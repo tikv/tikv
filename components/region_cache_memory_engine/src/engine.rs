@@ -16,7 +16,6 @@ use engine_traits::{
     RangeCacheEngine, ReadOptions, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT, CF_LOCK,
     CF_WRITE, DATA_CFS,
 };
-use keys::data_key;
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
 use skiplist_rs::{base::OwnedIter, SkipList};
 use slog_global::error;
@@ -111,6 +110,8 @@ impl SkiplistEngine {
                 handle.remove(iter.key(), guard);
                 iter.next(guard);
             }
+            // guard will buffer 8 drop methods, flush here to clear the buffer.
+            guard.flush();
         });
     }
 }
@@ -848,7 +849,7 @@ impl Peekable for RangeCacheSnapshot {
         key: &[u8],
     ) -> Result<Option<Self::DbVector>> {
         fail::fail_point!("on_range_cache_get_value");
-        if !self.snapshot_meta.range.contains_key_without_prefix(key) {
+        if !self.snapshot_meta.range.contains_key(key) {
             return Err(Error::Other(box_err!(
                 "key {} not in range[{}, {}]",
                 log_wrappers::Value(key),
@@ -857,9 +858,7 @@ impl Peekable for RangeCacheSnapshot {
             )));
         }
         let mut iter = self.skiplist_engine.data[cf_to_id(cf)].owned_iter();
-        // todo(SpadeA): reduce one clone
-        let key = data_key(key);
-        let seek_key = encode_seek_key(&key, self.sequence_number());
+        let seek_key = encode_seek_key(key, self.sequence_number());
 
         let guard = &epoch::pin();
         iter.seek(&seek_key, guard);
@@ -1851,7 +1850,7 @@ mod tests {
     #[test]
     fn test_prefix_seek() {
         let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
-        let range = CacheRange::new(b"zk000".to_vec(), b"zk100".to_vec());
+        let range = CacheRange::new(b"k000".to_vec(), b"k100".to_vec());
         engine.new_range(range.clone());
 
         {

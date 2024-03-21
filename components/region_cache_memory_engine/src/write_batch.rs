@@ -514,7 +514,6 @@ mod tests {
     use engine_traits::{
         CacheRange, KvEngine, Peekable, RangeCacheEngine, WriteBatch, CF_WRITE, DATA_CFS,
     };
-    use keys::{DATA_MAX_KEY, DATA_MIN_KEY};
     use skiplist_rs::SkipList;
     use tempfile::Builder;
 
@@ -586,7 +585,7 @@ mod tests {
     #[test]
     fn test_put_write_clear_delete_put_write() {
         let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
-        let r = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
+        let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
             let mut core = engine.core.write();
@@ -656,7 +655,7 @@ mod tests {
 
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.prepare_for_range(r1.clone());
-        wb.delete(b"zk01").unwrap();
+        wb.delete(b"k01").unwrap();
         wb.set_sequence_number(3).unwrap();
         let _ = wb.write();
         let snapshot = engine.snapshot(r1, u64::MAX, 3).unwrap();
@@ -694,8 +693,8 @@ mod tests {
             RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"k10", b"val"),
             RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"k19", b"val"),
             // Mock the range is evicted
-            RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"32", b"val"),
-            RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"45", b"val"),
+            RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"k32", b"val"),
+            RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"k45", b"val"),
         ];
 
         let (group_entries_to_cache, entries_to_write) =
@@ -725,8 +724,26 @@ mod tests {
             let guard = &epoch::pin();
             guard.flush();
         }
-        for _ in 0..128 {
+        for _ in 0..258 {
             let _ = &epoch::pin();
+        }
+    }
+
+    fn wait_evict_done(engine: &RangeCacheMemoryEngine) {
+        let mut wait = 0;
+        while wait < 10 {
+            wait += 1;
+            if !engine
+                .core
+                .read()
+                .range_manager()
+                .evicted_ranges()
+                .is_empty()
+            {
+                std::thread::sleep(Duration::from_millis(200));
+            } else {
+                break;
+            }
         }
     }
 
@@ -809,11 +826,13 @@ mod tests {
         // is evicted and the keys of it are deleted. After flush the epoch, we should
         // get 832-208 = 624 memory usage.
         flush_epoch();
+        wait_evict_done(&engine);
         assert_eq!(624, memory_controller.mem_usage());
 
         drop(snap1);
         engine.evict_range(&r1);
         flush_epoch();
+        wait_evict_done(&engine);
         assert_eq!(416, memory_controller.mem_usage());
     }
 }
