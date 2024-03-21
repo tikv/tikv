@@ -248,23 +248,24 @@ impl<E: KvEngine> Initializer<E> {
             end_key = Key::from_encoded_slice(&self.observed_range.end_key_encoded)
         }
 
-        debug!("cdc async incremental scan";
+        debug!(
+            "cdc async incremental scan";
             "region_id" => region_id,
             "downstream_id" => ?downstream_id,
             "observe_id" => ?observe_id,
             "conn_id" => ?conn_id,
             "all_key_covered" => ?self.observed_range.all_key_covered,
             "start_key" => log_wrappers::Value::key(start_key.as_encoded()),
-            "end_key" => log_wrappers::Value::key(end_key.as_encoded()));
+            "end_key" => log_wrappers::Value::key(end_key.as_encoded())
+        );
 
         if self.build_resolver.load(Ordering::Acquire) {
             // Scan and collect locks if build_resolver is true. The range
             // should be the whole region span instead of subscribed span,
             // because those locks will be shared between multiple Downstreams.
-            let s = Some(Key::transumte_encoded(&region.start_key));
-            let e = Some(Key::transumte_encoded(&region.end_key));
             let mut reader = MvccReader::new(snap.clone(), Some(ScanMode::Forward), false);
-            let (key_locks, has_remain) = reader.scan_locks_from_storage(s, e, |_, _| true, 0)?;
+            let (key_locks, has_remain) =
+                reader.scan_locks_from_storage(None, None, |_, _| true, 0)?;
             assert!(!has_remain);
             let mut locks = BTreeMap::<Key, TimeStamp>::new();
             for (key, lock) in key_locks {
@@ -619,8 +620,7 @@ mod tests {
         cdcpb::{EventLogType, Event_oneof_event},
         errorpb::Error as ErrorHeader,
     };
-    use raftstore::{coprocessor::ObserveHandle, router::CdcRaftRouter, store::RegionSnapshot};
-    use resolved_ts::TxnLocks;
+    use raftstore::{coprocessor::ObserveHandle, router::CdcRaftRouter};
     use test_raftstore::MockRaftStoreRouter;
     use tikv::{
         config::DbConfig,
@@ -726,50 +726,46 @@ mod tests {
     }
 
     #[test]
-    fn test_initializer_build_resolver() {
+    fn test_initializer_scan_locks() {
         let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
 
         let mut expected_locks = BTreeMap::<Key, TimeStamp>::new();
 
-        // Only observe ["", "b\0x90"]
+        // Only observe ["b\x00", "b\0x90"]
         let observed_range = ObservedRange::new(
-            Key::from_raw(&[]).into_encoded(),
+            Key::from_raw(&[b'k', 0]).into_encoded(),
             Key::from_raw(&[b'k', 90]).into_encoded(),
         )
         .unwrap();
-        let mut total_bytes = 0;
+
         // Pessimistic locks should not be tracked
         for i in 0..10 {
-            let k = &[b'k', i];
-            total_bytes += k.len();
-            let ts = TimeStamp::new(i as _);
+            let (k, ts) = (&[b'k', i], TimeStamp::new(i as _));
             must_acquire_pessimistic_lock(&mut engine, k, k, ts, ts);
         }
 
         for i in 10..100 {
-            let (k, v) = (&[b'k', i], &[b'v', i]);
-            total_bytes += k.len();
-            total_bytes += v.len();
-            let ts = TimeStamp::new(i as _);
+            let (k, v, ts) = (&[b'k', i], &[b'v', i], TimeStamp::new(i as _));
             must_prewrite_put(&mut engine, k, v, k, ts);
-            if i < 90 {
-                expected_locks.insert(Key::from_encoded_slice(k), ts);
-            }
+            expected_locks.insert(Key::from_raw(k), ts);
         }
 
         let region = Region::default();
         let snap = engine.snapshot(Default::default()).unwrap();
-        // Buffer must be large enough to unblock async incremental scan.
-        let buffer = 1000;
         let (mut worker, pool, mut initializer, rx, mut drain) = mock_initializer(
-            total_bytes,
-            total_bytes,
-            buffer,
+            usize::MAX,
+            usize::MAX,
+            1000,
             engine.kv_engine(),
             ChangeDataRequestKvApi::TiDb,
             false,
         );
         initializer.observed_range = observed_range.clone();
+        initializer.build_resolver.store(true, Ordering::Release);
+        initializer
+            .downstream_state
+            .store(DownstreamState::Initializing);
+
         let check_result = || {
             let task = rx.recv().unwrap();
             match task {
@@ -777,14 +773,16 @@ mod tests {
                 t => panic!("unexpected task {} received", t),
             }
         };
-        // To not block test by barrier.
+
         pool.spawn(async move {
             let mut d = drain.drain();
             while let Some((e, _)) = d.next().await {
                 if let CdcEvent::Event(e) = e {
                     for e in e.get_entries().get_entries() {
-                        let key = Key::from_raw(&e.key).into_encoded();
-                        assert!(observed_range.contains_encoded_key(&key), "{:?}", e);
+                        if e.r_type == EventLogType::Prewrite {
+                            let key = Key::from_raw(&e.key).into_encoded();
+                            assert!(observed_range.contains_encoded_key(&key));
+                        }
                     }
                 }
             }
@@ -793,21 +791,12 @@ mod tests {
         block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
         check_result();
 
-        initializer
-            .downstream_state
-            .store(DownstreamState::Initializing);
-        initializer.max_scan_batch_bytes = total_bytes;
-        block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
-        check_result();
-
-        initializer
-            .downstream_state
-            .store(DownstreamState::Initializing);
         initializer.build_resolver.store(false, Ordering::Release);
+        initializer
+            .downstream_state
+            .store(DownstreamState::Initializing);
         block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap();
-
-        let task = rx.recv_timeout(Duration::from_millis(100));
-        match task {
+        match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(t) => panic!("unexpected task {} received", t),
             Err(RecvTimeoutError::Timeout) => (),
             Err(e) => panic!("unexpected err {:?}", e),
@@ -815,26 +804,14 @@ mod tests {
 
         // Test cancellation.
         initializer.downstream_state.store(DownstreamState::Stopped);
-        block_on(initializer.async_incremental_scan(snap.clone(), region)).unwrap_err();
-
-        // Cancel error should trigger a deregsiter.
-        let mut region = Region::default();
-        region.set_id(initializer.region_id);
-        region.mut_peers().push(Default::default());
-        let snapshot = Some(RegionSnapshot::from_snapshot(snap, Arc::new(region)));
-        let resp = ReadResponse {
-            snapshot,
-            response: Default::default(),
-            txn_extra_op: Default::default(),
-        };
-        block_on(initializer.on_change_cmd_response(resp.clone())).unwrap_err();
+        block_on(initializer.async_incremental_scan(snap.clone(), region.clone())).unwrap_err();
 
         // Disconnect sink by dropping runtime (it also drops drain).
-        drop(pool);
         initializer
             .downstream_state
             .store(DownstreamState::Initializing);
-        block_on(initializer.on_change_cmd_response(resp)).unwrap_err();
+        drop(pool);
+        block_on(initializer.async_incremental_scan(snap, region)).unwrap_err();
 
         worker.stop();
     }
@@ -949,7 +926,6 @@ mod tests {
 
                 let snap = engine.snapshot(Default::default()).unwrap();
                 let th = pool.spawn(async move {
-                    let memory_qutoa = Arc::new(MemoryQuota::new(usize::MAX));
                     initializer
                         .async_incremental_scan(snap, Region::default())
                         .await
@@ -1002,7 +978,7 @@ mod tests {
     fn test_initializer_deregister_downstream() {
         let total_bytes = 1;
         let buffer = 1;
-        let (mut worker, _pool, mut initializer, rx, _drain) = mock_initializer(
+        let (mut worker, _pool, initializer, rx, _drain) = mock_initializer(
             total_bytes,
             total_bytes,
             buffer,

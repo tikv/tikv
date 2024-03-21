@@ -1195,8 +1195,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 cb,
             } => {
                 if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-                    delegate.init_lock_tracker();
-                    build_resolver.store(true, Ordering::Release);
+                    if delegate.init_lock_tracker() {
+                        build_resolver.store(true, Ordering::Release);
+                    }
                 }
                 if let Err(e) = sink.unbounded_send(incremental_scan_barrier, true) {
                     error!("cdc failed to schedule barrier for delta before delta scan";
@@ -2105,7 +2106,6 @@ mod tests {
             downstream,
             conn_id,
         });
-        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
         let observe_id = suite.endpoint.capture_regions[&1].handle.id;
         suite
             .capture_regions
@@ -2146,7 +2146,6 @@ mod tests {
             downstream,
             conn_id,
         });
-        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
         region.set_id(2);
         let observe_id = suite.endpoint.capture_regions[&2].handle.id;
         suite
@@ -2203,7 +2202,6 @@ mod tests {
             downstream,
             conn_id,
         });
-        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
         region.set_id(3);
         let observe_id = suite.endpoint.capture_regions[&3].handle.id;
         suite
@@ -2439,7 +2437,6 @@ mod tests {
                     downstream,
                     conn_id,
                 });
-                let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
                 let observe_id = suite.endpoint.capture_regions[&region_id].handle.id;
                 let mut region = Region::default();
                 region.set_id(region_id);
@@ -2603,7 +2600,6 @@ mod tests {
         let mut region = Region::default();
         region.id = 1;
         region.set_region_epoch(region_epoch_2);
-        let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
         suite
             .capture_regions
             .get_mut(&1)
@@ -2727,7 +2723,6 @@ mod tests {
                 conn_id,
             });
 
-            let memory_quota = Arc::new(MemoryQuota::new(std::usize::MAX));
             let mut locks = BTreeMap::<Key, TimeStamp>::default();
             locks.insert(Key::from_encoded(vec![]), TimeStamp::compose(0, id));
             let mut region = Region::default();

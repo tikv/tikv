@@ -348,9 +348,12 @@ impl Delegate {
         Ok(())
     }
 
-    pub(crate) fn init_lock_tracker(&mut self) {
-        assert!(matches!(self.lock_tracker, LockTracker::Pending));
-        self.lock_tracker = LockTracker::Preparing(vec![]);
+    pub(crate) fn init_lock_tracker(&mut self) -> bool {
+        if matches!(self.lock_tracker, LockTracker::Pending) {
+            self.lock_tracker = LockTracker::Preparing(vec![]);
+            return true;
+        }
+        false
     }
 
     pub(crate) fn finish_scan_locks(

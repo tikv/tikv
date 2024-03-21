@@ -15,7 +15,7 @@ use kvproto::{cdcpb::*, kvrpcpb::*, tikvpb_grpc::TikvClient};
 use pd_client::PdClient;
 use test_raftstore::*;
 use tikv_util::{debug, worker::Scheduler, HandyRwLock};
-use txn_types::{Key, TimeStamp};
+use txn_types::TimeStamp;
 
 use crate::{new_event_feed, new_event_feed_v2, ClientReceiver, TestSuite, TestSuiteBuilder};
 
@@ -594,65 +594,4 @@ fn test_cdc_notify_pending_regions() {
         Some(Event_oneof_event::Error(ref e)) if e.has_region_not_found(),
     );
     fail::remove("cdc_before_initialize");
-}
-
-// When subscribe a region, a Resolver will be constructed for the whole region
-// range, instead of the subscribed range. This case tests the behavior.
-#[test]
-fn test_cdc_build_ranged_resolver() {
-    let mut cluster = new_server_cluster(0, 1);
-    configure_for_lease_read(&mut cluster.cfg, Some(100), Some(10));
-    cluster.pd_client.disable_default_operator();
-    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
-    let region = suite.cluster.get_region(&[]);
-    let rid = region.id;
-
-    let prewrite_tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
-    let (k, v) = (b"key".to_vec(), vec![b'x'; 16]);
-    let mut mutation = Mutation::default();
-    mutation.set_op(Op::Put);
-    mutation.key = k.clone();
-    mutation.value = v;
-    suite.must_kv_prewrite(rid, vec![mutation], k.clone(), prewrite_tso);
-    let commit_tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
-
-    let cf_tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
-    let (mut req_tx, _, receive_event) = new_event_feed_v2(suite.get_region_cdc_client(rid));
-    let mut req = suite.new_changedata_request(rid);
-    req.request_id = 1;
-    req.checkpoint_ts = cf_tso.into_inner();
-    req.set_start_key(Key::from_raw(b"x").into_encoded());
-    req.set_end_key(Key::from_raw(b"z").into_encoded());
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
-
-    let cdc_event = receive_event(false);
-    'WaitInit: for event in cdc_event.get_events() {
-        for entry in event.get_entries().get_entries() {
-            match entry.get_type() {
-                EventLogType::Prewrite => {}
-                EventLogType::Initialized => break 'WaitInit,
-                _ => unreachable!(),
-            }
-        }
-    }
-
-    for _ in 0..10 {
-        let cdc_event = receive_event(true);
-        if cdc_event.has_resolved_ts() {
-            let resolved_ts = cdc_event.get_resolved_ts();
-            if resolved_ts.ts > prewrite_tso.into_inner() {
-                println!("resolved ts exceedes to prewrite_tso");
-                break;
-            }
-        }
-    }
-
-    suite.must_kv_commit(rid, vec![k], prewrite_tso, commit_tso);
-    let cdc_event = receive_event(false);
-    for event in cdc_event.get_events() {
-        let entries = event.get_entries().get_entries();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].get_type(), EventLogType::Commit);
-        break;
-    }
 }
