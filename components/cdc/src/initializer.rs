@@ -1053,9 +1053,6 @@ mod tests {
 
         let (tx1, rx1) = sync_channel(1);
         pool.spawn(async move {
-            // Migrated to 2021 migration. This let statement is probably not needed, see
-            //   https://doc.rust-lang.org/edition-guide/rust-2021/disjoint-capture-in-closures.html
-            let _ = (&initializer, &raft_router);
             let res = initializer.initialize(raft_router).await;
             tx1.send(res).unwrap();
         });
