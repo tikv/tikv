@@ -163,7 +163,7 @@ impl RangeManager {
     pub fn pending_ranges_in_loading_contains(&self, range: &CacheRange) -> bool {
         self.pending_ranges_loading_data
             .iter()
-            .any(|(r, _)| r.contains_range(range))
+            .any(|(r, ..)| r.contains_range(range))
     }
 
     pub(crate) fn overlap_with_range(&self, range: &CacheRange) -> bool {
@@ -280,8 +280,8 @@ impl RangeManager {
             .any(|r| r.overlaps(evict_range))
     }
 
-    pub fn on_delete_range(&mut self, range: &CacheRange) {
-        self.evicted_ranges.remove(range);
+    pub fn has_ranges_in_gc(&self) -> bool {
+        !self.ranges_in_gc.is_empty()
     }
 
     pub fn on_delete_ranges(&mut self, ranges: &[CacheRange]) {
@@ -294,8 +294,8 @@ impl RangeManager {
         self.ranges_in_gc = ranges_in_gc;
     }
 
-    pub fn clear_ranges_in_gc(&mut self) {
-        self.ranges_in_gc = BTreeSet::default();
+    pub fn on_gc_finished(&mut self, range: BTreeSet<CacheRange>) {
+        assert_eq!(range, std::mem::take(&mut self.ranges_in_gc));
     }
 
     pub fn load_range(&mut self, cache_range: CacheRange) -> Result<(), LoadFailedReason> {
@@ -310,6 +310,11 @@ impl RangeManager {
         }
         self.pending_ranges.push(cache_range);
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn evicted_ranges(&self) -> &BTreeSet<CacheRange> {
+        &self.evicted_ranges
     }
 }
 

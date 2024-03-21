@@ -13,7 +13,7 @@ use parking_lot::RwLock;
 use slog_global::{error, info, warn};
 use tikv_util::{
     keybuilder::KeyBuilder,
-    worker::{Runnable, ScheduleError, Scheduler, Worker},
+    worker::{Builder, Runnable, ScheduleError, Scheduler, Worker},
 };
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 use yatp::Remote;
@@ -44,6 +44,40 @@ fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
             "invalid write cf value: {}",
             log_wrappers::Value(value)
         )),
+    }
+}
+
+#[derive(Debug)]
+pub enum BackgroundTask {
+    Gc(GcTask),
+    LoadRange,
+    MemoryCheck,
+    DeleteRange(Vec<CacheRange>),
+}
+
+impl Display for BackgroundTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BackgroundTask::Gc(ref t) => t.fmt(f),
+            BackgroundTask::LoadRange => f.debug_struct("LoadTask").finish(),
+            BackgroundTask::MemoryCheck => f.debug_struct("MemoryCheck").finish(),
+            BackgroundTask::DeleteRange(ref r) => {
+                f.debug_struct("DeleteRange").field("range", r).finish()
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct GcTask {
+    pub safe_point: u64,
+}
+
+impl Display for GcTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GcTask")
+            .field("safe_point", &self.safe_point)
+            .finish()
     }
 }
 
@@ -101,16 +135,9 @@ impl BgWorkManager {
             loop {
                 select! {
                     recv(ticker) -> _ => {
-                        if scheduler.is_busy() {
-                            info!(
-                                "range cache engine gc worker is busy, jump to next gc duration";
-                            );
-                            continue;
-                        }
-
                         let safe_point = TimeStamp::physical_now() - gc_interval.as_millis() as u64;
                         let safe_point = TimeStamp::compose(safe_point, 0).into_inner();
-                        if let Err(e) = scheduler.schedule(BackgroundTask::GcTask(GcTask {safe_point})) {
+                        if let Err(e) = scheduler.schedule(BackgroundTask::Gc(GcTask {safe_point})) {
                             error!(
                                 "schedule range cache engine gc failed";
                                 "err" => ?e,
@@ -133,36 +160,6 @@ impl BgWorkManager {
     }
 }
 
-#[derive(Debug)]
-pub enum BackgroundTask {
-    GcTask(GcTask),
-    LoadTask,
-    MemoryCheck,
-}
-
-#[derive(Debug)]
-pub struct GcTask {
-    pub safe_point: u64,
-}
-
-impl Display for BackgroundTask {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BackgroundTask::GcTask(ref t) => t.fmt(f),
-            BackgroundTask::LoadTask => f.debug_struct("LoadTask").finish(),
-            BackgroundTask::MemoryCheck => f.debug_struct("MemoryCheck").finish(),
-        }
-    }
-}
-
-impl Display for GcTask {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GcTask")
-            .field("safe_point", &self.safe_point)
-            .finish()
-    }
-}
-
 #[derive(Clone)]
 struct BackgroundRunnerCore {
     engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
@@ -170,17 +167,27 @@ struct BackgroundRunnerCore {
 }
 
 impl BackgroundRunnerCore {
-    fn ranges_for_gc(&self) -> BTreeSet<CacheRange> {
+    /// Returns the ranges that are eligible for garbage collection.
+    ///
+    /// Returns `None` if there are no ranges cached or the previous gc is not
+    /// finished.
+    fn ranges_for_gc(&self) -> Option<BTreeSet<CacheRange>> {
         let ranges: BTreeSet<CacheRange> = {
             let core = self.engine.read();
+            if core.range_manager().has_ranges_in_gc() {
+                return None;
+            }
             core.range_manager().ranges().keys().cloned().collect()
         };
         let ranges_clone = ranges.clone();
+        if ranges_clone.is_empty() {
+            return None;
+        }
         {
             let mut core = self.engine.write();
             core.mut_range_manager().set_ranges_in_gc(ranges_clone);
         }
-        ranges
+        Some(ranges)
     }
 
     fn gc_range(&self, range: &CacheRange, safe_point: u64) {
@@ -247,12 +254,14 @@ impl BackgroundRunnerCore {
         );
     }
 
-    fn gc_finished(&mut self) {
+    fn on_gc_finished(&mut self, ranges: BTreeSet<CacheRange>) {
         let mut core = self.engine.write();
-        core.mut_range_manager().clear_ranges_in_gc();
+        core.mut_range_manager().on_gc_finished(ranges);
     }
 
-    // return the first range to load with RocksDB snapshot
+    /// Returns the first range to load with RocksDB snapshot.
+    ///
+    /// Returns `None` if there are no ranges to load.
     fn get_range_to_load(&self) -> Option<(CacheRange, Arc<RocksSnapshot>, bool)> {
         let core = self.engine.read();
         core.range_manager()
@@ -276,12 +285,14 @@ impl BackgroundRunnerCore {
                 drop(core);
                 let guard = &epoch::pin();
                 for (seq, entry) in cache_batch {
-                    entry.write_to_memory(
-                        seq,
-                        &skiplist_engine,
-                        self.memory_controller.clone(),
-                        guard,
-                    )?;
+                    entry
+                        .write_to_memory(
+                            seq,
+                            &skiplist_engine,
+                            self.memory_controller.clone(),
+                            guard,
+                        )
+                        .unwrap();
                 }
                 fail::fail_point!("on_cached_write_batch_consumed");
             } else {
@@ -289,7 +300,6 @@ impl BackgroundRunnerCore {
                 break;
             }
         }
-        Ok(())
     }
 
     fn on_snapshot_load_canceled(&mut self, range: CacheRange) {
@@ -299,6 +309,7 @@ impl BackgroundRunnerCore {
             .pending_ranges_loading_data
             .pop_front()
             .unwrap();
+        assert_eq!(r, range);
         assert!(canceled);
         // todo: r should be deleted
     }
@@ -306,13 +317,24 @@ impl BackgroundRunnerCore {
 
 pub struct BackgroundRunner {
     core: BackgroundRunnerCore,
+
+    // We have following three separate workers so that each type of task would not block each
+    // others
     range_load_remote: Remote<yatp::task::future::TaskCell>,
     range_load_worker: Worker,
+
+    delete_range_remote: Remote<yatp::task::future::TaskCell>,
+    delete_range_worker: Worker,
+
+    gc_range_remote: Remote<yatp::task::future::TaskCell>,
+    gc_range_worker: Worker,
 }
 
 impl Drop for BackgroundRunner {
     fn drop(&mut self) {
         self.range_load_worker.stop();
+        self.delete_range_worker.stop();
+        self.gc_range_worker.stop();
     }
 }
 
@@ -321,8 +343,21 @@ impl BackgroundRunner {
         engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
         memory_controller: Arc<MemoryController>,
     ) -> Self {
-        let range_load_worker = Worker::new("background-range-load-worker");
+        let range_load_worker = Builder::new("background-range-load-worker")
+            // Range load now is implemented sequentially, so we must use exactly one thread to handle it.
+            // todo(SpadeA): if the load speed is a bottleneck, we may consider to use multiple threads to load ranges.
+            .thread_count(1)
+            .create();
         let range_load_remote = range_load_worker.remote();
+
+        let delete_range_worker = Worker::new("background-delete-range_worker");
+        let delete_range_remote = delete_range_worker.remote();
+
+        let gc_range_worker = Builder::new("background-range-load-worker")
+            // Gc must also use exactly one thread to handle it.
+            .thread_count(1)
+            .create();
+        let gc_range_remote = delete_range_worker.remote();
         Self {
             core: BackgroundRunnerCore {
                 engine,
@@ -330,6 +365,10 @@ impl BackgroundRunner {
             },
             range_load_worker,
             range_load_remote,
+            delete_range_worker,
+            delete_range_remote,
+            gc_range_worker,
+            gc_range_remote,
         }
     }
 }
@@ -339,14 +378,19 @@ impl Runnable for BackgroundRunner {
 
     fn run(&mut self, task: Self::Task) {
         match task {
-            BackgroundTask::GcTask(t) => {
-                let ranges = self.core.ranges_for_gc();
-                for range in ranges {
-                    self.core.gc_range(&range, t.safe_point);
+            BackgroundTask::Gc(t) => {
+                let mut core = self.core.clone();
+                if let Some(ranges) = core.ranges_for_gc() {
+                    let f = async move {
+                        for range in &ranges {
+                            core.gc_range(range, t.safe_point);
+                        }
+                        core.on_gc_finished(ranges);
+                    };
+                    self.gc_range_remote.spawn(f);
                 }
-                self.core.gc_finished();
             }
-            BackgroundTask::LoadTask => {
+            BackgroundTask::LoadRange => {
                 let mem_usage = self.core.memory_controller.mem_usage();
                 if mem_usage
                     > (self.core.memory_controller.soft_limit_threshold()
@@ -409,6 +453,20 @@ impl Runnable for BackgroundRunner {
                     // todo: select ranges to evict
                 }
                 self.core.memory_controller.set_memory_checking(false);
+            }
+            BackgroundTask::DeleteRange(ranges) => {
+                let core = self.core.clone();
+                let f = async move {
+                    let skiplist_engine = { core.engine.read().engine() };
+                    for r in &ranges {
+                        skiplist_engine.delete_range(r);
+                    }
+                    core.engine
+                        .write()
+                        .mut_range_manager()
+                        .on_delete_ranges(&ranges);
+                };
+                self.delete_range_remote.spawn(f);
             }
         }
     }
@@ -1186,5 +1244,26 @@ pub mod tests {
         let key20 = encode_seek_key(&key20, u64::MAX);
         assert!(!key_exist(&write, &key20, guard));
         assert!(!key_exist(&default, &key20, guard));
+    }
+
+    #[test]
+    fn test_ranges_for_gc() {
+        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let memory_controller = engine.memory_controller();
+        let r1 = CacheRange::new(b"a".to_vec(), b"b".to_vec());
+        let r2 = CacheRange::new(b"b".to_vec(), b"c".to_vec());
+        engine.new_range(r1);
+        engine.new_range(r2);
+
+        let mut runner = BackgroundRunner::new(engine.core.clone(), memory_controller);
+        let ranges = runner.core.ranges_for_gc().unwrap();
+        assert_eq!(2, ranges.len());
+
+        // until the previous gc finished, node ranges will be returned
+        assert!(runner.core.ranges_for_gc().is_none());
+        runner.core.on_gc_finished(ranges);
+
+        let ranges = runner.core.ranges_for_gc().unwrap();
+        assert_eq!(2, ranges.len());
     }
 }

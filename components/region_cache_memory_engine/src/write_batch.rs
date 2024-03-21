@@ -140,15 +140,14 @@ impl RangeCacheWriteBatch {
         }
         let mut core = self.engine.core.write();
         let mut ranges = vec![];
-        let mut range_manager = core.mut_range_manager();
+        let range_manager = core.mut_range_manager();
         for r in std::mem::take(&mut self.ranges_to_evict) {
-            if range_manager.contains_range(&r) {
-                if range_manager.evict_range(&r) {
-                    ranges.push(r);
-                }
+            if range_manager.contains_range(&r) && range_manager.evict_range(&r) {
+                ranges.push(r);
+                continue;
             }
 
-            if let Some((range, _, canceled)) = range_manager
+            if let Some((.., canceled)) = range_manager
                 .pending_ranges_loading_data
                 .iter_mut()
                 .find(|(range, ..)| range.contains_range(&r))
@@ -634,7 +633,7 @@ mod tests {
             let snap = Arc::new(rocks_engine.snapshot(None));
             core.mut_range_manager()
                 .pending_ranges_loading_data
-                .push_back((r2.clone(), snap));
+                .push_back((r2.clone(), snap, false));
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.prepare_for_range(r1.clone());
@@ -679,10 +678,10 @@ mod tests {
         let snap = Arc::new(snap);
         range_manager
             .pending_ranges_loading_data
-            .push_back((r2.clone(), snap.clone()));
+            .push_back((r2.clone(), snap.clone(), false));
         range_manager
             .pending_ranges_loading_data
-            .push_back((r3.clone(), snap));
+            .push_back((r3.clone(), snap, false));
 
         let entries = vec![
             RangeCacheWriteBatchEntry::put_value(CF_DEFAULT, b"k22", b"val"),
