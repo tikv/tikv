@@ -80,6 +80,7 @@ impl RangeCacheWriteBatch {
     }
 
     fn write_impl(&mut self, seq: u64) -> Result<()> {
+        fail::fail_point!("on_write_impl");
         let (entries_to_write, engine) = self.engine.handle_pending_range_in_loading_buffer(
             seq,
             std::mem::take(&mut self.pending_range_in_loading_buffer),
@@ -203,46 +204,43 @@ pub fn group_write_batch_entries(
     let mut entries_to_write: Vec<RangeCacheWriteBatchEntry> = vec![];
     let mut drain = entries.drain(..).peekable();
     while let Some(mut e) = drain.next() {
-        let mut cache_range = None;
-        for r in &range_manager.pending_ranges_loading_data {
-            if r.0.contains_key(&e.key) {
-                cache_range = Some(r.0.clone());
-                break;
-            }
-        }
-        if let Some(cache_range) = cache_range {
+        if let Some((range_loading, _)) = range_manager
+            .pending_ranges_loading_data
+            .iter()
+            .find(|r| r.0.contains_key(&e.key))
+        {
+            // The range of this write batch entry is still in loading status
             let mut current_group = vec![];
-            // This range of this write batch entry is still in loading status
             loop {
                 current_group.push(e);
                 if let Some(next_e) = drain.peek()
-                    && cache_range.contains_key(&next_e.key)
+                    && range_loading.contains_key(&next_e.key)
                 {
                     e = drain.next().unwrap();
                 } else {
                     break;
                 }
             }
-            group_entries_to_cache.push((cache_range, current_group));
-        } else {
-            // cache_range is None, it means the range has finished loading and
-            // became a normal cache range
-            for r in range_manager.ranges().keys() {
-                if r.contains_key(&e.key) {
-                    cache_range = Some(r.clone());
-                }
-            }
-            let cache_range = cache_range.unwrap();
+            group_entries_to_cache.push((range_loading.clone(), current_group));
+        } else if let Some(range) = range_manager
+            .ranges()
+            .keys()
+            .find(|r| r.contains_key(&e.key))
+        {
+            // The range has finished loading and became a normal cache range
             loop {
                 entries_to_write.push(e);
                 if let Some(next_e) = drain.peek()
-                    && cache_range.contains_key(&next_e.key)
+                    && range.contains_key(&next_e.key)
                 {
                     e = drain.next().unwrap();
                 } else {
                     break;
                 }
             }
+        } else {
+            // The range of the entry is not found, it means the ranges has been
+            // evicted
         }
     }
     (group_entries_to_cache, entries_to_write)
@@ -540,6 +538,10 @@ mod tests {
             RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"k09", b"val"),
             RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"k10", b"val"),
             RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"k19", b"val"),
+            // The following entries are used to mock the pending ranges has finished the load and
+            // be evcited
+            RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"k33", b"val"),
+            RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"kk35", b"val"),
         ];
 
         let (group_entries_to_cache, entries_to_write) =
