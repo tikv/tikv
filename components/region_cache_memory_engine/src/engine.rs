@@ -28,7 +28,7 @@ use crate::{
         decode_key, encode_key_for_eviction, encode_seek_for_prev_key, encode_seek_key,
         InternalBytes, InternalKey, ValueType,
     },
-    range_manager::RangeManager,
+    range_manager::{LoadFailedReason, RangeManager},
     write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
 };
 
@@ -225,6 +225,17 @@ impl RangeCacheMemoryEngine {
         core.range_manager.new_range(range);
     }
 
+    /// Load the range in the in-memory engine.
+    // This method only push the range in the `pending_range` where sometime
+    // later, the range will be scheduled to load snapshot data into engine.
+    pub fn load_range(&self, range: CacheRange) -> Result<(), LoadFailedReason> {
+        let mut core = self.core.write();
+        core.mut_range_manager().load_range(range)
+    }
+
+    /// Evict a range from the in-memory engine. After this call, the range will
+    /// not be readable, but the data of the range may not be deleted
+    /// immediately due to some ongoing snapshots.
     pub fn evict_range(&self, range: &CacheRange) {
         let mut skiplist_engine = None;
         {
@@ -248,9 +259,6 @@ impl RangeCacheMemoryEngine {
     // Return `(bool, bool)`, the first indicates the range is in cache, the second
     // indicates the range is in loading, see comments in `RangeCacheWriteBatch`
     // for the detail of them.
-    //
-    // In addition, the region with range equals to the range in the `pending_range`
-    // may have been splited, and we should split the range accrodingly.
     pub(crate) fn prepare_for_apply(&self, range: &CacheRange) -> (bool, bool) {
         let core = self.core.upgradable_read();
         let range_manager = core.range_manager();
