@@ -453,5 +453,5 @@ fn test_load_with_eviction() {
         .get_cf_with_snap_ctx(CF_DEFAULT, b"k15", snap_ctx.clone())
         .unwrap();
     assert_eq!(&val, b"v");
-    assert!(rx.try_recv().is_err());
+    rx.try_recv().unwrap_err();
 }

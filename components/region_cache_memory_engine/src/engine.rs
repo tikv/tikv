@@ -5,6 +5,7 @@ use std::{
     collections::BTreeMap,
     fmt::{self, Debug},
     ops::Deref,
+    result,
     sync::Arc,
     time::Duration,
 };
@@ -228,7 +229,7 @@ impl RangeCacheMemoryEngine {
     /// Load the range in the in-memory engine.
     // This method only push the range in the `pending_range` where sometime
     // later, the range will be scheduled to load snapshot data into engine.
-    pub fn load_range(&self, range: CacheRange) -> Result<(), LoadFailedReason> {
+    pub fn load_range(&self, range: CacheRange) -> result::Result<(), LoadFailedReason> {
         let mut core = self.core.write();
         core.mut_range_manager().load_range(range)
     }
@@ -1887,7 +1888,7 @@ mod tests {
 
     #[test]
     fn test_evict_range_without_snapshot() {
-        let mut engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
         let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
         let evict_range = CacheRange::new(construct_user_key(10), construct_user_key(20));
         engine.new_range(range.clone());
@@ -1940,7 +1941,7 @@ mod tests {
 
     #[test]
     fn test_evict_range_with_snapshot() {
-        let mut engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
         let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
         let evict_range = CacheRange::new(construct_user_key(10), construct_user_key(20));
         engine.new_range(range.clone());
