@@ -662,7 +662,7 @@ where
         let (timer_tx, timer_rx) = mpsc::channel();
         self.timer = Some(timer_tx);
 
-        // The upper bound of buffer stats messages.
+        // The upper bound of buffered stats messages.
         // It prevents unexpected memory buildup when AutoSplitController
         // runs slowly.
         const STATS_LIMIT: usize = 128;
