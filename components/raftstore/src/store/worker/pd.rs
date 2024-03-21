@@ -662,11 +662,14 @@ where
         let (timer_tx, timer_rx) = mpsc::channel();
         self.timer = Some(timer_tx);
 
-        let stats_limit = 128;
-        let (read_stats_sender, read_stats_receiver) = mpsc::sync_channel(stats_limit);
+        // The upper bound of buffer stats messages.
+        // It prevents unexpected memory buildup when AutoSplitController
+        // runs slowly.
+        const STATS_LIMIT: usize = 128;
+        let (read_stats_sender, read_stats_receiver) = mpsc::sync_channel(STATS_LIMIT);
         self.read_stats_sender = Some(read_stats_sender);
 
-        let (cpu_stats_sender, cpu_stats_receiver) = mpsc::sync_channel(stats_limit);
+        let (cpu_stats_sender, cpu_stats_receiver) = mpsc::sync_channel(STATS_LIMIT);
         self.cpu_stats_sender = Some(cpu_stats_sender);
 
         let reporter = self.reporter.clone();
@@ -685,7 +688,7 @@ where
                 let mut collect_store_infos_thread_stats = ThreadInfoStatistics::new();
                 let mut load_base_split_thread_stats = ThreadInfoStatistics::new();
                 let mut region_cpu_records_collector = None;
-                let mut auto_split_controller_ctx = AutoSplitControllerContext::new(stats_limit);
+                let mut auto_split_controller_ctx = AutoSplitControllerContext::new(STATS_LIMIT);
                 // Register the region CPU records collector.
                 if auto_split_controller
                     .cfg
