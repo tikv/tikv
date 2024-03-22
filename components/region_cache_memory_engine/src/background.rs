@@ -271,7 +271,7 @@ impl BackgroundRunnerCore {
     }
 
     fn on_snapshot_load_finished(&mut self, range: CacheRange) {
-        fail::fail_point!("on_snapshot_loaded");
+        fail::fail_point!("on_snapshot_load_finished");
         loop {
             // Consume the cached write batch after the snapshot is acquired.
             let mut core = self.engine.write();
@@ -311,7 +311,6 @@ impl BackgroundRunnerCore {
             .unwrap();
         assert_eq!(r, range);
         assert!(canceled);
-        // todo: r should be deleted
     }
 }
 

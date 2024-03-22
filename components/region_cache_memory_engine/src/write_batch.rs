@@ -120,14 +120,16 @@ impl RangeCacheWriteBatch {
             });
         self.memory_controller.on_node_written(entry_counts);
 
-        // todo: schedule it to background worker
-        ranges_to_delete.iter().for_each(|r| engine.delete_range(r));
-        if !ranges_to_delete.is_empty() {
-            self.engine
-                .core
-                .write()
-                .mut_range_manager()
-                .on_delete_ranges(&ranges_to_delete);
+        if let Err(e) = self
+            .engine
+            .bg_worker_manager()
+            .schedule_task(BackgroundTask::DeleteRange(ranges_to_delete))
+        {
+            error!(
+                "schedule delete range failed";
+                "err" => ?e,
+            );
+            assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
         }
 
         res
@@ -147,11 +149,12 @@ impl RangeCacheWriteBatch {
                 continue;
             }
 
-            if let Some((.., canceled)) = range_manager
+            if let Some((range, _, canceled)) = range_manager
                 .pending_ranges_loading_data
                 .iter_mut()
                 .find(|(range, ..)| range.contains_range(&r))
             {
+                range_manager.ranges_being_deleted.insert(range.clone());
                 *canceled = true;
             }
         }
@@ -737,7 +740,7 @@ mod tests {
                 .core
                 .read()
                 .range_manager()
-                .evicted_ranges()
+                .ranges_being_deleted
                 .is_empty()
             {
                 std::thread::sleep(Duration::from_millis(200));
@@ -756,30 +759,15 @@ mod tests {
         let r3 = CacheRange::new(b"kk20".to_vec(), b"kk30".to_vec());
         let r4 = CacheRange::new(b"kk30".to_vec(), b"kk40".to_vec());
         let r5 = CacheRange::new(b"kk40".to_vec(), b"kk50".to_vec());
-        engine.new_range(r1.clone());
-        engine.new_range(r2.clone());
-        engine.new_range(r3.clone());
-        engine.new_range(r4.clone());
-        engine.new_range(r5.clone());
-        {
-            let mut core = engine.core.write();
-            core.mut_range_manager().set_range_readable(&r1, true);
-            core.mut_range_manager().set_range_readable(&r2, true);
-            core.mut_range_manager().set_range_readable(&r3, true);
-            core.mut_range_manager().set_range_readable(&r4, true);
-            core.mut_range_manager().set_range_readable(&r5, true);
-            core.mut_range_manager().set_safe_point(&r1, 10);
-            core.mut_range_manager().set_safe_point(&r2, 10);
-            core.mut_range_manager().set_safe_point(&r3, 10);
-            core.mut_range_manager().set_safe_point(&r4, 10);
-            core.mut_range_manager().set_safe_point(&r5, 10);
+        for r in [&r1, &r2, &r3, &r4, &r5] {
+            engine.new_range(r.clone());
+            {
+                let mut core = engine.core.write();
+                core.mut_range_manager().set_range_readable(&r, true);
+                core.mut_range_manager().set_safe_point(&r, 10);
+            }
+            let _ = engine.snapshot(r.clone(), 1000, 1000).unwrap();
         }
-
-        let _ = engine.snapshot(r1.clone(), 1000, 1000).unwrap();
-        let _ = engine.snapshot(r2.clone(), 1000, 1000).unwrap();
-        let _ = engine.snapshot(r3.clone(), 1000, 1000).unwrap();
-        let _ = engine.snapshot(r4.clone(), 1000, 1000).unwrap();
-        let _ = engine.snapshot(r5.clone(), 1000, 1000).unwrap();
 
         let val1: Vec<u8> = (0..100).map(|_| 0).collect();
         let mut wb = RangeCacheWriteBatch::from(&engine);

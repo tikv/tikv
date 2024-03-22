@@ -1953,7 +1953,7 @@ mod tests {
                 .core
                 .read()
                 .range_manager()
-                .evicted_ranges()
+                .ranges_being_deleted
                 .is_empty()
             {
                 std::thread::sleep(Duration::from_millis(200));
@@ -2069,7 +2069,7 @@ mod tests {
                     .core
                     .read()
                     .range_manager()
-                    .evicted_ranges()
+                    .ranges_being_deleted
                     .contains(&evict_range)
             );
         }
@@ -2082,7 +2082,7 @@ mod tests {
                     .core
                     .read()
                     .range_manager()
-                    .evicted_ranges()
+                    .ranges_being_deleted
                     .contains(&evict_range)
             );
         }

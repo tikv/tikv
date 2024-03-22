@@ -80,7 +80,9 @@ pub struct RangeManager {
     // Range before an eviction. It is recorded due to some undropped snapshot, which block the
     // evicted range deleting the relevant data.
     historical_ranges: BTreeMap<CacheRange, RangeMeta>,
-    evicted_ranges: BTreeSet<CacheRange>,
+    // `ranges_being_deleted` contains two types of ranges: 1. the range is evicted and not finish
+    // the delete, 2. the range is loading data but memory acquirement is rejected.
+    pub(crate) ranges_being_deleted: BTreeSet<CacheRange>,
     // ranges that are cached now
     ranges: BTreeMap<CacheRange, RangeMeta>,
 
@@ -217,7 +219,7 @@ impl RangeManager {
             }
 
             return self
-                .evicted_ranges
+                .ranges_being_deleted
                 .iter()
                 .filter(|evicted_range| {
                     !self
@@ -266,7 +268,7 @@ impl RangeManager {
             self.ranges.insert(right_range, right_meta);
         }
 
-        self.evicted_ranges.insert(evict_range.clone());
+        self.ranges_being_deleted.insert(evict_range.clone());
 
         if !meta.range_snapshot_list.is_empty() {
             self.historical_ranges.insert(range_key, meta);
@@ -286,7 +288,7 @@ impl RangeManager {
 
     pub fn on_delete_ranges(&mut self, ranges: &[CacheRange]) {
         for r in ranges {
-            self.evicted_ranges.remove(r);
+            self.ranges_being_deleted.remove(r);
         }
     }
 
@@ -305,16 +307,11 @@ impl RangeManager {
         if self.ranges_in_gc.contains(&cache_range) {
             return Err(LoadFailedReason::InGc);
         }
-        if self.evicted_ranges.contains(&cache_range) {
+        if self.ranges_being_deleted.contains(&cache_range) {
             return Err(LoadFailedReason::Evicted);
         }
         self.pending_ranges.push(cache_range);
         Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn evicted_ranges(&self) -> &BTreeSet<CacheRange> {
-        &self.evicted_ranges
     }
 }
 
@@ -355,7 +352,7 @@ mod tests {
         let r_right = CacheRange::new(b"k06".to_vec(), b"k10".to_vec());
         range_mgr.evict_range(&r_evict);
         let meta1 = range_mgr.historical_ranges.get(&r1).unwrap();
-        assert!(range_mgr.evicted_ranges.contains(&r_evict));
+        assert!(range_mgr.ranges_being_deleted.contains(&r_evict));
         assert!(range_mgr.ranges.get(&r1).is_none());
         let meta2 = range_mgr.ranges.get(&r_left).unwrap();
         let meta3 = range_mgr.ranges.get(&r_right).unwrap();
@@ -366,7 +363,7 @@ mod tests {
         range_mgr.range_snapshot(&r_left, 10);
         range_mgr.evict_range(&r_left);
         assert!(range_mgr.historical_ranges.get(&r_left).is_some());
-        assert!(range_mgr.evicted_ranges.contains(&r_left));
+        assert!(range_mgr.ranges_being_deleted.contains(&r_left));
         assert!(range_mgr.ranges.get(&r_left).is_none());
 
         assert!(!range_mgr.evict_range(&r_right));
