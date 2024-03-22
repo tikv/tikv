@@ -93,15 +93,9 @@ fn json_array_append(args: &[ScalarValueRef]) -> Result<Option<Json>> {
         let tmp_path_expr_list = vec![path_expr_list.last().unwrap().to_owned()];
         let element = base.as_ref().extract(&tmp_path_expr_list)?;
         // change element to JsonRef
-        let element_ref = match element {
-            Some(ref e) => Some(e.as_ref()),
-            None => None,
-        };
+        let element_ref = element.as_ref().map(|e| e.as_ref());
         // 2. merge the value into the element
-        let mut tmp_values: Vec<JsonRef> = vec![];
-
-        tmp_values.push(element_ref.unwrap());
-        tmp_values.push(value.as_ref());
+        let tmp_values: Vec<JsonRef> = vec![element_ref.unwrap(), value.as_ref()];
 
         values.push(Json::merge(tmp_values)?);
     }
