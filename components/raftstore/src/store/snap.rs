@@ -1684,10 +1684,10 @@ impl SnapManager {
         Ok(Box::new(s))
     }
 
-    pub fn check_snapshot_meta_file_exist(&self, key: &SnapKey) -> RaftStoreResult<()> {
+    pub fn meta_file_exist(&self, key: &SnapKey) -> RaftStoreResult<()> {
         let _lock = self.core.registry.rl();
         let base = &self.core.base;
-        // Use CheckPolicy::None to avoid reading meta file 
+        // Use CheckPolicy::None to avoid reading meta file
         let s = Snapshot::new(base, key, false, CheckPolicy::None, &self.core)?;
         if !file_exists(&s.meta_file.path) {
             return Err(RaftStoreError::Other(From::from(format!(
