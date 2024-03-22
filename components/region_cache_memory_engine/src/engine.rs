@@ -70,7 +70,7 @@ impl SkiplistEngine {
         self.data[cf_to_id(cf)].clone()
     }
 
-    fn delete_range(&self, range: &CacheRange) {
+    pub fn delete_range(&self, range: &CacheRange) {
         self.data.iter().for_each(|d| {
             let (start, end) = encode_key_for_eviction(range);
             let mut iter = d.owned_iter();
@@ -239,19 +239,20 @@ impl RangeCacheMemoryEngine {
     /// not be readable, but the data of the range may not be deleted
     /// immediately due to some ongoing snapshots.
     pub fn evict_range(&self, range: &CacheRange) {
-        let mut skiplist_engine = None;
-        {
-            let mut core = self.core.write();
-            if core.range_manager.evict_range(range) {
-                // The range can be delete directly.
-                skiplist_engine = Some(core.engine().clone());
+        let mut core = self.core.write();
+        if core.range_manager.evict_range(range) {
+            drop(core);
+            // The range can be deleted directly.
+            if let Err(e) = self
+                .bg_worker_manager()
+                .schedule_task(BackgroundTask::DeleteRange(vec![range.clone()]))
+            {
+                error!(
+                    "schedule delete range failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
-        };
-        if let Some(skiplist_engine) = skiplist_engine {
-            // todo(SpadeA): do it in background
-            skiplist_engine.delete_range(range);
-            let mut core = self.core.write();
-            core.mut_range_manager().on_delete_range(range);
         }
     }
 
@@ -299,7 +300,7 @@ impl RangeCacheMemoryEngine {
                 .push_back((pending_range, rocks_snap));
             if let Err(e) = self
                 .bg_worker_manager()
-                .schedule_task(BackgroundTask::LoadTask)
+                .schedule_task(BackgroundTask::LoadRange)
             {
                 error!(
                     "schedule range load failed";
@@ -718,21 +719,22 @@ impl RangeCacheSnapshot {
 
 impl Drop for RangeCacheSnapshot {
     fn drop(&mut self) {
-        let (ranges_removable, skiplist_engine) = {
-            let mut core = self.engine.core.write();
-            let ranges_removable = core
-                .range_manager
-                .remove_range_snapshot(&self.snapshot_meta);
-            (ranges_removable, core.engine().clone())
-        };
-        for range_removable in &ranges_removable {
-            // todo: schedule it to a separate thread
-            skiplist_engine.delete_range(range_removable);
-        }
+        let mut core = self.engine.core.write();
+        let ranges_removable = core
+            .range_manager
+            .remove_range_snapshot(&self.snapshot_meta);
         if !ranges_removable.is_empty() {
-            let mut core = self.engine.core.write();
-            for range_removable in &ranges_removable {
-                core.mut_range_manager().on_delete_range(range_removable);
+            drop(core);
+            if let Err(e) = self
+                .engine
+                .bg_worker_manager()
+                .schedule_task(BackgroundTask::DeleteRange(ranges_removable))
+            {
+                error!(
+                    "schedule delete range failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
         }
     }
@@ -871,7 +873,7 @@ mod tests {
     use crate::{
         keys::{
             construct_key, construct_user_key, construct_value, decode_key, encode_key,
-            InternalBytes, ValueType,
+            encode_seek_key, InternalBytes, ValueType,
         },
         RangeCacheMemoryEngine,
     };
@@ -1887,6 +1889,32 @@ mod tests {
         });
     }
 
+    fn verify_evict_range_deleted(engine: &RangeCacheMemoryEngine, range: &CacheRange) {
+        let mut wait = 0;
+        while wait < 10 {
+            wait += 1;
+            if !engine
+                .core
+                .read()
+                .range_manager()
+                .evicted_ranges()
+                .is_empty()
+            {
+                std::thread::sleep(Duration::from_millis(200));
+            } else {
+                break;
+            }
+        }
+        let write_handle = engine.core.read().engine.cf_handle("write");
+        let start_key = encode_seek_key(&range.start, u64::MAX);
+        let mut iter = write_handle.owned_iter();
+
+        let guard = &epoch::pin();
+        iter.seek(&start_key, guard);
+        let end = encode_seek_key(&range.end, u64::MAX);
+        assert!(iter.key() > &end || !iter.valid());
+    }
+
     #[test]
     fn test_evict_range_without_snapshot() {
         let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
@@ -1915,7 +1943,7 @@ mod tests {
 
         engine.evict_range(&evict_range);
         assert!(engine.snapshot(range.clone(), 10, 200).is_none());
-        assert!(engine.snapshot(evict_range, 10, 200).is_none());
+        assert!(engine.snapshot(evict_range.clone(), 10, 200).is_none());
 
         let r_left = CacheRange::new(construct_user_key(0), construct_user_key(10));
         let r_right = CacheRange::new(construct_user_key(20), construct_user_key(30));
@@ -1938,6 +1966,9 @@ mod tests {
         let mut iter = snap_right.iterator_opt("write", iter_opt).unwrap();
         iter.seek_to_first().unwrap();
         verify_key_values(&mut iter, (20..30).step_by(1), 10..11, true, true);
+
+        // verify the key, values are delete
+        verify_evict_range_deleted(&engine, &evict_range);
     }
 
     #[test]
@@ -1972,40 +2003,42 @@ mod tests {
         let range_left = CacheRange::new(construct_user_key(0), construct_user_key(10));
         let s3 = engine.snapshot(range_left, 20, 20).unwrap();
         let range_right = CacheRange::new(construct_user_key(20), construct_user_key(30));
-        let _s4 = engine.snapshot(range_right, 20, 20).unwrap();
+        let s4 = engine.snapshot(range_right, 20, 20).unwrap();
 
         drop(s3);
         let range_left_eviction = CacheRange::new(construct_user_key(0), construct_user_key(5));
         engine.evict_range(&range_left_eviction);
 
-        // todo(SpadeA): use memory limiter to check the removal of the node
-        // {
-        //     let removed = engine.memory_limiter.removed.lock().unwrap();
-        //     assert!(removed.is_empty());
-        // }
+        // todo(SpadeA): memory limiter
+        {
+            // evict_range is not eligible for delete
+            assert!(
+                engine
+                    .core
+                    .read()
+                    .range_manager()
+                    .evicted_ranges()
+                    .contains(&evict_range)
+            );
+        }
 
         drop(s1);
-        // todo(SpadeA): use memory limiter to check the removal of the node
-        // {
-        //     let removed = engine.memory_limiter.removed.lock().unwrap();
-        //     for i in 10..20 {
-        //         let user_key = construct_key(i, 10);
-        //         let internal_key = encode_key(&user_key, 10, ValueType::Value);
-        //         assert!(!removed.contains(internal_key.as_slice()));
-        //     }
-        // }
-
+        {
+            // evict_range is still not eligible for delete
+            assert!(
+                engine
+                    .core
+                    .read()
+                    .range_manager()
+                    .evicted_ranges()
+                    .contains(&evict_range)
+            );
+        }
         drop(s2);
-        // todo(SpadeA): use memory limiter to check the removal of the node
-        // s2 is dropped, so the range of `evict_range` is removed. The snapshot
-        // of s3 and s4 does not prevent it as they are not overlapped.
-        // {
-        //     let removed = engine.memory_limiter.removed.lock().unwrap();
-        //     for i in 10..20 {
-        //         let user_key = construct_key(i, 10);
-        //         let internal_key = encode_key(&user_key, 10,
-        // ValueType::Value);         assert!(removed.
-        // contains(internal_key.as_slice()));     }
-        // }
+        // Now, all snapshots before evicting `evict_range` are released
+        verify_evict_range_deleted(&engine, &evict_range);
+
+        drop(s4);
+        verify_evict_range_deleted(&engine, &range_left_eviction);
     }
 }
