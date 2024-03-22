@@ -1463,7 +1463,7 @@ mod tests {
 
     #[test]
     fn test_json_member_of() {
-        let test_cases: Vec<(Option<&str>, Option<&str>, Option<i64>)> = vec![
+        let test_cases = vec![
             (Some(r#"1"#), Some(r#"[1,2]"#), Some(1)),
             (Some(r#"1"#), Some(r#"[1]"#), Some(1)),
             (Some(r#"1"#), Some(r#"[0]"#), Some(0)),
