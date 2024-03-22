@@ -100,11 +100,11 @@ pub struct RangeManager {
     // further write batch being cached. We must ensure the cached write batch is empty at the time
     // the range becoming accessable range.
     //
-    // Note: the region with range equaling to the range in the `pending_range`
-    // may have been splited. This is fine, we just let the first child region that
-    // calls the prepare_for_apply to schedule it. We should cache writes for all child regions,
-    // and the load task completes as long as the snapshot has been loaded and the cached write
-    // batches for this super range have all been consumed.
+    // Note: the region with range equaling to the range in the `pending_range` may have been
+    // split. This is fine, we just let the first child region that calls the prepare_for_apply
+    // to schedule it. We should cache writes for all child regions, and the load task
+    // completes as long as the snapshot has been loaded and the cached write batches for this
+    // super range have all been consumed.
     pub(crate) pending_ranges: Vec<CacheRange>,
     pub(crate) pending_ranges_loading_data: VecDeque<(CacheRange, Arc<RocksSnapshot>)>,
 

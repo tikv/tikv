@@ -228,7 +228,8 @@ impl RangeCacheMemoryEngine {
 
     /// Load the range in the in-memory engine.
     // This method only push the range in the `pending_range` where sometime
-    // later, the range will be scheduled to load snapshot data into engine.
+    // later in `prepare_for_apply`, the range will be scheduled to load snapshot
+    // data into engine.
     pub fn load_range(&self, range: CacheRange) -> result::Result<(), LoadFailedReason> {
         let mut core = self.core.write();
         core.mut_range_manager().load_range(range)
