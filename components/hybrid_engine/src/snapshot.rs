@@ -6,11 +6,9 @@ use std::{
 };
 
 use engine_traits::{
-    CfNamesExt, DbVector, IterOptions, Iterable, KvEngine, Peekable, RangeCacheEngine, ReadOptions,
-    Result, Snapshot, SnapshotMiscExt, CF_DEFAULT,
+    is_data_cf, CfNamesExt, DbVector, IterOptions, Iterable, Iterator, KvEngine, Peekable,
+    RangeCacheEngine, ReadOptions, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT,
 };
-
-use crate::engine_iterator::HybridEngineIterator;
 
 pub struct HybridEngineSnapshot<EK, EC>
 where
@@ -68,18 +66,36 @@ where
     EK: KvEngine,
     EC: RangeCacheEngine,
 {
-    type Iterator = HybridEngineIterator<EK, EC>;
+    // TODO (afeinberg): use `Either` instead of `Box<dyn Iterator>`
+    type Iterator = Box<dyn Iterator>;
 
     fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
-        unimplemented!()
+        Ok(match self.region_cache_snap() {
+            Some(region_cache_snap) if is_data_cf(cf) => {
+                Box::new(region_cache_snap.iterator_opt(cf, opts)?)
+            }
+            _ => Box::new(self.disk_snap.iterator_opt(cf, opts)?),
+        })
     }
 }
 
-/// TODO: May be possible to replace this with an Either.
+// TODO (afeinberg): use `Either` instead of `Box<dyn DbVector>`
 pub struct HybridDbVector(Box<dyn DbVector>);
 
 impl DbVector for HybridDbVector {}
 
+impl HybridDbVector {
+    pub fn try_from_snapshot(
+        snap: &impl Snapshot,
+        opts: &ReadOptions,
+        cf: &str,
+        key: &[u8],
+    ) -> Result<Option<HybridDbVector>> {
+        Ok(snap
+            .get_value_cf_opt(opts, cf, key)?
+            .map(|e| HybridDbVector(Box::new(e))))
+    }
+}
 impl Deref for HybridDbVector {
     type Target = [u8];
 
@@ -99,7 +115,6 @@ impl<'a> PartialEq<&'a [u8]> for HybridDbVector {
         **rhs == **self
     }
 }
-
 impl<EK, EC> Peekable for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
@@ -117,18 +132,12 @@ where
         cf: &str,
         key: &[u8],
     ) -> Result<Option<Self::DbVector>> {
-        self.region_cache_snap.as_ref().map_or_else(
-            || {
-                self.disk_snap
-                    .get_value_cf_opt(opts, cf, key)
-                    .map(|r| r.map(|e| HybridDbVector(Box::new(e))))
-            },
-            |cache_snapshot| {
-                cache_snapshot
-                    .get_value_cf_opt(opts, cf, key)
-                    .map(|r| r.map(|e| HybridDbVector(Box::new(e))))
-            },
-        )
+        match self.region_cache_snap() {
+            Some(region_cache_snap) if is_data_cf(cf) => {
+                Self::DbVector::try_from_snapshot(region_cache_snap, opts, cf, key)
+            }
+            _ => Self::DbVector::try_from_snapshot(&self.disk_snap, opts, cf, key),
+        }
     }
 }
 
@@ -149,5 +158,61 @@ where
 {
     fn sequence_number(&self) -> u64 {
         self.disk_snap.sequence_number()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use engine_traits::{
+        CacheRange, IterOptions, Iterable, KvEngine, Mutable, SnapshotContext, WriteBatch,
+        WriteBatchExt, CF_DEFAULT,
+    };
+
+    use crate::util::hybrid_engine_for_tests;
+
+    #[test]
+    fn test_iterator() {
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        let mut iter_opt = IterOptions::default();
+        iter_opt.set_upper_bound(&range.end, 0);
+        iter_opt.set_lower_bound(&range.start, 0);
+
+        let range_clone = range.clone();
+        let (_path, hybrid_engine) =
+            hybrid_engine_for_tests("temp", Duration::from_secs(1000), move |memory_engine| {
+                memory_engine.new_range(range_clone.clone());
+                {
+                    let mut core = memory_engine.core().write();
+                    core.mut_range_manager()
+                        .set_range_readable(&range_clone, true);
+                    core.mut_range_manager().set_safe_point(&range_clone, 5);
+                }
+            })
+            .unwrap();
+        let snap = hybrid_engine.snapshot(None);
+        {
+            let mut iter = snap.iterator_opt(CF_DEFAULT, iter_opt.clone()).unwrap();
+            assert!(!iter.seek_to_first().unwrap());
+        }
+        let mut write_batch = hybrid_engine.write_batch();
+        write_batch.cache_write_batch.set_range_in_cache(true);
+        write_batch.put(b"hello", b"world").unwrap();
+        let seq = write_batch.write().unwrap();
+        assert!(seq > 0);
+        let ctx = SnapshotContext {
+            range: Some(range.clone()),
+            read_ts: 10,
+        };
+        let snap = hybrid_engine.snapshot(Some(ctx));
+        {
+            let mut iter = snap.iterator_opt(CF_DEFAULT, iter_opt).unwrap();
+            assert!(iter.seek_to_first().unwrap());
+            let actual_key = iter.key();
+            let actual_value = iter.value();
+            assert_eq!(actual_key, b"hello");
+            assert_eq!(actual_value, b"world");
+        }
     }
 }
