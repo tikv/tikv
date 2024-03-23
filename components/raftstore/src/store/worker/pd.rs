@@ -7,8 +7,13 @@ use std::{
     io, mem,
     sync::{
         atomic::Ordering,
+<<<<<<< HEAD
         mpsc::{self, Receiver, Sender},
         Arc,
+=======
+        mpsc::{self, Receiver, Sender, SyncSender},
+        Arc, Mutex,
+>>>>>>> 101b8bc50f (raftstore: optimize AutoSplitController memory usage (#16678))
     },
     thread::{Builder, JoinHandle},
     time::{Duration, Instant},
@@ -51,6 +56,7 @@ use tikv_util::{
 use txn_types::TimeStamp;
 use yatp::Remote;
 
+use super::split_controller::AutoSplitControllerContext;
 use crate::{
     coprocessor::CoprocessorHost,
     router::RaftStoreRouter,
@@ -486,8 +492,8 @@ where
     scheduler: Scheduler<Task<EK, ER>>,
     handle: Option<JoinHandle<()>>,
     timer: Option<Sender<bool>>,
-    read_stats_sender: Option<Sender<ReadStats>>,
-    cpu_stats_sender: Option<Sender<Arc<RawRecords>>>,
+    read_stats_sender: Option<SyncSender<ReadStats>>,
+    cpu_stats_sender: Option<SyncSender<Arc<RawRecords>>>,
     collect_store_infos_interval: Duration,
     load_base_split_check_interval: Duration,
     collect_tick_interval: Duration,
@@ -551,10 +557,14 @@ where
         let (timer_tx, timer_rx) = mpsc::channel();
         self.timer = Some(timer_tx);
 
-        let (read_stats_sender, read_stats_receiver) = mpsc::channel();
+        // The upper bound of buffered stats messages.
+        // It prevents unexpected memory buildup when AutoSplitController
+        // runs slowly.
+        const STATS_LIMIT: usize = 128;
+        let (read_stats_sender, read_stats_receiver) = mpsc::sync_channel(STATS_LIMIT);
         self.read_stats_sender = Some(read_stats_sender);
 
-        let (cpu_stats_sender, cpu_stats_receiver) = mpsc::channel();
+        let (cpu_stats_sender, cpu_stats_receiver) = mpsc::sync_channel(STATS_LIMIT);
         self.cpu_stats_sender = Some(cpu_stats_sender);
 
         let scheduler = self.scheduler.clone();
@@ -572,6 +582,20 @@ where
                 // make sure the record won't be disturbed.
                 let mut collect_store_infos_thread_stats = ThreadInfoStatistics::new();
                 let mut load_base_split_thread_stats = ThreadInfoStatistics::new();
+<<<<<<< HEAD
+=======
+                let mut region_cpu_records_collector = None;
+                let mut auto_split_controller_ctx = AutoSplitControllerContext::new(STATS_LIMIT);
+                // Register the region CPU records collector.
+                if auto_split_controller
+                    .cfg
+                    .region_cpu_overload_threshold_ratio()
+                    > 0.0
+                {
+                    region_cpu_records_collector =
+                        Some(collector_reg_handle.register(Box::new(reporter.clone()), false));
+                }
+>>>>>>> 101b8bc50f (raftstore: optimize AutoSplitController memory usage (#16678))
                 while let Err(mpsc::RecvTimeoutError::Timeout) =
                     timer_rx.recv_timeout(tick_interval)
                 {
@@ -584,6 +608,7 @@ where
                     if is_enable_tick(timer_cnt, load_base_split_check_interval) {
                         StatsMonitor::load_base_split(
                             &mut auto_split_controller,
+                            &mut auto_split_controller_ctx,
                             &read_stats_receiver,
                             &cpu_stats_receiver,
                             &mut load_base_split_thread_stats,
@@ -630,6 +655,7 @@ where
 
     pub fn load_base_split(
         auto_split_controller: &mut AutoSplitController,
+        auto_split_controller_ctx: &mut AutoSplitControllerContext,
         read_stats_receiver: &Receiver<ReadStats>,
         cpu_stats_receiver: &Receiver<Arc<RawRecords>>,
         thread_stats: &mut ThreadInfoStatistics,
@@ -648,18 +674,14 @@ where
             }
             SplitConfigChange::Noop => {}
         }
-        let mut read_stats_vec = vec![];
-        while let Ok(read_stats) = read_stats_receiver.try_recv() {
-            read_stats_vec.push(read_stats);
-        }
-        let mut cpu_stats_vec = vec![];
-        while let Ok(cpu_stats) = cpu_stats_receiver.try_recv() {
-            cpu_stats_vec.push(cpu_stats);
-        }
-        thread_stats.record();
-        let (top_qps, split_infos) =
-            auto_split_controller.flush(read_stats_vec, cpu_stats_vec, thread_stats);
+        let (top_qps, split_infos) = auto_split_controller.flush(
+            auto_split_controller_ctx,
+            read_stats_receiver,
+            cpu_stats_receiver,
+            thread_stats,
+        );
         auto_split_controller.clear();
+<<<<<<< HEAD
         let task = Task::AutoSplit { split_infos };
         if let Err(e) = scheduler.schedule(task) {
             error!(
@@ -667,6 +689,10 @@ where
                 "err" => ?e,
             );
         }
+=======
+        auto_split_controller_ctx.maybe_gc();
+        reporter.auto_split(split_infos);
+>>>>>>> 101b8bc50f (raftstore: optimize AutoSplitController memory usage (#16678))
         for i in 0..TOP_N {
             if i < top_qps.len() {
                 READ_QPS_TOPN
@@ -707,6 +733,7 @@ where
         }
     }
 
+<<<<<<< HEAD
     #[inline(always)]
     fn get_read_stats_sender(&self) -> &Option<Sender<ReadStats>> {
         &self.read_stats_sender
@@ -715,6 +742,24 @@ where
     #[inline(always)]
     fn get_cpu_stats_sender(&self) -> &Option<Sender<Arc<RawRecords>>> {
         &self.cpu_stats_sender
+=======
+    #[inline]
+    pub fn maybe_send_read_stats(&self, read_stats: ReadStats) {
+        if let Some(sender) = &self.read_stats_sender {
+            if sender.send(read_stats).is_err() {
+                debug!("send read_stats failed, are we shutting down?")
+            }
+        }
+    }
+
+    #[inline]
+    pub fn maybe_send_cpu_stats(&self, cpu_stats: &Arc<RawRecords>) {
+        if let Some(sender) = &self.cpu_stats_sender {
+            if sender.send(cpu_stats.clone()).is_err() {
+                debug!("send region cpu info failed, are we shutting down?")
+            }
+        }
+>>>>>>> 101b8bc50f (raftstore: optimize AutoSplitController memory usage (#16678))
     }
 }
 
