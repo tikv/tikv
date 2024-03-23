@@ -7,8 +7,13 @@ use std::{
     io, mem,
     sync::{
         atomic::Ordering,
+<<<<<<< HEAD
         mpsc::{self, Receiver, Sender},
         Arc,
+=======
+        mpsc::{self, Receiver, Sender, SyncSender},
+        Arc, Mutex,
+>>>>>>> 101b8bc50f (raftstore: optimize AutoSplitController memory usage (#16678))
     },
     thread::{Builder, JoinHandle},
     time::{Duration, Instant},
@@ -48,6 +53,7 @@ use tikv_util::{
 };
 use yatp::Remote;
 
+<<<<<<< HEAD
 use crate::store::{
     cmd_resp::new_error,
     metrics::*,
@@ -58,6 +64,25 @@ use crate::store::{
         query_stats::QueryStats,
         split_controller::{SplitInfo, TOP_N},
         AutoSplitController, ReadStats, WriteStats,
+=======
+use super::split_controller::AutoSplitControllerContext;
+use crate::{
+    coprocessor::CoprocessorHost,
+    router::RaftStoreRouter,
+    store::{
+        cmd_resp::new_error,
+        metrics::*,
+        unsafe_recovery::{
+            UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
+        },
+        util::{is_epoch_stale, KeysInfoFormatter},
+        worker::{
+            split_controller::{SplitInfo, TOP_N},
+            AutoSplitController, ReadStats, SplitConfigChange, WriteStats,
+        },
+        Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
+        SnapManager, StoreInfo, StoreMsg, TxnExt,
+>>>>>>> 101b8bc50f (raftstore: optimize AutoSplitController memory usage (#16678))
     },
     Callback, CasualMessage, Config, PeerMsg, RaftCmdExtraOpts, RaftCommand, RaftRouter,
     RegionReadProgressRegistry, SignificantMsg, SnapManager, StoreInfo, StoreMsg, TxnExt,
@@ -463,7 +488,12 @@ where
     scheduler: Scheduler<Task<EK, ER>>,
     handle: Option<JoinHandle<()>>,
     timer: Option<Sender<bool>>,
+<<<<<<< HEAD
     read_stats_sender: Option<Sender<ReadStats>>,
+=======
+    read_stats_sender: Option<SyncSender<ReadStats>>,
+    cpu_stats_sender: Option<SyncSender<Arc<RawRecords>>>,
+>>>>>>> 101b8bc50f (raftstore: optimize AutoSplitController memory usage (#16678))
     collect_store_infos_interval: Duration,
     load_base_split_check_interval: Duration,
     collect_tick_interval: Duration,
@@ -526,10 +556,24 @@ where
         let (tx, rx) = mpsc::channel();
         self.timer = Some(tx);
 
+<<<<<<< HEAD
         let (sender, receiver) = mpsc::channel();
         self.read_stats_sender = Some(sender);
 
         let scheduler = self.scheduler.clone();
+=======
+        // The upper bound of buffered stats messages.
+        // It prevents unexpected memory buildup when AutoSplitController
+        // runs slowly.
+        const STATS_LIMIT: usize = 128;
+        let (read_stats_sender, read_stats_receiver) = mpsc::sync_channel(STATS_LIMIT);
+        self.read_stats_sender = Some(read_stats_sender);
+
+        let (cpu_stats_sender, cpu_stats_receiver) = mpsc::sync_channel(STATS_LIMIT);
+        self.cpu_stats_sender = Some(cpu_stats_sender);
+
+        let reporter = self.reporter.clone();
+>>>>>>> 101b8bc50f (raftstore: optimize AutoSplitController memory usage (#16678))
         let props = tikv_util::thread_group::current_properties();
 
         fn is_enable_tick(timer_cnt: u64, interval: u64) -> bool {
@@ -539,17 +583,49 @@ where
             .name(thd_name!("stats-monitor"))
             .spawn(move || {
                 tikv_util::thread_group::set_properties(props);
+<<<<<<< HEAD
                 tikv_alloc::add_thread_memory_accessor();
                 let mut thread_stats = ThreadInfoStatistics::new();
                 while let Err(mpsc::RecvTimeoutError::Timeout) = rx.recv_timeout(tick_interval) {
+=======
+
+                // Create different `ThreadInfoStatistics` for different purposes to
+                // make sure the record won't be disturbed.
+                let mut collect_store_infos_thread_stats = ThreadInfoStatistics::new();
+                let mut load_base_split_thread_stats = ThreadInfoStatistics::new();
+                let mut region_cpu_records_collector = None;
+                let mut auto_split_controller_ctx = AutoSplitControllerContext::new(STATS_LIMIT);
+                // Register the region CPU records collector.
+                if auto_split_controller
+                    .cfg
+                    .region_cpu_overload_threshold_ratio()
+                    > 0.0
+                {
+                    region_cpu_records_collector =
+                        Some(collector_reg_handle.register(Box::new(reporter.clone()), false));
+                }
+                while let Err(mpsc::RecvTimeoutError::Timeout) =
+                    timer_rx.recv_timeout(tick_interval)
+                {
+>>>>>>> 101b8bc50f (raftstore: optimize AutoSplitController memory usage (#16678))
                     if is_enable_tick(timer_cnt, collect_store_infos_interval) {
                         StatsMonitor::collect_store_infos(&mut thread_stats, &scheduler);
                     }
                     if is_enable_tick(timer_cnt, load_base_split_check_interval) {
                         StatsMonitor::load_base_split(
                             &mut auto_split_controller,
+<<<<<<< HEAD
                             &receiver,
                             &scheduler,
+=======
+                            &mut auto_split_controller_ctx,
+                            &read_stats_receiver,
+                            &cpu_stats_receiver,
+                            &mut load_base_split_thread_stats,
+                            &reporter,
+                            &collector_reg_handle,
+                            &mut region_cpu_records_collector,
+>>>>>>> 101b8bc50f (raftstore: optimize AutoSplitController memory usage (#16678))
                         );
                     }
                     if is_enable_tick(timer_cnt, report_min_resolved_ts_interval) {
@@ -592,14 +668,25 @@ where
 
     pub fn load_base_split(
         auto_split_controller: &mut AutoSplitController,
+<<<<<<< HEAD
         receiver: &Receiver<ReadStats>,
         scheduler: &Scheduler<Task<EK, ER>>,
+=======
+        auto_split_controller_ctx: &mut AutoSplitControllerContext,
+        read_stats_receiver: &Receiver<ReadStats>,
+        cpu_stats_receiver: &Receiver<Arc<RawRecords>>,
+        thread_stats: &mut ThreadInfoStatistics,
+        reporter: &T,
+        collector_reg_handle: &CollectorRegHandle,
+        region_cpu_records_collector: &mut Option<CollectorGuard>,
+>>>>>>> 101b8bc50f (raftstore: optimize AutoSplitController memory usage (#16678))
     ) {
         auto_split_controller.refresh_cfg();
         let mut others = vec![];
         while let Ok(other) = receiver.try_recv() {
             others.push(other);
         }
+<<<<<<< HEAD
         let (top, split_infos) = auto_split_controller.flush(others);
         auto_split_controller.clear();
         let task = Task::AutoSplit { split_infos };
@@ -609,6 +696,17 @@ where
                 "err" => ?e,
             );
         }
+=======
+        let (top_qps, split_infos) = auto_split_controller.flush(
+            auto_split_controller_ctx,
+            read_stats_receiver,
+            cpu_stats_receiver,
+            thread_stats,
+        );
+        auto_split_controller.clear();
+        auto_split_controller_ctx.maybe_gc();
+        reporter.auto_split(split_infos);
+>>>>>>> 101b8bc50f (raftstore: optimize AutoSplitController memory usage (#16678))
         for i in 0..TOP_N {
             if i < top.len() {
                 READ_QPS_TOPN
@@ -655,8 +753,27 @@ where
         }
     }
 
+<<<<<<< HEAD
     pub fn get_sender(&self) -> &Option<Sender<ReadStats>> {
         &self.read_stats_sender
+=======
+    #[inline]
+    pub fn maybe_send_read_stats(&self, read_stats: ReadStats) {
+        if let Some(sender) = &self.read_stats_sender {
+            if sender.send(read_stats).is_err() {
+                debug!("send read_stats failed, are we shutting down?")
+            }
+        }
+    }
+
+    #[inline]
+    pub fn maybe_send_cpu_stats(&self, cpu_stats: &Arc<RawRecords>) {
+        if let Some(sender) = &self.cpu_stats_sender {
+            if sender.send(cpu_stats.clone()).is_err() {
+                debug!("send region cpu info failed, are we shutting down?")
+            }
+        }
+>>>>>>> 101b8bc50f (raftstore: optimize AutoSplitController memory usage (#16678))
     }
 }
 
