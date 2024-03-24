@@ -22,6 +22,9 @@ pub trait RangeCacheEngine:
 
     type DiskEngine: KvEngine;
     fn set_disk_engine(&mut self, disk_engine: Self::DiskEngine);
+
+    // return the range containing the key
+    fn get_range_for_key(&self, key: &[u8]) -> Option<CacheRange>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -85,18 +88,19 @@ impl CacheRange {
         self.start < other.end && other.start < self.end
     }
 
-    pub fn split_off(&self, key: &CacheRange) -> (Option<CacheRange>, Option<CacheRange>) {
-        let left = if self.start != key.start {
+    pub fn split_off(&self, range: &CacheRange) -> (Option<CacheRange>, Option<CacheRange>) {
+        assert!(self.contains_range(range));
+        let left = if self.start != range.start {
             Some(CacheRange {
                 start: self.start.clone(),
-                end: key.start.clone(),
+                end: range.start.clone(),
             })
         } else {
             None
         };
-        let right = if self.end != key.end {
+        let right = if self.end != range.end {
             Some(CacheRange {
-                start: key.end.clone(),
+                start: range.end.clone(),
                 end: self.end.clone(),
             })
         } else {

@@ -16,7 +16,6 @@ mod coprocessor;
 mod import;
 mod pd;
 mod raftstore;
-mod range_cache_engine;
 mod resource_metering;
 mod server;
 mod server_encryption;

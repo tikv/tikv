@@ -3082,7 +3082,12 @@ fn test_pessimistic_rollback_with_read_first() {
 #[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_pipelined_dml_flush() {
     let (_cluster, client, ctx) = new_cluster();
-    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    // k1 is put
+    let (k1, v) = (b"key".to_vec(), b"value".to_vec());
+    // k2 is deletion
+    let k2 = b"key2".to_vec();
+    // k3 is not touched
+    let k3 = b"key3".to_vec();
     let pk = b"primary".to_vec();
     let mut flush_req = FlushRequest::default();
     flush_req.set_mutations(
@@ -3095,8 +3100,14 @@ fn test_pipelined_dml_flush() {
             },
             Mutation {
                 op: Op::Put,
-                key: k.clone(),
+                key: k1.clone(),
                 value: v.clone(),
+                ..Default::default()
+            },
+            Mutation {
+                op: Op::Del,
+                key: k2.clone(),
+                value: vec![],
                 ..Default::default()
             },
         ]
@@ -3112,28 +3123,30 @@ fn test_pipelined_dml_flush() {
 
     let mut batch_get_req = BufferBatchGetRequest::default();
     batch_get_req.set_context(ctx.clone());
-    batch_get_req.set_keys(vec![k.clone()].into());
+    batch_get_req.set_keys(vec![k1.clone(), k2.clone(), k3.clone()].into());
     batch_get_req.set_version(1);
     let batch_get_resp = client.kv_buffer_batch_get(&batch_get_req).unwrap();
     assert!(!batch_get_resp.has_region_error());
     let pairs = batch_get_resp.get_pairs();
-    assert_eq!(pairs.len(), 1);
+    assert_eq!(pairs.len(), 2);
     assert!(!pairs[0].has_error());
-    assert_eq!(pairs[0].get_key(), k.as_slice());
+    assert_eq!(pairs[0].get_key(), k1.as_slice());
     assert_eq!(pairs[0].get_value(), v.as_slice());
+    assert_eq!(pairs[1].get_key(), k2.as_slice());
+    assert!(pairs[1].get_value().is_empty());
 
     let mut commit_req = CommitRequest::default();
     commit_req.set_context(ctx.clone());
     commit_req.set_start_version(1);
     commit_req.set_commit_version(2);
-    commit_req.set_keys(vec![pk.clone(), k.clone()].into());
+    commit_req.set_keys(vec![pk.clone(), k1.clone()].into());
     let commit_resp = client.kv_commit(&commit_req).unwrap();
     assert!(!commit_resp.has_region_error());
     assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
 
     let mut get_req = GetRequest::default();
     get_req.set_context(ctx);
-    get_req.set_key(k);
+    get_req.set_key(k1);
     get_req.set_version(10);
     let get_resp = client.kv_get(&get_req).unwrap();
     assert!(!get_resp.has_region_error());
@@ -3409,4 +3422,69 @@ fn test_check_cluster_id() {
     }
     assert!(error_match);
     assert_eq!(max_ts_before_req, cm.max_ts());
+}
+
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
+fn test_check_cluster_id_for_batch_cmds() {
+    let (_cluster, client, ctx) = new_cluster();
+    let k1 = b"k1";
+    let v1 = b"v1";
+    let ts = 1;
+    // Prewrite and commit.
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.set_key(k1.to_vec());
+    mutation.set_value(v1.to_vec());
+    must_kv_prewrite(&client, ctx.clone(), vec![mutation], k1.to_vec(), ts);
+    must_kv_commit(&client, ctx.clone(), vec![k1.to_vec()], ts, ts + 1, ts + 1);
+
+    // Test batch command requests.
+    for set_cluster_id in [false, true] {
+        let batch_req_num = 10usize;
+        for invalid_req_index in [0, 5, 9, 20] {
+            let (mut sender, receiver) = client.batch_commands().unwrap();
+            let mut batch_req = BatchCommandsRequest::default();
+            for i in 0..batch_req_num {
+                let mut get = GetRequest::default();
+                get.version = ts + 10;
+                get.key = k1.to_vec();
+                get.set_context(ctx.clone());
+                if set_cluster_id {
+                    get.mut_context().cluster_id = ctx.cluster_id;
+                    if i == invalid_req_index {
+                        get.mut_context().cluster_id = ctx.cluster_id + 100;
+                    }
+                }
+                let mut req = batch_commands_request::Request::default();
+                req.cmd = Some(batch_commands_request::request::Cmd::Get(get));
+                batch_req.mut_requests().push(req);
+                batch_req.mut_request_ids().push(i as u64);
+            }
+            block_on(sender.send((batch_req, WriteFlags::default()))).unwrap();
+            block_on(sender.close()).unwrap();
+            let (tx, rx) = mpsc::sync_channel(1);
+
+            thread::spawn(move || {
+                let mut count = 0;
+                for x in block_on(
+                    receiver
+                        .map(move |b| match b {
+                            Ok(batch) => batch.get_responses().len(),
+                            Err(..) => 0,
+                        })
+                        .collect::<Vec<usize>>(),
+                ) {
+                    count += x;
+                }
+                tx.send(count).unwrap();
+            });
+            let received_cnt = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            if !set_cluster_id || invalid_req_index >= batch_req_num {
+                assert_eq!(received_cnt, batch_req_num);
+            } else {
+                assert!(received_cnt < batch_req_num);
+            }
+        }
+    }
 }
