@@ -1,5 +1,10 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
 use engine_traits::{
     is_data_cf, CacheRange, KvEngine, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions,
 };
@@ -40,10 +45,13 @@ impl<EK: KvEngine> WriteBatch for HybridEngineWriteBatch<EK> {
     }
 
     fn write_callback_opt(&mut self, opts: &WriteOptions, mut cb: impl FnMut(u64)) -> Result<u64> {
+        let called = Arc::new(AtomicBool::new(false));
         self.disk_write_batch
             .write_callback_opt(opts, |s| {
-                self.cache_write_batch.set_sequence_number(s).unwrap();
-                self.cache_write_batch.write_opt(opts).unwrap();
+                if !called.fetch_or(true, Ordering::SeqCst) {
+                    self.cache_write_batch.set_sequence_number(s).unwrap();
+                    self.cache_write_batch.write_opt(opts).unwrap();
+                }
             })
             .map(|s| {
                 cb(s);
