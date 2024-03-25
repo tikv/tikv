@@ -6,9 +6,11 @@ use std::{
 };
 
 use engine_traits::{
-    is_data_cf, CfNamesExt, DbVector, IterOptions, Iterable, Iterator, KvEngine, Peekable,
-    RangeCacheEngine, ReadOptions, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT,
+    is_data_cf, CfNamesExt, DbVector, IterOptions, Iterable, KvEngine, Peekable, RangeCacheEngine,
+    ReadOptions, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT,
 };
+
+use crate::engine_iterator::HybridEngineIterator;
 
 pub struct HybridEngineSnapshot<EK, EC>
 where
@@ -66,15 +68,16 @@ where
     EK: KvEngine,
     EC: RangeCacheEngine,
 {
-    // TODO (afeinberg): use `Either` instead of `Box<dyn Iterator>`
-    type Iterator = Box<dyn Iterator>;
+    type Iterator = HybridEngineIterator<EK, EC>;
 
     fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
         Ok(match self.region_cache_snap() {
-            Some(region_cache_snap) if is_data_cf(cf) => {
-                Box::new(region_cache_snap.iterator_opt(cf, opts)?)
+            Some(ref region_cache_snap) if is_data_cf(cf) => {
+                HybridEngineIterator::region_cache_engine_iterator(
+                    region_cache_snap.iterator_opt(cf, opts)?,
+                )
             }
-            _ => Box::new(self.disk_snap.iterator_opt(cf, opts)?),
+            _ => HybridEngineIterator::disk_engine_iterator(self.disk_snap.iterator_opt(cf, opts)?),
         })
     }
 }
@@ -166,8 +169,8 @@ mod tests {
     use std::time::Duration;
 
     use engine_traits::{
-        CacheRange, IterOptions, Iterable, KvEngine, Mutable, SnapshotContext, WriteBatch,
-        WriteBatchExt, CF_DEFAULT,
+        CacheRange, IterOptions, Iterable, Iterator, KvEngine, Mutable, SnapshotContext,
+        WriteBatch, WriteBatchExt, CF_DEFAULT,
     };
 
     use crate::util::hybrid_engine_for_tests;

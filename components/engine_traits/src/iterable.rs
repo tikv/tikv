@@ -109,44 +109,6 @@ pub trait Iterator: Send {
     fn valid(&self) -> Result<bool>;
 }
 
-impl<T: Iterator + ?Sized> Iterator for Box<T> {
-    fn seek(&mut self, key: &[u8]) -> Result<bool> {
-        (**self).seek(key)
-    }
-
-    fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
-        (**self).seek_for_prev(key)
-    }
-
-    fn seek_to_first(&mut self) -> Result<bool> {
-        (**self).seek_to_first()
-    }
-
-    fn seek_to_last(&mut self) -> Result<bool> {
-        (**self).seek_to_last()
-    }
-
-    fn prev(&mut self) -> Result<bool> {
-        (**self).prev()
-    }
-
-    fn next(&mut self) -> Result<bool> {
-        (**self).next()
-    }
-
-    fn key(&self) -> &[u8] {
-        (**self).key()
-    }
-
-    fn value(&self) -> &[u8] {
-        (**self).value()
-    }
-
-    fn valid(&self) -> Result<bool> {
-        (**self).valid()
-    }
-}
-
 pub trait RefIterable {
     type Iterator<'a>: Iterator
     where
