@@ -279,16 +279,22 @@ impl RangeManager {
             .any(|r| r.overlaps(evict_range))
     }
 
-    pub fn on_delete_range(&mut self, range: &CacheRange) {
-        self.evicted_ranges.remove(range);
+    pub fn on_delete_ranges(&mut self, ranges: &[CacheRange]) {
+        for r in ranges {
+            self.evicted_ranges.remove(r);
+        }
+    }
+
+    pub fn has_ranges_in_gc(&self) -> bool {
+        !self.ranges_in_gc.is_empty()
     }
 
     pub fn set_ranges_in_gc(&mut self, ranges_in_gc: BTreeSet<CacheRange>) {
         self.ranges_in_gc = ranges_in_gc;
     }
 
-    pub fn clear_ranges_in_gc(&mut self) {
-        self.ranges_in_gc = BTreeSet::default();
+    pub fn on_gc_finished(&mut self, range: BTreeSet<CacheRange>) {
+        assert_eq!(range, std::mem::take(&mut self.ranges_in_gc));
     }
 
     pub fn load_range(&mut self, cache_range: CacheRange) -> Result<(), LoadFailedReason> {
@@ -303,6 +309,11 @@ impl RangeManager {
         }
         self.pending_ranges.push(cache_range);
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn evicted_ranges(&self) -> &BTreeSet<CacheRange> {
+        &self.evicted_ranges
     }
 }
 
