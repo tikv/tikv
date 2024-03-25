@@ -1,16 +1,13 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    fmt::{self, Debug, Formatter},
-    ops::Deref,
-};
+use std::fmt::{self, Debug, Formatter};
 
 use engine_traits::{
-    is_data_cf, CfNamesExt, DbVector, IterOptions, Iterable, KvEngine, Peekable, RangeCacheEngine,
+    is_data_cf, CfNamesExt, IterOptions, Iterable, KvEngine, Peekable, RangeCacheEngine,
     ReadOptions, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT,
 };
 
-use crate::engine_iterator::HybridEngineIterator;
+use crate::{db_vector::HybridDbVector, engine_iterator::HybridEngineIterator};
 
 pub struct HybridEngineSnapshot<EK, EC>
 where
@@ -72,7 +69,7 @@ where
 
     fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
         Ok(match self.region_cache_snap() {
-            Some(ref region_cache_snap) if is_data_cf(cf) => {
+            Some(region_cache_snap) if is_data_cf(cf) => {
                 HybridEngineIterator::region_cache_engine_iterator(
                     region_cache_snap.iterator_opt(cf, opts)?,
                 )
@@ -82,48 +79,12 @@ where
     }
 }
 
-// TODO (afeinberg): use `Either` instead of `Box<dyn DbVector>`
-pub struct HybridDbVector(Box<dyn DbVector>);
-
-impl DbVector for HybridDbVector {}
-
-impl HybridDbVector {
-    pub fn try_from_snapshot(
-        snap: &impl Snapshot,
-        opts: &ReadOptions,
-        cf: &str,
-        key: &[u8],
-    ) -> Result<Option<HybridDbVector>> {
-        Ok(snap
-            .get_value_cf_opt(opts, cf, key)?
-            .map(|e| HybridDbVector(Box::new(e))))
-    }
-}
-impl Deref for HybridDbVector {
-    type Target = [u8];
-
-    fn deref(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl Debug for HybridDbVector {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{:?}", &**self)
-    }
-}
-
-impl<'a> PartialEq<&'a [u8]> for HybridDbVector {
-    fn eq(&self, rhs: &&[u8]) -> bool {
-        **rhs == **self
-    }
-}
 impl<EK, EC> Peekable for HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,
     EC: RangeCacheEngine,
 {
-    type DbVector = HybridDbVector;
+    type DbVector = HybridDbVector<EK, EC>;
 
     fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Self::DbVector>> {
         self.get_value_cf_opt(opts, CF_DEFAULT, key)
@@ -137,9 +98,9 @@ where
     ) -> Result<Option<Self::DbVector>> {
         match self.region_cache_snap() {
             Some(region_cache_snap) if is_data_cf(cf) => {
-                Self::DbVector::try_from_snapshot(region_cache_snap, opts, cf, key)
+                Self::DbVector::try_from_cache_snap(region_cache_snap, opts, cf, key)
             }
-            _ => Self::DbVector::try_from_snapshot(&self.disk_snap, opts, cf, key),
+            _ => Self::DbVector::try_from_disk_snap(&self.disk_snap, opts, cf, key),
         }
     }
 }
