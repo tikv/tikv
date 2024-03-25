@@ -1705,7 +1705,7 @@ impl SnapManager {
         let base = &self.core.base;
         // Use CheckPolicy::None to avoid reading meta file
         let s = Snapshot::new(base, key, false, CheckPolicy::None, &self.core)?;
-        if !file_exists(&s.meta_file.path) {
+        if !file_exists(s.meta_file.path.as_path()) {
             return Err(RaftStoreError::Other(From::from(format!(
                 "snapshot of {:?} not exists.",
                 key
