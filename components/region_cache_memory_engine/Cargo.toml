@@ -31,6 +31,9 @@ engine_rocks = { workspace = true }
 fail = "0.5"
 yatp = { workspace = true }
 parking_lot = "0.12"
+prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
+prometheus-static-metric = "0.5"
+lazy_static = "1.4.0"
 
 [dev-dependencies]
 keys = { workspace = true }
