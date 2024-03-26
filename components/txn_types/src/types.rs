@@ -346,7 +346,7 @@ impl Display for Mutation {
             }
             Mutation::Insert((key, value), assertion) => write!(
                 f,
-                "Put key:{:?} value:{:?} assertion:{:?}",
+                "Insert key:{:?} value:{:?} assertion:{:?}",
                 key,
                 &log_wrappers::Value::value(value),
                 assertion
