@@ -185,6 +185,12 @@ lazy_static! {
         .unwrap();
     pub static ref MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC: MemLockCheckHistogramVec =
         auto_flush_from!(MEM_LOCK_CHECK_HISTOGRAM_VEC, MemLockCheckHistogramVec);
+
+    pub static ref COPR_CACHE_EFFICIENCY_VEC: IntCounterVec = register_int_counter_vec!(
+        "corp_cache_efficiency",
+        "Efficiency of corp cache",
+        &["type"]
+    ).unwrap();
 }
 
 make_static_metric! {
