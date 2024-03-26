@@ -99,9 +99,11 @@ where
             RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
                 .no_read_ts
                 .inc();
-            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
             None
         };
+        if region_cache_snap.is_none() {
+            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
+        }
         HybridEngineSnapshot::new(disk_snap, region_cache_snap)
     }
 
