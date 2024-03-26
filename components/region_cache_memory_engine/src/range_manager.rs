@@ -350,8 +350,8 @@ mod tests {
             range_mgr.range_snapshot(&r1, 5).unwrap_err(),
             FailedReason::ReadTsBelowSafePoint
         );
-        assert!(range_mgr.range_snapshot(&r1, 8).is_ok());
-        assert!(range_mgr.range_snapshot(&r1, 10).is_ok());
+        range_mgr.range_snapshot(&r1, 8).unwrap();
+        range_mgr.range_snapshot(&r1, 10).unwrap();
         let tmp_r = CacheRange::new(b"k08".to_vec(), b"k15".to_vec());
         assert_eq!(
             range_mgr.range_snapshot(&tmp_r, 8).unwrap_err(),
