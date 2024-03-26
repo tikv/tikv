@@ -847,6 +847,9 @@ impl Delegate {
                 .filter(|x| downstream.observed_range.contains_raw_key(&x.key))
                 .cloned()
                 .collect();
+            if filtered_entries.is_empty() {
+                continue;
+            }
             let event = Event {
                 region_id: self.region_id,
                 index,
@@ -902,6 +905,9 @@ impl Delegate {
                     let lock_count = lock_heap.entry(entry.start_ts.into()).or_default();
                     *lock_count += *lock_count_modify;
                 }
+            }
+            if filtered_entries.is_empty() {
+                continue;
             }
             let event = Event {
                 region_id: self.region_id,
