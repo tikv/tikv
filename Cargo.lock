@@ -2544,7 +2544,10 @@ version = "0.0.1"
 dependencies = [
  "engine_rocks",
  "engine_traits",
+ "lazy_static",
  "log_wrappers",
+ "prometheus",
+ "prometheus-static-metric",
  "region_cache_memory_engine",
  "slog",
  "slog-global",

@@ -24,6 +24,7 @@ mod table_properties;
 mod ttl_properties;
 pub mod util;
 mod write_batch;
+mod metrics;
 
 pub use engine::HybridEngine;
 pub use snapshot::HybridEngineSnapshot;

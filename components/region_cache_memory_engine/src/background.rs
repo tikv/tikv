@@ -22,12 +22,9 @@ use tikv_util::{
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use crate::{
-    engine::RangeCacheMemoryEngineCore,
-    keys::{
+    engine::RangeCacheMemoryEngineCore, keys::{
         decode_key, encode_key, encoding_for_filter, InternalKey, InternalKeyComparator, ValueType,
-    },
-    memory_limiter::GlobalMemoryLimiter,
-    skiplist::Skiplist,
+    }, memory_limiter::GlobalMemoryLimiter, metrics::GC_FILTERED_STATIC, skiplist::Skiplist
 };
 
 /// Try to extract the key and `u64` timestamp from `encoded_key`.
@@ -246,11 +243,11 @@ impl BackgroundRunner {
         ranges
     }
 
-    fn gc_range(&self, range: &CacheRange, safe_point: u64) {
+    fn gc_range(&self, range: &CacheRange, safe_point: u64) -> FilterMetrics {
         let (skiplist_engine, safe_ts) = {
             let mut core = self.engine_core.write().unwrap();
             let Some(range_meta) = core.mut_range_manager().mut_range_meta(range) else {
-                return;
+                return FilterMetrics::default();
             };
             let min_snapshot = range_meta
                 .range_snapshot_list()
@@ -264,7 +261,7 @@ impl BackgroundRunner {
                     "prev" => range_meta.safe_point(),
                     "current" => safe_point,
                 );
-                return;
+                return FilterMetrics::default();
             }
 
             // todo: change it to debug!
@@ -302,11 +299,13 @@ impl BackgroundRunner {
             "range gc complete";
             "range" => ?range,
             "total_version" => count,
-            "unique_keys" => filter.unique_key,
-            "outdated_version" => filter.versions,
-            "outdated_delete_version" => filter.delete_versions,
-            "filtered_version" => filter.filtered,
+            "unique_keys" => filter.metrics.unique_key,
+            "outdated_version" => filter.metrics.versions,
+            "outdated_delete_version" => filter.metrics.delete_versions,
+            "filtered_version" => filter.metrics.filtered,
         );
+
+        std::mem::take(&mut filter.metrics)
     }
 
     fn gc_finished(&mut self) {
@@ -361,10 +360,13 @@ impl Runnable for BackgroundRunner {
         match task {
             BackgroundTask::GcTask(t) => {
                 let ranges = self.ranges_for_gc();
+                let mut metrics = FilterMetrics::default();
                 for range in ranges {
-                    self.gc_range(&range, t.safe_point);
+                    let m = self.gc_range(&range, t.safe_point);
+                    metrics.merge(&m);
                 }
                 self.gc_finished();
+                metrics.flush();
             }
             BackgroundTask::ClearTombstone => {
                 // let ranges: Vec<_> = {
@@ -409,6 +411,38 @@ impl Runnable for BackgroundRunner {
     }
 }
 
+#[derive(Default)]
+struct FilterMetrics {
+    total: usize,
+    versions: usize,
+    delete_versions: usize,
+    filtered: usize,
+    unique_key: usize,
+    mvcc_rollback_and_locks: usize,
+}
+
+impl FilterMetrics {
+    fn merge(&mut self, other: &FilterMetrics) {
+        self.total += other.total;
+        self.versions += other.versions;
+        self.delete_versions += other.delete_versions;
+        self.filtered += other.filtered;
+        self.unique_key += other.unique_key;
+        self.mvcc_rollback_and_locks += other.mvcc_rollback_and_locks;
+    }
+
+    fn flush(&self) {
+        GC_FILTERED_STATIC.total.inc_by(self.total as u64);
+        GC_FILTERED_STATIC
+            .below_safe_point_total
+            .inc_by(self.versions as u64);
+        GC_FILTERED_STATIC.filtered.inc_by(self.filtered as u64);
+        GC_FILTERED_STATIC
+            .below_safe_point_unique
+            .inc_by(self.unique_key as u64);
+    }
+}
+
 struct Filter {
     safe_point: u64,
     mvcc_key_prefix: Vec<u8>,
@@ -423,11 +457,7 @@ struct Filter {
     filtered_write_key_buffer: Vec<Vec<u8>>,
     cached_delete_key: Option<Vec<u8>>,
 
-    versions: usize,
-    delete_versions: usize,
-    filtered: usize,
-    unique_key: usize,
-    mvcc_rollback_and_locks: usize,
+    metrics: FilterMetrics,
 }
 
 impl Drop for Filter {
@@ -448,16 +478,12 @@ impl Filter {
             safe_point,
             default_cf_handle,
             write_cf_handle,
-            unique_key: 0,
             filtered_write_key_size: 0,
             filtered_write_key_buffer: Vec::with_capacity(100),
             mvcc_key_prefix: vec![],
-            delete_versions: 0,
-            versions: 0,
-            filtered: 0,
             cached_delete_key: None,
-            mvcc_rollback_and_locks: 0,
             remove_older: false,
+            metrics: FilterMetrics::default(),
         }
     }
 
@@ -469,9 +495,9 @@ impl Filter {
             return Ok(());
         }
 
-        self.versions += 1;
+        self.metrics.versions += 1;
         if self.mvcc_key_prefix != mvcc_key_prefix {
-            self.unique_key += 1;
+            self.metrics.unique_key += 1;
             self.mvcc_key_prefix.clear();
             self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
             self.remove_older = false;
@@ -485,12 +511,12 @@ impl Filter {
         if !self.remove_older {
             match write.write_type {
                 WriteType::Rollback | WriteType::Lock => {
-                    self.mvcc_rollback_and_locks += 1;
+                    self.metrics.mvcc_rollback_and_locks += 1;
                     filtered = true;
                 }
                 WriteType::Put => self.remove_older = true,
                 WriteType::Delete => {
-                    self.delete_versions += 1;
+                    self.metrics.delete_versions += 1;
                     self.remove_older = true;
 
                     // The first mvcc type below safe point is the mvcc delete. We should delay to
@@ -504,7 +530,7 @@ impl Filter {
         if !filtered {
             return Ok(());
         }
-        self.filtered += 1;
+        self.metrics.filtered += 1;
         self.write_cf_handle.remove(key);
         self.handle_filtered_write(write)?;
 

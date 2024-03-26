@@ -1,12 +1,11 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    sync::Arc,
+    collections::{BTreeMap, BTreeSet, VecDeque}, result, sync::Arc
 };
 
 use engine_rocks::RocksSnapshot;
-use engine_traits::CacheRange;
+use engine_traits::{CacheRange, FailedReason};
 
 use crate::engine::{RagneCacheSnapshotMeta, SnapshotList};
 
@@ -140,24 +139,28 @@ impl RangeManager {
 
     // Acquire a snapshot of the `range` with `read_ts`. If the range is not
     // accessable, None will be returned. Otherwise, the range id will be returned.
-    pub(crate) fn range_snapshot(&mut self, range: &CacheRange, read_ts: u64) -> Option<u64> {
+    pub(crate) fn range_snapshot(
+        &mut self,
+        range: &CacheRange,
+        read_ts: u64,
+    ) -> result::Result<u64, FailedReason> {
         let Some(range_key) = self
             .ranges
             .keys()
             .find(|&r| r.contains_range(range))
             .cloned()
         else {
-            return None;
+            return Err(FailedReason::ReadTsBelowSafePoint);
         };
         let meta = self.ranges.get_mut(&range_key).unwrap();
 
         if read_ts <= meta.safe_point || !meta.can_read {
             // todo(SpadeA): add metrics for it
-            return None;
+            return Err(FailedReason::ReadTsBelowSafePoint);
         }
 
         meta.range_snapshot_list.new_snapshot(read_ts);
-        Some(meta.id)
+        Ok(meta.id)
     }
 
     // If the snapshot is the last one in the snapshot list of one cache range in

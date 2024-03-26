@@ -5,6 +5,7 @@ use std::{
     collections::BTreeMap,
     fmt::{self, Debug},
     ops::Deref,
+    result,
     sync::Arc,
     time::Duration,
 };
@@ -14,9 +15,7 @@ use crossbeam::sync::ShardedLock;
 use crossbeam_epoch::default_collector;
 use engine_rocks::{raw::SliceTransform, util::FixedSuffixSliceTransform, RocksEngine};
 use engine_traits::{
-    CacheRange, CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, KvEngine, Peekable,
-    RangeCacheEngine, ReadOptions, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT, CF_LOCK,
-    CF_WRITE,
+    CacheRange, CfNamesExt, DbVector, Error, FailedReason, IterOptions, Iterable, Iterator, KvEngine, Peekable, RangeCacheEngine, ReadOptions, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE
 };
 use kvproto::metapb;
 use slog_global::error;
@@ -328,7 +327,12 @@ impl Debug for RangeCacheMemoryEngine {
 impl RangeCacheEngine for RangeCacheMemoryEngine {
     type Snapshot = RangeCacheSnapshot;
 
-    fn snapshot(&self, range: CacheRange, read_ts: u64, seq_num: u64) -> Option<Self::Snapshot> {
+    fn snapshot(
+        &self,
+        range: CacheRange,
+        read_ts: u64,
+        seq_num: u64,
+    ) -> result::Result<Self::Snapshot, FailedReason> {
         RangeCacheSnapshot::new(self.clone(), range, read_ts, seq_num)
     }
 
@@ -669,17 +673,14 @@ impl RangeCacheSnapshot {
         range: CacheRange,
         read_ts: u64,
         seq_num: u64,
-    ) -> Option<Self> {
+    ) -> result::Result<Self, FailedReason> {
         let mut core = engine.core.write().unwrap();
-        if let Some(range_id) = core.range_manager.range_snapshot(&range, read_ts) {
-            return Some(RangeCacheSnapshot {
-                snapshot_meta: RagneCacheSnapshotMeta::new(range_id, range, read_ts, seq_num),
-                skiplist_engine: core.engine.clone(),
-                engine: engine.clone(),
-            });
-        }
-
-        None
+        let range_id = core.range_manager.range_snapshot(&range, read_ts)?;
+        Ok(RangeCacheSnapshot {
+            snapshot_meta: RagneCacheSnapshotMeta::new(range_id, range, read_ts, seq_num),
+            skiplist_engine: core.engine.clone(),
+            engine: engine.clone(),
+        })
     }
 }
 

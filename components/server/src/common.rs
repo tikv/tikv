@@ -713,7 +713,7 @@ impl KvEngineBuilder for HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
     fn build(disk_engine: RocksEngine) -> Self {
         // todo(SpadeA): make time configurable
         let mut memory_engine =
-            RangeCacheMemoryEngine::new(Arc::default(), std::time::Duration::from_secs(180));
+            RangeCacheMemoryEngine::new(Arc::default(), std::time::Duration::from_secs(60));
         memory_engine.set_disk_engine(disk_engine.clone());
         HybridEngine::new(disk_engine, memory_engine)
     }
