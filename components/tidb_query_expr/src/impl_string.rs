@@ -698,7 +698,7 @@ pub fn elt(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
         None => None,
         Some(i) => {
             let i = *i;
-            if i <= 0 || i + 1 > raw_args.len() as i64 {
+            if i <= 0 || i >= raw_args.len() as i64 {
                 return Ok(None);
             }
             raw_args[i as usize].as_bytes().map(|x| x.to_vec())
@@ -3661,6 +3661,14 @@ mod tests {
             (
                 vec![
                     Some(-1).into(),
+                    None::<Bytes>.into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(9223372036854775807).into(),
                     None::<Bytes>.into(),
                     Some(b"Hello World!".to_vec()).into(),
                 ],
