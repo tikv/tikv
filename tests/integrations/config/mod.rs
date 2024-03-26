@@ -315,6 +315,7 @@ fn test_serde_custom_tikv_config() {
         enable_pipelined_write: false,
         enable_multi_batch_write: true,
         enable_unordered_write: true,
+        track_and_verify_wals_in_manifest: false,
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
