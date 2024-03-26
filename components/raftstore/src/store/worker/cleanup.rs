@@ -69,10 +69,4 @@ where
             Task::GcSnapshot(t) => self.gc_snapshot.run(t),
         }
     }
-
-    fn shutdown(&mut self) {
-        // Stop the compaction thread in advance, so it won't block the cleanup thread
-        // when exiting.
-        self.compact.pause();
-    }
 }

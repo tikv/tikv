@@ -344,11 +344,6 @@ where
         );
         Ok(())
     }
-
-    /// Pause the background workers of the engine.
-    pub fn pause(&mut self) {
-        self.engine.pause_background_work();
-    }
 }
 
 impl<E> Runnable for Runner<E>

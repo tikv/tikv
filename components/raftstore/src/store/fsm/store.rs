@@ -104,7 +104,7 @@ use crate::{
         util::{is_initial_msg, RegionReadProgressRegistry},
         worker::{
             AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
-            CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
+            CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask, Destroyer,
             GcSnapshotRunner, GcSnapshotTask, PdRunner, RaftlogGcRunner, RaftlogGcTask,
             ReadDelegate, RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask,
             SplitCheckTask,
@@ -1597,6 +1597,8 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     coprocessor_host: CoprocessorHost<EK>,
 
     refresh_config_worker: LazyWorker<RefreshConfigTask>,
+
+    destroyer: Destroyer<EK, ER>,
 }
 
 pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
@@ -1689,6 +1691,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             raftlog_fetch_worker: Worker::new("raftlog-fetch-worker"),
             coprocessor_host: coprocessor_host.clone(),
             refresh_config_worker: LazyWorker::new("refreash-config-worker"),
+            destroyer: Destroyer::new("destory-helper", engines.clone()),
         };
         mgr.init()?;
         let region_runner = RegionRunner::new(
@@ -1926,6 +1929,10 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
         self.store_writers.shutdown();
         MEMTRACE_RAFT_ROUTER_ALIVE.trace(TraceEvent::Reset(0));
         MEMTRACE_RAFT_ROUTER_LEAK.trace(TraceEvent::Reset(0));
+
+        // Stop all background workers in the engine before stopping
+        // the other workers.
+        workers.destroyer.shutdown();
 
         workers.coprocessor_host.shutdown();
         workers.cleanup_worker.stop();
