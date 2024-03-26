@@ -468,6 +468,12 @@ pub struct ApplySnapshotContext {
     /// The message should be sent after snapshot is applied.
     pub msgs: Vec<eraftpb::Message>,
     pub persist_res: Option<PersistSnapshotResult>,
+    /// Destroy the peer after apply task finished or aborted
+    /// This flag is set to true when the peer destroy is skipped because of
+    /// running snapshot task.
+    /// This is to accelerate peer destroy without waiting for extra destory
+    /// peer message.
+    pub destroy_peer_after_apply: bool,
 }
 
 #[derive(PartialEq, Debug)]
@@ -1234,13 +1240,14 @@ where
             }
         }
 
-        if let Some(snap_ctx) = self.apply_snap_ctx.as_ref() {
+        if let Some(snap_ctx) = self.apply_snap_ctx.as_mut() {
             if !snap_ctx.scheduled {
                 info!(
                     "stale peer is persisting snapshot, will destroy next time";
                     "region_id" => self.region_id,
                     "peer_id" => self.peer.get_id(),
                 );
+                snap_ctx.destroy_peer_after_apply = true;
                 return None;
             }
         }
@@ -1251,6 +1258,9 @@ where
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
             );
+            if let Some(snap_ctx) = self.apply_snap_ctx.as_mut() {
+                snap_ctx.destroy_peer_after_apply = true;
+            }
             return None;
         }
 
@@ -1622,6 +1632,13 @@ where
     #[inline]
     pub fn is_handling_snapshot(&self) -> bool {
         self.apply_snap_ctx.is_some() || self.get_store().is_applying_snapshot()
+    }
+
+    #[inline]
+    pub fn should_destroy_after_apply_snapshot(&self) -> bool {
+        self.apply_snap_ctx
+            .as_ref()
+            .map_or(false, |ctx| ctx.destroy_peer_after_apply)
     }
 
     /// Returns `true` if the raft group has replicated a snapshot but not
@@ -2841,6 +2858,7 @@ where
                     destroy_regions,
                     for_witness,
                 }),
+                destroy_peer_after_apply: false,
             });
             if self.last_compacted_idx == 0 && last_first_index >= RAFT_INIT_LOG_INDEX {
                 // There may be stale logs in raft engine, so schedule a task to clean it
