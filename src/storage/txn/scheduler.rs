@@ -24,8 +24,10 @@
 //! which is transparent to the scheduler.
 
 use std::{
+    fmt::Write,
     marker::PhantomData,
     mem,
+    ops::{Deref, DerefMut},
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
@@ -44,7 +46,7 @@ use kvproto::{
     kvrpcpb::{self, CommandPri, Context, DiskFullOpt, ExtraOp},
     pdpb::QueryKind,
 };
-use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
+use parking_lot::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use pd_client::{Feature, FeatureGate};
 use raftstore::store::TxnExt;
 use resource_metering::{FutureExt, ResourceTagFactory};
@@ -85,7 +87,7 @@ use crate::{
             sched_pool::{tls_collect_query, tls_collect_scan_details, SchedPool},
             Error, ErrorInner, ProcessResult,
         },
-        types::StorageCallback,
+        types::{GuardedStorageCallback, StorageCallback},
         DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
         PessimisticLockKeyResult, PessimisticLockResults,
     },
@@ -204,7 +206,7 @@ impl TaskContext {
 }
 
 pub enum SchedulerTaskCallback {
-    NormalRequestCallback(StorageCallback),
+    NormalRequestCallback(GuardedStorageCallback),
     LockKeyCallbacks(Vec<PessimisticLockKeyCallback>),
 }
 
@@ -231,10 +233,26 @@ impl SchedulerTaskCallback {
         }
     }
 
-    fn unwrap_normal_request_callback(self) -> StorageCallback {
+    fn unwrap_normal_request_callback(self) -> GuardedStorageCallback {
         match self {
             Self::NormalRequestCallback(cb) => cb,
             _ => panic!(""),
+        }
+    }
+
+    fn set_cid(&mut self, cid: u64) {
+        match self {
+            Self::NormalRequestCallback(cb) => cb.set_cid(cid),
+            _ => panic!("LockKeyCallbacks not expected to be used in 6.5.x versions"),
+        }
+    }
+
+    #[must_use]
+    #[allow(dead_code)]
+    fn add_on_invoke(self, f: impl FnOnce() + Send + 'static) -> Self {
+        match self {
+            Self::NormalRequestCallback(cb) => Self::NormalRequestCallback(cb.wrap(f)),
+            _ => panic!("LockKeyCallbacks not expected to be used in 6.5.x versions"),
         }
     }
 }
@@ -248,6 +266,10 @@ struct SchedulerInner<L: LockManager> {
 
     // write concurrency control
     latches: Latches,
+
+    latch_state_dump_lock: RwLock<()>,
+
+    _stop_dump_latch_ch: tokio::sync::mpsc::Sender<()>,
 
     sched_pending_write_threshold: usize,
 
@@ -292,6 +314,25 @@ fn id_index(cid: u64) -> usize {
     cid as usize % TASKS_SLOTS_NUM
 }
 
+struct ComposedGuard<T, U> {
+    pub primary_guard: T,
+    #[allow(dead_code)]
+    pub secondary_guard: U,
+}
+
+impl<T, U> Deref for ComposedGuard<T, U> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.primary_guard
+    }
+}
+
+impl<T, U> DerefMut for ComposedGuard<T, U> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.primary_guard
+    }
+}
+
 impl<L: LockManager> SchedulerInner<L> {
     /// Generates the next command ID.
     #[inline]
@@ -301,8 +342,16 @@ impl<L: LockManager> SchedulerInner<L> {
     }
 
     #[inline]
-    fn get_task_slot(&self, cid: u64) -> MutexGuard<'_, HashMap<u64, TaskContext>> {
-        self.task_slots[id_index(cid)].lock()
+    fn get_task_slot(
+        &self,
+        cid: u64,
+    ) -> ComposedGuard<MutexGuard<'_, HashMap<u64, TaskContext>>, RwLockReadGuard<'_, ()>> {
+        let dump_lock_guard = self.latch_state_dump_lock.read_recursive();
+        let slot = self.task_slots[id_index(cid)].lock();
+        ComposedGuard {
+            primary_guard: slot,
+            secondary_guard: dump_lock_guard,
+        }
     }
 
     fn new_task_context(
@@ -389,6 +438,7 @@ impl<L: LockManager> SchedulerInner<L> {
             tctx.lock.owned_count += 1;
             return Err(e.into());
         }
+        // Dump lock already hold in `task_slot`
         if self.latches.acquire(&mut tctx.lock, cid) {
             tctx.on_schedule();
             return Ok(tctx.task.take());
@@ -442,10 +492,14 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
 
         let lock_wait_queues = LockWaitQueues::new(lock_mgr.clone());
 
+        let (dump_stop_tx, dump_stop_rx) = tokio::sync::mpsc::channel(10);
+
         let inner = Arc::new(SchedulerInner {
             task_slots,
             id_alloc: AtomicU64::new(0).into(),
             latches: Latches::new(config.scheduler_concurrency),
+            latch_state_dump_lock: RwLock::new(()),
+            _stop_dump_latch_ch: dump_stop_tx,
             running_write_bytes: AtomicUsize::new(0).into(),
             sched_pending_write_threshold: config.scheduler_pending_write_threshold.0 as usize,
             worker_pool: SchedPool::new(
@@ -481,10 +535,62 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             t.saturating_elapsed(),
             "initialized the transaction scheduler"
         );
-        Scheduler {
+
+        let result = Scheduler {
             inner,
             _engine: PhantomData,
-        }
+        };
+        result.start_latch_state_dumping(dump_stop_rx);
+        result
+    }
+
+    pub fn start_latch_state_dumping(&self, mut stop_rx: tokio::sync::mpsc::Receiver<()>) {
+        let self1 = self.clone();
+        self.inner
+            .high_priority_pool
+            .pool
+            .spawn(async move {
+                loop {
+                    tokio::select! {
+                        msg = stop_rx.recv() => {
+                            assert!(msg.is_none());
+                            break;
+                        }
+                        _ = tokio::time::sleep(Duration::from_secs(60)) => (),
+                    }
+
+                    let _g = self1.inner.latch_state_dump_lock.write();
+
+                    let formatted_latch_state = self1.inner.latches.dump_string();
+
+                    let mut formatted_tasks = String::new();
+                    for (slot_index, slot) in self1.inner.task_slots.iter().enumerate() {
+                        let slot = slot.lock();
+                        if slot.is_empty() {
+                            continue;
+                        }
+
+                        writeln!(formatted_tasks, "Slot {}:", slot_index).unwrap();
+                        for (key, item) in slot.iter() {
+                            writeln!(
+                                formatted_tasks,
+                                "    cid={}: tag={:?}, ts={}, latches={:?}, owned_count={}, elapsed={:?}, owned={}, cb={}, pr={}",
+                                key,
+                                item.tag,
+                                item.task.as_ref().map_or_else(TimeStamp::zero, |task|task.cmd.ts()),
+                                item.lock.required_hashes,
+                                item.lock.owned_count,
+                                item._cmd_timer.begin.saturating_elapsed(),
+                                item.owned.load(Ordering::Acquire),
+                                item.cb.as_ref().map_or("None", |_|"Some"),
+                                item.pr.as_ref().map_or("None", |_|"Some")
+                            ).unwrap();
+                        }
+                    }
+                    info!("dumped scheduler latch state"; "latches" =>  %formatted_latch_state, "tasks" => %formatted_tasks);
+                }
+            })
+            .unwrap();
     }
 
     pub fn dump_wait_for_entries(&self, cb: waiter_manager::Callback) {
@@ -507,7 +613,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         self.schedule_command(
             None,
             cmd,
-            SchedulerTaskCallback::NormalRequestCallback(callback),
+            SchedulerTaskCallback::NormalRequestCallback(callback.into()),
             None,
         );
     }
@@ -519,6 +625,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         cid: u64,
         keep_latches_for_next_cmd: Option<(u64, &Lock)>,
     ) {
+        let _g = self.inner.latch_state_dump_lock.read_recursive();
         let wakeup_list = self
             .inner
             .latches
@@ -532,10 +639,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         &self,
         specified_cid: Option<u64>,
         cmd: Command,
-        callback: SchedulerTaskCallback,
+        mut callback: SchedulerTaskCallback,
         prepared_latches: Option<Lock>,
     ) {
         let cid = specified_cid.unwrap_or_else(|| self.inner.gen_id());
+        callback.set_cid(cid);
         let tracker = get_tls_tracker_token();
         debug!("received new command"; "cid" => cid, "cmd" => ?cmd, "tracker" => ?tracker);
 
@@ -553,6 +661,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                 .new_task_context(Task::new(cid, tracker, cmd), callback, prepared_latches)
         });
 
+        // Dump lock already hold in `task_slot`
         if self.inner.latches.acquire(&mut tctx.lock, cid) {
             fail_point!("txn_scheduler_acquire_success");
             tctx.on_schedule();
@@ -575,6 +684,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         cmd_ctx: Context,
         deadline: Deadline,
     ) {
+        let start = chrono::Local::now();
         let sched = self.clone();
         self.inner
             .high_priority_pool
@@ -594,6 +704,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             let pr = ProcessResult::Failed {
                                 err: StorageError::from(e),
                             };
+                            warn!("early_response after precheck_write_with_ctx"; "cid" => cid, "tag" => ?tag);
                             Self::early_response(
                                 cid,
                                 cb,
@@ -612,6 +723,7 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                             .await
                             .unwrap();
                         let cb = sched.inner.try_own_and_take_cb(cid);
+                        warn!("try to cancel scheduler command due to deadline exceeded"; "cid" => cid, "tag" => ?tag, "got_callback" => cb.is_some(), "timing_start_time" => %start, "elapsed" => ?(chrono::Local::now() - start).to_std().unwrap());
                         if let Some(cb) = cb {
                             cb.execute(ProcessResult::Failed {
                                 err: StorageErrorInner::DeadlineExceeded.into(),
@@ -1415,6 +1527,8 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
             }
         });
 
+        let async_write_start_time = chrono::Local::now();
+
         let mut res = unsafe {
             with_tls_engine(|e: &mut E| {
                 e.async_write(&ctx, to_be_write, subscribed, Some(on_applied))
@@ -1422,9 +1536,51 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
         };
         drop(downgraded_guard);
 
+        #[derive(Debug, Clone, Copy)]
+        enum DiagnoseEvent {
+            Committed,
+            Proposed,
+            EarlyResponseOnCommitted,
+            EarlyResponseOnProposed,
+            Finished,
+        }
+
+        let (async_write_check_event_ch, mut rx) =
+            tokio::sync::mpsc::channel::<(chrono::DateTime<chrono::Local>, DiagnoseEvent)>(10);
+        self.inner.high_priority_pool.pool.spawn(async move {
+            let mut events = vec![];
+            loop {
+                tokio::select! {
+                    msg = rx.recv() => {
+                        if msg.is_none() {
+                            warn!("process_write exited before receiving DiagnoseEvent::Finished"; "cid" => cid, "tag" => %tag, "region_id" => region_id, "start_time" => %async_write_start_time, "events" => ?events);
+                            break;
+                        }
+                        let msg = msg.unwrap();
+
+                        events.push(msg);
+                        if !matches!(msg.1, DiagnoseEvent::Finished) {
+                            continue;
+                        }
+                        if (chrono::Local::now() - async_write_start_time).to_std().unwrap() > Duration::from_secs(10) {
+                            warn!("slow async_write invocation"; "cid" => cid, "tag" => %tag, "region_id" => region_id, "start_time" => %async_write_start_time, "events" => ?events);
+                        }
+                        break;
+                    }
+                    _ = tokio::time::sleep(Duration::from_secs(60)) => {
+                        warn!("async_write not finished in 1min"; "cid" => cid, "tag" => %tag, "region_id" => region_id, "start_time" => %async_write_start_time, "elapsed" => ?(chrono::Local::now() -  async_write_start_time).to_std().unwrap(), "received_events" => ?events);
+                    }
+                }
+            }
+        }).unwrap();
+
         while let Some(ev) = res.next().await {
             match ev {
                 WriteEvent::Committed => {
+                    async_write_check_event_ch
+                        .send((chrono::Local::now(), DiagnoseEvent::Committed))
+                        .await
+                        .unwrap();
                     let early_return = (|| {
                         fail_point!("before_async_apply_prewrite_finish", |_| false);
                         true
@@ -1432,6 +1588,13 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     if WriteEvent::subscribed_committed(subscribed) && early_return {
                         // Currently, the only case that response is returned after finishing
                         // commit is async applying prewrites for async commit transactions.
+                        async_write_check_event_ch
+                            .send((
+                                chrono::Local::now(),
+                                DiagnoseEvent::EarlyResponseOnCommitted,
+                            ))
+                            .await
+                            .unwrap();
                         let cb = scheduler.inner.take_task_cb(cid);
                         Self::early_response(
                             cid,
@@ -1443,6 +1606,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     }
                 }
                 WriteEvent::Proposed => {
+                    async_write_check_event_ch
+                        .send((chrono::Local::now(), DiagnoseEvent::Proposed))
+                        .await
+                        .unwrap();
                     let early_return = (|| {
                         fail_point!("before_pipelined_write_finish", |_| false);
                         true
@@ -1458,6 +1625,10 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                         // proposed phase is pipelined pessimistic lock.
                         // TODO: Unify the code structure of pipelined pessimistic lock and
                         // async apply prewrite.
+                        async_write_check_event_ch
+                            .send((chrono::Local::now(), DiagnoseEvent::EarlyResponseOnProposed))
+                            .await
+                            .unwrap();
                         let cb = scheduler.inner.take_task_cb(cid);
                         Self::early_response(
                             cid,
@@ -1469,6 +1640,11 @@ impl<E: Engine, L: LockManager> Scheduler<E, L> {
                     }
                 }
                 WriteEvent::Finished(res) => {
+                    async_write_check_event_ch
+                        .send((chrono::Local::now(), DiagnoseEvent::Finished))
+                        .await
+                        .unwrap();
+
                     fail_point!("scheduler_async_write_finish");
                     let ok = res.is_ok();
 
