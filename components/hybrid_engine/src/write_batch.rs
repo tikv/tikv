@@ -11,7 +11,7 @@ use crate::engine::HybridEngine;
 
 pub struct HybridEngineWriteBatch<EK: KvEngine> {
     disk_write_batch: EK::WriteBatch,
-    cache_write_batch: RangeCacheWriteBatch,
+    pub(crate) cache_write_batch: RangeCacheWriteBatch,
 }
 
 impl<EK> WriteBatchExt for HybridEngine<EK, RangeCacheMemoryEngine>
