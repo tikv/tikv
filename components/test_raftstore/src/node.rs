@@ -243,10 +243,11 @@ impl Simulator for NodeCluster {
             )
             .unwrap();
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
+        let store_config = Arc::new(VersionTrack::new(raft_store));
         let mut node = Node::new(
             system,
             &cfg.server,
-            Arc::new(VersionTrack::new(raft_store)),
+            store_config.clone(),
             cfg.storage.api_version(),
             Arc::clone(&self.pd_client),
             Arc::default(),
@@ -346,6 +347,7 @@ impl Simulator for NodeCluster {
                 .map(|p| p.path().to_str().unwrap().to_owned())
         );
 
+<<<<<<< HEAD
         let region_split_size = cfg.coprocessor.region_split_size;
         let enable_region_bucket = cfg.coprocessor.enable_region_bucket;
         let region_bucket_size = cfg.coprocessor.region_bucket_size;
@@ -354,11 +356,13 @@ impl Simulator for NodeCluster {
             .validate(region_split_size, enable_region_bucket, region_bucket_size)
             .unwrap();
         let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
+=======
+>>>>>>> 8cdf87b4da (raftstore: make manual compaction in cleanup worker be able to be ignored dynamically (#16547))
         cfg_controller.register(
             Module::Raftstore,
             Box::new(RaftstoreConfigManager::new(
                 node.refresh_config_scheduler(),
-                raft_store,
+                store_config,
             )),
         );
 

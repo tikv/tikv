@@ -353,6 +353,35 @@ pub struct Config {
     #[online_config(hidden)]
     // Interval to check peers availability info.
     pub check_peers_availability_interval: ReadableDuration,
+<<<<<<< HEAD
+=======
+
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
+    #[online_config(hidden)]
+    // Interval to check if need to request snapshot.
+    pub check_request_snapshot_interval: ReadableDuration,
+
+    /// Make raftstore v1 learners compatible with raftstore v2 by:
+    /// * Recving tablet snapshot from v2.
+    /// * Responsing GcPeerRequest from v2.
+    #[doc(hidden)]
+    #[online_config(hidden)]
+    #[serde(alias = "enable-partitioned-raft-kv-compatible-learner")]
+    pub enable_v2_compatible_learner: bool,
+
+    /// The minimal count of region pending on applying raft logs.
+    /// Only when the count of regions which not pending on applying logs is
+    /// less than the threshold, can the raftstore supply service.
+    #[doc(hidden)]
+    #[online_config(hidden)]
+    pub min_pending_apply_region_count: u64,
+
+    /// Whether to skip manual compaction in the clean up worker for `write` and
+    /// `default` column family
+    #[doc(hidden)]
+    pub skip_manual_compaction_in_clean_up_worker: bool,
+>>>>>>> 8cdf87b4da (raftstore: make manual compaction in cleanup worker be able to be ignored dynamically (#16547))
 }
 
 impl Default for Config {
@@ -466,6 +495,11 @@ impl Default for Config {
             // TODO: make its value reasonable
             check_peers_availability_interval: ReadableDuration::secs(30),
             unsafe_disable_check_quorum: false,
+<<<<<<< HEAD
+=======
+            min_pending_apply_region_count: 10,
+            skip_manual_compaction_in_clean_up_worker: false,
+>>>>>>> 8cdf87b4da (raftstore: make manual compaction in cleanup worker be able to be ignored dynamically (#16547))
         }
     }
 }

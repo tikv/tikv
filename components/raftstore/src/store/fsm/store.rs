@@ -1590,6 +1590,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             ReadRunner::new(self.router.clone(), engines.raft.clone()),
         );
 
+<<<<<<< HEAD
         let compact_runner = CompactRunner::new(engines.kv.clone());
         let cleanup_sst_runner = CleanupSstRunner::new(
             meta.get_id(),
@@ -1597,6 +1598,15 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             Arc::clone(&importer),
             Arc::clone(&pd_client),
         );
+=======
+        let compact_runner = CompactRunner::new(
+            engines.kv.clone(),
+            bgworker_remote,
+            cfg.clone().tracker(String::from("compact-runner")),
+            cfg.value().skip_manual_compaction_in_clean_up_worker,
+        );
+        let cleanup_sst_runner = CleanupSstRunner::new(Arc::clone(&importer));
+>>>>>>> 8cdf87b4da (raftstore: make manual compaction in cleanup worker be able to be ignored dynamically (#16547))
         let gc_snapshot_runner = GcSnapshotRunner::new(
             meta.get_id(),
             self.router.clone(), // RaftRouter
