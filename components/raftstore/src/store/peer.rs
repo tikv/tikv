@@ -4361,6 +4361,7 @@ where
                             cf_name: String::from(cf),
                             start_key: Some(start_key.clone()),
                             end_key: Some(end_key.clone()),
+                            bottommost_level_force: true,
                         };
 
                         if let Err(e) = poll_ctx
