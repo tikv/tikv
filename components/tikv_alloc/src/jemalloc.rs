@@ -25,6 +25,8 @@ pub const fn allocator() -> Allocator {
 lazy_static! {
     static ref THREAD_MEMORY_MAP: Mutex<HashMap<ThreadId, MemoryStatsAccessor>> =
         Mutex::new(HashMap::new());
+    // thread id -> (thread name, arena index)
+    static ref THREAD_ARENA_MAP: Mutex<HashMap<ThreadId, (String, usize)>> = Mutex::new(HashMap::new());
 }
 
 /// The struct for tracing the statistic of another thread.
@@ -217,6 +219,25 @@ pub fn iterate_thread_allocation_stats(mut f: impl FnMut(&str, u64, u64)) {
     }
 }
 
+/// Iterate over the allocation stat.
+/// Format of the callback: `(name, allocated, deallocated)`.
+pub fn iterate_arena_allocation_stats(mut f: impl FnMut(&str, u64, u64, u64)) {
+    // Given we have called `epoch::advance()` in `fetch_stats`, we (magically!)
+    // skip advancing the epoch here.
+    let thread_arena_map = THREAD_ARENA_MAP.lock().unwrap();
+    let mut collected = HashMap::<&str, (u64, u64, u64)>::with_capacity(thread_arena_map.len());
+    for (_, (name, index)) in thread_arena_map.iter() {
+        let stats = fetch_arena_stats(*index);
+        let ent = collected.entry(trim_yatp_suffix(name)).or_default();
+        ent.0 += stats.0;
+        ent.1 += stats.1;
+        ent.2 += stats.2;
+    }
+    for (name, val) in collected {
+        f(name, val.0, val.1, val.2)
+    }
+}
+
 #[allow(clippy::cast_ptr_alignment)]
 extern "C" fn write_cb(printer: *mut c_void, msg: *const c_char) {
     unsafe {
@@ -313,9 +334,51 @@ mod profiling {
     const PROF_DUMP: &[u8] = b"prof.dump\0";
     const PROF_RESET: &[u8] = b"prof.reset\0";
     const OPT_PROF: &[u8] = b"opt.prof\0";
+    const ARENAS_CREATE: &[u8] = b"arenas.create\0";
+    const THREAD_ARENA: &[u8] = b"thread.arena\0";
+
+    // Set exclusive arena for the current thread to avoid contention.
+    pub fn thread_allocate_exclusive_arena() -> ProfResult<()> {
+        unsafe {
+            let index: u32 = tikv_jemalloc_ctl::raw::read(ARENAS_CREATE)
+                .map_err(|e| ProfError::JemallocError(format!("failed to create arena: {}", e)))?;
+            if let Err(e) = tikv_jemalloc_ctl::raw::write(THREAD_ARENA, index) {
+                return Err(ProfError::JemallocError(format!(
+                    "failed to set thread arena: {}",
+                    e
+                )));
+            }
+            super::THREAD_ARENA_MAP.lock().unwrap().insert(
+                std::thread::current().id(),
+                (
+                    std::thread::current()
+                        .name()
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    index as usize,
+                ),
+            );
+        }
+        Ok(())
+    }
+
+    pub fn fetch_arena_stats(index: usize) -> (u64, u64, u64) {
+        let resident = unsafe {
+            tikv_jemalloc_ctl::raw::read(format!("stats.arenas.{}.resident\0", index).as_bytes())
+                .unwrap_or(0)
+        };
+        let mapped = unsafe {
+            tikv_jemalloc_ctl::raw::read(format!("stats.arenas.{}.mapped\0", index).as_bytes())
+                .unwrap_or(0)
+        };
+        let retained = unsafe {
+            tikv_jemalloc_ctl::raw::read(format!("stats.arenas.{}.retained\0", index).as_bytes())
+                .unwrap_or(0)
+        };
+        (resident, mapped, retained)
+    }
 
     pub fn set_prof_sample(rate: u64) -> ProfResult<()> {
-        let rate = (rate as f64).log2().ceil() as usize;
         unsafe {
             if let Err(e) = tikv_jemalloc_ctl::raw::write(PROF_RESET, rate) {
                 return Err(ProfError::JemallocError(format!(
