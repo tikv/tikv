@@ -24,10 +24,10 @@ where
     }
 
     pub fn shutdown(&mut self) {
-        // Pause the background worker threads before shutting down the engines. And it
+        // Disable manul compaction jobs before shutting down the engines. And it
         // will stop the compaction thread in advance, so it won't block the
         // cleanup thread when exiting.
-        let _ = self.engines.kv.pause_background_work();
+        let _ = self.engines.kv.disable_manual_compaction();
     }
 }
 #[cfg(test)]
@@ -40,6 +40,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
+
     #[test]
     fn test_destroyer_shutdown() {
         let path = Builder::new()
