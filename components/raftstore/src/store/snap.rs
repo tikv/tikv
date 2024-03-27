@@ -2598,10 +2598,6 @@ pub mod tests {
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
-<<<<<<< HEAD
-        let _ = s1.build(&db, &snapshot, &region, true, false).unwrap();
-        assert!(s1.exists());
-
         corrupt_snapshot_size_in(dir.path());
 
         Snapshot::new_for_sending(dir.path(), &key, &mgr_core).unwrap_err();
