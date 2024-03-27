@@ -405,6 +405,10 @@ impl Delegate {
         region: Region,
         locks: BTreeMap<Key, TimeStamp>,
     ) -> Result<Vec<(&Downstream, Error)>> {
+        fail::fail_point!("cdc_finish_scan_locks_memory_quota_exceed", |_| Err(
+            Error::MemoryQuotaExceeded(tikv_util::memory::MemoryQuotaExceeded)
+        ));
+
         info!("cdc region is ready"; "region_id" => self.region_id);
         self.finish_prepare_lock_tracker(region, locks)?;
 
