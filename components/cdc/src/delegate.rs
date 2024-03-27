@@ -1789,17 +1789,17 @@ mod tests {
         let mut k1 = Vec::with_capacity(100);
         k1.extend_from_slice(Key::from_raw(b"key1").as_encoded());
         let k1 = Key::from_encoded(k1);
-        assert_eq!(delegate.push_lock(k1.clone(), 100.into()).unwrap(), 0);
+        assert_eq!(delegate.push_lock(k1, 100.into()).unwrap(), 0);
         assert_eq!(quota.in_use(), 100);
 
-        delegate.pop_lock(k1).unwrap();
-        assert_eq!(quota.in_use(), 200);
+        delegate.pop_lock(Key::from_raw(b"key1")).unwrap();
+        assert_eq!(quota.in_use(), 117);
 
         let mut k2 = Vec::with_capacity(200);
         k2.extend_from_slice(Key::from_raw(b"key2").as_encoded());
         let k2 = Key::from_encoded(k2);
-        assert_eq!(delegate.push_lock(k2.clone(), 100.into()).unwrap(), 0);
-        assert_eq!(quota.in_use(), 400);
+        assert_eq!(delegate.push_lock(k2, 100.into()).unwrap(), 0);
+        assert_eq!(quota.in_use(), 317);
 
         let mut scaned_locks = BTreeMap::default();
         scaned_locks.insert(Key::from_raw(b"key1"), 100.into());
@@ -1809,5 +1809,20 @@ mod tests {
             .finish_prepare_lock_tracker(Default::default(), scaned_locks)
             .unwrap();
         assert_eq!(quota.in_use(), 34);
+
+        delegate.pop_lock(Key::from_raw(b"key2")).unwrap();
+        delegate.pop_lock(Key::from_raw(b"key3")).unwrap();
+        assert_eq!(quota.in_use(), 0);
+
+        let v = delegate
+            .push_lock(Key::from_raw(b"key1"), 300.into())
+            .unwrap();
+        assert_eq!(v, 1);
+        assert_eq!(quota.in_use(), 17);
+        let v = delegate
+            .push_lock(Key::from_raw(b"key1"), 300.into())
+            .unwrap();
+        assert_eq!(v, 0);
+        assert_eq!(quota.in_use(), 17);
     }
 }
