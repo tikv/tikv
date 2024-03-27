@@ -8,7 +8,7 @@ use tikv_util::box_err;
 use crate::{
     engine::{cf_to_id, SkiplistEngine},
     keys::{encode_key, InternalBytes, ValueType},
-    range_manager::RangeManager,
+    range_manager::{RangeCacheStatus, RangeManager},
     RangeCacheMemoryEngine,
 };
 
@@ -16,15 +16,13 @@ use crate::{
 // delegate. It sets `range_in_cache` and `pending_range_in_loading` which are
 // used to determine whether the writes of this peer should be buffered.
 pub struct RangeCacheWriteBatch {
-    // `range_in_cache` indicates that the range is cached in the memory engine and we should
-    // buffer the write in `buffer` which is consumed during the write is written in the kv engine.
-    range_in_cache: bool,
+    // `range_cache_status` indicates whether the range is cached, loading data, or not cached. If
+    // it is cached, we should buffer the write in `buffer` which is consumed during the write
+    // is written in the kv engine. If it is loading data, we should buffer the write in
+    // `pending_range_in_loading_buffer` which is cached in the memory engine and will be consumed
+    // after the snapshot has been loaded.
+    range_cache_status: RangeCacheStatus,
     buffer: Vec<RangeCacheWriteBatchEntry>,
-    // `pending_range_in_loading` indicates that the range is pending and loading snapshot in the
-    // background and we should buffer the further write for it in
-    // `pending_range_in_loading_buffer` which is cached in the memory engine and will be
-    // consumed after the snapshot has been loaded.
-    pending_range_in_loading: bool,
     pending_range_in_loading_buffer: Vec<RangeCacheWriteBatchEntry>,
     engine: RangeCacheMemoryEngine,
     save_points: Vec<usize>,
@@ -44,8 +42,7 @@ impl std::fmt::Debug for RangeCacheWriteBatch {
 impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
     fn from(engine: &RangeCacheMemoryEngine) -> Self {
         Self {
-            range_in_cache: false,
-            pending_range_in_loading: false,
+            range_cache_status: RangeCacheStatus::NotInCache,
             buffer: Vec::new(),
             pending_range_in_loading_buffer: Vec::new(),
             engine: engine.clone(),
@@ -58,8 +55,7 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
 impl RangeCacheWriteBatch {
     pub fn with_capacity(engine: &RangeCacheMemoryEngine, cap: usize) -> Self {
         Self {
-            range_in_cache: false,
-            pending_range_in_loading: false,
+            range_cache_status: RangeCacheStatus::NotInCache,
             buffer: Vec::with_capacity(cap),
             // cache_buffer should need small capacity
             pending_range_in_loading_buffer: Vec::new(),
@@ -92,22 +88,23 @@ impl RangeCacheWriteBatch {
             .try_for_each(|e| e.write_to_memory(&engine, seq, guard))
     }
 
-    pub fn set_range_in_cache(&mut self, v: bool) {
-        self.range_in_cache = v;
-    }
-
-    pub fn set_pending_range_in_loading(&mut self, v: bool) {
-        self.pending_range_in_loading = v;
+    #[inline]
+    pub(crate) fn set_range_cache_status(&mut self, range_cache_status: RangeCacheStatus) {
+        self.range_cache_status = range_cache_status;
     }
 
     fn process_cf_operation<F>(&mut self, entry: F)
     where
         F: FnOnce() -> RangeCacheWriteBatchEntry,
     {
-        if self.range_in_cache {
-            self.buffer.push(entry());
-        } else if self.pending_range_in_loading {
-            self.pending_range_in_loading_buffer.push(entry());
+        match self.range_cache_status {
+            RangeCacheStatus::Cached => {
+                self.buffer.push(entry());
+            }
+            RangeCacheStatus::Loading => {
+                self.pending_range_in_loading_buffer.push(entry());
+            }
+            RangeCacheStatus::NotInCache => {}
         }
     }
 }
@@ -319,9 +316,7 @@ impl WriteBatch for RangeCacheWriteBatch {
     }
 
     fn prepare_for_range(&mut self, range: &CacheRange) {
-        let (range_in_cache, range_in_loading) = self.engine.prepare_for_apply(range);
-        self.set_range_in_cache(range_in_cache);
-        self.set_pending_range_in_loading(range_in_loading);
+        self.set_range_cache_status(self.engine.prepare_for_apply(range));
     }
 }
 
@@ -392,7 +387,7 @@ mod tests {
             core.mut_range_manager().set_safe_point(&r, 10);
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
-        wb.range_in_cache = true;
+        wb.range_cache_status = RangeCacheStatus::Cached;
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
         assert_eq!(wb.write().unwrap(), 1);
@@ -413,7 +408,7 @@ mod tests {
             core.mut_range_manager().set_safe_point(&r, 10);
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
-        wb.range_in_cache = true;
+        wb.range_cache_status = RangeCacheStatus::Cached;
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_save_point();
         wb.put(b"aaa", b"ccc").unwrap();
@@ -439,7 +434,7 @@ mod tests {
             core.mut_range_manager().set_safe_point(&r, 10);
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
-        wb.range_in_cache = true;
+        wb.range_cache_status = RangeCacheStatus::Cached;
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
         _ = wb.write();

@@ -326,6 +326,12 @@ pub enum LoadFailedReason {
     Evicted,
 }
 
+pub(crate) enum RangeCacheStatus {
+    NotInCache,
+    Cached,
+    Loading,
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;

@@ -29,7 +29,7 @@ use crate::{
         decode_key, encode_key_for_eviction, encode_seek_for_prev_key, encode_seek_key,
         InternalBytes, InternalKey, ValueType,
     },
-    range_manager::{LoadFailedReason, RangeManager},
+    range_manager::{LoadFailedReason, RangeCacheStatus, RangeManager},
     write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
 };
 
@@ -258,18 +258,14 @@ impl RangeCacheMemoryEngine {
 
     // It handles the pending range and check whether to buffer write for this
     // range.
-    //
-    // Return `(bool, bool)`, the first indicates the range is in cache, the second
-    // indicates the range is in loading, see comments in `RangeCacheWriteBatch`
-    // for the detail of them.
-    pub(crate) fn prepare_for_apply(&self, range: &CacheRange) -> (bool, bool) {
+    pub(crate) fn prepare_for_apply(&self, range: &CacheRange) -> RangeCacheStatus {
         let core = self.core.upgradable_read();
         let range_manager = core.range_manager();
         if range_manager.pending_ranges_in_loading_contains(range) {
-            return (false, true);
+            return RangeCacheStatus::Loading;
         }
         if range_manager.contains_range(range) {
-            return (true, false);
+            return RangeCacheStatus::Cached;
         }
 
         // check whether the range is in pending_range and we can schedule load task if
@@ -310,10 +306,10 @@ impl RangeCacheMemoryEngine {
             }
             // We have scheduled the range to loading data, so the writes of the range
             // should be buffered
-            return (false, true);
+            return RangeCacheStatus::Loading;
         }
 
-        (false, false)
+        RangeCacheStatus::NotInCache
     }
 
     // The writes in `handle_pending_range_in_loading_buffer` indicating the ranges
