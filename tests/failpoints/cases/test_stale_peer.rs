@@ -137,7 +137,7 @@ fn test_stale_learner_restart() {
 /// snapshot.
 #[test]
 fn test_stale_peer_destroy_when_apply_snapshot() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = test_raftstore::new_node_cluster(0, 3);
     configure_for_snapshot(&mut cluster);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -205,8 +205,9 @@ fn test_stale_peer_destroy_when_apply_snapshot() {
     fail::remove(region_apply_snap_fp);
     // Wait for peer 3 changing `SnapState`
     sleep_ms(100);
-    cluster.sim.wl().send_raft_msg(tombstone_msg).unwrap();
 
+    // we expect the peer would be destroyed after applying the snapshot without
+    // another message trigger
     must_get_none(&cluster.get_engine(3), b"k1");
 }
 
