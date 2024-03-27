@@ -82,9 +82,9 @@ where
                 disk_snap.sequence_number(),
             ) {
                 Ok(snap) => Some(snap),
-                Err(FailedReason::ReadTsBelowSafePoint) => {
+                Err(FailedReason::TooOldRead) => {
                     RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
-                        .read_ts_below_safe_point
+                        .too_old_read
                         .inc();
                     None
                 }

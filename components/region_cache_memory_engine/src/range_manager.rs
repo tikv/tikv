@@ -189,7 +189,7 @@ impl RangeManager {
 
         if read_ts <= meta.safe_point || !meta.can_read {
             // todo(SpadeA): add metrics for it
-            return Err(FailedReason::ReadTsBelowSafePoint);
+            return Err(FailedReason::TooOldRead);
         }
 
         meta.range_snapshot_list.new_snapshot(read_ts);
@@ -348,7 +348,7 @@ mod tests {
         range_mgr.set_safe_point(&r1, 5);
         assert_eq!(
             range_mgr.range_snapshot(&r1, 5).unwrap_err(),
-            FailedReason::ReadTsBelowSafePoint
+            FailedReason::TooOldRead
         );
         range_mgr.range_snapshot(&r1, 8).unwrap();
         range_mgr.range_snapshot(&r1, 10).unwrap();

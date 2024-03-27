@@ -17,7 +17,7 @@ make_auto_flush_static_metric! {
     pub label_enum FailedReason {
         no_read_ts,
         not_cached,
-        read_ts_below_safe_point,
+        too_old_read,
     }
 
     pub struct FailedReasonCountVec: LocalIntCounter {

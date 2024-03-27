@@ -10,7 +10,7 @@ use crate::{Iterable, KvEngine, Snapshot, WriteBatchExt};
 #[derive(Debug, PartialEq)]
 pub enum FailedReason {
     NotCached,
-    ReadTsBelowSafePoint,
+    TooOldRead,
 }
 
 /// RangeCacheEngine works as a range cache caching some ranges (in Memory or

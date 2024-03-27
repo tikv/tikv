@@ -928,7 +928,7 @@ mod tests {
         }
         assert_eq!(
             engine.snapshot(range.clone(), 5, u64::MAX).unwrap_err(),
-            FailedReason::ReadTsBelowSafePoint
+            FailedReason::TooOldRead
         );
         let s2 = engine.snapshot(range.clone(), 10, u64::MAX).unwrap();
 
