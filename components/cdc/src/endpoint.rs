@@ -432,7 +432,7 @@ impl Advance {
                 let (ts, regions) = region_ts_heap.pop(batch_count);
                 if min_resolved.is_none() {
                     let rid = regions.iter().next().map_or(0, |x| *x);
-                    min_resolved = Some((rid, ts.into()));
+                    min_resolved = Some((rid, ts));
                 }
                 if conn.features().contains(FeatureGate::BATCH_RESOLVED_TS) {
                     send_cdc_events(ts.into_inner(), conn, req_id, Vec::from_iter(regions));
