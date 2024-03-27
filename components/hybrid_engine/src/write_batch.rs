@@ -138,6 +138,7 @@ mod tests {
     use engine_traits::{
         CacheRange, KvEngine, Mutable, Peekable, SnapshotContext, WriteBatch, WriteBatchExt,
     };
+    use region_cache_memory_engine::range_manager::RangeCacheStatus;
 
     use crate::util::hybrid_engine_for_tests;
 
@@ -157,7 +158,9 @@ mod tests {
             })
             .unwrap();
         let mut write_batch = hybrid_engine.write_batch();
-        write_batch.cache_write_batch.set_range_in_cache(true);
+        write_batch
+            .cache_write_batch
+            .set_range_cache_status(RangeCacheStatus::Cached);
         write_batch.put(b"hello", b"world").unwrap();
         let seq = write_batch.write().unwrap();
         assert!(seq > 0);

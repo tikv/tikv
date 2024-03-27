@@ -13,8 +13,8 @@ use crate::{
 };
 
 // `prepare_for_range` should be called before raft command apply for each peer
-// delegate. It sets `range_in_cache` and `pending_range_in_loading` which are
-// used to determine whether the writes of this peer should be buffered.
+// delegate. It sets `range_cache_status` which is used to determine whether the
+// writes of this peer should be buffered.
 pub struct RangeCacheWriteBatch {
     // `range_cache_status` indicates whether the range is cached, loading data, or not cached. If
     // it is cached, we should buffer the write in `buffer` which is consumed during the write
@@ -89,7 +89,7 @@ impl RangeCacheWriteBatch {
     }
 
     #[inline]
-    pub(crate) fn set_range_cache_status(&mut self, range_cache_status: RangeCacheStatus) {
+    pub fn set_range_cache_status(&mut self, range_cache_status: RangeCacheStatus) {
         self.range_cache_status = range_cache_status;
     }
 

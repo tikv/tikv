@@ -326,7 +326,7 @@ pub enum LoadFailedReason {
     Evicted,
 }
 
-pub(crate) enum RangeCacheStatus {
+pub enum RangeCacheStatus {
     NotInCache,
     Cached,
     Loading,
