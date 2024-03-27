@@ -359,9 +359,9 @@ pub(crate) struct Advance {
     pub(crate) exclusive: HashMap<ConnId, ResolvedRegionHeap>,
 
     // To be compatible with old TiCDC client before v4.0.8.
-    // TODO(qupeng): we can deprecated supports for too old TiCDC clients.
+    // TODO(qupeng): we can deprecate support for too old TiCDC clients.
     // map[(ConnId, region_id)]->request_id.
-    pub(crate) no_batch_resolved_ts: HashMap<(ConnId, u64), u64>,
+    pub(crate) dispersed: HashMap<(ConnId, u64), u64>,
 
     pub(crate) unchanged: usize,
 }
@@ -397,10 +397,8 @@ impl Advance {
 
         let send_cdc_events_compact = |ts: u64, conn: &Conn, regions: HashSet<u64>| {
             for region_id in regions {
-                let request_id = self
-                    .no_batch_resolved_ts
-                    .get(&(conn.get_id(), region_id))
-                    .unwrap();
+                let k = (conn.get_id(), region_id);
+                let request_id = self.dispersed.get(&k).unwrap();
                 let event = Event {
                     region_id,
                     request_id: *request_id,
@@ -460,9 +458,8 @@ pub struct Endpoint<T, E, S> {
     config: CdcConfig,
     api_version: ApiVersion,
 
-    // Incremental scan
+    // Incremental scan stuffs.
     workers: Runtime,
-    // The total number of scan tasks including running and pending.
     scan_task_counter: Arc<AtomicIsize>,
     scan_concurrency_semaphore: Arc<Semaphore>,
     scan_speed_limiter: Limiter,

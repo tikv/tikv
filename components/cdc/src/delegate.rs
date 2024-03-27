@@ -2,7 +2,7 @@
 
 use std::{
     collections::btree_map::{BTreeMap, Entry as BTreeMapEntry},
-    fmt, mem,
+    fmt,
     ops::Bound,
     result::Result as StdResult,
     string::String,
@@ -14,7 +14,7 @@ use std::{
 };
 
 use api_version::{ApiV2, KeyMode, KvFormat};
-use collections::{HashMap, HashMapEntry};
+use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
 use kvproto::{
     cdcpb::{
@@ -590,32 +590,27 @@ impl Delegate {
 
         let mut slow_downstreams = Vec::new();
         for d in &mut self.downstreams {
-            if let Some(ts) = handle_downstream(d) {
-                let features = connections.get(&d.conn_id).unwrap().features();
-                if features.contains(FeatureGate::STREAM_MULTIPLEXING) {
-                    advance
-                        .multiplexing
-                        .entry((d.conn_id, d.req_id))
-                        .or_default()
-                        .push(self.region_id, ts);
-                } else {
-                    advance
-                        .exclusive
-                        .entry(d.conn_id)
-                        .or_default()
-                        .push(self.region_id, ts);
-                    if !features.contains(FeatureGate::BATCH_RESOLVED_TS) {
-                        assert!(
-                            advance
-                                .no_batch_resolved_ts
-                                .insert((d.conn_id, self.region_id), d.req_id)
-                                .is_none()
-                        );
-                    }
-                };
+            let advanced_to = match handle_downstream(d) {
+                Some(ts) => ts,
+                None => {
+                    advance.unchanged += 1;
+                    d.advanced_to
+                }
+            };
+
+            let features = connections.get(&d.conn_id).unwrap().features();
+            if features.contains(FeatureGate::STREAM_MULTIPLEXING) {
+                let k = (d.conn_id, d.req_id);
+                let v = advance.multiplexing.entry(k).or_default();
+                v.push(self.region_id, advanced_to);
             } else {
-                advance.unchanged += 1;
-            }
+                let v = advance.exclusive.entry(d.conn_id).or_default();
+                v.push(self.region_id, advanced_to);
+                if !features.contains(FeatureGate::BATCH_RESOLVED_TS) {
+                    let k = (d.conn_id, self.region_id);
+                    advance.dispersed.insert(k, d.req_id);
+                }
+            };
 
             let lag = current_ts
                 .physical()
@@ -663,14 +658,13 @@ impl Delegate {
             }
             if !request.has_admin_request() {
                 let flags = WriteBatchFlags::from_bits_truncate(request.get_header().get_flags());
-                let is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
                 self.sink_data(
                     index,
                     request.requests.into(),
+                    flags,
                     old_value_cb,
                     old_value_cache,
                     statistics,
-                    is_one_pc,
                 )?;
             } else {
                 self.sink_admin(request.take_admin_request(), response.take_admin_response())?;
@@ -784,10 +778,10 @@ impl Delegate {
         &mut self,
         index: u64,
         requests: Vec<Request>,
+        flags: WriteBatchFlags,
         old_value_cb: &OldValueCallback,
         old_value_cache: &mut OldValueCache,
         statistics: &mut Statistics,
-        is_one_pc: bool,
     ) -> Result<()> {
         debug_assert_eq!(self.txn_extra_op.load(), TxnExtraOp::ReadOldValue);
 
@@ -799,21 +793,15 @@ impl Delegate {
         };
 
         let mut rows_builder = RowsBuilder::default();
+        rows_builder.is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
         for mut req in requests {
             let res = match req.get_cmd_type() {
-                CmdType::Put => self.sink_put(
-                    req.take_put(),
-                    is_one_pc,
-                    &mut rows_builder,
-                    &mut read_old_value,
-                ),
-                CmdType::Delete => self.sink_delete(req.take_delete()),
+                CmdType::Put => {
+                    self.sink_put(req.take_put(), &mut rows_builder, &mut read_old_value)
+                }
+                CmdType::Delete => self.sink_delete(req.take_delete(), &mut rows_builder),
                 _ => {
-                    debug!(
-                        "skip other command";
-                        "region_id" => self.region_id,
-                        "command" => ?req,
-                    );
+                    debug!("skip other command"; "region_id" => self.region_id, "command" => ?req);
                     Ok(())
                 }
             };
@@ -881,30 +869,35 @@ impl Delegate {
         entries.retain(|(x, _)| !TxnSource::is_lossy_ddl_reorg_source_set(x.txn_source));
 
         for downstream in downstreams {
+            // Firstly, filter out entries not in the subscribed range;
+            // then, update the downstream lock heap;
+            // finally, filter out entries by txn_source.
             let mut filtered_entries = Vec::with_capacity(entries.len());
             for (entry, lock_count_modify) in &entries {
                 if !downstream.observed_range.contains_raw_key(&entry.key) {
                     continue;
                 }
-                if downstream.filter_loop && TxnSource::is_cdc_write_source_set(entry.txn_source) {
-                    continue;
-                }
-                filtered_entries.push(entry.clone());
-                if let Some(lock_heap) = &mut downstream.lock_heap {
+                if *lock_count_modify != 0 && downstream.lock_heap.is_some() {
+                    let lock_heap = downstream.lock_heap.as_mut().unwrap();
                     match lock_heap.entry(entry.start_ts.into()) {
                         BTreeMapEntry::Vacant(x) => {
                             x.insert(*lock_count_modify);
                         }
                         BTreeMapEntry::Occupied(mut x) => {
-                            *x.get_mut() += lock_count_modify;
+                            *x.get_mut() += *lock_count_modify;
                             if *x.get() == 0 {
                                 x.remove();
                             }
                         }
                     }
-                    let lock_count = lock_heap.entry(entry.start_ts.into()).or_default();
-                    *lock_count += *lock_count_modify;
                 }
+                if TxnSource::is_lossy_ddl_reorg_source_set(entry.txn_source)
+                    || downstream.filter_loop
+                        && TxnSource::is_cdc_write_source_set(entry.txn_source)
+                {
+                    continue;
+                }
+                filtered_entries.push(entry.clone());
             }
             if filtered_entries.is_empty() {
                 continue;
@@ -926,7 +919,6 @@ impl Delegate {
     fn sink_put(
         &mut self,
         put: PutRequest,
-        is_one_pc: bool,
         rows_builder: &mut RowsBuilder,
         read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
     ) -> Result<()> {
@@ -934,7 +926,7 @@ impl Delegate {
         if key_mode == KeyMode::Raw {
             self.sink_raw_put(put, rows_builder)
         } else {
-            self.sink_txn_put(put, is_one_pc, read_old_value, rows_builder)
+            self.sink_txn_put(put, read_old_value, rows_builder)
         }
     }
 
@@ -948,67 +940,41 @@ impl Delegate {
     fn sink_txn_put(
         &mut self,
         mut put: PutRequest,
-        is_one_pc: bool,
         mut read_old_value: impl FnMut(&mut EventRow, TimeStamp) -> Result<()>,
         rows: &mut RowsBuilder,
     ) -> Result<()> {
         match put.cf.as_str() {
             "write" => {
-                let (mut row, mut has_value) = (EventRow::default(), false);
-                if decode_write(put.take_key(), &put.value, &mut row, &mut has_value, true) {
+                let key = Key::from_encoded_slice(&put.key).truncate_ts().unwrap();
+                let row = rows.txns_by_key.entry(key).or_default();
+                if decode_write(put.take_key(), &put.value, &mut row.0, &mut row.1, true) {
                     return Ok(());
                 }
 
-                let _commit_ts = if is_one_pc {
-                    set_event_row_type(&mut row, EventLogType::Committed);
-                    let commit_ts = TimeStamp::from(row.commit_ts);
-                    read_old_value(&mut row, commit_ts.prev())?;
-                    Some(commit_ts)
-                } else {
-                    // 2PC
-                    if row.commit_ts == 0 {
-                        None
-                    } else {
-                        Some(TimeStamp::from(row.commit_ts))
-                    }
-                };
-                // FIXME: use commit_ts?
-
-                match rows.txns_by_key.entry(row.key.clone()) {
-                    HashMapEntry::Occupied(o) => {
-                        let (ref mut exist_row, ..) = o.into_mut();
-                        mem::swap(&mut exist_row.value, &mut row.value);
-                        *exist_row = row;
-                    }
-                    HashMapEntry::Vacant(v) => {
-                        v.insert((row, has_value, -1));
-                    }
+                if rows.is_one_pc {
+                    set_event_row_type(&mut row.0, EventLogType::Committed);
+                    let read_old_ts = TimeStamp::from(row.0.commit_ts).prev();
+                    read_old_value(&mut row.0, read_old_ts)?;
                 }
             }
             "lock" => {
-                let (mut row, mut has_value) = (EventRow::default(), false);
                 let lock = Lock::parse(put.get_value()).unwrap();
                 let for_update_ts = lock.for_update_ts;
-                if decode_lock(put.take_key(), lock, &mut row, &mut has_value) {
+
+                let key = Key::from_encoded_slice(&put.key);
+                let row = rows.txns_by_key.entry(key.clone()).or_default();
+                if decode_lock(put.take_key(), lock, &mut row.0, &mut row.1) {
                     return Ok(());
                 }
 
-                let read_old_ts = std::cmp::max(for_update_ts, row.start_ts.into());
-                read_old_value(&mut row, read_old_ts)?;
+                row.2 = self.push_lock(key, row.0.start_ts.into())?;
 
-                let occupied = rows.txns_by_key.entry(row.key.clone()).or_default();
-                if occupied.1 {
-                    assert!(!has_value);
-                    has_value = true;
-                    mem::swap(&mut occupied.0.value, &mut row.value);
-                }
-                let lock_count_modify =
-                    self.push_lock(Key::from_raw(&row.key), row.start_ts.into())?;
-                *occupied = (row, has_value, lock_count_modify);
+                let read_old_ts = std::cmp::max(for_update_ts, row.0.start_ts.into());
+                read_old_value(&mut row.0, read_old_ts)?;
             }
             "" | "default" => {
                 let key = Key::from_encoded(put.take_key()).truncate_ts().unwrap();
-                let row = rows.txns_by_key.entry(key.into_raw().unwrap()).or_default();
+                let row = rows.txns_by_key.entry(key).or_default();
                 decode_default(put.take_value(), &mut row.0, &mut row.1);
             }
             other => panic!("invalid cf {}", other),
@@ -1016,9 +982,16 @@ impl Delegate {
         Ok(())
     }
 
-    fn sink_delete(&mut self, mut delete: DeleteRequest) -> Result<()> {
+    fn sink_delete(&mut self, mut delete: DeleteRequest, rows: &mut RowsBuilder) -> Result<()> {
         match delete.cf.as_str() {
-            "lock" => self.pop_lock(Key::from_encoded(delete.take_key()))?,
+            "lock" => {
+                self.pop_lock(Key::from_encoded_slice(&delete.key))?;
+                let row = rows
+                    .txns_by_key
+                    .entry(Key::from_encoded(delete.take_key()))
+                    .or_default();
+                row.2 -= 1;
+            }
             "" | "default" | "write" => {}
             other => panic!("invalid cf {}", other),
         }
@@ -1101,10 +1074,12 @@ impl Delegate {
 
 #[derive(Default)]
 struct RowsBuilder {
-    // map[raw_key]->(row, has_value, lock_count_modify)
-    txns_by_key: HashMap<Vec<u8>, (EventRow, bool, isize)>,
+    // map[Key]->(row, has_value, lock_count_modify)
+    txns_by_key: HashMap<Key, (EventRow, bool, isize)>,
 
     raws: Vec<EventRow>,
+
+    is_one_pc: bool,
 }
 
 impl RowsBuilder {
@@ -1194,28 +1169,25 @@ fn decode_write(
 }
 
 fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow, has_value: &mut bool) -> bool {
+    let key = Key::from_encoded(key);
     let op_type = match lock.lock_type {
         LockType::Put => EventRowOpType::Put,
         LockType::Delete => EventRowOpType::Delete,
         other => {
-            debug!("cdc skip lock record";
-                "type" => ?other,
-                "start_ts" => ?lock.ts,
-                "key" => &log_wrappers::Value::key(&key),
-                "for_update_ts" => ?lock.for_update_ts);
+            debug!("cdc skip lock record"; "lock" => ?other, "key" => %key);
             return true;
         }
     };
-    let key = Key::from_encoded(key);
+
     row.start_ts = lock.ts.into_inner();
     row.key = key.into_raw().unwrap();
     row.op_type = op_type as _;
-    // used for filter out the event. see `txn_source` field for more detail.
     row.txn_source = lock.txn_source;
     set_event_row_type(row, EventLogType::Prewrite);
     if let Some(value) = lock.short_value {
-        row.value = value;
+        assert!(!*has_value);
         *has_value = true;
+        row.value = value;
     }
 
     false
@@ -1642,7 +1614,7 @@ mod tests {
             )
             .to_bytes();
             delegate
-                .sink_txn_put(put, false, |_, _| Ok(()), &mut rows_builder)
+                .sink_txn_put(put, |_, _| Ok(()), &mut rows_builder)
                 .unwrap();
         }
         assert_eq!(rows_builder.txns_by_key.len(), 5);
@@ -1709,7 +1681,7 @@ mod tests {
             }
             put.value = lock.to_bytes();
             delegate
-                .sink_txn_put(put, false, |_, _| Ok(()), &mut rows_builder)
+                .sink_txn_put(put, |_, _| Ok(()), &mut rows_builder)
                 .unwrap();
         }
         assert_eq!(rows_builder.txns_by_key.len(), 5);
@@ -1805,5 +1777,37 @@ mod tests {
                 assert_eq!(row.expire_ts_unix_secs, 0);
             }
         }
+    }
+
+    #[test]
+    fn test_lock_tracker() {
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let mut delegate = Delegate::new(1, quota.clone(), Default::default());
+        assert!(delegate.init_lock_tracker());
+        assert!(!delegate.init_lock_tracker());
+
+        let mut k1 = Vec::with_capacity(100);
+        k1.extend_from_slice(Key::from_raw(b"key1").as_encoded());
+        let k1 = Key::from_encoded(k1);
+        assert_eq!(delegate.push_lock(k1.clone(), 100.into()).unwrap(), 0);
+        assert_eq!(quota.in_use(), 100);
+
+        delegate.pop_lock(k1).unwrap();
+        assert_eq!(quota.in_use(), 200);
+
+        let mut k2 = Vec::with_capacity(200);
+        k2.extend_from_slice(Key::from_raw(b"key2").as_encoded());
+        let k2 = Key::from_encoded(k2);
+        assert_eq!(delegate.push_lock(k2.clone(), 100.into()).unwrap(), 0);
+        assert_eq!(quota.in_use(), 400);
+
+        let mut scaned_locks = BTreeMap::default();
+        scaned_locks.insert(Key::from_raw(b"key1"), 100.into());
+        scaned_locks.insert(Key::from_raw(b"key2"), 100.into());
+        scaned_locks.insert(Key::from_raw(b"key3"), 100.into());
+        delegate
+            .finish_prepare_lock_tracker(Default::default(), scaned_locks)
+            .unwrap();
+        assert_eq!(quota.in_use(), 34);
     }
 }

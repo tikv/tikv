@@ -2208,7 +2208,7 @@ fn test_cdc_write_rollback_when_no_lock_impl<F: KvFormat>() {
     let k1 = b"xk1".to_vec();
     m1.set_op(Op::Put);
     m1.key = k1.clone();
-    m1.value = b"v1".to_vec();
+    m1.value = vec![b'x'; 16];
     suite.must_kv_prewrite(1, vec![m1], k1.clone(), 10.into());
 
     // Wait until resolved_ts advanced to 10
