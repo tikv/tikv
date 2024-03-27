@@ -2613,7 +2613,7 @@ pub mod tests {
 
 =======
         let snap_data = s1
-            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
+            .build(&db, &snapshot, &region, true, false)
             .unwrap();
         assert!(s1.exists());
 
