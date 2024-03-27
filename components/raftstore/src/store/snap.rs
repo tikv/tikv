@@ -2604,13 +2604,9 @@ pub mod tests {
         let snap_data = s2.build(&db, &snapshot, &region, true, false).unwrap();
         assert!(s2.exists());
 
-=======
-        let snap_data = s1
-            .build(&db, &snapshot, &region, true, false)
-            .unwrap();
+        let snap_data = s1.build(&db, &snapshot, &region, true, false).unwrap();
         assert!(s1.exists());
 
->>>>>>> 1c7b34419f (raftstore: Avoid snapshot IO in raftstore thread (#16682))
         let dst_dir = Builder::new()
             .prefix("test-snap-corruption-dst")
             .tempdir()
