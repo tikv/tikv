@@ -259,7 +259,9 @@ impl BackgroundRunnerCore {
         core.mut_range_manager().on_gc_finished(ranges);
     }
 
-    /// Returns the first range to load with RocksDB snapshot.
+    /// Returns the first range to load with RocksDB snapshot. The `bool`
+    /// returned indicates whether the task has been canceled due to memory
+    /// issue.
     ///
     /// Returns `None` if there are no ranges to load.
     fn get_range_to_load(&self) -> Option<(CacheRange, Arc<RocksSnapshot>, bool)> {
@@ -390,12 +392,7 @@ impl Runnable for BackgroundRunner {
                 }
             }
             BackgroundTask::LoadRange => {
-                let mem_usage = self.core.memory_controller.mem_usage();
-                if mem_usage
-                    > (self.core.memory_controller.soft_limit_threshold()
-                        + self.core.memory_controller.hard_limit_threshold())
-                        / 2
-                {
+                if self.core.memory_controller.reached_soft_limit() {
                     // We are running out of memory, so not to load new range.
                     return;
                 }

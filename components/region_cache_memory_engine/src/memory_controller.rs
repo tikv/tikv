@@ -76,6 +76,11 @@ impl MemoryController {
     }
 
     #[inline]
+    pub(crate) fn reached_soft_limit(&self) -> bool {
+        self.mem_usage() >= self.soft_limit_threshold
+    }
+
+    #[inline]
     pub(crate) fn soft_limit_threshold(&self) -> usize {
         self.soft_limit_threshold
     }
@@ -85,14 +90,17 @@ impl MemoryController {
         self.hard_limit_threshold
     }
 
+    #[inline]
     pub(crate) fn set_memory_checking(&self, v: bool) {
         self.memory_checking.store(v, Ordering::SeqCst);
     }
 
+    #[inline]
     pub(crate) fn memory_checking(&self) -> bool {
         self.memory_checking.load(Ordering::SeqCst)
     }
 
+    #[inline]
     pub(crate) fn mem_usage(&self) -> usize {
         self.allocated.load(Ordering::Relaxed)
             + (self.skiplist_engine.node_count() + self.pending_node_count.load(Ordering::Relaxed))
