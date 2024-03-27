@@ -363,11 +363,15 @@ pub(crate) struct Advance {
     // map[(ConnId, region_id)]->request_id.
     pub(crate) dispersed: HashMap<(ConnId, u64), u64>,
 
-    pub(crate) unchanged: usize,
+    pub(crate) scan_finished: usize,
+
+    pub(crate) blocked_on_scan: usize,
+
+    pub(crate) blocked_on_locks: usize,
 }
 
 impl Advance {
-    fn emit_resolved_ts(&mut self, connections: &HashMap<ConnId, Conn>) {
+    fn emit_resolved_ts(&mut self, connections: &HashMap<ConnId, Conn>) -> (u64, TimeStamp) {
         let handle_send_result = |conn: &Conn, res: std::result::Result<(), SendError>| -> bool {
             match res {
                 Ok(_) => return true,
@@ -420,11 +424,16 @@ impl Advance {
             .map(|((a, b), c)| (a, b, c))
             .chain(exclusive.map(|(a, c)| (a, 0, c)));
 
+        let mut min_resolved: Option<(u64, TimeStamp)> = None;
         for (conn_id, req_id, mut region_ts_heap) in unioned {
             let conn = connections.get(&conn_id).unwrap();
             let mut batch_count = 8;
             while !region_ts_heap.is_empty() {
                 let (ts, regions) = region_ts_heap.pop(batch_count);
+                if min_resolved.is_none() {
+                    let rid = regions.iter().next().map_or(0, |x| *x);
+                    min_resolved = Some((rid, ts.into()));
+                }
                 if conn.features().contains(FeatureGate::BATCH_RESOLVED_TS) {
                     send_cdc_events(ts.into_inner(), conn, req_id, Vec::from_iter(regions));
                 } else {
@@ -433,6 +442,7 @@ impl Advance {
                 batch_count *= 4;
             }
         }
+        min_resolved.unwrap_or_default()
     }
 }
 
@@ -1020,7 +1030,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
     }
 
     fn on_min_ts(&mut self, regions: Vec<u64>, min_ts: TimeStamp, current_ts: TimeStamp) {
-        self.min_resolved_ts = TimeStamp::max();
+        self.current_ts = current_ts;
+        self.min_resolved_ts = current_ts;
 
         let mut advance = Advance::default();
         for region_id in regions {
@@ -1029,7 +1040,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             }
         }
 
-        advance.emit_resolved_ts(&self.connections);
+        self.resolved_region_count = advance.scan_finished;
+        self.unresolved_region_count = advance.blocked_on_scan;
+        let (rid, ts) = advance.emit_resolved_ts(&self.connections);
+        if rid > 0 {
+            self.min_resolved_ts = ts;
+            self.min_ts_region_id = rid;
+        }
     }
 
     fn register_min_ts_event(&self, mut leader_resolver: LeadershipResolver, event_time: Instant) {

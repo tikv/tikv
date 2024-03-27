@@ -934,12 +934,15 @@ fn test_cdc_batch_size_limit_impl<F: KvFormat>() {
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
-        Event_oneof_event::Entries(es) => {
-            assert_eq!(es.entries.len(), 2);
-            let e = &es.entries[0];
+        Event_oneof_event::Entries(mut es) => {
+            let mut entries = es.take_entries().into_vec();
+            assert_eq!(entries.len(), 2);
+            entries.sort_by(|a, b| a.key.cmp(&b.key));
+
+            let e = &entries[0];
             assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", e.get_type());
             assert_eq!(e.key, b"xk3", "{:?}", e.key);
-            let e = &es.entries[1];
+            let e = &entries[1];
             assert_eq!(e.get_type(), EventLogType::Prewrite, "{:?}", e.get_type());
             assert_eq!(e.key, b"xk4", "{:?}", e.key);
         }
@@ -1321,19 +1324,20 @@ fn test_cdc_1pc_impl<F: KvFormat>() {
     let req = suite.new_changedata_request(1);
     let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    // Wait until the region subscription is initialized.
     let event = receive_event(false);
-    event.events.into_iter().for_each(|e| {
-        match e.event.unwrap() {
-            // Even if there is no write,
-            // it should always outputs an Initialized event.
+    event
+        .events
+        .into_iter()
+        .for_each(|e| match e.event.unwrap() {
             Event_oneof_event::Entries(es) => {
                 assert!(es.entries.len() == 1, "{:?}", es);
                 let e = &es.entries[0];
                 assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
             }
             other => panic!("unknown event {:?}", other),
-        }
-    });
+        });
 
     let (k1, v1) = (b"xk1", b"v1");
     let (k2, v2) = (b"xk2", &[0u8; 512]);
@@ -1377,16 +1381,19 @@ fn test_cdc_1pc_impl<F: KvFormat>() {
         if !events.is_empty() {
             assert_eq!(events.len(), 1);
             match events.pop().unwrap().event.unwrap() {
-                Event_oneof_event::Entries(entries) => {
-                    assert_eq!(entries.entries.len(), 2);
-                    let (e0, e1) = (&entries.entries[0], &entries.entries[1]);
+                Event_oneof_event::Entries(mut es) => {
+                    let mut entries = es.take_entries().into_vec();
+                    assert_eq!(entries.len(), 2);
+                    entries.sort_by(|a, b| a.key.cmp(&b.key));
+
+                    let (e0, e1) = (&entries[0], &entries[1]);
                     assert_eq!(e0.get_type(), EventLogType::Committed);
-                    assert_eq!(e0.get_key(), k2);
-                    assert_eq!(e0.get_value(), v2);
+                    assert_eq!(e0.get_key(), k1);
+                    assert_eq!(e0.get_value(), v1);
                     assert!(e0.commit_ts > resolved_ts);
                     assert_eq!(e1.get_type(), EventLogType::Committed);
-                    assert_eq!(e1.get_key(), k1);
-                    assert_eq!(e1.get_value(), v1);
+                    assert_eq!(e1.get_key(), k2);
+                    assert_eq!(e1.get_value(), v2);
                     assert!(e1.commit_ts > resolved_ts);
                     break;
                 }
@@ -1906,18 +1913,17 @@ fn test_cdc_extract_rollback_if_gc_fence_set_impl<F: KvFormat>() {
     let req = suite.new_changedata_request(1);
     let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
-    let event = receive_event(false);
-    event
-        .events
-        .into_iter()
-        .for_each(|e| match e.event.unwrap() {
+
+    for e in receive_event(false).events.into_vec() {
+        match e.event.unwrap() {
             Event_oneof_event::Entries(es) => {
                 assert!(es.entries.len() == 1, "{:?}", es);
                 let e = &es.entries[0];
                 assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
             }
             other => panic!("unknown event {:?}", other),
-        });
+        };
+    }
 
     sleep_ms(1000);
 

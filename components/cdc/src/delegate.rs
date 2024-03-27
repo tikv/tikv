@@ -565,10 +565,13 @@ impl Delegate {
             }
         };
 
-        let handle_downstream = |downstream: &mut Downstream| -> Option<TimeStamp> {
+        let mut handle_downstream = |downstream: &mut Downstream| -> Option<TimeStamp> {
             if !downstream.state.load().ready_for_advancing_ts() {
+                advance.blocked_on_scan += 1;
                 return None;
             }
+            advance.scan_finished += 1;
+
             if downstream.lock_heap.is_none() {
                 let mut lock_heap = BTreeMap::<TimeStamp, isize>::new();
                 for (_, ts) in locks.range(downstream.observed_range.to_range()) {
@@ -583,19 +586,17 @@ impl Delegate {
             let advanced_to = std::cmp::min(min_lock, min_ts);
             if advanced_to > downstream.advanced_to {
                 downstream.advanced_to = advanced_to;
-                return Some(advanced_to);
+            } else {
+                advance.blocked_on_locks += 1;
             }
-            None
+            Some(downstream.advanced_to)
         };
 
         let mut slow_downstreams = Vec::new();
         for d in &mut self.downstreams {
             let advanced_to = match handle_downstream(d) {
                 Some(ts) => ts,
-                None => {
-                    advance.unchanged += 1;
-                    d.advanced_to
-                }
+                None => continue,
             };
 
             let features = connections.get(&d.conn_id).unwrap().features();
