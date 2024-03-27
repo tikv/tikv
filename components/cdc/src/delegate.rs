@@ -329,7 +329,8 @@ impl Delegate {
         Ok(lock_count_modify)
     }
 
-    fn pop_lock(&mut self, key: Key) -> Result<()> {
+    fn pop_lock(&mut self, key: Key) -> Result<isize> {
+        let mut lock_count_modify = 0;
         match &mut self.lock_tracker {
             LockTracker::Pending => unreachable!(),
             LockTracker::Preparing(locks) => {
@@ -339,13 +340,15 @@ impl Delegate {
                 locks.push(PendingLock::Untrack { key });
             }
             LockTracker::Prepared { locks, .. } => {
-                let (key, _) = locks.remove_entry(&key).unwrap();
-                let bytes = key.approximate_heap_size();
-                self.memory_quota.free(bytes);
-                CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
+                if let Some((key, _)) = locks.remove_entry(&key) {
+                    let bytes = key.approximate_heap_size();
+                    self.memory_quota.free(bytes);
+                    CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
+                    lock_count_modify = -1;
+                }
             }
         }
-        Ok(())
+        Ok(lock_count_modify)
     }
 
     pub(crate) fn init_lock_tracker(&mut self) -> bool {
@@ -986,12 +989,10 @@ impl Delegate {
     fn sink_delete(&mut self, mut delete: DeleteRequest, rows: &mut RowsBuilder) -> Result<()> {
         match delete.cf.as_str() {
             "lock" => {
-                self.pop_lock(Key::from_encoded_slice(&delete.key))?;
-                let row = rows
-                    .txns_by_key
-                    .entry(Key::from_encoded(delete.take_key()))
-                    .or_default();
-                row.2 -= 1;
+                if self.pop_lock(Key::from_encoded_slice(&delete.key))? != 0 {
+                    let key = Key::from_encoded(delete.take_key());
+                    rows.txns_by_key.get_mut(&key).unwrap().2 -= 1;
+                }
             }
             "" | "default" | "write" => {}
             other => panic!("invalid cf {}", other),
