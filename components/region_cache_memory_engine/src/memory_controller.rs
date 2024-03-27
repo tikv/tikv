@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{self, AtomicBool, AtomicUsize, Ordering};
 
 use crate::{engine::SkiplistEngine, write_batch::NODE_OVERHEAD_SIZE_EXPECTATION};
 
@@ -51,11 +51,11 @@ impl MemoryController {
         let pending_count = self.pending_node_count.fetch_add(1, Ordering::Relaxed) + 1;
         let node_count = self.skiplist_engine.node_count();
 
-        let mem_usage = self.allocated.fetch_add(n, Ordering::SeqCst)
-            + (node_count + pending_count) * NODE_OVERHEAD_SIZE_EXPECTATION
-            + n;
+        let mem_usage = self.allocated.fetch_add(n, Ordering::Relaxed)
+            + n
+            + (node_count + pending_count) * NODE_OVERHEAD_SIZE_EXPECTATION;
         if mem_usage >= self.hard_limit_threshold {
-            self.allocated.fetch_sub(n, Ordering::SeqCst);
+            self.allocated.fetch_sub(n, Ordering::Relaxed);
             self.pending_node_count.fetch_sub(1, Ordering::Relaxed);
             return MemoryUsage::HardLimitReached(mem_usage - n - NODE_OVERHEAD_SIZE_EXPECTATION);
         }
@@ -72,7 +72,7 @@ impl MemoryController {
     }
 
     pub(crate) fn release(&self, n: usize) {
-        self.allocated.fetch_sub(n, Ordering::SeqCst);
+        self.allocated.fetch_sub(n, Ordering::Relaxed);
     }
 
     #[inline]
@@ -92,12 +92,12 @@ impl MemoryController {
 
     #[inline]
     pub(crate) fn set_memory_checking(&self, v: bool) {
-        self.memory_checking.store(v, Ordering::SeqCst);
+        self.memory_checking.store(v, Ordering::Relaxed);
     }
 
     #[inline]
     pub(crate) fn memory_checking(&self) -> bool {
-        self.memory_checking.load(Ordering::SeqCst)
+        self.memory_checking.load(Ordering::Relaxed)
     }
 
     #[inline]
