@@ -55,16 +55,9 @@ use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err, debug, defer, error, escape, info, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
-<<<<<<< HEAD
     store::{find_peer, is_learner, region_on_same_stores},
     sys::{disk::DiskUsage, memory_usage_reaches_high_water},
-    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
-=======
-    slow_log,
-    store::{find_peer, find_peer_by_id, is_learner, region_on_same_stores},
-    sys::disk::DiskUsage,
-    time::{monotonic_raw_now, Instant as TiInstant, SlowTimer},
->>>>>>> 8ab73504d8 (raftstore: Add slow log for peer and store msg (#16605))
+    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, SlowTimer},
     trace, warn,
     worker::{ScheduleError, Scheduler},
     Either,
@@ -721,11 +714,7 @@ where
             .raft_metrics
             .event_time
             .peer_msg
-<<<<<<< HEAD
-            .observe(duration_to_sec(timer.saturating_elapsed()));
-=======
             .observe(timer.saturating_elapsed().as_secs_f64());
->>>>>>> 8ab73504d8 (raftstore: Add slow log for peer and store msg (#16605))
     }
 
     #[inline]
