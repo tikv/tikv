@@ -968,7 +968,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     &mut self.old_value_cache,
                     &mut statistics,
                 ) {
-                    assert!(delegate.has_failed());
+                    delegate.mark_failed();
                     // Delegate has error, deregister the delegate.
                     deregister = Some(Deregister::Delegate {
                         region_id,

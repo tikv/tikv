@@ -359,31 +359,6 @@ impl Delegate {
         false
     }
 
-    pub(crate) fn finish_scan_locks(
-        &mut self,
-        region: Region,
-        locks: BTreeMap<Key, TimeStamp>,
-    ) -> Result<Vec<(&Downstream, Error)>> {
-        info!("cdc region is ready"; "region_id" => self.region_id);
-        self.finish_prepare_lock_tracker(region, locks)?;
-
-        let region = match &self.lock_tracker {
-            LockTracker::Prepared { region, .. } => region,
-            _ => unreachable!(),
-        };
-
-        // Check observed key range in region.
-        let mut failed_downstreams = Vec::new();
-        for downstream in &mut self.downstreams {
-            downstream.observed_range.update_region_key_range(region);
-            if let Err(e) = Self::check_epoch_on_ready(downstream, region) {
-                failed_downstreams.push((&*downstream, e));
-            }
-        }
-
-        Ok(failed_downstreams)
-    }
-
     fn finish_prepare_lock_tracker(
         &mut self,
         region: Region,
@@ -423,6 +398,31 @@ impl Delegate {
         }
         self.lock_tracker = LockTracker::Prepared { region, locks };
         Ok(())
+    }
+
+    pub(crate) fn finish_scan_locks(
+        &mut self,
+        region: Region,
+        locks: BTreeMap<Key, TimeStamp>,
+    ) -> Result<Vec<(&Downstream, Error)>> {
+        info!("cdc region is ready"; "region_id" => self.region_id);
+        self.finish_prepare_lock_tracker(region, locks)?;
+
+        let region = match &self.lock_tracker {
+            LockTracker::Prepared { region, .. } => region,
+            _ => unreachable!(),
+        };
+
+        // Check observed key range in region.
+        let mut failed_downstreams = Vec::new();
+        for downstream in &mut self.downstreams {
+            downstream.observed_range.update_region_key_range(region);
+            if let Err(e) = Self::check_epoch_on_ready(downstream, region) {
+                failed_downstreams.push((&*downstream, e));
+            }
+        }
+
+        Ok(failed_downstreams)
     }
 
     /// Create a Delegate the given region.
@@ -657,7 +657,6 @@ impl Delegate {
             } = cmd;
             if response.get_header().has_error() {
                 let err_header = response.mut_header().take_error();
-                self.mark_failed();
                 return Err(Error::request(err_header));
             }
             if !request.has_admin_request() {
@@ -799,20 +798,13 @@ impl Delegate {
         let mut rows_builder = RowsBuilder::default();
         rows_builder.is_one_pc = flags.contains(WriteBatchFlags::ONE_PC);
         for mut req in requests {
-            let res = match req.get_cmd_type() {
+            match req.get_cmd_type() {
                 CmdType::Put => {
-                    self.sink_put(req.take_put(), &mut rows_builder, &mut read_old_value)
+                    self.sink_put(req.take_put(), &mut rows_builder, &mut read_old_value)?
                 }
-                CmdType::Delete => self.sink_delete(req.take_delete(), &mut rows_builder),
-                _ => {
-                    debug!("skip other command"; "region_id" => self.region_id, "command" => ?req);
-                    Ok(())
-                }
+                CmdType::Delete => self.sink_delete(req.take_delete(), &mut rows_builder)?,
+                _ => debug!("skip other command"; "region_id" => self.region_id, "command" => ?req),
             };
-            if res.is_err() {
-                self.mark_failed();
-                return res;
-            }
         }
 
         let (raws, txns) = rows_builder.finish_build();
@@ -1020,7 +1012,6 @@ impl Delegate {
             }
             _ => return Ok(()),
         };
-        self.mark_failed();
         Err(Error::request(store_err.into()))
     }
 
