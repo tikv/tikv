@@ -38,8 +38,6 @@ use crate::{
 
 type ScanPool = tokio::runtime::Runtime;
 
-const INITIAL_SCAN_FAILURE_MAX_RETRY_TIME: usize = 10;
-
 // The retry parameters for failed to get last checkpoint ts.
 // When PD is temporarily disconnected, we may need this retry.
 // The total duration of retrying is about 345s ( 20 * 16 + 15 ),
@@ -196,11 +194,14 @@ impl ScanCmd {
 
     /// execute the command, when meeting error, retrying.
     async fn exec_by_with_retry(self, init: impl InitialScan) {
-        let mut retry_time = INITIAL_SCAN_FAILURE_MAX_RETRY_TIME;
+        let mut retry_time = TRY_START_OBSERVE_MAX_RETRY_TIME;
         loop {
             match self.exec_by(init.clone()).await {
                 Err(err) if should_retry(&err) && retry_time > 0 => {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    tokio::time::sleep(backoff_for_start_observe(
+                        TRY_START_OBSERVE_MAX_RETRY_TIME - retry_time,
+                    ))
+                    .await;
                     warn!("meet retryable error"; "err" => %err, "retry_time" => retry_time);
                     retry_time -= 1;
                     continue;
