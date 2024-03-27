@@ -86,6 +86,7 @@ mod tests {
             (r#"{"a":{"a":1},"b":2}"#, r#"{"b":3}"#, false),
             (r#"[1,2,[1,[5,{"a":[2,3]}]]]"#, r#"[1,{"a":[3]}]"#, true),
             (r#"[1,2,[1,[5,{"a":[2,3]}]]]"#, r#"[10,{"a":[3]}]"#, false),
+            (r#"[9223372036854775807]"#, r#"9223372036854775808"#, false),
         ];
         for (i, (js, value, expected)) in test_cases.drain(..).enumerate() {
             let j = js.parse();
