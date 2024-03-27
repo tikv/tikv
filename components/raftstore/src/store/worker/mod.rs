@@ -6,7 +6,7 @@ mod cleanup_snapshot;
 mod cleanup_sst;
 mod compact;
 mod consistency_check;
-mod destory;
+mod life;
 pub mod metrics;
 mod pd;
 mod raftlog_gc;
@@ -29,7 +29,7 @@ pub use self::{
         Task as CompactTask,
     },
     consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask},
-    destory::Destroyer,
+    life::Assistant,
     pd::{
         new_change_peer_v2_request, FlowStatistics, FlowStatsReporter, HeartbeatTask,
         Runner as PdRunner, StatsMonitor as PdStatsMonitor, StoreStatsReporter, Task as PdTask,

@@ -2,7 +2,12 @@
 
 use engine_traits::{Engines, KvEngine, RaftEngine};
 
-pub struct Destroyer<E, R>
+/// An assistant to help manage the lifecycle of engines.
+///
+/// Currently, it only enables manual compaction jobs before starting the
+/// engines and disables manual compaction jobs before shutting down the
+/// engines.
+pub struct Assistant<E, R>
 where
     E: KvEngine,
     R: RaftEngine,
@@ -11,7 +16,7 @@ where
     engines: Engines<E, R>,
 }
 
-impl<E, R> Destroyer<E, R>
+impl<E, R> Assistant<E, R>
 where
     E: KvEngine,
     R: RaftEngine,
@@ -23,7 +28,12 @@ where
         }
     }
 
-    pub fn shutdown(&mut self) {
+    pub fn start(&mut self) {
+        // Enable manual compaction jobs before starting the engines.
+        let _ = self.engines.kv.enable_manual_compaction();
+    }
+
+    pub fn stop(&mut self) {
         // Disable manul compaction jobs before shutting down the engines. And it
         // will stop the compaction thread in advance, so it won't block the
         // cleanup thread when exiting.
@@ -42,14 +52,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_destroyer_shutdown() {
+    fn test_assistant() {
         let path = Builder::new()
-            .prefix("test_destroyer_shutdown")
+            .prefix("test_assistant_shutdown")
             .tempdir()
             .unwrap();
         let engines = new_temp_engine(&path);
         let db = engines.kv.clone();
-        let mut destroyer = Destroyer::new("test-destroyer", engines.clone());
+        let mut assistant = Assistant::new("test-assistant", engines.clone());
 
         // Generate the first SST file.
         let mut wb = db.write_batch();
@@ -74,18 +84,37 @@ mod tests {
         // Get the total SST files size.
         let old_sst_files_size = db.get_total_sst_files_size_cf(CF_DEFAULT).unwrap().unwrap();
 
-        // Shutdown the destroyer.
-        destroyer.shutdown();
-        // Manually compact range.
-        let _ = db.compact_range_cf(
-            CF_DEFAULT,
-            None,
-            None,
-            ManualCompactionOptions::new(false, 1, true),
-        );
+        // Stop the assistant.
+        {
+            assistant.stop();
 
-        // Get the total SST files size after compact range.
-        let new_sst_files_size = db.get_total_sst_files_size_cf(CF_DEFAULT).unwrap().unwrap();
-        assert_eq!(old_sst_files_size, new_sst_files_size);
+            // Manually compact range.
+            let _ = db.compact_range_cf(
+                CF_DEFAULT,
+                None,
+                None,
+                ManualCompactionOptions::new(false, 1, true),
+            );
+
+            // Get the total SST files size after compact range.
+            let new_sst_files_size = db.get_total_sst_files_size_cf(CF_DEFAULT).unwrap().unwrap();
+            assert_eq!(old_sst_files_size, new_sst_files_size);
+        }
+        // Restart the assistant.
+        {
+            assistant.start();
+
+            // Manually compact range.
+            let _ = db.compact_range_cf(
+                CF_DEFAULT,
+                None,
+                None,
+                ManualCompactionOptions::new(false, 1, true),
+            );
+
+            // Get the total SST files size after compact range.
+            let new_sst_files_size = db.get_total_sst_files_size_cf(CF_DEFAULT).unwrap().unwrap();
+            assert!(old_sst_files_size > new_sst_files_size);
+        }
     }
 }
