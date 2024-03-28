@@ -858,10 +858,6 @@ where
         inspector: LatencyInspector,
     },
 
-    /// Message only used for test.
-    #[cfg(any(test, feature = "testexport"))]
-    Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
-
     UnsafeRecoveryReport(pdpb::StoreReport),
     UnsafeRecoveryCreatePeer {
         syncer: UnsafeRecoveryExecutePlanSyncer,
@@ -873,6 +869,10 @@ where
     AwakenRegions {
         abnormal_stores: Vec<u64>,
     },
+
+    /// Message only used for test.
+    #[cfg(any(test, feature = "testexport"))]
+    Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
 }
 
 impl<EK> fmt::Debug for StoreMsg<EK>
@@ -914,20 +914,21 @@ where
 impl<EK: KvEngine> StoreMsg<EK> {
     pub fn discriminant(&self) -> usize {
         match self {
-            StoreMsg::RaftMessage(_) => 0,
-            StoreMsg::StoreUnreachable { .. } => 1,
-            StoreMsg::CompactedEvent(_) => 2,
-            StoreMsg::ClearRegionSizeInRange { .. } => 3,
-            StoreMsg::Tick(_) => 4,
-            StoreMsg::Start { .. } => 5,
-            StoreMsg::UpdateReplicationMode(_) => 6,
-            StoreMsg::LatencyInspect { .. } => 7,
-            StoreMsg::UnsafeRecoveryReport(_) => 8,
-            StoreMsg::UnsafeRecoveryCreatePeer { .. } => 9,
-            StoreMsg::GcSnapshotFinish => 10,
-            StoreMsg::AwakenRegions { .. } => 11,
+            StoreMsg::RaftMessage(..) => 0,
+            StoreMsg::ValidateSstResult { .. } => 1,
+            StoreMsg::ClearRegionSizeInRange { .. } => 2,
+            StoreMsg::StoreUnreachable { .. } => 3,
+            StoreMsg::CompactedEvent(_) => 4,
+            StoreMsg::Tick(_) => 5,
+            StoreMsg::Start { .. } => 6,
+            StoreMsg::UpdateReplicationMode(_) => 7,
+            StoreMsg::LatencyInspect { .. } => 8,
+            StoreMsg::UnsafeRecoveryReport(_) => 9,
+            StoreMsg::UnsafeRecoveryCreatePeer { .. } => 10,
+            StoreMsg::GcSnapshotFinish => 11,
+            StoreMsg::AwakenRegions { .. } => 12,
             #[cfg(any(test, feature = "testexport"))]
-            StoreMsg::Validate(_) => 12,
+            StoreMsg::Validate(_) => 13,
         }
     }
 }
