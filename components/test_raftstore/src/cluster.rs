@@ -1372,8 +1372,7 @@ where
                     .get_region()
                     .get_peers()
                     .iter()
-                    .filter(|p| p.get_id() == peer_id)
-                    .next()
+                    .find(|p| p.get_id() == peer_id)
                     .unwrap();
                 if peer.role == role {
                     return;
