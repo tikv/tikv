@@ -14,9 +14,9 @@ use bytes::Bytes;
 use crossbeam::{epoch, epoch::default_collector};
 use engine_rocks::{raw::SliceTransform, util::FixedSuffixSliceTransform, RocksEngine};
 use engine_traits::{
-    CacheRange, CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, KvEngine, Peekable,
-    RangeCacheEngine, ReadOptions, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT, CF_LOCK,
-    CF_WRITE,
+    CacheRange, CfNamesExt, DbVector, Error, FailedReason, IterOptions, Iterable, Iterator,
+    KvEngine, Peekable, RangeCacheEngine, ReadOptions, Result, Snapshot, SnapshotMiscExt,
+    CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
 use skiplist_rs::{base::OwnedIter, SkipList};
@@ -364,7 +364,12 @@ impl Debug for RangeCacheMemoryEngine {
 impl RangeCacheEngine for RangeCacheMemoryEngine {
     type Snapshot = RangeCacheSnapshot;
 
-    fn snapshot(&self, range: CacheRange, read_ts: u64, seq_num: u64) -> Option<Self::Snapshot> {
+    fn snapshot(
+        &self,
+        range: CacheRange,
+        read_ts: u64,
+        seq_num: u64,
+    ) -> result::Result<Self::Snapshot, FailedReason> {
         RangeCacheSnapshot::new(self.clone(), range, read_ts, seq_num)
     }
 
@@ -699,17 +704,14 @@ impl RangeCacheSnapshot {
         range: CacheRange,
         read_ts: u64,
         seq_num: u64,
-    ) -> Option<Self> {
+    ) -> result::Result<Self, FailedReason> {
         let mut core = engine.core.write();
-        if let Some(range_id) = core.range_manager.range_snapshot(&range, read_ts) {
-            return Some(RangeCacheSnapshot {
-                snapshot_meta: RagneCacheSnapshotMeta::new(range_id, range, read_ts, seq_num),
-                skiplist_engine: core.engine.clone(),
-                engine: engine.clone(),
-            });
-        }
-
-        None
+        let range_id = core.range_manager.range_snapshot(&range, read_ts)?;
+        Ok(RangeCacheSnapshot {
+            snapshot_meta: RagneCacheSnapshotMeta::new(range_id, range, read_ts, seq_num),
+            skiplist_engine: core.engine.clone(),
+            engine: engine.clone(),
+        })
     }
 }
 
@@ -861,7 +863,8 @@ mod tests {
     use bytes::{BufMut, Bytes};
     use crossbeam::epoch;
     use engine_traits::{
-        CacheRange, IterOptions, Iterable, Iterator, Peekable, RangeCacheEngine, ReadOptions,
+        CacheRange, FailedReason, IterOptions, Iterable, Iterator, Peekable, RangeCacheEngine,
+        ReadOptions,
     };
     use skiplist_rs::SkipList;
 
@@ -909,8 +912,6 @@ mod tests {
             }
         };
 
-        assert!(engine.snapshot(range.clone(), 5, u64::MAX).is_none());
-
         {
             let mut core = engine.core.write();
             core.range_manager.set_range_readable(&range, true);
@@ -923,7 +924,10 @@ mod tests {
             assert!(!core.range_manager.set_safe_point(&t_range, 5));
             assert!(core.range_manager.set_safe_point(&range, 5));
         }
-        assert!(engine.snapshot(range.clone(), 5, u64::MAX).is_none());
+        assert_eq!(
+            engine.snapshot(range.clone(), 5, u64::MAX).unwrap_err(),
+            FailedReason::TooOldRead
+        );
         let s2 = engine.snapshot(range.clone(), 10, u64::MAX).unwrap();
 
         verify_snapshot_count(5, 1);
@@ -1938,8 +1942,14 @@ mod tests {
         }
 
         engine.evict_range(&evict_range);
-        assert!(engine.snapshot(range.clone(), 10, 200).is_none());
-        assert!(engine.snapshot(evict_range.clone(), 10, 200).is_none());
+        assert_eq!(
+            engine.snapshot(range.clone(), 10, 200).unwrap_err(),
+            FailedReason::NotCached
+        );
+        assert_eq!(
+            engine.snapshot(evict_range.clone(), 10, 200).unwrap_err(),
+            FailedReason::NotCached
+        );
 
         let r_left = CacheRange::new(construct_user_key(0), construct_user_key(10));
         let r_right = CacheRange::new(construct_user_key(20), construct_user_key(30));

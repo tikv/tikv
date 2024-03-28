@@ -418,7 +418,7 @@ fn test_load_with_eviction() {
                 u64::MAX,
                 u64::MAX,
             )
-            .is_none()
+            .is_err()
             && tried_count < 5
         {
             std::thread::sleep(Duration::from_millis(100));

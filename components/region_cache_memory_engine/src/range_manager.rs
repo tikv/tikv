@@ -2,11 +2,12 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
+    result,
     sync::Arc,
 };
 
 use engine_rocks::RocksSnapshot;
-use engine_traits::CacheRange;
+use engine_traits::{CacheRange, FailedReason};
 
 use crate::engine::{RagneCacheSnapshotMeta, SnapshotList};
 
@@ -173,24 +174,28 @@ impl RangeManager {
 
     // Acquire a snapshot of the `range` with `read_ts`. If the range is not
     // accessable, None will be returned. Otherwise, the range id will be returned.
-    pub(crate) fn range_snapshot(&mut self, range: &CacheRange, read_ts: u64) -> Option<u64> {
+    pub(crate) fn range_snapshot(
+        &mut self,
+        range: &CacheRange,
+        read_ts: u64,
+    ) -> result::Result<u64, FailedReason> {
         let Some(range_key) = self
             .ranges
             .keys()
             .find(|&r| r.contains_range(range))
             .cloned()
         else {
-            return None;
+            return Err(FailedReason::NotCached);
         };
         let meta = self.ranges.get_mut(&range_key).unwrap();
 
         if read_ts <= meta.safe_point || !meta.can_read {
             // todo(SpadeA): add metrics for it
-            return None;
+            return Err(FailedReason::TooOldRead);
         }
 
         meta.range_snapshot_list.new_snapshot(read_ts);
-        Some(meta.id)
+        Ok(meta.id)
     }
 
     // If the snapshot is the last one in the snapshot list of one cache range in
@@ -336,7 +341,7 @@ pub enum RangeCacheStatus {
 mod tests {
     use std::collections::BTreeSet;
 
-    use engine_traits::CacheRange;
+    use engine_traits::{CacheRange, FailedReason};
 
     use super::RangeManager;
     use crate::range_manager::LoadFailedReason;
@@ -349,13 +354,22 @@ mod tests {
         range_mgr.new_range(r1.clone());
         range_mgr.set_range_readable(&r1, true);
         range_mgr.set_safe_point(&r1, 5);
-        assert!(range_mgr.range_snapshot(&r1, 5).is_none());
-        assert!(range_mgr.range_snapshot(&r1, 8).is_some());
-        assert!(range_mgr.range_snapshot(&r1, 10).is_some());
+        assert_eq!(
+            range_mgr.range_snapshot(&r1, 5).unwrap_err(),
+            FailedReason::TooOldRead
+        );
+        range_mgr.range_snapshot(&r1, 8).unwrap();
+        range_mgr.range_snapshot(&r1, 10).unwrap();
         let tmp_r = CacheRange::new(b"k08".to_vec(), b"k15".to_vec());
-        assert!(range_mgr.range_snapshot(&tmp_r, 8).is_none());
+        assert_eq!(
+            range_mgr.range_snapshot(&tmp_r, 8).unwrap_err(),
+            FailedReason::NotCached
+        );
         let tmp_r = CacheRange::new(b"k10".to_vec(), b"k11".to_vec());
-        assert!(range_mgr.range_snapshot(&tmp_r, 8).is_none());
+        assert_eq!(
+            range_mgr.range_snapshot(&tmp_r, 8).unwrap_err(),
+            FailedReason::NotCached
+        );
 
         let r_evict = CacheRange::new(b"k03".to_vec(), b"k06".to_vec());
         let r_left = CacheRange::new(b"k00".to_vec(), b"k03".to_vec());
@@ -370,7 +384,7 @@ mod tests {
         assert!(meta2.can_read && meta3.can_read);
 
         // evict a range with accurate match
-        range_mgr.range_snapshot(&r_left, 10);
+        let _ = range_mgr.range_snapshot(&r_left, 10);
         range_mgr.evict_range(&r_left);
         assert!(range_mgr.historical_ranges.get(&r_left).is_some());
         assert!(range_mgr.evicted_ranges.contains(&r_left));
