@@ -100,9 +100,11 @@ pub struct RangeManager {
     // further write batch being cached. We must ensure the cached write batch is empty at the time
     // the range becoming accessable range.
     //
-    // Note: the range transferred from pending_range *must be* performed by the peer whose region
-    // range equals to it. If split happened, the first noticed peer should first split the range
-    // in the pending_range and then only handles its part.
+    // Note: the region with range equaling to the range in the `pending_range` may have been
+    // split. This is fine, we just let the first child region that calls the prepare_for_apply
+    // to schedule it. We should cache writes for all child regions, and the load task
+    // completes as long as the snapshot has been loaded and the cached write batches for this
+    // super range have all been consumed.
     pub(crate) pending_ranges: Vec<CacheRange>,
     pub(crate) pending_ranges_loading_data: VecDeque<(CacheRange, Arc<RocksSnapshot>)>,
 
@@ -322,6 +324,12 @@ pub enum LoadFailedReason {
     Overlapped,
     InGc,
     Evicted,
+}
+
+pub enum RangeCacheStatus {
+    NotInCache,
+    Cached,
+    Loading,
 }
 
 #[cfg(test)]
