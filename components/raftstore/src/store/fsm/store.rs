@@ -103,8 +103,8 @@ use crate::{
         util,
         util::{is_initial_msg, RegionReadProgressRegistry},
         worker::{
-            AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask, CleanupTask,
-            CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
+            Assistant, AutoSplitController, CleanupRunner, CleanupSstRunner, CleanupSstTask,
+            CleanupTask, CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
             GcSnapshotRunner, GcSnapshotTask, PdRunner, RaftlogGcRunner, RaftlogGcTask,
             ReadDelegate, RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask,
             SplitCheckTask,
@@ -1597,6 +1597,8 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     coprocessor_host: CoprocessorHost<EK>,
 
     refresh_config_worker: LazyWorker<RefreshConfigTask>,
+
+    assistant: Assistant<EK, ER>,
 }
 
 pub struct RaftBatchSystem<EK: KvEngine, ER: RaftEngine> {
@@ -1689,6 +1691,11 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             raftlog_fetch_worker: Worker::new("raftlog-fetch-worker"),
             coprocessor_host: coprocessor_host.clone(),
             refresh_config_worker: LazyWorker::new("refreash-config-worker"),
+            assistant: {
+                let mut assistant = Assistant::new("engine-assistant", engines.clone());
+                assistant.start();
+                assistant
+            },
         };
         mgr.init()?;
         let region_runner = RegionRunner::new(
@@ -1913,6 +1920,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             return;
         }
         let mut workers = self.workers.take().unwrap();
+        // Stop all background workers in the engine before stopping
+        // the other workers.
+        workers.assistant.stop();
         // Wait all workers finish.
         workers.pd_worker.stop();
 

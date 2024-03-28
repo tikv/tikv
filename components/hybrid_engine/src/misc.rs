@@ -68,6 +68,14 @@ where
         self.disk_engine().sync_wal()
     }
 
+    fn disable_manual_compaction(&self) -> Result<()> {
+        self.disk_engine().disable_manual_compaction()
+    }
+
+    fn enable_manual_compaction(&self) -> Result<()> {
+        self.disk_engine().enable_manual_compaction()
+    }
+
     fn pause_background_work(&self) -> Result<()> {
         self.disk_engine().pause_background_work()
     }
