@@ -7,6 +7,7 @@ mod cf_options;
 mod checkpoint;
 mod compact;
 mod db_options;
+mod db_vector;
 mod engine;
 mod engine_iterator;
 mod flow_control_factors;

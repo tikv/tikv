@@ -1,5 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use engine_traits::{
     is_data_cf, CacheRange, KvEngine, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions,
 };
@@ -9,7 +11,7 @@ use crate::engine::HybridEngine;
 
 pub struct HybridEngineWriteBatch<EK: KvEngine> {
     disk_write_batch: EK::WriteBatch,
-    cache_write_batch: RangeCacheWriteBatch,
+    pub(crate) cache_write_batch: RangeCacheWriteBatch,
 }
 
 impl<EK> WriteBatchExt for HybridEngine<EK, RangeCacheMemoryEngine>
@@ -40,10 +42,13 @@ impl<EK: KvEngine> WriteBatch for HybridEngineWriteBatch<EK> {
     }
 
     fn write_callback_opt(&mut self, opts: &WriteOptions, mut cb: impl FnMut(u64)) -> Result<u64> {
+        let called = AtomicBool::new(false);
         self.disk_write_batch
             .write_callback_opt(opts, |s| {
-                self.cache_write_batch.set_sequence_number(s).unwrap();
-                self.cache_write_batch.write_opt(opts).unwrap();
+                if !called.fetch_or(true, Ordering::SeqCst) {
+                    self.cache_write_batch.set_sequence_number(s).unwrap();
+                    self.cache_write_batch.write_opt(opts).unwrap();
+                }
             })
             .map(|s| {
                 cb(s);
@@ -138,6 +143,7 @@ mod tests {
     use engine_traits::{
         CacheRange, KvEngine, Mutable, Peekable, SnapshotContext, WriteBatch, WriteBatchExt,
     };
+    use region_cache_memory_engine::range_manager::RangeCacheStatus;
 
     use crate::util::hybrid_engine_for_tests;
 
@@ -157,7 +163,9 @@ mod tests {
             })
             .unwrap();
         let mut write_batch = hybrid_engine.write_batch();
-        write_batch.cache_write_batch.set_range_in_cache(true);
+        write_batch
+            .cache_write_batch
+            .set_range_cache_status(RangeCacheStatus::Cached);
         write_batch.put(b"hello", b"world").unwrap();
         let seq = write_batch.write().unwrap();
         assert!(seq > 0);
