@@ -113,7 +113,7 @@ fn new_cluster(
     port: u16,
     env: Arc<Environment>,
 ) -> (
-    Cluster<RocksDb, ServerCluster<RocksDb>>,
+    Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     TikvClient,
     Context,
 ) {

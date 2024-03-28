@@ -8,7 +8,6 @@ use std::{
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
-use engine_rocks::RocksEngine;
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, KvEngine, SnapshotContext};
 use health_controller::HealthController;
@@ -507,7 +506,10 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
 
 // Compare to server cluster, node cluster does not have server layer and
 // storage layer.
-pub fn new_node_cluster(id: u64, count: usize) -> Cluster<RocksEngine, NodeCluster<RocksEngine>> {
+pub fn new_node_cluster(
+    id: u64,
+    count: usize,
+) -> Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
@@ -521,7 +523,9 @@ pub fn new_node_cluster_with_hybrid_engine(
 ) -> Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
+    let mut cluster = Cluster::new(id, count, sim, pd_client, ApiVersion::V1);
+    cluster.set_range_cache_engine(true);
+    cluster
 }
 
 // This cluster does not support batch split, we expect it to transfer the
@@ -529,7 +533,7 @@ pub fn new_node_cluster_with_hybrid_engine(
 pub fn new_incompatible_node_cluster(
     id: u64,
     count: usize,
-) -> Cluster<RocksEngine, NodeCluster<RocksEngine>> {
+) -> Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>> {
     let pd_client = Arc::new(TestPdClient::new(id, true));
     let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)

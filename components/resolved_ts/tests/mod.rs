@@ -19,7 +19,7 @@ pub fn init() {
 }
 
 pub struct TestSuite {
-    pub cluster: Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    pub cluster: Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     tikv_cli: HashMap<u64, TikvClient>,
     import_cli: HashMap<u64, ImportSstClient>,
 

@@ -32,7 +32,7 @@ fn test_node_async_fetch() {
     let mut before_states = HashMap::default();
 
     for (&id, engines) in &cluster.engines {
-        must_get_equal(&engines.kv, b"k1", b"v1");
+        must_get_equal(engines.kv.disk_engine(), b"k1", b"v1");
         let mut state: RaftApplyState = engines
             .kv
             .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
@@ -88,7 +88,7 @@ fn test_node_async_fetch() {
     for i in 1..60u32 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
-        must_get_equal(&cluster.engines[&1].kv, &k, &v);
+        must_get_equal(cluster.engines[&1].kv.disk_engine(), &k, &v);
     }
 
     for i in 60..500u32 {
@@ -162,7 +162,7 @@ fn test_node_async_fetch_remove_peer() {
     for i in 1..60 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
-        must_get_equal(&cluster.get_engine(1), &k, &v);
+        must_get_equal(cluster.get_engine(1).disk_engine(), &k, &v);
     }
 }
 
@@ -231,7 +231,7 @@ fn test_node_async_fetch_leader_change() {
     for i in 1..200 {
         let k = i.to_string().into_bytes();
         let v = k.clone();
-        must_get_equal(&cluster.get_engine(1), &k, &v);
+        must_get_equal(cluster.get_engine(1).disk_engine(), &k, &v);
     }
 }
 
@@ -269,5 +269,5 @@ fn test_node_compact_entry_cache() {
     cluster.pd_client.must_have_peer(1, new_learner_peer(5, 5));
 
     // if entry cache is not reserved, the learner will not be able to catch up.
-    must_get_equal(&cluster.get_engine(5), b"5", b"5");
+    must_get_equal(cluster.get_engine(5).disk_engine(), b"5", b"5");
 }

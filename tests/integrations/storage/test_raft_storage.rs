@@ -26,7 +26,7 @@ use tikv_util::HandyRwLock;
 use txn_types::{Key, Mutation, TimeStamp};
 
 fn new_raft_storage() -> (
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     SyncTestStorageApiV1<SimulateEngine<RocksEngine>>,
     Context,
 ) {
@@ -235,7 +235,7 @@ fn write_test_data<E: Engine, F: KvFormat>(
 }
 
 fn check_data<E: Engine, F: KvFormat>(
-    cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    cluster: &mut Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     storages: &HashMap<u64, SyncTestStorage<E, F>>,
     test_data: &[(Vec<u8>, Vec<u8>)],
     ts: impl Into<TimeStamp>,

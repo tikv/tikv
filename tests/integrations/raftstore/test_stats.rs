@@ -145,7 +145,7 @@ fn test_store_heartbeat_report_hotspots() {
 
 type Query = dyn Fn(
     Context,
-    &Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    &Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     TikvClient,
     u64,
     u64,
@@ -443,7 +443,7 @@ fn test_txn_query_stats_tmpl<F: KvFormat>() {
 }
 
 fn raw_put(
-    _cluster: &Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    _cluster: &Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     client: &TikvClient,
     ctx: &Context,
     _store_id: u64,
@@ -461,7 +461,7 @@ fn raw_put(
 }
 
 fn put(
-    cluster: &Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    cluster: &Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     client: &TikvClient,
     ctx: &Context,
     store_id: u64,
@@ -682,7 +682,7 @@ fn test_txn_delete_query() {
 }
 
 fn check_query_num_read(
-    cluster: &Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    cluster: &Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     store_id: u64,
     region_id: u64,
     kind: QueryKind,
@@ -708,7 +708,7 @@ fn check_query_num_read(
 }
 
 fn check_query_num_write(
-    cluster: &Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    cluster: &Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     store_id: u64,
     kind: QueryKind,
     expect: u64,
@@ -728,7 +728,7 @@ fn check_query_num_write(
 }
 
 fn check_split_key(
-    cluster: &Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    cluster: &Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     start_key: Vec<u8>,
     end_key: Option<Vec<u8>>,
 ) -> bool {

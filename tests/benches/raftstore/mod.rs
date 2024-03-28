@@ -147,7 +147,7 @@ trait ClusterFactory<T: Simulator<RocksEngine>>: Clone + fmt::Debug + 'static {
 struct NodeClusterFactory;
 
 impl ClusterFactory<NodeCluster<RocksEngine>> for NodeClusterFactory {
-    fn build(&self, nodes: usize) -> Cluster<RocksEngine, NodeCluster<RocksEngine>> {
+    fn build(&self, nodes: usize) -> Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>> {
         new_node_cluster(1, nodes)
     }
 }
@@ -162,7 +162,7 @@ impl fmt::Debug for NodeClusterFactory {
 struct ServerClusterFactory;
 
 impl ClusterFactory<ServerCluster<RocksEngine>> for ServerClusterFactory {
-    fn build(&self, nodes: usize) -> Cluster<RocksEngine, ServerCluster<RocksEngine>> {
+    fn build(&self, nodes: usize) -> Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>> {
         new_server_cluster(1, nodes)
     }
 }

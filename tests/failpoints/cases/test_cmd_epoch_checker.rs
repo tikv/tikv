@@ -5,7 +5,6 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::{RocksEngine, RocksSnapshot};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use raft::eraftpb::MessageType;
 use raftstore::store::msg::*;
@@ -58,10 +57,10 @@ impl CbReceivers {
     }
 }
 
-fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, CbReceivers) {
+fn make_cb(cmd: &RaftCmdRequest) -> (Callback<HybridEngineSnapshotImpl>, CbReceivers) {
     let (proposed_tx, proposed_rx) = mpsc::channel();
     let (committed_tx, committed_rx) = mpsc::channel();
-    let (cb, applied_rx) = make_cb_ext::<RocksEngine>(
+    let (cb, applied_rx) = make_cb_ext::<HybridEngineImpl>(
         cmd,
         Some(Box::new(move || proposed_tx.send(()).unwrap())),
         Some(Box::new(move || committed_tx.send(()).unwrap())),
@@ -77,7 +76,7 @@ fn make_cb(cmd: &RaftCmdRequest) -> (Callback<RocksSnapshot>, CbReceivers) {
 }
 
 fn make_write_req(
-    cluster: &mut Cluster<RocksEngine, NodeCluster<RocksEngine>>,
+    cluster: &mut Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>>,
     k: &[u8],
 ) -> RaftCmdRequest {
     let r = cluster.get_region(k);
@@ -107,9 +106,9 @@ fn test_reject_proposal_during_region_split() {
 
     // Try to split region.
     let (split_tx, split_rx) = mpsc::channel();
-    let cb = Callback::read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
-        split_tx.send(resp.response).unwrap()
-    }));
+    let cb = Callback::read(Box::new(
+        move |resp: ReadResponse<HybridEngineSnapshotImpl>| split_tx.send(resp.response).unwrap(),
+    ));
     let r = cluster.get_region(b"");
     cluster.split_region(&r, b"k", cb);
     split_rx
@@ -185,9 +184,9 @@ fn test_reject_proposal_during_region_merge() {
     fail::cfg(prepare_merge_fp, "pause").unwrap();
     // Try to merge region.
     let (merge_tx, merge_rx) = mpsc::channel();
-    let cb = Callback::read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
-        merge_tx.send(resp.response).unwrap()
-    }));
+    let cb = Callback::read(Box::new(
+        move |resp: ReadResponse<HybridEngineSnapshotImpl>| merge_tx.send(resp.response).unwrap(),
+    ));
     let source = cluster.get_region(b"");
     let target = cluster.get_region(b"k");
     cluster.merge_region(source.get_id(), target.get_id(), cb);

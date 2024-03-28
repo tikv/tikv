@@ -555,7 +555,7 @@ trait ClusterI {
     ) -> raftstore::Result<RaftCmdResponse>;
 }
 
-impl ClusterI for Cluster<RocksEngine, NodeCluster<RocksEngine>> {
+impl ClusterI for Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>> {
     fn region_local_state(&self, region_id: u64, store_id: u64) -> RegionLocalState {
         Cluster::<RocksEngine, NodeCluster<RocksEngine>>::region_local_state(
             self, region_id, store_id,

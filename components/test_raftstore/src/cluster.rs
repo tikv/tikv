@@ -188,6 +188,7 @@ pub struct Cluster<EK: KvEngineWithRocks, T: Simulator<EK>> {
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
+    range_cache_engine: bool,
 }
 
 impl<EK, T> Cluster<EK, T>
@@ -228,6 +229,7 @@ where
             resource_manager: Some(Arc::new(ResourceGroupManager::default())),
             kv_statistics: vec![],
             raft_statistics: vec![],
+            range_cache_engine: false,
         }
     }
 
@@ -2021,6 +2023,10 @@ where
 
         Ok(())
     }
+
+    pub(crate) fn set_range_cache_engine(&mut self, v: bool) {
+        self.range_cache_engine = v;
+    }
 }
 
 impl<EK: KvEngineWithRocks, T: Simulator<EK>> Drop for Cluster<EK, T> {
@@ -2055,6 +2061,26 @@ impl RawEngine<RocksEngine> for RocksEngine {
 
     fn raft_local_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftLocalState>> {
         self.get_msg_cf(CF_RAFT, &keys::raft_state_key(region_id))
+    }
+}
+
+impl RawEngine<RocksEngine> for HybridEngineImpl {
+    fn region_local_state(
+        &self,
+        region_id: u64,
+    ) -> engine_traits::Result<Option<RegionLocalState>> {
+        self.disk_engine()
+            .get_msg_cf(CF_RAFT, &keys::region_state_key(region_id))
+    }
+
+    fn raft_apply_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftApplyState>> {
+        self.disk_engine()
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
+    }
+
+    fn raft_local_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftLocalState>> {
+        self.disk_engine()
+            .get_msg_cf(CF_RAFT, &keys::raft_state_key(region_id))
     }
 }
 

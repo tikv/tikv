@@ -71,7 +71,7 @@ fn deadlock(client: &TikvClient, ctx: Context, key1: &[u8], ts: u64) -> bool {
 }
 
 fn build_leader_client(
-    cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    cluster: &mut Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     key: &[u8],
 ) -> (TikvClient, Context) {
     let region_id = cluster.get_region_id(key);
@@ -93,7 +93,7 @@ fn build_leader_client(
 
 /// Creates a deadlock on the store containing key.
 fn must_detect_deadlock(
-    cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    cluster: &mut Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     key: &[u8],
     ts: u64,
 ) {
@@ -109,7 +109,7 @@ fn must_detect_deadlock(
 }
 
 fn deadlock_detector_leader_must_be(
-    cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    cluster: &mut Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     store_id: u64,
 ) {
     let leader_region = cluster.get_region(b"");
@@ -127,7 +127,7 @@ fn deadlock_detector_leader_must_be(
 }
 
 fn must_transfer_leader(
-    cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    cluster: &mut Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     region_key: &[u8],
     store_id: u64,
 ) {
@@ -145,7 +145,7 @@ fn must_transfer_leader(
 /// REQUIRE: The source store must be the leader the region and the target store
 /// must not have this region.
 fn must_transfer_region(
-    cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    cluster: &mut Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     region_key: &[u8],
     source_store_id: u64,
     target_store_id: u64,
@@ -165,7 +165,7 @@ fn must_transfer_region(
 }
 
 fn must_split_region(
-    cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    cluster: &mut Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     region_key: &[u8],
     split_key: &[u8],
 ) {
@@ -175,7 +175,7 @@ fn must_split_region(
 }
 
 fn must_merge_region(
-    cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    cluster: &mut Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     source_region_key: &[u8],
     target_region_key: &[u8],
 ) {
@@ -198,7 +198,7 @@ fn find_peer_of_store(region: &Region, store_id: u64) -> Peer {
 
 /// Creates a cluster with only one region and store(1) is the leader of the
 /// region.
-fn new_cluster_for_deadlock_test(count: usize) -> Cluster<RocksEngine, ServerCluster<RocksEngine>> {
+fn new_cluster_for_deadlock_test(count: usize) -> Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>> {
     let mut cluster = new_server_cluster(0, count);
     cluster.cfg.pessimistic_txn.wait_for_lock_timeout = ReadableDuration::millis(500);
     cluster.cfg.pessimistic_txn.pipelined = false;

@@ -13,7 +13,6 @@ use causal_ts::CausalTsProviderImpl;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
-use engine_rocks::RocksEngine;
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, KvEngine, SnapshotContext};
 use futures::executor::block_on;
@@ -874,13 +873,13 @@ impl<EK: KvEngineWithRocks> Cluster<EK, ServerCluster<EK>> {
 pub fn new_server_cluster(
     id: u64,
     count: usize,
-) -> Cluster<RocksEngine, ServerCluster<RocksEngine>> {
+) -> Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
 }
 
-// the hybrid engine with disk engine "RocksEngine" and region cache engine
+// the hybrid engine with disk engine "HybridEngineImpl" and region cache engine
 // "RangeCacheMemoryEngine" is used in the server cluster.
 pub fn new_server_cluster_with_hybrid_engine(
     id: u64,
@@ -895,7 +894,7 @@ pub fn new_server_cluster_with_api_ver(
     id: u64,
     count: usize,
     api_ver: ApiVersion,
-) -> Cluster<RocksEngine, ServerCluster<RocksEngine>> {
+) -> Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
     Cluster::new(id, count, sim, pd_client, api_ver)
@@ -904,7 +903,7 @@ pub fn new_server_cluster_with_api_ver(
 pub fn new_incompatible_server_cluster(
     id: u64,
     count: usize,
-) -> Cluster<RocksEngine, ServerCluster<RocksEngine>> {
+) -> Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>> {
     let pd_client = Arc::new(TestPdClient::new(id, true));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
     Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
@@ -913,7 +912,7 @@ pub fn new_incompatible_server_cluster(
 pub fn must_new_cluster_mul(
     count: usize,
 ) -> (
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     metapb::Peer,
     Context,
 ) {
@@ -921,9 +920,9 @@ pub fn must_new_cluster_mul(
 }
 
 pub fn must_new_and_configure_cluster(
-    configure: impl FnMut(&mut Cluster<RocksEngine, ServerCluster<RocksEngine>>),
+    configure: impl FnMut(&mut Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>),
 ) -> (
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     metapb::Peer,
     Context,
 ) {
@@ -932,9 +931,9 @@ pub fn must_new_and_configure_cluster(
 
 fn must_new_and_configure_cluster_mul(
     count: usize,
-    mut configure: impl FnMut(&mut Cluster<RocksEngine, ServerCluster<RocksEngine>>),
+    mut configure: impl FnMut(&mut Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>),
 ) -> (
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     metapb::Peer,
     Context,
 ) {
@@ -953,7 +952,7 @@ fn must_new_and_configure_cluster_mul(
 }
 
 pub fn must_new_cluster_and_kv_client() -> (
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     TikvClient,
     Context,
 ) {
@@ -963,7 +962,7 @@ pub fn must_new_cluster_and_kv_client() -> (
 pub fn must_new_cluster_and_kv_client_mul(
     count: usize,
 ) -> (
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     TikvClient,
     Context,
 ) {
@@ -972,9 +971,9 @@ pub fn must_new_cluster_and_kv_client_mul(
 
 pub fn must_new_cluster_with_cfg_and_kv_client_mul(
     count: usize,
-    configure: impl FnMut(&mut Cluster<RocksEngine, ServerCluster<RocksEngine>>),
+    configure: impl FnMut(&mut Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>),
 ) -> (
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     TikvClient,
     Context,
 ) {
@@ -988,7 +987,7 @@ pub fn must_new_cluster_with_cfg_and_kv_client_mul(
 }
 
 pub fn must_new_cluster_and_debug_client() -> (
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     DebugClient,
     u64,
 ) {
@@ -1003,7 +1002,7 @@ pub fn must_new_cluster_and_debug_client() -> (
 }
 
 pub fn must_new_cluster_kv_client_and_debug_client() -> (
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     TikvClient,
     DebugClient,
     Context,
@@ -1021,9 +1020,9 @@ pub fn must_new_cluster_kv_client_and_debug_client() -> (
 }
 
 pub fn must_new_and_configure_cluster_and_kv_client(
-    configure: impl FnMut(&mut Cluster<RocksEngine, ServerCluster<RocksEngine>>),
+    configure: impl FnMut(&mut Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>),
 ) -> (
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     TikvClient,
     Context,
 ) {
@@ -1038,7 +1037,7 @@ pub fn must_new_and_configure_cluster_and_kv_client(
 }
 
 pub fn setup_cluster() -> (
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     TikvClient,
     String,
     Context,

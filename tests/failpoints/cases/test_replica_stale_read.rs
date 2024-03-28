@@ -2,7 +2,6 @@
 
 use std::{sync::Arc, time::Duration};
 
-use engine_rocks::RocksEngine;
 use kvproto::{kvrpcpb::Op, metapb::Peer};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
@@ -12,7 +11,7 @@ use test_raftstore::*;
 fn prepare_for_stale_read(
     leader: Peer,
 ) -> (
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     Arc<TestPdClient>,
     PeerClient,
 ) {
@@ -23,7 +22,7 @@ fn prepare_for_stale_read_before_run(
     leader: Peer,
     before_run: Option<Box<dyn Fn(&mut Config)>>,
 ) -> (
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     Arc<TestPdClient>,
     PeerClient,
 ) {

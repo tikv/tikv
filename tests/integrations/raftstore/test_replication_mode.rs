@@ -9,7 +9,7 @@ use raft::eraftpb::ConfChangeType;
 use test_raftstore::*;
 use tikv_util::{config::*, mpsc::future, HandyRwLock};
 
-fn prepare_cluster() -> Cluster<RocksEngine, ServerCluster<RocksEngine>> {
+fn prepare_cluster() -> Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>> {
     let mut cluster = new_server_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     cluster.pd_client.configure_dr_auto_sync("zone");
@@ -21,7 +21,7 @@ fn prepare_cluster() -> Cluster<RocksEngine, ServerCluster<RocksEngine>> {
     cluster
 }
 
-fn configure_for_snapshot(cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>) {
+fn configure_for_snapshot(cluster: &mut Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>) {
     // Truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(2);
@@ -29,13 +29,13 @@ fn configure_for_snapshot(cluster: &mut Cluster<RocksEngine, ServerCluster<Rocks
     cluster.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(50);
 }
 
-fn run_cluster(cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>) {
+fn run_cluster(cluster: &mut Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>) {
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k1", b"v0");
 }
 
-fn prepare_labels(cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>) {
+fn prepare_labels(cluster: &mut Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>) {
     cluster.add_label(1, "dc", "dc1");
     cluster.add_label(2, "dc", "dc1");
     cluster.add_label(3, "dc", "dc2");

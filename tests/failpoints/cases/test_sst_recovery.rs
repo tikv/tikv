@@ -180,7 +180,7 @@ fn compact_files_to_target_level(
 }
 
 fn create_tikv_cluster_with_one_node_damaged() -> (
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     Arc<TestPdClient>,
     RocksEngine,
 ) {
@@ -197,7 +197,7 @@ fn create_tikv_cluster_with_one_node_damaged() -> (
     for (&id, &offset) in &cluster.sst_workers_map {
         let engine = cluster.get_engine(id);
         let runner = RecoveryRunner::new(
-            engine.clone(),
+            engine.disk_engine().clone(),
             cluster.store_metas.get(&id).unwrap().clone(),
             Duration::from_secs(10),
             CHECK_DURATION,
@@ -216,20 +216,20 @@ fn create_tikv_cluster_with_one_node_damaged() -> (
     cluster.must_put_cf(CF_DEFAULT, b"1", b"val");
     cluster.must_put_cf(CF_DEFAULT, b"2", b"val");
     cluster.flush_data();
-    compact_files_to_target_level(&engine1, false, 2).unwrap();
+    compact_files_to_target_level(engine1.disk_engine(), false, 2).unwrap();
 
     // create a sst [3,5]
     cluster.must_put_cf(CF_DEFAULT, b"3", b"val");
     cluster.must_put_cf(CF_DEFAULT, b"4", b"val");
     cluster.must_put_cf(CF_DEFAULT, b"5", b"val");
     cluster.flush_data();
-    compact_files_to_target_level(&engine1, false, 2).unwrap();
+    compact_files_to_target_level(engine1.disk_engine(), false, 2).unwrap();
 
     // create a sst [6,7]
     cluster.must_put_cf(CF_DEFAULT, b"6", b"val");
     cluster.must_put_cf(CF_DEFAULT, b"7", b"val");
     cluster.flush_data();
-    compact_files_to_target_level(&engine1, false, 2).unwrap();
+    compact_files_to_target_level(engine1.disk_engine(), false, 2).unwrap();
 
     let region = cluster.get_region(b"2");
     cluster.must_split(&region, b"2");
@@ -239,7 +239,7 @@ fn create_tikv_cluster_with_one_node_damaged() -> (
     cluster.must_split(&region, b"7");
 
     // after 3 flushing and compacts, now 3 sst files exist.
-    let files = engine1.as_inner().get_live_files();
+    let files = engine1.disk_engine().as_inner().get_live_files();
     assert_eq!(files.get_files_count(), 3);
 
     // disturb sst file range [3,5]
@@ -255,7 +255,11 @@ fn create_tikv_cluster_with_one_node_damaged() -> (
     disturb_sst_file(&sst_path);
 
     // The sst file is damaged, so this action will fail.
-    assert_corruption(compact_files_to_target_level(&engine1, true, 6));
+    assert_corruption(compact_files_to_target_level(
+        engine1.disk_engine(),
+        true,
+        6,
+    ));
 
-    (cluster, pd_client, engine1)
+    (cluster, pd_client, engine1.disk_engine().clone())
 }

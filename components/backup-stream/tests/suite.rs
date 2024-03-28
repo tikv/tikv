@@ -250,7 +250,7 @@ impl<S: MetaStore> MetaStore for ErrorStore<S> {
 pub struct Suite {
     pub endpoints: HashMap<u64, LazyWorker<Task>>,
     pub meta_store: ErrorStore<SlashEtcStore>,
-    pub cluster: Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    pub cluster: Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     tikv_cli: HashMap<u64, TikvClient>,
     log_backup_cli: HashMap<u64, LogBackupClient>,
     obs: HashMap<u64, BackupStreamObserver>,

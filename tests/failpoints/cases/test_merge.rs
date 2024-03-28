@@ -10,7 +10,6 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::RocksEngine;
 use engine_traits::{Peekable, CF_RAFT};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
@@ -1233,7 +1232,7 @@ fn test_prewrite_before_max_ts_is_synced() {
     let channel = ChannelBuilder::new(env).connect(&addr);
     let client = TikvClient::new(channel);
 
-    let do_prewrite = |cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>| {
+    let do_prewrite = |cluster: &mut Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>| {
         let region_id = right.get_id();
         let leader = cluster.leader_of_region(region_id).unwrap();
         let epoch = cluster.get_region_epoch(region_id);
