@@ -4,6 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use engine_rocks::RocksEngine;
 use grpcio::{ChannelBuilder, Environment};
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{import_sstpb::*, kvrpcpb::*, tikvpb::*};
 use security::SecurityConfig;
 use test_raftstore::*;
@@ -13,7 +14,12 @@ use tikv_util::HandyRwLock;
 
 const CLEANUP_SST_MILLIS: u64 = 10;
 
-pub fn new_cluster(cfg: TikvConfig) -> (Cluster<RocksEngine, ServerCluster<RocksEngine>>, Context) {
+pub fn new_cluster(
+    cfg: TikvConfig,
+) -> (
+    Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
+    Context,
+) {
     let count = 1;
     let mut cluster = new_server_cluster(0, count);
     cluster.cfg = Config {
@@ -61,7 +67,7 @@ pub fn new_cluster_v2(
 pub fn open_cluster_and_tikv_import_client(
     cfg: Option<TikvConfig>,
 ) -> (
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     Context,
     TikvClient,
     ImportSstClient,
@@ -139,7 +145,7 @@ pub fn open_cluster_and_tikv_import_client_v2(
 }
 
 pub fn new_cluster_and_tikv_import_client() -> (
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     Context,
     TikvClient,
     ImportSstClient,
@@ -149,7 +155,7 @@ pub fn new_cluster_and_tikv_import_client() -> (
 
 pub fn new_cluster_and_tikv_import_client_tde() -> (
     tempfile::TempDir,
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     Context,
     TikvClient,
     ImportSstClient,

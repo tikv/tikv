@@ -131,6 +131,7 @@ engine_test = { workspace = true }
 engine_traits = { workspace = true }
 external_storage ={ workspace = true }
 file_system = { workspace = true }
+hybrid_engine = { workspace = true }
 hyper = { version = "0.14", default-features = false, features = ["runtime"] }
 keys = { workspace = true }
 panic_hook = { workspace = true }

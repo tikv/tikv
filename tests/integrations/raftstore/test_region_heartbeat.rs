@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::RocksEngine;
+use hybrid_engine::HybridEngineImpl;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use tikv_util::{
@@ -92,7 +92,7 @@ fn test_server_down_peers_without_hibernate_regions() {
     test_down_peers!(&mut cluster);
 }
 
-fn test_pending_peers<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_pending_peers<T: Simulator<HybridEngineImpl>>(cluster: &mut Cluster<HybridEngineImpl, T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
     pd_client.disable_default_operator();

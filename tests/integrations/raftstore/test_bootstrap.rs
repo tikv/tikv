@@ -6,12 +6,12 @@ use std::{
 };
 
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::RocksEngine;
 use engine_traits::{
     DbOptionsExt, Engines, MiscExt, Peekable, RaftEngine, RaftEngineReadOnly, ALL_CFS, CF_DEFAULT,
     CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use health_controller::HealthController;
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{kvrpcpb::ApiVersion, metapb, raft_serverpb::RegionLocalState};
 use raftstore::{
     coprocessor::CoprocessorHost,
@@ -29,7 +29,9 @@ use tikv_util::{
     worker::{dummy_scheduler, Builder as WorkerBuilder, LazyWorker},
 };
 
-fn test_bootstrap_idempotent<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_bootstrap_idempotent<T: Simulator<HybridEngineImpl>>(
+    cluster: &mut Cluster<HybridEngineImpl, T>,
+) {
     // assume that there is a node  bootstrap the cluster and add region in pd
     // successfully
     cluster.add_first_region().unwrap();
@@ -52,7 +54,7 @@ fn test_node_bootstrap_with_prepared_data() {
 
     let (_, system) = fsm::create_raft_batch_system(&cfg.raft_store, &None);
     let simulate_trans =
-        SimulateTransport::<_, RocksEngine>::new(ChannelTransport::<RocksEngine>::new());
+        SimulateTransport::<_, HybridEngineImpl>::new(ChannelTransport::<HybridEngineImpl>::new());
     let tmp_path = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let engine =
         engine_rocks::util::new_engine(tmp_path.path().to_str().unwrap(), ALL_CFS).unwrap();

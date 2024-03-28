@@ -7,15 +7,15 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_rocks::RocksEngine;
+use hybrid_engine::HybridEngineImpl;
 use kvproto::metapb::Region;
 use more_asserts::{assert_gt, assert_le};
 use raftstore::coprocessor::{RegionInfoAccessor, RegionInfoProvider};
 use test_raftstore::*;
 use tikv_util::HandyRwLock;
 
-fn prepare_cluster<T: Simulator<RocksEngine>>(
-    cluster: &mut Cluster<RocksEngine, T>,
+fn prepare_cluster<T: Simulator<HybridEngineImpl>>(
+    cluster: &mut Cluster<HybridEngineImpl, T>,
 ) -> Vec<Region> {
     for i in 0..15 {
         let i = i + b'0';

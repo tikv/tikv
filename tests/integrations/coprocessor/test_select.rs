@@ -2,8 +2,8 @@
 
 use std::{cmp, thread, time::Duration};
 
-use engine_rocks::RocksEngine;
 use engine_traits::CF_LOCK;
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{
     coprocessor::{Request, Response, StoreBatchTask, StoreBatchTaskResponse},
     kvrpcpb::{Context, IsolationLevel},
@@ -2214,7 +2214,7 @@ fn test_batch_request() {
             true,
         ),
     ];
-    let prepare_req = |cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    let prepare_req = |cluster: &mut Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
                        ranges: &Vec<HandleRange>|
      -> Request {
         let original_range = ranges.first().unwrap();

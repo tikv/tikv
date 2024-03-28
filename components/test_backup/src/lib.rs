@@ -13,11 +13,11 @@ use backup::Task;
 use collections::HashMap;
 // NOTE: Perhaps we'd better use test engine here. But it seems for now we cannot initialize a
 // mock cluster with `PanicEngine` and in our CI environment clippy will complain that.
-use engine_rocks::RocksEngine as KTE;
 use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
 use external_storage::make_local_backend;
 use futures::{channel::mpsc as future_mpsc, executor::block_on};
 use grpcio::{ChannelBuilder, Environment};
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{brpb::*, kvrpcpb::*, tikvpb::TikvClient};
 use rand::Rng;
 use test_raftstore::*;
@@ -44,7 +44,7 @@ use txn_types::TimeStamp;
 pub mod disk_snap;
 
 pub struct TestSuite {
-    pub cluster: Cluster<KTE, ServerCluster<KTE>>,
+    pub cluster: Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     pub endpoints: HashMap<u64, LazyWorker<Task>>,
     pub tikv_cli: TikvClient,
     pub context: Context,

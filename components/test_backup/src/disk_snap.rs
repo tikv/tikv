@@ -7,7 +7,6 @@ use std::{
 };
 
 use backup::disk_snap::Env as BEnv;
-use engine_rocks::RocksEngine as KTE;
 use futures_executor::block_on;
 use futures_util::{
     sink::SinkExt,
@@ -17,6 +16,7 @@ use grpcio::{
     ChannelBuilder, ClientDuplexReceiver, Environment, Server, ServerBuilder, StreamingCallSink,
     WriteFlags,
 };
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{
     brpb::{
         self, PrepareSnapshotBackupEventType, PrepareSnapshotBackupRequest,
@@ -40,7 +40,7 @@ pub struct Node {
 }
 
 pub struct Suite {
-    pub cluster: Cluster<KTE, ServerCluster<KTE>>,
+    pub cluster: Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     pub nodes: HashMap<u64, Node>,
     grpc_env: Arc<Environment>,
 }

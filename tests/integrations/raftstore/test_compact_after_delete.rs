@@ -6,8 +6,9 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_rocks::{raw::Range, util::get_cf_handle, RocksEngine};
+use engine_rocks::{raw::Range, util::get_cf_handle};
 use engine_traits::{CachedTablet, MiscExt, CF_WRITE};
+use hybrid_engine::HybridEngineImpl;
 use keys::{data_key, DATA_MAX_KEY};
 use test_raftstore::*;
 use tikv::storage::mvcc::{TimeStamp, Write, WriteType};
@@ -32,7 +33,9 @@ fn gen_delete_k(k: &[u8], commit_ts: TimeStamp) -> Vec<u8> {
     k.as_encoded().clone()
 }
 
-fn test_compact_after_delete<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_compact_after_delete<T: Simulator<HybridEngineImpl>>(
+    cluster: &mut Cluster<HybridEngineImpl, T>,
+) {
     cluster.cfg.raft_store.region_compact_check_interval = ReadableDuration::millis(100);
     cluster.cfg.raft_store.region_compact_min_tombstones = 500;
     cluster.cfg.raft_store.region_compact_tombstones_percent = 50;
@@ -72,9 +75,10 @@ fn test_compact_after_delete<T: Simulator<RocksEngine>>(cluster: &mut Cluster<Ro
     receiver.recv_timeout(Duration::from_millis(5000)).unwrap();
 
     for engines in cluster.engines.values() {
-        let cf_handle = get_cf_handle(engines.kv.as_inner(), CF_WRITE).unwrap();
+        let cf_handle = get_cf_handle(engines.kv.disk_engine().as_inner(), CF_WRITE).unwrap();
         let approximate_size = engines
             .kv
+            .disk_engine()
             .as_inner()
             .get_approximate_sizes_cf(cf_handle, &[Range::new(b"", DATA_MAX_KEY)])[0];
         assert_eq!(approximate_size, 0);

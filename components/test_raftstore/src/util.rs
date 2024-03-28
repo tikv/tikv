@@ -13,9 +13,7 @@ use collections::HashMap;
 use encryption_export::{
     data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
 };
-use engine_rocks::{
-    config::BlobRunMode, RocksCompactedEvent, RocksEngine, RocksSnapshot, RocksStatistics,
-};
+use engine_rocks::{config::BlobRunMode, RocksCompactedEvent, RocksEngine, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     CfName, CfNamesExt, Engines, Iterable, KvEngine, Peekable, RaftEngineDebug, RaftEngineReadOnly,
@@ -25,7 +23,7 @@ use fail::fail_point;
 use file_system::IoRateLimiter;
 use futures::{executor::block_on, future::BoxFuture, StreamExt};
 use grpcio::{ChannelBuilder, Environment};
-use hybrid_engine::HybridEngine;
+use hybrid_engine::{HybridEngineImpl, HybridEngineSnapshotImpl};
 use kvproto::{
     encryptionpb::EncryptionMethod,
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
@@ -47,7 +45,6 @@ use raftstore::{
     RaftRouterCompactedEventSender, Result,
 };
 use rand::{seq::SliceRandom, RngCore};
-use region_cache_memory_engine::RangeCacheMemoryEngine;
 use server::common::{ConfiguredRaftEngine, KvEngineBuilder};
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
@@ -66,8 +63,6 @@ use tikv_util::{
 use txn_types::Key;
 
 use crate::{Cluster, Config, KvEngineWithRocks, RawEngine, ServerCluster, Simulator};
-
-pub type HybridEngineImpl = HybridEngine<RocksEngine, RangeCacheMemoryEngine>;
 
 pub fn must_get<EK: KvEngine>(
     engine: &impl RawEngine<EK>,
@@ -120,7 +115,10 @@ pub fn must_get_cf_none<EK: KvEngine>(engine: &impl RawEngine<EK>, cf: &str, key
     must_get(engine, cf, key, None);
 }
 
-pub fn must_region_cleared(engine: &Engines<RocksEngine, RaftTestEngine>, region: &metapb::Region) {
+pub fn must_region_cleared(
+    engine: &Engines<HybridEngineImpl, RaftTestEngine>,
+    region: &metapb::Region,
+) {
     let id = region.get_id();
     let state_key = keys::region_state_key(id);
     let state: RegionLocalState = engine.kv.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
@@ -404,8 +402,11 @@ pub fn check_raft_cmd_request(cmd: &RaftCmdRequest) -> bool {
 
 pub fn make_cb_rocks(
     cmd: &RaftCmdRequest,
-) -> (Callback<RocksSnapshot>, future::Receiver<RaftCmdResponse>) {
-    make_cb::<RocksEngine>(cmd)
+) -> (
+    Callback<HybridEngineSnapshotImpl>,
+    future::Receiver<RaftCmdResponse>,
+) {
+    make_cb::<HybridEngineImpl>(cmd)
 }
 
 pub fn make_cb<EK: KvEngine>(
@@ -1436,7 +1437,7 @@ pub fn get_tso(pd_client: &TestPdClient) -> u64 {
 }
 
 pub fn get_raft_msg_or_default<M: protobuf::Message + Default>(
-    engines: &Engines<RocksEngine, RaftTestEngine>,
+    engines: &Engines<HybridEngineImpl, RaftTestEngine>,
     key: &[u8],
 ) -> M {
     engines
@@ -1447,7 +1448,7 @@ pub fn get_raft_msg_or_default<M: protobuf::Message + Default>(
 }
 
 pub fn check_compacted(
-    all_engines: &HashMap<u64, Engines<RocksEngine, RaftTestEngine>>,
+    all_engines: &HashMap<u64, Engines<HybridEngineImpl, RaftTestEngine>>,
     before_states: &HashMap<u64, RaftTruncatedState>,
     compact_count: u64,
     must_compacted: bool,

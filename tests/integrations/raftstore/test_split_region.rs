@@ -7,8 +7,8 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::RocksEngine;
 use engine_traits::{Peekable, CF_DEFAULT, CF_WRITE};
+use hybrid_engine::HybridEngineImpl;
 use keys::data_key;
 use kvproto::{
     metapb, pdpb,
@@ -630,8 +630,8 @@ fn test_node_split_region_after_reboot_with_config_change() {
     }
 }
 
-fn test_split_epoch_not_match<T: Simulator<RocksEngine>>(
-    cluster: &mut Cluster<RocksEngine, T>,
+fn test_split_epoch_not_match<T: Simulator<HybridEngineImpl>>(
+    cluster: &mut Cluster<HybridEngineImpl, T>,
     right_derive: bool,
 ) {
     cluster.cfg.raft_store.right_derive_when_split = right_derive;

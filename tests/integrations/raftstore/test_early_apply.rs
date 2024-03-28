@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
-use engine_rocks::RocksEngine;
 use engine_traits::{RaftEngine, RaftEngineDebug};
+use hybrid_engine::HybridEngineImpl;
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::MessageType;
 use raftstore::store::*;
@@ -45,13 +45,13 @@ enum DataLost {
 }
 
 fn test<A, C>(
-    cluster: &mut Cluster<RocksEngine, NodeCluster<RocksEngine>>,
+    cluster: &mut Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>>,
     action: A,
     check: C,
     mode: DataLost,
 ) where
-    A: FnOnce(&mut Cluster<RocksEngine, NodeCluster<RocksEngine>>),
-    C: FnOnce(&mut Cluster<RocksEngine, NodeCluster<RocksEngine>>),
+    A: FnOnce(&mut Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>>),
+    C: FnOnce(&mut Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>>),
 {
     let filter = match mode {
         DataLost::AllLost | DataLost::LeaderCommit => RegionPacketFilter::new(1, 1)

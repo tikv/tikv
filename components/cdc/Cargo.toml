@@ -42,6 +42,7 @@ futures = "0.3"
 futures-timer = "3.0"
 getset = "0.1"
 grpcio = { workspace = true }
+hybrid_engine = { workspace = true }
 keys = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.3"

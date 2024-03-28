@@ -12,6 +12,6 @@ where
     type IngestExternalFileOptions = EK::IngestExternalFileOptions;
 
     fn ingest_external_file_cf(&self, cf: &str, files: &[&str]) -> engine_traits::Result<()> {
-        unimplemented!()
+        self.disk_engine().ingest_external_file_cf(cf, files)
     }
 }

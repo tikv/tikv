@@ -2,6 +2,7 @@
 
 use engine_rocks::{raw::CompactOptions, RocksEngine};
 use engine_traits::{MiscExt, Peekable, SyncMutable, CF_DEFAULT, CF_LOCK};
+use hybrid_engine::HybridEngineImpl;
 use test_raftstore::*;
 
 fn init_db_with_sst_files(db: &RocksEngine, level: i32, n: u8) {
@@ -35,7 +36,7 @@ fn check_db_files_at_level(db: &RocksEngine, level: i32, num_files: u64) {
     }
 }
 
-fn check_kv_in_all_cfs(db: &RocksEngine, i: u8, found: bool) {
+fn check_kv_in_all_cfs(db: &HybridEngineImpl, i: u8, found: bool) {
     for cf_name in &[CF_DEFAULT, CF_LOCK] {
         let k = keys::data_key(&[i]);
         let v = db.get_value_cf(cf_name, &k).unwrap();
@@ -47,7 +48,9 @@ fn check_kv_in_all_cfs(db: &RocksEngine, i: u8, found: bool) {
     }
 }
 
-fn test_clear_stale_data<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_clear_stale_data<T: Simulator<HybridEngineImpl>>(
+    cluster: &mut Cluster<HybridEngineImpl, T>,
+) {
     // Disable compaction at level 0.
     cluster
         .cfg
@@ -85,8 +88,8 @@ fn test_clear_stale_data<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksE
 
     // Generate `n` files in db at level 6.
     let level = 6;
-    init_db_with_sst_files(&db, level, n);
-    check_db_files_at_level(&db, level, u64::from(n));
+    init_db_with_sst_files(db.disk_engine(), level, n);
+    check_db_files_at_level(db.disk_engine(), level, u64::from(n));
     for i in 0..n {
         check_kv_in_all_cfs(&db, i, true);
     }
@@ -110,7 +113,7 @@ fn test_clear_stale_data<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksE
     for i in 0..n {
         check_kv_in_all_cfs(&db, i, i % 2 == 0);
     }
-    check_db_files_at_level(&db, level, u64::from(n) / 2);
+    check_db_files_at_level(db.disk_engine(), level, u64::from(n) / 2);
 }
 
 #[test]

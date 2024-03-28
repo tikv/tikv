@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::RocksEngine;
+use hybrid_engine::HybridEngineImpl;
 use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::coprocessor::{RangeKey, RegionInfo, RegionInfoAccessor};
@@ -49,7 +49,7 @@ fn check_region_ranges(regions: &[(Region, StateRole)], ranges: &[(&[u8], &[u8])
 }
 
 fn test_region_info_accessor_impl(
-    cluster: &mut Cluster<RocksEngine, NodeCluster<RocksEngine>>,
+    cluster: &mut Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>>,
     c: &RegionInfoAccessor,
 ) {
     for i in 0..9 {

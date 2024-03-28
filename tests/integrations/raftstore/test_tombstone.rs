@@ -3,15 +3,15 @@
 use std::{sync::Arc, thread, time::Duration};
 
 use crossbeam::channel;
-use engine_rocks::RocksEngine;
 use engine_traits::{CfNamesExt, Iterable, Peekable, RaftEngineDebug, SyncMutable, CF_RAFT};
+use hybrid_engine::HybridEngineImpl;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState, StoreIdent};
 use protobuf::Message;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv_util::{config::*, time::Instant};
 
-fn test_tombstone<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_tombstone<T: Simulator<HybridEngineImpl>>(cluster: &mut Cluster<HybridEngineImpl, T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
     pd_client.disable_default_operator();
@@ -114,7 +114,7 @@ fn test_server_tombstone() {
     test_tombstone(&mut cluster);
 }
 
-fn test_fast_destroy<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_fast_destroy<T: Simulator<HybridEngineImpl>>(cluster: &mut Cluster<HybridEngineImpl, T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
 
     // Disable default max peer number check.
@@ -159,7 +159,7 @@ fn test_server_fast_destroy() {
     test_fast_destroy(&mut cluster);
 }
 
-fn test_readd_peer<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_readd_peer<T: Simulator<HybridEngineImpl>>(cluster: &mut Cluster<HybridEngineImpl, T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
     pd_client.disable_default_operator();

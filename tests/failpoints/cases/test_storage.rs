@@ -273,7 +273,7 @@ fn test_scale_scheduler_pool() {
     cfg_controller.register(
         Module::Storage,
         Box::new(StorageConfigManger::new(
-            kv_engine,
+            kv_engine.disk_engine().clone(),
             scheduler,
             flow_controller,
             storage.get_scheduler(),

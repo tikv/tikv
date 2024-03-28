@@ -9,12 +9,12 @@ use causal_ts::CausalTsProvider;
 use cdc::{recv_timeout, CdcObserver, Delegate, FeatureGate, Task, Validate};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::RocksEngine;
 use futures::executor::block_on;
 use grpcio::{
     CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver,
     Environment, MetadataBuilder,
 };
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{
     cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest},
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
@@ -130,7 +130,7 @@ fn create_event_feed(
 }
 
 pub struct TestSuiteBuilder {
-    cluster: Option<Cluster<RocksEngine, ServerCluster<RocksEngine>>>,
+    cluster: Option<Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>>,
     memory_quota: Option<usize>,
 }
 
@@ -145,7 +145,7 @@ impl TestSuiteBuilder {
     #[must_use]
     pub fn cluster(
         mut self,
-        cluster: Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+        cluster: Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     ) -> TestSuiteBuilder {
         self.cluster = Some(cluster);
         self
@@ -163,7 +163,7 @@ impl TestSuiteBuilder {
 
     pub fn build_with_cluster_runner<F>(self, mut runner: F) -> TestSuite
     where
-        F: FnMut(&mut Cluster<RocksEngine, ServerCluster<RocksEngine>>),
+        F: FnMut(&mut Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>),
     {
         init();
         let memory_quota = self.memory_quota.unwrap_or(usize::MAX);
@@ -198,7 +198,7 @@ impl TestSuiteBuilder {
             let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
             obs.insert(id, cdc_ob.clone());
             sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
-                move |host: &mut CoprocessorHost<RocksEngine>| {
+                move |host: &mut CoprocessorHost<HybridEngineImpl>| {
                     cdc_ob.register_to(host);
                 },
             ));
@@ -252,7 +252,7 @@ impl TestSuiteBuilder {
 }
 
 pub struct TestSuite {
-    pub cluster: Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    pub cluster: Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
     pub endpoints: HashMap<u64, LazyWorker<Task>>,
     pub obs: HashMap<u64, CdcObserver>,
     tikv_cli: HashMap<u64, TikvClient>,
