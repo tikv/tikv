@@ -49,6 +49,7 @@ use engine_traits::{
 use file_system::IoRateLimiter;
 use keys::region_raft_prefix_len;
 use kvproto::kvrpcpb::ApiVersion;
+use once_cell::sync::OnceCell;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, OnlineConfig, Result as CfgResult};
 use pd_client::Config as PdConfig;
 use raft_log_engine::{
@@ -3412,6 +3413,9 @@ pub struct TikvConfig {
     // Memory quota used for in-memory engine. 0 means not enable it.
     pub region_cache_memory_limit: ReadableSize,
 
+    #[online_config(skip)]
+    pub allow_dynamic_security_config: bool,
+
     #[online_config(submodule)]
     pub log: LogConfig,
 
@@ -3455,7 +3459,7 @@ pub struct TikvConfig {
     #[online_config(skip)]
     pub raft_engine: RaftEngineConfig,
 
-    #[online_config(skip)]
+    #[online_config(submodule)]
     pub security: SecurityConfig,
 
     #[online_config(submodule)]
@@ -3512,6 +3516,7 @@ impl Default for TikvConfig {
             memory_usage_limit: None,
             memory_usage_high_water: 0.9,
             region_cache_memory_limit: ReadableSize::mb(0),
+            allow_dynamic_security_config: false,
             log: LogConfig::default(),
             memory: MemoryConfig::default(),
             quota: QuotaConfig::default(),
@@ -4281,6 +4286,23 @@ impl TikvConfig {
         }?;
         deserializer.end()?;
         cfg.cfg_path = path.display().to_string();
+
+        // Check and set TIKV_ALLOW_DYNAMIC_SECURITY_CONFIG flag
+        match TIKV_ALLOW_DYNAMIC_SECURITY_CONFIG.get() {
+            Some(allow) => {
+                info!("TIKV_ALLOW_DYNAMIC_SECURITY_CONFIG already set: {}", allow);
+            }
+            None => {
+                TIKV_ALLOW_DYNAMIC_SECURITY_CONFIG
+                    .set(cfg.allow_dynamic_security_config)
+                    .unwrap();
+                info!(
+                    "TIKV_ALLOW_DYNAMIC_SECURITY_CONFIG initialized : {}",
+                    TIKV_ALLOW_DYNAMIC_SECURITY_CONFIG.get().unwrap()
+                );
+            }
+        }
+
         Ok(cfg)
     }
 
@@ -4530,8 +4552,29 @@ pub fn to_flatten_config_info(cfg: &TikvConfig) -> Vec<Value> {
     res
 }
 
+pub static TIKV_ALLOW_DYNAMIC_SECURITY_CONFIG: OnceCell<bool> = OnceCell::new();
+
 lazy_static! {
-    pub static ref TIKVCONFIG_TYPED: ConfigChange = TikvConfig::default().typed();
+    pub static ref TIKVCONFIG_TYPED: ConfigChange = {
+        let mut config_typed: ConfigChange = TikvConfig::default().typed();
+
+        match TIKV_ALLOW_DYNAMIC_SECURITY_CONFIG.get(){
+            Some(allow) => {
+                if *allow {
+                    //pass: allow dynamic security configuration
+                }
+                else {
+                    //security config is not allowed to be online_configured
+                    config_typed.insert("security".to_owned(), ConfigValue::Skip);
+                }
+            }
+            None => {
+                //No value specified for TIKV_ALLOW_DYNAMIC_SECURITY_CONFIG, security config is not allowed to be online_configured
+                config_typed.insert("security".to_owned(), ConfigValue::Skip);
+            }
+        }
+        config_typed
+    };
 }
 
 fn serde_to_online_config(name: String) -> String {
@@ -5490,6 +5533,7 @@ mod tests {
                 "raftstore.raft-heartbeat-ticks".to_owned(),
                 "100".to_owned(),
             ),
+            ("security.redact_info_log".to_owned(), "true".to_owned()),
             ("raftstore.prevote".to_owned(), "false".to_owned()),
         ];
         for (name, value) in cases {
@@ -5497,6 +5541,19 @@ mod tests {
             change.insert(name, value);
             to_config_change(change).unwrap_err();
         }
+    }
+
+    #[test]
+    fn test_allow_dynamic_security_config() {
+        let old = TikvConfig::default();
+        let mut incoming = TikvConfig::default();
+        TIKV_ALLOW_DYNAMIC_SECURITY_CONFIG.set(true).unwrap();
+        incoming.security.redact_info_log = Some(true);
+        let diff = old.diff(&incoming);
+        let mut change = HashMap::new();
+        change.insert("security.redact_info_log".to_owned(), "true".to_owned());
+        let res = to_config_change(change).unwrap();
+        assert_eq!(diff, res);
     }
 
     #[test]
