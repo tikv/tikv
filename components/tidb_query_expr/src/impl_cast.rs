@@ -1385,8 +1385,9 @@ fn cast_string_as_json(
                 let mut vec;
                 if typ.tp() == FieldTypeTp::String {
                     vec = (*val).to_owned();
-                    // the `flen` of string is always greater than zero
-                    vec.resize(typ.flen().try_into().unwrap(), 0);
+                    if typ.flen() > 0 {
+                        vec.resize(typ.flen().try_into().unwrap(), 0);
+                    }
                     buf = &vec;
                 }
 
@@ -7014,6 +7015,17 @@ mod tests {
                 FieldTypeBuilder::new()
                     .tp(FieldTypeTp::VarChar)
                     .flen(256)
+                    .charset(CHARSET_BIN)
+                    .collation(Collation::Binary)
+                    .build(),
+                "a".to_string(),
+                Json::from_opaque(FieldTypeTp::String, &[97]).unwrap(),
+                true,
+            ),
+            (
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarChar)
+                    .flen(UNSPECIFIED_LENGTH)
                     .charset(CHARSET_BIN)
                     .collation(Collation::Binary)
                     .build(),
