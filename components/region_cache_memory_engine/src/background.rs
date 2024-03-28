@@ -239,10 +239,10 @@ impl BackgroundRunnerCore {
             "range gc complete";
             "range" => ?range,
             "total_version" => filter.metrics.total,
-            "unique_keys" => filter.metrics.unique_key,
+            "filtered_version" => filter.metrics.filtered,
+            "below_safe_point_unique_keys" => filter.metrics.unique_key,
             "below_safe_point_version" => filter.metrics.versions,
             "below_safe_point_delete_version" => filter.metrics.delete_versions,
-            "filtered_version" => filter.metrics.filtered,
         );
 
         std::mem::take(&mut filter.metrics)
