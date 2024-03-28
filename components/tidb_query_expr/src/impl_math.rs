@@ -353,7 +353,12 @@ fn rand_with_seed_first_gen(seed: Option<&i64>) -> Result<Option<Real>> {
 #[inline]
 #[rpn_fn]
 fn degrees(arg: &Real) -> Result<Option<Real>> {
-    Ok(Real::new(arg.to_degrees()).ok())
+    let ret = arg.to_degrees();
+    if ret.is_finite() {
+        Ok(Real::new(ret).ok())
+    } else {
+        Err(Error::overflow("DOUBLE", format_args!("degrees({})", arg)).into())
+    }
 }
 
 #[inline]
@@ -1230,6 +1235,14 @@ mod tests {
                 .evaluate(ScalarFuncSig::Degrees)
                 .unwrap();
             assert_eq!(expect, output, "{:?}", input);
+        }
+
+        let overflow_tests = [1e308, -1e308];
+        for x in overflow_tests {
+            let output = RpnFnScalarEvaluator::new()
+                .push_param(Some(Real::new(x).unwrap()))
+                .evaluate::<Real>(ScalarFuncSig::Degrees);
+            output.unwrap_err();
         }
     }
 
