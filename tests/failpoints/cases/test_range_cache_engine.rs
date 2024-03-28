@@ -4,11 +4,12 @@ use std::{
 };
 
 use engine_traits::{CacheRange, RangeCacheEngine, SnapshotContext, CF_DEFAULT, CF_WRITE};
+use hybrid_engine::HybridEngineImpl;
 use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use test_raftstore::{
-    make_cb, new_node_cluster_with_hybrid_engine, new_put_cmd, new_request, Cluster,
-    HybridEngineImpl, NodeCluster, Simulator,
+    make_cb, new_node_cluster_with_hybrid_engine, new_put_cmd, new_request, Cluster, NodeCluster,
+    Simulator,
 };
 use tikv_util::HandyRwLock;
 use txn_types::Key;
