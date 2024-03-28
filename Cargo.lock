@@ -2998,7 +2998,11 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#c4b7047314a9b27926a1b7b25d2e6d1a37a48d2b"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
+>>>>>>> 0e3c1bb462 (rocksdb: Fix partial synced inactive WAL (#16706))
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3017,7 +3021,11 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#c4b7047314a9b27926a1b7b25d2e6d1a37a48d2b"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
+>>>>>>> 0e3c1bb462 (rocksdb: Fix partial synced inactive WAL (#16706))
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4936,7 +4944,11 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git#c4b7047314a9b27926a1b7b25d2e6d1a37a48d2b"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
+>>>>>>> 0e3c1bb462 (rocksdb: Fix partial synced inactive WAL (#16706))
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
