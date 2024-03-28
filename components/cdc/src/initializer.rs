@@ -267,12 +267,16 @@ impl<E: KvEngine> Initializer<E> {
         ));
 
         let mut scan_long_time = false;
+
         while !done {
             // Add metrics to observe long time incremental scan region count
             if (!scan_long_time) && start.saturating_elapsed() > Duration::from_secs(60) {
                 CDC_SCAN_LONG_DURATION_REGIONS.inc();
+                defer!(CDC_SCAN_LONG_DURATION_REGIONS.dec());
+        
                 scan_long_time = true;
-                warn!("cdc incremental scan takes too long"; "region_id" => region_id, "conn_id" => ?self.conn_id, "downstream_id" => ?self.downstream_id, "takes" => ?start.saturating_elapsed());
+                warn!("cdc incremental scan takes too long"; "region_id" => region_id, "conn_id" => ?self.conn_id, 
+                      "downstream_id" => ?self.downstream_id, "takes" => ?start.saturating_elapsed());
             } 
             // When downstream_state is Stopped, it means the corresponding
             // delegate is stopped. The initialization can be safely canceled.
@@ -307,10 +311,6 @@ impl<E: KvEngine> Initializer<E> {
 
         if let Some(resolver) = resolver {
             self.finish_building_resolver(resolver, region);
-        }
-
-        if scan_long_time {
-            CDC_SCAN_LONG_DURATION_REGIONS.dec();
         }
 
         CDC_SCAN_DURATION_HISTOGRAM.observe(takes.as_secs_f64());
