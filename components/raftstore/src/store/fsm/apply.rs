@@ -796,26 +796,7 @@ fn has_high_latency_operation(cmd: &RaftCmdRequest) -> bool {
 
 /// Checks if a write is needed to be issued after handling the command.
 fn should_sync_log(cmd: &RaftCmdRequest) -> bool {
-    if cmd.has_admin_request() {
-        if cmd.get_admin_request().get_cmd_type() == AdminCmdType::CompactLog {
-            // We do not need to sync WAL before compact log, because this request will send
-            // a msg to raft_gc_log thread to delete the entries before this
-            // index instead of deleting them in apply thread directly.
-            return false;
-        }
-        return true;
-    }
-
-    for req in cmd.get_requests() {
-        // After ingest sst, sst files are deleted quickly. As a result,
-        // ingest sst command can not be handled again and must be synced.
-        // See more in Cleanup worker.
-        if req.has_ingest_sst() {
-            return true;
-        }
-    }
-
-    false
+    true
 }
 
 fn can_witness_skip(entry: &Entry) -> bool {
@@ -4763,28 +4744,6 @@ mod tests {
         let data = conf_change_v2.write_to_bytes().unwrap();
         entry.set_data(Bytes::copy_from_slice(&data));
         assert!(!can_witness_skip(&entry));
-    }
-
-    #[test]
-    fn test_should_sync_log() {
-        // Admin command
-        let mut req = RaftCmdRequest::default();
-        req.mut_admin_request()
-            .set_cmd_type(AdminCmdType::ComputeHash);
-        assert_eq!(should_sync_log(&req), true);
-
-        // IngestSst command
-        let mut req = Request::default();
-        req.set_cmd_type(CmdType::IngestSst);
-        req.set_ingest_sst(IngestSstRequest::default());
-        let mut cmd = RaftCmdRequest::default();
-        cmd.mut_requests().push(req);
-        assert_eq!(should_write_to_engine(true, &cmd), true);
-        assert_eq!(should_sync_log(&cmd), true);
-
-        // Normal command
-        let req = RaftCmdRequest::default();
-        assert_eq!(should_sync_log(&req), false);
     }
 
     #[test]
