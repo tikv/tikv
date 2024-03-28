@@ -7,8 +7,8 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_rocks::RocksEngine;
 use futures::executor::block_on;
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{
     metapb,
     raft_cmdpb::ChangePeerRequest,
@@ -485,8 +485,8 @@ fn test_witness_replica_read() {
     );
 }
 
-fn must_get_error_is_witness<T: Simulator<RocksEngine>>(
-    cluster: &mut Cluster<RocksEngine, T>,
+fn must_get_error_is_witness<T: Simulator<HybridEngineImpl>>(
+    cluster: &mut Cluster<HybridEngineImpl, T>,
     region: &metapb::Region,
     cmd: kvproto::raft_cmdpb::Request,
 ) {

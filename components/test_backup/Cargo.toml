@@ -19,6 +19,7 @@ futures = "0.3"
 futures-executor = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { workspace = true }
+hybrid_engine = { workspace = true }
 kvproto = { workspace = true }
 protobuf = "2"
 raftstore = { workspace = true }

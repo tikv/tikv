@@ -3,14 +3,14 @@
 use std::fmt;
 
 use criterion::{Bencher, Criterion};
-use engine_rocks::RocksEngine;
 use engine_traits::{Mutable, WriteBatch, WriteBatchExt};
+use hybrid_engine::HybridEngineImpl;
 use test_raftstore::*;
 use test_util::*;
 
 const DEFAULT_DATA_SIZE: usize = 100_000;
 
-fn enc_write_kvs(db: &RocksEngine, kvs: &[(Vec<u8>, Vec<u8>)]) {
+fn enc_write_kvs(db: &HybridEngineImpl, kvs: &[(Vec<u8>, Vec<u8>)]) {
     let mut wb = db.write_batch();
     for (k, v) in kvs {
         wb.put(&keys::data_key(k), v).unwrap();
@@ -18,8 +18,8 @@ fn enc_write_kvs(db: &RocksEngine, kvs: &[(Vec<u8>, Vec<u8>)]) {
     wb.write().unwrap();
 }
 
-fn prepare_cluster<T: Simulator<RocksEngine>>(
-    cluster: &mut Cluster<RocksEngine, T>,
+fn prepare_cluster<T: Simulator<HybridEngineImpl>>(
+    cluster: &mut Cluster<HybridEngineImpl, T>,
     initial_kvs: &[(Vec<u8>, Vec<u8>)],
 ) {
     cluster.run();
@@ -38,7 +38,7 @@ struct SetConfig<F> {
 
 fn bench_set<T, F>(b: &mut Bencher<'_>, input: &SetConfig<F>)
 where
-    T: Simulator<RocksEngine>,
+    T: Simulator<HybridEngineImpl>,
     F: ClusterFactory<T>,
 {
     let mut cluster = input.factory.build(input.nodes);
@@ -60,7 +60,7 @@ struct GetConfig<F> {
 
 fn bench_get<T, F>(b: &mut Bencher<'_>, input: &GetConfig<F>)
 where
-    T: Simulator<RocksEngine>,
+    T: Simulator<HybridEngineImpl>,
     F: ClusterFactory<T>,
 {
     let mut cluster = input.factory.build(input.nodes);
@@ -87,7 +87,7 @@ struct DeleteConfig<F> {
 
 fn bench_delete<T, F>(b: &mut Bencher<'_>, input: &DeleteConfig<F>)
 where
-    T: Simulator<RocksEngine>,
+    T: Simulator<HybridEngineImpl>,
     F: ClusterFactory<T>,
 {
     let mut cluster = input.factory.build(input.nodes);
@@ -108,7 +108,7 @@ where
 
 fn bench_raft_cluster<T, F>(c: &mut Criterion, factory: F, label: &str)
 where
-    T: Simulator<RocksEngine> + 'static,
+    T: Simulator<HybridEngineImpl> + 'static,
     F: ClusterFactory<T>,
 {
     let nodes_coll = vec![1, 3, 5];
@@ -139,14 +139,14 @@ where
     group.finish();
 }
 
-trait ClusterFactory<T: Simulator<RocksEngine>>: Clone + fmt::Debug + 'static {
-    fn build(&self, nodes: usize) -> Cluster<RocksEngine, T>;
+trait ClusterFactory<T: Simulator<HybridEngineImpl>>: Clone + fmt::Debug + 'static {
+    fn build(&self, nodes: usize) -> Cluster<HybridEngineImpl, T>;
 }
 
 #[derive(Clone)]
 struct NodeClusterFactory;
 
-impl ClusterFactory<NodeCluster<RocksEngine>> for NodeClusterFactory {
+impl ClusterFactory<NodeCluster<HybridEngineImpl>> for NodeClusterFactory {
     fn build(&self, nodes: usize) -> Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>> {
         new_node_cluster(1, nodes)
     }
@@ -161,7 +161,7 @@ impl fmt::Debug for NodeClusterFactory {
 #[derive(Clone)]
 struct ServerClusterFactory;
 
-impl ClusterFactory<ServerCluster<RocksEngine>> for ServerClusterFactory {
+impl ClusterFactory<ServerCluster<HybridEngineImpl>> for ServerClusterFactory {
     fn build(&self, nodes: usize) -> Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>> {
         new_server_cluster(1, nodes)
     }

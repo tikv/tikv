@@ -9,12 +9,12 @@ use causal_ts::CausalTsProvider;
 use cdc::{recv_timeout, CdcObserver, Delegate, FeatureGate, Task, Validate};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::RocksEngine;
 use futures::executor::block_on;
 use grpcio::{
     CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver,
     Environment, MetadataBuilder,
 };
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{
     cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest},
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
@@ -198,7 +198,7 @@ impl TestSuiteBuilder {
             let cdc_ob = cdc::CdcObserver::new(scheduler.clone());
             obs.insert(id, cdc_ob.clone());
             sim.coprocessor_hooks.entry(id).or_default().push(Box::new(
-                move |host: &mut CoprocessorHost<RocksEngine>| {
+                move |host: &mut CoprocessorHost<HybridEngineImpl>| {
                     cdc_ob.register_to(host);
                 },
             ));

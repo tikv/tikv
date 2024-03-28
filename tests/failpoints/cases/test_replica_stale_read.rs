@@ -2,6 +2,7 @@
 
 use std::{sync::Arc, time::Duration};
 
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{kvrpcpb::Op, metapb::Peer};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;

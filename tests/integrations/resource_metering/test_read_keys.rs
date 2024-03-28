@@ -4,8 +4,8 @@ use std::{sync::Arc, time::Duration};
 
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{unbounded, Receiver, RecvTimeoutError, Sender};
-use engine_rocks::RocksEngine as RocksDb;
 use grpcio::{ChannelBuilder, Environment};
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{coprocessor, kvrpcpb::*, resource_usage_agent::ResourceUsageRecord, tikvpb::*};
 use protobuf::Message;
 use resource_metering::ResourceTagFactory;

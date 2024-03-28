@@ -7,10 +7,10 @@ use std::{
 };
 
 use api_version::{test_kv_format_impl, KvFormat};
-use engine_rocks::RocksEngine;
 use engine_traits::MiscExt;
 use futures::{executor::block_on, SinkExt, StreamExt};
 use grpcio::*;
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{kvrpcpb::*, pdpb::QueryKind, tikvpb::*, tikvpb_grpc::TikvClient};
 use pd_client::PdClient;
 use test_coprocessor::{DagSelect, ProductTable};
@@ -18,7 +18,7 @@ use test_raftstore::*;
 use tikv_util::{config::*, store::QueryStats};
 use txn_types::Key;
 
-fn check_available<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn check_available<T: Simulator<HybridEngineImpl>>(cluster: &mut Cluster<HybridEngineImpl, T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     let engine = cluster.get_engine(1);
 
@@ -44,7 +44,9 @@ fn check_available<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine,
     panic!("available not changed")
 }
 
-fn test_simple_store_stats<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_simple_store_stats<T: Simulator<HybridEngineImpl>>(
+    cluster: &mut Cluster<HybridEngineImpl, T>,
+) {
     let pd_client = Arc::clone(&cluster.pd_client);
 
     cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(20);

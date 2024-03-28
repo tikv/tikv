@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
-use engine_rocks::RocksEngine;
 use engine_traits::{RaftEngine, RaftEngineDebug};
+use hybrid_engine::HybridEngineImpl;
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::MessageType;
 use raftstore::store::*;

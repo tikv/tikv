@@ -2,8 +2,8 @@
 
 use std::{cmp, thread, time::Duration};
 
-use engine_rocks::RocksEngine;
 use engine_traits::CF_LOCK;
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{
     coprocessor::{Request, Response, StoreBatchTask, StoreBatchTaskResponse},
     kvrpcpb::{Context, IsolationLevel},

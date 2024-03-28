@@ -18,6 +18,7 @@ use engine_traits::{Engines, KvEngine, SnapshotContext};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use health_controller::HealthController;
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{
     deadlock::create_deadlock,
     debugpb::{create_debug, DebugClient},

@@ -12,6 +12,7 @@ use std::{
 
 use engine_traits::{Peekable, CF_RAFT};
 use grpcio::{ChannelBuilder, Environment};
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
     raft_serverpb::{PeerState, RaftMessage, RegionLocalState},

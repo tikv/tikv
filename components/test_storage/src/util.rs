@@ -1,10 +1,9 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use api_version::KvFormat;
+use hybrid_engine::HybridEngineImpl;
 use kvproto::kvrpcpb::Context;
-use test_raftstore::{
-    new_server_cluster, Cluster, HybridEngineImpl, ServerCluster, SimulateEngine,
-};
+use test_raftstore::{new_server_cluster, Cluster, ServerCluster, SimulateEngine};
 use tikv_util::HandyRwLock;
 
 use super::*;

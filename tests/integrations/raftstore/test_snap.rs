@@ -12,11 +12,11 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_rocks::RocksEngine;
 use engine_traits::{Checkpointer, KvEngine, RaftEngineDebug};
 use file_system::{IoOp, IoType};
 use futures::executor::block_on;
 use grpcio::{self, ChannelBuilder, Environment};
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{
     raft_serverpb::{RaftMessage, RaftSnapshotData},
     tikvpb::TikvClient,
@@ -40,8 +40,8 @@ use tikv_util::{
     HandyRwLock,
 };
 
-fn test_huge_snapshot<T: Simulator<RocksEngine>>(
-    cluster: &mut Cluster<RocksEngine, T>,
+fn test_huge_snapshot<T: Simulator<HybridEngineImpl>>(
+    cluster: &mut Cluster<HybridEngineImpl, T>,
     max_snapshot_file_size: u64,
 ) {
     cluster.cfg.rocksdb.titan.enabled = Some(true);

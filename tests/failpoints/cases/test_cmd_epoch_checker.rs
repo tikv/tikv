@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use hybrid_engine::{HybridEngineImpl, HybridEngineSnapshotImpl};
 use kvproto::raft_cmdpb::{RaftCmdRequest, RaftCmdResponse};
 use raft::eraftpb::MessageType;
 use raftstore::store::msg::*;

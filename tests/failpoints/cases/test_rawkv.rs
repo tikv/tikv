@@ -5,6 +5,7 @@ use std::{sync::Arc, thread, time::Duration};
 use causal_ts::{CausalTsProvider, CausalTsProviderImpl};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{
     kvrpcpb::*,
     metapb::{Peer, Region},

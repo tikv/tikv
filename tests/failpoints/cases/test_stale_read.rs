@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use hybrid_engine::HybridEngineImpl;
 use kvproto::metapb::{Peer, Region};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;

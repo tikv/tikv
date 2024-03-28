@@ -4,6 +4,7 @@ use std::{iter::FromIterator, sync::Arc, time::Duration};
 
 use collections::HashMap;
 use futures::executor::block_on;
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{metapb, raft_serverpb::RaftApplyState};
 use pd_client::PdClient;
 use test_raftstore::*;

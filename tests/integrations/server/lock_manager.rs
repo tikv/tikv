@@ -10,8 +10,8 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::RocksEngine;
 use grpcio::{ChannelBuilder, Environment};
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{
     kvrpcpb::*,
     metapb::{Peer, Region},

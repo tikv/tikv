@@ -23,7 +23,7 @@ use fail::fail_point;
 use file_system::IoRateLimiter;
 use futures::{executor::block_on, future::BoxFuture, StreamExt};
 use grpcio::{ChannelBuilder, Environment};
-use hybrid_engine::{HybridEngine, HybridEngineSnapshot};
+use hybrid_engine::{HybridEngineImpl, HybridEngineSnapshotImpl};
 use kvproto::{
     encryptionpb::EncryptionMethod,
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
@@ -45,7 +45,6 @@ use raftstore::{
     RaftRouterCompactedEventSender, Result,
 };
 use rand::{seq::SliceRandom, RngCore};
-use region_cache_memory_engine::RangeCacheMemoryEngine;
 use server::common::{ConfiguredRaftEngine, KvEngineBuilder};
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
@@ -64,9 +63,6 @@ use tikv_util::{
 use txn_types::Key;
 
 use crate::{Cluster, Config, KvEngineWithRocks, RawEngine, ServerCluster, Simulator};
-
-pub type HybridEngineImpl = HybridEngine<RocksEngine, RangeCacheMemoryEngine>;
-pub type HybridEngineSnapshotImpl = HybridEngineSnapshot<RocksEngine, RangeCacheMemoryEngine>;
 
 pub fn must_get<EK: KvEngine>(
     engine: &impl RawEngine<EK>,

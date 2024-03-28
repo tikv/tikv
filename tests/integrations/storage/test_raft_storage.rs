@@ -8,8 +8,8 @@ use std::{
 
 use api_version::{ApiV1, KvFormat};
 use collections::HashMap;
-use engine_rocks::RocksEngine;
 use error_code::{raftstore::STALE_COMMAND, ErrorCodeExt};
+use hybrid_engine::HybridEngineImpl;
 use kvproto::kvrpcpb::Context;
 use test_raftstore::*;
 use test_storage::*;
@@ -27,7 +27,7 @@ use txn_types::{Key, Mutation, TimeStamp};
 
 fn new_raft_storage() -> (
     Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
-    SyncTestStorageApiV1<SimulateEngine<RocksEngine>>,
+    SyncTestStorageApiV1<SimulateEngine<HybridEngineImpl>>,
     Context,
 ) {
     new_raft_storage_with_store_count::<ApiV1>(1, "")

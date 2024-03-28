@@ -1,11 +1,12 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use api_version::{ApiV1, KvFormat};
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{
     kvrpcpb::{Context, KeyRange, LockInfo},
     metapb,
 };
-use test_raftstore::{Cluster, HybridEngineImpl, ServerCluster, SimulateEngine};
+use test_raftstore::{Cluster, ServerCluster, SimulateEngine};
 use tikv::storage::{
     self,
     kv::{Error as KvError, ErrorInner as KvErrorInner, RocksEngine},

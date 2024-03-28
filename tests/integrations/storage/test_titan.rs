@@ -59,7 +59,7 @@ fn test_turnoff_titan() {
     cluster.must_flush_cf(CF_DEFAULT, true);
     for i in cluster.get_node_ids().into_iter() {
         let engine = cluster.get_engine(i);
-        let db = engine.as_inner();
+        let db = engine.disk_engine().as_inner();
         assert_eq!(
             db.get_property_int("rocksdb.num-files-at-level0").unwrap(),
             2
@@ -102,7 +102,7 @@ fn test_turnoff_titan() {
         all_check_pass = true;
         for i in cluster.get_node_ids().into_iter() {
             let engine = cluster.get_engine(i);
-            let db = engine.as_inner();
+            let db = engine.disk_engine().as_inner();
             if db.get_property_int("rocksdb.num-files-at-level0").unwrap() != 0 {
                 all_check_pass = false;
                 break;

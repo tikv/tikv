@@ -7,6 +7,7 @@ use std::{
 
 use engine_rocks::RocksEngine;
 use futures::executor::block_on;
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{
     errorpb::FlashbackInProgress,
     metapb,
@@ -557,7 +558,7 @@ trait ClusterI {
 
 impl ClusterI for Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>> {
     fn region_local_state(&self, region_id: u64, store_id: u64) -> RegionLocalState {
-        Cluster::<RocksEngine, NodeCluster<RocksEngine>>::region_local_state(
+        Cluster::<HybridEngineImpl, NodeCluster<HybridEngineImpl>>::region_local_state(
             self, region_id, store_id,
         )
     }
@@ -567,7 +568,7 @@ impl ClusterI for Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>> {
         region_id: u64,
         timeout: Duration,
     ) -> Option<metapb::Peer> {
-        Cluster::<RocksEngine, NodeCluster<RocksEngine>>::query_leader(
+        Cluster::<HybridEngineImpl, NodeCluster<HybridEngineImpl>>::query_leader(
             self, store_id, region_id, timeout,
         )
     }
@@ -576,7 +577,9 @@ impl ClusterI for Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>> {
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> raftstore::Result<RaftCmdResponse> {
-        Cluster::<RocksEngine, NodeCluster<RocksEngine>>::call_command(self, request, timeout)
+        Cluster::<HybridEngineImpl, NodeCluster<HybridEngineImpl>>::call_command(
+            self, request, timeout,
+        )
     }
 }
 

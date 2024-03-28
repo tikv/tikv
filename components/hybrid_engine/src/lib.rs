@@ -26,4 +26,9 @@ pub mod util;
 mod write_batch;
 
 pub use engine::HybridEngine;
+use engine_rocks::RocksEngine;
+use region_cache_memory_engine::RangeCacheMemoryEngine;
 pub use snapshot::HybridEngineSnapshot;
+
+pub type HybridEngineImpl = HybridEngine<RocksEngine, RangeCacheMemoryEngine>;
+pub type HybridEngineSnapshotImpl = HybridEngineSnapshot<RocksEngine, RangeCacheMemoryEngine>;

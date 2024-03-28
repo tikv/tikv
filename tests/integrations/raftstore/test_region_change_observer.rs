@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::RocksEngine;
+use hybrid_engine::HybridEngineImpl;
 use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::coprocessor::{

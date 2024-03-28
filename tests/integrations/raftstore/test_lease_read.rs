@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::RocksSnapshot;
+use hybrid_engine::HybridEngineSnapshotImpl;
 use kvproto::{metapb, raft_serverpb::RaftMessage};
 use more_asserts::assert_le;
 use pd_client::PdClient;
@@ -347,7 +347,7 @@ fn test_node_batch_id_in_lease() {
         .map(|(p, r)| (p.clone(), r))
         .collect();
     let responses = batch_read_on_peer(&mut cluster, &requests);
-    let snaps: Vec<RegionSnapshot<RocksSnapshot>> = responses
+    let snaps: Vec<RegionSnapshot<HybridEngineSnapshotImpl>> = responses
         .into_iter()
         .map(|response| {
             assert!(!response.response.get_header().has_error());
@@ -369,7 +369,7 @@ fn test_node_batch_id_in_lease() {
     // make sure that region 2 could renew lease.
     cluster.must_put(b"k55", b"v2");
     let responses = batch_read_on_peer(&mut cluster, &requests);
-    let snaps2: Vec<RegionSnapshot<RocksSnapshot>> = responses
+    let snaps2: Vec<RegionSnapshot<HybridEngineSnapshotImpl>> = responses
         .into_iter()
         .map(|response| {
             assert!(!response.response.get_header().has_error());

@@ -2,7 +2,7 @@
 
 use std::{iter::FromIterator, sync::Arc, thread, time::Duration};
 
-use engine_rocks::RocksEngine;
+use hybrid_engine::HybridEngineImpl;
 use kvproto::replication_modepb::*;
 use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;

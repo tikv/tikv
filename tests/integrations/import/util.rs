@@ -4,6 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use engine_rocks::RocksEngine;
 use grpcio::{ChannelBuilder, Environment};
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{import_sstpb::*, kvrpcpb::*, tikvpb::*};
 use security::SecurityConfig;
 use test_raftstore::*;

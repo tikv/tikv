@@ -16,6 +16,7 @@ use grpcio::{
     ChannelBuilder, ClientDuplexReceiver, Environment, Server, ServerBuilder, StreamingCallSink,
     WriteFlags,
 };
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{
     brpb::{
         self, PrepareSnapshotBackupEventType, PrepareSnapshotBackupRequest,

@@ -11,6 +11,7 @@ use encryption_export::DataKeyManager;
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, KvEngine, SnapshotContext};
 use health_controller::HealthController;
+use hybrid_engine::HybridEngineImpl;
 use kvproto::{
     kvrpcpb::ApiVersion,
     metapb,

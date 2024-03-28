@@ -1,9 +1,11 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_rocks::RocksEngine;
+use hybrid_engine::HybridEngineImpl;
 use test_raftstore::*;
 
-fn test_partition_write<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_partition_write<T: Simulator<HybridEngineImpl>>(
+    cluster: &mut Cluster<HybridEngineImpl, T>,
+) {
     cluster.run();
 
     let (key, value) = (b"k1", b"v1");
