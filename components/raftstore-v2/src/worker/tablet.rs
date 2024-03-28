@@ -9,7 +9,8 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{
-    CfName, DeleteStrategy, KvEngine, Range, TabletContext, TabletRegistry, WriteOptions, DATA_CFS,
+    CfName, DeleteStrategy, KvEngine, ManualCompactionOptions, Range, TabletContext,
+    TabletRegistry, WriteOptions, DATA_CFS,
 };
 use fail::fail_point;
 use kvproto::{import_sstpb::SstMeta, metapb::Region};
@@ -302,9 +303,11 @@ impl<EK: KvEngine> Runner<EK> {
                 // some files missing from compaction if dynamic_level_bytes is off.
                 for r in [range1, range2] {
                     // When compaction filter is present, trivial move is disallowed.
-                    if let Err(e) =
-                        tablet.compact_range(Some(r.start_key), Some(r.end_key), false, 1)
-                    {
+                    if let Err(e) = tablet.compact_range(
+                        Some(r.start_key),
+                        Some(r.end_key),
+                        ManualCompactionOptions::new(false, 1, false),
+                    ) {
                         if e.to_string().contains("Manual compaction paused") {
                             info!(
                                 logger,
@@ -467,7 +470,8 @@ impl<EK: KvEngine> Runner<EK> {
         let Some(Some(tablet)) = self
             .tablet_registry
             .get(region_id)
-            .map(|mut cache| cache.latest().cloned()) else {
+            .map(|mut cache| cache.latest().cloned())
+        else {
             warn!(
                 self.logger,
                 "flush memtable failed to acquire tablet";
@@ -555,7 +559,15 @@ impl<EK: KvEngine> Runner<EK> {
     }
 
     fn delete_range(&self, delete_range: Task<EK>) {
-        let Task::DeleteRange { region_id, tablet, cf, start_key, end_key, cb } = delete_range else {
+        let Task::DeleteRange {
+            region_id,
+            tablet,
+            cf,
+            start_key,
+            end_key,
+            cb,
+        } = delete_range
+        else {
             slog_panic!(self.logger, "unexpected task"; "task" => format!("{}", delete_range))
         };
 

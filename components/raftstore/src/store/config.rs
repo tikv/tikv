@@ -407,6 +407,18 @@ pub struct Config {
     #[online_config(hidden)]
     #[serde(alias = "enable-partitioned-raft-kv-compatible-learner")]
     pub enable_v2_compatible_learner: bool,
+
+    /// The minimal count of region pending on applying raft logs.
+    /// Only when the count of regions which not pending on applying logs is
+    /// less than the threshold, can the raftstore supply service.
+    #[doc(hidden)]
+    #[online_config(hidden)]
+    pub min_pending_apply_region_count: u64,
+
+    /// Whether to skip manual compaction in the clean up worker for `write` and
+    /// `default` column family
+    #[doc(hidden)]
+    pub skip_manual_compaction_in_clean_up_worker: bool,
 }
 
 impl Default for Config {
@@ -488,7 +500,7 @@ impl Default for Config {
             local_read_batch_size: 1024,
             apply_batch_system: BatchSystemConfig::default(),
             store_batch_system: BatchSystemConfig::default(),
-            store_io_pool_size: 0,
+            store_io_pool_size: 1,
             store_io_notify_capacity: 40960,
             future_poll_size: 1,
             hibernate_regions: true,
@@ -507,12 +519,12 @@ impl Default for Config {
             reactive_memory_lock_tick_interval: ReadableDuration::secs(2),
             reactive_memory_lock_timeout_tick: 5,
             check_long_uncommitted_interval: ReadableDuration::secs(10),
-            /// In some cases, such as rolling upgrade, some regions' commit log
-            /// duration can be 12 seconds. Before #13078 is merged,
-            /// the commit log duration can be 2.8 minutes. So maybe
-            /// 20s is a relatively reasonable base threshold. Generally,
-            /// the log commit duration is less than 1s. Feel free to adjust
-            /// this config :)
+            // In some cases, such as rolling upgrade, some regions' commit log
+            // duration can be 12 seconds. Before #13078 is merged,
+            // the commit log duration can be 2.8 minutes. So maybe
+            // 20s is a relatively reasonable base threshold. Generally,
+            // the log commit duration is less than 1s. Feel free to adjust
+            // this config :)
             long_uncommitted_base_threshold: ReadableDuration::secs(20),
             max_entry_cache_warmup_duration: ReadableDuration::secs(1),
 
@@ -544,6 +556,8 @@ impl Default for Config {
             check_request_snapshot_interval: ReadableDuration::minutes(1),
             enable_v2_compatible_learner: false,
             unsafe_disable_check_quorum: false,
+            min_pending_apply_region_count: 10,
+            skip_manual_compaction_in_clean_up_worker: false,
         }
     }
 }
@@ -945,6 +959,12 @@ impl Config {
         if self.slow_trend_network_io_factor < 0.0 {
             return Err(box_err!(
                 "slow_trend_network_io_factor must be greater than 0"
+            ));
+        }
+
+        if self.min_pending_apply_region_count == 0 {
+            return Err(box_err!(
+                "min_pending_apply_region_count must be greater than 0"
             ));
         }
 

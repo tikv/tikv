@@ -1,8 +1,8 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    KvEngine, Peekable, ReadOptions, RegionCacheEngine, Result, SnapshotContext, SnapshotMiscExt,
-    SyncMutable,
+    KvEngine, Mutable, Peekable, RangeCacheEngine, ReadOptions, Result, SnapshotContext,
+    SnapshotMiscExt, SyncMutable, WriteBatch, WriteBatchExt,
 };
 
 use crate::snapshot::HybridEngineSnapshot;
@@ -17,7 +17,7 @@ use crate::snapshot::HybridEngineSnapshot;
 pub struct HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     disk_engine: EK,
     region_cache_engine: EC,
@@ -26,7 +26,7 @@ where
 impl<EK, EC> HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     pub fn disk_engine(&self) -> &EK {
         &self.disk_engine
@@ -48,7 +48,7 @@ where
 impl<EK, EC> HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     pub fn new(disk_engine: EK, region_cache_engine: EC) -> Self {
         Self {
@@ -62,7 +62,8 @@ where
 impl<EK, EC> KvEngine for HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
+    HybridEngine<EK, EC>: WriteBatchExt,
 {
     type Snapshot = HybridEngineSnapshot<EK, EC>;
 
@@ -70,7 +71,7 @@ where
         let disk_snap = self.disk_engine.snapshot(ctx.clone());
         let region_cache_snap = if let Some(ctx) = ctx {
             self.region_cache_engine.snapshot(
-                ctx.region_id,
+                ctx.range.unwrap(),
                 ctx.read_ts,
                 disk_snap.sequence_number(),
             )
@@ -97,7 +98,7 @@ where
 impl<EK, EC> Peekable for HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
 {
     type DbVector = EK::DbVector;
 
@@ -120,38 +121,77 @@ where
 impl<EK, EC> SyncMutable for HybridEngine<EK, EC>
 where
     EK: KvEngine,
-    EC: RegionCacheEngine,
+    EC: RangeCacheEngine,
+    HybridEngine<EK, EC>: WriteBatchExt,
 {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        unimplemented!()
+        let mut batch = self.write_batch();
+        if let Some(range) = self.region_cache_engine.get_range_for_key(key) {
+            batch.prepare_for_range(&range);
+        }
+        batch.put(key, value)?;
+        let _ = batch.write()?;
+        Ok(())
     }
 
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
-        unimplemented!()
+        let mut batch = self.write_batch();
+        if let Some(range) = self.region_cache_engine.get_range_for_key(key) {
+            batch.prepare_for_range(&range);
+        }
+        batch.put_cf(cf, key, value)?;
+        let _ = batch.write()?;
+        Ok(())
     }
 
     fn delete(&self, key: &[u8]) -> Result<()> {
-        unimplemented!()
+        let mut batch = self.write_batch();
+        if let Some(range) = self.region_cache_engine.get_range_for_key(key) {
+            batch.prepare_for_range(&range);
+        }
+        batch.delete(key)?;
+        let _ = batch.write()?;
+        Ok(())
     }
 
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
-        unimplemented!()
+        let mut batch = self.write_batch();
+        if let Some(range) = self.region_cache_engine.get_range_for_key(key) {
+            batch.prepare_for_range(&range);
+        }
+        batch.delete_cf(cf, key)?;
+        let _ = batch.write()?;
+        Ok(())
     }
 
     fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        unimplemented!()
+        let mut batch = self.write_batch();
+        if let Some(range) = self.region_cache_engine.get_range_for_key(begin_key) {
+            batch.prepare_for_range(&range);
+        }
+        batch.delete_range(begin_key, end_key)?;
+        let _ = batch.write()?;
+        Ok(())
     }
 
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        unimplemented!()
+        let mut batch = self.write_batch();
+        if let Some(range) = self.region_cache_engine.get_range_for_key(begin_key) {
+            batch.prepare_for_range(&range);
+        }
+        batch.delete_range_cf(cf, begin_key, end_key)?;
+        let _ = batch.write()?;
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use engine_rocks::util::new_engine;
-    use engine_traits::{KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
-    use region_cache_memory_engine::RegionCacheMemoryEngine;
+    use engine_traits::{CacheRange, KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use region_cache_memory_engine::RangeCacheMemoryEngine;
     use tempfile::Builder;
 
     use crate::HybridEngine;
@@ -164,12 +204,13 @@ mod tests {
             &[CF_DEFAULT, CF_LOCK, CF_WRITE],
         )
         .unwrap();
-        let memory_engine = RegionCacheMemoryEngine::default();
-        memory_engine.new_region(1);
+        let memory_engine = RangeCacheMemoryEngine::new(Duration::from_secs(100));
+        let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+        memory_engine.new_range(range.clone());
         {
-            let mut core = memory_engine.core().lock().unwrap();
-            core.mut_region_meta(1).unwrap().set_can_read(true);
-            core.mut_region_meta(1).unwrap().set_safe_ts(10);
+            let mut core = memory_engine.core().write();
+            core.mut_range_manager().set_range_readable(&range, true);
+            core.mut_range_manager().set_safe_point(&range, 10);
         }
 
         let hybrid_engine = HybridEngine::new(disk_engine, memory_engine.clone());
@@ -178,21 +219,21 @@ mod tests {
 
         let mut snap_ctx = SnapshotContext {
             read_ts: 15,
-            region_id: 1,
+            range: Some(range.clone()),
         };
         let s = hybrid_engine.snapshot(Some(snap_ctx.clone()));
         assert!(s.region_cache_snapshot_available());
 
         {
-            let mut core = memory_engine.core().lock().unwrap();
-            core.mut_region_meta(1).unwrap().set_can_read(false);
+            let mut core = memory_engine.core().write();
+            core.mut_range_manager().set_range_readable(&range, false);
         }
         let s = hybrid_engine.snapshot(Some(snap_ctx.clone()));
         assert!(!s.region_cache_snapshot_available());
 
         {
-            let mut core = memory_engine.core().lock().unwrap();
-            core.mut_region_meta(1).unwrap().set_can_read(true);
+            let mut core = memory_engine.core().write();
+            core.mut_range_manager().set_range_readable(&range, true);
         }
         snap_ctx.read_ts = 5;
         let s = hybrid_engine.snapshot(Some(snap_ctx));

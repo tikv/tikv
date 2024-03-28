@@ -5,6 +5,7 @@ use std::{cmp, sync::Arc};
 use collections::{HashMap, HashSet};
 use engine_traits::{KvEngine, RaftEngine};
 use fail::fail_point;
+use health_controller::types::LatencyInspector;
 use kvproto::pdpb;
 use pd_client::{
     metrics::{
@@ -15,8 +16,8 @@ use pd_client::{
 };
 use prometheus::local::LocalHistogram;
 use raftstore::store::{
-    metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC, util::LatencyInspector,
-    UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
+    metrics::STORE_SNAPSHOT_TRAFFIC_GAUGE_VEC, UnsafeRecoveryExecutePlanSyncer,
+    UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle,
 };
 use slog::{error, info, warn};
 use tikv_util::{

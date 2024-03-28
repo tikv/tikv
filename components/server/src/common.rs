@@ -23,7 +23,7 @@ use engine_rocks::{
 };
 use engine_traits::{
     data_cf_offset, CachedTablet, CfOptions, CfOptionsExt, FlowControlFactorsExt, KvEngine,
-    RaftEngine, StatisticsReporter, TabletRegistry, CF_DEFAULT, DATA_CFS,
+    RaftEngine, RangeCacheEngine, StatisticsReporter, TabletRegistry, CF_DEFAULT, DATA_CFS,
 };
 use error_code::ErrorCodeExt;
 use file_system::{get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor};
@@ -31,7 +31,7 @@ use grpcio::Environment;
 use hybrid_engine::HybridEngine;
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
-use region_cache_memory_engine::RegionCacheMemoryEngine;
+use region_cache_memory_engine::RangeCacheMemoryEngine;
 use security::SecurityManager;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, TikvConfig},
@@ -448,7 +448,7 @@ const RESERVED_OPEN_FDS: u64 = 1000;
 pub fn check_system_config(config: &TikvConfig) {
     info!("beginning system configuration check");
     let mut rocksdb_max_open_files = config.rocksdb.max_open_files;
-    if config.rocksdb.titan.enabled {
+    if let Some(true) = config.rocksdb.titan.enabled {
         // Titan engine maintains yet another pool of blob files and uses the same max
         // number of open files setup as rocksdb does. So we double the max required
         // open files here
@@ -560,7 +560,9 @@ impl EnginesResourceInfo {
             });
 
         for (_, cache) in cached_latest_tablets.iter_mut() {
-            let Some(tablet) = cache.latest() else { continue };
+            let Some(tablet) = cache.latest() else {
+                continue;
+            };
             for cf in DATA_CFS {
                 fetch_engine_cf(tablet, cf);
             }
@@ -707,9 +709,12 @@ impl KvEngineBuilder for RocksEngine {
     }
 }
 
-impl KvEngineBuilder for HybridEngine<RocksEngine, RegionCacheMemoryEngine> {
-    fn build(_disk_engine: RocksEngine) -> Self {
-        unimplemented!()
+impl KvEngineBuilder for HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
+    fn build(disk_engine: RocksEngine) -> Self {
+        // todo(SpadeA): make time configurable
+        let mut memory_engine = RangeCacheMemoryEngine::new(std::time::Duration::from_secs(180));
+        memory_engine.set_disk_engine(disk_engine.clone());
+        HybridEngine::new(disk_engine, memory_engine)
     }
 }
 

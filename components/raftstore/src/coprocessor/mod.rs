@@ -13,9 +13,13 @@ use engine_traits::{CfName, SstMetaInfo};
 use kvproto::{
     metapb::Region,
     pdpb::CheckPolicy,
-    raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request},
+    raft_cmdpb::{
+        AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request,
+        TransferLeaderRequest,
+    },
     raft_serverpb::RaftApplyState,
 };
+use pd_client::RegionStat;
 use raft::{eraftpb, StateRole};
 
 pub mod config;
@@ -129,6 +133,14 @@ pub trait AdminObserver: Coprocessor {
         _: &mut ApplyCtxInfo<'_>,
     ) -> bool {
         false
+    }
+
+    fn pre_transfer_leader(
+        &self,
+        _ctx: &mut ObserverContext<'_>,
+        _tr: &TransferLeaderRequest,
+    ) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -339,6 +351,9 @@ pub trait RegionChangeObserver: Coprocessor {
     fn pre_write_apply_state(&self, _: &mut ObserverContext<'_>) -> bool {
         true
     }
+}
+pub trait RegionHeartbeatObserver: Coprocessor {
+    fn on_region_heartbeat(&self, _: &mut ObserverContext<'_>, _: &RegionStat) {}
 }
 
 pub trait MessageObserver: Coprocessor {

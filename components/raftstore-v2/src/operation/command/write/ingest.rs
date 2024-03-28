@@ -62,9 +62,14 @@ impl Store {
 
         let ranges = ctx.sst_importer.ranges_in_import();
         for (region_id, ssts) in region_ssts {
-            if let Err(TrySendError::Disconnected(msg)) = ctx.router.send(region_id, PeerMsg::CleanupImportSst(ssts.into()))
-                && !ctx.router.is_shutdown() {
-                let PeerMsg::CleanupImportSst( ssts) = msg else { unreachable!() };
+            if let Err(TrySendError::Disconnected(msg)) = ctx
+                .router
+                .send(region_id, PeerMsg::CleanupImportSst(ssts.into()))
+                && !ctx.router.is_shutdown()
+            {
+                let PeerMsg::CleanupImportSst(ssts) = msg else {
+                    unreachable!()
+                };
                 let mut ssts = ssts.into_vec();
                 ssts.retain(|sst| {
                     for range in &ranges {
@@ -74,7 +79,10 @@ impl Store {
                     }
                     true
                 });
-                let _ = ctx.schedulers.tablet.schedule(tablet::Task::CleanupImportSst(ssts.into()));
+                let _ = ctx
+                    .schedulers
+                    .tablet
+                    .schedule(tablet::Task::CleanupImportSst(ssts.into()));
             }
         }
 

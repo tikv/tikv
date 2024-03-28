@@ -41,7 +41,7 @@ use engine_traits::{
 use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetricsManager};
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
-use grpcio_health::HealthService;
+use health_controller::HealthController;
 use hybrid_engine::HybridEngine;
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
@@ -67,12 +67,13 @@ use raftstore::{
             RaftBatchSystem, RaftRouter, StoreMeta, MULTI_FILES_SNAPSHOT_FEATURE, PENDING_MSG_CAP,
         },
         memory::MEMTRACE_ROOT as MEMTRACE_RAFTSTORE,
+        snapshot_backup::PrepareDiskSnapObserver,
         AutoSplitController, CheckLeaderRunner, LocalReader, SnapManager, SnapManagerBuilder,
         SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
     RaftRouterCompactedEventSender,
 };
-use region_cache_memory_engine::RegionCacheMemoryEngine;
+use region_cache_memory_engine::RangeCacheMemoryEngine;
 use resolved_ts::{LeadershipResolver, Task};
 use resource_control::ResourceGroupManager;
 use security::SecurityManager;
@@ -100,6 +101,7 @@ use tikv::{
         tablet_snap::NoSnapshotCache,
         ttl::TtlChecker,
         KvEngineFactoryBuilder, Node, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, GRPC_THREAD_PREFIX,
+        MEMORY_LIMIT_GAUGE,
     },
     storage::{
         self,
@@ -165,6 +167,7 @@ fn run_impl<EK, CER, F>(
     let server_config = tikv.init_servers();
     tikv.register_services();
     tikv.init_metrics_flusher(fetcher, engines_info);
+    tikv.init_cgroup_monitor();
     tikv.init_storage_stats_task(engines);
     tikv.run_server(server_config);
     tikv.run_status_server();
@@ -220,28 +223,32 @@ pub fn run_tikv(
 
     dispatch_api_version!(config.storage.api_version(), {
         if !config.raft_engine.enable {
-            if config.region_cache_memory_limit == ReadableSize(0) {
-                run_impl::<RocksEngine, RocksEngine, API>(
+            if cfg!(feature = "memory-engine")
+                && config.region_cache_memory_limit != ReadableSize(0)
+            {
+                run_impl::<HybridEngine<RocksEngine, RangeCacheMemoryEngine>, RocksEngine, API>(
                     config,
                     service_event_tx,
                     service_event_rx,
                 )
             } else {
-                run_impl::<HybridEngine<RocksEngine, RegionCacheMemoryEngine>, RocksEngine, API>(
+                run_impl::<RocksEngine, RocksEngine, API>(
                     config,
                     service_event_tx,
                     service_event_rx,
                 )
             }
         } else {
-            if config.region_cache_memory_limit == ReadableSize(0) {
-                run_impl::<RocksEngine, RaftLogEngine, API>(
+            if cfg!(feature = "memory-engine")
+                && config.region_cache_memory_limit != ReadableSize(0)
+            {
+                run_impl::<HybridEngine<RocksEngine, RangeCacheMemoryEngine>, RaftLogEngine, API>(
                     config,
                     service_event_tx,
                     service_event_rx,
                 )
             } else {
-                run_impl::<HybridEngine<RocksEngine, RegionCacheMemoryEngine>, RaftLogEngine, API>(
+                run_impl::<RocksEngine, RaftLogEngine, API>(
                     config,
                     service_event_tx,
                     service_event_rx,
@@ -254,6 +261,7 @@ pub fn run_tikv(
 const DEFAULT_METRICS_FLUSH_INTERVAL: Duration = Duration::from_millis(10_000);
 const DEFAULT_MEMTRACE_FLUSH_INTERVAL: Duration = Duration::from_millis(1_000);
 const DEFAULT_STORAGE_STATS_INTERVAL: Duration = Duration::from_secs(1);
+const DEFAULT_CGROUP_MONITOR_INTERVAL: Duration = Duration::from_secs(10);
 
 /// A complete TiKV server.
 struct TikvServer<EK, ER, F>
@@ -287,6 +295,7 @@ where
     br_snap_recovery_mode: bool, // use for br snapshot recovery
     resolved_ts_scheduler: Option<Scheduler<Task>>,
     grpc_service_mgr: GrpcServiceManager,
+    snap_br_rejector: Option<Arc<PrepareDiskSnapObserver>>,
 }
 
 struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -404,7 +413,21 @@ where
             config.coprocessor.clone(),
         ));
 
-        let region_info_accessor = RegionInfoAccessor::new(coprocessor_host.as_mut().unwrap());
+        // Region stats manager collects region heartbeat for use by in-memory engine.
+        let region_stats_manager_enabled_cb: Arc<dyn Fn() -> bool + Send + Sync> =
+            if cfg!(feature = "memory-engine") {
+                let cfg_controller_clone = cfg_controller.clone();
+                Arc::new(move || {
+                    cfg_controller_clone.get_current().region_cache_memory_limit != ReadableSize(0)
+                })
+            } else {
+                Arc::new(|| false)
+            };
+
+        let region_info_accessor = RegionInfoAccessor::new(
+            coprocessor_host.as_mut().unwrap(),
+            region_stats_manager_enabled_cb,
+        );
 
         // Initialize concurrency manager
         let latest_ts = block_on(pd_client.get_tso()).expect("failed to get timestamp from PD");
@@ -477,6 +500,7 @@ where
             br_snap_recovery_mode: is_recovering_marked,
             resolved_ts_scheduler: None,
             grpc_service_mgr: GrpcServiceManager::new(tx),
+            snap_br_rejector: None,
         }
     }
 
@@ -808,7 +832,7 @@ where
             )
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(self.core.config.raft_store.clone()));
-        let health_service = HealthService::default();
+        let health_controller = HealthController::new();
         let mut node = Node::new(
             self.system.take().unwrap(),
             &server_config.value().clone(),
@@ -817,7 +841,7 @@ where
             self.pd_client.clone(),
             state,
             self.core.background_worker.clone(),
-            Some(health_service.clone()),
+            health_controller.clone(),
             None,
         );
         node.try_bootstrap_store(engines.engines.clone())
@@ -846,7 +870,7 @@ where
             self.env.clone(),
             unified_read_pool,
             debug_thread_pool,
-            health_service,
+            health_controller,
             self.resource_manager.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to create server: {}", e));
@@ -858,6 +882,10 @@ where
                 server.get_grpc_mem_quota().clone(),
             )),
         );
+
+        let rejector = Arc::new(PrepareDiskSnapObserver::default());
+        rejector.register_to(self.coprocessor_host.as_mut().unwrap());
+        self.snap_br_rejector = Some(rejector);
 
         // Start backup stream
         let backup_stream_scheduler = if self.core.config.log_backup.enable {
@@ -1207,16 +1235,6 @@ where
         // Backup service.
         let mut backup_worker = Box::new(self.core.background_worker.lazy_build("backup-endpoint"));
         let backup_scheduler = backup_worker.scheduler();
-        let backup_service =
-            backup::Service::<EK, ER>::with_router(backup_scheduler, self.router.clone());
-        if servers
-            .server
-            .register_service(create_backup(backup_service))
-            .is_some()
-        {
-            fatal!("failed to register backup service");
-        }
-
         let backup_endpoint = backup::Endpoint::new(
             servers.node.id(),
             engines.engine.clone(),
@@ -1228,6 +1246,20 @@ where
             self.causal_ts_provider.clone(),
             self.resource_manager.clone(),
         );
+        let env = backup::disk_snap::Env::new(
+            Arc::new(Mutex::new(self.router.clone())),
+            self.snap_br_rejector.take().unwrap(),
+            Some(backup_endpoint.io_pool_handle().clone()),
+        );
+        let backup_service = backup::Service::new(backup_scheduler, env);
+        if servers
+            .server
+            .register_service(create_backup(backup_service))
+            .is_some()
+        {
+            fatal!("failed to register backup service");
+        }
+
         self.cfg_controller.as_mut().unwrap().register(
             tikv::config::Module::Backup,
             Box::new(backup_endpoint.get_config_manager()),
@@ -1289,7 +1321,7 @@ where
         let mut engine_metrics = EngineMetricsManager::<RocksEngine, ER>::new(
             self.tablet_registry.clone().unwrap(),
             self.kv_statistics.clone(),
-            self.core.config.rocksdb.titan.enabled,
+            self.core.config.rocksdb.titan.enabled.map_or(false, |v| v),
             self.engines.as_ref().unwrap().engines.raft.clone(),
             self.raft_statistics.clone(),
         );
@@ -1472,6 +1504,28 @@ where
         } else {
             None
         }
+    }
+
+    fn init_cgroup_monitor(&mut self) {
+        let mut last_cpu_quota: f64 = 0.0;
+        let mut last_memory_limit: u64 = 0;
+        self.core.background_worker.spawn_interval_task(
+            DEFAULT_CGROUP_MONITOR_INTERVAL,
+            move || {
+                let cpu_quota = SysQuota::cpu_cores_quota_current();
+                if cpu_quota != last_cpu_quota {
+                    info!("cpu quota set to {:?}", cpu_quota);
+                    CPU_CORES_QUOTA_GAUGE.set(cpu_quota);
+                    last_cpu_quota = cpu_quota;
+                }
+                let memory_limit = SysQuota::memory_limit_in_bytes_current();
+                if memory_limit != last_memory_limit {
+                    info!("memory limit set to {:?}", memory_limit);
+                    MEMORY_LIMIT_GAUGE.set(memory_limit as f64);
+                    last_memory_limit = memory_limit;
+                }
+            },
+        );
     }
 
     fn run_server(&mut self, server_config: Arc<VersionTrack<ServerConfig>>) {

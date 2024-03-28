@@ -153,7 +153,7 @@ impl ApplyEvents {
     /// those keys.
     /// Note: the resolved ts cannot be advanced if there is no command, maybe
     /// we also need to update resolved_ts when flushing?
-    pub fn from_cmd_batch(cmd: CmdBatch, resolver: &mut TwoPhaseResolver) -> Self {
+    pub fn from_cmd_batch(cmd: CmdBatch, resolver: &mut TwoPhaseResolver) -> Result<Self> {
         let region_id = cmd.region_id;
         let mut result = vec![];
         for req in cmd
@@ -197,7 +197,9 @@ impl ApplyEvents {
                         }) {
                             Ok(lock) => {
                                 if utils::should_track_lock(&lock) {
-                                    resolver.track_lock(lock.ts, key)
+                                    resolver
+                                        .track_lock(lock.ts, key)
+                                        .map_err(|_| Error::OutOfQuota { region_id })?;
                                 }
                             }
                             Err(err) => err.report(format!("region id = {}", region_id)),
@@ -220,11 +222,11 @@ impl ApplyEvents {
             }
             result.push(item);
         }
-        Self {
+        Ok(Self {
             events: result,
             region_id,
             region_resolved_ts: resolver.resolved_ts().into_inner(),
-        }
+        })
     }
 
     pub fn push(&mut self, event: ApplyEvent) {
@@ -316,7 +318,7 @@ impl ApplyEvent {
 
 /// The shared version of router.
 #[derive(Debug, Clone)]
-pub struct Router(Arc<RouterInner>);
+pub struct Router(pub(crate) Arc<RouterInner>);
 
 pub struct Config {
     pub prefix: PathBuf,
@@ -407,7 +409,7 @@ impl RouterInner {
         }
     }
 
-    pub fn udpate_config(&self, config: &BackupStreamConfig) {
+    pub fn update_config(&self, config: &BackupStreamConfig) {
         *self.max_flush_interval.write().unwrap() = config.max_flush_interval.0;
         self.temp_file_size_limit
             .store(config.file_size_limit.0, Ordering::SeqCst);
@@ -567,15 +569,6 @@ impl RouterInner {
         let task_info = self.get_task_info(&task).await?;
         task_info.on_events(events).await?;
         let file_size_limit = self.temp_file_size_limit.load(Ordering::SeqCst);
-        #[cfg(features = "failpoints")]
-        {
-            let delayed = (|| {
-                fail::fail_point!("router_on_event_delay_ms", |v| {
-                    v.and_then(|v| v.parse::<u64>().ok()).unwrap_or(0)
-                })
-            })();
-            tokio::time::sleep(Duration::from_millis(delayed)).await;
-        }
 
         // When this event make the size of temporary files exceeds the size limit, make
         // a flush. Note that we only flush if the size is less than the limit before
@@ -947,7 +940,7 @@ impl StreamTaskInfo {
         #[allow(clippy::map_entry)]
         if !w.contains_key(&key) {
             let path = key.temp_file_name();
-            let val = Mutex::new(DataFile::new(path, &self.temp_file_pool).await?);
+            let val = Mutex::new(DataFile::new(path, &self.temp_file_pool)?);
             w.insert(key, val);
         }
 
@@ -1023,7 +1016,9 @@ impl StreamTaskInfo {
             .last_flush_time
             .swap(Box::into_raw(Box::new(Instant::now())), Ordering::SeqCst);
         // manual gc last instant
-        unsafe { Box::from_raw(ptr) };
+        unsafe {
+            let _ = Box::from_raw(ptr);
+        };
     }
 
     pub fn should_flush(&self, flush_interval: &Duration) -> bool {
@@ -1449,7 +1444,7 @@ impl MetadataInfo {
 impl DataFile {
     /// create and open a logfile at the path.
     /// Note: if a file with same name exists, would truncate it.
-    async fn new(local_path: impl AsRef<Path>, files: &Arc<TempFilePool>) -> Result<Self> {
+    fn new(local_path: impl AsRef<Path>, files: &Arc<TempFilePool>) -> Result<Self> {
         let sha256 = Hasher::new(MessageDigest::sha256())
             .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?;
         let inner = files.open_for_write(local_path.as_ref())?;
@@ -1601,7 +1596,7 @@ mod tests {
     use futures::AsyncReadExt;
     use kvproto::brpb::{Local, Noop, StorageBackend, StreamBackupTaskInfo};
     use online_config::{ConfigManager, OnlineConfig};
-    use tempdir::TempDir;
+    use tempfile::TempDir;
     use tikv_util::{
         codec::number::NumberEncoder,
         config::ReadableDuration,
@@ -2433,13 +2428,13 @@ mod tests {
 
         let file_name = format!("{}", uuid::Uuid::new_v4());
         let file_path = Path::new(&file_name);
-        let tempfile = TempDir::new("test_est_len_in_flush").unwrap();
+        let tempfile = TempDir::new().unwrap();
         let cfg = make_tempfiles_cfg(tempfile.path());
         let pool = Arc::new(TempFilePool::new(cfg).unwrap());
         let mut f = pool.open_for_write(file_path).unwrap();
         f.write_all(b"test-data").await?;
         f.done().await?;
-        let mut data_file = DataFile::new(&file_path, &pool).await.unwrap();
+        let mut data_file = DataFile::new(file_path, &pool).unwrap();
         let info = DataFileInfo::new();
 
         let mut meta = MetadataInfo::with_capacity(1);
@@ -2488,7 +2483,7 @@ mod tests {
         match &cmds[0] {
             Task::ChangeConfig(cfg) => {
                 assert!(matches!(cfg, _new_cfg));
-                router.udpate_config(cfg);
+                router.update_config(cfg);
                 assert_eq!(
                     router.max_flush_interval.rl().to_owned(),
                     _new_cfg.max_flush_interval.0
