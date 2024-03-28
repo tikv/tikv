@@ -13,7 +13,12 @@ use tikv_util::HandyRwLock;
 
 const CLEANUP_SST_MILLIS: u64 = 10;
 
-pub fn new_cluster(cfg: TikvConfig) -> (Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>, Context) {
+pub fn new_cluster(
+    cfg: TikvConfig,
+) -> (
+    Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
+    Context,
+) {
     let count = 1;
     let mut cluster = new_server_cluster(0, count);
     cluster.cfg = Config {

@@ -21,7 +21,9 @@ fn prepare_cluster() -> Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl
     cluster
 }
 
-fn configure_for_snapshot(cluster: &mut Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>) {
+fn configure_for_snapshot(
+    cluster: &mut Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>>,
+) {
     // Truncate the log quickly so that we can force sending snapshot.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(2);

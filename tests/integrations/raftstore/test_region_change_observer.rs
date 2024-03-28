@@ -40,7 +40,9 @@ impl RegionChangeObserver for TestObserver {
     }
 }
 
-fn test_region_change_observer_impl(mut cluster: Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>>) {
+fn test_region_change_observer_impl(
+    mut cluster: Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>>,
+) {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 

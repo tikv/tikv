@@ -198,7 +198,9 @@ fn find_peer_of_store(region: &Region, store_id: u64) -> Peer {
 
 /// Creates a cluster with only one region and store(1) is the leader of the
 /// region.
-fn new_cluster_for_deadlock_test(count: usize) -> Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>> {
+fn new_cluster_for_deadlock_test(
+    count: usize,
+) -> Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>> {
     let mut cluster = new_server_cluster(0, count);
     cluster.cfg.pessimistic_txn.wait_for_lock_timeout = ReadableDuration::millis(500);
     cluster.cfg.pessimistic_txn.pipelined = false;
