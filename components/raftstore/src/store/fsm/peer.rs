@@ -55,6 +55,7 @@ use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err, debug, defer, error, escape, info, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
+    slow_log,
     store::{find_peer, is_learner, region_on_same_stores},
     sys::{disk::DiskUsage, memory_usage_reaches_high_water},
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, SlowTimer},
