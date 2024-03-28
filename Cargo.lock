@@ -7799,8 +7799,3 @@ dependencies = [
  "cc",
  "libc 0.2.146",
 ]
-
-[[patch.unused]]
-name = "snappy-sys"
-version = "0.1.0"
-source = "git+https://github.com/busyjay/rust-snappy.git?branch=static-link#8c12738bad811397600455d6982aff754ea2ac44"
