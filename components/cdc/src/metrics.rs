@@ -96,7 +96,7 @@ lazy_static! {
     pub static ref CDC_SCAN_LONG_DURATION_REGIONS : IntGauge = register_int_gauge!(
         "tikv_cdc_scan_long_duration_region",
         "The number of regions that take a long time to scan"
-    ).unwrap()
+    ).unwrap();
     pub static ref CDC_SCAN_BYTES: IntCounter = register_int_counter!(
         "tikv_cdc_scan_bytes_total",
         "Total fetched bytes of CDC incremental scan"
