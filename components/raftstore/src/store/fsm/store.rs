@@ -61,7 +61,7 @@ use tikv_util::{
     store::{find_peer, region_on_stores},
     sys as sys_util,
     sys::disk::{get_disk_status, DiskUsage},
-    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, SlowTimer},
+    time::{monotonic_raw_now, Instant as TiInstant, SlowTimer},
     timer::SteadyTimer,
     warn,
     worker::{LazyWorker, Scheduler, Worker},
