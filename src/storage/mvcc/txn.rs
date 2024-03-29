@@ -519,8 +519,10 @@ pub(crate) mod tests {
 
         // Rollback lock
         must_rollback(&mut engine, k, 15, false);
-        // Rollbacks of optimistic transactions needn't be protected
-        must_get_rollback_protected(&mut engine, k, 15, false);
+        // Rollbacks of optimistic transactions need to be protected
+        // TODO: Re-check how the test can be better written after refinement of
+        // `must_rollback`'s       semantics.
+        must_get_rollback_protected(&mut engine, k, 15, true);
     }
 
     #[test]
@@ -869,16 +871,20 @@ pub(crate) mod tests {
     #[test]
     fn test_collapse_prev_rollback() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let (key, value) = (b"key", b"value");
+        let (key, pk, value) = (b"key", b"pk", b"value");
+
+        // Worked around the problem that `must_rollback` always protects primary lock
+        // by setting different PK.
+        // TODO: Cover primary when working on https://github.com/tikv/tikv/issues/16625
 
         // Add a Rollback whose start ts is 1.
-        must_prewrite_put(&mut engine, key, value, key, 1);
+        must_prewrite_put(&mut engine, key, value, pk, 1);
         must_rollback(&mut engine, key, 1, false);
         must_get_rollback_ts(&mut engine, key, 1);
 
         // Add a Rollback whose start ts is 2, the previous Rollback whose
         // start ts is 1 will be collapsed.
-        must_prewrite_put(&mut engine, key, value, key, 2);
+        must_prewrite_put(&mut engine, key, value, pk, 2);
         must_rollback(&mut engine, key, 2, false);
         must_get_none(&mut engine, key, 2);
         must_get_rollback_ts(&mut engine, key, 2);
