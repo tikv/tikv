@@ -5,6 +5,7 @@ use std::{
     collections::BTreeMap,
     fmt::{self, Debug},
     ops::Deref,
+    result,
     sync::Arc,
 };
 
@@ -12,9 +13,9 @@ use bytes::Bytes;
 use crossbeam::epoch::{self, default_collector, Guard};
 use engine_rocks::{raw::SliceTransform, util::FixedSuffixSliceTransform, RocksEngine};
 use engine_traits::{
-    CacheRange, CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, KvEngine, Peekable,
-    RangeCacheEngine, ReadOptions, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT, CF_LOCK,
-    CF_WRITE, DATA_CFS,
+    CacheRange, CfNamesExt, DbVector, Error, FailedReason, IterOptions, Iterable, Iterator,
+    KvEngine, Peekable, RangeCacheEngine, ReadOptions, Result, Snapshot, SnapshotMiscExt,
+    CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
 use skiplist_rs::{base::OwnedIter, SkipList};
@@ -28,7 +29,7 @@ use crate::{
         InternalBytes, InternalKey, ValueType,
     },
     memory_controller::MemoryController,
-    range_manager::RangeManager,
+    range_manager::{LoadFailedReason, RangeCacheStatus, RangeManager},
     write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
     EngineConfig,
 };
@@ -272,6 +273,18 @@ impl RangeCacheMemoryEngine {
         core.range_manager.new_range(range);
     }
 
+    /// Load the range in the in-memory engine.
+    // This method only push the range in the `pending_range` where sometime
+    // later in `prepare_for_apply`, the range will be scheduled to load snapshot
+    // data into engine.
+    pub fn load_range(&self, range: CacheRange) -> result::Result<(), LoadFailedReason> {
+        let mut core = self.core.write();
+        core.mut_range_manager().load_range(range)
+    }
+
+    /// Evict a range from the in-memory engine. After this call, the range will
+    /// not be readable, but the data of the range may not be deleted
+    /// immediately due to some ongoing snapshots.
     pub fn evict_range(&self, range: &CacheRange) {
         let mut core = self.core.write();
         if core.range_manager.evict_range(range) {
@@ -292,72 +305,58 @@ impl RangeCacheMemoryEngine {
 
     // It handles the pending range and check whether to buffer write for this
     // range.
-    //
-    // Return `(range_in_cache, pending_range_in_loading)`, see comments in
-    // `RangeCacheWriteBatch` for the detail of them.
-    //
-    // In addition, the region with range equals to the range in the `pending_range`
-    // may have been splited, and we should split the range accrodingly.
-    pub(crate) fn prepare_for_apply(&self, range: &CacheRange) -> (bool, bool) {
+    pub(crate) fn prepare_for_apply(&self, range: &CacheRange) -> RangeCacheStatus {
         let core = self.core.upgradable_read();
         let range_manager = core.range_manager();
-        let mut pending_range_in_loading = range_manager.pending_ranges_in_loading_contains(range);
-        let range_in_cache = range_manager.contains_range(range);
-        if range_in_cache || pending_range_in_loading {
-            return (range_in_cache, pending_range_in_loading);
+        if range_manager.pending_ranges_in_loading_contains(range) {
+            return RangeCacheStatus::Loading;
+        }
+        if range_manager.contains_range(range) {
+            return RangeCacheStatus::Cached;
         }
 
-        // check whether the range is in pending_range and also split it if the range
-        // has been splitted
-        let mut index = None;
-        let mut left_splitted_range = None;
-        let mut right_splitted_range = None;
-        for (i, r) in range_manager.pending_ranges.iter().enumerate() {
-            if r == range {
-                index = Some(i);
-                break;
-            } else if r.contains_range(range) {
-                index = Some(i);
-                // It means the loading region has been splitted. We split the
-                // range accordingly.
-                (left_splitted_range, right_splitted_range) = r.split_off(range);
-                break;
-            } else if range.contains_range(r) {
-                // todo: it means merge happens
-                unimplemented!()
-            }
-        }
-        if index.is_none() {
-            return (range_in_cache, pending_range_in_loading);
-        }
-
-        let mut core = RwLockUpgradableReadGuard::upgrade(core);
-        let range_manager = core.mut_range_manager();
-        range_manager.pending_ranges.swap_remove(index.unwrap());
-        if let Some(left) = left_splitted_range {
-            range_manager.pending_ranges.push(left);
-        }
-        if let Some(right) = right_splitted_range {
-            range_manager.pending_ranges.push(right);
-        }
-
-        let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
-        range_manager
-            .pending_ranges_loading_data
-            .push_back((range.clone(), rocks_snap, false));
-
-        if let Err(e) = self
-            .bg_worker_manager()
-            .schedule_task(BackgroundTask::LoadRange)
+        // check whether the range is in pending_range and we can schedule load task if
+        // it is
+        if let Some((idx, pending_range)) = range_manager
+            .pending_ranges
+            .iter()
+            .enumerate()
+            .find_map(|(idx, r)| {
+                if r.contains_range(range) {
+                    Some((idx, r.clone()))
+                } else if range.contains_range(r) {
+                    // todo(SpadeA): merge occurs
+                    unimplemented!()
+                } else {
+                    None
+                }
+            })
         {
-            error!(
-                "schedule range load failed";
-                "err" => ?e,
-            );
-            assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+            let mut core = RwLockUpgradableReadGuard::upgrade(core);
+            let range_manager = core.mut_range_manager();
+            range_manager.pending_ranges.swap_remove(idx);
+            let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
+            // Here, we use the range in `pending_ranges` rather than the parameter range as
+            // the region may be splitted.
+            range_manager
+                .pending_ranges_loading_data
+                .push_back((pending_range, rocks_snap, false));
+            if let Err(e) = self
+                .bg_worker_manager()
+                .schedule_task(BackgroundTask::LoadRange)
+            {
+                error!(
+                    "schedule range load failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+            }
+            // We have scheduled the range to loading data, so the writes of the range
+            // should be buffered
+            return RangeCacheStatus::Loading;
         }
-        pending_range_in_loading = true;
-        (range_in_cache, pending_range_in_loading)
+
+        RangeCacheStatus::NotInCache
     }
 
     // The writes in `handle_pending_range_in_loading_buffer` indicating the ranges
@@ -416,7 +415,12 @@ impl Debug for RangeCacheMemoryEngine {
 impl RangeCacheEngine for RangeCacheMemoryEngine {
     type Snapshot = RangeCacheSnapshot;
 
-    fn snapshot(&self, range: CacheRange, read_ts: u64, seq_num: u64) -> Option<Self::Snapshot> {
+    fn snapshot(
+        &self,
+        range: CacheRange,
+        read_ts: u64,
+        seq_num: u64,
+    ) -> result::Result<Self::Snapshot, FailedReason> {
         RangeCacheSnapshot::new(self.clone(), range, read_ts, seq_num)
     }
 
@@ -751,17 +755,14 @@ impl RangeCacheSnapshot {
         range: CacheRange,
         read_ts: u64,
         seq_num: u64,
-    ) -> Option<Self> {
+    ) -> result::Result<Self, FailedReason> {
         let mut core = engine.core.write();
-        if let Some(range_id) = core.range_manager.range_snapshot(&range, read_ts) {
-            return Some(RangeCacheSnapshot {
-                snapshot_meta: RagneCacheSnapshotMeta::new(range_id, range, read_ts, seq_num),
-                skiplist_engine: core.engine.clone(),
-                engine: engine.clone(),
-            });
-        }
-
-        None
+        let range_id = core.range_manager.range_snapshot(&range, read_ts)?;
+        Ok(RangeCacheSnapshot {
+            snapshot_meta: RagneCacheSnapshotMeta::new(range_id, range, read_ts, seq_num),
+            skiplist_engine: core.engine.clone(),
+            engine: engine.clone(),
+        })
     }
 }
 
@@ -921,7 +922,8 @@ mod tests {
     use bytes::{BufMut, Bytes};
     use crossbeam::epoch;
     use engine_traits::{
-        CacheRange, IterOptions, Iterable, Iterator, Peekable, RangeCacheEngine, ReadOptions,
+        CacheRange, FailedReason, IterOptions, Iterable, Iterator, Peekable, RangeCacheEngine,
+        ReadOptions,
     };
     use skiplist_rs::SkipList;
 
@@ -969,8 +971,6 @@ mod tests {
             }
         };
 
-        assert!(engine.snapshot(range.clone(), 5, u64::MAX).is_none());
-
         {
             let mut core = engine.core.write();
             core.range_manager.set_range_readable(&range, true);
@@ -983,7 +983,10 @@ mod tests {
             assert!(!core.range_manager.set_safe_point(&t_range, 5));
             assert!(core.range_manager.set_safe_point(&range, 5));
         }
-        assert!(engine.snapshot(range.clone(), 5, u64::MAX).is_none());
+        assert_eq!(
+            engine.snapshot(range.clone(), 5, u64::MAX).unwrap_err(),
+            FailedReason::TooOldRead
+        );
         let s2 = engine.snapshot(range.clone(), 10, u64::MAX).unwrap();
 
         verify_snapshot_count(5, 1);
@@ -1994,8 +1997,14 @@ mod tests {
         }
 
         engine.evict_range(&evict_range);
-        assert!(engine.snapshot(range.clone(), 10, 200).is_none());
-        assert!(engine.snapshot(evict_range.clone(), 10, 200).is_none());
+        assert_eq!(
+            engine.snapshot(range.clone(), 10, 200).unwrap_err(),
+            FailedReason::NotCached
+        );
+        assert_eq!(
+            engine.snapshot(evict_range.clone(), 10, 200).unwrap_err(),
+            FailedReason::NotCached
+        );
 
         let r_left = CacheRange::new(construct_user_key(0), construct_user_key(10));
         let r_right = CacheRange::new(construct_user_key(20), construct_user_key(30));

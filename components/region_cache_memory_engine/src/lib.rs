@@ -16,6 +16,7 @@ use tikv_util::config::ReadableSize;
 pub use write_batch::RangeCacheWriteBatch;
 mod memory_controller;
 pub use background::{BackgroundRunner, GcTask};
+mod metrics;
 
 pub struct EngineConfig {
     gc_interval: Duration,

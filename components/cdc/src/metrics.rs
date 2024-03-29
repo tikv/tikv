@@ -93,6 +93,10 @@ lazy_static! {
         "Bucketed histogram of cdc async scan sink time duration",
     )
     .unwrap();
+    pub static ref CDC_SCAN_LONG_DURATION_REGIONS : IntGauge = register_int_gauge!(
+        "tikv_cdc_scan_long_duration_region",
+        "The number of regions that take a long time to scan"
+    ).unwrap();
     pub static ref CDC_SCAN_BYTES: IntCounter = register_int_counter!(
         "tikv_cdc_scan_bytes_total",
         "Total fetched bytes of CDC incremental scan"
