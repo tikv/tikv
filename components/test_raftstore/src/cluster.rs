@@ -192,7 +192,10 @@ pub struct Cluster<EK: KvEngineWithRocks, T: Simulator<EK>> {
     pub pd_client: Arc<TestPdClient>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
 
-    range_cache_engine_enabled: bool,
+    // When this is set, the `HybridEngineImpl` will be used as the underlying KvEngine. In
+    // addition, it atomaticaly load the whole range when start. When we want to do something
+    // specific, for example, only load ranges of some regions, we may not set this.
+    range_cache_engine_enabled_with_whole_range: bool,
 }
 
 impl<EK, T> Cluster<EK, T>
@@ -233,7 +236,7 @@ where
             resource_manager: Some(Arc::new(ResourceGroupManager::default())),
             kv_statistics: vec![],
             raft_statistics: vec![],
-            range_cache_engine_enabled: false,
+            range_cache_engine_enabled_with_whole_range: false,
         }
     }
 
@@ -358,7 +361,7 @@ where
         self.create_engines();
         self.bootstrap_region().unwrap();
         self.start().unwrap();
-        if self.range_cache_engine_enabled {
+        if self.range_cache_engine_enabled_with_whole_range {
             self.engines
                 .iter()
                 .for_each(|(_, engines)| engines.kv.cache_all());
@@ -1004,7 +1007,7 @@ where
     }
 
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        if !self.range_cache_engine_enabled {
+        if !self.range_cache_engine_enabled_with_whole_range {
             self.get_impl(CF_DEFAULT, key, false)
         } else {
             let ctx = SnapshotContext {
@@ -1019,7 +1022,7 @@ where
     }
 
     pub fn get_cf(&mut self, cf: &str, key: &[u8]) -> Option<Vec<u8>> {
-        if !self.range_cache_engine_enabled {
+        if !self.range_cache_engine_enabled_with_whole_range {
             self.get_impl(cf, key, false)
         } else {
             let ctx = SnapshotContext {
@@ -1034,7 +1037,7 @@ where
     }
 
     pub fn must_get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        if !self.range_cache_engine_enabled {
+        if !self.range_cache_engine_enabled_with_whole_range {
             self.get_impl(CF_DEFAULT, key, true)
         } else {
             let ctx = SnapshotContext {
@@ -1084,12 +1087,17 @@ where
         read_quorum: bool,
         snap_ctx: SnapshotContext,
     ) -> Option<Vec<u8>> {
-        fail::remove("on_range_cache_get_value");
-        let (tx, rx) = sync_channel(1);
-        fail::cfg_callback("on_range_cache_get_value", move || {
-            tx.send(true).unwrap();
-        })
-        .unwrap();
+        let rx = if self.range_cache_engine_enabled_with_whole_range {
+            fail::remove("on_range_cache_get_value");
+            let (tx, rx) = sync_channel(1);
+            fail::cfg_callback("on_range_cache_get_value", move || {
+                tx.send(true).unwrap();
+            })
+            .unwrap();
+            Some(rx)
+        } else {
+            None
+        };
 
         let mut resp = self.request_with_snap_ctx(
             key,
@@ -1104,12 +1112,16 @@ where
         assert_eq!(resp.get_responses().len(), 1);
         assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
         let res = if resp.get_responses()[0].has_get() {
-            rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            if let Some(rx) = rx {
+                rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
             Some(resp.mut_responses()[0].mut_get().take_value())
         } else {
             None
         };
-        fail::remove("on_range_cache_get_value");
+        if self.range_cache_engine_enabled_with_whole_range {
+            fail::remove("on_range_cache_get_value");
+        }
         res
     }
 
@@ -2112,8 +2124,8 @@ where
         Ok(())
     }
 
-    pub fn set_range_cache_engine_enabled(&mut self, v: bool) {
-        self.range_cache_engine_enabled = v;
+    pub fn range_cache_engine_enabled_with_whole_range(&mut self, v: bool) {
+        self.range_cache_engine_enabled_with_whole_range = v;
     }
 }
 

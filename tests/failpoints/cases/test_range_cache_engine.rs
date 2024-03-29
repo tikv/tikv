@@ -7,15 +7,15 @@ use engine_traits::{CacheRange, RangeCacheEngine, SnapshotContext, CF_DEFAULT, C
 use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use test_raftstore::{
-    make_cb, new_node_cluster_with_hybrid_engine, new_put_cmd, new_request, Cluster,
-    HybridEngineImpl, NodeCluster, Simulator,
+    make_cb, new_node_cluster_with_hybrid_engine_with_no_range_cache, new_put_cmd, new_request,
+    Cluster, HybridEngineImpl, NodeCluster, Simulator,
 };
 use tikv_util::HandyRwLock;
 use txn_types::Key;
 
 #[test]
 fn test_basic_put_get() {
-    let mut cluster = new_node_cluster_with_hybrid_engine(0, 1);
+    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
     cluster.run();
 
@@ -49,7 +49,7 @@ fn test_basic_put_get() {
 #[test]
 fn test_load() {
     let test_load = |concurrent_with_split: bool| {
-        let mut cluster = new_node_cluster_with_hybrid_engine(0, 1);
+        let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
         cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
         cluster.run();
 
@@ -159,7 +159,7 @@ fn test_load() {
 
 #[test]
 fn test_write_batch_cache_during_load() {
-    let mut cluster = new_node_cluster_with_hybrid_engine(0, 1);
+    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     cluster.run();
 
@@ -264,7 +264,7 @@ fn test_write_batch_cache_during_load() {
 // It tests that after we schedule the pending range to load snapshot, the range
 // splits.
 fn test_load_with_split() {
-    let mut cluster = new_node_cluster_with_hybrid_engine(0, 1);
+    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     cluster.run();
 
@@ -375,7 +375,7 @@ fn make_write_req(
 // to engine, the range has finished the loading, became a normal range, and
 // even been evicted.
 fn test_load_with_eviction() {
-    let mut cluster = new_node_cluster_with_hybrid_engine(0, 1);
+    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
     cluster.run();
     // load range
     {
