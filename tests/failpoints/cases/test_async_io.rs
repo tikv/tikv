@@ -17,7 +17,7 @@ use tikv_util::HandyRwLock;
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_async_io_commit_without_leader_persist() {
     let mut cluster = new_cluster(0, 3);
-    cluster.cfg.raft_store.cmd_batch_concurrent_ready_max_count = 0;
+    cluster.cfg.raft_store.cmd_batch_concurrent_ready_max_count = Some(0);
     cluster.cfg.raft_store.store_io_pool_size = 2;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -52,9 +52,9 @@ fn test_async_io_commit_without_leader_persist() {
 #[test]
 fn test_async_io_apply_without_leader_persist() {
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.cmd_batch_concurrent_ready_max_count = 0;
+    cluster.cfg.raft_store.cmd_batch_concurrent_ready_max_count = Some(0);
     cluster.cfg.raft_store.store_io_pool_size = 1;
-    cluster.cfg.raft_store.apply_unpersisted_log_limit = 10000;
+    cluster.cfg.raft_store.max_apply_unpersisted_log_limit = 10000;
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 

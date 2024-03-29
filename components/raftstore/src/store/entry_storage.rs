@@ -480,7 +480,7 @@ fn validate_states<ER: RaftEngine>(
         commit_index = recorded_commit_index;
     }
     if apply_state.get_applied_index() > commit_index {
-        info!("applied index is bigger than recorded commit index"; "apply" => apply_state.get_applied_index(), "commit" => commit_index);
+        info!("applied index is larger than recorded commit index"; "apply" => apply_state.get_applied_index(), "commit" => commit_index);
     }
     // Invariant: max(commit index, recorded commit index) <= last index
     if commit_index > last_index {

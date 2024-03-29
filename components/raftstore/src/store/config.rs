@@ -89,7 +89,7 @@ pub struct Config {
     pub raft_log_gc_size_limit: Option<ReadableSize>,
     /// the maximum raft log numbers that applied_index can be ahead of
     /// persisted_index.
-    pub apply_unpersisted_log_limit: u64,
+    pub max_apply_unpersisted_log_limit: u64,
     // follower will reject this follower request to avoid falling behind leader too far,
     // when the read index is ahead of the sum between the applied index and
     // follower_read_max_log_gap,
@@ -321,7 +321,11 @@ pub struct Config {
     /// be proposed until the previous ready has been persisted.
     /// If `cmd_batch` is 0, this config will have no effect.
     /// If it is 0, it means no limit.
-    pub cmd_batch_concurrent_ready_max_count: usize,
+    /// The default value depends on the value of
+    /// `max_apply_unpersisted_log_limit`,
+    /// if max_apply_unpersisted_log_limit = 0, the default value is 1,
+    /// if max_apply_unpersisted_log_limit > 0, the default value is 128.
+    pub cmd_batch_concurrent_ready_max_count: Option<usize>,
 
     /// When the size of raft db writebatch exceeds this value, write will be
     /// triggered.
@@ -445,7 +449,7 @@ impl Default for Config {
             raft_log_gc_threshold: 50,
             raft_log_gc_count_limit: None,
             raft_log_gc_size_limit: None,
-            apply_unpersisted_log_limit: 0,
+            max_apply_unpersisted_log_limit: 0,
             follower_read_max_log_gap: 100,
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),
@@ -514,7 +518,7 @@ impl Default for Config {
             perf_level: PerfLevel::Uninitialized,
             evict_cache_on_memory_ratio: 0.1,
             cmd_batch: true,
-            cmd_batch_concurrent_ready_max_count: 1,
+            cmd_batch_concurrent_ready_max_count: None,
             raft_write_size_limit: ReadableSize::mb(1),
             waterfall_metrics: true,
             io_reschedule_concurrent_max_count: 4,
@@ -667,6 +671,17 @@ impl Config {
 
         if self.raft_log_gc_count_limit.is_none() && raft_kv_v2 {
             self.raft_log_gc_count_limit = Some(10000);
+        }
+
+        if self.cmd_batch_concurrent_ready_max_count.is_none() {
+            let max_count = if self.max_apply_unpersisted_log_limit == 0 {
+                1
+            } else {
+                // set a relative large value to avoid the batch wait block raft log propose
+                // when raft disk io is slow.
+                128
+            };
+            self.cmd_batch_concurrent_ready_max_count = Some(max_count);
         }
     }
 
@@ -1182,7 +1197,7 @@ impl Config {
             .set((self.cmd_batch as i32).into());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["cmd_batch_concurrent_ready_max_count"])
-            .set(self.cmd_batch_concurrent_ready_max_count as f64);
+            .set(self.cmd_batch_concurrent_ready_max_count.unwrap_or(0) as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_write_size_limit"])
             .set(self.raft_write_size_limit.0 as f64);

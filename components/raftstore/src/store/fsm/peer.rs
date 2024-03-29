@@ -715,7 +715,11 @@ where
 
     #[inline]
     fn on_loop_finished(&mut self) {
-        let ready_concurrency = self.ctx.cfg.cmd_batch_concurrent_ready_max_count;
+        let ready_concurrency = self
+            .ctx
+            .cfg
+            .cmd_batch_concurrent_ready_max_count
+            .unwrap_or(0);
         let should_propose = self.ctx.sync_write_worker.is_some()
             || ready_concurrency == 0
             || self.fsm.peer.unpersisted_ready_len() < ready_concurrency;
