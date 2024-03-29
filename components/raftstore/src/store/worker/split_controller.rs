@@ -2026,7 +2026,7 @@ mod tests {
         b.iter(|| {
             let mut hub = AutoSplitController::default();
             for s in other_qps_stats.clone() {
-                read_stats_sender.try_send(s).unwrap();
+                read_stats_sender.send(s).unwrap();
             }
             hub.flush(
                 &mut ctx,
@@ -2085,8 +2085,8 @@ mod tests {
             let read_stats = ReadStats::default();
             let cpu_stats = Arc::new(RawRecords::default());
             for _ in 0..len {
-                read_stats_sender.send(read_stats.clone()).unwrap();
-                cpu_stats_sender.send(cpu_stats.clone()).unwrap();
+                read_stats_sender.try_send(read_stats.clone()).unwrap();
+                cpu_stats_sender.try_send(cpu_stats.clone()).unwrap();
             }
             // If channel is full, should return error.
             assert!(read_stats_sender.try_send(read_stats.clone()).is_err());
