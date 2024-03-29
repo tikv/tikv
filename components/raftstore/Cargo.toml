@@ -80,6 +80,8 @@ slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debu
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 smallvec = "1.4"
 sst_importer = { workspace = true }
+strum = { version = "0.20", features = ["derive"] }
+strum_macros = "0.24"
 tempfile = "3.0"
 thiserror = "1.0"
 tidb_query_datatype = { workspace = true }
