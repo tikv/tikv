@@ -2,11 +2,12 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
+    result,
     sync::Arc,
 };
 
 use engine_rocks::RocksSnapshot;
-use engine_traits::CacheRange;
+use engine_traits::{CacheRange, FailedReason};
 
 use crate::engine::{RagneCacheSnapshotMeta, SnapshotList};
 
@@ -84,16 +85,29 @@ pub struct RangeManager {
     // ranges that are cached now
     ranges: BTreeMap<CacheRange, RangeMeta>,
 
-    // `pending_ranges` contains ranges that will be loaded into the memory engine. At
-    // sometime in the apply thread, the pending ranges, coupled with rocksdb snapshot, will be
-    // poped and pushed into `ranges_loading_snapshot`. Then the data in the snapshot
-    // of the given ranges will be loaded in the memory engine in the background worker.
-    // When the snapshot load is finished, `ranges_loading_cached_write` will take over it, which
-    // will handle data that is written after the acquire of the snapshot. After it, the range load
-    // is finished.
+    // `pending_ranges` contains ranges that will be loaded into the memory engine. To guarantee
+    // the completeness of the data, we also need to write the data that is applied after the
+    // snapshot is acquired. And to ensure the data is written by order, we should cache the data
+    // that is applied after the snapshot acquired and only consume them when snapshot load
+    // finishes.
+    // So, at sometime in the apply thread, the pending ranges, coupled with rocksdb
+    // snapshot, will be poped and pushed into `pending_ranges_loading_data` (data here means the
+    // data in snapshot and in further applied write). Then the data in the snapshot of the
+    // given ranges will be loaded in the memory engine in the background worker. When the
+    // snapshot load is finished, we begin to consume the write batch that is cached after the
+    // snapshot is acquired.
+    //
+    // Note: as we will release lock during the consuming of the cached write batch, there could be
+    // further write batch being cached. We must ensure the cached write batch is empty at the time
+    // the range becoming accessable range.
+    //
+    // Note: the region with range equaling to the range in the `pending_range` may have been
+    // split. This is fine, we just let the first child region that calls the prepare_for_apply
+    // to schedule it. We should cache writes for all child regions, and the load task
+    // completes as long as the snapshot has been loaded and the cached write batches for this
+    // super range have all been consumed.
     pub(crate) pending_ranges: Vec<CacheRange>,
-    pub(crate) ranges_loading_snapshot: VecDeque<(CacheRange, Arc<RocksSnapshot>)>,
-    pub(crate) ranges_loading_cached_write: Vec<CacheRange>,
+    pub(crate) pending_ranges_loading_data: VecDeque<(CacheRange, Arc<RocksSnapshot>)>,
 
     ranges_in_gc: BTreeSet<CacheRange>,
 }
@@ -134,30 +148,54 @@ impl RangeManager {
         self.ranges.keys().any(|r| r.contains_key(key))
     }
 
+    pub fn get_range_for_key(&self, key: &[u8]) -> Option<CacheRange> {
+        self.ranges.keys().find_map(|r| {
+            if r.contains_key(key) {
+                Some(r.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn contains_range(&self, range: &CacheRange) -> bool {
+        self.ranges.keys().any(|r| r.contains_range(range))
+    }
+
+    pub fn pending_ranges_in_loading_contains(&self, range: &CacheRange) -> bool {
+        self.pending_ranges_loading_data
+            .iter()
+            .any(|(r, _)| r.contains_range(range))
+    }
+
     pub(crate) fn overlap_with_range(&self, range: &CacheRange) -> bool {
         self.ranges.keys().any(|r| r.overlaps(range))
     }
 
     // Acquire a snapshot of the `range` with `read_ts`. If the range is not
     // accessable, None will be returned. Otherwise, the range id will be returned.
-    pub(crate) fn range_snapshot(&mut self, range: &CacheRange, read_ts: u64) -> Option<u64> {
+    pub(crate) fn range_snapshot(
+        &mut self,
+        range: &CacheRange,
+        read_ts: u64,
+    ) -> result::Result<u64, FailedReason> {
         let Some(range_key) = self
             .ranges
             .keys()
             .find(|&r| r.contains_range(range))
             .cloned()
         else {
-            return None;
+            return Err(FailedReason::NotCached);
         };
         let meta = self.ranges.get_mut(&range_key).unwrap();
 
         if read_ts <= meta.safe_point || !meta.can_read {
             // todo(SpadeA): add metrics for it
-            return None;
+            return Err(FailedReason::TooOldRead);
         }
 
         meta.range_snapshot_list.new_snapshot(read_ts);
-        Some(meta.id)
+        Ok(meta.id)
     }
 
     // If the snapshot is the last one in the snapshot list of one cache range in
@@ -248,16 +286,22 @@ impl RangeManager {
             .any(|r| r.overlaps(evict_range))
     }
 
-    pub fn on_delete_range(&mut self, range: &CacheRange) {
-        self.evicted_ranges.remove(range);
+    pub fn on_delete_ranges(&mut self, ranges: &[CacheRange]) {
+        for r in ranges {
+            self.evicted_ranges.remove(r);
+        }
+    }
+
+    pub fn has_ranges_in_gc(&self) -> bool {
+        !self.ranges_in_gc.is_empty()
     }
 
     pub fn set_ranges_in_gc(&mut self, ranges_in_gc: BTreeSet<CacheRange>) {
         self.ranges_in_gc = ranges_in_gc;
     }
 
-    pub fn clear_ranges_in_gc(&mut self) {
-        self.ranges_in_gc = BTreeSet::default();
+    pub fn on_gc_finished(&mut self, range: BTreeSet<CacheRange>) {
+        assert_eq!(range, std::mem::take(&mut self.ranges_in_gc));
     }
 
     pub fn load_range(&mut self, cache_range: CacheRange) -> Result<(), LoadFailedReason> {
@@ -274,8 +318,9 @@ impl RangeManager {
         Ok(())
     }
 
-    pub(crate) fn has_range_to_cache_write(&self) -> bool {
-        !self.ranges_loading_snapshot.is_empty() || !self.ranges_loading_cached_write.is_empty()
+    #[cfg(test)]
+    pub(crate) fn evicted_ranges(&self) -> &BTreeSet<CacheRange> {
+        &self.evicted_ranges
     }
 }
 
@@ -286,11 +331,17 @@ pub enum LoadFailedReason {
     Evicted,
 }
 
+pub enum RangeCacheStatus {
+    NotInCache,
+    Cached,
+    Loading,
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
-    use engine_traits::CacheRange;
+    use engine_traits::{CacheRange, FailedReason};
 
     use super::RangeManager;
     use crate::range_manager::LoadFailedReason;
@@ -303,13 +354,22 @@ mod tests {
         range_mgr.new_range(r1.clone());
         range_mgr.set_range_readable(&r1, true);
         range_mgr.set_safe_point(&r1, 5);
-        assert!(range_mgr.range_snapshot(&r1, 5).is_none());
-        assert!(range_mgr.range_snapshot(&r1, 8).is_some());
-        assert!(range_mgr.range_snapshot(&r1, 10).is_some());
+        assert_eq!(
+            range_mgr.range_snapshot(&r1, 5).unwrap_err(),
+            FailedReason::TooOldRead
+        );
+        range_mgr.range_snapshot(&r1, 8).unwrap();
+        range_mgr.range_snapshot(&r1, 10).unwrap();
         let tmp_r = CacheRange::new(b"k08".to_vec(), b"k15".to_vec());
-        assert!(range_mgr.range_snapshot(&tmp_r, 8).is_none());
+        assert_eq!(
+            range_mgr.range_snapshot(&tmp_r, 8).unwrap_err(),
+            FailedReason::NotCached
+        );
         let tmp_r = CacheRange::new(b"k10".to_vec(), b"k11".to_vec());
-        assert!(range_mgr.range_snapshot(&tmp_r, 8).is_none());
+        assert_eq!(
+            range_mgr.range_snapshot(&tmp_r, 8).unwrap_err(),
+            FailedReason::NotCached
+        );
 
         let r_evict = CacheRange::new(b"k03".to_vec(), b"k06".to_vec());
         let r_left = CacheRange::new(b"k00".to_vec(), b"k03".to_vec());
@@ -324,7 +384,7 @@ mod tests {
         assert!(meta2.can_read && meta3.can_read);
 
         // evict a range with accurate match
-        range_mgr.range_snapshot(&r_left, 10);
+        let _ = range_mgr.range_snapshot(&r_left, 10);
         range_mgr.evict_range(&r_left);
         assert!(range_mgr.historical_ranges.get(&r_left).is_some());
         assert!(range_mgr.evicted_ranges.contains(&r_left));
