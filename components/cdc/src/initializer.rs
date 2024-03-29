@@ -1,5 +1,11 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use api_version::ApiV2;
 use crossbeam::atomic::AtomicCell;
@@ -266,15 +272,20 @@ impl<E: KvEngine> Initializer<E> {
             DownstreamState::Initializing | DownstreamState::Stopped
         ));
 
-        let mut scan_long_time = false;
+        let scan_long_time = AtomicBool::new(false);
+
+        defer!(if scan_long_time.load(Ordering::SeqCst) {
+            CDC_SCAN_LONG_DURATION_REGIONS.dec();
+        });
 
         while !done {
             // Add metrics to observe long time incremental scan region count
-            if !scan_long_time && start.saturating_elapsed() > Duration::from_secs(60) {
+            if !scan_long_time.load(Ordering::SeqCst)
+                && start.saturating_elapsed() > Duration::from_secs(60)
+            {
                 CDC_SCAN_LONG_DURATION_REGIONS.inc();
-                defer!(CDC_SCAN_LONG_DURATION_REGIONS.dec());
 
-                scan_long_time = true;
+                scan_long_time.store(true, Ordering::SeqCst);
                 warn!("cdc incremental scan takes too long"; "region_id" => region_id, "conn_id" => ?self.conn_id, 
                       "downstream_id" => ?self.downstream_id, "takes" => ?start.saturating_elapsed());
             }
