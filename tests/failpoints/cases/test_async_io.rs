@@ -63,8 +63,8 @@ fn test_async_io_apply_without_leader_persist() {
     let region = pd_client.get_region(b"k1").unwrap();
     let peer_1 = find_peer(&region, 1).cloned().unwrap();
 
-    cluster.must_put(b"k1", b"v1");
     cluster.must_transfer_leader(region.get_id(), peer_1);
+    cluster.must_put(b"k1", b"v1");
 
     let raft_before_save_on_store_1_fp = "raft_before_persist_on_store_1";
     // skip persist to simulate raft log persist lag but not block node restart.

@@ -2375,7 +2375,7 @@ where
             "peer_id" => self.peer_id(),
         );
 
-        self.disable_apply_unpersisted_log(self.raft_group.raft.raft_log.last_index() + 1);
+        self.disable_apply_unpersisted_log(self.raft_group.raft.raft_log.last_index());
 
         self.read_progress
             .update_leader_info(leader_id, term, self.region());
