@@ -1296,10 +1296,10 @@ mod tests {
         let (read_stats_sender, read_stats_receiver) = mpsc::sync_channel(len);
         let (cpu_stats_sender, cpu_stats_receiver) = mpsc::sync_channel(len);
         for s in cpu_stats {
-            cpu_stats_sender.send(s).unwrap();
+            cpu_stats_sender.try_send(s).unwrap();
         }
         for s in read_stats {
-            read_stats_sender.send(s).unwrap();
+            read_stats_sender.try_send(s).unwrap();
         }
         (
             AutoSplitControllerContext::new(len),
@@ -2083,9 +2083,12 @@ mod tests {
             let read_stats = ReadStats::default();
             let cpu_stats = Arc::new(RawRecords::default());
             for _ in 0..len {
-                read_stats_sender.send(read_stats.clone()).unwrap();
-                cpu_stats_sender.send(cpu_stats.clone()).unwrap();
+                read_stats_sender.try_send(read_stats.clone()).unwrap();
+                cpu_stats_sender.try_send(cpu_stats.clone()).unwrap();
             }
+            // If channel is full, should return error.
+            assert!(read_stats_sender.try_send(read_stats.clone()).is_err());
+            assert!(cpu_stats_sender.try_send(cpu_stats.clone()).is_err());
             loop {
                 let batch = ctx.batch_recv_read_stats(&read_stats_receiver);
                 if batch.is_empty() {

@@ -745,8 +745,8 @@ where
     #[inline]
     pub fn maybe_send_read_stats(&self, read_stats: ReadStats) {
         if let Some(sender) = &self.read_stats_sender {
-            if sender.send(read_stats).is_err() {
-                debug!("send read_stats failed, are we shutting down?")
+            if sender.try_send(read_stats).is_err() {
+                debug!("send read_stats failed, are we shutting down or channel is full?")
             }
         }
     }
@@ -754,8 +754,8 @@ where
     #[inline]
     pub fn maybe_send_cpu_stats(&self, cpu_stats: &Arc<RawRecords>) {
         if let Some(sender) = &self.cpu_stats_sender {
-            if sender.send(cpu_stats.clone()).is_err() {
-                debug!("send region cpu info failed, are we shutting down?")
+            if sender.try_send(cpu_stats.clone()).is_err() {
+                debug!("send region cpu info failed, are we shutting down or channel is full?")
             }
         }
     }
