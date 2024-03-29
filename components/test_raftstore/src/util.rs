@@ -4,7 +4,10 @@ use std::{
     fmt::Write,
     path::Path,
     str::FromStr,
-    sync::{mpsc, Arc, Mutex},
+    sync::{
+        mpsc::{self, sync_channel},
+        Arc, Mutex,
+    },
     thread,
     time::Duration,
 };
@@ -75,8 +78,22 @@ pub fn must_get<EK: KvEngine>(
     key: &[u8],
     value: Option<&[u8]>,
 ) {
+    let rx = if engine.range_cache_engine() {
+        fail::remove("on_range_cache_get_value");
+        let (tx, rx) = sync_channel(1);
+        fail::cfg_callback("on_range_cache_get_value", move || {
+            tx.send(true).unwrap();
+        })
+        .unwrap();
+        Some(rx)
+    } else {
+        None
+    };
     for _ in 1..300 {
         let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
+        if let Some(ref rx) = rx {
+            rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        }
         if let (Some(value), Some(res)) = (value, res.as_ref()) {
             assert_eq!(value, &res[..]);
             return;

@@ -26,8 +26,6 @@ fn test_basic_put_get() {
         let cache_range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
         core.mut_range_manager().new_range(cache_range.clone());
         core.mut_range_manager().set_safe_point(&cache_range, 1000);
-        core.mut_range_manager()
-            .set_range_readable(&cache_range, true);
     }
 
     cluster.put(b"k05", b"val").unwrap();
@@ -41,7 +39,7 @@ fn test_basic_put_get() {
     })
     .unwrap();
 
-    let val = cluster.get_with_snap_ctx(b"k05", snap_ctx).unwrap();
+    let val = cluster.get_with_snap_ctx(b"k05", false, snap_ctx).unwrap();
     assert_eq!(&val, b"val");
 
     // verify it's read from range cache engine
@@ -141,14 +139,14 @@ fn test_load() {
                 .append_ts(20.into())
                 .into_encoded();
             let val = cluster
-                .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, snap_ctx.clone())
+                .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, false, snap_ctx.clone())
                 .unwrap();
             assert_eq!(&val, b"val-write");
             // verify it's read from range cache engine
             assert!(rx.try_recv().unwrap());
 
             let val = cluster
-                .get_with_snap_ctx(&encoded_key, snap_ctx.clone())
+                .get_with_snap_ctx(&encoded_key, false, snap_ctx.clone())
                 .unwrap();
             assert_eq!(&val, b"val-default");
             // verify it's read from range cache engine
@@ -223,7 +221,7 @@ fn test_write_batch_cache_during_load() {
                 .append_ts(20.into())
                 .into_encoded();
             let val = cluster
-                .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, snap_ctx.clone())
+                .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, false, snap_ctx.clone())
                 .unwrap();
             assert_eq!(&val, b"val-write");
             // We should not read the value in the memory engine at this phase.
@@ -247,14 +245,14 @@ fn test_write_batch_cache_during_load() {
             .append_ts(20.into())
             .into_encoded();
         let val = cluster
-            .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, snap_ctx.clone())
+            .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, false, snap_ctx.clone())
             .unwrap();
         assert_eq!(&val, b"val-write");
         // verify it's read from range cache engine
         assert!(rx2.try_recv().unwrap());
 
         let val = cluster
-            .get_with_snap_ctx(&encoded_key, snap_ctx.clone())
+            .get_with_snap_ctx(&encoded_key, false, snap_ctx.clone())
             .unwrap();
         assert_eq!(&val, b"val-default");
         // verify it's read from range cache engine
@@ -340,14 +338,14 @@ fn test_load_with_split() {
             .append_ts(20.into())
             .into_encoded();
         let val = cluster
-            .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, snap_ctx.clone())
+            .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, false, snap_ctx.clone())
             .unwrap();
         assert_eq!(&val, b"val-write");
         // verify it's read from range cache engine
         assert!(rx.try_recv().unwrap());
 
         let val = cluster
-            .get_with_snap_ctx(&encoded_key, snap_ctx.clone())
+            .get_with_snap_ctx(&encoded_key, false, snap_ctx.clone())
             .unwrap();
         assert_eq!(&val, b"val-default");
         // verify it's read from range cache engine
@@ -444,13 +442,13 @@ fn test_load_with_eviction() {
         range: None,
     };
     let val = cluster
-        .get_cf_with_snap_ctx(CF_DEFAULT, b"k01", snap_ctx.clone())
+        .get_cf_with_snap_ctx(CF_DEFAULT, b"k01", false, snap_ctx.clone())
         .unwrap();
     assert_eq!(&val, b"v");
     assert!(rx.try_recv().unwrap());
 
     let val = cluster
-        .get_cf_with_snap_ctx(CF_DEFAULT, b"k15", snap_ctx.clone())
+        .get_cf_with_snap_ctx(CF_DEFAULT, b"k15", false, snap_ctx.clone())
         .unwrap();
     assert_eq!(&val, b"v");
     rx.try_recv().unwrap_err();

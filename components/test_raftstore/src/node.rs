@@ -521,7 +521,9 @@ pub fn new_node_cluster_with_hybrid_engine(
 ) -> Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
+    let mut cluster = Cluster::new(id, count, sim, pd_client, ApiVersion::V1);
+    cluster.set_range_cache_engine_enabled(true);
+    cluster
 }
 
 // This cluster does not support batch split, we expect it to transfer the
