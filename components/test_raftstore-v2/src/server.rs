@@ -271,7 +271,7 @@ pub struct ServerMeta<EK: KvEngine> {
     sim_trans: SimulateServerTransport<EK>,
     raw_router: StoreRouter<EK, RaftTestEngine>,
     gc_worker: GcWorker<TestRaftKv2<EK>>,
-    rts_worker: Option<LazyWorker<watermark::Task>>,
+    wm_worker: Option<LazyWorker<watermark::Task>>,
     rsmeter_cleanup: Box<dyn FnOnce()>,
 }
 
@@ -460,7 +460,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
         );
         gc_worker.start(node_id).unwrap();
 
-        let watermark_worker = if cfg.watermark.enable {
+        let wm_worker = if cfg.watermark.enable {
             // Watermark worker
             let mut wm_worker = LazyWorker::new("watermark");
             let wm_ob = watermark::Observer::new(wm_worker.scheduler());
@@ -721,7 +721,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 sim_router,
                 gc_worker,
                 sim_trans: simulate_trans,
-                rts_worker,
+                wm_worker,
                 rsmeter_cleanup,
             },
         );
@@ -838,7 +838,7 @@ impl<EK: KvEngine> Simulator<EK> for ServerCluster<EK> {
             meta.server.stop().unwrap();
             meta.node.stop();
             // watermark worker started, let's stop it
-            if let Some(worker) = meta.rts_worker {
+            if let Some(worker) = meta.wm_worker {
                 worker.stop_worker();
             }
             (meta.rsmeter_cleanup)();

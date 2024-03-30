@@ -6,7 +6,7 @@ pub mod diagnostics;
 mod kv;
 
 pub use self::{
-    debug::{ResolvedTsDiagnosisCallback, Service as DebugService},
+    debug::{Service as DebugService, WatermarkDiagnosisCallback},
     diagnostics::Service as DiagnosticsService,
     kv::{
         batch_commands_request, batch_commands_response, future_flashback_to_version,
