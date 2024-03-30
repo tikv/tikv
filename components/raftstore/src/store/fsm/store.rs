@@ -813,7 +813,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             StoreTick::LoadMetricsWindow => self.on_load_metrics_window_tick(),
             StoreTick::ConsistencyCheck => self.on_consistency_check_tick(),
             StoreTick::CleanupImportSst => self.on_cleanup_import_sst_tick(),
-            StoreTick::PdReportMinResolvedTs => self.on_pd_report_min_resolved_ts_tick(),
+            StoreTick::PdReportMinWatermark => self.on_pd_report_min_watermark_tick(),
         }
         let elapsed = timer.saturating_elapsed();
         self.ctx
@@ -924,7 +924,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         self.register_full_compact_tick();
         self.register_load_metrics_window_tick();
         self.register_pd_store_heartbeat_tick();
-        self.register_pd_report_min_resolved_ts_tick();
+        self.register_pd_report_min_watermark_tick();
         self.register_compact_lock_cf_tick();
         self.register_snap_mgr_gc_tick();
         self.register_consistency_check_tick();
@@ -2721,19 +2721,19 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         }
     }
 
-    fn report_min_resolved_ts(&self) {
+    fn report_min_watermark(&self) {
         let read_progress = {
             let meta = self.ctx.store_meta.lock().unwrap();
             meta.region_read_progress().clone()
         };
-        let min_resolved_ts = read_progress.get_min_resolved_ts();
+        let min_watermark = read_progress.get_min_watermark();
 
-        let task = PdTask::ReportMinResolvedTs {
+        let task = PdTask::ReportMinWatermark {
             store_id: self.fsm.store.id,
-            min_resolved_ts,
+            min_watermark,
         };
         if let Err(e) = self.ctx.pd_scheduler.schedule(task) {
-            error!("failed to send min resolved ts to pd worker";
+            error!("failed to send min watermark to pd worker";
                 "store_id" => self.fsm.store.id,
                 "err" => ?e
             );
@@ -2910,9 +2910,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         self.register_pd_store_heartbeat_tick();
     }
 
-    fn on_pd_report_min_resolved_ts_tick(&mut self) {
-        self.report_min_resolved_ts();
-        self.register_pd_report_min_resolved_ts_tick();
+    fn on_pd_report_min_watermark_tick(&mut self) {
+        self.report_min_watermark();
+        self.register_pd_report_min_watermark_tick();
     }
 
     fn on_snap_mgr_gc(&mut self) {
@@ -3020,10 +3020,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         );
     }
 
-    fn register_pd_report_min_resolved_ts_tick(&self) {
+    fn register_pd_report_min_watermark_tick(&self) {
         self.ctx.schedule_store_tick(
-            StoreTick::PdReportMinResolvedTs,
-            self.ctx.cfg.pd_report_min_resolved_ts_interval.0,
+            StoreTick::PdReportMinWatermark,
+            self.ctx.cfg.pd_report_min_watermark_interval.0,
         );
     }
 

@@ -42,21 +42,21 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
 }
 
 pub type Callback<T> = Box<dyn FnOnce(T) + Send>;
-pub type ResolvedTsDiagnosisCallback = Callback<
+pub type WatermarkDiagnosisCallback = Callback<
     Option<(
         bool, // stopped
-        u64,  // resolved_ts
+        u64,  // watermark
         u64,  // tracked index
         u64,  // num_locks
         u64,  // num_transactions
     )>,
 >;
-pub type ScheduleResolvedTsTask = Arc<
+pub type ScheduleWatermarkTask = Arc<
     dyn Fn(
             u64,  // region id
             bool, // log_locks
             u64,  // min_start_ts
-            ResolvedTsDiagnosisCallback,
+            WatermarkDiagnosisCallback,
         ) -> bool
         + Send
         + Sync,
@@ -73,7 +73,7 @@ where
     debugger: D,
     raft_router: T,
     store_meta: Arc<Mutex<S>>,
-    resolved_ts_scheduler: ScheduleResolvedTsTask,
+    watermark_scheduler: ScheduleWatermarkTask,
 }
 
 impl<T, D, S> Clone for Service<T, D, S>
@@ -88,7 +88,7 @@ where
             debugger: self.debugger.clone(),
             raft_router: self.raft_router.clone(),
             store_meta: self.store_meta.clone(),
-            resolved_ts_scheduler: self.resolved_ts_scheduler.clone(),
+            watermark_scheduler: self.watermark_scheduler.clone(),
         }
     }
 }
@@ -106,14 +106,14 @@ where
         pool: Handle,
         raft_router: T,
         store_meta: Arc<Mutex<S>>,
-        resolved_ts_scheduler: ScheduleResolvedTsTask,
+        watermark_scheduler: ScheduleWatermarkTask,
     ) -> Self {
         Service {
             pool,
             debugger,
             raft_router,
             store_meta,
-            resolved_ts_scheduler,
+            watermark_scheduler,
         }
     }
 
@@ -674,7 +674,7 @@ where
 
         // get from resolver
         let (cb, f) = paired_future_callback();
-        if (*self.resolved_ts_scheduler)(
+        if (*self.watermark_scheduler)(
             req.get_region_id(),
             req.get_log_locks(),
             req.get_min_start_ts(),
@@ -684,19 +684,19 @@ where
                 let res = f.await;
                 match res {
                     Err(e) => {
-                        resp.set_error("get resolved-ts info failed".to_owned());
-                        error!("tikv-ctl get resolved-ts info failed"; "err" => ?e);
+                        resp.set_error("get watermark info failed".to_owned());
+                        error!("tikv-ctl get watermark info failed"; "err" => ?e);
                     }
                     Ok(Some((
                         stopped,
-                        resolved_ts,
+                        watermark,
                         resolver_tracked_index,
                         num_locks,
                         num_transactions,
                     ))) => {
                         resp.set_resolver_exist(true);
                         resp.set_resolver_stopped(stopped);
-                        resp.set_resolved_ts(resolved_ts);
+                        resp.set_watermark(watermark);
                         resp.set_resolver_tracked_index(resolver_tracked_index);
                         resp.set_num_locks(num_locks);
                         resp.set_num_transactions(num_transactions);
@@ -710,7 +710,7 @@ where
             };
             self.handle_response(ctx, sink, f, "debug_get_region_read_progress");
         } else {
-            resp.set_error("resolved-ts is not enabled".to_owned());
+            resp.set_error("watermark is not enabled".to_owned());
             let f = async move { Ok(resp) };
             self.handle_response(ctx, sink, f, "debug_get_region_read_progress");
         }

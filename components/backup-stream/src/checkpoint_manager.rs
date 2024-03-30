@@ -36,7 +36,7 @@ use crate::{
 #[derive(Default)]
 pub struct CheckpointManager {
     checkpoint_ts: HashMap<u64, LastFlushTsOfRegion>,
-    resolved_ts: HashMap<u64, LastFlushTsOfRegion>,
+    watermark: HashMap<u64, LastFlushTsOfRegion>,
     manager_handle: Option<Sender<SubscriptionOp>>,
 }
 
@@ -44,7 +44,7 @@ impl std::fmt::Debug for CheckpointManager {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CheckpointManager")
             .field("checkpoints", &self.checkpoint_ts)
-            .field("resolved-ts", &self.resolved_ts)
+            .field("watermark", &self.watermark)
             .finish()
     }
 }
@@ -195,8 +195,8 @@ impl CheckpointManager {
     }
 
     pub fn flush(&mut self) {
-        info!("log backup checkpoint manager flushing."; "resolved_ts_len" => %self.resolved_ts.len(), "resolved_ts" => ?self.get_resolved_ts());
-        self.checkpoint_ts = std::mem::take(&mut self.resolved_ts);
+        info!("log backup checkpoint manager flushing."; "watermark_len" => %self.watermark.len(), "watermark" => ?self.get_watermark());
+        self.checkpoint_ts = std::mem::take(&mut self.watermark);
         // Clippy doesn't know this iterator borrows `self.checkpoint_ts` :(
         #[allow(clippy::needless_collect)]
         let items = self
@@ -311,7 +311,7 @@ impl CheckpointManager {
     }
 
     fn do_update(&mut self, region: Region, checkpoint: TimeStamp) {
-        Self::update_ts(&mut self.resolved_ts, region, checkpoint)
+        Self::update_ts(&mut self.watermark, region, checkpoint)
     }
 
     /// get checkpoint from a region.
@@ -332,8 +332,8 @@ impl CheckpointManager {
         self.checkpoint_ts.values().cloned().collect()
     }
 
-    pub fn get_resolved_ts(&self) -> Option<TimeStamp> {
-        self.resolved_ts.values().map(|x| x.checkpoint).min()
+    pub fn get_watermark(&self) -> Option<TimeStamp> {
+        self.watermark.values().map(|x| x.checkpoint).min()
     }
 
     #[cfg(test)]
@@ -411,12 +411,12 @@ pub trait FlushObserver: Send + 'static {
     /// The callback when the flush is done. (Files are fully written to
     /// external storage.)
     async fn after(&mut self, task: &str, rts: u64) -> Result<()>;
-    /// The optional callback to rewrite the resolved ts of this flush.
-    /// Because the default method (collect all leader resolved ts in the store,
-    /// and use the minimal TS.) may lead to resolved ts rolling back, if we
-    /// desire a stronger consistency, we can rewrite a safer resolved ts here.
-    /// Note the new resolved ts cannot be greater than the old resolved ts.
-    async fn rewrite_resolved_ts(
+    /// The optional callback to rewrite the watermark of this flush.
+    /// Because the default method (collect all leader watermark in the store,
+    /// and use the minimal TS.) may lead to watermark rolling back, if we
+    /// desire a stronger consistency, we can rewrite a safer watermark here.
+    /// Note the new watermark cannot be greater than the old watermark.
+    async fn rewrite_watermark(
         &mut self,
         #[allow(unused_variables)] _task: &str,
     ) -> Option<TimeStamp> {
@@ -540,11 +540,11 @@ where
         Ok(())
     }
 
-    async fn rewrite_resolved_ts(&mut self, task: &str) -> Option<TimeStamp> {
+    async fn rewrite_watermark(&mut self, task: &str) -> Option<TimeStamp> {
         let global_checkpoint = self
             .get_checkpoint(task)
             .await
-            .map_err(|err| err.report("failed to get resolved ts for rewriting"))
+            .map_err(|err| err.report("failed to get watermark for rewriting"))
             .ok()?;
         info!("getting global checkpoint for updating."; "checkpoint" => ?global_checkpoint);
         matches!(global_checkpoint.provider, CheckpointProvider::Global)

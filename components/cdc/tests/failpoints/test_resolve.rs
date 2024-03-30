@@ -128,8 +128,8 @@ fn test_stale_resolver_impl<F: KvFormat>() {
     suite.stop();
 }
 
-// Resolved ts can still advance even if some regions are merged (it drops
-// callback that is used to advance resolved ts).
+// Watermark can still advance even if some regions are merged (it drops
+// callback that is used to advance watermark).
 #[test]
 fn test_region_error() {
     let mut cluster = new_server_cluster(1, 1);
@@ -166,13 +166,13 @@ fn test_region_error() {
         .must_try_merge(source.get_id(), target.get_id());
     sleep_ms(200);
 
-    let mut last_resolved_ts = 0;
+    let mut last_watermark = 0;
     for _ in 0..5 {
         let event = target_event(true);
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            let ts = resolved_ts.ts;
-            assert!(ts > last_resolved_ts);
-            last_resolved_ts = ts;
+        if let Some(watermark) = event.watermark.as_ref() {
+            let ts = watermark.ts;
+            assert!(ts > last_watermark);
+            last_watermark = ts;
         }
     }
     fail::remove(multi_batch_fp);
@@ -190,15 +190,15 @@ fn test_joint_confchange() {
     cluster.cfg.cdc.hibernate_regions_compatible = true;
     let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
 
-    let receive_resolved_ts = |receive_event: &(dyn Fn(bool) -> ChangeDataEvent + Send)| {
-        let mut last_resolved_ts = 0;
+    let receive_watermark = |receive_event: &(dyn Fn(bool) -> ChangeDataEvent + Send)| {
+        let mut last_watermark = 0;
         let mut i = 0;
         loop {
             let event = receive_event(true);
-            if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-                let ts = resolved_ts.ts;
-                assert!(ts >= last_resolved_ts);
-                last_resolved_ts = ts;
+            if let Some(watermark) = event.watermark.as_ref() {
+                let ts = watermark.ts;
+                assert!(ts >= last_watermark);
+                last_watermark = ts;
                 i += 1;
             }
             if i > 10 {
@@ -224,10 +224,10 @@ fn test_joint_confchange() {
     let (mut req_tx, event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(region.get_id()));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
-    receive_resolved_ts(&receive_event);
+    receive_watermark(&receive_event);
 
     suite.cluster.stop_node(peers[1].get_store_id());
-    receive_resolved_ts(&receive_event);
+    receive_watermark(&receive_event);
     suite.cluster.run_node(peers[1].get_store_id()).unwrap();
 
     let confchanges = vec![(
@@ -238,7 +238,7 @@ fn test_joint_confchange() {
         .cluster
         .pd_client
         .must_joint_confchange(region.get_id(), confchanges);
-    receive_resolved_ts(&receive_event);
+    receive_watermark(&receive_event);
 
     suite.cluster.stop_node(peers[1].get_store_id());
     let update_region_fp = "change_peer_after_update_region";
@@ -257,7 +257,7 @@ fn test_joint_confchange() {
     sleep_ms(500);
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        receive_resolved_ts(&receive_event);
+        receive_watermark(&receive_event);
         tx.send(()).unwrap();
     });
     rx.recv_timeout(Duration::from_secs(2)).unwrap_err();

@@ -28,7 +28,6 @@ use raftstore::{
     store::util::compare_region_epoch,
     Error as RaftStoreError,
 };
-use resolved_ts::{Resolver, TsSource, ON_DROP_WARN_HEAP_SIZE};
 use tikv::storage::{txn::TxnEntry, Statistics};
 use tikv_util::{
     debug, info,
@@ -36,6 +35,7 @@ use tikv_util::{
     warn,
 };
 use txn_types::{Key, Lock, LockType, TimeStamp, WriteBatchFlags, WriteRef, WriteType};
+use watermark::{Resolver, TsSource, ON_DROP_WARN_HEAP_SIZE};
 
 use crate::{
     channel::{CdcEvent, SendError, Sink, CDC_EVENT_MAX_BYTES},
@@ -67,12 +67,12 @@ impl Default for DownstreamId {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DownstreamState {
-    /// It's just created and rejects change events and resolved timestamps.
+    /// It's just created and rejects change events and watermarks.
     Uninitialized,
     /// It has got a snapshot for incremental scan, and change events will be
-    /// accepted. However it still rejects resolved timestamps.
+    /// accepted. However it still rejects watermarks.
     Initializing,
-    /// Incremental scan is finished so that resolved timestamps are acceptable
+    /// Incremental scan is finished so that watermarks are acceptable
     /// now.
     Normal,
     Stopped,
@@ -324,7 +324,7 @@ impl HeapSize for PendingLock {
 /// A CDC delegate of a raftstore region peer.
 ///
 /// It converts raft commands into CDC events and broadcast to downstreams.
-/// It also track trancation on the fly in order to compute resolved ts.
+/// It also track trancation on the fly in order to compute watermark.
 pub struct Delegate {
     pub handle: ObserveHandle,
     pub region_id: u64,
@@ -514,7 +514,7 @@ impl Delegate {
         Ok(failed_downstreams)
     }
 
-    /// Try advance and broadcast resolved ts.
+    /// Try advance and broadcast watermark.
     pub fn on_min_ts(&mut self, min_ts: TimeStamp) -> Option<TimeStamp> {
         if self.resolver.is_none() {
             debug!("cdc region resolver not ready";
@@ -523,10 +523,10 @@ impl Delegate {
         }
         debug!("cdc try to advance ts"; "region_id" => self.region_id, "min_ts" => min_ts);
         let resolver = self.resolver.as_mut().unwrap();
-        let resolved_ts = resolver.resolve(min_ts, None, TsSource::Cdc);
-        debug!("cdc resolved ts updated";
-            "region_id" => self.region_id, "resolved_ts" => resolved_ts);
-        Some(resolved_ts)
+        let watermark = resolver.resolve(min_ts, None, TsSource::Cdc);
+        debug!("cdc watermark updated";
+            "region_id" => self.region_id, "watermark" => watermark);
+        Some(watermark)
     }
 
     pub fn on_batch(
@@ -872,15 +872,15 @@ impl Delegate {
                         Some(TimeStamp::from(row.commit_ts))
                     }
                 };
-                // validate commit_ts must be greater than the current resolved_ts
+                // validate commit_ts must be greater than the current watermark
                 if let (Some(resolver), Some(commit_ts)) = (&self.resolver, commit_ts) {
-                    let resolved_ts = resolver.resolved_ts();
+                    let watermark = resolver.watermark();
                     assert!(
-                        commit_ts > resolved_ts,
-                        "region {} commit_ts: {:?}, resolved_ts: {:?}",
+                        commit_ts > watermark,
+                        "region {} commit_ts: {:?}, watermark: {:?}",
                         self.region_id,
                         commit_ts,
-                        resolved_ts
+                        watermark
                     );
                 }
 
@@ -906,7 +906,7 @@ impl Delegate {
                 let read_old_ts = std::cmp::max(for_update_ts, row.start_ts.into());
                 read_old_value(&mut row, read_old_ts)?;
 
-                // In order to compute resolved ts, we must track inflight txns.
+                // In order to compute watermark, we must track inflight txns.
                 match self.resolver {
                     Some(ref mut resolver) => {
                         resolver.track_lock(row.start_ts.into(), row.key.clone(), None)?;

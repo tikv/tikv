@@ -7,15 +7,15 @@ use std::{sync::mpsc::channel, time::Duration};
 use futures::executor::block_on;
 use kvproto::{kvrpcpb::*, metapb::RegionEpoch};
 use pd_client::PdClient;
-use resolved_ts::Task;
 use tempfile::Builder;
 use test_raftstore::{sleep_ms, IsolationFilterFactory};
 use test_sst_importer::*;
 pub use testsuite::*;
 use tikv_util::store::new_peer;
+use watermark::Task;
 
 #[test]
-fn test_resolved_ts_basic() {
+fn test_watermark_basic() {
     let mut suite = TestSuite::new(1);
     let region = suite.cluster.get_region(&[]);
 
@@ -28,36 +28,36 @@ fn test_resolved_ts_basic() {
     mutation.value = v.to_vec();
     suite.must_kv_prewrite(region.id, vec![mutation], k.to_vec(), start_ts, false);
 
-    // The `resolved-ts` won't be updated due to there is lock on the region,
-    // the `resolved-ts` may not be the `start_ts` of the lock if the `resolved-ts`
+    // The `watermark` won't be updated due to there is lock on the region,
+    // the `watermark` may not be the `start_ts` of the lock if the `watermark`
     // is updated with a newer ts before the prewrite request come, but still the
-    // `resolved-ts` won't be updated
-    let rts = suite.region_resolved_ts(region.id).unwrap();
+    // `watermark` won't be updated
+    let rts = suite.region_watermark(region.id).unwrap();
 
     // Split region
     suite.cluster.must_split(&region, k);
     let r1 = suite.cluster.get_region(&[]);
     let r2 = suite.cluster.get_region(k);
     let current_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
-    // Resolved ts of region1 should be advanced
+    // watermark of region1 should be advanced
     suite.must_get_rts_ge(r1.id, current_ts);
-    // Resolved ts of region2 should be equal to rts
+    // watermark of region2 should be equal to rts
     suite.must_get_rts(r2.id, rts);
 
     // Merge region2 to region1
     suite.cluster.must_try_merge(r2.id, r1.id);
-    // Resolved ts of region1 should be equal to rts
+    // watermark of region1 should be equal to rts
     suite.must_get_rts(r1.id, rts);
 
     // Commit
     let commit_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_commit(r1.id, vec![k.to_vec()], start_ts, commit_ts);
-    // Resolved ts of region1 should be advanced
+    // watermark of region1 should be advanced
     let current_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_get_rts_ge(r1.id, current_ts);
 
     // ingest sst
-    let temp_dir = Builder::new().prefix("test_resolved_ts").tempdir().unwrap();
+    let temp_dir = Builder::new().prefix("test_watermark").tempdir().unwrap();
     let sst_path = temp_dir.path().join("test.sst");
     let sst_range = (0, 100);
 
@@ -126,9 +126,9 @@ fn test_dynamic_change_advance_ts_interval() {
     // sleep to wait for previous update task finish
     sleep_ms(200);
 
-    // `resolved-ts` should not be updated
+    // `watermark` should not be updated
     for _ in 0..10 {
-        if let Some(ts) = suite.region_resolved_ts(region.id) {
+        if let Some(ts) = suite.region_watermark(region.id) {
             if block_on(suite.cluster.pd_client.get_tso()).unwrap() <= ts {
                 panic!("unexpect update");
             }
@@ -138,7 +138,7 @@ fn test_dynamic_change_advance_ts_interval() {
 
     // change the interval to 10ms
     suite.must_change_advance_ts_interval(1, Duration::from_millis(10));
-    // `resolved-ts` should be updated immediately
+    // `watermark` should be updated immediately
     suite.must_get_rts_ge(
         region.id,
         block_on(suite.cluster.pd_client.get_tso()).unwrap(),
@@ -167,7 +167,7 @@ fn test_change_log_memory_quota_exceeded() {
     mutation.value = v.to_vec();
     suite.must_kv_prewrite(region.id, vec![mutation], k.to_vec(), start_ts, false);
 
-    // Resolved ts should not advance.
+    // watermark should not advance.
     let (tx, rx) = channel();
     suite.must_schedule_task(
         1,
@@ -214,10 +214,10 @@ fn test_scan_log_memory_quota_exceeded() {
     let current_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     // Wait for scan log.
     sleep_ms(500);
-    // Resolved ts of region1 should be advanced
+    // watermark of region1 should be advanced
     suite.must_get_rts_ge(r1.id, current_ts);
 
-    // Resolved ts should not advance.
+    // watermark should not advance.
     let (tx, rx) = channel();
     suite.must_schedule_task(
         r2.id,
@@ -236,7 +236,7 @@ fn test_scan_log_memory_quota_exceeded() {
     suite.stop();
 }
 
-// This case checks resolved ts can still be advanced quickly even if some TiKV
+// This case checks watermark can still be advanced quickly even if some TiKV
 // stores are partitioned.
 #[test]
 fn test_store_partitioned() {
@@ -250,12 +250,12 @@ fn test_store_partitioned() {
         .add_send_filter(IsolationFilterFactory::new(3));
     let tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     for _ in 0..50 {
-        let rts = suite.region_resolved_ts(r.id).unwrap();
+        let rts = suite.region_watermark(r.id).unwrap();
         if rts > tso {
             if rts.physical() - tso.physical() < 3000 {
                 break;
             } else {
-                panic!("resolved ts doesn't advance in time")
+                panic!("watermark doesn't advance in time")
             }
         }
         sleep_ms(100);

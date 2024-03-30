@@ -24,7 +24,7 @@ use kvproto::{
     cdcpb::{
         ChangeDataRequest, ClusterIdMismatch as ErrorClusterIdMismatch,
         Compatibility as ErrorCompatibility, DuplicateRequest as ErrorDuplicateRequest,
-        Error as EventError, Event, Event_oneof_event, ResolvedTs,
+        Error as EventError, Event, Event_oneof_event, Watermark,
     },
     kvrpcpb::ApiVersion,
     metapb::Region,
@@ -36,7 +36,6 @@ use raftstore::{
     router::CdcHandle,
     store::fsm::{store::StoreRegionMeta, ChangeObserver},
 };
-use resolved_ts::{resolve_by_raft, LeadershipResolver, Resolver};
 use security::SecurityManager;
 use tikv::{
     config::CdcConfig,
@@ -58,6 +57,7 @@ use tokio::{
     sync::Semaphore,
 };
 use txn_types::{TimeStamp, TxnExtra, TxnExtraScheduler};
+use watermark::{resolve_by_raft, LeadershipResolver, Resolver};
 
 use crate::{
     channel::{CdcEvent, SendError},
@@ -69,13 +69,13 @@ use crate::{
     CdcObserver, Error,
 };
 
-const FEATURE_RESOLVED_TS_STORE: Feature = Feature::require(5, 0, 0);
+const FEATURE_WATERMARK_STORE: Feature = Feature::require(5, 0, 0);
 const METRICS_FLUSH_INTERVAL: u64 = 1_000; // 1s
 // 10 minutes, it's the default gc life time of TiDB
 // and is long enough for most transactions.
-const WARN_RESOLVED_TS_LAG_THRESHOLD: Duration = Duration::from_secs(600);
-// Suppress repeat resolved ts lag warning.
-const WARN_RESOLVED_TS_COUNT_THRESHOLD: usize = 10;
+const WARN_WATERMARK_LAG_THRESHOLD: Duration = Duration::from_secs(600);
+// Suppress repeat watermark lag warning.
+const WARN_WATERMARK_COUNT_THRESHOLD: usize = 10;
 
 pub enum Deregister {
     Conn(ConnId),
@@ -302,7 +302,7 @@ impl fmt::Debug for Task {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ResolvedRegion {
     region_id: u64,
-    resolved_ts: TimeStamp,
+    watermark: TimeStamp,
 }
 
 impl PartialOrd for ResolvedRegion {
@@ -313,7 +313,7 @@ impl PartialOrd for ResolvedRegion {
 
 impl Ord for ResolvedRegion {
     fn cmp(&self, other: &Self) -> CmpOrdering {
-        self.resolved_ts.cmp(&other.resolved_ts)
+        self.watermark.cmp(&other.watermark)
     }
 }
 
@@ -323,28 +323,28 @@ struct ResolvedRegionHeap {
 }
 
 impl ResolvedRegionHeap {
-    fn push(&mut self, region_id: u64, resolved_ts: TimeStamp) {
+    fn push(&mut self, region_id: u64, watermark: TimeStamp) {
         self.heap.push(Reverse(ResolvedRegion {
             region_id,
-            resolved_ts,
+            watermark,
         }))
     }
 
-    // Pop slow regions and the minimum resolved ts among them.
+    // Pop slow regions and the minimum watermark among them.
     fn pop(&mut self, count: usize) -> (TimeStamp, HashSet<u64>) {
-        let mut min_resolved_ts = TimeStamp::max();
+        let mut min_watermark = TimeStamp::max();
         let mut outliers = HashSet::with_capacity_and_hasher(count, Default::default());
         for _ in 0..count {
             if let Some(resolved_region) = self.heap.pop() {
                 outliers.insert(resolved_region.0.region_id);
-                if min_resolved_ts > resolved_region.0.resolved_ts {
-                    min_resolved_ts = resolved_region.0.resolved_ts;
+                if min_watermark > resolved_region.0.watermark {
+                    min_watermark = resolved_region.0.watermark;
                 }
             } else {
                 break;
             }
         }
-        (min_resolved_ts, outliers)
+        (min_watermark, outliers)
     }
 
     fn is_empty(&self) -> bool {
@@ -376,7 +376,7 @@ pub struct Endpoint<T, E, S> {
     tso_worker: Runtime,
     store_meta: Arc<StdMutex<S>>,
     /// The concurrency manager for transactions. It's needed for CDC to check
-    /// locks when calculating resolved_ts.
+    /// locks when calculating watermark.
     concurrency_manager: ConcurrencyManager,
 
     raftstore_v2: bool,
@@ -401,11 +401,11 @@ pub struct Endpoint<T, E, S> {
 
     // Metrics and logging.
     current_ts: TimeStamp,
-    min_resolved_ts: TimeStamp,
+    min_watermark: TimeStamp,
     min_ts_region_id: u64,
     resolved_region_count: usize,
     unresolved_region_count: usize,
-    warn_resolved_ts_repeat_count: usize,
+    warn_watermark_repeat_count: usize,
 }
 
 impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, S> {
@@ -495,7 +495,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             observer,
             store_meta,
             concurrency_manager,
-            min_resolved_ts: TimeStamp::max(),
+            min_watermark: TimeStamp::max(),
             min_ts_region_id: 0,
             resolved_region_heap: RefCell::new(ResolvedRegionHeap {
                 heap: BinaryHeap::new(),
@@ -504,8 +504,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             resolved_region_count: 0,
             unresolved_region_count: 0,
             sink_memory_quota,
-            // Log the first resolved ts warning.
-            warn_resolved_ts_repeat_count: WARN_RESOLVED_TS_COUNT_THRESHOLD,
+            // Log the first watermark warning.
+            warn_watermark_repeat_count: WARN_WATERMARK_COUNT_THRESHOLD,
             current_ts: TimeStamp::zero(),
             causal_ts_provider,
         };
@@ -951,27 +951,27 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         resolved_regions.clear();
 
         let total_region_count = regions.len();
-        self.min_resolved_ts = TimeStamp::max();
+        self.min_watermark = TimeStamp::max();
         let mut advance_ok = 0;
         let mut advance_failed_none = 0;
         let mut advance_failed_same = 0;
         let mut advance_failed_stale = 0;
         for region_id in regions {
             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-                let old_resolved_ts = delegate
+                let old_watermark = delegate
                     .resolver
                     .as_ref()
-                    .map_or(TimeStamp::zero(), |r| r.resolved_ts());
-                if old_resolved_ts > min_ts {
+                    .map_or(TimeStamp::zero(), |r| r.watermark());
+                if old_watermark > min_ts {
                     advance_failed_stale += 1;
                 }
-                if let Some(resolved_ts) = delegate.on_min_ts(min_ts) {
-                    if resolved_ts < self.min_resolved_ts {
-                        self.min_resolved_ts = resolved_ts;
+                if let Some(watermark) = delegate.on_min_ts(min_ts) {
+                    if watermark < self.min_watermark {
+                        self.min_watermark = watermark;
                         self.min_ts_region_id = region_id;
                     }
-                    resolved_regions.push(region_id, resolved_ts);
-                    if resolved_ts == old_resolved_ts {
+                    resolved_regions.push(region_id, watermark);
+                    if watermark == old_watermark {
                         advance_failed_same += 1;
                     } else {
                         advance_ok += 1;
@@ -984,13 +984,13 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         self.current_ts = current_ts;
         let lag_millis = min_ts
             .physical()
-            .saturating_sub(self.min_resolved_ts.physical());
-        if Duration::from_millis(lag_millis) > WARN_RESOLVED_TS_LAG_THRESHOLD {
-            self.warn_resolved_ts_repeat_count += 1;
-            if self.warn_resolved_ts_repeat_count >= WARN_RESOLVED_TS_COUNT_THRESHOLD {
-                self.warn_resolved_ts_repeat_count = 0;
-                warn!("cdc resolved ts lag too large";
-                    "min_resolved_ts" => self.min_resolved_ts,
+            .saturating_sub(self.min_watermark.physical());
+        if Duration::from_millis(lag_millis) > WARN_WATERMARK_LAG_THRESHOLD {
+            self.warn_watermark_repeat_count += 1;
+            if self.warn_watermark_repeat_count >= WARN_WATERMARK_COUNT_THRESHOLD {
+                self.warn_watermark_repeat_count = 0;
+                warn!("cdc watermark lag too large";
+                    "min_watermark" => self.min_watermark,
                     "min_ts_region_id" => self.min_ts_region_id,
                     "min_ts" => min_ts,
                     "lag" => ?Duration::from_millis(lag_millis),
@@ -1005,29 +1005,29 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
         // Separate broadcasting outlier regions and normal regions,
         // so 1) downstreams know where they should send resolve lock requests,
-        // and 2) resolved ts of normal regions does not fallback.
+        // and 2) watermark of normal regions does not fallback.
         //
-        // Regions are separated exponentially to reduce resolved ts events and
+        // Regions are separated exponentially to reduce watermark events and
         // save CPU for both TiKV and TiCDC.
         let mut batch_count = 8;
         while !resolved_regions.is_empty() {
-            let (outlier_min_resolved_ts, outlier_regions) = resolved_regions.pop(batch_count);
-            self.broadcast_resolved_ts(outlier_min_resolved_ts, outlier_regions);
+            let (outlier_min_watermark, outlier_regions) = resolved_regions.pop(batch_count);
+            self.broadcast_watermark(outlier_min_watermark, outlier_regions);
             batch_count *= 4;
         }
     }
 
-    fn broadcast_resolved_ts(&self, min_resolved_ts: TimeStamp, regions: HashSet<u64>) {
+    fn broadcast_watermark(&self, min_watermark: TimeStamp, regions: HashSet<u64>) {
         let send_cdc_event = |ts: u64, conn: &Conn, request_id: u64, regions: Vec<u64>| {
-            let mut resolved_ts = ResolvedTs::default();
-            resolved_ts.ts = ts;
-            resolved_ts.request_id = request_id;
-            *resolved_ts.mut_regions() = regions;
+            let mut watermark = Watermark::default();
+            watermark.ts = ts;
+            watermark.request_id = request_id;
+            *watermark.mut_regions() = regions;
 
             let force_send = false;
             match conn
                 .get_sink()
-                .unbounded_send(CdcEvent::ResolvedTs(resolved_ts), force_send)
+                .unbounded_send(CdcEvent::Watermark(watermark), force_send)
             {
                 Ok(_) => (),
                 Err(SendError::Disconnected) => {
@@ -1069,46 +1069,41 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             }
         }
 
-        let min_resolved_ts = min_resolved_ts.into_inner();
+        let min_watermark = min_watermark.into_inner();
 
         for ((conn_id, request_id), regions) in multiplexing {
             let conn = self.connections.get(&conn_id).unwrap();
-            if conn.features().contains(FeatureGate::BATCH_RESOLVED_TS) {
-                send_cdc_event(min_resolved_ts, conn, request_id, regions);
+            if conn.features().contains(FeatureGate::BATCH_WATERMARK) {
+                send_cdc_event(min_watermark, conn, request_id, regions);
             } else {
                 for region_id in regions {
-                    self.broadcast_resolved_ts_compact(
-                        conn,
-                        request_id,
-                        region_id,
-                        min_resolved_ts,
-                    );
+                    self.broadcast_watermark_compact(conn, request_id, region_id, min_watermark);
                 }
             }
         }
         for (conn_id, reqs_regions) in one_way {
             let conn = self.connections.get(&conn_id).unwrap();
-            if conn.features().contains(FeatureGate::BATCH_RESOLVED_TS) {
-                send_cdc_event(min_resolved_ts, conn, 0, reqs_regions.1);
+            if conn.features().contains(FeatureGate::BATCH_WATERMARK) {
+                send_cdc_event(min_watermark, conn, 0, reqs_regions.1);
             } else {
                 for i in 0..reqs_regions.0.len() {
-                    self.broadcast_resolved_ts_compact(
+                    self.broadcast_watermark_compact(
                         conn,
                         reqs_regions.0[i],
                         reqs_regions.1[i],
-                        min_resolved_ts,
+                        min_watermark,
                     );
                 }
             }
         }
     }
 
-    fn broadcast_resolved_ts_compact(
+    fn broadcast_watermark_compact(
         &self,
         conn: &Conn,
         request_id: u64,
         region_id: u64,
-        resolved_ts: u64,
+        watermark: u64,
     ) {
         let downstream_id = conn.get_downstream(request_id, region_id).unwrap();
         let delegate = self.capture_regions.get(&region_id).unwrap();
@@ -1116,18 +1111,18 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         if !downstream.get_state().load().ready_for_advancing_ts() {
             return;
         }
-        let resolved_ts_event = Event {
+        let watermark_event = Event {
             region_id,
             request_id,
-            event: Some(Event_oneof_event::ResolvedTs(resolved_ts)),
+            event: Some(Event_oneof_event::Watermark(watermark)),
             ..Default::default()
         };
         let force_send = false;
-        let _ = downstream.sink_event(resolved_ts_event, force_send);
+        let _ = downstream.sink_event(watermark_event, force_send);
     }
 
     fn register_min_ts_event(&self, mut leader_resolver: LeadershipResolver, event_time: Instant) {
-        // Try to keep advance resolved ts every `min_ts_interval`, thus
+        // Try to keep advance watermark every `min_ts_interval`, thus
         // the actual wait interval = `min_ts_interval` - the last register min_ts event
         // time.
         let interval = self
@@ -1153,7 +1148,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 // TiKV API v2 is enabled when causal_ts_provider is Some.
                 // In this scenario, get TSO from causal_ts_provider to make sure that
                 // RawKV write requests will get larger TSO after this point.
-                // RawKV CDC's resolved_ts is guaranteed by ConcurrencyManager::global_min_lock_ts,
+                // RawKV CDC's watermark is guaranteed by ConcurrencyManager::global_min_lock_ts,
                 // which lock flying keys's ts in raw put and delete interfaces in `Storage`.
                 Some(provider) => provider.async_get_ts().await.unwrap_or_default(),
                 None => pd_client.get_tso().await.unwrap_or_default(),
@@ -1182,7 +1177,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         event_time: Instant::now(),
                     }) {
                         Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                        // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
+                        // Must schedule `RegisterMinTsEvent` event otherwise watermark can not
                         // advance normally.
                         Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
                     }
@@ -1197,11 +1192,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             // Check region peer leadership, make sure they are leaders.
             let gate = pd_client.feature_gate();
             let regions =
-                if hibernate_regions_compatible && gate.can_enable(FEATURE_RESOLVED_TS_STORE) {
-                    CDC_RESOLVED_TS_ADVANCE_METHOD.set(1);
+                if hibernate_regions_compatible && gate.can_enable(FEATURE_WATERMARK_STORE) {
+                    CDC_WATERMARK_ADVANCE_METHOD.set(1);
                     leader_resolver.resolve(regions, min_ts).await
                 } else {
-                    CDC_RESOLVED_TS_ADVANCE_METHOD.set(0);
+                    CDC_WATERMARK_ADVANCE_METHOD.set(0);
                     resolve_by_raft(regions, min_ts, cdc_handle).await
                 };
             leader_resolver_tx.send(leader_resolver).unwrap();
@@ -1213,14 +1208,14 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     current_ts: min_ts_pd,
                 }) {
                     Ok(_) | Err(ScheduleError::Stopped(_)) => (),
-                    // Must schedule `MinTS` event otherwise resolved ts can not
+                    // Must schedule `MinTS` event otherwise watermark can not
                     // advance normally.
                     Err(err) => panic!("failed to schedule min ts event, error: {:?}", err),
                 }
             }
             let lag_millis = min_ts_pd.physical().saturating_sub(min_ts.physical());
-            if Duration::from_millis(lag_millis) > WARN_RESOLVED_TS_LAG_THRESHOLD {
-                // TODO: Suppress repeat logs by using WARN_RESOLVED_TS_COUNT_THRESHOLD.
+            if Duration::from_millis(lag_millis) > WARN_WATERMARK_LAG_THRESHOLD {
+                // TODO: Suppress repeat logs by using WARN_WATERMARK_COUNT_THRESHOLD.
                 info!("cdc min_ts lag too large";
                     "min_ts" => min_ts, "min_ts_pd" => min_ts_pd,
                     "min_ts_min_lock" => min_ts_min_lock);
@@ -1346,22 +1341,22 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
             .with_label_values(&["resolved"])
             .set(self.resolved_region_count as _);
 
-        if self.min_resolved_ts != TimeStamp::max() {
-            CDC_MIN_RESOLVED_TS_REGION.set(self.min_ts_region_id as i64);
-            CDC_MIN_RESOLVED_TS.set(self.min_resolved_ts.physical() as i64);
-            CDC_MIN_RESOLVED_TS_LAG.set(
+        if self.min_watermark != TimeStamp::max() {
+            CDC_MIN_WATERMARK_REGION.set(self.min_ts_region_id as i64);
+            CDC_MIN_WATERMARK.set(self.min_watermark.physical() as i64);
+            CDC_MIN_WATERMARK_LAG.set(
                 self.current_ts
                     .physical()
-                    .saturating_sub(self.min_resolved_ts.physical()) as i64,
+                    .saturating_sub(self.min_watermark.physical()) as i64,
             );
-            CDC_RESOLVED_TS_GAP_HISTOGRAM.observe(
+            CDC_WATERMARK_GAP_HISTOGRAM.observe(
                 self.current_ts
                     .physical()
-                    .saturating_sub(self.min_resolved_ts.physical()) as f64
+                    .saturating_sub(self.min_watermark.physical()) as f64
                     / 1000f64,
             );
         }
-        self.min_resolved_ts = TimeStamp::max();
+        self.min_watermark = TimeStamp::max();
         self.current_ts = TimeStamp::max();
         self.min_ts_region_id = 0;
 
@@ -1570,7 +1565,7 @@ mod tests {
         suite.run(Task::OpenConn { conn });
         suite.run(set_conn_version_task(
             conn_id,
-            FeatureGate::batch_resolved_ts(),
+            FeatureGate::batch_watermark(),
         ));
 
         let mut req_header = Header::default();
@@ -1908,8 +1903,8 @@ mod tests {
         let conn_id = conn.get_id();
         suite.run(Task::OpenConn { conn });
 
-        // Enable batch resolved ts in the test.
-        let version = FeatureGate::batch_resolved_ts();
+        // Enable batch watermark in the test.
+        let version = FeatureGate::batch_watermark();
         suite.run(set_conn_version_task(conn_id, version));
 
         let mut req_header = Header::default();
@@ -2075,8 +2070,8 @@ mod tests {
         let conn_id = conn.get_id();
         suite.run(Task::OpenConn { conn });
 
-        // Enable batch resolved ts in the test.
-        let version = FeatureGate::batch_resolved_ts();
+        // Enable batch watermark in the test.
+        let version = FeatureGate::batch_watermark();
         suite.run(set_conn_version_task(conn_id, version));
 
         let mut req_header = Header::default();
@@ -2181,8 +2176,8 @@ mod tests {
         let conn_id = conn.get_id();
         suite.run(Task::OpenConn { conn });
 
-        // Enable batch resolved ts in the test.
-        let version = FeatureGate::batch_resolved_ts();
+        // Enable batch watermark in the test.
+        let version = FeatureGate::batch_watermark();
         suite.run(set_conn_version_task(conn_id, version));
 
         let mut req_header = Header::default();
@@ -2217,7 +2212,7 @@ mod tests {
         let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
             .unwrap()
             .unwrap();
-        if let CdcEvent::ResolvedTs(r) = cdc_event.0 {
+        if let CdcEvent::Watermark(r) = cdc_event.0 {
             assert_eq!(r.regions, vec![1]);
             assert_eq!(r.ts, 1);
         } else {
@@ -2255,7 +2250,7 @@ mod tests {
         let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
             .unwrap()
             .unwrap();
-        if let CdcEvent::ResolvedTs(mut r) = cdc_event.0 {
+        if let CdcEvent::Watermark(mut r) = cdc_event.0 {
             r.regions.as_mut_slice().sort_unstable();
             assert_eq!(r.regions, vec![1, 2]);
             assert_eq!(r.ts, 2);
@@ -2263,7 +2258,7 @@ mod tests {
             panic!("unknown cdc event {:?}", cdc_event);
         }
 
-        // Register region 3 to another conn which is not support batch resolved ts.
+        // Register region 3 to another conn which is not support batch watermark.
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (tx, mut rx2) = channel::channel(1, quota);
         let mut rx2 = rx2.drain();
@@ -2308,10 +2303,10 @@ mod tests {
         let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
             .unwrap()
             .unwrap();
-        if let CdcEvent::ResolvedTs(mut r) = cdc_event.0 {
+        if let CdcEvent::Watermark(mut r) = cdc_event.0 {
             r.regions.as_mut_slice().sort_unstable();
-            // Region 3 resolved ts must not be send to the first conn when
-            // batch resolved ts is enabled.
+            // Region 3 watermark must not be send to the first conn when
+            // batch watermark is enabled.
             assert_eq!(r.regions, vec![1, 2]);
             assert_eq!(r.ts, 3);
         } else {
@@ -2325,7 +2320,7 @@ mod tests {
             assert_eq!(e.request_id, 3);
             let event = e.event.take().unwrap();
             match event {
-                Event_oneof_event::ResolvedTs(ts) => {
+                Event_oneof_event::Watermark(ts) => {
                     assert_eq!(ts, 3);
                 }
                 other => panic!("unknown event {:?}", other),
@@ -2484,7 +2479,7 @@ mod tests {
     }
 
     #[test]
-    fn test_broadcast_resolved_ts() {
+    fn test_broadcast_watermark() {
         let cfg = CdcConfig {
             min_ts_interval: ReadableDuration(Duration::from_secs(60)),
             ..Default::default()
@@ -2501,7 +2496,7 @@ mod tests {
             let conn = Conn::new(tx, String::new());
             let conn_id = conn.get_id();
             suite.run(Task::OpenConn { conn });
-            let version = FeatureGate::batch_resolved_ts();
+            let version = FeatureGate::batch_watermark();
             suite.run(set_conn_version_task(conn_id, version));
 
             for region_id in region_ids {
@@ -2535,15 +2530,15 @@ mod tests {
             }
         }
 
-        let assert_batch_resolved_ts = |drain: &mut channel::Drain,
-                                        regions: Vec<u64>,
-                                        resolved_ts: u64| {
+        let assert_batch_watermark = |drain: &mut channel::Drain,
+                                      regions: Vec<u64>,
+                                      watermark: u64| {
             let cdc_event = channel::recv_timeout(&mut drain.drain(), Duration::from_millis(500))
                 .unwrap()
                 .unwrap();
-            if let CdcEvent::ResolvedTs(r) = cdc_event.0 {
+            if let CdcEvent::Watermark(r) = cdc_event.0 {
                 assert_eq!(r.regions, regions);
-                assert_eq!(r.ts, resolved_ts);
+                assert_eq!(r.ts, watermark);
             } else {
                 panic!("unknown cdc event {:?}", cdc_event);
             }
@@ -2554,8 +2549,8 @@ mod tests {
             min_ts: TimeStamp::from(1),
             current_ts: TimeStamp::zero(),
         });
-        // conn a must receive a resolved ts that only contains region 1.
-        assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1], 1);
+        // conn a must receive a watermark that only contains region 1.
+        assert_batch_watermark(conn_rxs.get_mut(0).unwrap(), vec![1], 1);
         // conn b must not receive any messages.
         channel::recv_timeout(
             &mut conn_rxs.get_mut(0).unwrap().drain(),
@@ -2568,8 +2563,8 @@ mod tests {
             min_ts: TimeStamp::from(2),
             current_ts: TimeStamp::zero(),
         });
-        // conn a must receive a resolved ts that contains region 1 and region 2.
-        assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1, 2], 2);
+        // conn a must receive a watermark that contains region 1 and region 2.
+        assert_batch_watermark(conn_rxs.get_mut(0).unwrap(), vec![1, 2], 2);
         // conn b must not receive any messages.
         channel::recv_timeout(
             &mut conn_rxs.get_mut(1).unwrap().drain(),
@@ -2582,20 +2577,20 @@ mod tests {
             min_ts: TimeStamp::from(3),
             current_ts: TimeStamp::zero(),
         });
-        // conn a must receive a resolved ts that contains region 1 and region 2.
-        assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1, 2], 3);
-        // conn b must receive a resolved ts that contains region 3.
-        assert_batch_resolved_ts(conn_rxs.get_mut(1).unwrap(), vec![3], 3);
+        // conn a must receive a watermark that contains region 1 and region 2.
+        assert_batch_watermark(conn_rxs.get_mut(0).unwrap(), vec![1, 2], 3);
+        // conn b must receive a watermark that contains region 3.
+        assert_batch_watermark(conn_rxs.get_mut(1).unwrap(), vec![3], 3);
 
         suite.run(Task::MinTs {
             regions: vec![1, 3],
             min_ts: TimeStamp::from(4),
             current_ts: TimeStamp::zero(),
         });
-        // conn a must receive a resolved ts that only contains region 1.
-        assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1], 4);
-        // conn b must receive a resolved ts that contains region 3.
-        assert_batch_resolved_ts(conn_rxs.get_mut(1).unwrap(), vec![3], 4);
+        // conn a must receive a watermark that only contains region 1.
+        assert_batch_watermark(conn_rxs.get_mut(0).unwrap(), vec![1], 4);
+        // conn b must receive a watermark that contains region 3.
+        assert_batch_watermark(conn_rxs.get_mut(1).unwrap(), vec![3], 4);
     }
 
     // Suppose there are two Conn that capture the same region,
@@ -2769,7 +2764,7 @@ mod tests {
     #[test]
     fn test_on_min_ts() {
         let cfg = CdcConfig {
-            // Disable automatic advance resolved ts during test.
+            // Disable automatic advance watermark during test.
             min_ts_interval: ReadableDuration(Duration::from_secs(1000)),
             ..Default::default()
         };
@@ -2781,8 +2776,8 @@ mod tests {
         let conn = Conn::new(tx, String::new());
         let conn_id = conn.get_id();
         suite.run(Task::OpenConn { conn });
-        // Enable batch resolved ts in the test.
-        let version = FeatureGate::batch_resolved_ts();
+        // Enable batch watermark in the test.
+        let version = FeatureGate::batch_watermark();
         suite.run(set_conn_version_task(conn_id, version));
 
         let mut req_header = Header::default();
@@ -2840,22 +2835,22 @@ mod tests {
             current_ts: TimeStamp::compose(0, 4096),
         });
 
-        // There should be at least 3 resolved ts events.
-        let mut last_resolved_ts = 0;
+        // There should be at least 3 watermark events.
+        let mut last_watermark = 0;
         let mut last_batch_count = 0;
         for _ in 0..3 {
             let event = recv_timeout(&mut rx, Duration::from_millis(100))
                 .unwrap()
                 .unwrap()
                 .0;
-            assert!(last_resolved_ts < event.resolved_ts().ts, "{:?}", event);
+            assert!(last_watermark < event.watermark().ts, "{:?}", event);
             assert!(
-                last_batch_count < event.resolved_ts().regions.len(),
+                last_batch_count < event.watermark().regions.len(),
                 "{:?}",
                 event
             );
-            last_resolved_ts = event.resolved_ts().ts;
-            last_batch_count = event.resolved_ts().regions.len();
+            last_watermark = event.watermark().ts;
+            last_batch_count = event.watermark().regions.len();
         }
     }
 
@@ -2875,7 +2870,7 @@ mod tests {
         let conn_id = conn.get_id();
         suite.run(Task::OpenConn { conn });
 
-        let version = FeatureGate::batch_resolved_ts();
+        let version = FeatureGate::batch_watermark();
         suite.run(set_conn_version_task(conn_id, version));
 
         let mut req_header = Header::default();

@@ -60,7 +60,6 @@ raft = { workspace = true }
 raftstore = { workspace = true }
 rand = "0.8.0"
 regex = "1"
-resolved_ts = { workspace = true }
 security = { path = "../security" }
 slog = { workspace = true }
 slog-global = { workspace = true }
@@ -77,6 +76,7 @@ tracing = { workspace = true }
 tracing-active-tree = { workspace = true }
 txn_types = { workspace = true }
 uuid = "0.8"
+watermark = { workspace = true }
 yatp = { workspace = true }
 
 [dev-dependencies]

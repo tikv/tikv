@@ -135,7 +135,7 @@ struct ServerMeta<EK: KvEngine> {
     raw_router: RaftRouter<EK, RaftTestEngine>,
     raw_apply_router: ApplyRouter<EK>,
     gc_worker: GcWorker<RaftKv<EK, SimulateStoreTransport<EK>>>,
-    rts_worker: Option<LazyWorker<resolved_ts::Task>>,
+    wm_worker: Option<LazyWorker<watermark::Task>>,
     rsmeter_cleanup: Box<dyn FnOnce()>,
 }
 
@@ -351,17 +351,17 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
         );
         gc_worker.start(node_id).unwrap();
 
-        let rts_worker = if cfg.resolved_ts.enable {
-            // Resolved ts worker
-            let mut rts_worker = LazyWorker::new("resolved-ts");
-            let rts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
-            rts_ob.register_to(&mut coprocessor_host);
-            // resolved ts endpoint needs store id.
+        let wm_worker = if cfg.watermark.enable {
+            // Watermark worker
+            let mut wm_worker = LazyWorker::new("watermark");
+            let wm_ob = watermark::Observer::new(wm_worker.scheduler());
+            wm_ob.register_to(&mut coprocessor_host);
+            // Watermark endpoint needs store id.
             store_meta.lock().unwrap().store_id = Some(node_id);
-            // Resolved ts endpoint
-            let rts_endpoint = resolved_ts::Endpoint::new(
-                &cfg.resolved_ts,
-                rts_worker.scheduler(),
+            // Watermark endpoint
+            let wm_endpoint = watermark::Endpoint::new(
+                &cfg.watermark,
+                wm_worker.scheduler(),
                 CdcRaftRouter(raft_router),
                 store_meta.clone(),
                 self.pd_client.clone(),
@@ -370,8 +370,8 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
                 self.security_mgr.clone(),
             );
             // Start the worker
-            rts_worker.start(rts_endpoint);
-            Some(rts_worker)
+            wm_worker.start(wm_endpoint);
+            Some(wm_worker)
         } else {
             None
         };
@@ -658,7 +658,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
                 sim_router,
                 sim_trans: simulate_trans,
                 gc_worker,
-                rts_worker,
+                wm_worker,
                 rsmeter_cleanup,
             },
         );
@@ -671,9 +671,9 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
         Ok(node_id)
     }
 
-    pub fn get_resolved_ts_scheduler(&self, store_id: u64) -> Option<Scheduler<resolved_ts::Task>> {
+    pub fn get_watermark_scheduler(&self, store_id: u64) -> Option<Scheduler<watermark::Task>> {
         let meta = self.metas.get(&store_id)?;
-        let w = meta.rts_worker.as_ref()?;
+        let w = meta.wm_worker.as_ref()?;
         Some(w.scheduler())
     }
 }
@@ -721,8 +721,8 @@ impl<EK: KvEngineWithRocks> Simulator<EK> for ServerCluster<EK> {
         if let Some(mut meta) = self.metas.remove(&node_id) {
             meta.server.stop().unwrap();
             meta.node.stop();
-            // resolved ts worker started, let's stop it
-            if let Some(worker) = meta.rts_worker {
+            // watermark worker started, let's stop it
+            if let Some(worker) = meta.wm_worker {
                 worker.stop_worker();
             }
             (meta.rsmeter_cleanup)();

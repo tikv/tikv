@@ -147,7 +147,7 @@ impl CommandExt for FlashbackToVersionReadPhase {
 ///     - Rollback all these locks.
 ///   2. [PrepareFlashback] Prewrite phase:
 ///     - Prewrite the first user key after `self.start_key` specifically to
-///       prevent the `resolved_ts` from advancing.
+///       prevent the `watermark` from advancing.
 ///   3. [FinishFlashback] FlashbackWrite phase:
 ///     - Scan all the latest writes and their corresponding values at
 ///       `self.version`.

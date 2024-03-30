@@ -1292,22 +1292,22 @@ impl RegionReadProgressRegistry {
 
     // NOTICE: this function is an alias of `get_safe_ts` to distinguish the
     // semantics.
-    pub fn get_resolved_ts(&self, region_id: &u64) -> Option<u64> {
+    pub fn get_watermark(&self, region_id: &u64) -> Option<u64> {
         self.registry
             .lock()
             .unwrap()
             .get(region_id)
-            .map(|rp| rp.resolved_ts())
+            .map(|rp| rp.watermark())
     }
 
-    // Get the minimum `resolved_ts` which could ensure that there will be no more
+    // Get the minimum `watermark` which could ensure that there will be no more
     // locks whose `commit_ts` is smaller than it.
-    pub fn get_min_resolved_ts(&self) -> u64 {
+    pub fn get_min_watermark(&self) -> u64 {
         self.registry
             .lock()
             .unwrap()
             .iter()
-            .map(|(_, rrp)| rrp.resolved_ts())
+            .map(|(_, rrp)| rrp.watermark())
             //TODO: the uninitialized peer should be taken into consideration instead of skipping it(https://github.com/tikv/tikv/issues/15506).
             .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized,
             .min()
@@ -1366,7 +1366,7 @@ impl Default for RegionReadProgressRegistry {
 /// ```
 ///
 /// For the leader, the `(apply index, safe ts)` item is publish by the
-/// `resolved-ts` worker periodically. For the followers, the item is sync
+/// `watermark` worker periodically. For the followers, the item is sync
 /// periodically from the leader through the `CheckLeader` rpc.
 ///
 /// The intend is to make the item's `safe ts` larger (more up to date) and
@@ -1402,11 +1402,11 @@ impl RegionReadProgress {
         }
     }
 
-    pub fn update_advance_resolved_ts_notify(&self, advance_notify: Arc<Notify>) {
+    pub fn update_advance_watermark_notify(&self, advance_notify: Arc<Notify>) {
         self.core.lock().unwrap().advance_notify = Some(advance_notify);
     }
 
-    pub fn notify_advance_resolved_ts(&self) {
+    pub fn notify_advance_watermark(&self) {
         if let Ok(core) = self.core.try_lock()
             && let Some(advance_notify) = &core.advance_notify
         {
@@ -1557,10 +1557,10 @@ impl RegionReadProgress {
         self.safe_ts.load(AtomicOrdering::Acquire)
     }
 
-    // `safe_ts` is calculated from the `resolved_ts`, they are the same thing
-    // internally. So we can use `resolved_ts` as the alias of `safe_ts` here.
+    // `safe_ts` is calculated from the `watermark`, they are the same thing
+    // internally. So we can use `watermark` as the alias of `safe_ts` here.
     #[inline(always)]
-    pub fn resolved_ts(&self) -> u64 {
+    pub fn watermark(&self) -> u64 {
         self.safe_ts()
     }
 
@@ -1590,10 +1590,10 @@ pub struct RegionReadProgressCore {
     pause: bool,
     // Discard incoming `(idx, ts)`
     discard: bool,
-    // A notify to trigger advancing resolved ts immediately.
+    // A notify to trigger advancing watermark immediately.
     advance_notify: Option<Arc<Notify>>,
     // The approximate last instant of calling update_safe_ts(), used for diagnosis.
-    // Only the update from advance of resolved-ts is counted. Other sources like CDC or
+    // Only the update from advance of watermark is counted. Other sources like CDC or
     // backup-stream are ignored.
     last_instant_of_update_safe_ts: Option<Instant>,
     last_instant_of_consume_leader: Option<Instant>,

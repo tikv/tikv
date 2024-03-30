@@ -50,7 +50,7 @@ pub struct DataResolverManager {
     tx: UnboundedSender<ResolveKvDataResponse>,
     /// Current working workers
     workers: Arc<Mutex<Vec<JoinHandle<()>>>>,
-    resolved_ts: TimeStamp,
+    watermark: TimeStamp,
 }
 
 impl Clone for DataResolverManager {
@@ -59,7 +59,7 @@ impl Clone for DataResolverManager {
             engine: self.engine.clone(),
             tx: self.tx.clone(),
             workers: Arc::new(Mutex::new(Vec::new())),
-            resolved_ts: self.resolved_ts,
+            watermark: self.watermark,
         }
     }
 }
@@ -69,16 +69,16 @@ impl DataResolverManager {
     pub fn new(
         engine: RocksEngine,
         tx: UnboundedSender<ResolveKvDataResponse>,
-        resolved_ts: TimeStamp,
+        watermark: TimeStamp,
     ) -> Self {
         DataResolverManager {
             engine,
             tx,
             workers: Arc::new(Mutex::new(Vec::new())),
-            resolved_ts,
+            watermark,
         }
     }
-    /// Start a delete kv data process which delete all data by resolved_ts.
+    /// Start a delete kv data process which delete all data by watermark.
     pub fn start(&self) {
         self.resolve_lock();
         self.resolve_write();
@@ -86,7 +86,7 @@ impl DataResolverManager {
 
     fn resolve_lock(&self) {
         let mut readopts = IterOptions::new(None, None, false);
-        readopts.set_hint_min_ts(Bound::Excluded(self.resolved_ts.into_inner()));
+        readopts.set_hint_min_ts(Bound::Excluded(self.watermark.into_inner()));
         let lock_iter = self.engine.iterator_opt(CF_LOCK, readopts).unwrap();
         let mut worker = LockResolverWorker::new(lock_iter, self.tx.clone());
         let mut wb = self.engine.write_batch();
@@ -107,12 +107,12 @@ impl DataResolverManager {
 
     fn resolve_write(&self) {
         let mut readopts = IterOptions::new(None, None, false);
-        readopts.set_hint_min_ts(Bound::Excluded(self.resolved_ts.into_inner()));
+        readopts.set_hint_min_ts(Bound::Excluded(self.watermark.into_inner()));
         let write_iter = self
             .engine
             .iterator_opt(CF_WRITE, readopts.clone())
             .unwrap();
-        let mut worker = WriteResolverWorker::new(write_iter, self.resolved_ts, self.tx.clone());
+        let mut worker = WriteResolverWorker::new(write_iter, self.watermark, self.tx.clone());
         let mut wb = self.engine.write_batch();
         let props = tikv_util::thread_group::current_properties();
 
@@ -193,8 +193,8 @@ const BATCH_SIZE_LIMIT: usize = 1024 * 1024;
 /// `WriteResolverWorker` is the worker that does the actual delete data work.
 pub struct WriteResolverWorker {
     batch_size_limit: usize,
-    /// `resolved_ts` is the timestamp to data delete to.
-    resolved_ts: TimeStamp,
+    /// `watermark` is the timestamp to data delete to.
+    watermark: TimeStamp,
     write_iter: RocksEngineIterator,
     /// send progress of this task
     tx: UnboundedSender<ResolveKvDataResponse>,
@@ -211,14 +211,14 @@ struct Batch {
 impl WriteResolverWorker {
     pub fn new(
         mut write_iter: RocksEngineIterator,
-        resolved_ts: TimeStamp,
+        watermark: TimeStamp,
         tx: UnboundedSender<ResolveKvDataResponse>,
     ) -> Self {
         write_iter.seek_to_first().unwrap();
         Self {
             batch_size_limit: BATCH_SIZE_LIMIT,
             write_iter,
-            resolved_ts,
+            watermark,
             tx,
         }
     }
@@ -248,7 +248,7 @@ impl WriteResolverWorker {
         for _ in 0..self.batch_size_limit {
             if let Some((key, write)) = self.next_write()? {
                 let commit_ts = box_try!(Key::decode_ts_from(keys::origin_key(&key)));
-                if commit_ts > self.resolved_ts {
+                if commit_ts > self.watermark {
                     writes.push((key, write));
                 }
             } else {
@@ -259,7 +259,7 @@ impl WriteResolverWorker {
         Ok(Batch { writes, has_more })
     }
 
-    // delete key.commit_ts > resolved-ts in write cf and default cf
+    // delete key.commit_ts > watermark in write cf and default cf
     fn batch_resolve_write(&mut self, wb: &mut RocksWriteBatchVec) -> Result<bool> {
         let Batch { writes, has_more } = self.scan_next_batch()?;
         if has_more && writes.is_empty() {

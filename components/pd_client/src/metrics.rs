@@ -23,7 +23,7 @@ make_static_metric! {
         report_batch_split,
         get_gc_safe_point,
         update_service_safe_point,
-        min_resolved_ts,
+        min_watermark,
         get_operator,
         alloc_id,
         is_recovering_marked,

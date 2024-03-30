@@ -8,13 +8,13 @@ use dashmap::{
 };
 use kvproto::metapb::Region;
 use raftstore::coprocessor::*;
-use resolved_ts::{Resolver, TsSource, TxnLocks};
 use tikv_util::{
     info,
     memory::{MemoryQuota, MemoryQuotaExceeded},
     warn,
 };
 use txn_types::TimeStamp;
+use watermark::{Resolver, TsSource, TxnLocks};
 
 use crate::{debug, metrics::TRACK_REGION, utils};
 
@@ -247,8 +247,8 @@ impl SubscriptionTracer {
         self.0.iter().map(|s| *s.key()).collect()
     }
 
-    /// try advance the resolved ts with the min ts of in-memory locks.
-    /// returns the regions and theirs resolved ts.
+    /// try advance the watermark with the min ts of in-memory locks.
+    /// returns the regions and theirs watermark.
     pub fn resolve_with(
         &self,
         min_ts: TimeStamp,
@@ -466,8 +466,8 @@ impl<'a> ActiveSubscriptionRef<'a> {
 ///   more.
 ///
 /// This version of resolver did some change for solve these problems:
-/// - The resolver won't advance the resolved ts to greater than `stable_ts` if
-///   there is some. This can help us prevent resolved ts from advancing when
+/// - The resolver won't advance the watermark to greater than `stable_ts` if
+///   there is some. This can help us prevent watermark from advancing when
 ///   initial scanning hasn't finished yet.
 /// - When we `untrack` a lock haven't been tracked, this would record it, and
 ///   skip this lock if we want to track it then. This would be safe because:
@@ -475,7 +475,7 @@ impl<'a> ActiveSubscriptionRef<'a> {
 ///   - tracking a lock have already being untracked (unordered call of `track`
 ///     and `untrack`) wouldn't happen at phase 2 for same region. but only when
 ///     phase 1 and phase 2 happened concurrently, at that time, we wouldn't and
-///     cannot advance the resolved ts.
+///     cannot advance the watermark.
 pub struct TwoPhaseResolver {
     resolver: Resolver,
     future_locks: Vec<FutureLock>,
@@ -571,12 +571,12 @@ impl TwoPhaseResolver {
         self.resolver.resolve(min_ts, None, TsSource::BackupStream)
     }
 
-    pub fn resolved_ts(&self) -> TimeStamp {
+    pub fn watermark(&self) -> TimeStamp {
         if let Some(stable_ts) = self.stable_ts {
             return stable_ts;
         }
 
-        self.resolver.resolved_ts()
+        self.resolver.watermark()
     }
 
     pub fn new(region_id: u64, stable_ts: Option<TimeStamp>) -> Self {
@@ -599,7 +599,7 @@ impl TwoPhaseResolver {
             Some(ts) => {
                 // advance the internal resolver.
                 // the start ts of initial scanning would be a safe ts for min ts
-                // -- because is used to be a resolved ts.
+                // -- because is used to be a watermark.
                 self.resolver.resolve(ts, None, TsSource::BackupStream);
             }
             None => {
@@ -624,8 +624,8 @@ mod test {
 
     use kvproto::metapb::{Region, RegionEpoch};
     use raftstore::coprocessor::ObserveHandle;
-    use resolved_ts::TxnLocks;
     use txn_types::TimeStamp;
+    use watermark::TxnLocks;
 
     use super::{SubscriptionTracer, TwoPhaseResolver};
     use crate::subscription_track::RefMut;

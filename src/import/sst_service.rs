@@ -140,7 +140,7 @@ struct RequestCollector {
     max_raft_req_size: usize,
 
     /// Retain the last ts of each key in each request.
-    /// This is used for write CF because resolved ts observer hates duplicated
+    /// This is used for write CF because watermark observer hates duplicated
     /// key in the same request.
     write_reqs: HashMap<Vec<u8>, (Modify, u64)>,
     /// Collector favor that simple collect all items, and it do not contains
@@ -216,7 +216,7 @@ impl RequestCollector {
     }
 
     // we need to remove duplicate keys in here, since
-    // in https://github.com/tikv/tikv/blob/a401f78bc86f7e6ea6a55ad9f453ae31be835b55/components/resolved_ts/src/cmd.rs#L204
+    // in https://github.com/tikv/tikv/blob/master/components/watermark/src/cmd.rs#L218
     // will panic if found duplicated entry during Vec<PutRequest>.
     fn accept(&mut self, cf: &str, m: Modify) {
         if self.should_send_batch_before_adding(&m) {
@@ -288,7 +288,7 @@ impl RequestCollector {
             return;
         }
         // Set the UUID of header to prevent raftstore batching our requests.
-        // The current `resolved_ts` observer assumes that each batch of request doesn't
+        // The current `watermark` observer assumes that each batch of request doesn't
         // has two writes to the same key. (Even with 2 different TS). That was true
         // for normal cases because the latches reject concurrency write to keys.
         // However we have bypassed the latch layer :(

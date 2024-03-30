@@ -512,7 +512,6 @@ dependencies = [
  "raftstore",
  "rand 0.8.5",
  "regex",
- "resolved_ts",
  "security",
  "slog",
  "slog-global",
@@ -537,6 +536,7 @@ dependencies = [
  "url",
  "uuid 0.8.2",
  "walkdir",
+ "watermark",
  "yatp",
 ]
 
@@ -864,7 +864,6 @@ dependencies = [
  "protobuf",
  "raft",
  "raftstore",
- "resolved_ts",
  "security",
  "semver 1.0.4",
  "slog",
@@ -879,6 +878,7 @@ dependencies = [
  "tikv_util",
  "tokio",
  "txn_types",
+ "watermark",
 ]
 
 [[package]]
@@ -2838,7 +2838,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#929ab83f9754d96b3366adec9004ccf21e9d7824"
+source = "git+https://github.com/zhangjinpeng87/kvproto.git?branch=rename-resolve-ts#02a86434e2e57b603fea6c67c932f717ffb79782"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4657,44 +4657,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "resolved_ts"
-version = "0.0.1"
-dependencies = [
- "collections",
- "concurrency_manager",
- "crossbeam",
- "engine_rocks",
- "engine_traits",
- "fail",
- "futures 0.3.15",
- "grpcio",
- "hex 0.4.2",
- "kvproto",
- "lazy_static",
- "log_wrappers",
- "online_config",
- "panic_hook",
- "pd_client",
- "prometheus",
- "protobuf",
- "raft",
- "raftstore",
- "security",
- "slog",
- "slog-global",
- "tempfile",
- "test_raftstore",
- "test_sst_importer",
- "test_util",
- "thiserror",
- "tikv",
- "tikv_kv",
- "tikv_util",
- "tokio",
- "txn_types",
-]
-
-[[package]]
 name = "resource_control"
 version = "0.0.1"
 dependencies = [
@@ -5303,7 +5265,6 @@ dependencies = [
  "raftstore",
  "raftstore-v2",
  "region_cache_memory_engine",
- "resolved_ts",
  "resource_control",
  "resource_metering",
  "security",
@@ -5320,6 +5281,7 @@ dependencies = [
  "tokio",
  "toml",
  "txn_types",
+ "watermark",
  "yatp",
 ]
 
@@ -6005,7 +5967,6 @@ dependencies = [
  "raftstore",
  "rand 0.8.5",
  "region_cache_memory_engine",
- "resolved_ts",
  "resource_control",
  "resource_metering",
  "security",
@@ -6021,6 +5982,7 @@ dependencies = [
  "tokio",
  "tokio-timer",
  "txn_types",
+ "watermark",
 ]
 
 [[package]]
@@ -6054,7 +6016,6 @@ dependencies = [
  "raftstore",
  "raftstore-v2",
  "rand 0.8.5",
- "resolved_ts",
  "resource_control",
  "resource_metering",
  "security",
@@ -6071,6 +6032,7 @@ dependencies = [
  "tokio",
  "tokio-timer",
  "txn_types",
+ "watermark",
 ]
 
 [[package]]
@@ -7071,7 +7033,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "static_assertions",
 ]
 
@@ -7349,6 +7311,44 @@ name = "wasm-bindgen-shared"
 version = "0.2.79"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d958d035c4438e28c70e4321a2911302f10135ce78a9c7834c0cab4123d06a2"
+
+[[package]]
+name = "watermark"
+version = "0.0.1"
+dependencies = [
+ "collections",
+ "concurrency_manager",
+ "crossbeam",
+ "engine_rocks",
+ "engine_traits",
+ "fail",
+ "futures 0.3.15",
+ "grpcio",
+ "hex 0.4.2",
+ "kvproto",
+ "lazy_static",
+ "log_wrappers",
+ "online_config",
+ "panic_hook",
+ "pd_client",
+ "prometheus",
+ "protobuf",
+ "raft",
+ "raftstore",
+ "security",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "test_raftstore",
+ "test_sst_importer",
+ "test_util",
+ "thiserror",
+ "tikv",
+ "tikv_kv",
+ "tikv_util",
+ "tokio",
+ "txn_types",
+]
 
 [[package]]
 name = "web-sys"

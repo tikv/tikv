@@ -309,7 +309,7 @@ pub trait PdClient: Send + Sync {
     /// recovery mode recovery mode will do
     /// 1. update tikv cluster id from pd
     /// 2. all peer apply the log to last of the leader peer which has the most
-    /// log appended. 3. delete data to some point of time (resolved_ts)
+    /// log appended. 3. delete data to some point of time (watermark)
     fn is_recovering_marked(&self) -> Result<bool> {
         unimplemented!();
     }
@@ -516,8 +516,8 @@ pub trait PdClient: Send + Sync {
         unimplemented!()
     }
 
-    // Report min resolved_ts to PD.
-    fn report_min_resolved_ts(&self, _store_id: u64, _min_resolved_ts: u64) -> PdFuture<()> {
+    // Report min watermark to PD.
+    fn report_min_watermark(&self, _store_id: u64, _min_watermark: u64) -> PdFuture<()> {
         unimplemented!()
     }
 

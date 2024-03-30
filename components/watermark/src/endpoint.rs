@@ -27,7 +27,7 @@ use raftstore::{
     },
 };
 use security::SecurityManager;
-use tikv::config::ResolvedTsConfig;
+use tikv::config::WatermarkConfig;
 use tikv_util::{
     memory::{HeapSize, MemoryQuota},
     warn,
@@ -45,7 +45,7 @@ use crate::{
     Error, Result, TsSource, TxnLocks, ON_DROP_WARN_HEAP_SIZE,
 };
 
-/// grace period for identifying identifying slow resolved-ts and safe-ts.
+/// grace period for identifying identifying slow watermark and safe-ts.
 const SLOW_LOG_GRACE_PERIOD_MS: u64 = 1000;
 const MEMORY_QUOTA_EXCEEDED_BACKOFF: Duration = Duration::from_secs(30);
 
@@ -106,7 +106,7 @@ impl ResolverStatus {
         memory_quota
             .alloc(lock.approximate_heap_size())
             .map_err(|e| {
-                fail::fail_point!("resolved_ts_on_pending_locks_memory_quota_exceeded");
+                fail::fail_point!("watermark_on_pending_locks_memory_quota_exceeded");
                 Error::MemoryQuotaExceeded(e)
             })?;
         locks.push(lock);
@@ -177,7 +177,7 @@ impl HeapSize for PendingLock {
 
 // Records information related to observed region.
 // observe_id is used for avoiding ABA problems in incremental scan task,
-// advance resolved ts task, and command observing.
+// advance watermark task, and command observing.
 struct ObserveRegion {
     meta: Region,
     handle: ObserveHandle,
@@ -370,7 +370,7 @@ impl ObserveRegion {
 
 pub struct Endpoint<T, E: KvEngine, S> {
     store_id: Option<u64>,
-    cfg: ResolvedTsConfig,
+    cfg: WatermarkConfig,
     memory_quota: Arc<MemoryQuota>,
     advance_notify: Arc<Notify>,
     store_meta: Arc<Mutex<S>>,
@@ -401,20 +401,20 @@ where
             for (region_id, read_progress) in registry {
                 let (leader_info, leader_store_id) = read_progress.dump_leader_info();
                 let core = read_progress.get_core();
-                let resolved_ts = leader_info.get_read_state().get_safe_ts();
+                let watermark = leader_info.get_read_state().get_safe_ts();
                 let safe_ts = core.read_state().ts;
 
-                if resolved_ts == 0 {
+                if watermark == 0 {
                     stats.zero_ts_count += 1;
                     continue;
                 }
 
                 if is_leader(store_id, leader_store_id) {
-                    // leader resolved-ts
-                    if resolved_ts < stats.min_leader_resolved_ts.resolved_ts {
+                    // leader watermark
+                    if watermark < stats.min_leader_watermark.watermark {
                         let resolver = self.regions.get_mut(region_id).map(|x| &mut x.resolver);
                         stats
-                            .min_leader_resolved_ts
+                            .min_leader_watermark
                             .set(*region_id, resolver, &core, &leader_info);
                     }
                 } else {
@@ -423,9 +423,9 @@ where
                         stats.min_follower_safe_ts.set(*region_id, &core);
                     }
 
-                    // follower resolved-ts
-                    if resolved_ts < stats.min_follower_resolved_ts.resolved_ts {
-                        stats.min_follower_resolved_ts.set(*region_id, &core);
+                    // follower watermark
+                    if watermark < stats.min_follower_watermark.watermark {
+                        stats.min_follower_watermark.set(*region_id, &core);
                     }
                 }
             }
@@ -458,20 +458,23 @@ where
     fn update_metrics(&self, stats: &Stats) {
         let now = self.approximate_now_tso();
         // general
-        if stats.min_follower_resolved_ts.resolved_ts < stats.min_leader_resolved_ts.resolved_ts {
-            RTS_MIN_RESOLVED_TS.set(stats.min_follower_resolved_ts.resolved_ts as i64);
-            RTS_MIN_RESOLVED_TS_GAP.set(now.saturating_sub(
-                TimeStamp::from(stats.min_follower_resolved_ts.resolved_ts).physical(),
-            ) as i64);
-            RTS_MIN_RESOLVED_TS_REGION.set(stats.min_follower_resolved_ts.region_id as i64);
+        if stats.min_follower_watermark.watermark < stats.min_leader_watermark.watermark {
+            RTS_MIN_WATERMARK.set(stats.min_follower_watermark.watermark as i64);
+            RTS_MIN_WATERMARK_GAP.set(
+                now.saturating_sub(
+                    TimeStamp::from(stats.min_follower_watermark.watermark).physical(),
+                ) as i64,
+            );
+            RTS_MIN_WATERMARK_REGION.set(stats.min_follower_watermark.region_id as i64);
         } else {
-            RTS_MIN_RESOLVED_TS.set(stats.min_leader_resolved_ts.resolved_ts as i64);
-            RTS_MIN_RESOLVED_TS_GAP.set(now.saturating_sub(
-                TimeStamp::from(stats.min_leader_resolved_ts.resolved_ts).physical(),
-            ) as i64);
-            RTS_MIN_RESOLVED_TS_REGION.set(stats.min_leader_resolved_ts.region_id as i64);
+            RTS_MIN_WATERMARK.set(stats.min_leader_watermark.watermark as i64);
+            RTS_MIN_WATERMARK_GAP
+                .set(now.saturating_sub(
+                    TimeStamp::from(stats.min_leader_watermark.watermark).physical(),
+                ) as i64);
+            RTS_MIN_WATERMARK_REGION.set(stats.min_leader_watermark.region_id as i64);
         }
-        RTS_ZERO_RESOLVED_TS.set(stats.zero_ts_count);
+        RTS_ZERO_WATERMARK.set(stats.zero_ts_count);
 
         RTS_LOCK_HEAP_BYTES_GAUGE.set(stats.resolver.heap_size);
         RTS_LOCK_QUOTA_IN_USE_BYTES_GAUGE.set(self.memory_quota.in_use() as i64);
@@ -505,40 +508,39 @@ where
                 .unwrap_or(-1),
         );
 
-        // min leader resolved ts
-        RTS_MIN_LEADER_RESOLVED_TS.set(stats.min_leader_resolved_ts.resolved_ts as i64);
-        RTS_MIN_LEADER_RESOLVED_TS_REGION.set(stats.min_leader_resolved_ts.region_id as i64);
-        RTS_MIN_LEADER_RESOLVED_TS_REGION_MIN_LOCK_TS.set(
+        // min leader watermark
+        RTS_MIN_LEADER_WATERMARK.set(stats.min_leader_watermark.watermark as i64);
+        RTS_MIN_LEADER_WATERMARK_REGION.set(stats.min_leader_watermark.region_id as i64);
+        RTS_MIN_LEADER_WATERMARK_REGION_MIN_LOCK_TS.set(
             stats
-                .min_leader_resolved_ts
+                .min_leader_watermark
                 .min_lock
                 .as_ref()
                 .map(|(ts, _)| (*ts).into_inner() as i64)
                 .unwrap_or(-1),
         );
-        RTS_MIN_LEADER_RESOLVED_TS_GAP
-            .set(now.saturating_sub(
-                TimeStamp::from(stats.min_leader_resolved_ts.resolved_ts).physical(),
-            ) as i64);
+        RTS_MIN_LEADER_WATERMARK_GAP.set(
+            now.saturating_sub(TimeStamp::from(stats.min_leader_watermark.watermark).physical())
+                as i64,
+        );
         RTS_MIN_LEADER_DUATION_TO_LAST_UPDATE_SAFE_TS.set(
             stats
-                .min_leader_resolved_ts
+                .min_leader_watermark
                 .duration_to_last_update_ms
                 .map(|x| x as i64)
                 .unwrap_or(-1),
         );
 
-        // min follower resolved ts
-        RTS_MIN_FOLLOWER_RESOLVED_TS.set(stats.min_follower_resolved_ts.resolved_ts as i64);
-        RTS_MIN_FOLLOWER_RESOLVED_TS_REGION.set(stats.min_follower_resolved_ts.region_id as i64);
-        RTS_MIN_FOLLOWER_RESOLVED_TS_GAP.set(
-            now.saturating_sub(
-                TimeStamp::from(stats.min_follower_resolved_ts.resolved_ts).physical(),
-            ) as i64,
+        // min follower watermark
+        RTS_MIN_FOLLOWER_WATERMARK.set(stats.min_follower_watermark.watermark as i64);
+        RTS_MIN_FOLLOWER_WATERMARK_REGION.set(stats.min_follower_watermark.region_id as i64);
+        RTS_MIN_FOLLOWER_WATERMARK_GAP.set(
+            now.saturating_sub(TimeStamp::from(stats.min_follower_watermark.watermark).physical())
+                as i64,
         );
-        RTS_MIN_FOLLOWER_RESOLVED_TS_DURATION_TO_LAST_CONSUME_LEADER.set(
+        RTS_MIN_FOLLOWER_WATERMARK_DURATION_TO_LAST_CONSUME_LEADER.set(
             stats
-                .min_follower_resolved_ts
+                .min_follower_watermark
                 .duration_to_last_consume_leader
                 .map(|x| x as i64)
                 .unwrap_or(-1),
@@ -570,25 +572,25 @@ where
         let follower_threshold = 2 * expected_interval + SLOW_LOG_GRACE_PERIOD_MS;
         let now = self.approximate_now_tso();
 
-        // min leader resolved ts
-        let min_leader_resolved_ts_gap = now
-            .saturating_sub(TimeStamp::from(stats.min_leader_resolved_ts.resolved_ts).physical());
-        if min_leader_resolved_ts_gap > leader_threshold {
+        // min leader watermark
+        let min_leader_watermark_gap =
+            now.saturating_sub(TimeStamp::from(stats.min_leader_watermark.watermark).physical());
+        if min_leader_watermark_gap > leader_threshold {
             info!(
-                "the max gap of leader resolved-ts is large";
-                "region_id" => stats.min_leader_resolved_ts.region_id,
-                "gap" => format!("{}ms", min_leader_resolved_ts_gap),
-                "read_state" => ?stats.min_leader_resolved_ts.read_state,
-                "applied_index" => stats.min_leader_resolved_ts.applied_index,
-                "min_lock" => ?stats.min_leader_resolved_ts.min_lock,
-                "lock_num" => stats.min_leader_resolved_ts.lock_num,
-                "txn_num" => stats.min_leader_resolved_ts.txn_num,
+                "the max gap of leader watermark is large";
+                "region_id" => stats.min_leader_watermark.region_id,
+                "gap" => format!("{}ms", min_leader_watermark_gap),
+                "read_state" => ?stats.min_leader_watermark.read_state,
+                "applied_index" => stats.min_leader_watermark.applied_index,
+                "min_lock" => ?stats.min_leader_watermark.min_lock,
+                "lock_num" => stats.min_leader_watermark.lock_num,
+                "txn_num" => stats.min_leader_watermark.txn_num,
                 "min_memory_lock" => ?stats.cm_min_lock,
-                "duration_to_last_update_safe_ts" => match stats.min_leader_resolved_ts.duration_to_last_update_ms {
+                "duration_to_last_update_safe_ts" => match stats.min_leader_watermark.duration_to_last_update_ms {
                     Some(d) => format!("{}ms", d),
                     None => "none".to_owned(),
                 },
-                "last_resolve_attempt" => &stats.min_leader_resolved_ts.last_resolve_attempt,
+                "last_resolve_attempt" => &stats.min_leader_watermark.last_resolve_attempt,
             );
         }
 
@@ -601,7 +603,7 @@ where
                 "region_id" => stats.min_follower_safe_ts.region_id,
                 "gap" => format!("{}ms", min_follower_safe_ts_gap),
                 "safe_ts" => stats.min_follower_safe_ts.safe_ts,
-                "resolved_ts" => stats.min_follower_safe_ts.resolved_ts,
+                "watermark" => stats.min_follower_safe_ts.watermark,
                 "duration_to_last_consume_leader" => match stats.min_follower_safe_ts.duration_to_last_consume_leader {
                     Some(d) => format!("{}ms", d),
                     None => "none".to_owned(),
@@ -612,28 +614,28 @@ where
             );
         }
 
-        // min follower resolved ts
-        let min_follower_resolved_ts_gap = now
-            .saturating_sub(TimeStamp::from(stats.min_follower_resolved_ts.resolved_ts).physical());
-        if min_follower_resolved_ts_gap > follower_threshold {
-            if stats.min_follower_resolved_ts.region_id == stats.min_follower_safe_ts.region_id {
+        // min follower watermark
+        let min_follower_watermark_gap =
+            now.saturating_sub(TimeStamp::from(stats.min_follower_watermark.watermark).physical());
+        if min_follower_watermark_gap > follower_threshold {
+            if stats.min_follower_watermark.region_id == stats.min_follower_safe_ts.region_id {
                 info!(
-                    "the max gap of follower resolved-ts is large; it's the same region that has the min safe-ts"
+                    "the max gap of follower watermark is large; it's the same region that has the min safe-ts"
                 );
             } else {
                 info!(
-                    "the max gap of follower resolved-ts is large";
-                    "region_id" => stats.min_follower_resolved_ts.region_id,
-                    "gap" => format!("{}ms", min_follower_resolved_ts_gap),
-                    "safe_ts" => stats.min_follower_resolved_ts.safe_ts,
-                    "resolved_ts" => stats.min_follower_resolved_ts.resolved_ts,
-                    "duration_to_last_consume_leader" => match stats.min_follower_resolved_ts.duration_to_last_consume_leader {
+                    "the max gap of follower watermark is large";
+                    "region_id" => stats.min_follower_watermark.region_id,
+                    "gap" => format!("{}ms", min_follower_watermark_gap),
+                    "safe_ts" => stats.min_follower_watermark.safe_ts,
+                    "watermark" => stats.min_follower_watermark.watermark,
+                    "duration_to_last_consume_leader" => match stats.min_follower_watermark.duration_to_last_consume_leader {
                         Some(d) => format!("{}ms", d),
                         None => "none".to_owned(),
                     },
-                    "applied_index" => stats.min_follower_resolved_ts.applied_index,
-                    "latest_candidate" => ?stats.min_follower_resolved_ts.latest_candidate,
-                    "oldest_candidate" => ?stats.min_follower_resolved_ts.oldest_candidate,
+                    "applied_index" => stats.min_follower_watermark.applied_index,
+                    "latest_candidate" => ?stats.min_follower_watermark.latest_candidate,
+                    "oldest_candidate" => ?stats.min_follower_watermark.oldest_candidate,
                 );
             }
         }
@@ -647,7 +649,7 @@ where
     S: StoreRegionMeta,
 {
     pub fn new(
-        cfg: &ResolvedTsConfig,
+        cfg: &WatermarkConfig,
         scheduler: Scheduler<Task>,
         cdc_handle: T,
         store_meta: Arc<Mutex<S>>,
@@ -687,7 +689,7 @@ where
             regions: HashMap::default(),
             _phantom: PhantomData,
         };
-        ep.handle_advance_resolved_ts(leader_resolver);
+        ep.handle_advance_watermark(leader_resolver);
         ep
     }
 
@@ -709,7 +711,7 @@ where
         let observe_handle = observe_region.handle.clone();
         observe_region
             .read_progress()
-            .update_advance_resolved_ts_notify(self.advance_notify.clone());
+            .update_advance_watermark_notify(self.advance_notify.clone());
         self.regions.insert(region_id, observe_region);
 
         let scan_task = self.build_scan_task(region, observe_handle, cancelled_rx, backoff);
@@ -801,7 +803,7 @@ where
                 self.deregister_region(region.id);
             } else {
                 warn!(
-                    "resolved ts destroy region failed due to epoch not match";
+                    "watermark destroy region failed due to epoch not match";
                     "region_id" => region.id,
                     "current_epoch" => ?observe_region.meta.get_region_epoch(),
                     "request_epoch" => ?region.get_region_epoch(),
@@ -820,7 +822,7 @@ where
     ) {
         if let Some(observe_region) = self.regions.get(&region_id) {
             if observe_region.handle.id != observe_id {
-                warn!("resolved ts deregister region failed due to observe_id not match");
+                warn!("watermark deregister region failed due to observe_id not match");
                 return;
             }
 
@@ -843,14 +845,9 @@ where
         }
     }
 
-    // Update advanced resolved ts.
+    // Update advanced watermark.
     // Must ensure all regions are leaders at the point of ts.
-    fn handle_resolved_ts_advanced(
-        &mut self,
-        regions: Vec<u64>,
-        ts: TimeStamp,
-        ts_source: TsSource,
-    ) {
+    fn handle_watermark_advanced(&mut self, regions: Vec<u64>, ts: TimeStamp, ts_source: TsSource) {
         if regions.is_empty() {
             return;
         }
@@ -890,7 +887,7 @@ where
                         self.re_register_region(region_id, observe_id, e, backoff);
                     }
                 } else {
-                    debug!("resolved ts CmdBatch discarded";
+                    debug!("watermark CmdBatch discarded";
                         "region_id" => batch.region_id,
                         "observe_id" => ?batch.rts_id,
                         "current" => ?observe_region.handle.id,
@@ -927,7 +924,7 @@ where
         }
     }
 
-    fn handle_advance_resolved_ts(&self, leader_resolver: LeadershipResolver) {
+    fn handle_advance_watermark(&self, leader_resolver: LeadershipResolver) {
         let regions = self.regions.keys().copied().collect();
         self.advance_worker.advance_ts_for_regions(
             regions,
@@ -940,7 +937,7 @@ where
     fn handle_change_config(&mut self, change: ConfigChange) {
         let prev = format!("{:?}", self.cfg);
         if let Err(e) = self.cfg.update(change) {
-            warn!("resolved-ts config fails"; "error" => ?e);
+            warn!("watermark config fails"; "error" => ?e);
         } else {
             self.advance_notify.notify_waiters();
             self.memory_quota
@@ -948,7 +945,7 @@ where
             self.scan_concurrency_semaphore =
                 Arc::new(Semaphore::new(self.cfg.incremental_scan_concurrency));
             info!(
-                "resolved-ts config changed";
+                "watermark config changed";
                 "prev" => prev,
                 "current" => ?self.cfg,
             );
@@ -968,7 +965,7 @@ where
         region_id: u64,
         log_locks: bool,
         min_start_ts: u64,
-        callback: tikv::server::service::ResolvedTsDiagnosisCallback,
+        callback: tikv::server::service::WatermarkDiagnosisCallback,
     ) {
         if let Some(r) = self.regions.get(&region_id) {
             if log_locks {
@@ -976,7 +973,7 @@ where
             }
             callback(Some((
                 r.resolver.stopped(),
-                r.resolver.resolved_ts().into_inner(),
+                r.resolver.watermark().into_inner(),
                 r.resolver.tracked_index(),
                 r.resolver.num_locks(),
                 r.resolver.num_transactions(),
@@ -1001,10 +998,10 @@ pub enum Task {
         observe_id: ObserveId,
         cause: Error,
     },
-    AdvanceResolvedTs {
+    AdvanceWatermark {
         leader_resolver: LeadershipResolver,
     },
-    ResolvedTsAdvanced {
+    WatermarkAdvanced {
         regions: Vec<u64>,
         ts: TimeStamp,
         ts_source: TsSource,
@@ -1025,13 +1022,13 @@ pub enum Task {
         region_id: u64,
         log_locks: bool,
         min_start_ts: u64,
-        callback: tikv::server::service::ResolvedTsDiagnosisCallback,
+        callback: tikv::server::service::WatermarkDiagnosisCallback,
     },
 }
 
 impl fmt::Debug for Task {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut de = f.debug_struct("ResolvedTsTask");
+        let mut de = f.debug_struct("WatermarkTask");
         match self {
             Task::RegionDestroyed(ref region) => de
                 .field("name", &"region_destroyed")
@@ -1059,12 +1056,12 @@ impl fmt::Debug for Task {
                 .field("observe_id", &observe_id)
                 .field("cause", &cause)
                 .finish(),
-            Task::ResolvedTsAdvanced {
+            Task::WatermarkAdvanced {
                 ref regions,
                 ref ts,
                 ref ts_source,
             } => de
-                .field("name", &"advance_resolved_ts")
+                .field("name", &"advance_watermark")
                 .field("regions", &regions)
                 .field("ts", &ts)
                 .field("ts_source", &ts_source.label())
@@ -1081,7 +1078,7 @@ impl fmt::Debug for Task {
                 .field("observe_id", &observe_id)
                 .field("apply_index", &apply_index)
                 .finish(),
-            Task::AdvanceResolvedTs { .. } => de.field("name", &"advance_resolved_ts").finish(),
+            Task::AdvanceWatermark { .. } => de.field("name", &"advance_watermark").finish(),
             Task::ChangeConfig { ref change } => de
                 .field("name", &"change_config")
                 .field("change", &change)
@@ -1110,7 +1107,7 @@ where
     type Task = Task;
 
     fn run(&mut self, task: Task) {
-        debug!("run resolved-ts task"; "task" => ?task);
+        debug!("run watermark task"; "task" => ?task);
         match task {
             Task::RegionDestroyed(region) => self.region_destroyed(region),
             Task::RegionUpdated(region) => self.region_updated(region),
@@ -1121,14 +1118,14 @@ where
                 observe_id,
                 cause,
             } => self.re_register_region(region_id, observe_id, cause, None),
-            Task::AdvanceResolvedTs { leader_resolver } => {
-                self.handle_advance_resolved_ts(leader_resolver)
+            Task::AdvanceWatermark { leader_resolver } => {
+                self.handle_advance_watermark(leader_resolver)
             }
-            Task::ResolvedTsAdvanced {
+            Task::WatermarkAdvanced {
                 regions,
                 ts,
                 ts_source,
-            } => self.handle_resolved_ts_advanced(regions, ts, ts_source),
+            } => self.handle_watermark_advanced(regions, ts, ts_source),
             Task::ChangeLog { cmd_batch } => self.handle_change_log(cmd_batch),
             Task::ScanLocks {
                 region_id,
@@ -1147,15 +1144,15 @@ where
     }
 }
 
-pub struct ResolvedTsConfigManager(Scheduler<Task>);
+pub struct WatermarkConfigManager(Scheduler<Task>);
 
-impl ResolvedTsConfigManager {
-    pub fn new(scheduler: Scheduler<Task>) -> ResolvedTsConfigManager {
-        ResolvedTsConfigManager(scheduler)
+impl WatermarkConfigManager {
+    pub fn new(scheduler: Scheduler<Task>) -> WatermarkConfigManager {
+        WatermarkConfigManager(scheduler)
     }
 }
 
-impl ConfigManager for ResolvedTsConfigManager {
+impl ConfigManager for WatermarkConfigManager {
     fn dispatch(&mut self, change: ConfigChange) -> online_config::Result<()> {
         if let Err(e) = self.0.schedule(Task::ChangeConfig { change }) {
             error!("failed to schedule ChangeConfig task"; "err" => ?e);
@@ -1168,11 +1165,11 @@ impl ConfigManager for ResolvedTsConfigManager {
 struct Stats {
     // stats for metrics
     zero_ts_count: i64,
-    min_leader_resolved_ts: LeaderStats,
+    min_leader_watermark: LeaderStats,
     min_follower_safe_ts: FollowerStats,
-    min_follower_resolved_ts: FollowerStats,
+    min_follower_watermark: FollowerStats,
     resolver: ResolverStats,
-    // we don't care about min_safe_ts_leader, because safe_ts should be equal to resolved_ts in
+    // we don't care about min_safe_ts_leader, because safe_ts should be equal to watermark in
     // leaders
     // The min memory lock in concurrency manager.
     cm_min_lock: Option<(TimeStamp, Key)>,
@@ -1180,7 +1177,7 @@ struct Stats {
 
 struct LeaderStats {
     region_id: u64,
-    resolved_ts: u64,
+    watermark: u64,
     read_state: ReadState,
     duration_to_last_update_ms: Option<u64>,
     last_resolve_attempt: Option<LastAttempt>,
@@ -1195,7 +1192,7 @@ impl Default for LeaderStats {
     fn default() -> Self {
         Self {
             region_id: 0,
-            resolved_ts: u64::MAX,
+            watermark: u64::MAX,
             read_state: ReadState::default(),
             duration_to_last_update_ms: None,
             applied_index: 0,
@@ -1217,7 +1214,7 @@ impl LeaderStats {
     ) {
         *self = LeaderStats {
             region_id,
-            resolved_ts: leader_info.get_read_state().get_safe_ts(),
+            watermark: leader_info.get_read_state().get_safe_ts(),
             read_state: region_read_progress.read_state().clone(),
             duration_to_last_update_ms: region_read_progress
                 .last_instant_of_update_ts()
@@ -1235,7 +1232,7 @@ impl LeaderStats {
 
 struct FollowerStats {
     region_id: u64,
-    resolved_ts: u64,
+    watermark: u64,
     safe_ts: u64,
     latest_candidate: Option<ReadState>,
     oldest_candidate: Option<ReadState>,
@@ -1248,7 +1245,7 @@ impl Default for FollowerStats {
         Self {
             region_id: 0,
             safe_ts: u64::MAX,
-            resolved_ts: u64::MAX,
+            watermark: u64::MAX,
             latest_candidate: None,
             oldest_candidate: None,
             applied_index: 0,
@@ -1266,7 +1263,7 @@ impl FollowerStats {
         let read_state = region_read_progress.read_state();
         *self = FollowerStats {
             region_id,
-            resolved_ts: region_read_progress
+            watermark: region_read_progress
                 .get_leader_info()
                 .get_read_state()
                 .get_safe_ts(),

@@ -23,7 +23,6 @@ use raftstore::{
         msg::{Callback, ReadResponse},
     },
 };
-use resolved_ts::{Resolver, TsSource};
 use tikv::storage::{
     kv::Snapshot,
     mvcc::{DeltaScanner, ScannerBuilder},
@@ -45,6 +44,7 @@ use tikv_util::{
 };
 use tokio::sync::Semaphore;
 use txn_types::{Key, KvPair, Lock, LockType, OldValue, TimeStamp};
+use watermark::{Resolver, TsSource};
 
 use crate::{
     channel::CdcEvent,
@@ -448,7 +448,7 @@ impl<E: KvEngine> Initializer<E> {
         }
 
         if let Some(barrier) = barrier {
-            // CDC needs to make sure resolved ts events can only be sent after
+            // CDC needs to make sure watermark events can only be sent after
             // incremental scan is finished.
             // Wait the barrier to ensure tikv sends out all scan events.
             let _ = barrier.await;
@@ -465,7 +465,7 @@ impl<E: KvEngine> Initializer<E> {
             "region_id" => region.get_id(),
             "conn_id" => ?self.conn_id,
             "downstream_id" => ?self.downstream_id,
-            "resolved_ts" => rts,
+            "watermark" => rts,
             "lock_count" => resolver.locks().len(),
             "observe_id" => ?observe_id,
         );
@@ -485,7 +485,7 @@ impl<E: KvEngine> Initializer<E> {
         let deregister = if self.build_resolver || err.has_region_error() {
             // Deregister delegate on the conditions,
             // * It fails to build a resolver. A delegate requires a resolver to advance
-            //   resolved ts.
+            //   watermark.
             // * A region error. It usually mean a peer is not leader or a leader meets an
             //   error and can not serve.
             Deregister::Delegate {
@@ -580,7 +580,6 @@ mod tests {
         errorpb::Error as ErrorHeader,
     };
     use raftstore::{coprocessor::ObserveHandle, router::CdcRaftRouter, store::RegionSnapshot};
-    use resolved_ts::TxnLocks;
     use test_raftstore::MockRaftStoreRouter;
     use tikv::{
         config::DbConfig,
@@ -600,6 +599,7 @@ mod tests {
         worker::{LazyWorker, Runnable},
     };
     use tokio::runtime::{Builder, Runtime};
+    use watermark::TxnLocks;
 
     use super::*;
     use crate::txn_source::TxnSource;

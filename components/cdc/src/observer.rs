@@ -44,7 +44,7 @@ impl CdcObserver {
 
     pub fn register_to(&self, coprocessor_host: &mut CoprocessorHost<impl KvEngine>) {
         // use 0 as the priority of the cmd observer. CDC should have a higher priority
-        // than the `resolved-ts`'s cmd observer
+        // than the `watermark`'s cmd observer
         coprocessor_host
             .registry
             .register_cmd_observer(0, BoxCmdObserver::new(self.clone()));

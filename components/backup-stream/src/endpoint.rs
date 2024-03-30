@@ -23,7 +23,6 @@ use raftstore::{
     coprocessor::{CmdBatch, ObserveHandle, RegionInfoProvider},
     router::CdcHandle,
 };
-use resolved_ts::{resolve_by_raft, LeadershipResolver};
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
     box_err,
@@ -45,6 +44,7 @@ use tokio_stream::StreamExt;
 use tracing::instrument;
 use tracing_active_tree::root;
 use txn_types::TimeStamp;
+use watermark::{resolve_by_raft, LeadershipResolver};
 
 use super::metrics::HANDLE_EVENT_DURATION_HISTOGRAM;
 use crate::{
@@ -832,8 +832,8 @@ where
             let mut new_rts = resolved.global_checkpoint();
             fail::fail_point!("delay_on_flush");
             flush_ob.before(resolved.take_resolve_result()).await;
-            if let Some(rewritten_rts) = flush_ob.rewrite_resolved_ts(&task).await {
-                info!("rewriting resolved ts"; "old" => %new_rts, "new" => %rewritten_rts);
+            if let Some(rewritten_rts) = flush_ob.rewrite_watermark(&task).await {
+                info!("rewriting watermark"; "old" => %new_rts, "new" => %rewritten_rts);
                 new_rts = rewritten_rts.min(new_rts);
             }
             if let Some(rts) = router.do_flush(&task, store_id, new_rts).await {
@@ -842,7 +842,7 @@ where
                     "task" => %task,
                 );
                 if rts == 0 {
-                    // We cannot advance the resolved ts for now.
+                    // We cannot advance the watermark for now.
                     return Ok(());
                 }
                 flush_ob.after(&task, rts).await?

@@ -92,7 +92,7 @@ fn create_event_feed(
     let event_feed_wrap = Arc::new(Mutex::new(Some(resp_rx)));
     let event_feed_wrap_clone = event_feed_wrap.clone();
 
-    let receive_event = move |keep_resolved_ts: bool| loop {
+    let receive_event = move |keep_watermark: bool| loop {
         let mut events;
         {
             let mut event_feed = event_feed_wrap_clone.lock().unwrap();
@@ -114,7 +114,7 @@ fn create_event_feed(
             *event_feed = events;
         }
         let change_data_event = change_data.unwrap_or_default();
-        if !keep_resolved_ts && change_data_event.has_resolved_ts() {
+        if !keep_watermark && change_data_event.has_watermark() {
             continue;
         }
         tikv_util::info!("cdc receive event {:?}", change_data_event);
@@ -293,9 +293,9 @@ impl TestSuite {
             ..Default::default()
         };
         req.set_region_epoch(self.get_context(region_id).take_region_epoch());
-        // Enable batch resolved ts feature.
+        // Enable batch watermark feature.
         req.mut_header()
-            .set_ticdc_version(FeatureGate::batch_resolved_ts().to_string());
+            .set_ticdc_version(FeatureGate::batch_watermark().to_string());
         req
     }
 

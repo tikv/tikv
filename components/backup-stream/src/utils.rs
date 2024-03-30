@@ -374,7 +374,7 @@ pub fn should_track_lock(l: &Lock) -> bool {
         LockType::Put | LockType::Delete => true,
         // Lock or Pessimistic lock won't commit more data,
         // (i.e. won't break the integration of data between [Lock.start_ts, get_ts()))
-        // it is safe for ignoring them and advancing resolved_ts.
+        // it is safe for ignoring them and advancing watermark.
         LockType::Lock | LockType::Pessimistic => false,
     }
 }

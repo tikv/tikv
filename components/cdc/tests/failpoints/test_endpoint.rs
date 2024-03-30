@@ -134,9 +134,9 @@ fn test_cdc_double_scan_io_error_impl<F: KvFormat>() {
 
     'outer: loop {
         let event = receive_event(true);
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            // resolved ts has been pushed, so this conn is good.
-            if resolved_ts.regions.len() == 1 {
+        if let Some(watermark) = event.watermark.as_ref() {
+            // watermark has been pushed, so this conn is good.
+            if watermark.regions.len() == 1 {
                 break 'outer;
             }
         }
@@ -156,9 +156,9 @@ fn test_cdc_double_scan_io_error_impl<F: KvFormat>() {
 
     'outer1: loop {
         let event = receive_event_1(true);
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            // resolved ts has been pushed, so this conn is good.
-            if resolved_ts.regions.len() == 1 {
+        if let Some(watermark) = event.watermark.as_ref() {
+            // watermark has been pushed, so this conn is good.
+            if watermark.regions.len() == 1 {
                 break 'outer1;
             }
         }
@@ -240,12 +240,12 @@ fn test_cdc_scan_continues_after_region_split_impl<F: KvFormat>() {
     }
 
     let event = receive_event(true);
-    if let Some(resolved_event) = event.resolved_ts.as_ref() {
-        assert_eq!(resolved_event.regions, &[1], "{:?}", resolved_event);
+    if let Some(wm_event) = event.watermark.as_ref() {
+        assert_eq!(wm_event.regions, &[1], "{:?}", wm_event);
         assert!(
-            resolved_event.ts >= commit_ts1.into_inner(),
-            "resolved_event: {:?}, commit_ts1: {:?}",
-            resolved_event,
+            wm_event.ts >= commit_ts1.into_inner(),
+            "watermark_event: {:?}, commit_ts1: {:?}",
+            wm_event,
             commit_ts1
         );
     } else {
@@ -264,40 +264,40 @@ fn test_cdc_scan_continues_after_region_split_impl<F: KvFormat>() {
     suite.stop();
 }
 
-// Test the `ResolvedTs` sequence shouldn't be pushed to a region downstream
+// Test the `Watermark` sequence shouldn't be pushed to a region downstream
 // if the downstream hasn't been initialized.
 #[test]
-fn test_no_resolved_ts_before_downstream_initialized() {
+fn test_no_watermark_before_downstream_initialized() {
     for version in &["4.0.7", "4.0.8"] {
-        do_test_no_resolved_ts_before_downstream_initialized(version);
+        do_test_no_watermark_before_downstream_initialized(version);
     }
 }
 
-fn do_test_no_resolved_ts_before_downstream_initialized(version: &str) {
+fn do_test_no_watermark_before_downstream_initialized(version: &str) {
     let cluster = new_server_cluster(0, 1);
     cluster.pd_client.disable_default_operator();
     let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
     let region = suite.cluster.get_region(b"");
 
-    let recv_resolved_ts = |event_feed: &ClientReceiver| {
+    let recv_watermark = |event_feed: &ClientReceiver| {
         let mut rx = event_feed.replace(None).unwrap();
         let timeout = Duration::from_secs(1);
         for _ in 0..10 {
             if let Ok(Some(event)) = recv_timeout(&mut rx, timeout) {
                 let event = event.unwrap();
-                if event.has_resolved_ts() {
+                if event.has_watermark() {
                     event_feed.replace(Some(rx));
                     return;
                 }
                 for e in event.get_events() {
-                    if let Some(Event_oneof_event::ResolvedTs(_)) = e.event {
+                    if let Some(Event_oneof_event::Watermark(_)) = e.event {
                         event_feed.replace(Some(rx));
                         return;
                     }
                 }
             }
         }
-        panic!("must receive a resolved ts");
+        panic!("must receive a watermark");
     };
 
     // Create 2 changefeeds and the second will be blocked in initialization.
@@ -306,7 +306,7 @@ fn do_test_no_resolved_ts_before_downstream_initialized(version: &str) {
     for i in 0..2 {
         if i == 1 {
             // Wait the first capture has been initialized.
-            recv_resolved_ts(&event_feeds[0]);
+            recv_watermark(&event_feeds[0]);
             fail::cfg("cdc_incremental_scan_start", "pause").unwrap();
         }
         let (mut req_tx, event_feed, _) = new_event_feed(suite.get_region_cdc_client(region.id));
@@ -451,7 +451,7 @@ fn test_old_value_cache_without_downstreams() {
 }
 
 #[test]
-fn test_cdc_rawkv_resolved_ts() {
+fn test_cdc_rawkv_watermark() {
     let mut suite = TestSuite::new(1, ApiVersion::V2);
     let cluster = &suite.cluster;
 
@@ -506,15 +506,15 @@ fn test_cdc_rawkv_resolved_ts() {
 
     sleep_ms(100);
 
-    let event = receive_event(true).resolved_ts.unwrap();
+    let event = receive_event(true).watermark.unwrap();
     assert!(
         ts.next() >= TimeStamp::from(event.ts),
         "{} {}",
         ts,
         TimeStamp::from(event.ts)
     );
-    // Receive again to make sure resolved ts <= ongoing request's ts.
-    let event = receive_event(true).resolved_ts.unwrap();
+    // Receive again to make sure watermark <= ongoing request's ts.
+    let event = receive_event(true).watermark.unwrap();
     assert!(
         ts.next() >= TimeStamp::from(event.ts),
         "{} {}",
@@ -549,19 +549,19 @@ fn test_cdc_stream_multiplexing() {
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     receive_event(false);
 
-    // Request 2 can't receive a ResolvedTs, because it's not ready.
+    // Request 2 can't receive a Watermark, because it's not ready.
     for _ in 0..10 {
         let event = receive_event(true);
-        let req_id = event.get_resolved_ts().get_request_id();
+        let req_id = event.get_watermark().get_request_id();
         assert_eq!(req_id, 1);
     }
 
-    // After request 2 is ready, it must receive a ResolvedTs.
+    // After request 2 is ready, it must receive a Watermark.
     fail::remove("before_post_incremental_scan");
     let mut request_2_ready = false;
     for _ in 0..20 {
         let event = receive_event(true);
-        let req_id = event.get_resolved_ts().get_request_id();
+        let req_id = event.get_watermark().get_request_id();
         if req_id == 2 {
             request_2_ready = true;
             break;

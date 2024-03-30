@@ -76,9 +76,9 @@ lazy_static! {
         "tikv_cdc_endpoint_pending_tasks",
         "CDC endpoint pending tasks"
     ).unwrap();
-    pub static ref CDC_RESOLVED_TS_GAP_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_cdc_resolved_ts_gap_seconds",
-        "Bucketed histogram of the gap between cdc resolved ts and current tso",
+    pub static ref CDC_WATERMARK_GAP_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_cdc_watermark_gap_seconds",
+        "Bucketed histogram of the gap between cdc watermark and current tso",
         exponential_buckets(0.001, 2.0, 24).unwrap()
     )
     .unwrap();
@@ -108,18 +108,18 @@ lazy_static! {
         "tikv_cdc_scan_disk_read_bytes_total",
         "Total disk read bytes of CDC incremental scan"
     ).unwrap();
-    pub static ref CDC_MIN_RESOLVED_TS_REGION: IntGauge = register_int_gauge!(
-        "tikv_cdc_min_resolved_ts_region",
-        "The region which has minimal resolved ts"
+    pub static ref CDC_MIN_WATERMARK_REGION: IntGauge = register_int_gauge!(
+        "tikv_cdc_min_watermark_region",
+        "The region which has minimal watermark"
     )
     .unwrap();
-    pub static ref CDC_MIN_RESOLVED_TS_LAG: IntGauge = register_int_gauge!(
-        "tikv_cdc_min_resolved_ts_lag",
-        "The lag between the minimal resolved ts and the current ts"
+    pub static ref CDC_MIN_WATERMARK_LAG: IntGauge = register_int_gauge!(
+        "tikv_cdc_min_watermark_lag",
+        "The lag between the minimal watermark and the current ts"
     ).unwrap();
-    pub static ref CDC_MIN_RESOLVED_TS: IntGauge = register_int_gauge!(
-        "tikv_cdc_min_resolved_ts",
-        "The minimal resolved ts for current regions"
+    pub static ref CDC_MIN_WATERMARK: IntGauge = register_int_gauge!(
+        "tikv_cdc_min_watermark",
+        "The minimal watermark for current regions"
     )
     .unwrap();
     pub static ref CDC_PENDING_BYTES_GAUGE: IntGauge = register_int_gauge!(
@@ -191,9 +191,9 @@ lazy_static! {
         exponential_buckets(0.0001, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref CDC_RESOLVED_TS_ADVANCE_METHOD: IntGauge = register_int_gauge!(
-        "tikv_cdc_resolved_ts_advance_method",
-        "Resolved Ts advance method, 0 = advanced through raft command, 1 = advanced through store RPC"
+    pub static ref CDC_WATERMARK_ADVANCE_METHOD: IntGauge = register_int_gauge!(
+        "tikv_cdc_watermark_advance_method",
+        "Watermark advance method, 0 = advanced through raft command, 1 = advanced through store RPC"
     )
     .unwrap();
     pub static ref CDC_GRPC_ACCUMULATE_MESSAGE_BYTES: IntCounterVec = register_int_counter_vec!(
@@ -210,9 +210,9 @@ lazy_static! {
     )
     .unwrap();
 
-    pub static ref CDC_RAW_OUTLIER_RESOLVED_TS_GAP: Histogram = register_histogram!(
-        "tikv_cdc_raw_outlier_resolved_ts_gap_seconds",
-        "Bucketed histogram of the gap between cdc raw outlier resolver_ts and current tso",
+    pub static ref CDC_RAW_OUTLIER_WATERMARK_GAP: Histogram = register_histogram!(
+        "tikv_cdc_raw_outlier_watermark_gap_seconds",
+        "Bucketed histogram of the gap between cdc raw outlier watermark and current tso",
         exponential_buckets(1.0, 2.0, 15).unwrap() // outlier threshold is 60s by default.
     )
     .unwrap();

@@ -18,7 +18,7 @@ impl Observer {
     }
 
     pub fn register_to<E: KvEngine>(&self, coprocessor_host: &mut CoprocessorHost<E>) {
-        // The `resolved-ts` cmd observer will `mem::take` the `Vec<CmdBatch>`, use a
+        // The `watermark` cmd observer will `mem::take` the `Vec<CmdBatch>`, use a
         // low priority to let it be the last observer and avoid affecting other
         // observers
         coprocessor_host
@@ -70,7 +70,7 @@ impl<E: KvEngine> CmdObserver<E> for Observer {
     }
 
     fn on_applied_current_term(&self, role: StateRole, region: &Region) {
-        // Start to advance resolved ts after peer becomes leader and apply on its term
+        // Start to advance watermark after peer becomes leader and apply on its term
         if role == StateRole::Leader {
             if let Err(e) = self.scheduler.schedule(Task::RegisterRegion {
                 region: region.clone(),
@@ -83,7 +83,7 @@ impl<E: KvEngine> CmdObserver<E> for Observer {
 
 impl RoleObserver for Observer {
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
-        // Stop to advance resolved ts after peer steps down to follower or candidate.
+        // Stop to advance watermark after peer steps down to follower or candidate.
         // Do not need to check observe id because we expect all role change events are
         // scheduled in order.
         if role_change.state != StateRole::Leader {
@@ -191,7 +191,7 @@ mod test {
             cmd.request.mut_requests().push(put.clone());
         }
 
-        // Both cdc and resolved-ts worker are observing
+        // Both cdc and watermark worker are observing
         let observe_info = CmdObserveInfo::from_handle(
             ObserveHandle::new(),
             ObserveHandle::new(),
@@ -228,7 +228,7 @@ mod test {
         // Still observe all data
         expect_recv(&mut rx, data.clone());
 
-        // Only resolved-ts worker is observing
+        // Only watermark worker is observing
         let observe_info = CmdObserveInfo::from_handle(
             ObserveHandle::new(),
             ObserveHandle::new(),
@@ -242,7 +242,7 @@ mod test {
         data.retain(|p| p.get_put().cf != CF_DEFAULT);
         expect_recv(&mut rx, data);
 
-        // Both cdc and resolved-ts worker are not observing
+        // Both cdc and watermark worker are not observing
         let observe_info = CmdObserveInfo::from_handle(
             ObserveHandle::new(),
             ObserveHandle::new(),

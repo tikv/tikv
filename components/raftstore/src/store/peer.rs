@@ -4861,10 +4861,10 @@ where
             let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
             let safe_ts = self.read_progress.safe_ts();
             if safe_ts < read_ts {
-                // Advancing resolved ts may be expensive, only notify if read_ts - safe_ts >
+                // Advancing watermark may be expensive, only notify if read_ts - safe_ts >
                 // 200ms.
                 if TimeStamp::from(read_ts).physical() > TimeStamp::from(safe_ts).physical() + 200 {
-                    self.read_progress.notify_advance_resolved_ts();
+                    self.read_progress.notify_advance_watermark();
                 }
                 warn!(
                     "read rejected by safe timestamp";

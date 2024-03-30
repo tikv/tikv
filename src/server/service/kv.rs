@@ -1805,7 +1805,7 @@ pub async fn future_prepare_flashback_to_version<E: Engine, L: LockManager, F: K
     let mut res = f.await.map_err(storage::Error::from);
     if matches!(res, Ok(())) {
         // After the region is put into the flashback state, we need to do a special
-        // prewrite to prevent `resolved_ts` from advancing.
+        // prewrite to prevent `watermark` from advancing.
         let (cb, f) = paired_future_callback();
         res = storage.sched_txn_command(req.clone().into(), cb);
         if matches!(res, Ok(())) {

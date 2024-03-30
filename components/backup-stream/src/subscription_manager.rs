@@ -454,7 +454,7 @@ where
                     let regions = resolver.resolve(self.subs.current_regions(), min_ts).await;
                     let cps = self.subs.resolve_with(min_ts, regions);
                     let min_region = cps.iter().min_by_key(|rs| rs.checkpoint);
-                    // If there isn't any region observed, the `min_ts` can be used as resolved ts
+                    // If there isn't any region observed, the `min_ts` can be used as watermark
                     // safely.
                     let rts = min_region.map(|rs| rs.checkpoint).unwrap_or(min_ts);
                     if min_region

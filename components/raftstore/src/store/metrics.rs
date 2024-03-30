@@ -217,7 +217,7 @@ make_static_metric! {
         periodic_full_compact,
         load_metrics_window,
         pd_store_heartbeat,
-        pd_report_min_resolved_ts,
+        pd_report_min_watermark,
         snap_gc,
         compact_lock_cf,
         consistency_check,

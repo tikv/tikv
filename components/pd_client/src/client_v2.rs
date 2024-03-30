@@ -632,7 +632,7 @@ pub trait PdClient {
         ttl: Duration,
     ) -> PdFuture<()>;
 
-    fn report_min_resolved_ts(&mut self, store_id: u64, min_resolved_ts: u64) -> PdFuture<()>;
+    fn report_min_watermark(&mut self, store_id: u64, min_watermark: u64) -> PdFuture<()>;
 }
 
 pub struct CachedDuplexResponse<T> {
@@ -1311,12 +1311,12 @@ impl PdClient for RpcClient {
         })
     }
 
-    fn report_min_resolved_ts(&mut self, store_id: u64, min_resolved_ts: u64) -> PdFuture<()> {
+    fn report_min_watermark(&mut self, store_id: u64, min_watermark: u64) -> PdFuture<()> {
         let timer = Instant::now_coarse();
 
-        let mut req = pdpb::ReportMinResolvedTsRequest::default();
+        let mut req = pdpb::ReportMinWatermarkRequest::default();
         req.set_store_id(store_id);
-        req.set_min_resolved_ts(min_resolved_ts);
+        req.set_min_watermark(min_watermark);
 
         let mut raw_client = self.raw_client.clone();
         Box::pin(async move {
@@ -1324,16 +1324,16 @@ impl PdClient for RpcClient {
             req.set_header(raw_client.header());
             let resp = raw_client
                 .stub()
-                .report_min_resolved_ts_async_opt(
+                .report_min_watermark_async_opt(
                     &req,
                     raw_client.call_option().timeout(request_timeout()),
                 )
                 .unwrap_or_else(|e| {
-                    panic!("fail to request PD {} err {:?}", "min_resolved_ts", e);
+                    panic!("fail to request PD {} err {:?}", "min_watermark", e);
                 })
                 .await;
             PD_REQUEST_HISTOGRAM_VEC
-                .min_resolved_ts
+                .min_watermark
                 .observe(timer.saturating_elapsed_secs());
             let resp = raw_client.check_resp(resp)?;
             check_resp_header(resp.get_header())?;

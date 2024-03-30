@@ -7209,20 +7209,20 @@ def PointInTimeRestore() -> RowPanel:
     return layout.row_panel
 
 
-def ResolvedTS() -> RowPanel:
-    layout = Layout(title="Resolved TS")
+def Watermark() -> RowPanel:
+    layout = Layout(title="Watermark")
     layout.row(
         [
             graph_panel(
-                title="Resolved TS Worker CPU",
-                description="The CPU utilization of resolved ts worker",
+                title="Watermark Worker CPU",
+                description="The CPU utilization of watermark worker",
                 yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
                 targets=[
                     target(
                         expr=expr_sum_rate(
                             "tikv_thread_cpu_seconds_total",
                             label_selectors=[
-                                'name=~"resolved_ts.*"',
+                                'name=~"watermark.*"',
                             ],
                         ),
                     )
@@ -7263,24 +7263,24 @@ def ResolvedTS() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Max gap of resolved-ts",
-                description="The gap between resolved ts (the maximum candidate of safe-ts) and current time.",
+                title="Max gap of watermark",
+                description="The gap between watermark (the maximum candidate of safe-ts) and current time.",
                 yaxes=yaxes(left_format=UNITS.MILLI_SECONDS),
                 targets=[
                     target(
                         expr=expr_sum(
-                            "tikv_resolved_ts_min_resolved_ts_gap_millis",
+                            "tikv_watermark_min_watermark_gap_millis",
                         ),
                     )
                 ],
             ),
             graph_panel(
-                title="Min Resolved TS Region",
-                description="The region that has minimal resolved ts",
+                title="Min Watermark Region",
+                description="The region that has minimal watermark",
                 targets=[
                     target(
                         expr=expr_sum(
-                            "tikv_resolved_ts_min_resolved_ts_region",
+                            "tikv_watermark_min_watermark_region",
                         ),
                     )
                 ],
@@ -7296,7 +7296,7 @@ def ResolvedTS() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum(
-                            "tikv_resolved_ts_min_follower_safe_ts_gap_millis",
+                            "tikv_watermark_min_follower_safe_ts_gap_millis",
                         ),
                     )
                 ],
@@ -7307,7 +7307,7 @@ def ResolvedTS() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum(
-                            "tikv_resolved_ts_min_follower_safe_ts_region",
+                            "tikv_watermark_min_follower_safe_ts_region",
                         ),
                     )
                 ],
@@ -7317,24 +7317,24 @@ def ResolvedTS() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Max gap of resolved-ts in region leaders",
-                description="The gap between resolved ts of leaders and current time",
+                title="Max gap of watermark in region leaders",
+                description="The gap between watermark of leaders and current time",
                 yaxes=yaxes(left_format=UNITS.MILLI_SECONDS),
                 targets=[
                     target(
                         expr=expr_sum(
-                            "tikv_resolved_ts_min_leader_resolved_ts_gap_millis",
+                            "tikv_watermark_min_leader_watermark_gap_millis",
                         ),
                     )
                 ],
             ),
             graph_panel(
-                title="Min Leader Resolved TS Region",
-                description="The region that its leader has minimal resolved ts.",
+                title="Min Leader watermark Region",
+                description="The region that its leader has minimal watermark.",
                 targets=[
                     target(
                         expr=expr_sum(
-                            "tikv_resolved_ts_min_leader_resolved_ts_region",
+                            "tikv_watermark_min_leader_watermark_region",
                         ),
                     )
                 ],
@@ -7347,7 +7347,7 @@ def ResolvedTS() -> RowPanel:
                 title="Check leader duration",
                 description="The time consumed when handle a check leader request",
                 yaxis=yaxis(format=UNITS.SECONDS),
-                metric="tikv_resolved_ts_check_leader_duration_seconds_bucket",
+                metric="tikv_watermark_check_leader_duration_seconds_bucket",
             ),
             graph_panel(
                 title="99% CheckLeader request region count",
@@ -7392,11 +7392,11 @@ def ResolvedTS() -> RowPanel:
             ),
             graph_panel(
                 title="Fail advance ts count",
-                description="The count of fail to advance resolved-ts",
+                description="The count of fail to advance watermark",
                 targets=[
                     target(
                         expr=expr_sum_delta(
-                            "tikv_resolved_ts_fail_advance_count",
+                            "tikv_watermark_fail_advance_count",
                             by_labels=["instance", "reason"],
                         ),
                     ),
@@ -7415,12 +7415,12 @@ def ResolvedTS() -> RowPanel:
         [
             graph_panel(
                 title="Lock heap size",
-                description="Total bytes in memory of resolved-ts observe regions's lock heap",
+                description="Total bytes in memory of watermark observe regions's lock heap",
                 yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 targets=[
                     target(
                         expr=expr_avg(
-                            "tikv_resolved_ts_lock_heap_bytes",
+                            "tikv_watermark_lock_heap_bytes",
                         ),
                     )
                 ],
@@ -7429,7 +7429,7 @@ def ResolvedTS() -> RowPanel:
                 title="Initial scan backoff duration",
                 description="The backoff duration before starting initial scan",
                 yaxis=yaxis(format=UNITS.SECONDS),
-                metric="tikv_resolved_ts_initial_scan_backoff_duration_seconds_bucket",
+                metric="tikv_watermark_initial_scan_backoff_duration_seconds_bucket",
             ),
         ]
     )
@@ -7437,11 +7437,11 @@ def ResolvedTS() -> RowPanel:
         [
             graph_panel(
                 title="Observe region status",
-                description="The status of resolved-ts observe regions",
+                description="The status of watermark observe regions",
                 targets=[
                     target(
                         expr=expr_sum(
-                            "tikv_resolved_ts_region_resolve_status",
+                            "tikv_watermark_region_resolve_status",
                             by_labels=["type"],
                         ),
                     )
@@ -7454,7 +7454,7 @@ def ResolvedTS() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_avg(
-                            "tikv_resolved_ts_channel_penging_cmd_bytes_total",
+                            "tikv_watermark_channel_penging_cmd_bytes_total",
                         ),
                     )
                 ],
@@ -8783,7 +8783,7 @@ dashboard = Dashboard(
         SlowTrendStatistics(),
         Snapshot(),
         # Tools
-        ResolvedTS(),
+        Watermark(),
         PointInTimeRestore(),
         BackupImport(),
         BackupLog(),

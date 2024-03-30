@@ -53,7 +53,7 @@ impl Default for ConnId {
 // features by specifying GRPC headers. See `EventFeedHeaders`.
 bitflags::bitflags! {
     pub struct FeatureGate: u8 {
-        const BATCH_RESOLVED_TS = 0b00000001;
+        const BATCH_WATERMARK = 0b00000001;
         const VALIDATE_CLUSTER_ID = 0b00000010;
         const STREAM_MULTIPLEXING = 0b00000100;
     }
@@ -63,7 +63,7 @@ impl FeatureGate {
     fn default_features(version: &semver::Version) -> FeatureGate {
         let mut features = FeatureGate::empty();
         if *version >= semver::Version::new(4, 0, 8) {
-            features.set(FeatureGate::BATCH_RESOLVED_TS, true);
+            features.set(FeatureGate::BATCH_WATERMARK, true);
         }
         if *version >= semver::Version::new(5, 3, 0) {
             features.set(FeatureGate::VALIDATE_CLUSTER_ID, true);
@@ -71,8 +71,8 @@ impl FeatureGate {
         features
     }
 
-    /// Returns the first version (v4.0.8) that supports batch resolved ts.
-    pub fn batch_resolved_ts() -> semver::Version {
+    /// Returns the first version (v4.0.8) that supports batch watermark.
+    pub fn batch_watermark() -> semver::Version {
         semver::Version::new(4, 0, 8)
     }
 }
@@ -526,7 +526,7 @@ mod tests {
 
     use futures::{executor::block_on, SinkExt};
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
-    use kvproto::cdcpb::{create_change_data, ChangeDataClient, ResolvedTs};
+    use kvproto::cdcpb::{create_change_data, ChangeDataClient, Watermark};
     use tikv_util::future::block_on_timeout;
 
     use super::*;
@@ -569,13 +569,13 @@ mod tests {
         };
         let sink = conn.get_sink().clone();
         // Approximate 1 KB.
-        let mut rts = ResolvedTs::default();
+        let mut rts = Watermark::default();
         rts.set_regions(vec![u64::MAX; 128]);
 
         let send = || {
             let rts_ = rts.clone();
             let mut sink_ = sink.clone();
-            Box::pin(async move { sink_.send_all(vec![CdcEvent::ResolvedTs(rts_)]).await })
+            Box::pin(async move { sink_.send_all(vec![CdcEvent::Watermark(rts_)]).await })
         };
         let must_fill_window = || {
             let mut window_size = 0;

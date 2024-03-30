@@ -7,10 +7,10 @@ use engine_rocks::RocksEngine;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{import_sstpb_grpc::ImportSstClient, kvrpcpb::*, tikvpb::TikvClient};
 use online_config::ConfigValue;
-use resolved_ts::Task;
 use test_raftstore::*;
 use tikv_util::{config::ReadableDuration, HandyRwLock};
 use txn_types::TimeStamp;
+use watermark::Task;
 
 static INIT: Once = Once::new();
 
@@ -32,9 +32,9 @@ impl TestSuite {
         // Increase the Raft tick interval to make this test case running reliably.
         configure_for_lease_read(&mut cluster.cfg, Some(100), None);
 
-        // Start resolved ts endpoint.
-        cluster.cfg.resolved_ts.enable = true;
-        cluster.cfg.resolved_ts.advance_ts_interval = ReadableDuration::millis(10);
+        // Start watermark endpoint.
+        cluster.cfg.watermark.enable = true;
+        cluster.cfg.watermark.advance_ts_interval = ReadableDuration::millis(10);
         cluster.run();
 
         TestSuite {
@@ -76,7 +76,7 @@ impl TestSuite {
             .sim
             .read()
             .unwrap()
-            .get_resolved_ts_scheduler(store_id)
+            .get_watermark_scheduler(store_id)
             .unwrap();
         scheduler.schedule(task).unwrap();
     }
@@ -196,12 +196,12 @@ impl TestSuite {
             })
     }
 
-    pub fn region_resolved_ts(&mut self, region_id: u64) -> Option<TimeStamp> {
+    pub fn region_watermark(&mut self, region_id: u64) -> Option<TimeStamp> {
         let leader = self.cluster.leader_of_region(region_id)?;
         let meta = self.cluster.store_metas[&leader.store_id].lock().unwrap();
         Some(
             meta.region_read_progress
-                .get_resolved_ts(&region_id)
+                .get_watermark(&region_id)
                 .unwrap()
                 .into(),
         )
@@ -223,7 +223,7 @@ impl TestSuite {
 
     pub fn must_get_rts(&mut self, region_id: u64, rts: TimeStamp) {
         for _ in 0..50 {
-            if let Some(ts) = self.region_resolved_ts(region_id) {
+            if let Some(ts) = self.region_watermark(region_id) {
                 if rts == ts {
                     return;
                 }
@@ -235,7 +235,7 @@ impl TestSuite {
 
     pub fn must_get_rts_ge(&mut self, region_id: u64, rts: TimeStamp) {
         for _ in 0..50 {
-            if let Some(ts) = self.region_resolved_ts(region_id) {
+            if let Some(ts) = self.region_watermark(region_id) {
                 if rts < ts {
                     return;
                 }

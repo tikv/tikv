@@ -271,7 +271,7 @@ pub struct ServerMeta<EK: KvEngine> {
     sim_trans: SimulateServerTransport<EK>,
     raw_router: StoreRouter<EK, RaftTestEngine>,
     gc_worker: GcWorker<TestRaftKv2<EK>>,
-    rts_worker: Option<LazyWorker<resolved_ts::Task>>,
+    rts_worker: Option<LazyWorker<watermark::Task>>,
     rsmeter_cleanup: Box<dyn FnOnce()>,
 }
 
@@ -460,17 +460,17 @@ impl<EK: KvEngine> ServerCluster<EK> {
         );
         gc_worker.start(node_id).unwrap();
 
-        let rts_worker = if cfg.resolved_ts.enable {
-            // Resolved ts worker
-            let mut rts_worker = LazyWorker::new("resolved-ts");
-            let rts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
-            rts_ob.register_to(&mut coprocessor_host);
-            // resolved ts endpoint needs store id.
+        let watermark_worker = if cfg.watermark.enable {
+            // Watermark worker
+            let mut wm_worker = LazyWorker::new("watermark");
+            let wm_ob = watermark::Observer::new(wm_worker.scheduler());
+            wm_ob.register_to(&mut coprocessor_host);
+            // watermark endpoint needs store id.
             store_meta.lock().unwrap().store_id = node_id;
-            // Resolved ts endpoint
-            let rts_endpoint = resolved_ts::Endpoint::new(
-                &cfg.resolved_ts,
-                rts_worker.scheduler(),
+            // Watermark endpoint
+            let wm_endpoint = watermark::Endpoint::new(
+                &cfg.watermark,
+                wm_worker.scheduler(),
                 raft_router.clone(),
                 store_meta.clone(),
                 self.pd_client.clone(),
@@ -479,8 +479,8 @@ impl<EK: KvEngine> ServerCluster<EK> {
                 self.security_mgr.clone(),
             );
             // Start the worker
-            rts_worker.start(rts_endpoint);
-            Some(rts_worker)
+            wm_worker.start(wm_endpoint);
+            Some(wm_worker)
         } else {
             None
         };
@@ -837,7 +837,7 @@ impl<EK: KvEngine> Simulator<EK> for ServerCluster<EK> {
         if let Some(mut meta) = self.metas.remove(&node_id) {
             meta.server.stop().unwrap();
             meta.node.stop();
-            // resolved ts worker started, let's stop it
+            // watermark worker started, let's stop it
             if let Some(worker) = meta.rts_worker {
                 worker.stop_worker();
             }

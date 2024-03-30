@@ -32,11 +32,11 @@ fn test_check_leader_timeout() {
         .cluster
         .must_transfer_leader(region.id, new_peer(1, 1));
 
-    // The `resolved-ts` won't be updated due to there is lock on the region,
-    // the `resolved-ts` may not be the `start_ts` of the lock if the `resolved-ts`
+    // The `watermark` won't be updated due to there is lock on the region,
+    // the `watermark` may not be the `start_ts` of the lock if the `watermark`
     // is updated with a newer ts before the prewrite request come, but still the
-    // `resolved-ts` won't be updated
-    let rts = suite.region_resolved_ts(region.id).unwrap();
+    // `watermark` won't be updated
+    let rts = suite.region_watermark(region.id).unwrap();
 
     let store2_fp = "before_check_leader_store_2";
     fail::cfg(store2_fp, "pause").unwrap();
@@ -58,10 +58,10 @@ fn test_check_leader_timeout() {
 }
 
 #[test]
-fn test_report_min_resolved_ts() {
+fn test_report_min_watermark() {
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
     fail::cfg("mock_collect_tick_interval", "return(0)").unwrap();
-    fail::cfg("mock_min_resolved_ts_interval", "return(0)").unwrap();
+    fail::cfg("mock_min_watermark_interval", "return(0)").unwrap();
     let mut suite = TestSuite::new(1);
     assert_eq!(
         suite
@@ -69,11 +69,11 @@ fn test_report_min_resolved_ts() {
             .cfg
             .tikv
             .raft_store
-            .pd_report_min_resolved_ts_interval,
+            .pd_report_min_watermark_interval,
         ReadableDuration::millis(50)
     );
     let region = suite.cluster.get_region(&[]);
-    let ts1 = suite.cluster.pd_client.get_min_resolved_ts();
+    let ts1 = suite.cluster.pd_client.get_min_watermark();
 
     // Prewrite
     let (k, v) = (b"k1", b"v");
@@ -89,25 +89,25 @@ fn test_report_min_resolved_ts() {
     suite.must_kv_commit(region.id, vec![k.to_vec()], start_ts, commit_ts);
 
     sleep_ms(100);
-    let ts3 = suite.cluster.pd_client.get_min_resolved_ts();
+    let ts3 = suite.cluster.pd_client.get_min_watermark();
     let unapplied_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     assert!(ts3 > ts1);
     assert!(TimeStamp::new(ts3) > commit_ts);
     assert!(TimeStamp::new(ts3) < unapplied_ts);
     fail::remove("mock_tick_interval");
     fail::remove("mock_collect_tick_interval");
-    fail::remove("mock_min_resolved_ts_interval");
+    fail::remove("mock_min_watermark_interval");
     suite.stop();
 }
 
 #[test]
-fn test_report_min_resolved_ts_disable() {
+fn test_report_min_watermark_disable() {
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
     fail::cfg("mock_collect_tick_interval", "return(0)").unwrap();
-    fail::cfg("mock_min_resolved_ts_interval_disable", "return(0)").unwrap();
+    fail::cfg("mock_min_watermark_interval_disable", "return(0)").unwrap();
     let mut suite = TestSuite::new(1);
     let region = suite.cluster.get_region(&[]);
-    let ts1 = suite.cluster.pd_client.get_min_resolved_ts();
+    let ts1 = suite.cluster.pd_client.get_min_watermark();
 
     // Prewrite
     let (k, v) = (b"k1", b"v");
@@ -125,23 +125,23 @@ fn test_report_min_resolved_ts_disable() {
     sleep_ms(100);
 
     // no report
-    let ts3 = suite.cluster.pd_client.get_min_resolved_ts();
+    let ts3 = suite.cluster.pd_client.get_min_watermark();
     assert!(ts3 == ts1);
     fail::remove("mock_tick_interval");
     fail::remove("mock_collect_tick_interval");
-    fail::remove("mock_min_resolved_ts_interval_disable");
+    fail::remove("mock_min_watermark_interval_disable");
     suite.stop();
 }
 
 #[test]
 fn test_pending_locks_memory_quota_exceeded() {
     // Pause scan lock so that locks will be put in pending locks.
-    fail::cfg("resolved_ts_after_scanner_get_snapshot", "pause").unwrap();
+    fail::cfg("watermark_after_scanner_get_snapshot", "pause").unwrap();
     // Check if memory quota exceeded is triggered.
     let (tx, rx) = channel();
     let tx = Mutex::new(tx);
     fail::cfg_callback(
-        "resolved_ts_on_pending_locks_memory_quota_exceeded",
+        "watermark_on_pending_locks_memory_quota_exceeded",
         move || {
             let sender = tx.lock().unwrap();
             sender.send(()).unwrap();
@@ -168,7 +168,7 @@ fn test_pending_locks_memory_quota_exceeded() {
     // Must trigger memory quota exceeded.
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
-    fail::remove("resolved_ts_after_scanner_get_snapshot");
-    fail::remove("resolved_ts_on_pending_locks_memory_quota_exceeded");
+    fail::remove("watermark_after_scanner_get_snapshot");
+    fail::remove("watermark_on_pending_locks_memory_quota_exceeded");
     suite.stop();
 }

@@ -291,7 +291,6 @@ members = [
   "components/profiler",
   "components/raftstore",
   "components/raftstore-v2",
-  "components/resolved_ts",
   "components/resource_control",
   "components/resource_metering",
   "components/security",
@@ -322,6 +321,7 @@ members = [
   "components/tipb_helper",
   "components/tracker",
   "components/txn_types",
+  "components/watermark",
   "fuzz",
   "fuzz/fuzzer-afl",
   "fuzz/fuzzer-honggfuzz",
@@ -381,7 +381,7 @@ profiler = { path = "components/profiler" }
 raft_log_engine = { path = "components/raft_log_engine" }
 raftstore = { path = "components/raftstore", default-features = false }
 raftstore-v2 = { path = "components/raftstore-v2", default-features = false }
-resolved_ts = { path = "components/resolved_ts" }
+watermark = { path = "components/watermark" }
 resource_control = { path = "components/resource_control" }
 resource_metering = { path = "components/resource_metering" }
 security = { path = "components/security" }
@@ -431,7 +431,8 @@ grpcio-health = { version = "0.10.4", default-features = false, features = [
   "protobuf-codec",
 ] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+# kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+kvproto = { git = "https://github.com/zhangjinpeng87/kvproto.git", branch = "rename-resolve-ts" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }

@@ -42,7 +42,7 @@ impl BackupStreamObserver {
         let registry = &mut coprocessor_host.registry;
 
         // use 0 as the priority of the cmd observer. should have a higher priority than
-        // the `resolved-ts`'s cmd observer
+        // the `watermark`'s cmd observer
         registry.register_cmd_observer(0, BoxCmdObserver::new(self.clone()));
         registry.register_role_observer(100, BoxRoleObserver::new(self.clone()));
         registry.register_region_change_observer(100, BoxRegionChangeObserver::new(self.clone()));

@@ -2,7 +2,7 @@
 
 use cdc::CdcEvent;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use kvproto::cdcpb::ResolvedTs;
+use kvproto::cdcpb::Watermark;
 use protobuf::Message;
 
 fn bench_cdc_event_size(c: &mut Criterion) {
@@ -15,11 +15,11 @@ fn bench_cdc_event_size(c: &mut Criterion) {
     // Benchmark from 1 region id to 131,072 region ids.
     for i in 0..18 {
         let len = 2usize.pow(i);
-        let mut resolved_ts = ResolvedTs::default();
-        resolved_ts.ts = ts;
-        resolved_ts.regions = vec![region_id; len];
+        let mut watermark = Watermark::default();
+        watermark.ts = ts;
+        watermark.regions = vec![region_id; len];
 
-        let message_compute_size = resolved_ts.clone();
+        let message_compute_size = watermark.clone();
         group.bench_with_input(
             BenchmarkId::new("protobuf::Message::compute_size", len),
             &message_compute_size,
@@ -30,9 +30,9 @@ fn bench_cdc_event_size(c: &mut Criterion) {
             },
         );
 
-        let cdc_event_size = CdcEvent::ResolvedTs(resolved_ts);
+        let cdc_event_size = CdcEvent::Watermark(watermark);
         group.bench_with_input(
-            BenchmarkId::new("CdcEvent::ResolvedTs::size", len),
+            BenchmarkId::new("CdcEvent::Watermark::size", len),
             &cdc_event_size,
             |b, cdc_event_size| {
                 b.iter(move || {

@@ -586,10 +586,10 @@ impl ReadDelegate {
         if safe_ts >= read_ts {
             return Ok(());
         }
-        // Advancing resolved ts may be expensive, only notify if read_ts - safe_ts >
+        // Advancing watermark may be expensive, only notify if read_ts - safe_ts >
         // 200ms.
         if TimeStamp::from(read_ts).physical() > TimeStamp::from(safe_ts).physical() + 200 {
-            self.read_progress.notify_advance_resolved_ts();
+            self.read_progress.notify_advance_watermark();
         }
         debug!(
             "reject stale read by safe ts";
@@ -2270,14 +2270,14 @@ mod tests {
         must_not_redirect(&mut reader, &rx, task);
         snap_rx.recv().unwrap().snapshot.unwrap();
 
-        // A peer has to notify advancing resolved ts if read_ts >= safe_ts.
+        // A peer has to notify advancing watermark if read_ts >= safe_ts.
         let notify = Arc::new(tokio::sync::Notify::new());
         {
             let mut meta = store_meta.lock().unwrap();
             let delegate = meta.readers.get_mut(&1).unwrap();
             delegate
                 .read_progress
-                .update_advance_resolved_ts_notify(notify.clone());
+                .update_advance_watermark_notify(notify.clone());
         }
         // 201ms larger than safe_ts.
         let read_ts_2 = TimeStamp::compose(safe_ts.physical() + 201, 0);

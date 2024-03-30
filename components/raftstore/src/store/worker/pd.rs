@@ -200,9 +200,9 @@ where
         duration: RaftstoreDuration,
     },
     RegionCpuRecords(Arc<RawRecords>),
-    ReportMinResolvedTs {
+    ReportMinWatermark {
         store_id: u64,
-        min_resolved_ts: u64,
+        min_watermark: u64,
     },
     ReportBuckets(BucketStat),
     ControlGrpcServer(pdpb::ControlGrpcEvent),
@@ -449,14 +449,14 @@ where
             Task::RegionCpuRecords(ref cpu_records) => {
                 write!(f, "get region cpu records: {:?}", cpu_records)
             }
-            Task::ReportMinResolvedTs {
+            Task::ReportMinWatermark {
                 store_id,
-                min_resolved_ts,
+                min_watermark,
             } => {
                 write!(
                     f,
-                    "report min resolved ts: store {}, resolved ts {}",
-                    store_id, min_resolved_ts
+                    "report min watermark: store {}, watermark {}",
+                    store_id, min_watermark
                 )
             }
             Task::ReportBuckets(ref buckets) => {
@@ -511,7 +511,7 @@ pub trait StoreStatsReporter: Send + Clone + Sync + 'static + Collector {
         read_io_rates: RecordPairVec,
         write_io_rates: RecordPairVec,
     );
-    fn report_min_resolved_ts(&self, store_id: u64, min_resolved_ts: u64);
+    fn report_min_watermark(&self, store_id: u64, min_watermark: u64);
     fn auto_split(&self, split_infos: Vec<SplitInfo>);
     fn update_latency_stats(&self, timer_tick: u64);
 }
@@ -540,14 +540,14 @@ where
         }
     }
 
-    fn report_min_resolved_ts(&self, store_id: u64, min_resolved_ts: u64) {
-        let task = Task::ReportMinResolvedTs {
+    fn report_min_watermark(&self, store_id: u64, min_watermark: u64) {
+        let task = Task::ReportMinWatermark {
             store_id,
-            min_resolved_ts,
+            min_watermark,
         };
         if let Err(e) = self.0.schedule(task) {
             error!(
-                "failed to send min resolved ts to pd worker";
+                "failed to send min watermark to pd worker";
                 "err" => ?e,
             );
         }
@@ -1761,13 +1761,11 @@ where
         calculate_region_cpu_records(self.store_id, records, &mut self.region_cpu_records);
     }
 
-    fn handle_report_min_resolved_ts(&self, store_id: u64, min_resolved_ts: u64) {
-        let resp = self
-            .pd_client
-            .report_min_resolved_ts(store_id, min_resolved_ts);
+    fn handle_report_min_watermark(&self, store_id: u64, min_watermark: u64) {
+        let resp = self.pd_client.report_min_watermark(store_id, min_watermark);
         let f = async move {
             if let Err(e) = resp.await {
-                warn!("report min resolved_ts failed"; "err" => ?e);
+                warn!("report min watermark failed"; "err" => ?e);
             }
         };
         self.remote.spawn(f);
@@ -2135,10 +2133,10 @@ where
                 );
             }
             Task::RegionCpuRecords(records) => self.handle_region_cpu_records(records),
-            Task::ReportMinResolvedTs {
+            Task::ReportMinWatermark {
                 store_id,
-                min_resolved_ts,
-            } => self.handle_report_min_resolved_ts(store_id, min_resolved_ts),
+                min_watermark,
+            } => self.handle_report_min_watermark(store_id, min_watermark),
             Task::ReportBuckets(buckets) => {
                 self.handle_report_region_buckets(buckets);
             }

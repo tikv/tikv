@@ -53,7 +53,6 @@ prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { workspace = true }
 raftstore = { workspace = true }
-resolved_ts = { workspace = true }
 security = { workspace = true }
 semver = "1.0"
 slog = { workspace = true }
@@ -64,6 +63,7 @@ tikv_kv = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread", "time"] }
 txn_types = { workspace = true }
+watermark = { workspace = true }
 
 [dev-dependencies]
 criterion = "0.3"

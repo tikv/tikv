@@ -22,7 +22,7 @@ pub enum TsSource {
     MemoryLock(Key),
     PdTso,
     // The following sources can also come from PD or memory lock, but we care more about sources
-    // in resolved-ts.
+    // in watermark.
     BackupStream,
     Cdc,
 }
@@ -83,12 +83,12 @@ pub struct Resolver {
     // The last shrink time.
     last_aggressive_shrink_time: Instant,
     // The timestamps that guarantees no more commit will happen before.
-    resolved_ts: TimeStamp,
+    watermark: TimeStamp,
     // The highest index `Resolver` had been tracked
     tracked_index: u64,
-    // The region read progress used to utilize `resolved_ts` to serve stale read request
+    // The region read progress used to utilize `watermark` to serve stale read request
     read_progress: Option<Arc<RegionReadProgress>>,
-    // The timestamps that advance the resolved_ts when there is no more write.
+    // The timestamps that advance the watermark when there is no more write.
     min_ts: TimeStamp,
     // Whether the `Resolver` is stopped
     stopped: bool,
@@ -180,7 +180,7 @@ impl Resolver {
     ) -> Resolver {
         Resolver {
             region_id,
-            resolved_ts: TimeStamp::zero(),
+            watermark: TimeStamp::zero(),
             locks_by_key: HashMap::default(),
             lock_ts_heap: BTreeMap::new(),
             last_aggressive_shrink_time: Instant::now_coarse(),
@@ -193,8 +193,8 @@ impl Resolver {
         }
     }
 
-    pub fn resolved_ts(&self) -> TimeStamp {
-        self.resolved_ts
+    pub fn watermark(&self) -> TimeStamp {
+        self.watermark
     }
 
     pub fn tracked_index(&self) -> u64 {
@@ -350,7 +350,7 @@ impl Resolver {
         self.shrink_ratio(shrink_ratio);
     }
 
-    /// Try to advance resolved ts.
+    /// Try to advance watermark.
     ///
     /// `min_ts` advances the resolver even if there is no write.
     /// Return None means the resolver is not initialized.
@@ -369,9 +369,9 @@ impl Resolver {
         }
 
         // The `Resolver` is stopped, not need to advance, just return the current
-        // `resolved_ts`
+        // `watermark`
         if self.stopped {
-            return self.resolved_ts;
+            return self.watermark;
         }
 
         // Find the min start ts.
@@ -380,8 +380,8 @@ impl Resolver {
         let min_start_ts = min_lock.as_ref().map(|(ts, _)| **ts).unwrap_or(min_ts);
 
         // No more commit happens before the ts.
-        let new_resolved_ts = cmp::min(min_start_ts, min_ts);
-        // reason is the min source of the new resolved ts.
+        let new_watermark = cmp::min(min_start_ts, min_ts);
+        // reason is the min source of the new watermark.
         let reason = match (min_lock, min_ts) {
             (Some((lock_ts, txn_locks)), min_ts) if *lock_ts < min_ts => {
                 TsSource::Lock(txn_locks.clone())
@@ -390,43 +390,43 @@ impl Resolver {
             (None, _) => source,
         };
 
-        if self.resolved_ts >= new_resolved_ts {
+        if self.watermark >= new_watermark {
             RTS_RESOLVED_FAIL_ADVANCE_VEC
                 .with_label_values(&[reason.label()])
                 .inc();
             self.last_attempt = Some(LastAttempt {
                 success: false,
-                ts: new_resolved_ts,
+                ts: new_watermark,
                 reason,
             });
         } else {
             self.last_attempt = Some(LastAttempt {
                 success: true,
-                ts: new_resolved_ts,
+                ts: new_watermark,
                 reason,
             })
         }
 
-        // Resolved ts never decrease.
-        self.resolved_ts = cmp::max(self.resolved_ts, new_resolved_ts);
+        // watermark never decrease.
+        self.watermark = cmp::max(self.watermark, new_watermark);
 
         // Publish an `(apply index, safe ts)` item into the region read progress
         if let Some(rrp) = &self.read_progress {
-            rrp.update_safe_ts_with_time(self.tracked_index, self.resolved_ts.into_inner(), now);
+            rrp.update_safe_ts_with_time(self.tracked_index, self.watermark.into_inner(), now);
         }
 
         let new_min_ts = if has_lock {
             // If there are some lock, the min_ts must be smaller than
             // the min start ts, so it guarantees to be smaller than
             // any late arriving commit ts.
-            new_resolved_ts // cmp::min(min_start_ts, min_ts)
+            new_watermark // cmp::min(min_start_ts, min_ts)
         } else {
             min_ts
         };
         // Min ts never decrease.
         self.min_ts = cmp::max(self.min_ts, new_min_ts);
 
-        self.resolved_ts
+        self.watermark
     }
 
     pub(crate) fn log_locks(&self, min_start_ts: u64) {

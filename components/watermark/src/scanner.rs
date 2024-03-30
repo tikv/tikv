@@ -51,7 +51,7 @@ impl ScanTask {
             apply_index,
         };
         if let Err(e) = self.scheduler.schedule(task) {
-            warn!("resolved_ts scheduler send entries failed"; "err" => ?e);
+            warn!("watermark scheduler send entries failed"; "err" => ?e);
         }
     }
 
@@ -130,16 +130,16 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
             if task.is_cancelled() {
                 return;
             }
-            fail::fail_point!("resolved_ts_before_scanner_get_snapshot");
+            fail::fail_point!("watermark_before_scanner_get_snapshot");
             let snap = match Self::get_snapshot(&mut task, cdc_handle).await {
                 Ok(snap) => snap,
                 Err(e) => {
-                    warn!("resolved_ts scan get snapshot failed"; "err" => ?e);
+                    warn!("watermark scan get snapshot failed"; "err" => ?e);
                     task.on_error(e);
                     return;
                 }
             };
-            fail::fail_point!("resolved_ts_after_scanner_get_snapshot");
+            fail::fail_point!("watermark_after_scanner_get_snapshot");
             let start = Instant::now();
             let apply_index = snap.get_apply_index().unwrap();
             let mut reader = MvccReader::new(snap, Some(MvccScanMode::Forward), false);
@@ -150,7 +150,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine> ScannerPool<T, E> {
                     match Self::scan_locks(&mut reader, start_key.as_ref(), task.checkpoint_ts) {
                         Ok(rs) => rs,
                         Err(e) => {
-                            warn!("resolved_ts scan lock failed"; "err" => ?e);
+                            warn!("watermark scan lock failed"; "err" => ?e);
                             task.on_error(e);
                             return;
                         }

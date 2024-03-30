@@ -3086,7 +3086,7 @@ impl CdcConfig {
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
-pub struct ResolvedTsConfig {
+pub struct WatermarkConfig {
     #[online_config(skip)]
     pub enable: bool,
     pub advance_ts_interval: ReadableDuration,
@@ -3096,19 +3096,19 @@ pub struct ResolvedTsConfig {
     pub incremental_scan_concurrency: usize,
 }
 
-impl ResolvedTsConfig {
+impl WatermarkConfig {
     fn validate(&self) -> Result<(), Box<dyn Error>> {
         if self.advance_ts_interval.is_zero() {
-            return Err("resolved-ts.advance-ts-interval can't be zero".into());
+            return Err("watermark.advance-ts-interval can't be zero".into());
         }
         if self.scan_lock_pool_size == 0 {
-            return Err("resolved-ts.scan-lock-pool-size can't be zero".into());
+            return Err("watermak.scan-lock-pool-size can't be zero".into());
         }
         Ok(())
     }
 }
 
-impl Default for ResolvedTsConfig {
+impl Default for WatermarkConfig {
     fn default() -> Self {
         Self {
             enable: true,
@@ -3482,7 +3482,8 @@ pub struct TikvConfig {
     pub cdc: CdcConfig,
 
     #[online_config(submodule)]
-    pub resolved_ts: ResolvedTsConfig,
+    #[serde(rename = "resolved-ts", alias = "watermark")]
+    pub watermark: WatermarkConfig,
 
     #[online_config(submodule)]
     pub resource_metering: ResourceMeteringConfig,
@@ -3533,7 +3534,7 @@ impl Default for TikvConfig {
             gc: GcConfig::default(),
             split: SplitConfig::default(),
             cdc: CdcConfig::default(),
-            resolved_ts: ResolvedTsConfig::default(),
+            watermark: WatermarkConfig::default(),
             resource_metering: ResourceMeteringConfig::default(),
             log_backup: BackupStreamConfig::default(),
             causal_ts: CausalTsConfig::default(),
@@ -3900,7 +3901,7 @@ impl TikvConfig {
             .validate(self.storage.engine == EngineType::RaftKv2)?;
         self.pessimistic_txn.validate()?;
         self.gc.validate()?;
-        self.resolved_ts.validate()?;
+        self.watermark.validate()?;
         self.resource_metering.validate()?;
         self.quota.validate()?;
         self.causal_ts.validate()?;
@@ -4690,7 +4691,7 @@ pub enum Module {
     Gc,
     Split,
     Cdc,
-    ResolvedTs,
+    Watermark,
     ResourceMetering,
     BackupStream,
     Quota,
@@ -4720,7 +4721,7 @@ impl From<&str> for Module {
             "pessimistic_txn" => Module::PessimisticTxn,
             "gc" => Module::Gc,
             "cdc" => Module::Cdc,
-            "resolved_ts" => Module::ResolvedTs,
+            "watermark" => Module::Watermark,
             "resource_metering" => Module::ResourceMetering,
             "quota" => Module::Quota,
             "log" => Module::Log,
@@ -5656,7 +5657,7 @@ mod tests {
     }
 
     #[test]
-    fn test_change_resolved_ts_config() {
+    fn test_change_watermark_config() {
         use crossbeam::channel;
 
         pub struct TestConfigManager(channel::Sender<ConfigChange>);
@@ -5670,54 +5671,51 @@ mod tests {
         let (cfg, _dir) = TikvConfig::with_tmp().unwrap();
         let cfg_controller = ConfigController::new(cfg);
         let (tx, rx) = channel::unbounded();
-        cfg_controller.register(Module::ResolvedTs, Box::new(TestConfigManager(tx)));
+        cfg_controller.register(Module::Watermark, Box::new(TestConfigManager(tx)));
 
         // Return error if try to update not support config or unknow config
         cfg_controller
-            .update_config("resolved-ts.enable", "false")
+            .update_config("watermark.enable", "false")
             .unwrap_err();
         cfg_controller
-            .update_config("resolved-ts.scan-lock-pool-size", "10")
+            .update_config("watermark.scan-lock-pool-size", "10")
             .unwrap_err();
         cfg_controller
-            .update_config("resolved-ts.xxx", "false")
+            .update_config("watermark.xxx", "false")
             .unwrap_err();
 
-        let mut resolved_ts_cfg = cfg_controller.get_current().resolved_ts;
+        let mut watermark_cfg = cfg_controller.get_current().watermark;
         // Default value
         assert_eq!(
-            resolved_ts_cfg.advance_ts_interval,
+            watermark_cfg.advance_ts_interval,
             ReadableDuration::secs(20)
         );
 
         // Update `advance-ts-interval` to 100ms
         cfg_controller
-            .update_config("resolved-ts.advance-ts-interval", "100ms")
+            .update_config("watermark.advance-ts-interval", "100ms")
             .unwrap();
-        resolved_ts_cfg.update(rx.recv().unwrap()).unwrap();
+        watermark_cfg.update(rx.recv().unwrap()).unwrap();
         assert_eq!(
-            resolved_ts_cfg.advance_ts_interval,
+            watermark_cfg.advance_ts_interval,
             ReadableDuration::millis(100)
         );
 
         // Return error if try to update `advance-ts-interval` to an invalid value
         cfg_controller
-            .update_config("resolved-ts.advance-ts-interval", "0m")
+            .update_config("watermark.advance-ts-interval", "0m")
             .unwrap_err();
         assert_eq!(
-            resolved_ts_cfg.advance_ts_interval,
+            watermark_cfg.advance_ts_interval,
             ReadableDuration::millis(100)
         );
 
         // Update `advance-ts-interval` to 3s
         cfg_controller
-            .update_config("resolved-ts.advance-ts-interval", "3s")
+            .update_config("watermark.advance-ts-interval", "3s")
             .unwrap();
-        resolved_ts_cfg.update(rx.recv().unwrap()).unwrap();
-        assert_eq!(
-            resolved_ts_cfg.advance_ts_interval,
-            ReadableDuration::secs(3)
-        );
+        watermark_cfg.update(rx.recv().unwrap()).unwrap();
+        assert_eq!(watermark_cfg.advance_ts_interval, ReadableDuration::secs(3));
     }
 
     #[test]
@@ -7189,7 +7187,7 @@ mod tests {
             ("pessimistic_txn", Module::PessimisticTxn),
             ("gc", Module::Gc),
             ("cdc", Module::Cdc),
-            ("resolved_ts", Module::ResolvedTs),
+            ("watermark", Module::Watermark),
             ("resource_metering", Module::ResourceMetering),
             ("unknown", Module::Unknown("unknown".to_string())),
         ];

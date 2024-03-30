@@ -85,9 +85,9 @@ pub enum Task {
     },
     // BucketStat is the delta write flow of the bucket.
     ReportBuckets(BucketStat),
-    ReportMinResolvedTs {
+    ReportMinWatermark {
         store_id: u64,
-        min_resolved_ts: u64,
+        min_watermark: u64,
     },
     // In slowness.rs
     InspectLatency {
@@ -154,13 +154,13 @@ impl Display for Task {
                 region_id
             ),
             Task::ReportBuckets(ref buckets) => write!(f, "report buckets: {:?}", buckets),
-            Task::ReportMinResolvedTs {
+            Task::ReportMinWatermark {
                 store_id,
-                min_resolved_ts,
+                min_watermark,
             } => write!(
                 f,
-                "report min resolved ts: store {}, resolved ts {}",
-                store_id, min_resolved_ts,
+                "report min watermark: store {}, watermark {}",
+                store_id, min_watermark,
             ),
             Task::InspectLatency {
                 send_time,
@@ -332,10 +332,10 @@ where
                 txn_ext,
             } => self.handle_update_max_timestamp(region_id, initial_status, txn_ext),
             Task::ReportBuckets(delta_buckets) => self.handle_report_region_buckets(delta_buckets),
-            Task::ReportMinResolvedTs {
+            Task::ReportMinWatermark {
                 store_id,
-                min_resolved_ts,
-            } => self.handle_report_min_resolved_ts(store_id, min_resolved_ts),
+                min_watermark,
+            } => self.handle_report_min_watermark(store_id, min_watermark),
             Task::InspectLatency {
                 send_time,
                 inspector,
@@ -403,15 +403,15 @@ impl StoreStatsReporter for PdReporter {
         }
     }
 
-    fn report_min_resolved_ts(&self, store_id: u64, min_resolved_ts: u64) {
-        let task = Task::ReportMinResolvedTs {
+    fn report_min_watermark(&self, store_id: u64, min_watermark: u64) {
+        let task = Task::ReportMinWatermark {
             store_id,
-            min_resolved_ts,
+            min_watermark,
         };
         if let Err(e) = self.scheduler.schedule(task) {
             error!(
                 self.logger,
-                "failed to send min resolved ts to pd worker";
+                "failed to send min watermark to pd worker";
                 "err" => ?e,
             );
         }

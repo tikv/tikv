@@ -115,14 +115,14 @@ fn test_observe_duplicate_cmd_impl<F: KvFormat>() {
         other => panic!("unknown event {:?}", other),
     }
 
-    // Make sure resolved ts can be advanced normally even with few tso failures.
+    // Make sure watermark can be advanced normally even with few tso failures.
     let mut counter = 0;
     loop {
         // Even if there is no write,
-        // resolved ts should be advanced regularly.
+        // watermark should be advanced regularly.
         let event = receive_event_3(true);
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            assert_ne!(0, resolved_ts.ts);
+        if let Some(watermark) = event.watermark.as_ref() {
+            assert_ne!(0, watermark.ts);
             counter += 1;
         }
         if counter > 5 {
@@ -196,8 +196,8 @@ fn test_delayed_change_cmd() {
     let mut counter = 0;
     loop {
         let event = receive_event(true);
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            assert_ne!(0, resolved_ts.ts);
+        if let Some(watermark) = event.watermark.as_ref() {
+            assert_ne!(0, watermark.ts);
             counter += 1;
         }
         for e in event.events.into_iter() {

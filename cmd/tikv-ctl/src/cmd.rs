@@ -636,7 +636,7 @@ pub enum Cmd {
         #[structopt(long)]
         /// When specified, prints the locks associated with the transaction
         /// that has the smallest 'start_ts' in the resolver, which is
-        /// preventing the 'resolved_ts' from advancing.
+        /// preventing the 'watermark' from advancing.
         log: bool,
 
         #[structopt(long, requires = "log")]

@@ -34,7 +34,7 @@ fn prepare_for_stale_read_before_run(
     if let Some(f) = before_run {
         f(&mut cluster.cfg);
     };
-    cluster.cfg.resolved_ts.enable = true;
+    cluster.cfg.watermark.enable = true;
     cluster.run();
 
     cluster.must_transfer_leader(1, leader.clone());
@@ -126,7 +126,7 @@ fn test_stale_read_1pc_flow_replicate() {
         get_tso(&pd_client),
     );
     let read_ts = get_tso(&pd_client);
-    // wait for advance_resolved_ts.
+    // wait for advance_watermark.
     sleep_ms(200);
     // Follower 2 can still read `value1`, but can not read `value2` due
     // to it don't have enough data
@@ -259,7 +259,7 @@ fn test_update_apply_index_before_sync_read_state() {
     follower_client2.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), commit_ts1);
 }
 
-// Testing that if `resolved_ts` updated before `apply_index` update, the
+// Testing that if `watermark` updated before `apply_index` update, the
 // `safe_ts` won't be updated, hence the leader won't broadcast a wrong
 // `(apply_index, safe_ts)` item to other replicas
 #[test]
@@ -295,7 +295,7 @@ fn test_update_resoved_ts_before_apply_index() {
         b"key1".to_vec(),
     );
 
-    // Wait `resolved_ts` be updated
+    // Wait `watermark` be updated
     sleep_ms(100);
 
     // The leader can't handle stale read with `commit_ts2` because its `safe_ts`

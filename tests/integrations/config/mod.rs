@@ -201,7 +201,7 @@ fn test_serde_custom_tikv_config() {
         region_compact_redundant_rows_percent: Some(33),
         pd_heartbeat_tick_interval: ReadableDuration::minutes(12),
         pd_store_heartbeat_tick_interval: ReadableDuration::secs(12),
-        pd_report_min_resolved_ts_interval: ReadableDuration::millis(233),
+        pd_report_min_watermark_interval: ReadableDuration::millis(233),
         notify_capacity: 12_345,
         snap_mgr_gc_tick_interval: ReadableDuration::minutes(12),
         snap_gc_timeout: ReadableDuration::hours(12),
@@ -863,7 +863,7 @@ fn test_serde_custom_tikv_config() {
         sink_memory_quota: ReadableSize::mb(7),
         ..Default::default()
     };
-    value.resolved_ts = ResolvedTsConfig {
+    value.watermark = WatermarkConfig {
         enable: true,
         advance_ts_interval: ReadableDuration::secs(5),
         scan_lock_pool_size: 1,

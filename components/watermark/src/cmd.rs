@@ -231,7 +231,7 @@ fn group_row_changes(requests: Vec<Request>) -> (HashMap<Key, RowChange>, bool) 
                         }
                     }
                     other => {
-                        debug!("resolved ts invalid cf {}", other);
+                        debug!("watermark invalid cf {}", other);
                     }
                 }
             }
@@ -245,7 +245,7 @@ fn group_row_changes(requests: Vec<Request>) -> (HashMap<Key, RowChange>, bool) 
                     }
                     "" | CF_WRITE | CF_DEFAULT => {}
                     other => {
-                        debug!("resolved ts invalid cf {}", other);
+                        debug!("watermark invalid cf {}", other);
                     }
                 }
             }

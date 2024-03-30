@@ -74,7 +74,6 @@ use raftstore::{
     RaftRouterCompactedEventSender,
 };
 use region_cache_memory_engine::RangeCacheMemoryEngine;
-use resolved_ts::{LeadershipResolver, Task};
 use resource_control::ResourceGroupManager;
 use security::SecurityManager;
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
@@ -128,6 +127,7 @@ use tikv_util::{
     Either,
 };
 use tokio::runtime::Builder;
+use watermark::{LeadershipResolver, Task};
 
 use crate::{
     common::{
@@ -293,7 +293,7 @@ where
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
     br_snap_recovery_mode: bool, // use for br snapshot recovery
-    resolved_ts_scheduler: Option<Scheduler<Task>>,
+    watermark_scheduler: Option<Scheduler<Task>>,
     grpc_service_mgr: GrpcServiceManager,
     snap_br_rejector: Option<Arc<PrepareDiskSnapObserver>>,
 }
@@ -498,7 +498,7 @@ where
             causal_ts_provider,
             tablet_registry: None,
             br_snap_recovery_mode: is_recovering_marked,
-            resolved_ts_scheduler: None,
+            watermark_scheduler: None,
             grpc_service_mgr: GrpcServiceManager::new(tx),
             snap_br_rejector: None,
         }
@@ -792,18 +792,16 @@ where
             Box::new(CdcConfigManager(cdc_worker.scheduler())),
         );
 
-        // Create resolved ts worker
-        let rts_worker = if self.core.config.resolved_ts.enable {
-            let worker = Box::new(LazyWorker::new("resolved-ts"));
-            // Register the resolved ts observer
-            let resolved_ts_ob = resolved_ts::Observer::new(worker.scheduler());
-            resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-            // Register config manager for resolved ts worker
+        // Create watermark worker
+        let wm_worker = if self.core.config.watermark.enable {
+            let worker = Box::new(LazyWorker::new("watermark"));
+            // Register the watermark observer
+            let watermark_ob = watermark::Observer::new(worker.scheduler());
+            watermark_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+            // Register config manager for watermark worker
             cfg_controller.register(
-                tikv::config::Module::ResolvedTs,
-                Box::new(resolved_ts::ResolvedTsConfigManager::new(
-                    worker.scheduler(),
-                )),
+                tikv::config::Module::Watermark,
+                Box::new(watermark::WatermarkConfigManager::new(worker.scheduler())),
             );
             Some(worker)
         } else {
@@ -1084,11 +1082,11 @@ where
         cdc_worker.start_with_timer(cdc_endpoint);
         self.core.to_stop.push(cdc_worker);
 
-        // Start resolved ts
-        if let Some(mut rts_worker) = rts_worker {
-            let rts_endpoint = resolved_ts::Endpoint::new(
-                &self.core.config.resolved_ts,
-                rts_worker.scheduler(),
+        // Start watermark
+        if let Some(mut wm_worker) = wm_worker {
+            let wm_endpoint = watermark::Endpoint::new(
+                &self.core.config.watermark,
+                wm_worker.scheduler(),
                 CdcRaftRouter(self.router.clone()),
                 engines.store_meta.clone(),
                 self.pd_client.clone(),
@@ -1096,9 +1094,9 @@ where
                 server.env(),
                 self.security_mgr.clone(),
             );
-            self.resolved_ts_scheduler = Some(rts_worker.scheduler());
-            rts_worker.start_with_timer(rts_endpoint);
-            self.core.to_stop.push(rts_worker);
+            self.watermark_scheduler = Some(wm_worker.scheduler());
+            wm_worker.start_with_timer(wm_endpoint);
+            self.core.to_stop.push(wm_worker);
         }
 
         cfg_controller.register(
@@ -1167,7 +1165,7 @@ where
             .register(tikv::config::Module::Import, Box::new(import_cfg_mgr));
 
         // Debug service.
-        let resolved_ts_scheduler = Arc::new(self.resolved_ts_scheduler.clone());
+        let watermark_scheduler = Arc::new(self.watermark_scheduler.clone());
         let debug_service = DebugService::new(
             servers.debugger.clone(),
             servers.server.get_debug_thread_pool().clone(),
@@ -1175,7 +1173,7 @@ where
             self.engines.as_ref().unwrap().store_meta.clone(),
             Arc::new(
                 move |region_id, log_locks, min_start_ts, callback| -> bool {
-                    if let Some(s) = resolved_ts_scheduler.as_ref() {
+                    if let Some(s) = watermark_scheduler.as_ref() {
                         let res = s.schedule(Task::GetDiagnosisInfo {
                             region_id,
                             log_locks,

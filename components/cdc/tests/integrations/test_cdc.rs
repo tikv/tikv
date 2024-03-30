@@ -3,7 +3,7 @@
 use std::{sync::*, time::Duration};
 
 use api_version::{test_kv_format_impl, KvFormat};
-use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Task, Validate};
+use cdc::{metrics::CDC_WATERMARK_ADVANCE_METHOD, Task, Validate};
 use concurrency_manager::ConcurrencyManager;
 use futures::{executor::block_on, SinkExt};
 use grpcio::WriteFlags;
@@ -79,10 +79,10 @@ fn test_cdc_basic_impl<F: KvFormat>() {
     let mut counter = 0;
     loop {
         // Even if there is no write,
-        // resolved ts should be advanced regularly.
+        // watermark should be advanced regularly.
         let event = receive_event(true);
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            assert_ne!(0, resolved_ts.ts);
+        if let Some(watermark) = event.watermark.as_ref() {
+            assert_ne!(0, watermark.ts);
             counter += 1;
         }
         if counter > 5 {
@@ -700,17 +700,17 @@ fn test_cdc_tso_failure_impl<F: KvFormat>() {
 
     suite.cluster.pd_client.trigger_tso_failure();
 
-    // Make sure resolved ts can be advanced normally even with few tso failures.
+    // Make sure watermark can be advanced normally even with few tso failures.
     let mut counter = 0;
     let mut previous_ts = 0;
     loop {
         // Even if there is no write,
-        // resolved ts should be advanced regularly.
+        // watermark should be advanced regularly.
         let event = receive_event(true);
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            assert!(resolved_ts.ts >= previous_ts);
-            assert_eq!(resolved_ts.regions, vec![1]);
-            previous_ts = resolved_ts.ts;
+        if let Some(watermark) = event.watermark.as_ref() {
+            assert!(watermark.ts >= previous_ts);
+            assert_eq!(watermark.regions, vec![1]);
+            previous_ts = watermark.ts;
             counter += 1;
         }
         if counter > 5 {
@@ -789,20 +789,20 @@ fn test_region_split() {
         other => panic!("unknown event {:?}", other),
     }
 
-    // Make sure resolved ts can be advanced normally.
+    // Make sure watermark can be advanced normally.
     let mut counter = 0;
     let mut previous_ts = 0;
     loop {
         // Even if there is no write,
-        // resolved ts should be advanced regularly.
+        // watermark should be advanced regularly.
         let event = receive_event(true);
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            assert!(resolved_ts.ts >= previous_ts);
+        if let Some(watermark) = event.watermark.as_ref() {
+            assert!(watermark.ts >= previous_ts);
             assert!(
-                resolved_ts.regions == vec![region.id, region1.id]
-                    || resolved_ts.regions == vec![region1.id, region.id]
+                watermark.regions == vec![region.id, region1.id]
+                    || watermark.regions == vec![region1.id, region.id]
             );
-            previous_ts = resolved_ts.ts;
+            previous_ts = watermark.ts;
             counter += 1;
         }
         if counter > 5 {
@@ -1210,11 +1210,11 @@ fn test_old_value_multi_changefeeds_impl<F: KvFormat>() {
 }
 
 #[test]
-fn test_cdc_resolve_ts_checking_concurrency_manager() {
-    test_kv_format_impl!(test_cdc_resolve_ts_checking_concurrency_manager_impl<ApiV1 ApiV2>);
+fn test_cdc_watermark_checking_concurrency_manager() {
+    test_kv_format_impl!(test_cdc_watermark_checking_concurrency_manager_impl<ApiV1 ApiV2>);
 }
 
-fn test_cdc_resolve_ts_checking_concurrency_manager_impl<F: KvFormat>() {
+fn test_cdc_watermark_checking_concurrency_manager_impl<F: KvFormat>() {
     let mut suite = TestSuite::new(1, F::TAG);
     let cm: ConcurrencyManager = suite.get_txn_concurrency_manager(1).unwrap();
     let lock_key = |key: &[u8], ts: u64| {
@@ -1259,53 +1259,53 @@ fn test_cdc_resolve_ts_checking_concurrency_manager_impl<F: KvFormat>() {
         other => panic!("unknown event {:?}", other),
     }
 
-    fn check_resolved_ts(event: ChangeDataEvent, check_fn: impl Fn(u64)) {
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            check_fn(resolved_ts.ts)
+    fn check_watermark(event: ChangeDataEvent, check_fn: impl Fn(u64)) {
+        if let Some(watermark) = event.watermark.as_ref() {
+            check_fn(watermark.ts)
         }
     }
 
-    check_resolved_ts(receive_event(true), |ts| assert_eq!(ts, 80));
+    check_watermark(receive_event(true), |ts| assert_eq!(ts, 80));
     assert!(cm.max_ts() >= 100.into());
 
     drop(guard);
     for retry in 0.. {
         let event = receive_event(true);
-        let mut current_rts = 0;
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            current_rts = resolved_ts.ts;
-            if resolved_ts.ts >= 100 {
+        let mut current_wm = 0;
+        if let Some(watermark) = event.watermark.as_ref() {
+            current_wm = watermark.ts;
+            if watermark.ts >= 100 {
                 break;
             }
         }
         if retry >= 5 {
             panic!(
-                "resolved ts didn't push properly after unlocking memlock. current resolved_ts: {}",
-                current_rts
+                "watermark didn't push properly after unlocking memlock. current watermark: {}",
+                current_wm
             );
         }
     }
 
     let _guard = lock_key(b"xa", 90);
-    // The resolved_ts should be blocked by the mem lock but it's already greater
-    // than 90. Retry until receiving an unchanged resolved_ts because the first
-    // several resolved ts received might be updated before acquiring the lock.
-    let mut last_resolved_ts = 0;
+    // The watermark should be blocked by the mem lock but it's already greater
+    // than 90. Retry until receiving an unchanged watermark because the first
+    // several watermark received might be updated before acquiring the lock.
+    let mut last_watermark = 0;
     let mut success = false;
     for _ in 0..5 {
         let event = receive_event(true);
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            let ts = resolved_ts.ts;
+        if let Some(watermark) = event.watermark.as_ref() {
+            let ts = watermark.ts;
             assert!(ts > 100);
-            if ts == last_resolved_ts {
+            if ts == last_watermark {
                 success = true;
                 break;
             }
-            assert!(ts > last_resolved_ts);
-            last_resolved_ts = ts;
+            assert!(ts > last_watermark);
+            last_watermark = ts;
         }
     }
-    assert!(success, "resolved_ts not blocked by the memory lock");
+    assert!(success, "watermark not blocked by the memory lock");
 
     event_feed_wrap.replace(None);
     suite.stop();
@@ -1340,7 +1340,7 @@ fn test_cdc_1pc_impl<F: KvFormat>() {
 
     let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
 
-    // Let resolved_ts update.
+    // Let watermark update.
     sleep_ms(500);
 
     // Prewrite
@@ -1367,11 +1367,11 @@ fn test_cdc_1pc_impl<F: KvFormat>() {
         .unwrap();
     assert!(prewrite_resp.get_one_pc_commit_ts() > 0);
 
-    let mut resolved_ts = 0;
+    let mut watermark = 0;
     loop {
         let mut cde = receive_event(true);
-        if cde.get_resolved_ts().get_ts() > resolved_ts {
-            resolved_ts = cde.get_resolved_ts().get_ts();
+        if cde.get_watermark().get_ts() > watermark {
+            watermark = cde.get_watermark().get_ts();
         }
         let events = cde.mut_events();
         if !events.is_empty() {
@@ -1383,11 +1383,11 @@ fn test_cdc_1pc_impl<F: KvFormat>() {
                     assert_eq!(e0.get_type(), EventLogType::Committed);
                     assert_eq!(e0.get_key(), k2);
                     assert_eq!(e0.get_value(), v2);
-                    assert!(e0.commit_ts > resolved_ts);
+                    assert!(e0.commit_ts > watermark);
                     assert_eq!(e1.get_type(), EventLogType::Committed);
                     assert_eq!(e1.get_key(), k1);
                     assert_eq!(e1.get_value(), v1);
-                    assert!(e1.commit_ts > resolved_ts);
+                    assert!(e1.commit_ts > watermark);
                     break;
                 }
                 other => panic!("unknown event {:?}", other),
@@ -1795,10 +1795,10 @@ fn test_region_created_replicate() {
     let mut previous_ts = 0;
     loop {
         let event = receive_event(true);
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            assert!(resolved_ts.ts >= previous_ts);
-            assert!(resolved_ts.regions == vec![region.id]);
-            previous_ts = resolved_ts.ts;
+        if let Some(watermark) = event.watermark.as_ref() {
+            assert!(watermark.ts >= previous_ts);
+            assert!(watermark.regions == vec![region.id]);
+            previous_ts = watermark.ts;
             counter += 1;
         }
         if counter > 5 {
@@ -1945,12 +1945,12 @@ fn test_cdc_extract_rollback_if_gc_fence_set_impl<F: KvFormat>() {
 
     // We don't care about the events caused by the previous writings in this test
     // case, and it's too complicated to check them. Just skip them here, and
-    // wait for resolved_ts to be pushed to a greater value than the two
+    // wait for watermark to be pushed to a greater value than the two
     // versions' commit_ts-es.
     let skip_to_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     loop {
         let e = receive_event(true);
-        if let Some(r) = e.resolved_ts.as_ref() {
+        if let Some(r) = e.watermark.as_ref() {
             if r.ts > skip_to_ts.into_inner() {
                 break;
             }
@@ -2128,10 +2128,10 @@ fn test_term_change() {
     let mut previous_ts = 0;
     loop {
         let event = receive_event(true);
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            assert!(resolved_ts.ts >= previous_ts);
-            assert!(resolved_ts.regions == vec![region.id]);
-            previous_ts = resolved_ts.ts;
+        if let Some(watermark) = event.watermark.as_ref() {
+            assert!(watermark.ts >= previous_ts);
+            assert!(watermark.regions == vec![region.id]);
+            previous_ts = watermark.ts;
             counter += 1;
         }
         if counter > 5 {
@@ -2177,13 +2177,13 @@ fn test_cdc_no_write_corresponding_to_lock_impl<F: KvFormat>() {
     let mut advance_cnt = 0;
     loop {
         let event = receive_event(true);
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+        if let Some(watermark) = event.watermark.as_ref() {
             advance_cnt += 1;
-            if resolved_ts.ts >= 25 {
+            if watermark.ts >= 25 {
                 break;
             }
             if advance_cnt > 50 {
-                panic!("resolved_ts is not advanced, stuck at {}", resolved_ts.ts);
+                panic!("watermark is not advanced, stuck at {}", watermark.ts);
             }
         }
     }
@@ -2211,11 +2211,11 @@ fn test_cdc_write_rollback_when_no_lock_impl<F: KvFormat>() {
     m1.value = b"v1".to_vec();
     suite.must_kv_prewrite(1, vec![m1], k1.clone(), 10.into());
 
-    // Wait until resolved_ts advanced to 10
+    // Wait until watermark advanced to 10
     loop {
         let event = receive_event(true);
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            if resolved_ts.ts == 10 {
+        if let Some(watermark) = event.watermark.as_ref() {
+            if watermark.ts == 10 {
                 break;
             }
         }
@@ -2224,12 +2224,12 @@ fn test_cdc_write_rollback_when_no_lock_impl<F: KvFormat>() {
     // Do a rollback on the same key, but the start_ts is different.
     suite.must_kv_rollback(1, vec![k1.clone()], 5.into());
 
-    // resolved_ts shouldn't be advanced beyond 10
+    // watermark shouldn't be advanced beyond 10
     for _ in 0..10 {
         let event = receive_event(true);
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            if resolved_ts.ts > 10 {
-                panic!("resolved_ts shouldn't be advanced beyond 10");
+        if let Some(watermark) = event.watermark.as_ref() {
+            if watermark.ts > 10 {
+                panic!("watermark shouldn't be advanced beyond 10");
             }
         }
     }
@@ -2239,13 +2239,13 @@ fn test_cdc_write_rollback_when_no_lock_impl<F: KvFormat>() {
     let mut advance_cnt = 0;
     loop {
         let event = receive_event(true);
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
+        if let Some(watermark) = event.watermark.as_ref() {
             advance_cnt += 1;
-            if resolved_ts.ts > 15 {
+            if watermark.ts > 15 {
                 break;
             }
             if advance_cnt > 10 {
-                panic!("resolved_ts is not advanced, stuck at {}", resolved_ts.ts);
+                panic!("watermark is not advanced, stuck at {}", watermark.ts);
             }
         }
     }
@@ -2254,7 +2254,7 @@ fn test_cdc_write_rollback_when_no_lock_impl<F: KvFormat>() {
 }
 
 #[test]
-fn test_resolved_ts_cluster_upgrading() {
+fn test_watermark_cluster_upgrading() {
     let cluster = new_server_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     unsafe {
@@ -2272,9 +2272,9 @@ fn test_resolved_ts_cluster_upgrading() {
         new_event_feed(suite.get_region_cdc_client(region.id));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     let event = receive_event(true);
-    if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-        assert!(resolved_ts.regions == vec![region.id]);
-        assert_eq!(CDC_RESOLVED_TS_ADVANCE_METHOD.get(), 0);
+    if let Some(watermark) = event.watermark.as_ref() {
+        assert!(watermark.regions == vec![region.id]);
+        assert_eq!(CDC_WATERMARK_ADVANCE_METHOD.get(), 0);
     }
     suite
         .cluster
@@ -2285,9 +2285,9 @@ fn test_resolved_ts_cluster_upgrading() {
 
     loop {
         let event = receive_event(true);
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            assert!(resolved_ts.regions == vec![region.id]);
-            if CDC_RESOLVED_TS_ADVANCE_METHOD.get() == 1 {
+        if let Some(watermark) = event.watermark.as_ref() {
+            assert!(watermark.regions == vec![region.id]);
+            if CDC_WATERMARK_ADVANCE_METHOD.get() == 1 {
                 break;
             }
         }
@@ -2298,7 +2298,7 @@ fn test_resolved_ts_cluster_upgrading() {
 }
 
 #[test]
-fn test_resolved_ts_with_learners() {
+fn test_watermark_with_learners() {
     let cluster = new_server_cluster(0, 2);
     cluster.pd_client.disable_default_operator();
     let mut suite = TestSuiteBuilder::new()
@@ -2315,14 +2315,14 @@ fn test_resolved_ts_with_learners() {
 
     for _ in 0..10 {
         let event = receive_event(true);
-        if event.has_resolved_ts() {
-            assert!(event.get_resolved_ts().regions == vec![rid]);
+        if event.has_watermark() {
+            assert!(event.get_watermark().regions == vec![rid]);
             drop(receive_event);
             suite.stop();
             return;
         }
     }
-    panic!("resolved timestamp should be advanced correctly");
+    panic!("watermark should be advanced correctly");
 }
 
 #[test]
@@ -2490,7 +2490,7 @@ fn test_filter_loop_impl<F: KvFormat>() {
 #[test]
 fn test_flashback() {
     let mut cluster = new_server_cluster(0, 1);
-    cluster.cfg.resolved_ts.advance_ts_interval = ReadableDuration::millis(50);
+    cluster.cfg.watermark.advance_ts_interval = ReadableDuration::millis(50);
     let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
 
     let key = Key::from_raw(b"a");
@@ -2535,16 +2535,16 @@ fn test_flashback() {
     // Prepare flashback.
     let flashback_start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
     suite.must_kv_prepare_flashback(region_id, &start_key, &end_key, flashback_start_ts);
-    // resolved ts should not be advanced anymore.
+    // watermark should not be advanced anymore.
     let mut counter = 0;
-    let mut last_resolved_ts = 0;
+    let mut last_watermark = 0;
     loop {
         let event = receive_event(true);
-        if let Some(resolved_ts) = event.resolved_ts.as_ref() {
-            if resolved_ts.ts == last_resolved_ts {
+        if let Some(watermark) = event.watermark.as_ref() {
+            if watermark.ts == last_watermark {
                 counter += 1;
             }
-            last_resolved_ts = resolved_ts.ts;
+            last_watermark = watermark.ts;
         }
         if counter > 20 {
             break;
@@ -2562,12 +2562,12 @@ fn test_flashback() {
         start_ts,
     );
     // Check the flashback event.
-    let mut resolved_ts = 0;
+    let mut watermark = 0;
     let mut event_counter = 0;
     loop {
         let mut cde = receive_event(true);
-        if cde.get_resolved_ts().get_ts() > resolved_ts {
-            resolved_ts = cde.get_resolved_ts().get_ts();
+        if cde.get_watermark().get_ts() > watermark {
+            watermark = cde.get_watermark().get_ts();
         }
         let events = cde.mut_events();
         if !events.is_empty() {
@@ -2577,7 +2577,7 @@ fn test_flashback() {
                     assert_eq!(entries.entries.len(), 1);
                     event_counter += 1;
                     let e = &entries.entries[0];
-                    assert!(e.commit_ts > resolved_ts);
+                    assert!(e.commit_ts > watermark);
                     assert_eq!(e.get_op_type(), EventRowOpType::Delete);
                     match e.get_type() {
                         EventLogType::Committed => {
@@ -2659,18 +2659,18 @@ fn test_cdc_filter_key_range() {
         } else if is13 {
             let events = receive_event13(false).events.to_vec();
             let event = receive_event24(true);
-            assert!(event.resolved_ts.is_some(), "{:?}", event);
+            assert!(event.watermark.is_some(), "{:?}", event);
             events
         } else if is24 {
             let events = receive_event24(false).events.to_vec();
             let event = receive_event13(true);
-            assert!(event.resolved_ts.is_some(), "{:?}", event);
+            assert!(event.watermark.is_some(), "{:?}", event);
             events
         } else {
             let event = receive_event13(true);
-            assert!(event.resolved_ts.is_some(), "{:?}", event);
+            assert!(event.watermark.is_some(), "{:?}", event);
             let event = receive_event24(true);
-            assert!(event.resolved_ts.is_some(), "{:?}", event);
+            assert!(event.watermark.is_some(), "{:?}", event);
             vec![]
         }
     };

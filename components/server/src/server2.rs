@@ -67,7 +67,6 @@ use raftstore_v2::{
     router::{DiskSnapBackupHandle, PeerMsg, RaftRouter},
     StateStorage,
 };
-use resolved_ts::Task;
 use resource_control::ResourceGroupManager;
 use security::SecurityManager;
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
@@ -120,6 +119,7 @@ use tikv_util::{
     Either,
 };
 use tokio::runtime::Builder;
+use watermark::Task;
 
 use crate::{
     common::{ConfiguredRaftEngine, EngineMetricsManager, EnginesResourceInfo, TikvServerCore},
@@ -247,7 +247,7 @@ struct TikvServer<ER: RaftEngine> {
     resource_manager: Option<Arc<ResourceGroupManager>>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
-    resolved_ts_scheduler: Option<Scheduler<Task>>,
+    watermark_scheduler: Option<Scheduler<Task>>,
     grpc_service_mgr: GrpcServiceManager,
 }
 
@@ -395,7 +395,7 @@ where
             resource_manager,
             causal_ts_provider,
             tablet_registry: None,
-            resolved_ts_scheduler: None,
+            watermark_scheduler: None,
             grpc_service_mgr: GrpcServiceManager::new(tx),
         }
     }
@@ -670,21 +670,21 @@ where
         self.core.to_stop.push(cdc_worker);
         self.cdc_memory_quota = Some(cdc_memory_quota);
 
-        // Create resolved ts.
-        if self.core.config.resolved_ts.enable {
-            let mut rts_worker = Box::new(LazyWorker::new("resolved-ts"));
-            // Register the resolved ts observer
-            let resolved_ts_ob = resolved_ts::Observer::new(rts_worker.scheduler());
-            resolved_ts_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-            // Register config manager for resolved ts worker
+        // Create watermark.
+        if self.core.config.watermark.enable {
+            let mut rts_worker = Box::new(LazyWorker::new("watermark"));
+            // Register the watermark observer
+            let watermark_ob = watermark::Observer::new(rts_worker.scheduler());
+            watermark_ob.register_to(self.coprocessor_host.as_mut().unwrap());
+            // Register config manager for watermark worker
             cfg_controller.register(
-                tikv::config::Module::ResolvedTs,
-                Box::new(resolved_ts::ResolvedTsConfigManager::new(
+                tikv::config::Module::Watermark,
+                Box::new(watermark::WatermarkConfigManager::new(
                     rts_worker.scheduler(),
                 )),
             );
-            let rts_endpoint = resolved_ts::Endpoint::new(
-                &self.core.config.resolved_ts,
+            let rts_endpoint = watermark::Endpoint::new(
+                &self.core.config.watermark,
                 rts_worker.scheduler(),
                 self.router.clone().unwrap(),
                 self.router.as_ref().unwrap().store_meta().clone(),
@@ -693,7 +693,7 @@ where
                 self.env.clone(),
                 self.security_mgr.clone(),
             );
-            self.resolved_ts_scheduler = Some(rts_worker.scheduler());
+            self.watermark_scheduler = Some(rts_worker.scheduler());
             rts_worker.start_with_timer(rts_endpoint);
             self.core.to_stop.push(rts_worker);
         }
@@ -997,7 +997,7 @@ where
         debugger.set_raft_statistics(self.raft_statistics.clone());
 
         // Debug service.
-        let resolved_ts_scheduler = Arc::new(self.resolved_ts_scheduler.clone());
+        let watermark_scheduler = Arc::new(self.watermark_scheduler.clone());
         let debug_service = DebugService::new(
             debugger,
             servers.server.get_debug_thread_pool().clone(),
@@ -1005,7 +1005,7 @@ where
             self.router.as_ref().unwrap().store_meta().clone(),
             Arc::new(
                 move |region_id, log_locks, min_start_ts, callback| -> bool {
-                    if let Some(s) = resolved_ts_scheduler.as_ref() {
+                    if let Some(s) = watermark_scheduler.as_ref() {
                         let res = s.schedule(Task::GetDiagnosisInfo {
                             region_id,
                             log_locks,

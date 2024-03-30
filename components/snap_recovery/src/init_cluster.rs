@@ -110,8 +110,8 @@ pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
     // for cpu = 1, take a reasonable value min[32, maxValue].
     let limit = (SysQuota::cpu_cores_quota() * 10.0) as i32;
     config.rocksdb.max_background_jobs = cmp::min(32, limit);
-    // disable resolve ts during the recovery
-    config.resolved_ts.enable = false;
+    // disable watermark during the recovery
+    config.watermark.enable = false;
 
     // ebs volume has very poor performance during restore, it easy to cause the
     // raft client timeout, at the same time clean up all message included

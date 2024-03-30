@@ -142,7 +142,14 @@ pub struct Config {
     pub region_compact_redundant_rows_percent: Option<u64>,
     pub pd_heartbeat_tick_interval: ReadableDuration,
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
-    pub pd_report_min_resolved_ts_interval: ReadableDuration,
+
+    /// The minimal duration of the interval for a watermark to be reported to
+    /// PD.
+    #[serde(
+        rename = "pd-report-min-resolved-ts-interval",
+        alias = "pd-report-min-watermark-interval"
+    )]
+    pub pd_report_min_watermark_interval: ReadableDuration,
     pub snap_mgr_gc_tick_interval: ReadableDuration,
     pub snap_gc_timeout: ReadableDuration,
     /// The duration of snapshot waits for region split. It prevents leader from
@@ -458,7 +465,7 @@ impl Default for Config {
             region_compact_redundant_rows_percent: Some(20),
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
-            pd_report_min_resolved_ts_interval: ReadableDuration::secs(1),
+            pd_report_min_watermark_interval: ReadableDuration::secs(1),
             // Disable periodic full compaction by default.
             periodic_full_compact_start_times: ReadableSchedule::default(),
             // If periodic full compaction is enabled, do not start a full compaction
@@ -1069,8 +1076,8 @@ impl Config {
             .with_label_values(&["pd_store_heartbeat_tick_interval"])
             .set(self.pd_store_heartbeat_tick_interval.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["pd_report_min_resolved_ts_interval"])
-            .set(self.pd_report_min_resolved_ts_interval.as_secs_f64());
+            .with_label_values(&["pd_report_min_watermark_interval"])
+            .set(self.pd_report_min_watermark_interval.as_secs_f64());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["snap_mgr_gc_tick_interval"])
             .set(self.snap_mgr_gc_tick_interval.as_secs_f64());

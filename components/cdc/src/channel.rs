@@ -11,7 +11,7 @@ use futures::{
     stream, SinkExt, Stream, StreamExt,
 };
 use grpcio::WriteFlags;
-use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
+use kvproto::cdcpb::{ChangeDataEvent, Event, Watermark};
 use protobuf::Message;
 use tikv_util::{
     future::block_on_timeout,
@@ -44,12 +44,12 @@ const CDC_RESP_MAX_BYTES: u32 = 6 * 1024 * 1024;
 /// Assume the average size of batched `CdcEvent::Event`s is 32KB and
 /// the average count of batched `CdcEvent::Event`s is 64.
 /// ```text
-/// 2 = (CDC_EVENT_MAX_BYTES * CDC_EVENT_MAX_COUNT / CDC_MAX_RESP_SIZE).ceil() + 1 /* reserve for ResolvedTs */;
+/// 2 = (CDC_EVENT_MAX_BYTES * CDC_EVENT_MAX_COUNT / CDC_MAX_RESP_SIZE).ceil() + 1 /* reserve for Watermark */;
 /// ```
 const CDC_RESP_MAX_BATCH_COUNT: usize = 2;
 
 pub enum CdcEvent {
-    ResolvedTs(ResolvedTs),
+    Watermark(Watermark),
     Event(Event),
     Barrier(Option<Box<dyn FnOnce(()) + Send>>),
 }
@@ -60,7 +60,7 @@ impl CdcEvent {
             .map(|s| s.parse::<u32>().unwrap())
             .unwrap_or(0));
         match self {
-            CdcEvent::ResolvedTs(ref r) => {
+            CdcEvent::Watermark(ref r) => {
                 // For region id, it is unlikely to exceed 100,000,000 which is
                 // encoded into 4 bytes.
                 // For TSO, it is likely to be encoded into 9 bytes,
@@ -85,14 +85,14 @@ impl CdcEvent {
 
     pub fn event(&self) -> &Event {
         match self {
-            CdcEvent::ResolvedTs(_) | CdcEvent::Barrier(_) => unreachable!(),
+            CdcEvent::Watermark(_) | CdcEvent::Barrier(_) => unreachable!(),
             CdcEvent::Event(ref e) => e,
         }
     }
 
-    pub fn resolved_ts(&self) -> &ResolvedTs {
+    pub fn watermark(&self) -> &Watermark {
         match self {
-            CdcEvent::ResolvedTs(ref r) => r,
+            CdcEvent::Watermark(ref r) => r,
             CdcEvent::Event(_) | CdcEvent::Barrier(_) => unreachable!(),
         }
     }
@@ -105,9 +105,9 @@ impl fmt::Debug for CdcEvent {
                 let mut d = f.debug_tuple("Barrier");
                 d.finish()
             }
-            CdcEvent::ResolvedTs(ref r) => {
-                let mut d = f.debug_struct("ResolvedTs");
-                d.field("resolved ts", &r.ts);
+            CdcEvent::Watermark(ref r) => {
+                let mut d = f.debug_struct("Watermark");
+                d.field("watermark", &r.ts);
                 d.field("region count", &r.regions.len());
                 d.finish()
             }
@@ -130,7 +130,7 @@ pub struct EventBatcher {
 
     // statistics
     total_event_bytes: usize,
-    total_resolved_ts_bytes: usize,
+    total_watermark_bytes: usize,
 }
 
 impl EventBatcher {
@@ -140,7 +140,7 @@ impl EventBatcher {
             last_size: 0,
 
             total_event_bytes: 0,
-            total_resolved_ts_bytes: 0,
+            total_watermark_bytes: 0,
         }
     }
 
@@ -161,14 +161,14 @@ impl EventBatcher {
                 self.buffer.last_mut().unwrap().mut_events().push(e);
                 self.total_event_bytes += size as usize;
             }
-            CdcEvent::ResolvedTs(r) => {
+            CdcEvent::Watermark(r) => {
                 let mut change_data_event = ChangeDataEvent::default();
-                change_data_event.set_resolved_ts(r);
+                change_data_event.set_watermark(r);
                 self.buffer.push(change_data_event);
 
-                // Make sure the next message is not batched with ResolvedTs.
+                // Make sure the next message is not batched with Watermark.
                 self.last_size = CDC_RESP_MAX_BYTES;
-                self.total_resolved_ts_bytes += size as usize;
+                self.total_watermark_bytes += size as usize;
             }
             CdcEvent::Barrier(_) => {
                 // Barrier requires events must be batched across the barrier.
@@ -181,9 +181,9 @@ impl EventBatcher {
         self.buffer
     }
 
-    // Return the total bytes of event and resolved ts.
+    // Return the total bytes of event and watermark.
     pub fn statistics(&self) -> (usize, usize) {
-        (self.total_event_bytes, self.total_resolved_ts_bytes)
+        (self.total_event_bytes, self.total_watermark_bytes)
     }
 }
 
@@ -324,8 +324,8 @@ impl<'a> Drain {
         S: futures::Sink<(ChangeDataEvent, WriteFlags), Error = E> + Unpin,
     {
         let total_event_bytes = CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["event"]);
-        let total_resolved_ts_bytes =
-            CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["resolved_ts"]);
+        let total_watermark_bytes =
+            CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["watermark"]);
 
         let memory_quota = self.memory_quota.clone();
         let mut chunks = self.drain().ready_chunks(CDC_EVENT_MAX_COUNT);
@@ -336,7 +336,7 @@ impl<'a> Drain {
                 bytes += size;
                 batcher.push(e);
             });
-            let (event_bytes, resolved_ts_bytes) = batcher.statistics();
+            let (event_bytes, watermark_bytes) = batcher.statistics();
             let resps = batcher.build();
             let resps_len = resps.len();
             // Events are about to be sent, free pending events memory counter.
@@ -348,7 +348,7 @@ impl<'a> Drain {
             }
             sink.flush().await?;
             total_event_bytes.inc_by(event_bytes as u64);
-            total_resolved_ts_bytes.inc_by(resolved_ts_bytes as u64);
+            total_watermark_bytes.inc_by(watermark_bytes as u64);
         }
         Ok(())
     }
@@ -390,7 +390,7 @@ mod tests {
 
     use futures::executor::block_on;
     use kvproto::cdcpb::{
-        ChangeDataEvent, Event, EventEntries, EventRow, Event_oneof_event, ResolvedTs,
+        ChangeDataEvent, Event, EventEntries, EventRow, Event_oneof_event, Watermark,
     };
 
     use super::*;
@@ -421,7 +421,7 @@ mod tests {
             btx1.send(()).unwrap();
         }))))
         .unwrap();
-        send(CdcEvent::ResolvedTs(Default::default())).unwrap();
+        send(CdcEvent::Watermark(Default::default())).unwrap();
         let (btx2, brx2) = mpsc::channel();
         send(CdcEvent::Barrier(Some(Box::new(move |()| {
             btx2.send(()).unwrap();
@@ -437,7 +437,7 @@ mod tests {
         assert_matches!(block_on(drain.next()), Some((CdcEvent::Barrier(_), _)));
         brx1.recv_timeout(Duration::from_millis(100)).unwrap();
         brx2.recv_timeout(Duration::from_millis(100)).unwrap_err();
-        assert_matches!(block_on(drain.next()), Some((CdcEvent::ResolvedTs(_), _)));
+        assert_matches!(block_on(drain.next()), Some((CdcEvent::Watermark(_), _)));
         brx2.recv_timeout(Duration::from_millis(100)).unwrap_err();
         assert_matches!(block_on(drain.next()), Some((CdcEvent::Barrier(_), _)));
         brx2.recv_timeout(Duration::from_millis(100)).unwrap();
@@ -630,14 +630,14 @@ mod tests {
             assert_eq!(result.len(), expected.len());
 
             for i in 0..expected.len() {
-                if !result[i].has_resolved_ts() {
+                if !result[i].has_watermark() {
                     assert_eq!(result[i].events.len(), expected[i].len());
                     for j in 0..expected[i].len() {
                         assert_eq!(&result[i].events[j], expected[i][j].event());
                     }
                 } else {
                     assert_eq!(expected[i].len(), 1);
-                    assert_eq!(result[i].get_resolved_ts(), expected[i][0].resolved_ts());
+                    assert_eq!(result[i].get_watermark(), expected[i][0].watermark());
                 }
             }
         };
@@ -663,24 +663,24 @@ mod tests {
             ..Default::default()
         };
 
-        let mut resolved_ts = ResolvedTs::default();
-        resolved_ts.set_ts(1);
+        let mut watermark = Watermark::default();
+        watermark.set_ts(1);
 
         // None empty event should not return a zero size.
-        assert_ne!(CdcEvent::ResolvedTs(resolved_ts.clone()).size(), 0);
+        assert_ne!(CdcEvent::Watermark(watermark.clone()).size(), 0);
         assert_ne!(CdcEvent::Event(event_big.clone()).size(), 0);
         assert_ne!(CdcEvent::Event(event_small.clone()).size(), 0);
 
         // An ReslovedTs event follows a small event, they should not be batched
         // in one message.
         let mut batcher = EventBatcher::with_capacity(CDC_RESP_MAX_BATCH_COUNT);
-        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
+        batcher.push(CdcEvent::Watermark(watermark.clone()));
         batcher.push(CdcEvent::Event(event_small.clone()));
 
         check_events(
             batcher.build(),
             vec![
-                vec![CdcEvent::ResolvedTs(resolved_ts.clone())],
+                vec![CdcEvent::Watermark(watermark.clone())],
                 vec![CdcEvent::Event(event_small.clone())],
             ],
         );
@@ -688,8 +688,8 @@ mod tests {
         // A more complex case.
         let mut batcher = EventBatcher::with_capacity(1024);
         batcher.push(CdcEvent::Event(event_small.clone()));
-        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
-        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
+        batcher.push(CdcEvent::Watermark(watermark.clone()));
+        batcher.push(CdcEvent::Watermark(watermark.clone()));
         batcher.push(CdcEvent::Event(event_big.clone()));
         batcher.push(CdcEvent::Event(event_small.clone()));
         batcher.push(CdcEvent::Event(event_small.clone()));
@@ -699,8 +699,8 @@ mod tests {
             batcher.build(),
             vec![
                 vec![CdcEvent::Event(event_small.clone())],
-                vec![CdcEvent::ResolvedTs(resolved_ts.clone())],
-                vec![CdcEvent::ResolvedTs(resolved_ts)],
+                vec![CdcEvent::Watermark(watermark.clone())],
+                vec![CdcEvent::Watermark(watermark)],
                 vec![CdcEvent::Event(event_big.clone())],
                 vec![
                     CdcEvent::Event(event_small.clone()),
@@ -719,8 +719,8 @@ mod tests {
         event_entries.entries = vec![row_small].into();
         event_small.event = Some(Event_oneof_event::Entries(event_entries));
 
-        let mut resolved_ts = ResolvedTs::default();
-        resolved_ts.set_ts(1);
+        let mut watermark = Watermark::default();
+        watermark.set_ts(1);
 
         let mut batcher = EventBatcher::with_capacity(1024);
         batcher.push(CdcEvent::Event(event_small.clone()));
@@ -729,12 +729,12 @@ mod tests {
             (CdcEvent::Event(event_small.clone()).size() as usize, 0)
         );
 
-        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
+        batcher.push(CdcEvent::Watermark(watermark.clone()));
         assert_eq!(
             batcher.statistics(),
             (
                 CdcEvent::Event(event_small.clone()).size() as usize,
-                CdcEvent::ResolvedTs(resolved_ts.clone()).size() as usize
+                CdcEvent::Watermark(watermark.clone()).size() as usize
             )
         );
 
@@ -743,33 +743,33 @@ mod tests {
             batcher.statistics(),
             (
                 CdcEvent::Event(event_small.clone()).size() as usize * 2,
-                CdcEvent::ResolvedTs(resolved_ts.clone()).size() as usize
+                CdcEvent::Watermark(watermark.clone()).size() as usize
             )
         );
 
-        batcher.push(CdcEvent::ResolvedTs(resolved_ts.clone()));
+        batcher.push(CdcEvent::Watermark(watermark.clone()));
         assert_eq!(
             batcher.statistics(),
             (
                 CdcEvent::Event(event_small).size() as usize * 2,
-                CdcEvent::ResolvedTs(resolved_ts).size() as usize * 2
+                CdcEvent::Watermark(watermark).size() as usize * 2
             )
         );
     }
 
     #[test]
-    fn test_cdc_event_resolved_ts_size() {
+    fn test_cdc_event_watermark_size() {
         // A typical region id.
         let region_id = 4194304;
         // A typical ts.
         let ts = 426624231625982140;
         for i in 0..17 {
-            let mut resolved_ts = ResolvedTs::default();
-            resolved_ts.ts = ts;
-            resolved_ts.regions = vec![region_id; 2usize.pow(i)];
+            let mut watermark = Watermark::default();
+            watermark.ts = ts;
+            watermark.regions = vec![region_id; 2usize.pow(i)];
             assert_eq!(
-                resolved_ts.compute_size(),
-                CdcEvent::ResolvedTs(resolved_ts).size()
+                watermark.compute_size(),
+                CdcEvent::Watermark(watermark).size()
             );
         }
     }

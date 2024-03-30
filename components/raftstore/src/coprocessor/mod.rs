@@ -454,7 +454,7 @@ impl CmdObserveInfo {
     /// The types are:
     /// CDC: Observer supports the `ChangeData` service.
     /// PiTR: Observer supports the `backup-log` function.
-    /// RTS: Observer supports the `resolved-ts` advancing (and follower read,
+    /// RTS: Observer supports the `watermark` advancing (and follower read,
     /// etc.).
     pub fn observe_level(&self) -> ObserveLevel {
         let cdc = if self.cdc_id.is_observing() {
@@ -470,7 +470,7 @@ impl CmdObserveInfo {
             ObserveLevel::None
         };
         let rts = if self.rts_id.is_observing() {
-            // `resolved-ts` observe lock related data
+            // `watermark` observe lock related data
             ObserveLevel::LockRelated
         } else {
             ObserveLevel::None
@@ -606,7 +606,7 @@ mod tests {
 
     #[test]
     fn test_observe_level() {
-        // Both cdc and `resolved-ts` are observing
+        // Both cdc and `watermark` are observing
         let observe_info = CmdObserveInfo::from_handle(
             ObserveHandle::new(),
             ObserveHandle::new(),
@@ -630,7 +630,7 @@ mod tests {
         observe_info.pitr_id.stop_observing();
         assert_eq!(observe_info.observe_level(), ObserveLevel::All);
 
-        // Only `resolved-ts` observing
+        // Only `watermark` observing
         let observe_info = CmdObserveInfo::from_handle(
             ObserveHandle::new(),
             ObserveHandle::new(),

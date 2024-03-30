@@ -6484,7 +6484,7 @@ where
                 }
 
                 // It's very likely that this is a stale peer. To prevent
-                // resolved ts from being blocked for too long, we check stale
+                // watermark from being blocked for too long, we check stale
                 // peer eagerly.
                 self.fsm.peer.bcast_check_stale_peer_message(self.ctx);
             }

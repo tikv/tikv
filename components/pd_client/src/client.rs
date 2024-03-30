@@ -982,28 +982,28 @@ impl PdClient for RpcClient {
         &self.pd_client.feature_gate
     }
 
-    fn report_min_resolved_ts(&self, store_id: u64, min_resolved_ts: u64) -> PdFuture<()> {
+    fn report_min_watermark(&self, store_id: u64, min_watermark: u64) -> PdFuture<()> {
         let timer = Instant::now();
 
-        let mut req = pdpb::ReportMinResolvedTsRequest::default();
+        let mut req = pdpb::ReportMinWatermarkRequest::default();
         req.set_header(self.header());
         req.set_store_id(store_id);
-        req.set_min_resolved_ts(min_resolved_ts);
+        req.set_min_watermark(min_watermark);
 
-        let executor = move |client: &Client, req: pdpb::ReportMinResolvedTsRequest| {
+        let executor = move |client: &Client, req: pdpb::ReportMinWatermarkRequest| {
             let handler = {
                 let inner = client.inner.rl();
                 inner
                     .client_stub
-                    .report_min_resolved_ts_async_opt(&req, call_option_inner(&inner))
+                    .report_min_watermark_async_opt(&req, call_option_inner(&inner))
                     .unwrap_or_else(|e| {
-                        panic!("fail to request PD {} err {:?}", "min_resolved_ts", e)
+                        panic!("fail to request PD {} err {:?}", "min_watermark", e)
                     })
             };
             Box::pin(async move {
                 let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
-                    .min_resolved_ts
+                    .min_watermark
                     .observe(timer.saturating_elapsed_secs());
                 check_resp_header(resp.get_header())?;
                 Ok(())

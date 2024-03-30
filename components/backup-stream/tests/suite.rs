@@ -33,7 +33,6 @@ use kvproto::{
 };
 use pd_client::PdClient;
 use raftstore::{router::CdcRaftRouter, RegionInfoAccessor};
-use resolved_ts::LeadershipResolver;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
@@ -50,6 +49,7 @@ use tikv_util::{
 };
 use txn_types::{Key, TimeStamp, WriteRef};
 use walkdir::WalkDir;
+use watermark::LeadershipResolver;
 
 #[derive(Debug)]
 pub struct FileSegments {

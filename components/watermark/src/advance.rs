@@ -55,7 +55,7 @@ pub struct AdvanceTsWorker {
     worker: Runtime,
     scheduler: Scheduler<Task>,
     /// The concurrency manager for transactions. It's needed for CDC to check
-    /// locks when calculating resolved_ts.
+    /// locks when calculating watermark.
     pub(crate) concurrency_manager: ConcurrencyManager,
 
     // cache the last pd tso, used to approximate the next timestamp w/o an actual TSO RPC
@@ -127,7 +127,7 @@ impl AdvanceTsWorker {
 
             let regions = leader_resolver.resolve(regions, min_ts).await;
             if !regions.is_empty() {
-                if let Err(e) = scheduler.schedule(Task::ResolvedTsAdvanced {
+                if let Err(e) = scheduler.schedule(Task::WatermarkAdvanced {
                     regions,
                     ts: min_ts,
                     ts_source,
@@ -141,12 +141,12 @@ impl AdvanceTsWorker {
                 // Skip wait timeout if a notify is arrived.
                 _ = advance_notify.notified().fuse() => (),
             };
-            // Wait min timeout to prevent from overloading advancing resolved ts.
+            // Wait min timeout to prevent from overloading advancing watermark.
             let _ = min_timeout.compat().await;
 
             // NB: We must schedule the leader resolver even if there is no region,
-            //     otherwise we can not advance resolved ts next time.
-            if let Err(e) = scheduler.schedule(Task::AdvanceResolvedTs { leader_resolver }) {
+            //     otherwise we can not advance watermark next time.
+            if let Err(e) = scheduler.schedule(Task::AdvanceWatermark { leader_resolver }) {
                 error!("failed to schedule register advance event"; "err" => ?e);
             }
         };
@@ -221,7 +221,7 @@ impl LeadershipResolver {
         self.valid_regions.clear();
     }
 
-    // Confirms leadership of region peer before trying to advance resolved ts.
+    // Confirms leadership of region peer before trying to advance watermark.
     // This function broadcasts a special message to all stores, gets the leader id
     // of them to confirm whether current peer has a quorum which accepts its
     // leadership.

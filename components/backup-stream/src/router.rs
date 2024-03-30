@@ -144,15 +144,15 @@ pub struct ApplyEvents {
     events: Vec<ApplyEvent>,
     region_id: u64,
     // TODO: this field is useless, maybe remove it.
-    region_resolved_ts: u64,
+    region_watermark: u64,
 }
 
 impl ApplyEvents {
     /// Convert a [CmdBatch] to a vector of events. Ignoring admin / error
     /// commands. At the same time, advancing status of the `Resolver` by
     /// those keys.
-    /// Note: the resolved ts cannot be advanced if there is no command, maybe
-    /// we also need to update resolved_ts when flushing?
+    /// Note: the watermark cannot be advanced if there is no command, maybe
+    /// we also need to update watermark when flushing?
     pub fn from_cmd_batch(cmd: CmdBatch, resolver: &mut TwoPhaseResolver) -> Result<Self> {
         let region_id = cmd.region_id;
         let mut result = vec![];
@@ -225,7 +225,7 @@ impl ApplyEvents {
         Ok(Self {
             events: result,
             region_id,
-            region_resolved_ts: resolver.resolved_ts().into_inner(),
+            region_watermark: resolver.watermark().into_inner(),
         })
     }
 
@@ -237,7 +237,7 @@ impl ApplyEvents {
         Self {
             events: Vec::with_capacity(cap),
             region_id,
-            region_resolved_ts: 0,
+            region_watermark: 0,
         }
     }
 
@@ -274,7 +274,7 @@ impl ApplyEvents {
                                 v.push(event);
                                 v
                             },
-                            region_resolved_ts: self.region_resolved_ts,
+                            region_watermark: self.region_watermark,
                             region_id: self.region_id,
                         },
                     );
@@ -602,7 +602,7 @@ impl RouterInner {
         futures::future::join_all(tasks).await
     }
 
-    /// flush the specified task, once once success, return the min resolved ts
+    /// flush the specified task, once once success, return the min watermark
     /// of this flush. returns `None` if failed.
     #[instrument(skip(self, resolve_to))]
     pub async fn do_flush(
@@ -833,8 +833,8 @@ pub struct StreamTaskInfo {
     flushing_meta_files: RwLock<Vec<(TempFileKey, DataFile, DataFileInfo)>>,
     /// last_flush_ts represents last time this task flushed to storage.
     last_flush_time: AtomicPtr<Instant>,
-    /// The min resolved TS of all regions involved.
-    min_resolved_ts: TimeStamp,
+    /// The min watermark of all regions involved.
+    min_watermark: TimeStamp,
     /// Total size of all temporary files in byte.
     total_size: AtomicUsize,
     /// This should only be set to `true` by `compare_and_set(current=false,
@@ -880,7 +880,7 @@ impl std::fmt::Debug for StreamTaskInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StreamTaskInfo")
             .field("task", &self.task.info.name)
-            .field("min_resolved_ts", &self.min_resolved_ts)
+            .field("min_watermark", &self.min_watermark)
             .field("total_size", &self.total_size)
             .field("flushing", &self.flushing)
             .finish()
@@ -906,7 +906,7 @@ impl StreamTaskInfo {
             task,
             storage,
             ranges,
-            min_resolved_ts: TimeStamp::max(),
+            min_watermark: TimeStamp::max(),
             files: SlotMap::default(),
             flushing_files: RwLock::default(),
             flushing_meta_files: RwLock::default(),
@@ -1096,7 +1096,7 @@ impl StreamTaskInfo {
         let mut stat_length = 0;
         let mut max_ts: Option<u64> = None;
         let mut min_ts: Option<u64> = None;
-        let mut min_resolved_ts: Option<u64> = None;
+        let mut min_watermark: Option<u64> = None;
         for (_, data_file, file_info) in files {
             let mut file_info_clone = file_info.to_owned();
             // Update offset of file_info(DataFileInfo)
@@ -1116,8 +1116,8 @@ impl StreamTaskInfo {
             });
             data_file_infos.push(file_info_clone);
 
-            let rts = file_info.resolved_ts;
-            min_resolved_ts = min_resolved_ts.map_or(Some(rts), |r| Some(r.min(rts)));
+            let rts = file_info.watermark;
+            min_watermark = min_watermark.map_or(Some(rts), |r| Some(r.min(rts)));
             min_ts = min_ts.map_or(Some(file_info.min_ts), |ts| Some(ts.min(file_info.min_ts)));
             max_ts = max_ts.map_or(Some(file_info.max_ts), |ts| Some(ts.max(file_info.max_ts)));
         }
@@ -1133,7 +1133,7 @@ impl StreamTaskInfo {
         merged_file_info.set_length(stat_length);
         merged_file_info.set_max_ts(max_ts);
         merged_file_info.set_min_ts(min_ts);
-        merged_file_info.set_min_resolved_ts(min_resolved_ts.unwrap_or_default());
+        merged_file_info.set_min_watermark(min_watermark.unwrap_or_default());
 
         // to do: limiter to storage
         let limiter = Limiter::builder(std::f64::INFINITY).build();
@@ -1247,15 +1247,15 @@ impl StreamTaskInfo {
     }
 
     /// execute the flush: copy local files to external storage.
-    /// if success, return the last resolved ts of this flush.
-    /// The caller can try to advance the resolved ts and provide it to the
-    /// function, and we would use `max(resolved_ts_provided,
-    /// resolved_ts_from_file)`.
+    /// if success, return the last watermark of this flush.
+    /// The caller can try to advance the watermark and provide it to the
+    /// function, and we would use `max(watermark_provided,
+    /// watermark_from_file)`.
     #[instrument(skip_all)]
     pub async fn do_flush(
         &self,
         store_id: u64,
-        resolved_ts_provided: TimeStamp,
+        watermark_provided: TimeStamp,
     ) -> Result<Option<u64>> {
         // do nothing if not flushing status.
         let result: Result<Option<u64>> = async move {
@@ -1279,12 +1279,12 @@ impl StreamTaskInfo {
 
             // flush log file to storage.
             self.flush_log(&mut metadata_info).await?;
-            // the field `min_resolved_ts` of metadata will be updated
+            // the field `min_watermark` of metadata will be updated
             // only after flush is done.
-            metadata_info.min_resolved_ts = metadata_info
-                .min_resolved_ts
-                .max(Some(resolved_ts_provided.into_inner()));
-            let rts = metadata_info.min_resolved_ts;
+            metadata_info.min_watermark = metadata_info
+                .min_watermark
+                .max(Some(watermark_provided.into_inner()));
+            let rts = metadata_info.min_watermark;
 
             // compress length
             let file_size_vec = metadata_info
@@ -1368,7 +1368,7 @@ impl StreamTaskInfo {
 struct DataFile {
     min_ts: TimeStamp,
     max_ts: TimeStamp,
-    resolved_ts: TimeStamp,
+    watermark: TimeStamp,
     min_begin_ts: Option<TimeStamp>,
     sha256: Hasher,
     // TODO: use lz4 with async feature
@@ -1385,7 +1385,7 @@ pub struct MetadataInfo {
     // the field files is deprecated in v6.3.0
     // pub files: Vec<DataFileInfo>,
     pub file_groups: Vec<DataFileGroup>,
-    pub min_resolved_ts: Option<u64>,
+    pub min_watermark: Option<u64>,
     pub min_ts: Option<u64>,
     pub max_ts: Option<u64>,
     pub store_id: u64,
@@ -1395,7 +1395,7 @@ impl MetadataInfo {
     fn with_capacity(cap: usize) -> Self {
         Self {
             file_groups: Vec::with_capacity(cap),
-            min_resolved_ts: None,
+            min_watermark: None,
             min_ts: None,
             max_ts: None,
             store_id: 0,
@@ -1407,8 +1407,8 @@ impl MetadataInfo {
     }
 
     fn push(&mut self, file: DataFileGroup) {
-        let rts = file.min_resolved_ts;
-        self.min_resolved_ts = self.min_resolved_ts.map_or(Some(rts), |r| Some(r.min(rts)));
+        let rts = file.min_watermark;
+        self.min_watermark = self.min_watermark.map_or(Some(rts), |r| Some(r.min(rts)));
         self.min_ts = self
             .min_ts
             .map_or(Some(file.min_ts), |ts| Some(ts.min(file.min_ts)));
@@ -1422,7 +1422,7 @@ impl MetadataInfo {
         let mut metadata = Metadata::new();
         metadata.set_file_groups(self.file_groups.into());
         metadata.set_store_id(self.store_id as _);
-        metadata.set_resolved_ts(self.min_resolved_ts.unwrap_or_default());
+        metadata.set_watermark(self.min_watermark.unwrap_or_default());
         metadata.set_min_ts(self.min_ts.unwrap_or(0));
         metadata.set_max_ts(self.max_ts.unwrap_or(0));
         metadata.set_meta_version(MetaVersion::V2);
@@ -1435,7 +1435,7 @@ impl MetadataInfo {
     fn path_to_meta(&self) -> String {
         format!(
             "v1/backupmeta/{}-{}.meta",
-            self.min_resolved_ts.unwrap_or_default(),
+            self.min_watermark.unwrap_or_default(),
             uuid::Uuid::new_v4()
         )
     }
@@ -1451,7 +1451,7 @@ impl DataFile {
         Ok(Self {
             min_ts: TimeStamp::max(),
             max_ts: TimeStamp::zero(),
-            resolved_ts: TimeStamp::zero(),
+            watermark: TimeStamp::zero(),
             min_begin_ts: None,
             inner,
             compression_type: files.config().content_compression,
@@ -1497,7 +1497,7 @@ impl DataFile {
             total_size += size;
             self.min_ts = self.min_ts.min(ts);
             self.max_ts = self.max_ts.max(ts);
-            self.resolved_ts = self.resolved_ts.max(events.region_resolved_ts.into());
+            self.watermark = self.watermark.max(events.region_watermark.into());
 
             // decode_begin_ts is used to maintain the txn when restore log.
             // if value is empty, no need to decode begin_ts.
@@ -1547,7 +1547,7 @@ impl DataFile {
         meta.set_number_of_entries(self.number_of_entries as _);
         meta.set_max_ts(self.max_ts.into_inner() as _);
         meta.set_min_ts(self.min_ts.into_inner() as _);
-        meta.set_resolved_ts(self.resolved_ts.into_inner() as _);
+        meta.set_watermark(self.watermark.into_inner() as _);
         meta.set_min_begin_ts_in_default_cf(
             self.min_begin_ts
                 .map_or(self.min_ts.into_inner(), |ts| ts.into_inner()),
@@ -1573,7 +1573,7 @@ impl std::fmt::Debug for DataFile {
         f.debug_struct("DataFile")
             .field("min_ts", &self.min_ts)
             .field("max_ts", &self.max_ts)
-            .field("resolved_ts", &self.resolved_ts)
+            .field("watermark", &self.watermark)
             .finish()
     }
 }
@@ -1640,12 +1640,12 @@ mod tests {
     }
 
     impl KvEventsBuilder {
-        fn new(region_id: u64, region_resolved_ts: u64) -> Self {
+        fn new(region_id: u64, region_watermark: u64) -> Self {
             Self {
                 events: ApplyEvents {
                     events: vec![],
                     region_id,
-                    region_resolved_ts,
+                    region_watermark,
                 },
             }
         }
@@ -1694,13 +1694,13 @@ mod tests {
 
         fn finish(&mut self) -> ApplyEvents {
             let region_id = self.events.region_id;
-            let region_resolved_ts = self.events.region_resolved_ts;
+            let region_watermark = self.events.region_watermark;
             std::mem::replace(
                 &mut self.events,
                 ApplyEvents {
                     events: vec![],
                     region_id,
-                    region_resolved_ts,
+                    region_watermark,
                 },
             )
         }
@@ -1926,8 +1926,8 @@ mod tests {
         Ok(())
     }
 
-    fn mock_build_large_kv_events(table_id: i64, region_id: u64, resolved_ts: u64) -> ApplyEvents {
-        let mut events_builder = KvEventsBuilder::new(region_id, resolved_ts);
+    fn mock_build_large_kv_events(table_id: i64, region_id: u64, watermark: u64) -> ApplyEvents {
+        let mut events_builder = KvEventsBuilder::new(region_id, watermark);
         events_builder.put_table(
             "default",
             table_id,
@@ -2103,7 +2103,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_empty_resolved_ts() {
+    async fn test_empty_watermark() {
         let (tx, _rx) = dummy_scheduler();
         let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
         let router = RouterInner::new(

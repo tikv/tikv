@@ -49,7 +49,6 @@ raft = { workspace = true }
 raftstore = { workspace = true, features = ["testexport"] }
 rand = "0.8"
 region_cache_memory_engine = { workspace = true }
-resolved_ts = { workspace = true }
 resource_control = { workspace = true }
 resource_metering = { workspace = true }
 security = { workspace = true }
@@ -66,3 +65,4 @@ tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 tokio-timer = { workspace = true }
 txn_types = { workspace = true }
+watermark = { workspace = true }

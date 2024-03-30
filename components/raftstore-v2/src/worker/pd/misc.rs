@@ -115,14 +115,12 @@ where
         }
     }
 
-    pub fn handle_report_min_resolved_ts(&mut self, store_id: u64, min_resolved_ts: u64) {
-        let resp = self
-            .pd_client
-            .report_min_resolved_ts(store_id, min_resolved_ts);
+    pub fn handle_report_min_watermark(&mut self, store_id: u64, min_watermark: u64) {
+        let resp = self.pd_client.report_min_watermark(store_id, min_watermark);
         let logger = self.logger.clone();
         let f = async move {
             if let Err(e) = resp.await {
-                warn!(logger, "report min resolved_ts failed"; "err" => ?e);
+                warn!(logger, "report min watermark failed"; "err" => ?e);
             }
         };
         self.remote.spawn(f);

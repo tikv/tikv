@@ -20,8 +20,8 @@ fn test_stale_read_with_ts0() {
     let mut cluster = new_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
-    cluster.cfg.resolved_ts.enable = true;
-    cluster.cfg.resolved_ts.advance_ts_interval = ReadableDuration::millis(200);
+    cluster.cfg.watermark.enable = true;
+    cluster.cfg.watermark.advance_ts_interval = ReadableDuration::millis(200);
     cluster.run();
 
     let region_id = 1;
@@ -77,23 +77,23 @@ fn test_stale_read_with_ts0() {
 
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-fn test_stale_read_resolved_ts_advance() {
+fn test_stale_read_watermark_advance() {
     let mut cluster = new_cluster(0, 3);
-    cluster.cfg.resolved_ts.enable = true;
-    cluster.cfg.resolved_ts.advance_ts_interval = ReadableDuration::millis(200);
+    cluster.cfg.watermark.enable = true;
+    cluster.cfg.watermark.advance_ts_interval = ReadableDuration::millis(200);
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
     cluster.run_conf_change();
     let cluster = RefCell::new(cluster);
 
-    let must_resolved_ts_advance = |region: &Region| {
+    let must_watermark_advance = |region: &Region| {
         let cluster = cluster.borrow_mut();
         let ts = cluster.store_metas[&region.get_peers()[0].get_store_id()]
             .lock()
             .unwrap()
             .region_read_progress
-            .get_resolved_ts(&region.get_id())
+            .get_watermark(&region.get_id())
             .unwrap();
         let now = Instant::now();
         for peer in region.get_peers() {
@@ -102,7 +102,7 @@ fn test_stale_read_resolved_ts_advance() {
                     .lock()
                     .unwrap()
                     .region_read_progress
-                    .get_resolved_ts(&region.get_id())
+                    .get_watermark(&region.get_id())
                     .unwrap();
                 if new_ts <= ts {
                     if now.saturating_elapsed() > Duration::from_secs(5) {
@@ -120,9 +120,9 @@ fn test_stale_read_resolved_ts_advance() {
     cluster.borrow_mut().must_put(key, value);
     assert_eq!(cluster.borrow_mut().get(key), Some(value.to_vec()));
 
-    // Make sure resolved ts advances.
+    // Make sure watermark advances.
     let region = cluster.borrow().get_region(&[]);
-    must_resolved_ts_advance(&region);
+    must_watermark_advance(&region);
 
     // Add peer (2, 2) to region 1.
     pd_client.must_add_peer(region.id, new_peer(2, 2));
@@ -130,30 +130,30 @@ fn test_stale_read_resolved_ts_advance() {
 
     // Test conf change.
     let region = cluster.borrow().get_region(&[]);
-    must_resolved_ts_advance(&region);
+    must_watermark_advance(&region);
 
     // Test transfer leader.
     let region = cluster.borrow().get_region(&[]);
     cluster
         .borrow_mut()
         .must_transfer_leader(region.get_id(), region.get_peers()[1].clone());
-    must_resolved_ts_advance(&region);
+    must_watermark_advance(&region);
 
     // Test split.
     let split_key = b"k1";
     cluster.borrow_mut().must_split(&region, split_key);
     let left = cluster.borrow().get_region(&[]);
     let right = cluster.borrow().get_region(split_key);
-    must_resolved_ts_advance(&left);
-    must_resolved_ts_advance(&right);
+    must_watermark_advance(&left);
+    must_watermark_advance(&right);
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
-fn test_resolved_ts_after_destroy_peer() {
+fn test_watermark_after_destroy_peer() {
     let mut cluster = new_cluster(0, 3);
-    cluster.cfg.resolved_ts.enable = true;
-    cluster.cfg.resolved_ts.advance_ts_interval = ReadableDuration::millis(200);
+    cluster.cfg.watermark.enable = true;
+    cluster.cfg.watermark.advance_ts_interval = ReadableDuration::millis(200);
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
 
@@ -183,5 +183,5 @@ fn test_resolved_ts_after_destroy_peer() {
 
     // Must not get destory peer's read progress
     let meta = cluster.store_metas[&r1].lock().unwrap();
-    assert_eq!(None, meta.region_read_progress.get_resolved_ts(&r1))
+    assert_eq!(None, meta.region_read_progress.get_watermark(&r1))
 }

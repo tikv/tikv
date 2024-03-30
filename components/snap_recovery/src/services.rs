@@ -438,7 +438,7 @@ where
         self.threads.spawn_ok(task);
     }
 
-    // 4.resolve kv data to a backup resolved-tss
+    // 4.resolve kv data to a backup watermark
     fn resolve_kv_data(
         &mut self,
         _ctx: RpcContext<'_>,
@@ -446,12 +446,12 @@ where
         mut sink: ServerStreamingSink<ResolveKvDataResponse>,
     ) {
         // implement a resolve/delete data funciton
-        let resolved_ts = req.get_resolved_ts();
+        let watermark = req.get_watermark();
         let (tx, rx) = mpsc::unbounded();
         let resolver = DataResolverManager::new(
             self.engines.kv.get_disk_engine().clone(),
             tx,
-            resolved_ts.into(),
+            watermark.into(),
         );
         info!("start to resolve kv data");
         resolver.start();
