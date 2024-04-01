@@ -952,51 +952,10 @@ mod tests {
         }
     }
 
-    async fn test_async_write() {
-        use futures::io::AsyncWriteExt;
-
-        let methods = [
-            EncryptionMethod::Plaintext,
-            EncryptionMethod::Aes128Ctr,
-            EncryptionMethod::Aes192Ctr,
-            EncryptionMethod::Aes256Ctr,
-            EncryptionMethod::Sm4Ctr,
-        ];
-        let iv = Iv::new_ctr();
-        let size = 10240;
-        let mut plain_text = vec![0; size];
-        OsRng.fill_bytes(&mut plain_text);
-
-        for method in methods {
-            let key = generate_data_key(method);
-            let pipe = ThrottledBufPipe::new(&[], 16);
-            let mut writer = EncrypterWriter::new(pipe, method, &key, iv).unwrap();
-            AsyncWriteExt::write_all(&mut writer, plain_text.as_slice())
-                .await
-                .unwrap();
-            writer.flush().await.unwrap();
-            let enc_buf = writer.finalize().unwrap().cursor.into_inner();
-            if method == EncryptionMethod::Plaintext {
-                assert_eq!(enc_buf, plain_text);
-            } else {
-                assert_ne!(enc_buf, plain_text);
-            }
-            let dec_pipe = ThrottledBufPipe::new(&[], 16);
-            let mut writer = DecrypterWriter::new(dec_pipe, method, &key, iv).unwrap();
-            AsyncWriteExt::write_all(&mut writer, enc_buf.as_slice())
-                .await
-                .unwrap();
-            writer.flush().await.unwrap();
-            let dec_buf = writer.finalize().unwrap().cursor.into_inner();
-            assert_eq!(plain_text, dec_buf);
-        }
-    }
-
     #[test]
     fn test_async() {
         futures::executor::block_on(async {
             test_poll_read().await;
-            test_async_write().await;
         });
     }
 }

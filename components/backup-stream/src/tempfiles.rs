@@ -29,7 +29,6 @@ use std::{
 };
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter, Iv};
-use engine_traits::EncryptionKeyManager;
 use futures::{AsyncWriteExt, TryFutureExt};
 use kvproto::{brpb::CompressionType, encryptionpb::EncryptionMethod};
 use tikv_util::warn;
@@ -303,10 +302,7 @@ impl TempFilePool {
         }
         let st = f.content.lock().unwrap();
         let myfile = match &st.external_file {
-            Some(_) => {
-                let f = self.open_relative(p)?;
-                Some(self.decrypted(f)?)
-            }
+            Some(_) => Some(self.open_relative(p)?),
             None => None,
         };
         f.reader_count.fetch_add(1, Ordering::SeqCst);
@@ -353,7 +349,7 @@ impl TempFilePool {
         let file = OsFile::from_std(SyncOsFile::create(&abs_path)?);
         let pfile = match &self.cfg.encryption {
             Some(enc) => SwappedOut::Encrypted(
-                enc.open_file_with_writer(&abs_path, file.compat_write(), true)
+                enc.open_file_with_writer(&abs_path, file.compat(), true)
                     .map_err(Self::convert_encrypt_error_to_io)?
                     .compat_write(),
             ),
@@ -366,21 +362,16 @@ impl TempFilePool {
     /// Open a file by a relative path.
     /// This will open a raw OS file for reading. The file content may be
     /// compressed if the configuration requires.
-    fn open_relative(&self, p: &Path) -> std::io::Result<OsFile> {
+    fn open_relative(&self, p: &Path) -> std::io::Result<Decrypted<OsFile>> {
         let abs_path = self.cfg.swap_files.join(p);
         let file = SyncOsFile::open(&abs_path)?;
         let async_file = OsFile::from_std(file).compat();
-        Ok(async_file)
-    }
-
-    /// Wrap a reader with decrypted.
-    fn decrypted(&self, reader: R) -> std::io::Result<Decrypted<R>> {
         let decrypted_file = match &self.cfg.encryption {
             Some(enc) => enc
-                .open_file_with_reader(&abs_path, reader)
+                .open_file_with_reader(&abs_path, async_file)
                 .map_err(Self::convert_encrypt_error_to_io)?
                 .compat(),
-            None => DecrypterReader::new(reader, EncryptionMethod::Plaintext, &[], Iv::Empty)
+            None => DecrypterReader::new(async_file, EncryptionMethod::Plaintext, &[], Iv::Empty)
                 .map_err(Self::convert_encrypt_error_to_io)?
                 .compat(),
         };
@@ -390,7 +381,7 @@ impl TempFilePool {
     fn delete_relative(&self, p: &Path) -> std::io::Result<()> {
         let abs_path = self.cfg.swap_files.join(p);
         if let Some(enc) = &self.cfg.encryption {
-            enc.delete_file(&abs_path.to_string_lossy())?;
+            enc.delete_file(&abs_path.to_string_lossy(), None)?;
         }
         std::fs::remove_file(&abs_path)?;
         Ok(())
@@ -802,8 +793,8 @@ mod test {
     use async_compression::tokio::bufread::ZstdDecoder;
     use encryption::DataKeyManager;
     use kvproto::{brpb::CompressionType, encryptionpb::EncryptionMethod};
-    use test_util::new_test_key_manager;
     use tempfile::{tempdir, TempDir};
+    use test_util::new_test_key_manager;
     use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
     use walkdir::WalkDir;
 
@@ -909,10 +900,7 @@ mod test {
 
         // The newly written bytes would be kept in memory.
         let excepted = b"Once the word count...Reaches 30. The content of files shall be swaped out to the disk.";
-        let mut local_file = pool
-            .open_relative("world.txt".as_ref())
-            .and_then(|f| pool.decrypted(f))
-            .unwrap();
+        let mut local_file = pool.open_relative("world.txt".as_ref()).unwrap();
         buf.clear();
         rt.block_on(local_file.read_to_end(&mut buf)).unwrap();
         assert_eq!(
@@ -1135,7 +1123,7 @@ mod test {
     fn test_encryption(enc: DataKeyManager) {
         let tmp = tempdir().unwrap();
         let method = enc.encryption_method();
-        let pool = simple_pool_with_modify(|cfg| {
+        let pool = test_pool_with_modify(|cfg| {
             cfg.encryption = Some(Arc::new(enc));
             cfg.minimal_swap_out_file_size = 15;
             cfg.write_buffer_size = 15;
