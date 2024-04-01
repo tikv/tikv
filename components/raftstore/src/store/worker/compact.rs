@@ -506,7 +506,7 @@ fn collect_ranges_need_compact(
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, thread::sleep, time::Duration};
+    use std::{thread::sleep, time::Duration};
 
     use engine_test::{
         ctor::{CfOptions, DbOptions},
