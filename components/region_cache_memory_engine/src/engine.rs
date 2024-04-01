@@ -17,13 +17,13 @@ use engine_traits::{
     KvEngine, Peekable, RangeCacheEngine, ReadOptions, Result, Snapshot, SnapshotMiscExt,
     CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
-use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
+use parking_lot::{lock_api::{RwLockReadGuard, RwLockUpgradableReadGuard}, RawRwLock, RwLock, RwLockWriteGuard};
 use skiplist_rs::{base::OwnedIter, SkipList};
 use slog_global::error;
 use tikv_util::box_err;
 
 use crate::{
-    background::{BackgroundTask, BgWorkManager},
+    background::{BackgroundTask, BgWorkManager, PrepareForApplyFn},
     keys::{
         decode_key, encode_key_for_eviction, encode_seek_for_prev_key, encode_seek_key,
         InternalBytes, InternalKey, ValueType,
@@ -238,7 +238,7 @@ impl RangeCacheMemoryEngineCore {
 pub struct RangeCacheMemoryEngine {
     pub(crate) core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
     pub(crate) rocks_engine: Option<RocksEngine>,
-    bg_work_manager: Arc<BgWorkManager>,
+    bg_work_manager: Arc<RwLock<BgWorkManager>>,
     memory_controller: Arc<MemoryController>,
 }
 
@@ -253,11 +253,11 @@ impl RangeCacheMemoryEngine {
             skiplist_engine,
         ));
 
-        let bg_work_manager = Arc::new(BgWorkManager::new(
+        let bg_work_manager = Arc::new(RwLock::new(BgWorkManager::new(
             core.clone(),
             config.gc_interval,
             memory_controller.clone(),
-        ));
+        )));
 
         Self {
             core,
@@ -390,8 +390,8 @@ impl RangeCacheMemoryEngine {
         }
     }
 
-    pub fn bg_worker_manager(&self) -> &BgWorkManager {
-        &self.bg_work_manager
+    pub fn bg_worker_manager(&self) -> RwLockReadGuard<'_, RawRwLock, BgWorkManager> {
+        self.bg_work_manager.read()
     }
 
     pub(crate) fn memory_controller(&self) -> Arc<MemoryController> {
@@ -426,6 +426,11 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
     type DiskEngine = RocksEngine;
     fn set_disk_engine(&mut self, disk_engine: Self::DiskEngine) {
         self.rocks_engine = Some(disk_engine);
+        let mut bg_work_manager = self.bg_work_manager.write();
+        let self_with_rocks_engine = self.clone();
+        bg_work_manager.set_prepare_for_apply_fn(Arc::new(move |cache_range| {
+            self_with_rocks_engine.prepare_for_apply(&cache_range)
+        }));
     }
 
     fn get_range_for_key(&self, key: &[u8]) -> Option<CacheRange> {

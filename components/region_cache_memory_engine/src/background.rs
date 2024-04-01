@@ -23,6 +23,7 @@ use crate::{
     keys::{decode_key, encode_key, encoding_for_filter, InternalBytes, InternalKey, ValueType},
     memory_controller::MemoryController,
     metrics::GC_FILTERED_STATIC,
+    range_manager::RangeCacheStatus,
 };
 
 /// Try to extract the key and `u64` timestamp from `encoded_key`.
@@ -82,6 +83,7 @@ impl Display for GcTask {
     }
 }
 
+pub(crate) type PrepareForApplyFn = Arc<dyn Fn(CacheRange) -> RangeCacheStatus + Send + Sync>;
 // BgWorkManager managers the worker inits, stops, and task schedules. When
 // created, it starts a worker which receives tasks such as gc task, range
 // delete task, range snapshot load and so on, and starts a thread for
@@ -90,6 +92,7 @@ pub struct BgWorkManager {
     worker: Worker,
     scheduler: Scheduler<BackgroundTask>,
     tick_stopper: Option<(JoinHandle<()>, Sender<bool>)>,
+    prepare_for_apply_fn: Option<PrepareForApplyFn>,
 }
 
 impl Drop for BgWorkManager {
@@ -119,11 +122,16 @@ impl BgWorkManager {
             worker,
             scheduler,
             tick_stopper: Some((handle, tx)),
+            prepare_for_apply_fn: None,
         }
     }
 
     pub fn schedule_task(&self, task: BackgroundTask) -> Result<(), ScheduleError<BackgroundTask>> {
         self.scheduler.schedule_force(task)
+    }
+
+    pub fn set_prepare_for_apply_fn(&mut self, prepare_for_apply_fn: PrepareForApplyFn) {
+        self.prepare_for_apply_fn = Some(prepare_for_apply_fn)
     }
 
     fn start_tick(
