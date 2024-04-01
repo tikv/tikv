@@ -29,7 +29,6 @@ pub use self::{
         Task as CompactTask,
     },
     consistency_check::{Runner as ConsistencyCheckRunner, Task as ConsistencyCheckTask},
-    life::Assistant,
     pd::{
         new_change_peer_v2_request, FlowStatistics, FlowStatsReporter, HeartbeatTask,
         Runner as PdRunner, StatsMonitor as PdStatsMonitor, StoreStatsReporter, Task as PdTask,
