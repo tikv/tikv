@@ -258,7 +258,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             )
         } else {
             let trans = self.trans.core.lock().unwrap();
-            let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
+            let (snap_mgr, _) = &trans.snap_paths[&node_id];
             (snap_mgr.clone(), None)
         };
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
@@ -311,6 +311,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         let (sender, _) = mpsc::unbounded();
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
         let state: Arc<Mutex<GlobalReplicationState>> = Arc::default();
+        let store_config = Arc::new(VersionTrack::new(raft_store));
         node.start(
             raft_engine.clone(),
             tablet_registry,
@@ -324,7 +325,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             CollectorRegHandle::new_for_test(),
             bg_worker,
             pd_worker,
-            Arc::new(VersionTrack::new(raft_store)),
+            store_config.clone(),
             &state,
             importer,
             key_manager,
@@ -338,27 +339,11 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         );
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
-
-        let region_split_size = cfg.coprocessor.region_split_size();
-        let enable_region_bucket = cfg.coprocessor.enable_region_bucket();
-        let region_bucket_size = cfg.coprocessor.region_bucket_size;
-        let mut raftstore_cfg = cfg.tikv.raft_store;
-        raftstore_cfg.optimize_for(true);
-        raftstore_cfg
-            .validate(
-                region_split_size,
-                enable_region_bucket,
-                region_bucket_size,
-                true,
-            )
-            .unwrap();
-
-        let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
         cfg_controller.register(
             Module::Raftstore,
             Box::new(RaftstoreConfigManager::new(
                 node.refresh_config_scheduler(),
-                raft_store,
+                store_config,
             )),
         );
 

@@ -65,7 +65,8 @@ impl Drop for ResolverStatus {
             locks,
             memory_quota,
             ..
-        } = self else {
+        } = self
+        else {
             return;
         };
         if locks.is_empty() {
@@ -76,7 +77,7 @@ impl Drop for ResolverStatus {
         let mut bytes = 0;
         let num_locks = locks.len();
         for lock in locks {
-            bytes += lock.heap_size();
+            bytes += lock.approximate_heap_size();
         }
         if bytes > ON_DROP_WARN_HEAP_SIZE {
             warn!("drop huge ResolverStatus";
@@ -96,24 +97,24 @@ impl ResolverStatus {
             locks,
             memory_quota,
             ..
-        } = self else {
+        } = self
+        else {
             panic!("region {:?} resolver has ready", region_id)
         };
         // Check if adding a new lock or unlock will exceed the memory
         // quota.
-        memory_quota.alloc(lock.heap_size()).map_err(|e| {
-            fail::fail_point!("resolved_ts_on_pending_locks_memory_quota_exceeded");
-            Error::MemoryQuotaExceeded(e)
-        })?;
+        memory_quota
+            .alloc(lock.approximate_heap_size())
+            .map_err(|e| {
+                fail::fail_point!("resolved_ts_on_pending_locks_memory_quota_exceeded");
+                Error::MemoryQuotaExceeded(e)
+            })?;
         locks.push(lock);
         Ok(())
     }
 
     fn update_tracked_index(&mut self, index: u64, region_id: u64) {
-        let ResolverStatus::Pending {
-            tracked_index,
-            ..
-        } = self else {
+        let ResolverStatus::Pending { tracked_index, .. } = self else {
             panic!("region {:?} resolver has ready", region_id)
         };
         assert!(
@@ -135,7 +136,8 @@ impl ResolverStatus {
             memory_quota,
             tracked_index,
             ..
-        } = self else {
+        } = self
+        else {
             panic!("region {:?} resolver has ready", region_id)
         };
         // Must take locks, otherwise it may double free memory quota on drop.
@@ -143,7 +145,7 @@ impl ResolverStatus {
         (
             *tracked_index,
             locks.into_iter().map(|lock| {
-                memory_quota.free(lock.heap_size());
+                memory_quota.free(lock.approximate_heap_size());
                 lock
             }),
         )
@@ -164,10 +166,10 @@ enum PendingLock {
 }
 
 impl HeapSize for PendingLock {
-    fn heap_size(&self) -> usize {
+    fn approximate_heap_size(&self) -> usize {
         match self {
             PendingLock::Track { key, .. } | PendingLock::Untrack { key, .. } => {
-                key.as_encoded().heap_size()
+                key.as_encoded().approximate_heap_size()
             }
         }
     }
@@ -440,7 +442,7 @@ where
             match &observed_region.resolver_status {
                 ResolverStatus::Pending { locks, .. } => {
                     for l in locks {
-                        stats.heap_size += l.heap_size() as i64;
+                        stats.heap_size += l.approximate_heap_size() as i64;
                     }
                     stats.unresolved_count += 1;
                 }
@@ -658,12 +660,8 @@ where
             let meta = store_meta.lock().unwrap();
             (meta.region_read_progress().clone(), meta.store_id())
         };
-        let advance_worker = AdvanceTsWorker::new(
-            cfg.advance_ts_interval.0,
-            pd_client.clone(),
-            scheduler.clone(),
-            concurrency_manager,
-        );
+        let advance_worker =
+            AdvanceTsWorker::new(pd_client.clone(), scheduler.clone(), concurrency_manager);
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, cdc_handle);
         let store_resolver_gc_interval = Duration::from_secs(60);
         let leader_resolver = LeadershipResolver::new(
@@ -687,7 +685,7 @@ where
             scanner_pool,
             scan_concurrency_semaphore,
             regions: HashMap::default(),
-            _phantom: PhantomData::default(),
+            _phantom: PhantomData,
         };
         ep.handle_advance_resolved_ts(leader_resolver);
         ep
@@ -870,7 +868,7 @@ where
 
     // Tracking or untracking locks with incoming commands that corresponding
     // observe id is valid.
-    #[allow(clippy::drop_ref)]
+    #[allow(dropping_references)]
     fn handle_change_log(&mut self, cmd_batch: Vec<CmdBatch>) {
         let size = cmd_batch.iter().map(|b| b.size()).sum::<usize>();
         RTS_CHANNEL_PENDING_CMD_BYTES.sub(size as i64);
@@ -930,7 +928,7 @@ where
     }
 
     fn handle_advance_resolved_ts(&self, leader_resolver: LeadershipResolver) {
-        let regions = self.regions.keys().into_iter().copied().collect();
+        let regions = self.regions.keys().copied().collect();
         self.advance_worker.advance_ts_for_regions(
             regions,
             leader_resolver,

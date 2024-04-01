@@ -81,6 +81,9 @@ impl<EK: Engine, K: ConfigurableDb, L: LockManager> ConfigManager
         } else if let Some(v) = change.get("scheduler_worker_pool_size") {
             let pool_size: usize = v.into();
             self.scheduler.scale_pool_size(pool_size);
+        } else if let Some(v) = change.remove("memory_quota") {
+            let cap: ReadableSize = v.into();
+            self.scheduler.set_memory_quota_capacity(cap.0 as usize);
         }
         if let Some(ConfigValue::Module(mut io_rate_limit)) = change.remove("io_rate_limit") {
             let limiter = match get_io_rate_limiter() {

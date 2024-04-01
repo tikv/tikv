@@ -17,7 +17,7 @@ use kvproto::{
         Mutation, Op, PessimisticLockRequest, PrewriteRequest, PrewriteRequestPessimisticAction::*,
     },
     metapb::Region,
-    pdpb::CheckPolicy,
+    pdpb::{self, CheckPolicy},
     raft_serverpb::{PeerState, RaftMessage},
     tikvpb::TikvClient,
 };
@@ -1426,8 +1426,7 @@ impl Filter for TeeFilter {
 // 2. the splitted region set has_dirty_data be true in `apply_snapshot`
 // 3. the splitted region schedule tablet trim task in `on_applied_snapshot`
 //    with tablet index 5
-// 4. the splitted region received a snapshot sent from its
-//    leader
+// 4. the splitted region received a snapshot sent from its leader
 // 5. after finishing applying this snapshot, the tablet index in storage
 //    changed to 6
 // 6. tablet trim complete and callbacked to raftstore
@@ -1610,4 +1609,66 @@ fn test_split_by_split_check_on_keys() {
     put_till_count(&mut cluster, region_max_keys / 2 + 3, &mut range);
     // waiting the split,
     cluster.wait_region_split(&region);
+}
+
+fn change(name: &str, value: &str) -> std::collections::HashMap<String, String> {
+    let mut m = std::collections::HashMap::new();
+    m.insert(name.to_owned(), value.to_owned());
+    m
+}
+
+#[test]
+fn test_turn_off_manual_compaction_caused_by_no_valid_split_key() {
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.run();
+    let r = cluster.get_region(b"");
+    cluster.must_split(&r, b"k1");
+    let r = cluster.get_region(b"k1");
+    cluster.must_split(&r, b"k2");
+    cluster.must_put(b"k1", b"val");
+
+    let (tx, rx) = sync_channel(5);
+    fail::cfg_callback("on_compact_range_cf", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+
+    let safe_point_inject = "safe_point_inject";
+    fail::cfg(safe_point_inject, "return(100)").unwrap();
+
+    {
+        let sim = cluster.sim.rl();
+        let cfg_controller = sim.get_cfg_controller(1).unwrap();
+        cfg_controller
+            .update(change(
+                "raftstore.skip-manual-compaction-in-clean_up-worker",
+                "true",
+            ))
+            .unwrap();
+    }
+
+    let r = cluster.get_region(b"k1");
+    cluster
+        .pd_client
+        .split_region(r.clone(), pdpb::CheckPolicy::Usekey, vec![b"k1".to_vec()]);
+    rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
+
+    {
+        let sim = cluster.sim.rl();
+        let cfg_controller = sim.get_cfg_controller(1).unwrap();
+        cfg_controller
+            .update(change(
+                "raftstore.skip-manual-compaction-in-clean_up-worker",
+                "false",
+            ))
+            .unwrap();
+    }
+
+    cluster
+        .pd_client
+        .split_region(r, pdpb::CheckPolicy::Usekey, vec![b"k1".to_vec()]);
+    fail::cfg(safe_point_inject, "return(200)").unwrap();
+    rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    rx.try_recv().unwrap_err();
 }

@@ -43,7 +43,7 @@ use tikv_util::{
     warn,
     worker::Runnable,
 };
-use tokio::runtime::Runtime;
+use tokio::runtime::{Handle, Runtime};
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::{
@@ -413,7 +413,7 @@ impl BackupRange {
 
             let entries = batch.drain();
             if writer.need_split_keys() {
-                let this_end_key = entries.as_slice().get(0).map_or_else(
+                let this_end_key = entries.as_slice().first().map_or_else(
                     || Err(Error::Other(box_err!("get entry error: nothing in batch"))),
                     |x| {
                         x.to_key().map(|k| k.into_raw().unwrap()).map_err(|e| {
@@ -809,7 +809,13 @@ impl<R: RegionInfoProvider> Progress<R> {
                             break;
                         }
                     }
-                    let peer = find_peer(region, store_id).unwrap().to_owned();
+                    let peer = if let Some(peer) = find_peer(region, store_id) {
+                        peer.to_owned()
+                    } else {
+                        // skip the region at this time, and would retry to backup the region in
+                        // finegrained step.
+                        continue;
+                    };
                     // Raft peer role has to match the replica read flag.
                     if replica_read || info.role == StateRole::Leader {
                         let ekey = get_min_end_key(end_key.as_ref(), region);
@@ -1153,6 +1159,13 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 codec,
             ));
         }
+    }
+
+    /// Get the internal handle of the io thread pool used by the backup
+    /// endpoint. This is mainly shared for disk snapshot backup (so they
+    /// don't need to spawn on the gRPC pool.)
+    pub fn io_pool_handle(&self) -> &Handle {
+        self.io_pool.handle()
     }
 }
 
@@ -1576,7 +1589,7 @@ pub mod tests {
             };
 
         // Test whether responses contain correct range.
-        #[allow(clippy::blocks_in_if_conditions)]
+        #[allow(clippy::blocks_in_conditions)]
         let test_handle_backup_task_range =
             |start_key: &[u8], end_key: &[u8], expect: Vec<(&[u8], &[u8])>| {
                 let tmp = TempDir::new().unwrap();
@@ -1823,7 +1836,7 @@ pub mod tests {
             };
 
         // Test whether responses contain correct range.
-        #[allow(clippy::blocks_in_if_conditions)]
+        #[allow(clippy::blocks_in_conditions)]
         let test_handle_backup_task_ranges =
             |sub_ranges: Vec<(&[u8], &[u8])>, expect: Vec<(&[u8], &[u8])>| {
                 let tmp = TempDir::new().unwrap();
@@ -2492,8 +2505,8 @@ pub mod tests {
     fn test_backup_file_name() {
         let region = metapb::Region::default();
         let store_id = 1;
-        let test_cases = vec!["s3", "local", "gcs", "azure", "hdfs"];
-        let test_target = vec![
+        let test_cases = ["s3", "local", "gcs", "azure", "hdfs"];
+        let test_target = [
             "1/0_0_000",
             "1/0_0_000",
             "1_0_0_000",
@@ -2512,7 +2525,7 @@ pub mod tests {
             assert_eq!(target.to_string(), prefix_arr.join(delimiter));
         }
 
-        let test_target = vec!["1/0_0", "1/0_0", "1_0_0", "1_0_0", "1_0_0"];
+        let test_target = ["1/0_0", "1/0_0", "1_0_0", "1_0_0", "1_0_0"];
         for (storage_name, target) in test_cases.iter().zip(test_target.iter()) {
             let key = None;
             let filename = backup_file_name(store_id, &region, key, storage_name);

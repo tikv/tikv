@@ -9,6 +9,7 @@ use std::{
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use engine_traits::{Engines, ALL_CFS, CF_DEFAULT};
+use health_controller::HealthController;
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{
     coprocessor::CoprocessorHost,
@@ -111,7 +112,7 @@ fn start_raftstore(
             Arc::default(),
             ConcurrencyManager::new(1.into()),
             CollectorRegHandle::new_for_test(),
-            None,
+            HealthController::new(),
             None,
             GrpcServiceManager::dummy(),
             Arc::new(AtomicU64::new(0)),
@@ -236,6 +237,7 @@ fn test_update_raftstore_io_config() {
     // Start from SYNC mode.
     {
         let (mut resize_config, _dir) = TikvConfig::with_tmp().unwrap();
+        resize_config.raft_store.store_io_pool_size = 0; // SYNC mode
         resize_config.validate().unwrap();
         let (cfg_controller, _, _, mut system) = start_raftstore(resize_config, &_dir);
 

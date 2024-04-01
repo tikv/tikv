@@ -317,7 +317,12 @@ impl ArithmeticOp for DecimalMultiply {
     type T = Decimal;
 
     fn calc(lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
-        let res: codec::Result<Decimal> = (lhs * rhs).into();
+        let res: codec::Result<Decimal> = match lhs * rhs {
+            codec::mysql::Res::Ok(t) => Ok(t),
+            codec::mysql::Res::Truncated(t) => Ok(t),
+            other => other.into(),
+        };
+
         Ok(Some(res?))
     }
 }
@@ -491,17 +496,19 @@ impl ArithmeticOpWithCtx for DecimalDivide {
     type T = Decimal;
 
     fn calc(ctx: &mut EvalContext, lhs: &Decimal, rhs: &Decimal) -> Result<Option<Decimal>> {
-        Ok(if let Some(value) = lhs / rhs {
-            value
-                .into_result_with_overflow_err(
-                    ctx,
-                    Error::overflow("DECIMAL", format!("({} / {})", lhs, rhs)),
-                )
-                .map(Some)
-        } else {
-            // TODO: handle RpnFuncExtra's field_type, round the result if is needed.
-            ctx.handle_division_by_zero().map(|_| None)
-        }?)
+        Ok(
+            if let Some(value) = lhs.div(rhs, ctx.cfg.div_precision_increment) {
+                value
+                    .into_result_with_overflow_err(
+                        ctx,
+                        Error::overflow("DECIMAL", format!("({} / {})", lhs, rhs)),
+                    )
+                    .map(Some)
+            } else {
+                // TODO: handle RpnFuncExtra's field_type, round the result if is needed.
+                ctx.handle_division_by_zero().map(|_| None)
+            }?,
+        )
     }
 }
 
@@ -872,7 +879,14 @@ mod tests {
 
     #[test]
     fn test_multiply_decimal() {
-        let test_cases = vec![("1.1", "2.2", "2.42")];
+        let test_cases = vec![
+            ("1.1", "2.2", "2.42"),
+            (
+                "999999999999999999999999999999999.9999",
+                "766507373740683764182618847769240.9770",
+                "766507373740683764182618847769239999923349262625931623581738115223.07600000",
+            ),
+        ];
         for (lhs, rhs, expected) in test_cases {
             let expected: Option<Decimal> = expected.parse().ok();
             let output = RpnFnScalarEvaluator::new()
@@ -1224,6 +1238,29 @@ mod tests {
             let expected = expected.map(|s| Decimal::from_str(s).unwrap());
 
             assert_eq!(actual, expected, "lhs={:?}, rhs={:?}", lhs, rhs);
+        }
+
+        let cases2 = vec![
+            (Some("2.2"), Some("1.3"), Some("1.692"), 2),
+            (Some("2.2"), Some("1.3"), Some("1.6923"), 3),
+            (Some("2.2"), Some("1.3"), Some("1.69231"), 4),
+            (None, Some("2"), None, 4),
+            (Some("123"), None, None, 4),
+        ];
+        for (lhs, rhs, expected, frac_incr) in cases2 {
+            let mut cfg = EvalConfig::new();
+            cfg.set_div_precision_incr(frac_incr);
+            let ctx = EvalContext::new(cfg.into());
+            let actual: Option<Decimal> = RpnFnScalarEvaluator::new_for_test(ctx)
+                .push_param(lhs.map(|s| Decimal::from_str(s).unwrap()))
+                .push_param(rhs.map(|s| Decimal::from_str(s).unwrap()))
+                .evaluate(ScalarFuncSig::DivideDecimal)
+                .unwrap();
+
+            let expected = expected.map(|s| Decimal::from_str(s).unwrap());
+            if let (Some(lhs_), Some(rhs_)) = (expected, actual) {
+                assert_eq!(format!("{lhs_}"), format!("{rhs_}"));
+            }
         }
     }
 

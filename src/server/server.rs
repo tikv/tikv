@@ -11,7 +11,8 @@ use std::{
 use api_version::KvFormat;
 use futures::{compat::Stream01CompatExt, stream::StreamExt};
 use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
-use grpcio_health::{create_health, HealthService, ServingStatus};
+use grpcio_health::{create_health, HealthService};
+use health_controller::HealthController;
 use kvproto::tikvpb::*;
 use raftstore::store::{CheckLeaderTask, SnapManager, TabletSnapManager};
 use resource_control::ResourceGroupManager;
@@ -135,7 +136,7 @@ pub struct Server<S: StoreAddrResolver + 'static, E: Engine> {
     grpc_thread_load: Arc<ThreadLoadPool>,
     yatp_read_pool: Option<ReadPool>,
     debug_thread_pool: Arc<Runtime>,
-    health_service: HealthService,
+    health_controller: HealthController,
     timer: Handle,
     builder_factory: Box<dyn GrpcBuilderFactory>,
 }
@@ -161,7 +162,7 @@ where
         env: Arc<Environment>,
         yatp_read_pool: Option<ReadPool>,
         debug_thread_pool: Arc<Runtime>,
-        health_service: HealthService,
+        health_controller: HealthController,
         resource_manager: Option<Arc<ResourceGroupManager>>,
     ) -> Result<Self> {
         // A helper thread (or pool) for transport layer.
@@ -185,8 +186,15 @@ where
         let lazy_worker = snap_worker.lazy_build("snap-handler");
         let raft_ext = storage.get_engine().raft_extension();
 
+        let health_feedback_interval = if cfg.value().health_feedback_interval.0.is_zero() {
+            None
+        } else {
+            Some(cfg.value().health_feedback_interval.0)
+        };
+
         let proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
         let kv_service = KvService::new(
+            cfg.value().cluster_id,
             store_id,
             storage,
             gc_worker,
@@ -199,12 +207,14 @@ where
             proxy,
             cfg.value().reject_messages_on_memory_ratio,
             resource_manager,
+            health_controller.clone(),
+            health_feedback_interval,
         );
         let builder_factory = Box::new(BuilderFactory::new(
             kv_service,
             cfg.clone(),
             security_mgr.clone(),
-            health_service.clone(),
+            health_controller.get_grpc_health_service(),
         ));
 
         let addr = SocketAddr::from_str(&cfg.value().addr)?;
@@ -224,7 +234,6 @@ where
         let raft_client = RaftClient::new(store_id, conn_builder);
 
         let trans = ServerTransport::new(raft_client);
-        health_service.set_serving_status("", ServingStatus::NotServing);
 
         let svr = Server {
             env: Arc::clone(&env),
@@ -239,7 +248,7 @@ where
             grpc_thread_load,
             yatp_read_pool,
             debug_thread_pool,
-            health_service,
+            health_controller,
             timer: GLOBAL_TIMER_HANDLE.clone(),
             builder_factory,
         };
@@ -300,8 +309,7 @@ where
         let mut grpc_server = self.builder_or_server.take().unwrap().right().unwrap();
         grpc_server.start();
         self.builder_or_server = Some(Either::Right(grpc_server));
-        self.health_service
-            .set_serving_status("", ServingStatus::Serving);
+        self.health_controller.set_is_serving(true);
     }
 
     /// Starts the TiKV server.
@@ -391,7 +399,7 @@ where
             pool.shutdown_background();
         }
         let _ = self.yatp_read_pool.take();
-        self.health_service.shutdown();
+        self.health_controller.shutdown();
         Ok(())
     }
 
@@ -403,8 +411,7 @@ where
         if let Some(Either::Right(server)) = self.builder_or_server.take() {
             drop(server);
         }
-        self.health_service
-            .set_serving_status("", ServingStatus::NotServing);
+        self.health_controller.set_is_serving(false);
         self.builder_or_server = Some(builder);
         info!("paused the grpc server"; "takes" => ?start.elapsed(),);
         Ok(())
@@ -667,7 +674,7 @@ mod tests {
             env,
             None,
             debug_thread_pool,
-            HealthService::default(),
+            HealthController::new(),
             None,
         )
         .unwrap();

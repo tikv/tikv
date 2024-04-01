@@ -17,8 +17,6 @@ use std::{
 use fail::fail_point;
 #[cfg(target_os = "linux")]
 use lazy_static::lazy_static;
-#[cfg(target_os = "linux")]
-use mnt::get_mount;
 use sysinfo::RefreshKind;
 pub use sysinfo::{CpuExt, DiskExt, NetworkExt, ProcessExt, SystemExt};
 
@@ -54,8 +52,32 @@ impl SysQuota {
         limit_cpu_cores_quota_by_env_var(cpu_num)
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn cpu_cores_quota_current() -> f64 {
+        let cgroup = cgroup::CGroupSys::new().unwrap_or_default();
+        let mut cpu_num = num_cpus::get() as f64;
+        let cpuset_cores = cgroup.cpuset_cores().len() as f64;
+        let cpu_quota = cgroup.cpu_quota().unwrap_or(0.);
+
+        if cpuset_cores != 0. {
+            cpu_num = cpu_num.min(cpuset_cores);
+        }
+
+        if cpu_quota != 0. {
+            cpu_num = cpu_num.min(cpu_quota);
+        }
+
+        limit_cpu_cores_quota_by_env_var(cpu_num)
+    }
+
     #[cfg(not(target_os = "linux"))]
     pub fn cpu_cores_quota() -> f64 {
+        let cpu_num = num_cpus::get() as f64;
+        limit_cpu_cores_quota_by_env_var(cpu_num)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn cpu_cores_quota_current() -> f64 {
         let cpu_num = num_cpus::get() as f64;
         limit_cpu_cores_quota_by_env_var(cpu_num)
     }
@@ -70,8 +92,24 @@ impl SysQuota {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    pub fn memory_limit_in_bytes_current() -> u64 {
+        let cgroup = cgroup::CGroupSys::new().unwrap_or_default();
+        let total_mem = Self::sysinfo_memory_limit_in_bytes();
+        if let Some(cgroup_memory_limit) = cgroup.memory_limit_in_bytes() {
+            std::cmp::min(total_mem, cgroup_memory_limit)
+        } else {
+            total_mem
+        }
+    }
+
     #[cfg(not(target_os = "linux"))]
     pub fn memory_limit_in_bytes() -> u64 {
+        Self::sysinfo_memory_limit_in_bytes()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub fn memory_limit_in_bytes_current() -> u64 {
         Self::sysinfo_memory_limit_in_bytes()
     }
 
@@ -169,6 +207,12 @@ pub fn path_in_diff_mount_point(path1: impl AsRef<Path>, path2: impl AsRef<Path>
     if empty_path(path1) || empty_path(path2) {
         return false;
     }
+    let get_mount = |path| -> std::io::Result<_> {
+        let mounts = std::fs::File::open("/proc/mounts")?;
+        let mount_point = get_path_mount_point(Box::new(std::io::BufReader::new(mounts)), path);
+        Ok(mount_point)
+    };
+
     match (get_mount(path1), get_mount(path2)) {
         (Err(e1), _) => {
             warn!("Get mount point error for path {}, {}", path1.display(), e1);
@@ -188,6 +232,48 @@ pub fn path_in_diff_mount_point(path1: impl AsRef<Path>, path2: impl AsRef<Path>
         }
         (Ok(Some(mount1)), Ok(Some(mount2))) => mount1 != mount2,
     }
+}
+
+#[cfg(target_os = "linux")]
+fn get_path_mount_point(mounts: Box<dyn std::io::BufRead>, path: &Path) -> Option<String> {
+    use std::io::BufRead;
+
+    // (fs_file, mount point)
+    let mut ret = None;
+    // Each filesystem is described on a separate line. Fields on each line are
+    // separated by tabs or spaces. Lines starting with '#' are comments.
+    // Blank lines are ignored.
+    // See man 5 fstab.
+    for line in mounts.lines() {
+        let line = match line {
+            Ok(line) => line,
+            Err(e) => {
+                warn!("fail to read mounts line, error {}", e);
+                continue;
+            }
+        };
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // We only care about the second field (fs_file).
+        let mut idx = 0;
+        for field in line.split(&[' ', '\t']) {
+            if field.is_empty() {
+                continue;
+            }
+            if idx == 1 {
+                if path.starts_with(field) {
+                    // Keep the longest match.
+                    if ret.as_ref().map_or(0, |r: &(String, String)| r.0.len()) < field.len() {
+                        ret = Some((field.to_owned(), line.clone()));
+                    }
+                }
+                break;
+            }
+            idx += 1;
+        }
+    }
+    ret.map(|r| r.1)
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -216,5 +302,50 @@ mod tests {
         let (normal_path1, normal_path2) = ("/", "/");
         let result = path_in_diff_mount_point(normal_path1, normal_path2);
         assert_eq!(result, false);
+    }
+
+    #[test]
+    fn test_get_path_mount_point() {
+        let mounts = "
+sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0
+proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0
+tmpfs /sys/fs/cgroup tmpfs ro,nosuid,nodev,noexec,mode=755 0 0
+cgroup /sys/fs/cgroup/systemd cgroup rw,nosuid,nodev,noexec,relatime,xattr,release_agent=/usr/lib/systemd/systemd-cgroups-agent,name=systemd 0 0
+pstore /sys/fs/pstore pstore rw,nosuid,nodev,noexec,relatime 0 0
+bpf /sys/fs/bpf bpf rw,nosuid,nodev,noexec,relatime,mode=700 0 0
+none /sys/kernel/tracing tracefs rw,relatime 0 0
+configfs /sys/kernel/config configfs rw,relatime 0 0
+systemd-1 /proc/sys/fs/binfmt_misc autofs rw,relatime,fd=32,pgrp=1,timeout=0,minproto=5,maxproto=5,direct,pipe_ino=16122 0 0
+mqueue /dev/mqueue mqueue rw,relatime 0 0
+/dev/vda2 /boot ext4 rw,relatime 0 0
+/dev/vda3 / ext4 rw,relatime 0 0
+
+# Double spaces in below.
+/dev/nvme1n1  /data/nvme1n1  xfs  rw,seclabel,relatime,attr2,inode64,logbufs=8,logbsize=32k,noquota 0 0
+# \\t in below.
+/dev/nvme0n1\t/data/nvme0n1/data ext4 rw,seclabel,relatime 0 0
+";
+        let reader = mounts.as_bytes();
+        let check = |path: &str, expected: Option<&str>| {
+            let mp = get_path_mount_point(Box::new(reader), Path::new(path));
+            if let Some(expected) = expected {
+                assert!(
+                    mp.as_ref().unwrap().starts_with(expected),
+                    "{:?}: {:?}",
+                    mp,
+                    expected
+                );
+            } else {
+                assert!(mp.is_none(), "{:?}: {:?}", mp, expected);
+            };
+        };
+        check("/data/nvme1n1", Some("/dev/nvme1n1  /data/nvme1n1  xfs"));
+        check(
+            "/data/nvme0n1/data/tikv",
+            Some("/dev/nvme0n1\t/data/nvme0n1/data ext4"),
+        );
+        check("/data/nvme0n1", Some("/dev/vda3 / ext4"));
+        check("/home", Some("/dev/vda3 / ext4"));
+        check("unknown/path", None);
     }
 }

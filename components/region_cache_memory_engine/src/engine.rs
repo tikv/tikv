@@ -5,20 +5,34 @@ use std::{
     collections::BTreeMap,
     fmt::{self, Debug},
     ops::Deref,
-    sync::{Arc, Mutex},
+    sync::Arc,
+    time::Duration,
 };
 
 use bytes::Bytes;
-use collections::HashMap;
+use crossbeam::{epoch, epoch::default_collector};
+use engine_rocks::{raw::SliceTransform, util::FixedSuffixSliceTransform, RocksEngine};
 use engine_traits::{
-    CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, Mutable, Peekable, ReadOptions,
-    RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, WriteBatch, WriteBatchExt, WriteOptions,
-    CF_DEFAULT, CF_LOCK, CF_WRITE,
+    CacheRange, CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, KvEngine, Peekable,
+    RangeCacheEngine, ReadOptions, Result, Snapshot, SnapshotMiscExt, CF_DEFAULT, CF_LOCK,
+    CF_WRITE,
 };
-use skiplist_rs::{ByteWiseComparator, IterRef, Skiplist};
-use tikv_util::config::ReadableSize;
+use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
+use skiplist_rs::{base::OwnedIter, SkipList};
+use slog_global::error;
+use tikv_util::box_err;
 
-fn cf_to_id(cf: &str) -> usize {
+use crate::{
+    background::{BackgroundTask, BgWorkManager},
+    keys::{
+        decode_key, encode_key_for_eviction, encode_seek_for_prev_key, encode_seek_key,
+        InternalBytes, InternalKey, ValueType,
+    },
+    range_manager::RangeManager,
+    write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
+};
+
+pub(crate) fn cf_to_id(cf: &str) -> usize {
     match cf {
         CF_DEFAULT => 0,
         CF_LOCK => 1,
@@ -27,63 +41,68 @@ fn cf_to_id(cf: &str) -> usize {
     }
 }
 
-/// RegionMemoryEngine stores data for a specific cached region
-///
-/// todo: The skiplist used here currently is for test purpose. Replace it
-/// with a formal implementation.
+/// A single global set of skiplists shared by all cached ranges
 #[derive(Clone)]
-pub struct RegionMemoryEngine {
-    data: [Arc<Skiplist<ByteWiseComparator>>; 3],
+pub struct SkiplistEngine {
+    pub(crate) data: [Arc<SkipList<InternalBytes, InternalBytes>>; 3],
 }
 
-impl RegionMemoryEngine {
-    pub fn with_capacity(arena_size: usize) -> Self {
-        RegionMemoryEngine {
+impl Default for SkiplistEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SkiplistEngine {
+    pub fn new() -> Self {
+        let collector = default_collector().clone();
+        SkiplistEngine {
             data: [
-                Arc::new(Skiplist::with_capacity(
-                    ByteWiseComparator::default(),
-                    arena_size,
-                    true,
-                )),
-                Arc::new(Skiplist::with_capacity(
-                    ByteWiseComparator::default(),
-                    arena_size,
-                    true,
-                )),
-                Arc::new(Skiplist::with_capacity(
-                    ByteWiseComparator::default(),
-                    arena_size,
-                    true,
-                )),
+                Arc::new(SkipList::new(collector.clone())),
+                Arc::new(SkipList::new(collector.clone())),
+                Arc::new(SkipList::new(collector)),
             ],
         }
     }
-}
 
-impl Default for RegionMemoryEngine {
-    fn default() -> Self {
-        RegionMemoryEngine::with_capacity(ReadableSize::mb(1).0 as usize)
+    pub fn cf_handle(&self, cf: &str) -> Arc<SkipList<InternalBytes, InternalBytes>> {
+        self.data[cf_to_id(cf)].clone()
+    }
+
+    pub fn delete_range(&self, range: &CacheRange) {
+        self.data.iter().for_each(|d| {
+            let (start, end) = encode_key_for_eviction(range);
+            let mut iter = d.owned_iter();
+            let guard = &epoch::pin();
+            iter.seek(&start, guard);
+            while iter.valid() && iter.key() < &end {
+                if let Some(e) = d.remove(iter.key(), guard) {
+                    e.release(guard)
+                }
+                iter.next(guard);
+            }
+        });
     }
 }
 
-impl Debug for RegionMemoryEngine {
+impl Debug for SkiplistEngine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Region Memory Engine")
+        write!(f, "Range Memory Engine")
     }
 }
 
 // read_ts -> ref_count
-#[derive(Default)]
-struct SnapshotList(BTreeMap<u64, u64>);
+#[derive(Default, Debug)]
+pub(crate) struct SnapshotList(BTreeMap<u64, u64>);
 
 impl SnapshotList {
-    fn new_snapshot(&mut self, read_ts: u64) {
+    pub(crate) fn new_snapshot(&mut self, read_ts: u64) {
         // snapshot with this ts may be granted before
         let count = self.0.get(&read_ts).unwrap_or(&0) + 1;
         self.0.insert(read_ts, count);
     }
 
-    fn remove_snapshot(&mut self, read_ts: u64) {
+    pub(crate) fn remove_snapshot(&mut self, read_ts: u64) {
         let count = self.0.get_mut(&read_ts).unwrap();
         assert!(*count >= 1);
         if *count == 1 {
@@ -92,192 +111,554 @@ impl SnapshotList {
             *count -= 1;
         }
     }
+
+    // returns the min snapshot_ts (read_ts) if there's any
+    pub fn min_snapshot_ts(&self) -> Option<u64> {
+        self.0.first_key_value().map(|(ts, _)| *ts)
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
-#[derive(Default)]
-pub struct RegionMemoryMeta {
-    // It records the snapshots that have been granted previsously with specific snapshot_ts. We
-    // should guarantee that the data visible to any one of the snapshot in it will not be removed.
-    snapshot_list: SnapshotList,
-    // It indicates whether the region is readable. False means integrity of the data in this
-    // cached region is not satisfied due to being evicted for instance.
-    can_read: bool,
-    // Request with read_ts below it is not eligible for granting snapshot.
-    // Note: different region can have different safe_ts.
-    safe_ts: u64,
+pub struct RangeCacheMemoryEngineCore {
+    engine: SkiplistEngine,
+    range_manager: RangeManager,
+    pub(crate) cached_write_batch: BTreeMap<CacheRange, Vec<(u64, RangeCacheWriteBatchEntry)>>,
 }
 
-#[derive(Default)]
-pub struct RegionCacheMemoryEngineCore {
-    engine: HashMap<u64, RegionMemoryEngine>,
-    region_metas: HashMap<u64, RegionMemoryMeta>,
+impl Default for RangeCacheMemoryEngineCore {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
-/// The RegionCacheMemoryEngine serves as a region cache, storing hot regions in
+impl RangeCacheMemoryEngineCore {
+    pub fn new() -> RangeCacheMemoryEngineCore {
+        RangeCacheMemoryEngineCore {
+            engine: SkiplistEngine::new(),
+            range_manager: RangeManager::default(),
+            cached_write_batch: BTreeMap::default(),
+        }
+    }
+
+    pub fn engine(&self) -> SkiplistEngine {
+        self.engine.clone()
+    }
+
+    pub fn range_manager(&self) -> &RangeManager {
+        &self.range_manager
+    }
+
+    pub fn mut_range_manager(&mut self) -> &mut RangeManager {
+        &mut self.range_manager
+    }
+
+    pub(crate) fn has_cached_write_batch(&self, cache_range: &CacheRange) -> bool {
+        self.cached_write_batch.contains_key(cache_range)
+    }
+
+    pub(crate) fn take_cache_write_batch(
+        &mut self,
+        cache_range: &CacheRange,
+    ) -> Option<Vec<(u64, RangeCacheWriteBatchEntry)>> {
+        self.cached_write_batch.remove(cache_range)
+    }
+
+    // ensure that the transfer from `pending_ranges_loading_data` to
+    // `range` is atomic with cached_write_batch empty
+    pub(crate) fn pending_range_completes_loading(
+        core: &mut RwLockWriteGuard<'_, Self>,
+        range: &CacheRange,
+    ) {
+        fail::fail_point!("on_pending_range_completes_loading");
+        assert!(!core.has_cached_write_batch(range));
+        let range_manager = core.mut_range_manager();
+        let r = range_manager
+            .pending_ranges_loading_data
+            .pop_front()
+            .unwrap()
+            .0;
+        assert_eq!(&r, range);
+        range_manager.new_range(r);
+        range_manager.set_range_readable(range, true);
+    }
+}
+
+/// The RangeCacheMemoryEngine serves as a range cache, storing hot ranges in
 /// the leaders' store. Incoming writes that are written to disk engine (now,
-/// RocksDB) are also written to the RegionCacheMemoryEngine, leading to a
-/// mirrored data set in the cached regions with the disk engine.
+/// RocksDB) are also written to the RangeCacheMemoryEngine, leading to a
+/// mirrored data set in the cached ranges with the disk engine.
 ///
-/// A load/evict unit manages the memory, deciding which regions should be
-/// evicted when the memory used by the RegionCacheMemoryEngine reaches a
-/// certain limit, and determining which regions should be loaded when there is
+/// A load/evict unit manages the memory, deciding which ranges should be
+/// evicted when the memory used by the RangeCacheMemoryEngine reaches a
+/// certain limit, and determining which ranges should be loaded when there is
 /// spare memory capacity.
 ///
-/// The safe point lifetime differs between RegionCacheMemoryEngine and the disk
-/// engine, often being much shorter in RegionCacheMemoryEngine. This means that
-/// RegionCacheMemoryEngine may filter out some keys that still exist in the
+/// The safe point lifetime differs between RangeCacheMemoryEngine and the disk
+/// engine, often being much shorter in RangeCacheMemoryEngine. This means that
+/// RangeCacheMemoryEngine may filter out some keys that still exist in the
 /// disk engine, thereby improving read performance as fewer duplicated keys
 /// will be read. If there's a need to read keys that may have been filtered by
-/// RegionCacheMemoryEngine (as indicated by read_ts and safe_point of the
+/// RangeCacheMemoryEngine (as indicated by read_ts and safe_point of the
 /// cached region), we resort to using a the disk engine's snapshot instead.
-#[derive(Clone, Default)]
-pub struct RegionCacheMemoryEngine {
-    core: Arc<Mutex<RegionCacheMemoryEngineCore>>,
+#[derive(Clone)]
+pub struct RangeCacheMemoryEngine {
+    pub(crate) core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
+    pub(crate) rocks_engine: Option<RocksEngine>,
+    bg_work_manager: Arc<BgWorkManager>,
 }
 
-impl Debug for RegionCacheMemoryEngine {
+impl RangeCacheMemoryEngine {
+    pub fn new(gc_interval: Duration) -> Self {
+        let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
+        Self {
+            core: core.clone(),
+            rocks_engine: None,
+            bg_work_manager: Arc::new(BgWorkManager::new(core, gc_interval)),
+        }
+    }
+
+    pub fn new_range(&self, range: CacheRange) {
+        let mut core = self.core.write();
+        core.range_manager.new_range(range);
+    }
+
+    pub fn evict_range(&mut self, range: &CacheRange) {
+        let mut core = self.core.write();
+        if core.range_manager.evict_range(range) {
+            drop(core);
+            // The range can be deleted directly.
+            if let Err(e) = self
+                .bg_worker_manager()
+                .schedule_task(BackgroundTask::DeleteRange(vec![range.clone()]))
+            {
+                error!(
+                    "schedule delete range failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+            }
+        }
+    }
+
+    // It handles the pending range and check whether to buffer write for this
+    // range.
+    //
+    // Return `(range_in_cache, pending_range_in_loading)`, see comments in
+    // `RangeCacheWriteBatch` for the detail of them.
+    //
+    // In addition, the region with range equals to the range in the `pending_range`
+    // may have been splited, and we should split the range accrodingly.
+    pub(crate) fn prepare_for_apply(&self, range: &CacheRange) -> (bool, bool) {
+        let core = self.core.upgradable_read();
+        let range_manager = core.range_manager();
+        let mut pending_range_in_loading = range_manager.pending_ranges_in_loading_contains(range);
+        let range_in_cache = range_manager.contains_range(range);
+        if range_in_cache || pending_range_in_loading {
+            return (range_in_cache, pending_range_in_loading);
+        }
+
+        // check whether the range is in pending_range and also split it if the range
+        // has been splitted
+        let mut index = None;
+        let mut left_splitted_range = None;
+        let mut right_splitted_range = None;
+        for (i, r) in range_manager.pending_ranges.iter().enumerate() {
+            if r == range {
+                index = Some(i);
+                break;
+            } else if r.contains_range(range) {
+                index = Some(i);
+                // It means the loading region has been splitted. We split the
+                // range accordingly.
+                (left_splitted_range, right_splitted_range) = r.split_off(range);
+                break;
+            } else if range.contains_range(r) {
+                // todo: it means merge happens
+                unimplemented!()
+            }
+        }
+        if index.is_none() {
+            return (range_in_cache, pending_range_in_loading);
+        }
+
+        let mut core = RwLockUpgradableReadGuard::upgrade(core);
+        let range_manager = core.mut_range_manager();
+        range_manager.pending_ranges.swap_remove(index.unwrap());
+        if let Some(left) = left_splitted_range {
+            range_manager.pending_ranges.push(left);
+        }
+        if let Some(right) = right_splitted_range {
+            range_manager.pending_ranges.push(right);
+        }
+
+        let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
+        range_manager
+            .pending_ranges_loading_data
+            .push_back((range.clone(), rocks_snap));
+
+        if let Err(e) = self
+            .bg_worker_manager()
+            .schedule_task(BackgroundTask::LoadRange)
+        {
+            error!(
+                "schedule range load failed";
+                "err" => ?e,
+            );
+            assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+        }
+        pending_range_in_loading = true;
+        (range_in_cache, pending_range_in_loading)
+    }
+
+    // The writes in `handle_pending_range_in_loading_buffer` indicating the ranges
+    // of the writes are pending_ranges that are still loading data at the time of
+    // `prepare_for_apply`. But some of them may have been finished the load and
+    // become a normal range so that the writes should be written to the engine
+    // directly rather than cached. This method decides which writes should be
+    // cached and which writes should be written directly.
+    pub(crate) fn handle_pending_range_in_loading_buffer(
+        &self,
+        seq: u64,
+        pending_range_in_loading_buffer: Vec<RangeCacheWriteBatchEntry>,
+    ) -> (Vec<RangeCacheWriteBatchEntry>, SkiplistEngine) {
+        if !pending_range_in_loading_buffer.is_empty() {
+            let core = self.core.upgradable_read();
+            let (group_entries_to_cache, entries_to_write) =
+                group_write_batch_entries(pending_range_in_loading_buffer, core.range_manager());
+            let engine = core.engine().clone();
+            if !group_entries_to_cache.is_empty() {
+                let mut core = RwLockUpgradableReadGuard::upgrade(core);
+                for (range, write_batches) in group_entries_to_cache {
+                    core.cached_write_batch
+                        .entry(range)
+                        .or_default()
+                        .extend(write_batches.into_iter().map(|e| (seq, e)));
+                }
+            }
+            (entries_to_write, engine)
+        } else {
+            let core = self.core.read();
+            (vec![], core.engine().clone())
+        }
+    }
+
+    pub fn bg_worker_manager(&self) -> &BgWorkManager {
+        &self.bg_work_manager
+    }
+}
+
+impl RangeCacheMemoryEngine {
+    pub fn core(&self) -> &Arc<RwLock<RangeCacheMemoryEngineCore>> {
+        &self.core
+    }
+}
+
+impl Debug for RangeCacheMemoryEngine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Region Cache Memory Engine")
+        write!(f, "Range Cache Memory Engine")
     }
 }
 
-impl RegionCacheMemoryEngine {
-    pub fn new_region(&self, region_id: u64) {
-        let mut core = self.core.lock().unwrap();
+impl RangeCacheEngine for RangeCacheMemoryEngine {
+    type Snapshot = RangeCacheSnapshot;
 
-        assert!(core.engine.get(&region_id).is_none());
-        assert!(core.region_metas.get(&region_id).is_none());
-        core.engine.insert(region_id, RegionMemoryEngine::default());
-        core.region_metas
-            .insert(region_id, RegionMemoryMeta::default());
+    fn snapshot(&self, range: CacheRange, read_ts: u64, seq_num: u64) -> Option<Self::Snapshot> {
+        RangeCacheSnapshot::new(self.clone(), range, read_ts, seq_num)
+    }
+
+    type DiskEngine = RocksEngine;
+    fn set_disk_engine(&mut self, disk_engine: Self::DiskEngine) {
+        self.rocks_engine = Some(disk_engine);
+    }
+
+    fn get_range_for_key(&self, key: &[u8]) -> Option<CacheRange> {
+        let core = self.core.read();
+        core.range_manager().get_range_for_key(key)
     }
 }
 
-impl RegionCacheEngine for RegionCacheMemoryEngine {
-    type Snapshot = RegionCacheSnapshot;
-
-    // todo(SpadeA): add sequence number logic
-    fn snapshot(&self, region_id: u64, read_ts: u64) -> Option<Self::Snapshot> {
-        RegionCacheSnapshot::new(self.clone(), region_id, read_ts)
-    }
+#[derive(PartialEq)]
+enum Direction {
+    Uninit,
+    Forward,
+    Backward,
 }
 
-// todo: fill fields needed
-pub struct RegionCacheWriteBatch;
-
-impl WriteBatchExt for RegionCacheMemoryEngine {
-    type WriteBatch = RegionCacheWriteBatch;
-    // todo: adjust it
-    const WRITE_BATCH_MAX_KEYS: usize = 256;
-
-    fn write_batch(&self) -> Self::WriteBatch {
-        RegionCacheWriteBatch {}
-    }
-
-    fn write_batch_with_cap(&self, _: usize) -> Self::WriteBatch {
-        RegionCacheWriteBatch {}
-    }
-}
-
-pub struct RegionCacheIterator {
-    cf: String,
+pub struct RangeCacheIterator {
     valid: bool,
-    prefix_same_as_start: bool,
-    prefix: Option<Vec<u8>>,
-    iter: IterRef<Skiplist<ByteWiseComparator>, ByteWiseComparator>,
+    iter: OwnedIter<Arc<SkipList<InternalBytes, InternalBytes>>, InternalBytes, InternalBytes>,
     // The lower bound is inclusive while the upper bound is exclusive if set
+    // Note: bounds (region boundaries) have no mvcc versions
     lower_bound: Vec<u8>,
     upper_bound: Vec<u8>,
+    // A snapshot sequence number passed from RocksEngine Snapshot to guarantee suitable
+    // visibility.
+    sequence_number: u64,
+
+    saved_user_key: Vec<u8>,
+    // This is only used by backwawrd iteration where the value we want may not be pointed by the
+    // `iter`
+    saved_value: Option<Bytes>,
+
+    // Not None means we are performing prefix seek
+    // Note: prefix_seek doesn't support seek_to_first and seek_to_last.
+    prefix_extractor: Option<FixedSuffixSliceTransform>,
+    prefix: Option<Vec<u8>>,
+
+    direction: Direction,
 }
 
-impl Iterable for RegionCacheMemoryEngine {
-    type Iterator = RegionCacheIterator;
+impl Iterable for RangeCacheMemoryEngine {
+    type Iterator = RangeCacheIterator;
 
-    fn iterator(&self, cf: &str) -> Result<Self::Iterator> {
-        unimplemented!()
-    }
-
-    fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
+    fn iterator_opt(&self, _: &str, _: IterOptions) -> Result<Self::Iterator> {
+        // This engine does not support creating iterators directly by the engine.
         unimplemented!()
     }
 }
 
-impl Iterator for RegionCacheIterator {
+impl RangeCacheIterator {
+    // If `skipping_saved_key` is true, the function will keep iterating until it
+    // finds a user key that is larger than `saved_user_key`.
+    // If `prefix` is not None, the iterator needs to stop when all keys for the
+    // prefix are exhausted and the iterator is set to invalid.
+    fn find_next_visible_key(&mut self, mut skip_saved_key: bool, guard: &epoch::Guard) {
+        while self.iter.valid() {
+            let InternalKey {
+                user_key,
+                sequence,
+                v_type,
+            } = decode_key(self.iter.key().as_slice());
+
+            if user_key >= self.upper_bound.as_slice() {
+                break;
+            }
+
+            if let Some(ref prefix) = self.prefix {
+                if prefix != self.prefix_extractor.as_mut().unwrap().transform(user_key) {
+                    // stop iterating due to unmatched prefix
+                    break;
+                }
+            }
+
+            if self.is_visible(sequence) {
+                if skip_saved_key && user_key == self.saved_user_key.as_slice() {
+                    // the user key has been met before, skip it.
+                    // todo(SpadeA): add metrics if neede
+                } else {
+                    self.saved_user_key.clear();
+                    self.saved_user_key.extend_from_slice(user_key);
+                    // self.saved_user_key =
+                    // Key::from_encoded(user_key.to_vec()).into_raw().unwrap();
+
+                    match v_type {
+                        ValueType::Deletion => {
+                            skip_saved_key = true;
+                        }
+                        ValueType::Value => {
+                            self.valid = true;
+                            return;
+                        }
+                    }
+                }
+            } else if skip_saved_key && user_key > self.saved_user_key.as_slice() {
+                // user key changed, so no need to skip it
+                skip_saved_key = false;
+            }
+
+            self.iter.next(guard);
+        }
+
+        self.valid = false;
+    }
+
+    fn is_visible(&self, seq: u64) -> bool {
+        seq <= self.sequence_number
+    }
+
+    fn seek_internal(&mut self, key: &InternalBytes) -> Result<bool> {
+        let guard = &epoch::pin();
+        self.iter.seek(key, guard);
+        if self.iter.valid() {
+            self.find_next_visible_key(false, guard);
+        }
+        Ok(self.valid)
+    }
+
+    fn seek_for_prev_internal(&mut self, key: &InternalBytes) -> Result<bool> {
+        let guard = &epoch::pin();
+        self.iter.seek_for_prev(key, guard);
+        self.prev_internal(guard);
+
+        Ok(self.valid)
+    }
+
+    fn prev_internal(&mut self, guard: &epoch::Guard) {
+        while self.iter.valid() {
+            let InternalKey { user_key, .. } = decode_key(self.iter.key().as_slice());
+            self.saved_user_key.clear();
+            self.saved_user_key.extend_from_slice(user_key);
+
+            if user_key < self.lower_bound.as_slice() {
+                break;
+            }
+
+            if let Some(ref prefix) = self.prefix {
+                if prefix != self.prefix_extractor.as_mut().unwrap().transform(user_key) {
+                    // stop iterating due to unmatched prefix
+                    break;
+                }
+            }
+
+            if !self.find_value_for_current_key(guard) {
+                return;
+            }
+
+            self.find_user_key_before_saved(guard);
+
+            if self.valid {
+                return;
+            }
+        }
+
+        // We have not found any key
+        self.valid = false;
+    }
+
+    // Used for backwards iteration.
+    // Looks at the entries with user key `saved_user_key` and finds the most
+    // up-to-date value for it. Sets `valid`` to true if the value is found and is
+    // ready to be presented to the user through value().
+    fn find_value_for_current_key(&mut self, guard: &epoch::Guard) -> bool {
+        assert!(self.iter.valid());
+        let mut last_key_entry_type = ValueType::Deletion;
+        while self.iter.valid() {
+            let InternalKey {
+                user_key,
+                sequence,
+                v_type,
+            } = decode_key(self.iter.key().as_slice());
+
+            if !self.is_visible(sequence) || self.saved_user_key != user_key {
+                // no further version is visible or the user key changed
+                break;
+            }
+
+            last_key_entry_type = v_type;
+            match v_type {
+                ValueType::Value => {
+                    self.saved_value = Some(self.iter.value().clone_bytes());
+                }
+                ValueType::Deletion => {
+                    self.saved_value.take();
+                }
+            }
+
+            self.iter.prev(guard);
+        }
+
+        self.valid = last_key_entry_type == ValueType::Value;
+        self.iter.valid()
+    }
+
+    // Move backwards until the key smaller than `saved_user_key`.
+    // Changes valid only if return value is false.
+    fn find_user_key_before_saved(&mut self, guard: &epoch::Guard) {
+        while self.iter.valid() {
+            let InternalKey { user_key, .. } = decode_key(self.iter.key().as_slice());
+
+            if user_key < self.saved_user_key.as_slice() {
+                return;
+            }
+
+            self.iter.prev(guard);
+        }
+    }
+}
+
+impl Iterator for RangeCacheIterator {
     fn key(&self) -> &[u8] {
         assert!(self.valid);
-        self.iter.key().as_slice()
+        &self.saved_user_key
     }
 
     fn value(&self) -> &[u8] {
         assert!(self.valid);
-        self.iter.value().as_slice()
+        if let Some(saved_value) = self.saved_value.as_ref() {
+            saved_value.as_slice()
+        } else {
+            self.iter.value().as_slice()
+        }
     }
 
     fn next(&mut self) -> Result<bool> {
         assert!(self.valid);
-        self.iter.next();
-        self.valid = self.iter.valid() && self.iter.key().as_slice() < self.upper_bound.as_slice();
-
-        if self.valid && self.prefix_same_as_start {
-            // todo(SpadeA): support prefix seek
-            unimplemented!()
+        assert!(self.direction == Direction::Forward);
+        let guard = &epoch::pin();
+        self.iter.next(guard);
+        self.valid = self.iter.valid();
+        if self.valid {
+            self.find_next_visible_key(true, guard);
         }
         Ok(self.valid)
     }
 
     fn prev(&mut self) -> Result<bool> {
         assert!(self.valid);
-        self.iter.prev();
-        self.valid = self.iter.valid() && self.iter.key().as_slice() >= self.lower_bound.as_slice();
-        if self.valid && self.prefix_same_as_start {
-            // todo(SpadeA): support prefix seek
-            unimplemented!()
-        }
+        assert!(self.direction == Direction::Backward);
+        let guard = &epoch::pin();
+        self.prev_internal(guard);
         Ok(self.valid)
     }
 
     fn seek(&mut self, key: &[u8]) -> Result<bool> {
+        self.direction = Direction::Forward;
+        if let Some(ref mut extractor) = self.prefix_extractor {
+            assert!(key.len() >= 8);
+            self.prefix = Some(extractor.transform(key).to_vec())
+        }
+
         let seek_key = if key < self.lower_bound.as_slice() {
             self.lower_bound.as_slice()
         } else {
             key
         };
-        self.iter.seek(seek_key);
-        self.valid = self.iter.valid() && self.iter.key().as_slice() < self.upper_bound.as_slice();
 
-        if self.valid && self.prefix_same_as_start {
-            // todo(SpadeA): support prefix seek
-            unimplemented!()
-        }
-
-        Ok(self.valid)
+        let seek_key = encode_seek_key(seek_key, self.sequence_number);
+        self.seek_internal(&seek_key)
     }
 
     fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
-        let end = if key > self.upper_bound.as_slice() {
-            self.upper_bound.as_slice()
-        } else {
-            key
-        };
-        self.iter.seek_for_prev(end);
-        self.valid = self.iter.valid() && self.iter.key().as_slice() >= self.lower_bound.as_slice();
-
-        if self.valid && self.prefix_same_as_start {
-            // todo(SpadeA): support prefix seek
-            unimplemented!()
+        self.direction = Direction::Backward;
+        if let Some(ref mut extractor) = self.prefix_extractor {
+            assert!(key.len() >= 8);
+            self.prefix = Some(extractor.transform(key).to_vec())
         }
 
-        Ok(self.valid)
+        let seek_key = if key > self.upper_bound.as_slice() {
+            encode_seek_for_prev_key(self.upper_bound.as_slice(), u64::MAX)
+        } else {
+            encode_seek_for_prev_key(key, 0)
+        };
+
+        self.seek_for_prev_internal(&seek_key)
     }
 
     fn seek_to_first(&mut self) -> Result<bool> {
-        let lower_bound = self.lower_bound.clone();
-        self.seek(lower_bound.as_slice())
+        assert!(self.prefix_extractor.is_none());
+        self.direction = Direction::Forward;
+        let seek_key = encode_seek_key(&self.lower_bound, self.sequence_number);
+        self.seek_internal(&seek_key)
     }
 
     fn seek_to_last(&mut self) -> Result<bool> {
-        let upper_bound = self.upper_bound.clone();
-        self.seek_for_prev(upper_bound.as_slice())
+        assert!(self.prefix_extractor.is_none());
+        self.direction = Direction::Backward;
+        let seek_key = encode_seek_for_prev_key(&self.upper_bound, u64::MAX);
+        self.seek_for_prev_internal(&seek_key)
     }
 
     fn valid(&self) -> Result<bool> {
@@ -285,141 +666,126 @@ impl Iterator for RegionCacheIterator {
     }
 }
 
-impl WriteBatch for RegionCacheWriteBatch {
-    fn write_opt(&mut self, _: &WriteOptions) -> Result<u64> {
-        unimplemented!()
-    }
-
-    fn data_size(&self) -> usize {
-        unimplemented!()
-    }
-
-    fn count(&self) -> usize {
-        unimplemented!()
-    }
-
-    fn is_empty(&self) -> bool {
-        unimplemented!()
-    }
-
-    fn should_write_to_engine(&self) -> bool {
-        unimplemented!()
-    }
-
-    fn clear(&mut self) {
-        unimplemented!()
-    }
-
-    fn set_save_point(&mut self) {
-        unimplemented!()
-    }
-
-    fn pop_save_point(&mut self) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn rollback_to_save_point(&mut self) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn merge(&mut self, _: Self) -> Result<()> {
-        unimplemented!()
-    }
+#[derive(Clone, Debug)]
+pub struct RagneCacheSnapshotMeta {
+    pub(crate) range_id: u64,
+    pub(crate) range: CacheRange,
+    pub(crate) snapshot_ts: u64,
+    // Sequence number is shared between RangeCacheEngine and disk KvEnigne to
+    // provide atomic write
+    pub(crate) sequence_number: u64,
 }
 
-impl Mutable for RegionCacheWriteBatch {
-    fn put(&mut self, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn put_cf(&mut self, _: &str, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn delete(&mut self, _: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn delete_cf(&mut self, _: &str, _: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn delete_range(&mut self, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn delete_range_cf(&mut self, _: &str, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
+impl RagneCacheSnapshotMeta {
+    fn new(range_id: u64, range: CacheRange, snapshot_ts: u64, sequence_number: u64) -> Self {
+        Self {
+            range_id,
+            range,
+            snapshot_ts,
+            sequence_number,
+        }
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct RegionCacheSnapshot {
-    region_id: u64,
-    snapshot_ts: u64,
-    region_memory_engine: RegionMemoryEngine,
-    engine: RegionCacheMemoryEngine,
+pub struct RangeCacheSnapshot {
+    snapshot_meta: RagneCacheSnapshotMeta,
+    skiplist_engine: SkiplistEngine,
+    engine: RangeCacheMemoryEngine,
 }
 
-impl RegionCacheSnapshot {
-    pub fn new(engine: RegionCacheMemoryEngine, region_id: u64, read_ts: u64) -> Option<Self> {
-        let mut core = engine.core.lock().unwrap();
-        let region_meta = core.region_metas.get_mut(&region_id)?;
-        if !region_meta.can_read {
-            return None;
+impl RangeCacheSnapshot {
+    pub fn new(
+        engine: RangeCacheMemoryEngine,
+        range: CacheRange,
+        read_ts: u64,
+        seq_num: u64,
+    ) -> Option<Self> {
+        let mut core = engine.core.write();
+        if let Some(range_id) = core.range_manager.range_snapshot(&range, read_ts) {
+            return Some(RangeCacheSnapshot {
+                snapshot_meta: RagneCacheSnapshotMeta::new(range_id, range, read_ts, seq_num),
+                skiplist_engine: core.engine.clone(),
+                engine: engine.clone(),
+            });
         }
 
-        if read_ts <= region_meta.safe_ts {
-            // todo(SpadeA): add metrics for it
-            return None;
-        }
-
-        region_meta.snapshot_list.new_snapshot(read_ts);
-
-        Some(RegionCacheSnapshot {
-            region_id,
-            snapshot_ts: read_ts,
-            region_memory_engine: core.engine.get(&region_id).unwrap().clone(),
-            engine: engine.clone(),
-        })
+        None
     }
 }
 
-impl Drop for RegionCacheSnapshot {
+impl Drop for RangeCacheSnapshot {
     fn drop(&mut self) {
-        let mut core = self.engine.core.lock().unwrap();
-        let meta = core.region_metas.get_mut(&self.region_id).unwrap();
-        meta.snapshot_list.remove_snapshot(self.snapshot_ts);
+        let mut core = self.engine.core.write();
+        let ranges_removable = core
+            .range_manager
+            .remove_range_snapshot(&self.snapshot_meta);
+        if !ranges_removable.is_empty() {
+            drop(core);
+            if let Err(e) = self
+                .engine
+                .bg_worker_manager()
+                .schedule_task(BackgroundTask::DeleteRange(ranges_removable))
+            {
+                error!(
+                    "schedule delete range failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+            }
+        }
     }
 }
 
-impl Snapshot for RegionCacheSnapshot {}
+impl Snapshot for RangeCacheSnapshot {}
 
-impl Iterable for RegionCacheSnapshot {
-    type Iterator = RegionCacheIterator;
+impl Iterable for RangeCacheSnapshot {
+    type Iterator = RangeCacheIterator;
 
     fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
-        let iter = self.region_memory_engine.data[cf_to_id(cf)].iter();
-        let prefix_same_as_start = opts.prefix_same_as_start();
+        let iter = self.skiplist_engine.data[cf_to_id(cf)].owned_iter();
+        let prefix_extractor = if opts.prefix_same_as_start() {
+            Some(FixedSuffixSliceTransform::new(8))
+        } else {
+            None
+        };
+
         let (lower_bound, upper_bound) = opts.build_bounds();
         // only support with lower/upper bound set
         if lower_bound.is_none() || upper_bound.is_none() {
             return Err(Error::BoundaryNotSet);
         }
-        Ok(RegionCacheIterator {
-            cf: String::from(cf),
+
+        let (lower_bound, upper_bound) = (lower_bound.unwrap(), upper_bound.unwrap());
+        if lower_bound < self.snapshot_meta.range.start
+            || upper_bound > self.snapshot_meta.range.end
+        {
+            return Err(Error::Other(box_err!(
+                "the bounderies required [{}, {}] exceeds the range of the snapshot [{}, {}]",
+                log_wrappers::Value(&lower_bound),
+                log_wrappers::Value(&upper_bound),
+                log_wrappers::Value(&self.snapshot_meta.range.start),
+                log_wrappers::Value(&self.snapshot_meta.range.end)
+            )));
+        }
+
+        Ok(RangeCacheIterator {
             valid: false,
-            prefix_same_as_start,
             prefix: None,
-            lower_bound: lower_bound.unwrap(),
-            upper_bound: upper_bound.unwrap(),
+            lower_bound,
+            upper_bound,
             iter,
+            sequence_number: self.sequence_number(),
+            saved_user_key: vec![],
+            saved_value: None,
+            direction: Direction::Uninit,
+            prefix_extractor,
         })
     }
 }
 
-impl Peekable for RegionCacheSnapshot {
-    type DbVector = RegionCacheDbVector;
+impl Peekable for RangeCacheSnapshot {
+    type DbVector = RangeCacheDbVector;
 
     fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Self::DbVector>> {
         self.get_value_cf_opt(opts, CF_DEFAULT, key)
@@ -431,29 +797,43 @@ impl Peekable for RegionCacheSnapshot {
         cf: &str,
         key: &[u8],
     ) -> Result<Option<Self::DbVector>> {
-        Ok(self.region_memory_engine.data[cf_to_id(cf)]
-            .get(key)
-            .cloned()
-            .map(|v| RegionCacheDbVector(v)))
+        fail::fail_point!("on_range_cache_get_value");
+        let mut iter = self.skiplist_engine.data[cf_to_id(cf)].owned_iter();
+        let seek_key = encode_seek_key(key, self.sequence_number());
+
+        let guard = &epoch::pin();
+        iter.seek(&seek_key, guard);
+        if !iter.valid() {
+            return Ok(None);
+        }
+
+        match decode_key(iter.key().as_slice()) {
+            InternalKey {
+                user_key,
+                v_type: ValueType::Value,
+                ..
+            } if user_key == key => Ok(Some(RangeCacheDbVector(iter.value().clone_bytes()))),
+            _ => Ok(None),
+        }
     }
 }
 
-impl CfNamesExt for RegionCacheSnapshot {
+impl CfNamesExt for RangeCacheSnapshot {
     fn cf_names(&self) -> Vec<&str> {
         unimplemented!()
     }
 }
 
-impl SnapshotMiscExt for RegionCacheSnapshot {
+impl SnapshotMiscExt for RangeCacheSnapshot {
     fn sequence_number(&self) -> u64 {
-        self.snapshot_ts
+        self.snapshot_meta.sequence_number
     }
 }
 
 #[derive(Debug)]
-pub struct RegionCacheDbVector(Bytes);
+pub struct RangeCacheDbVector(Bytes);
 
-impl Deref for RegionCacheDbVector {
+impl Deref for RangeCacheDbVector {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
@@ -461,9 +841,9 @@ impl Deref for RegionCacheDbVector {
     }
 }
 
-impl DbVector for RegionCacheDbVector {}
+impl DbVector for RangeCacheDbVector {}
 
-impl<'a> PartialEq<&'a [u8]> for RegionCacheDbVector {
+impl<'a> PartialEq<&'a [u8]> for RangeCacheDbVector {
     fn eq(&self, rhs: &&[u8]) -> bool {
         self.0.as_slice() == *rhs
     }
@@ -472,31 +852,45 @@ impl<'a> PartialEq<&'a [u8]> for RegionCacheDbVector {
 #[cfg(test)]
 mod tests {
     use core::ops::Range;
-    use std::{iter::StepBy, sync::Arc};
-
-    use bytes::Bytes;
-    use engine_traits::{
-        IterOptions, Iterable, Iterator, Peekable, ReadOptions, RegionCacheEngine,
+    use std::{
+        iter::{self, StepBy},
+        ops::Deref,
+        sync::Arc,
+        time::Duration,
     };
-    use skiplist_rs::{ByteWiseComparator, Skiplist};
 
-    use super::{cf_to_id, RegionCacheIterator};
-    use crate::RegionCacheMemoryEngine;
+    use bytes::{BufMut, Bytes};
+    use crossbeam::epoch;
+    use engine_traits::{
+        CacheRange, IterOptions, Iterable, Iterator, Peekable, RangeCacheEngine, ReadOptions,
+    };
+    use skiplist_rs::SkipList;
+
+    use super::{cf_to_id, RangeCacheIterator, SkiplistEngine};
+    use crate::{
+        keys::{
+            construct_key, construct_user_key, construct_value, decode_key, encode_key,
+            encode_seek_key, InternalBytes, ValueType,
+        },
+        RangeCacheMemoryEngine,
+    };
 
     #[test]
     fn test_snapshot() {
-        let engine = RegionCacheMemoryEngine::default();
-        engine.new_region(1);
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+        engine.new_range(range.clone());
 
         let verify_snapshot_count = |snapshot_ts, count| {
-            let core = engine.core.lock().unwrap();
+            let core = engine.core.read();
             if count > 0 {
                 assert_eq!(
                     *core
-                        .region_metas
-                        .get(&1)
+                        .range_manager
+                        .ranges()
+                        .get(&range)
                         .unwrap()
-                        .snapshot_list
+                        .range_snapshot_list()
                         .0
                         .get(&snapshot_ts)
                         .unwrap(),
@@ -504,10 +898,11 @@ mod tests {
                 );
             } else {
                 assert!(
-                    core.region_metas
-                        .get(&1)
+                    core.range_manager
+                        .ranges()
+                        .get(&range)
                         .unwrap()
-                        .snapshot_list
+                        .range_snapshot_list()
                         .0
                         .get(&snapshot_ts)
                         .is_none()
@@ -515,143 +910,266 @@ mod tests {
             }
         };
 
-        assert!(engine.snapshot(1, 5).is_none());
+        assert!(engine.snapshot(range.clone(), 5, u64::MAX).is_none());
 
         {
-            let mut core = engine.core.lock().unwrap();
-            core.region_metas.get_mut(&1).unwrap().can_read = true;
+            let mut core = engine.core.write();
+            core.range_manager.set_range_readable(&range, true);
         }
-        let s1 = engine.snapshot(1, 5).unwrap();
+        let s1 = engine.snapshot(range.clone(), 5, u64::MAX).unwrap();
 
         {
-            let mut core = engine.core.lock().unwrap();
-            core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
+            let mut core = engine.core.write();
+            let t_range = CacheRange::new(b"k00".to_vec(), b"k02".to_vec());
+            assert!(!core.range_manager.set_safe_point(&t_range, 5));
+            assert!(core.range_manager.set_safe_point(&range, 5));
         }
-        assert!(engine.snapshot(1, 5).is_none());
-        let s2 = engine.snapshot(1, 10).unwrap();
+        assert!(engine.snapshot(range.clone(), 5, u64::MAX).is_none());
+        let s2 = engine.snapshot(range.clone(), 10, u64::MAX).unwrap();
 
         verify_snapshot_count(5, 1);
         verify_snapshot_count(10, 1);
-        let s3 = engine.snapshot(1, 10).unwrap();
+        let s3 = engine.snapshot(range.clone(), 10, u64::MAX).unwrap();
         verify_snapshot_count(10, 2);
 
         drop(s1);
         verify_snapshot_count(5, 0);
         drop(s2);
         verify_snapshot_count(10, 1);
-        let s4 = engine.snapshot(1, 10).unwrap();
+        let s4 = engine.snapshot(range.clone(), 10, u64::MAX).unwrap();
         verify_snapshot_count(10, 2);
         drop(s4);
         verify_snapshot_count(10, 1);
         drop(s3);
-        verify_snapshot_count(10, 0);
-    }
-
-    fn construct_key(i: i32) -> String {
-        format!("key-{:08}", i)
-    }
-
-    fn construct_value(i: i32) -> String {
-        format!("value-{:08}", i)
-    }
-
-    fn fill_data_in_skiplist(sl: Arc<Skiplist<ByteWiseComparator>>, range: StepBy<Range<i32>>) {
-        for i in range {
-            let key = construct_key(i);
-            let val = construct_value(i);
-            sl.put(Bytes::from(key), Bytes::from(val));
+        {
+            let core = engine.core.write();
+            assert!(
+                core.range_manager
+                    .ranges()
+                    .get(&range)
+                    .unwrap()
+                    .range_snapshot_list()
+                    .is_empty()
+            );
         }
     }
 
-    fn verify_key_value(k: &[u8], v: &[u8], i: i32) {
-        let key = construct_key(i);
-        let val = construct_value(i);
-        assert_eq!(k, key.as_bytes());
+    fn fill_data_in_skiplist(
+        sl: Arc<SkipList<InternalBytes, InternalBytes>>,
+        key_range: StepBy<Range<u64>>,
+        mvcc_range: Range<u64>,
+        mut start_seq: u64,
+    ) {
+        let guard = &epoch::pin();
+        for mvcc in mvcc_range {
+            for i in key_range.clone() {
+                let key = construct_key(i, mvcc);
+                let val = construct_value(i, mvcc);
+                let key = encode_key(&key, start_seq, ValueType::Value);
+                sl.insert(key, InternalBytes::from_vec(val.into_bytes()), guard)
+                    .release(guard);
+            }
+            start_seq += 1;
+        }
+    }
+
+    fn delete_data_in_skiplist(
+        sl: Arc<SkipList<InternalBytes, InternalBytes>>,
+        key_range: StepBy<Range<u64>>,
+        mvcc_range: Range<u64>,
+        mut seq: u64,
+    ) {
+        let guard = &epoch::pin();
+        for i in key_range {
+            for mvcc in mvcc_range.clone() {
+                let key = construct_key(i, mvcc);
+                let key = encode_key(&key, seq, ValueType::Deletion);
+                sl.insert(key, InternalBytes::from_bytes(Bytes::default()), guard)
+                    .release(guard);
+            }
+            seq += 1;
+        }
+    }
+
+    fn construct_mvcc_key(key: &str, mvcc: u64) -> Vec<u8> {
+        let mut k = vec![];
+        k.extend_from_slice(key.as_bytes());
+        k.put_u64(!mvcc);
+        k
+    }
+
+    fn put_key_val(
+        sl: &Arc<SkipList<InternalBytes, InternalBytes>>,
+        key: &str,
+        val: &str,
+        mvcc: u64,
+        seq: u64,
+    ) {
+        let key = construct_mvcc_key(key, mvcc);
+        let key = encode_key(&key, seq, ValueType::Value);
+        let guard = &epoch::pin();
+        sl.insert(
+            key,
+            InternalBytes::from_vec(val.to_owned().into_bytes()),
+            guard,
+        )
+        .release(guard);
+    }
+
+    fn delete_key(
+        sl: &Arc<SkipList<InternalBytes, InternalBytes>>,
+        key: &str,
+        mvcc: u64,
+        seq: u64,
+    ) {
+        let key = construct_mvcc_key(key, mvcc);
+        let key = encode_key(&key, seq, ValueType::Deletion);
+        let guard = &epoch::pin();
+        sl.insert(key, InternalBytes::from_vec(b"".to_vec()), guard)
+            .release(guard);
+    }
+
+    fn verify_key_value(k: &[u8], v: &[u8], i: u64, mvcc: u64) {
+        let key = construct_key(i, mvcc);
+        let val = construct_value(i, mvcc);
+        assert_eq!(k, &key);
         assert_eq!(v, val.as_bytes());
     }
 
-    fn verify_key_values(
-        iter: &mut RegionCacheIterator,
-        step: i32,
-        mut start_idx: i32,
-        end_idx: i32,
+    fn verify_key_not_equal(k: &[u8], i: u64, mvcc: u64) {
+        let key = construct_key(i, mvcc);
+        assert_ne!(k, &key);
+    }
+
+    fn verify_key_values<I: iter::Iterator<Item = u32>, J: iter::Iterator<Item = u32> + Clone>(
+        iter: &mut RangeCacheIterator,
+        key_range: I,
+        mvcc_range: J,
+        foward: bool,
+        ended: bool,
     ) {
-        let forward = step > 0;
-        while iter.valid().unwrap() {
-            let k = iter.key();
-            let val = iter.value();
-            verify_key_value(k, val, start_idx);
-            if forward {
-                iter.next().unwrap();
-            } else {
-                iter.prev().unwrap();
+        for i in key_range {
+            for mvcc in mvcc_range.clone() {
+                let k = iter.key();
+                let val = iter.value();
+                verify_key_value(k, val, i as u64, mvcc as u64);
+                if foward {
+                    iter.next().unwrap();
+                } else {
+                    iter.prev().unwrap();
+                }
             }
-            start_idx += step;
         }
 
-        if forward {
-            assert!(start_idx - step < end_idx);
-        } else {
-            assert!(start_idx - step > end_idx);
+        if ended {
+            assert!(!iter.valid().unwrap());
         }
     }
 
     #[test]
     fn test_get_value() {
-        let engine = RegionCacheMemoryEngine::default();
-        engine.new_region(1);
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(range.clone());
 
         {
-            let mut core = engine.core.lock().unwrap();
-            core.region_metas.get_mut(&1).unwrap().can_read = true;
-            core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
-            let sl = core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone();
-            fill_data_in_skiplist(sl, (1..100).step_by(1));
+            let mut core = engine.core.write();
+            core.range_manager.set_range_readable(&range, true);
+            core.range_manager.set_safe_point(&range, 5);
+            let sl = core.engine.data[cf_to_id("write")].clone();
+            fill_data_in_skiplist(sl.clone(), (1..10).step_by(1), 1..50, 1);
+            // k1 is deleted at seq_num 150 while k49 is deleted at seq num 101
+            delete_data_in_skiplist(sl, (1..10).step_by(1), 1..50, 100);
         }
 
-        let snapshot = engine.snapshot(1, 10).unwrap();
         let opts = ReadOptions::default();
-        for i in 1..100 {
-            let k = construct_key(i);
-            let v = snapshot
-                .get_value_cf_opt(&opts, "write", k.as_bytes())
-                .unwrap()
-                .unwrap();
-            verify_key_value(k.as_bytes(), &v, i);
+        {
+            let snapshot = engine.snapshot(range.clone(), 10, 60).unwrap();
+            for i in 1..10 {
+                for mvcc in 1..50 {
+                    let k = construct_key(i, mvcc);
+                    let v = snapshot
+                        .get_value_cf_opt(&opts, "write", &k)
+                        .unwrap()
+                        .unwrap();
+                    verify_key_value(&k, &v, i, mvcc);
+                }
+                let k = construct_key(i, 50);
+                assert!(
+                    snapshot
+                        .get_value_cf_opt(&opts, "write", &k)
+                        .unwrap()
+                        .is_none()
+                );
+            }
         }
 
-        let k = construct_key(100);
-        assert!(
-            snapshot
-                .get_value_cf_opt(&opts, "write", k.as_bytes())
-                .unwrap()
-                .is_none()
-        );
+        // all deletions
+        {
+            let snapshot = engine.snapshot(range.clone(), 10, u64::MAX).unwrap();
+            for i in 1..10 {
+                for mvcc in 1..50 {
+                    let k = construct_key(i, mvcc);
+                    assert!(
+                        snapshot
+                            .get_value_cf_opt(&opts, "write", &k)
+                            .unwrap()
+                            .is_none()
+                    );
+                }
+            }
+        }
+
+        // some deletions
+        {
+            let snapshot = engine.snapshot(range.clone(), 10, 105).unwrap();
+            for mvcc in 1..50 {
+                for i in 1..7 {
+                    let k = construct_key(i, mvcc);
+                    assert!(
+                        snapshot
+                            .get_value_cf_opt(&opts, "write", &k)
+                            .unwrap()
+                            .is_none()
+                    );
+                }
+                for i in 7..10 {
+                    let k = construct_key(i, mvcc);
+                    let v = snapshot
+                        .get_value_cf_opt(&opts, "write", &k)
+                        .unwrap()
+                        .unwrap();
+                    verify_key_value(&k, &v, i, mvcc);
+                }
+            }
+        }
     }
 
     #[test]
     fn test_iterator_forawrd() {
-        let engine = RegionCacheMemoryEngine::default();
-        engine.new_region(1);
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(range.clone());
         let step: i32 = 2;
 
         {
-            let mut core = engine.core.lock().unwrap();
-            core.region_metas.get_mut(&1).unwrap().can_read = true;
-            core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
-            let sl = core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone();
-            fill_data_in_skiplist(sl, (1..100).step_by(step as usize));
+            let mut core = engine.core.write();
+            core.range_manager.set_range_readable(&range, true);
+            core.range_manager.set_safe_point(&range, 5);
+            let sl = core.engine.data[cf_to_id("write")].clone();
+            fill_data_in_skiplist(sl.clone(), (1..100).step_by(step as usize), 1..10, 1);
+            delete_data_in_skiplist(sl, (1..100).step_by(step as usize), 1..10, 200);
         }
 
         let mut iter_opt = IterOptions::default();
-        let snapshot = engine.snapshot(1, 10).unwrap();
+        let snapshot = engine.snapshot(range.clone(), 10, u64::MAX).unwrap();
         // boundaries are not set
         assert!(snapshot.iterator_opt("lock", iter_opt.clone()).is_err());
 
-        let lower_bound = construct_key(1);
-        let upper_bound = construct_key(100);
-        iter_opt.set_upper_bound(upper_bound.as_bytes(), 0);
-        iter_opt.set_lower_bound(lower_bound.as_bytes(), 0);
+        let lower_bound = construct_user_key(1);
+        let upper_bound = construct_user_key(100);
+        iter_opt.set_upper_bound(&upper_bound, 0);
+        iter_opt.set_lower_bound(&lower_bound, 0);
 
         let mut iter = snapshot.iterator_opt("lock", iter_opt.clone()).unwrap();
         assert!(!iter.seek_to_first().unwrap());
@@ -659,102 +1177,865 @@ mod tests {
         let mut iter = snapshot.iterator_opt("default", iter_opt.clone()).unwrap();
         assert!(!iter.seek_to_first().unwrap());
 
-        let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
-        iter.seek_to_first().unwrap();
-        verify_key_values(&mut iter, step, 1, i32::MAX);
+        // Not restricted by bounds, no deletion (seq_num 150)
+        {
+            let snapshot = engine.snapshot(range.clone(), 100, 150).unwrap();
+            let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+            iter.seek_to_first().unwrap();
+            verify_key_values(
+                &mut iter,
+                (1..100).step_by(step as usize),
+                (1..10).rev(),
+                true,
+                true,
+            );
 
-        // seek key that is in the skiplist
-        let seek_key = construct_key(11);
-        iter.seek(seek_key.as_bytes()).unwrap();
-        verify_key_values(&mut iter, step, 11, i32::MAX);
+            // seek key that is in the skiplist
+            let seek_key = construct_key(11, u64::MAX);
+            iter.seek(&seek_key).unwrap();
+            verify_key_values(
+                &mut iter,
+                (11..100).step_by(step as usize),
+                (1..10).rev(),
+                true,
+                true,
+            );
 
-        // seek key that is not in the skiplist
-        let seek_key = construct_key(12);
-        iter.seek(seek_key.as_bytes()).unwrap();
-        verify_key_values(&mut iter, step, 13, i32::MAX);
+            // seek key that is not in the skiplist
+            let seek_key = construct_key(12, u64::MAX);
+            iter.seek(&seek_key).unwrap();
+            verify_key_values(
+                &mut iter,
+                (13..100).step_by(step as usize),
+                (1..10).rev(),
+                true,
+                true,
+            );
+        }
 
-        // with bounds
-        let lower_bound = construct_key(20);
-        let upper_bound = construct_key(40);
-        iter_opt.set_upper_bound(upper_bound.as_bytes(), 0);
-        iter_opt.set_lower_bound(lower_bound.as_bytes(), 0);
-        let mut iter = snapshot.iterator_opt("write", iter_opt).unwrap();
+        // Not restricted by bounds, some deletions (seq_num 230)
+        {
+            let snapshot = engine.snapshot(range.clone(), 10, 230).unwrap();
+            let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+            iter.seek_to_first().unwrap();
+            verify_key_values(
+                &mut iter,
+                (63..100).step_by(step as usize),
+                (1..10).rev(),
+                true,
+                true,
+            );
 
-        assert!(iter.seek_to_first().unwrap());
-        verify_key_values(&mut iter, step, 21, 40);
+            // sequence can see the deletion
+            {
+                // seek key that is in the skiplist
+                let seek_key = construct_key(21, u64::MAX);
+                assert!(iter.seek(&seek_key).unwrap());
+                verify_key_not_equal(iter.key(), 21, 9);
 
-        // seek a key that is below the lower bound is the same with seek_to_first
-        let seek_key = construct_key(11);
-        assert!(iter.seek(seek_key.as_bytes()).unwrap());
-        verify_key_values(&mut iter, step, 21, 40);
+                // seek key that is not in the skiplist
+                let seek_key = construct_key(22, u64::MAX);
+                assert!(iter.seek(&seek_key).unwrap());
+                verify_key_not_equal(iter.key(), 23, 9);
+            }
 
-        // seek a key that is larger or equal to upper bound won't get any key
-        let seek_key = construct_key(40);
-        assert!(!iter.seek(seek_key.as_bytes()).unwrap());
-        assert!(!iter.valid().unwrap());
+            // sequence cannot see the deletion
+            {
+                // seek key that is in the skiplist
+                let seek_key = construct_key(65, u64::MAX);
+                iter.seek(&seek_key).unwrap();
+                verify_key_value(iter.key(), iter.value(), 65, 9);
 
-        let seek_key = construct_key(22);
-        assert!(iter.seek(seek_key.as_bytes()).unwrap());
-        verify_key_values(&mut iter, step, 23, 40);
+                // seek key that is not in the skiplist
+                let seek_key = construct_key(66, u64::MAX);
+                iter.seek(&seek_key).unwrap();
+                verify_key_value(iter.key(), iter.value(), 67, 9);
+            }
+        }
+
+        // with bounds, no deletion (seq_num 150)
+        let lower_bound = construct_user_key(20);
+        let upper_bound = construct_user_key(40);
+        iter_opt.set_upper_bound(&upper_bound, 0);
+        iter_opt.set_lower_bound(&lower_bound, 0);
+        {
+            let snapshot = engine.snapshot(range.clone(), 10, 150).unwrap();
+            let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+
+            assert!(iter.seek_to_first().unwrap());
+            verify_key_values(
+                &mut iter,
+                (21..40).step_by(step as usize),
+                (1..10).rev(),
+                true,
+                true,
+            );
+
+            // seek a key that is below the lower bound is the same with seek_to_first
+            let seek_key = construct_key(19, u64::MAX);
+            assert!(iter.seek(&seek_key).unwrap());
+            verify_key_values(
+                &mut iter,
+                (21..40).step_by(step as usize),
+                (1..10).rev(),
+                true,
+                true,
+            );
+
+            // seek a key that is larger or equal to upper bound won't get any key
+            let seek_key = construct_key(41, u64::MAX);
+            assert!(!iter.seek(&seek_key).unwrap());
+            assert!(!iter.valid().unwrap());
+
+            let seek_key = construct_key(32, u64::MAX);
+            assert!(iter.seek(&seek_key).unwrap());
+            verify_key_values(
+                &mut iter,
+                (33..40).step_by(step as usize),
+                (1..10).rev(),
+                true,
+                true,
+            );
+        }
+
+        // with bounds, some deletions (seq_num 215)
+        {
+            let snapshot = engine.snapshot(range.clone(), 10, 215).unwrap();
+            let mut iter = snapshot.iterator_opt("write", iter_opt).unwrap();
+
+            // sequence can see the deletion
+            {
+                // seek key that is in the skiplist
+                let seek_key = construct_key(21, u64::MAX);
+                assert!(iter.seek(&seek_key).unwrap());
+                verify_key_not_equal(iter.key(), 21, 9);
+
+                // seek key that is not in the skiplist
+                let seek_key = construct_key(20, u64::MAX);
+                assert!(iter.seek(&seek_key).unwrap());
+                verify_key_not_equal(iter.key(), 21, 9);
+            }
+
+            // sequence cannot see the deletion
+            {
+                // seek key that is in the skiplist
+                let seek_key = construct_key(33, u64::MAX);
+                iter.seek(&seek_key).unwrap();
+                verify_key_value(iter.key(), iter.value(), 33, 9);
+
+                // seek key that is not in the skiplist
+                let seek_key = construct_key(32, u64::MAX);
+                iter.seek(&seek_key).unwrap();
+                verify_key_value(iter.key(), iter.value(), 33, 9);
+            }
+        }
     }
 
     #[test]
     fn test_iterator_backward() {
-        let engine = RegionCacheMemoryEngine::default();
-        engine.new_region(1);
-        let mut step: i32 = 2;
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(range.clone());
+        let step: i32 = 2;
 
         {
-            let mut core = engine.core.lock().unwrap();
-            core.region_metas.get_mut(&1).unwrap().can_read = true;
-            core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
-            let sl = core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone();
-            fill_data_in_skiplist(sl, (1..100).step_by(step as usize));
+            let mut core = engine.core.write();
+            core.range_manager.set_range_readable(&range, true);
+            core.range_manager.set_safe_point(&range, 5);
+            let sl = core.engine.data[cf_to_id("write")].clone();
+            fill_data_in_skiplist(sl.clone(), (1..100).step_by(step as usize), 1..10, 1);
+            delete_data_in_skiplist(sl, (1..100).step_by(step as usize), 1..10, 200);
         }
-        step = -step;
 
         let mut iter_opt = IterOptions::default();
-        let lower_bound = construct_key(1);
-        let upper_bound = construct_key(100);
-        iter_opt.set_upper_bound(upper_bound.as_bytes(), 0);
-        iter_opt.set_lower_bound(lower_bound.as_bytes(), 0);
+        let lower_bound = construct_user_key(1);
+        let upper_bound = construct_user_key(100);
+        iter_opt.set_upper_bound(&upper_bound, 0);
+        iter_opt.set_lower_bound(&lower_bound, 0);
 
-        let snapshot = engine.snapshot(1, 10).unwrap();
+        // Not restricted by bounds, no deletion (seq_num 150)
+        {
+            let snapshot = engine.snapshot(range.clone(), 10, 150).unwrap();
+            let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+            assert!(iter.seek_to_last().unwrap());
+            verify_key_values(
+                &mut iter,
+                (1..100).step_by(step as usize).rev(),
+                1..10,
+                false,
+                true,
+            );
+
+            // seek key that is in the skiplist
+            let seek_key = construct_key(81, 0);
+            assert!(iter.seek_for_prev(&seek_key).unwrap());
+            verify_key_values(
+                &mut iter,
+                (1..82).step_by(step as usize).rev(),
+                1..10,
+                false,
+                true,
+            );
+
+            // seek key that is in the skiplist
+            let seek_key = construct_key(80, 0);
+            assert!(iter.seek_for_prev(&seek_key).unwrap());
+            verify_key_values(
+                &mut iter,
+                (1..80).step_by(step as usize).rev(),
+                1..10,
+                false,
+                true,
+            );
+        }
+
+        let lower_bound = construct_user_key(21);
+        let upper_bound = construct_user_key(39);
+        iter_opt.set_upper_bound(&upper_bound, 0);
+        iter_opt.set_lower_bound(&lower_bound, 0);
+        {
+            let snapshot = engine.snapshot(range.clone(), 10, 150).unwrap();
+            let mut iter = snapshot.iterator_opt("write", iter_opt).unwrap();
+
+            assert!(iter.seek_to_last().unwrap());
+            verify_key_values(
+                &mut iter,
+                (21..38).step_by(step as usize).rev(),
+                1..10,
+                false,
+                true,
+            );
+
+            // seek a key that is above the upper bound is the same with seek_to_last
+            let seek_key = construct_key(40, 0);
+            assert!(iter.seek_for_prev(&seek_key).unwrap());
+            verify_key_values(
+                &mut iter,
+                (21..38).step_by(step as usize).rev(),
+                1..10,
+                false,
+                true,
+            );
+
+            // seek a key that is less than the lower bound won't get any key
+            let seek_key = construct_key(20, u64::MAX);
+            assert!(!iter.seek_for_prev(&seek_key).unwrap());
+            assert!(!iter.valid().unwrap());
+
+            let seek_key = construct_key(26, 0);
+            assert!(iter.seek_for_prev(&seek_key).unwrap());
+            verify_key_values(
+                &mut iter,
+                (21..26).step_by(step as usize).rev(),
+                1..10,
+                false,
+                true,
+            );
+        }
+    }
+
+    #[test]
+    fn test_seq_visibility() {
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(range.clone());
+
+        {
+            let mut core = engine.core.write();
+            core.range_manager.set_range_readable(&range, true);
+            core.range_manager.set_safe_point(&range, 5);
+            let sl = core.engine.data[cf_to_id("write")].clone();
+
+            put_key_val(&sl, "aaa", "va1", 10, 1);
+            put_key_val(&sl, "aaa", "va2", 10, 3);
+            delete_key(&sl, "aaa", 10, 4);
+            put_key_val(&sl, "aaa", "va4", 10, 6);
+
+            put_key_val(&sl, "bbb", "vb1", 10, 2);
+            put_key_val(&sl, "bbb", "vb2", 10, 4);
+
+            put_key_val(&sl, "ccc", "vc1", 10, 2);
+            put_key_val(&sl, "ccc", "vc2", 10, 4);
+            put_key_val(&sl, "ccc", "vc3", 10, 5);
+            delete_key(&sl, "ccc", 10, 6);
+        }
+
+        let mut iter_opt = IterOptions::default();
+        iter_opt.set_upper_bound(&range.end, 0);
+        iter_opt.set_lower_bound(&range.start, 0);
+
+        // seq num 1
+        {
+            let snapshot = engine.snapshot(range.clone(), u64::MAX, 1).unwrap();
+            let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+            iter.seek_to_first().unwrap();
+            assert_eq!(iter.value(), b"va1");
+            assert!(!iter.next().unwrap());
+            let key = construct_mvcc_key("aaa", 10);
+            assert_eq!(
+                snapshot
+                    .get_value_cf("write", &key)
+                    .unwrap()
+                    .unwrap()
+                    .deref(),
+                "va1".as_bytes()
+            );
+            assert!(iter.seek(&key).unwrap());
+            assert_eq!(iter.value(), "va1".as_bytes());
+
+            let key = construct_mvcc_key("bbb", 10);
+            assert!(snapshot.get_value_cf("write", &key).unwrap().is_none());
+            assert!(!iter.seek(&key).unwrap());
+
+            let key = construct_mvcc_key("ccc", 10);
+            assert!(snapshot.get_value_cf("write", &key).unwrap().is_none());
+            assert!(!iter.seek(&key).unwrap());
+        }
+
+        // seq num 2
+        {
+            let snapshot = engine.snapshot(range.clone(), u64::MAX, 2).unwrap();
+            let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+            iter.seek_to_first().unwrap();
+            assert_eq!(iter.value(), b"va1");
+            iter.next().unwrap();
+            assert_eq!(iter.value(), b"vb1");
+            iter.next().unwrap();
+            assert_eq!(iter.value(), b"vc1");
+            assert!(!iter.next().unwrap());
+        }
+
+        // seq num 5
+        {
+            let snapshot = engine.snapshot(range.clone(), u64::MAX, 5).unwrap();
+            let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+            iter.seek_to_first().unwrap();
+            assert_eq!(iter.value(), b"vb2");
+            iter.next().unwrap();
+            assert_eq!(iter.value(), b"vc3");
+            assert!(!iter.next().unwrap());
+        }
+
+        // seq num 6
+        {
+            let snapshot = engine.snapshot(range.clone(), u64::MAX, 6).unwrap();
+            let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+            iter.seek_to_first().unwrap();
+            assert_eq!(iter.value(), b"va4");
+            iter.next().unwrap();
+            assert_eq!(iter.value(), b"vb2");
+            assert!(!iter.next().unwrap());
+
+            let key = construct_mvcc_key("aaa", 10);
+            assert_eq!(
+                snapshot
+                    .get_value_cf("write", &key)
+                    .unwrap()
+                    .unwrap()
+                    .deref(),
+                "va4".as_bytes()
+            );
+            assert!(iter.seek(&key).unwrap());
+            assert_eq!(iter.value(), "va4".as_bytes());
+
+            let key = construct_mvcc_key("bbb", 10);
+            assert_eq!(
+                snapshot
+                    .get_value_cf("write", &key)
+                    .unwrap()
+                    .unwrap()
+                    .deref(),
+                "vb2".as_bytes()
+            );
+            assert!(iter.seek(&key).unwrap());
+            assert_eq!(iter.value(), "vb2".as_bytes());
+
+            let key = construct_mvcc_key("ccc", 10);
+            assert!(snapshot.get_value_cf("write", &key).unwrap().is_none());
+            assert!(!iter.seek(&key).unwrap());
+        }
+    }
+
+    #[test]
+    fn test_seq_visibility_backward() {
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(range.clone());
+
+        {
+            let mut core = engine.core.write();
+            core.range_manager.set_range_readable(&range, true);
+            core.range_manager.set_safe_point(&range, 5);
+            let sl = core.engine.data[cf_to_id("write")].clone();
+
+            put_key_val(&sl, "aaa", "va1", 10, 2);
+            put_key_val(&sl, "aaa", "va2", 10, 4);
+            put_key_val(&sl, "aaa", "va3", 10, 5);
+            delete_key(&sl, "aaa", 10, 6);
+
+            put_key_val(&sl, "bbb", "vb1", 10, 2);
+            put_key_val(&sl, "bbb", "vb2", 10, 4);
+
+            put_key_val(&sl, "ccc", "vc1", 10, 1);
+            put_key_val(&sl, "ccc", "vc2", 10, 3);
+            delete_key(&sl, "ccc", 10, 4);
+            put_key_val(&sl, "ccc", "vc4", 10, 6);
+        }
+
+        let mut iter_opt = IterOptions::default();
+        iter_opt.set_upper_bound(&range.end, 0);
+        iter_opt.set_lower_bound(&range.start, 0);
+
+        // seq num 1
+        {
+            let snapshot = engine.snapshot(range.clone(), u64::MAX, 1).unwrap();
+            let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+            iter.seek_to_last().unwrap();
+            assert_eq!(iter.value(), b"vc1");
+            assert!(!iter.prev().unwrap());
+            let key = construct_mvcc_key("aaa", 10);
+            assert!(!iter.seek_for_prev(&key).unwrap());
+
+            let key = construct_mvcc_key("bbb", 10);
+            assert!(!iter.seek_for_prev(&key).unwrap());
+
+            let key = construct_mvcc_key("ccc", 10);
+            assert!(iter.seek_for_prev(&key).unwrap());
+            assert_eq!(iter.value(), "vc1".as_bytes());
+        }
+
+        // seq num 2
+        {
+            let snapshot = engine.snapshot(range.clone(), u64::MAX, 2).unwrap();
+            let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+            iter.seek_to_last().unwrap();
+            assert_eq!(iter.value(), b"vc1");
+            iter.prev().unwrap();
+            assert_eq!(iter.value(), b"vb1");
+            iter.prev().unwrap();
+            assert_eq!(iter.value(), b"va1");
+            assert!(!iter.prev().unwrap());
+        }
+
+        // seq num 5
+        {
+            let snapshot = engine.snapshot(range.clone(), u64::MAX, 5).unwrap();
+            let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+            iter.seek_to_last().unwrap();
+            assert_eq!(iter.value(), b"vb2");
+            iter.prev().unwrap();
+            assert_eq!(iter.value(), b"va3");
+            assert!(!iter.prev().unwrap());
+        }
+
+        // seq num 6
+        {
+            let snapshot = engine.snapshot(range.clone(), u64::MAX, 6).unwrap();
+            let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+            iter.seek_to_last().unwrap();
+            assert_eq!(iter.value(), b"vc4");
+            iter.prev().unwrap();
+            assert_eq!(iter.value(), b"vb2");
+            assert!(!iter.prev().unwrap());
+
+            let key = construct_mvcc_key("ccc", 10);
+            assert!(iter.seek_for_prev(&key).unwrap());
+            assert_eq!(iter.value(), "vc4".as_bytes());
+
+            let key = construct_mvcc_key("bbb", 10);
+            assert!(iter.seek_for_prev(&key).unwrap());
+            assert_eq!(iter.value(), "vb2".as_bytes());
+
+            let key = construct_mvcc_key("aaa", 10);
+            assert!(!iter.seek_for_prev(&key).unwrap());
+        }
+    }
+
+    #[test]
+    fn test_iter_user_skip() {
+        let mut iter_opt = IterOptions::default();
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        iter_opt.set_upper_bound(&range.end, 0);
+        iter_opt.set_lower_bound(&range.start, 0);
+
+        // backward, all put
+        {
+            let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+            engine.new_range(range.clone());
+            let sl = {
+                let mut core = engine.core.write();
+                core.range_manager.set_range_readable(&range, true);
+                core.range_manager.set_safe_point(&range, 5);
+                core.engine.data[cf_to_id("write")].clone()
+            };
+
+            let mut s = 1;
+            for seq in 2..50 {
+                put_key_val(&sl, "a", "val", 10, s + 1);
+                for i in 2..50 {
+                    let v = construct_value(i, i);
+                    put_key_val(&sl, "b", v.as_str(), 10, s + i);
+                }
+
+                let snapshot = engine.snapshot(range.clone(), 10, s + seq).unwrap();
+                let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+                assert!(iter.seek_to_last().unwrap());
+                let k = construct_mvcc_key("b", 10);
+                let v = construct_value(seq, seq);
+                assert_eq!(iter.key(), &k);
+                assert_eq!(iter.value(), v.as_bytes());
+
+                assert!(iter.prev().unwrap());
+                let k = construct_mvcc_key("a", 10);
+                assert_eq!(iter.key(), &k);
+                assert_eq!(iter.value(), b"val");
+                assert!(!iter.prev().unwrap());
+                assert!(!iter.valid().unwrap());
+                s += 100;
+            }
+        }
+
+        // backward, all deletes
+        {
+            let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+            engine.new_range(range.clone());
+            let sl = {
+                let mut core = engine.core.write();
+                core.range_manager.set_range_readable(&range, true);
+                core.range_manager.set_safe_point(&range, 5);
+                core.engine.data[cf_to_id("write")].clone()
+            };
+
+            let mut s = 1;
+            for seq in 2..50 {
+                put_key_val(&sl, "a", "val", 10, s + 1);
+                for i in 2..50 {
+                    delete_key(&sl, "b", 10, s + i);
+                }
+
+                let snapshot = engine.snapshot(range.clone(), 10, s + seq).unwrap();
+                let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+                assert!(iter.seek_to_last().unwrap());
+                let k = construct_mvcc_key("a", 10);
+                assert_eq!(iter.key(), &k);
+                assert_eq!(iter.value(), b"val");
+                assert!(!iter.prev().unwrap());
+                assert!(!iter.valid().unwrap());
+                s += 100;
+            }
+        }
+
+        // backward, all deletes except for last put, last put's seq
+        {
+            let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+            engine.new_range(range.clone());
+            let sl = {
+                let mut core = engine.core.write();
+                core.range_manager.set_range_readable(&range, true);
+                core.range_manager.set_safe_point(&range, 5);
+                core.engine.data[cf_to_id("write")].clone()
+            };
+            put_key_val(&sl, "a", "val", 10, 1);
+            for i in 2..50 {
+                delete_key(&sl, "b", 10, i);
+            }
+            let v = construct_value(50, 50);
+            put_key_val(&sl, "b", v.as_str(), 10, 50);
+            let snapshot = engine.snapshot(range.clone(), 10, 50).unwrap();
+            let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+            assert!(iter.seek_to_last().unwrap());
+            let k = construct_mvcc_key("b", 10);
+            let v = construct_value(50, 50);
+            assert_eq!(iter.key(), &k);
+            assert_eq!(iter.value(), v.as_bytes());
+
+            assert!(iter.prev().unwrap());
+            let k = construct_mvcc_key("a", 10);
+            assert_eq!(iter.key(), &k);
+            assert_eq!(iter.value(), b"val");
+            assert!(!iter.prev().unwrap());
+            assert!(!iter.valid().unwrap());
+        }
+
+        // all deletes except for last put, deletions' seq
+        {
+            let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+            engine.new_range(range.clone());
+            let sl = {
+                let mut core = engine.core.write();
+                core.range_manager.set_range_readable(&range, true);
+                core.range_manager.set_safe_point(&range, 5);
+                core.engine.data[cf_to_id("write")].clone()
+            };
+            let mut s = 1;
+            for seq in 2..50 {
+                for i in 2..50 {
+                    delete_key(&sl, "b", 10, s + i);
+                }
+                let v = construct_value(50, 50);
+                put_key_val(&sl, "b", v.as_str(), 10, s + 50);
+
+                let snapshot = engine.snapshot(range.clone(), 10, s + seq).unwrap();
+                let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+                assert!(!iter.seek_to_first().unwrap());
+                assert!(!iter.valid().unwrap());
+
+                assert!(!iter.seek_to_last().unwrap());
+                assert!(!iter.valid().unwrap());
+
+                s += 100;
+            }
+        }
+    }
+
+    #[test]
+    fn test_prefix_seek() {
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let range = CacheRange::new(b"k000".to_vec(), b"k100".to_vec());
+        engine.new_range(range.clone());
+
+        {
+            let mut core = engine.core.write();
+            core.range_manager.set_range_readable(&range, true);
+            core.range_manager.set_safe_point(&range, 5);
+            let sl = core.engine.data[cf_to_id("write")].clone();
+
+            let guard = &epoch::pin();
+            for i in 1..5 {
+                for mvcc in 10..20 {
+                    let user_key = construct_key(i, mvcc);
+                    let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                    let v = format!("v{:02}{:02}", i, mvcc);
+                    sl.insert(internal_key, InternalBytes::from_vec(v.into_bytes()), guard)
+                        .release(guard);
+                }
+            }
+        }
+
+        let mut iter_opt = IterOptions::default();
+        let lower_bound = construct_user_key(1);
+        let upper_bound = construct_user_key(5);
+        iter_opt.set_upper_bound(&upper_bound, 0);
+        iter_opt.set_lower_bound(&lower_bound, 0);
+        iter_opt.set_prefix_same_as_start(true);
+        let snapshot = engine.snapshot(range.clone(), u64::MAX, u64::MAX).unwrap();
         let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
-        assert!(iter.seek_to_last().unwrap());
-        verify_key_values(&mut iter, step, 99, i32::MIN);
 
-        // seek key that is in the skiplist
-        let seek_key = construct_key(81);
-        assert!(iter.seek_for_prev(seek_key.as_bytes()).unwrap());
-        verify_key_values(&mut iter, step, 81, i32::MIN);
+        // prefix seek, forward
+        for i in 1..5 {
+            let seek_key = construct_key(i, 100);
+            assert!(iter.seek(&seek_key).unwrap());
+            let mut start = 19;
+            while iter.valid().unwrap() {
+                let user_key = iter.key();
+                let mvcc = !u64::from_be_bytes(user_key[user_key.len() - 8..].try_into().unwrap());
+                assert_eq!(mvcc, start);
+                let v = format!("v{:02}{:02}", i, start);
+                assert_eq!(v.as_bytes(), iter.value());
+                start -= 1;
+                iter.next().unwrap();
+            }
+            assert_eq!(start, 9);
+        }
 
-        // seek key that is in the skiplist
-        let seek_key = construct_key(80);
-        assert!(iter.seek_for_prev(seek_key.as_bytes()).unwrap());
-        verify_key_values(&mut iter, step, 79, i32::MIN);
+        // prefix seek, backward
+        for i in 1..5 {
+            let seek_key = construct_key(i, 0);
+            assert!(iter.seek_for_prev(&seek_key).unwrap());
+            let mut start = 10;
+            while iter.valid().unwrap() {
+                let user_key = iter.key();
+                let mvcc = !u64::from_be_bytes(user_key[user_key.len() - 8..].try_into().unwrap());
+                assert_eq!(mvcc, start);
+                let v = format!("v{:02}{:02}", i, start);
+                assert_eq!(v.as_bytes(), iter.value());
+                start += 1;
+                iter.prev().unwrap();
+            }
+            assert_eq!(start, 20);
+        }
+    }
 
-        let lower_bound = construct_key(20);
-        let upper_bound = construct_key(40);
-        iter_opt.set_upper_bound(upper_bound.as_bytes(), 0);
-        iter_opt.set_lower_bound(lower_bound.as_bytes(), 0);
-        let mut iter = snapshot.iterator_opt("write", iter_opt).unwrap();
+    #[test]
+    fn test_skiplist_engine_evict_range() {
+        let sl_engine = SkiplistEngine::new();
+        sl_engine.data.iter().for_each(|sl| {
+            fill_data_in_skiplist(sl.clone(), (1..60).step_by(1), 1..2, 1);
+        });
 
-        assert!(iter.seek_to_last().unwrap());
-        verify_key_values(&mut iter, step, 39, 20);
+        let evict_range = CacheRange::new(construct_user_key(20), construct_user_key(40));
+        sl_engine.delete_range(&evict_range);
+        sl_engine.data.iter().for_each(|sl| {
+            let mut iter = sl.owned_iter();
+            let guard = &epoch::pin();
+            iter.seek_to_first(guard);
+            for i in 1..20 {
+                let internal_key = decode_key(iter.key().as_slice());
+                let expected_key = construct_key(i, 1);
+                assert_eq!(internal_key.user_key, &expected_key);
+                iter.next(guard);
+            }
 
-        // seek a key that is above the upper bound is the same with seek_to_last
-        let seek_key = construct_key(45);
-        assert!(iter.seek_for_prev(seek_key.as_bytes()).unwrap());
-        verify_key_values(&mut iter, step, 39, 20);
+            for i in 40..60 {
+                let internal_key = decode_key(iter.key().as_slice());
+                let expected_key = construct_key(i, 1);
+                assert_eq!(internal_key.user_key, &expected_key);
+                iter.next(guard);
+            }
+            assert!(!iter.valid());
+        });
+    }
 
-        // seek a key that is less than the lower bound won't get any key
-        let seek_key = construct_key(19);
-        assert!(!iter.seek_for_prev(seek_key.as_bytes()).unwrap());
-        assert!(!iter.valid().unwrap());
+    fn verify_evict_range_deleted(engine: &RangeCacheMemoryEngine, range: &CacheRange) {
+        let mut wait = 0;
+        while wait < 10 {
+            wait += 1;
+            if !engine
+                .core
+                .read()
+                .range_manager()
+                .evicted_ranges()
+                .is_empty()
+            {
+                std::thread::sleep(Duration::from_millis(200));
+            } else {
+                break;
+            }
+        }
+        let write_handle = engine.core.read().engine.cf_handle("write");
+        let start_key = encode_seek_key(&range.start, u64::MAX);
+        let mut iter = write_handle.owned_iter();
 
-        let seek_key = construct_key(38);
-        assert!(iter.seek_for_prev(seek_key.as_bytes()).unwrap());
-        verify_key_values(&mut iter, step, 37, 20);
+        let guard = &epoch::pin();
+        iter.seek(&start_key, guard);
+        let end = encode_seek_key(&range.end, u64::MAX);
+        assert!(iter.key() > &end || !iter.valid());
+    }
+
+    #[test]
+    fn test_evict_range_without_snapshot() {
+        let mut engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
+        let evict_range = CacheRange::new(construct_user_key(10), construct_user_key(20));
+        engine.new_range(range.clone());
+
+        let guard = &epoch::pin();
+        {
+            let mut core = engine.core.write();
+            core.range_manager.set_range_readable(&range, true);
+            core.range_manager.set_safe_point(&range, 5);
+            let sl = core.engine.data[cf_to_id("write")].clone();
+            for i in 0..30 {
+                let user_key = construct_key(i, 10);
+                let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                let v = construct_value(i, 10);
+                sl.insert(
+                    internal_key.clone(),
+                    InternalBytes::from_vec(v.into_bytes()),
+                    guard,
+                )
+                .release(guard);
+            }
+        }
+
+        engine.evict_range(&evict_range);
+        assert!(engine.snapshot(range.clone(), 10, 200).is_none());
+        assert!(engine.snapshot(evict_range.clone(), 10, 200).is_none());
+
+        let r_left = CacheRange::new(construct_user_key(0), construct_user_key(10));
+        let r_right = CacheRange::new(construct_user_key(20), construct_user_key(30));
+        let snap_left = engine.snapshot(r_left, 10, 200).unwrap();
+
+        let mut iter_opt = IterOptions::default();
+        let lower_bound = construct_user_key(0);
+        let upper_bound = construct_user_key(10);
+        iter_opt.set_upper_bound(&upper_bound, 0);
+        iter_opt.set_lower_bound(&lower_bound, 0);
+        let mut iter = snap_left.iterator_opt("write", iter_opt.clone()).unwrap();
+        iter.seek_to_first().unwrap();
+        verify_key_values(&mut iter, (0..10).step_by(1), 10..11, true, true);
+
+        let snap_right = engine.snapshot(r_right, 10, 200).unwrap();
+        let lower_bound = construct_user_key(20);
+        let upper_bound = construct_user_key(30);
+        iter_opt.set_upper_bound(&upper_bound, 0);
+        iter_opt.set_lower_bound(&lower_bound, 0);
+        let mut iter = snap_right.iterator_opt("write", iter_opt).unwrap();
+        iter.seek_to_first().unwrap();
+        verify_key_values(&mut iter, (20..30).step_by(1), 10..11, true, true);
+
+        // verify the key, values are delete
+        verify_evict_range_deleted(&engine, &evict_range);
+    }
+
+    #[test]
+    fn test_evict_range_with_snapshot() {
+        let mut engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
+        let evict_range = CacheRange::new(construct_user_key(10), construct_user_key(20));
+        engine.new_range(range.clone());
+
+        let guard = &epoch::pin();
+        {
+            let mut core = engine.core.write();
+            core.range_manager.set_range_readable(&range, true);
+            core.range_manager.set_safe_point(&range, 5);
+            let sl = core.engine.data[cf_to_id("write")].clone();
+            for i in 0..30 {
+                let user_key = construct_key(i, 10);
+                let internal_key = encode_key(&user_key, 10, ValueType::Value);
+                let v = construct_value(i, 10);
+                sl.insert(
+                    internal_key.clone(),
+                    InternalBytes::from_vec(v.clone().into_bytes()),
+                    guard,
+                )
+                .release(guard);
+            }
+        }
+
+        let s1 = engine.snapshot(range.clone(), 10, 10);
+        let s2 = engine.snapshot(range, 20, 20);
+        engine.evict_range(&evict_range);
+        let range_left = CacheRange::new(construct_user_key(0), construct_user_key(10));
+        let s3 = engine.snapshot(range_left, 20, 20).unwrap();
+        let range_right = CacheRange::new(construct_user_key(20), construct_user_key(30));
+        let s4 = engine.snapshot(range_right, 20, 20).unwrap();
+
+        drop(s3);
+        let range_left_eviction = CacheRange::new(construct_user_key(0), construct_user_key(5));
+        engine.evict_range(&range_left_eviction);
+
+        // todo(SpadeA): memory limiter
+        {
+            // evict_range is not eligible for delete
+            assert!(
+                engine
+                    .core
+                    .read()
+                    .range_manager()
+                    .evicted_ranges()
+                    .contains(&evict_range)
+            );
+        }
+
+        drop(s1);
+        {
+            // evict_range is still not eligible for delete
+            assert!(
+                engine
+                    .core
+                    .read()
+                    .range_manager()
+                    .evicted_ranges()
+                    .contains(&evict_range)
+            );
+        }
+        drop(s2);
+        // Now, all snapshots before evicting `evict_range` are released
+        verify_evict_range_deleted(&engine, &evict_range);
+
+        drop(s4);
+        verify_evict_range_deleted(&engine, &range_left_eviction);
     }
 }
