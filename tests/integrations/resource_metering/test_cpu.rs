@@ -12,6 +12,7 @@ use std::{
 use concurrency_manager::ConcurrencyManager;
 use futures::{executor::block_on, StreamExt};
 use kvproto::kvrpcpb::Context;
+use resource_control::ResourceGroupManager;
 use test_coprocessor::{DagSelect, Insert, ProductTable, Store};
 use tidb_query_datatype::codec::Datum;
 use tikv::{
@@ -95,7 +96,10 @@ pub fn test_reschedule_coprocessor() {
     let mut req = DagSelect::from(&table).build();
     let mut ctx = Context::default();
     ctx.set_resource_group_tag(tag.as_bytes().to_vec());
+    ctx.set_request_source("test".to_owned());
     req.set_context(ctx);
+    fail::cfg("only_check_source_task_name", "return(test)").unwrap();
+    defer!(fail::remove("only_check_source_task_name"));
     assert!(
         !block_on(endpoint.parse_and_handle_unary_request(req, None))
             .consume()
@@ -229,6 +233,7 @@ fn setup_test_suite() -> (TestSuite, Store<RocksEngine>, Endpoint<RocksEngine>) 
         cm,
         test_suite.get_tag_factory(),
         Arc::new(QuotaLimiter::default()),
+        Some(Arc::new(ResourceGroupManager::default())),
     );
     (test_suite, store, endpoint)
 }

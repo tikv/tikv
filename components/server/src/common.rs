@@ -23,13 +23,15 @@ use engine_rocks::{
 };
 use engine_traits::{
     data_cf_offset, CachedTablet, CfOptions, CfOptionsExt, FlowControlFactorsExt, KvEngine,
-    RaftEngine, StatisticsReporter, TabletRegistry, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    RaftEngine, RangeCacheEngine, StatisticsReporter, TabletRegistry, CF_DEFAULT, DATA_CFS,
 };
 use error_code::ErrorCodeExt;
 use file_system::{get_io_rate_limiter, set_io_rate_limiter, BytesFetcher, File, IoBudgetAdjustor};
 use grpcio::Environment;
+use hybrid_engine::HybridEngine;
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
+use region_cache_memory_engine::RangeCacheMemoryEngine;
 use security::SecurityManager;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, TikvConfig},
@@ -404,7 +406,7 @@ impl TikvServerCore {
                             debug!(
                                 "cpu_time_limiter tuned for backend request";
                                 "cpu_util" => ?cpu_util,
-                                "new quota" => ?target_quota);
+                                "new_quota" => ?target_quota);
                             INSTANCE_BACKEND_CPU_QUOTA.set(target_quota as i64);
                         }
                     }
@@ -446,7 +448,7 @@ const RESERVED_OPEN_FDS: u64 = 1000;
 pub fn check_system_config(config: &TikvConfig) {
     info!("beginning system configuration check");
     let mut rocksdb_max_open_files = config.rocksdb.max_open_files;
-    if config.rocksdb.titan.enabled {
+    if let Some(true) = config.rocksdb.titan.enabled {
         // Titan engine maintains yet another pool of blob files and uses the same max
         // number of open files setup as rocksdb does. So we double the max required
         // open files here
@@ -478,8 +480,8 @@ pub fn check_system_config(config: &TikvConfig) {
 
 pub struct EnginesResourceInfo {
     tablet_registry: TabletRegistry<RocksEngine>,
-    // The initial value of max_compactions. For kvdb.defaultcf, kvdb.writecf only.
-    base_max_compactions: [u32; 2],
+    // The initial value of max_compactions.
+    base_max_compactions: [u32; 3],
     raft_engine: Option<RocksEngine>,
     latest_normalized_pending_bytes: AtomicU32,
     normalized_pending_bytes_collector: MovingAvgU32,
@@ -494,8 +496,10 @@ impl EnginesResourceInfo {
         raft_engine: Option<RocksEngine>,
         max_samples_to_preserve: usize,
     ) -> Self {
+        // Match DATA_CFS.
         let base_max_compactions = [
             config.rocksdb.defaultcf.max_compactions.unwrap_or(0),
+            config.rocksdb.lockcf.max_compactions.unwrap_or(0),
             config.rocksdb.writecf.max_compactions.unwrap_or(0),
         ];
         EnginesResourceInfo {
@@ -514,16 +518,33 @@ impl EnginesResourceInfo {
     ) {
         let mut compaction_pending_bytes = [0; DATA_CFS.len()];
         let mut soft_pending_compaction_bytes_limit = [0; DATA_CFS.len()];
+        // level0 file number ratio within [compaction trigger, slowdown trigger].
+        let mut level0_ratio = [0.0f32; DATA_CFS.len()];
 
         let mut fetch_engine_cf = |engine: &RocksEngine, cf: &str| {
             if let Ok(cf_opts) = engine.get_options_cf(cf) {
+                let offset = data_cf_offset(cf);
                 if let Ok(Some(b)) = engine.get_cf_pending_compaction_bytes(cf) {
-                    let offset = data_cf_offset(cf);
                     compaction_pending_bytes[offset] += b;
                     soft_pending_compaction_bytes_limit[offset] = cmp::max(
                         cf_opts.get_soft_pending_compaction_bytes_limit(),
                         soft_pending_compaction_bytes_limit[offset],
                     );
+                }
+                if let Ok(Some(n)) = engine.get_cf_num_files_at_level(cf, 0) {
+                    let level0 = n as f32;
+                    let slowdown_trigger = cf_opts.get_level_zero_slowdown_writes_trigger() as f32;
+                    let compaction_trigger =
+                        cf_opts.get_level_zero_file_num_compaction_trigger() as f32;
+                    let ratio = if slowdown_trigger > compaction_trigger {
+                        (level0 - compaction_trigger) / (slowdown_trigger - compaction_trigger)
+                    } else {
+                        1.0
+                    };
+
+                    if ratio > level0_ratio[offset] {
+                        level0_ratio[offset] = ratio;
+                    }
                 }
             }
         };
@@ -539,8 +560,10 @@ impl EnginesResourceInfo {
             });
 
         for (_, cache) in cached_latest_tablets.iter_mut() {
-            let Some(tablet) = cache.latest() else { continue };
-            for cf in &[CF_DEFAULT, CF_WRITE, CF_LOCK] {
+            let Some(tablet) = cache.latest() else {
+                continue;
+            };
+            for cf in DATA_CFS {
                 fetch_engine_cf(tablet, cf);
             }
         }
@@ -556,29 +579,44 @@ impl EnginesResourceInfo {
                     normalized_pending_bytes,
                     (*pending * EnginesResourceInfo::SCALE_FACTOR / limit) as u32,
                 );
-                // kvdb defaultcf or writecf.
-                if (i == 1 || i == 2 )
-                    && let base = self.base_max_compactions[i-1]
-                    && base > 0
-                {
+                let base = self.base_max_compactions[i];
+                if base > 0 {
                     let level = *pending as f32 / limit as f32;
-                    let delta = if level > 0.7 {
+                    // 50% -> 1, 70% -> 2, 85% -> 3, 95% -> 6, 98% -> 1024.
+                    let delta1 = if level > 0.98 {
+                        1024
+                    } else if level > 0.95 {
+                        cmp::min(SysQuota::cpu_cores_quota() as u32 - 2, 6)
+                    } else if level > 0.85 {
+                        3
+                    } else if level > 0.7 {
                         2
                     } else {
                         u32::from(level > 0.5)
                     };
-                    let cf = if i == 1 {
-                        CF_DEFAULT
+                    // 20% -> 1, 60% -> 2, 80% -> 3, 90% -> 6, 98% -> 1024.
+                    let delta2 = if level0_ratio[i] > 0.98 {
+                        // effectively disable the limiter.
+                        1024
+                    } else if level0_ratio[i] > 0.9 {
+                        cmp::min(SysQuota::cpu_cores_quota() as u32 - 2, 6)
+                    } else if level0_ratio[i] > 0.8 {
+                        3
+                    } else if level0_ratio[i] > 0.6 {
+                        2
                     } else {
-                        CF_WRITE
+                        u32::from(level0_ratio[i] > 0.2)
                     };
+                    let delta = cmp::max(delta1, delta2);
+                    let cf = DATA_CFS[i];
                     if delta != 0 {
                         info!(
                             "adjusting `max-compactions`";
                             "cf" => cf,
                             "n" => base + delta,
                             "pending_bytes" => *pending,
-                            "soft_limit" => limit
+                            "soft_limit" => limit,
+                            "level0_ratio" => level0_ratio[i],
                         );
                     }
                     // We cannot get the current limit from limiter to avoid repeatedly setting the
@@ -661,6 +699,25 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
     }
 }
 
+pub trait KvEngineBuilder: KvEngine {
+    fn build(disk_engine: RocksEngine) -> Self;
+}
+
+impl KvEngineBuilder for RocksEngine {
+    fn build(disk_engine: RocksEngine) -> Self {
+        disk_engine
+    }
+}
+
+impl KvEngineBuilder for HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
+    fn build(disk_engine: RocksEngine) -> Self {
+        // todo(SpadeA): make time configurable
+        let mut memory_engine = RangeCacheMemoryEngine::new(std::time::Duration::from_secs(180));
+        memory_engine.set_disk_engine(disk_engine.clone());
+        HybridEngine::new(disk_engine, memory_engine)
+    }
+}
+
 pub trait ConfiguredRaftEngine: RaftEngine {
     fn build(
         _: &TikvConfig,
@@ -728,7 +785,11 @@ impl ConfiguredRaftEngine for RocksEngine {
     fn register_config(&self, cfg_controller: &mut ConfigController) {
         cfg_controller.register(
             tikv::config::Module::Raftdb,
-            Box::new(DbConfigManger::new(self.clone(), DbType::Raft)),
+            Box::new(DbConfigManger::new(
+                cfg_controller.get_current().rocksdb,
+                self.clone(),
+                DbType::Raft,
+            )),
         );
     }
 }

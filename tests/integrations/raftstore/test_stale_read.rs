@@ -8,7 +8,7 @@ use kvproto::{
     metapb::{Peer, Region},
     tikvpb_grpc::TikvClient,
 };
-use test_raftstore::{new_mutation, new_peer, new_server_cluster, PeerClient};
+use test_raftstore::{must_get_equal, new_mutation, new_peer};
 use test_raftstore_macro::test_case;
 use tikv_util::{config::ReadableDuration, time::Instant};
 
@@ -78,11 +78,13 @@ fn test_stale_read_with_ts0() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_stale_read_resolved_ts_advance() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.cfg.resolved_ts.enable = true;
     cluster.cfg.resolved_ts.advance_ts_interval = ReadableDuration::millis(200);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
 
-    cluster.run();
+    cluster.run_conf_change();
     let cluster = RefCell::new(cluster);
 
     let must_resolved_ts_advance = |region: &Region| {
@@ -112,12 +114,26 @@ fn test_stale_read_resolved_ts_advance() {
             }
         }
     };
+    // Now region 1 only has peer (1, 1);
+    let (key, value) = (b"k1", b"v1");
+
+    cluster.borrow_mut().must_put(key, value);
+    assert_eq!(cluster.borrow_mut().get(key), Some(value.to_vec()));
 
     // Make sure resolved ts advances.
     let region = cluster.borrow().get_region(&[]);
     must_resolved_ts_advance(&region);
 
+    // Add peer (2, 2) to region 1.
+    pd_client.must_add_peer(region.id, new_peer(2, 2));
+    must_get_equal(&cluster.borrow().get_engine(2), key, value);
+
+    // Test conf change.
+    let region = cluster.borrow().get_region(&[]);
+    must_resolved_ts_advance(&region);
+
     // Test transfer leader.
+    let region = cluster.borrow().get_region(&[]);
     cluster
         .borrow_mut()
         .must_transfer_leader(region.get_id(), region.get_peers()[1].clone());
@@ -130,4 +146,42 @@ fn test_stale_read_resolved_ts_advance() {
     let right = cluster.borrow().get_region(split_key);
     must_resolved_ts_advance(&left);
     must_resolved_ts_advance(&right);
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_resolved_ts_after_destroy_peer() {
+    let mut cluster = new_cluster(0, 3);
+    cluster.cfg.resolved_ts.enable = true;
+    cluster.cfg.resolved_ts.advance_ts_interval = ReadableDuration::millis(200);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    // Now region 1 only has peer (1, 1);
+    let (key, value) = (b"k1", b"v1");
+
+    cluster.must_put(key, value);
+    assert_eq!(cluster.get(key), Some(value.to_vec()));
+
+    // Add peer (2, 2) to region 1.
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), key, value);
+
+    // Add peer (3, 3) to region 1.
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), key, value);
+
+    // Transfer leader to peer (2, 2).
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+
+    // Remove peer (1, 1) from region 1.
+    pd_client.must_remove_peer(r1, new_peer(1, 1));
+
+    // Make sure region 1 is removed from store 1.
+    cluster.wait_destroy_and_clean(r1, new_peer(1, 1));
+
+    // Must not get destory peer's read progress
+    let meta = cluster.store_metas[&r1].lock().unwrap();
+    assert_eq!(None, meta.region_read_progress.get_resolved_ts(&r1))
 }

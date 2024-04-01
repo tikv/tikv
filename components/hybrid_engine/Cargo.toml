@@ -1,0 +1,23 @@
+[package]
+name = "hybrid_engine"
+version = "0.0.1"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[features]
+testexport = []
+
+[dependencies]
+engine_traits = { workspace = true }
+txn_types = { workspace = true }
+tikv_util = { workspace = true }
+engine_rocks = { workspace = true }
+region_cache_memory_engine = { workspace = true }
+tempfile = "3.0"
+prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
+prometheus-static-metric = "0.5"
+lazy_static = "1.4.0"
+
+[dev-dependencies]
+tempfile = "3.0"

@@ -19,8 +19,8 @@ use crate::store::BucketRange;
 
 /// A handle for coprocessor to schedule some command back to raftstore.
 pub trait StoreHandle: Clone + Send {
-    fn update_approximate_size(&self, region_id: u64, size: u64);
-    fn update_approximate_keys(&self, region_id: u64, keys: u64);
+    fn update_approximate_size(&self, region_id: u64, size: Option<u64>, splitable: Option<bool>);
+    fn update_approximate_keys(&self, region_id: u64, keys: Option<u64>, splitable: Option<bool>);
     fn ask_split(
         &self,
         region_id: u64,
@@ -48,11 +48,13 @@ pub trait StoreHandle: Clone + Send {
 pub enum SchedTask {
     UpdateApproximateSize {
         region_id: u64,
-        size: u64,
+        splitable: Option<bool>,
+        size: Option<u64>,
     },
     UpdateApproximateKeys {
         region_id: u64,
-        keys: u64,
+        splitable: Option<bool>,
+        keys: Option<u64>,
     },
     AskSplit {
         region_id: u64,
@@ -75,12 +77,20 @@ pub enum SchedTask {
 }
 
 impl StoreHandle for std::sync::mpsc::SyncSender<SchedTask> {
-    fn update_approximate_size(&self, region_id: u64, size: u64) {
-        let _ = self.try_send(SchedTask::UpdateApproximateSize { region_id, size });
+    fn update_approximate_size(&self, region_id: u64, size: Option<u64>, splitable: Option<bool>) {
+        let _ = self.try_send(SchedTask::UpdateApproximateSize {
+            region_id,
+            splitable,
+            size,
+        });
     }
 
-    fn update_approximate_keys(&self, region_id: u64, keys: u64) {
-        let _ = self.try_send(SchedTask::UpdateApproximateKeys { region_id, keys });
+    fn update_approximate_keys(&self, region_id: u64, keys: Option<u64>, splitable: Option<bool>) {
+        let _ = self.try_send(SchedTask::UpdateApproximateKeys {
+            region_id,
+            splitable,
+            keys,
+        });
     }
 
     fn ask_split(
@@ -280,7 +290,11 @@ impl_box_observer_g!(
     WrappedConsistencyCheckObserver
 );
 impl_box_observer!(BoxMessageObserver, MessageObserver, WrappedMessageObserver);
-
+impl_box_observer!(
+    BoxRegionHeartbeatObserver,
+    RegionHeartbeatObserver,
+    WrappedRegionHeartbeatObserver
+);
 /// Registry contains all registered coprocessors.
 #[derive(Clone)]
 pub struct Registry<E>
@@ -299,6 +313,7 @@ where
     pd_task_observers: Vec<Entry<BoxPdTaskObserver>>,
     update_safe_ts_observers: Vec<Entry<BoxUpdateSafeTsObserver>>,
     message_observers: Vec<Entry<BoxMessageObserver>>,
+    region_heartbeat_observers: Vec<Entry<BoxRegionHeartbeatObserver>>,
     // TODO: add endpoint
 }
 
@@ -317,6 +332,7 @@ impl<E: KvEngine> Default for Registry<E> {
             pd_task_observers: Default::default(),
             update_safe_ts_observers: Default::default(),
             message_observers: Default::default(),
+            region_heartbeat_observers: Default::default(),
         }
     }
 }
@@ -388,6 +404,14 @@ impl<E: KvEngine> Registry<E> {
 
     pub fn register_message_observer(&mut self, priority: u32, qo: BoxMessageObserver) {
         push!(priority, qo, self.message_observers);
+    }
+
+    pub fn register_region_heartbeat_observer(
+        &mut self,
+        priority: u32,
+        qo: BoxRegionHeartbeatObserver,
+    ) {
+        push!(priority, qo, self.region_heartbeat_observers);
     }
 }
 
@@ -471,10 +495,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
             BoxSplitCheckObserver::new(KeysCheckObserver::new(ch)),
         );
         registry.register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
-        registry.register_split_check_observer(
-            400,
-            BoxSplitCheckObserver::new(TableCheckObserver::default()),
-        );
+        registry.register_split_check_observer(400, BoxSplitCheckObserver::new(TableCheckObserver));
         registry.register_admin_observer(100, BoxAdminObserver::new(SplitObserver));
         CoprocessorHost { registry, cfg }
     }
@@ -662,6 +683,10 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
+    pub fn pre_transfer_leader(&self, r: &Region, tr: &TransferLeaderRequest) -> Result<()> {
+        try_loop_ob!(r, &self.registry.admin_observers, pre_transfer_leader, tr)
+    }
+
     pub fn post_apply_snapshot(
         &self,
         region: &Region,
@@ -673,6 +698,13 @@ impl<E: KvEngine> CoprocessorHost<E> {
         for observer in &self.registry.apply_snapshot_observers {
             let observer = observer.observer.inner();
             observer.post_apply_snapshot(&mut ctx, peer_id, snap_key, snap);
+        }
+    }
+
+    pub fn cancel_apply_snapshot(&self, region_id: u64, peer_id: u64) {
+        for observer in &self.registry.apply_snapshot_observers {
+            let observer = observer.observer.inner();
+            observer.cancel_apply_snapshot(region_id, peer_id);
         }
     }
 
@@ -751,6 +783,14 @@ impl<E: KvEngine> CoprocessorHost<E> {
             on_region_changed,
             event,
             role
+        );
+    }
+    pub fn on_region_heartbeat(&self, region: &Region, region_stat: &RegionStat) {
+        loop_ob!(
+            region,
+            &self.registry.region_heartbeat_observers,
+            on_region_heartbeat,
+            region_stat
         );
     }
 
@@ -910,6 +950,7 @@ mod tests {
         PrePersist = 24,
         PreWriteApplyState = 25,
         OnRaftMessage = 26,
+        CancelApplySnapshot = 27,
     }
 
     impl Coprocessor for TestCoprocessor {}
@@ -1128,6 +1169,13 @@ mod tests {
             );
             false
         }
+
+        fn cancel_apply_snapshot(&self, _: u64, _: u64) {
+            self.called.fetch_add(
+                ObserverIndex::CancelApplySnapshot as usize,
+                Ordering::SeqCst,
+            );
+        }
     }
 
     impl CmdObserver<PanicEngine> for TestCoprocessor {
@@ -1316,6 +1364,10 @@ mod tests {
         let msg = RaftMessage::default();
         host.on_raft_message(&msg);
         index += ObserverIndex::OnRaftMessage as usize;
+        assert_all!([&ob.called], &[index]);
+
+        host.cancel_apply_snapshot(region.get_id(), 0);
+        index += ObserverIndex::CancelApplySnapshot as usize;
         assert_all!([&ob.called], &[index]);
     }
 

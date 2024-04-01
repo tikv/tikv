@@ -24,7 +24,7 @@ command! {
     /// This should be following a [`Prewrite`](Command::Prewrite) on the given key.
     Cleanup:
         cmd_ty => (),
-        display => "kv::command::cleanup {} @ {} | {:?}", (key, start_ts, ctx),
+        display => { "kv::command::cleanup {} @ {} | {:?}", (key, start_ts, ctx), }
         content => {
             key: Key,
             /// The transaction timestamp.
@@ -32,6 +32,9 @@ command! {
             /// The approximate current ts when cleanup request is invoked, which is used to check the
             /// lock's TTL. 0 means do not check TTL.
             current_ts: TimeStamp,
+        }
+        in_heap => {
+            key,
         }
 }
 
@@ -80,6 +83,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Cleanup {
             new_acquired_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status: vec![],
         })
     }
 }

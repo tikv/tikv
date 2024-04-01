@@ -3,6 +3,7 @@ name = "engine_rocks"
 version = "0.0.1"
 edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [features]
 trace-lifetime = []
@@ -42,7 +43,7 @@ online_config = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = "2"
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft = { workspace = true }
 regex = "1"
 serde = "1.0"
 serde_derive = "1.0"
@@ -52,7 +53,7 @@ slog_derive = "0.2"
 tempfile = "3.0"
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
-time = "0.1"
+time = { workspace = true }
 tracker = { workspace = true }
 txn_types = { workspace = true }
 
@@ -64,3 +65,4 @@ features = ["encryption"]
 [dev-dependencies]
 rand = "0.8"
 toml = "0.5"
+proptest = "1.0.0"

@@ -100,6 +100,14 @@ impl DbOptions for RocksDbOptions {
         Ok(())
     }
 
+    fn get_flush_size(&self) -> Result<u64> {
+        if let Some(m) = self.0.get_write_buffer_manager() {
+            return Ok(m.flush_size() as u64);
+        }
+
+        Err(box_err!("write buffer manager not found"))
+    }
+
     fn set_flush_oldest_first(&mut self, f: bool) -> Result<()> {
         if let Some(m) = self.0.get_write_buffer_manager() {
             m.set_flush_oldest_first(f);
@@ -111,6 +119,10 @@ impl DbOptions for RocksDbOptions {
 
     fn set_titandb_options(&mut self, opts: &Self::TitanDbOptions) {
         self.0.set_titandb_options(opts.as_raw())
+    }
+
+    fn set_track_and_verify_wals_in_manifest(&mut self, v: bool) {
+        self.0.set_track_and_verify_wals_in_manifest(v)
     }
 }
 

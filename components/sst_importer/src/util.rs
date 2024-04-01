@@ -3,8 +3,7 @@
 use std::path::Path;
 
 use encryption::DataKeyManager;
-use engine_traits::EncryptionKeyManager;
-use external_storage_export::ExternalStorage;
+use external_storage::ExternalStorage;
 use file_system::File;
 
 use super::Result;
@@ -37,7 +36,7 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
     // rocksdb is not atomic, thus the file may be deleted but key in key
     // manager is not.
     if let Some(key_manager) = encryption_key_manager {
-        key_manager.delete_file(clone)?;
+        key_manager.delete_file(clone, None)?;
     }
 
     #[cfg(unix)]
@@ -73,32 +72,39 @@ pub fn copy_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
     clone: Q,
     encryption_key_manager: Option<&DataKeyManager>,
 ) -> Result<()> {
-    let path = path.as_ref().to_str().unwrap();
-    let clone = clone.as_ref().to_str().unwrap();
-
-    if Path::new(clone).exists() {
-        file_system::remove_file(clone).map_err(|e| format!("remove {}: {:?}", clone, e))?;
+    let path = path.as_ref();
+    let clone = clone.as_ref();
+    if clone.exists() {
+        file_system::remove_file(clone)
+            .map_err(|e| format!("remove {}: {:?}", clone.display(), e))?;
     }
     // always try to remove the file from key manager because the clean up in
     // rocksdb is not atomic, thus the file may be deleted but key in key
     // manager is not.
     if let Some(key_manager) = encryption_key_manager {
-        key_manager.delete_file(clone)?;
+        key_manager.delete_file(clone.to_str().unwrap(), None)?;
     }
 
-    file_system::copy_and_sync(path, clone)
-        .map_err(|e| format!("copy from {} to {}: {:?}", path, clone, e))?;
+    file_system::copy_and_sync(path, clone).map_err(|e| {
+        format!(
+            "copy from {} to {}: {:?}",
+            path.display(),
+            clone.display(),
+            e
+        )
+    })?;
 
     let mut pmts = file_system::metadata(clone)?.permissions();
     if pmts.readonly() {
+        #[allow(clippy::permissions_set_readonly_false)]
         pmts.set_readonly(false);
         file_system::set_permissions(clone, pmts)?;
     }
 
     // sync clone dir
-    File::open(Path::new(clone).parent().unwrap())?.sync_all()?;
+    File::open(clone.parent().unwrap())?.sync_all()?;
     if let Some(key_manager) = encryption_key_manager {
-        key_manager.link_file(path, clone)?;
+        key_manager.link_file(path.to_str().unwrap(), clone.to_str().unwrap())?;
     }
 
     Ok(())
@@ -121,8 +127,8 @@ mod tests {
         RocksTitanDbOptions,
     };
     use engine_traits::{
-        CfName, CfOptions, DbOptions, EncryptionKeyManager, ImportExt, Peekable, SstWriter,
-        SstWriterBuilder, TitanCfOptions, CF_DEFAULT,
+        CfName, CfOptions, DbOptions, ImportExt, Peekable, SstWriter, SstWriterBuilder,
+        TitanCfOptions, CF_DEFAULT,
     };
     use tempfile::Builder;
     use test_util::encryption::new_test_key_manager;
@@ -211,7 +217,9 @@ mod tests {
         // Since we are not using key_manager in db, simulate the db deleting the file
         // from key_manager.
         if let Some(manager) = key_manager {
-            manager.delete_file(sst_clone.to_str().unwrap()).unwrap();
+            manager
+                .delete_file(sst_clone.to_str().unwrap(), None)
+                .unwrap();
         }
 
         // The second ingestion will copy sst_path to sst_clone.

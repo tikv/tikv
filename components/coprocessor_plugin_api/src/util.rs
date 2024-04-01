@@ -19,10 +19,16 @@ pub type PluginConstructorSignature =
 
 /// Type signature of the exported function with symbol
 /// [`PLUGIN_GET_BUILD_INFO_SYMBOL`].
+// FIXME: Fixing the warning breaks compatibility, maybe we should deprecated it
+// by A new API?
+#[allow(improper_ctypes_definitions)]
 pub type PluginGetBuildInfoSignature = extern "C" fn() -> BuildInfo;
 
 /// Type signature of the exported function with symbol
 /// [`PLUGIN_GET_PLUGIN_INFO_SYMBOL`].
+// FIXME: Fixing the warning breaks compatibility, maybe we should deprecated it
+// by A new API?
+#[allow(improper_ctypes_definitions)]
 pub type PluginGetPluginInfoSignature = extern "C" fn() -> PluginInfo;
 
 /// Automatically collected build information about the plugin that is exposed

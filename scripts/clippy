@@ -48,6 +48,33 @@ CLIPPY_LINTS=(
     -D clippy::disallowed_methods \
     -D rust-2018-idioms \
     -D clippy::assertions_on_result_states \
+    -A clippy::non_canonical_partial_ord_impl \
+    -A clippy::arc_with_non_send_sync \
+)
+
+# TODO: Enables `clippy::needless_return_with_question_mark` after
+# https://github.com/rust-lang/rust-clippy/issues/11982 is fixed.
+CLIPPY_LINTS+=(
+    -A clippy::needless_return_with_question_mark \
+)
+
+# We should be pedantic about writing async code, as it's easy to write
+# suboptimal or even bloat code. See:
+# - https://github.com/rust-lang/rust/issues/69826
+# - https://github.com/rust-lang/rust/issues/69663
+# - https://github.com/rust-lang/rust/issues/71407
+CLIPPY_LINTS+=(
+    -D clippy::redundant_async_block \
+    -D clippy::unused_async \
+    -D clippy::manual_async_fn \
+    -D clippy::large_futures \
+)
+
+# Allow let_underscore_future temporary due to lots of counterexamples in
+# tests.
+# TODO: deny it.
+CLIPPY_LINTS+=(
+    -A clippy::let_underscore_future \
 )
 
 cargo clippy --workspace \

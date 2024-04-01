@@ -34,6 +34,8 @@ impl Checkpointer for RocksEngineCheckpointer {
         titan_out_dir: Option<&Path>,
         log_size_for_flush: u64,
     ) -> Result<()> {
+        #[cfg(any(test, feature = "testexport"))]
+        file_system::delete_dir_if_exist(db_out_dir).unwrap();
         self.0
             .create_at(db_out_dir, titan_out_dir, log_size_for_flush)
             .map_err(|e| r2e(e))
@@ -42,7 +44,7 @@ impl Checkpointer for RocksEngineCheckpointer {
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::{Checkpointable, Checkpointer, Peekable, SyncMutable, ALL_CFS};
+    use engine_traits::{Checkpointable, Checkpointer, MiscExt, Peekable, SyncMutable, ALL_CFS};
     use tempfile::tempdir;
 
     use crate::util::new_engine;
@@ -55,6 +57,14 @@ mod tests {
         engine.put(b"key", b"value").unwrap();
 
         let mut check_pointer = engine.new_checkpointer().unwrap();
+
+        engine.pause_background_work().unwrap();
+        let path2 = dir.path().join("checkpoint");
+        check_pointer
+            .create_at(path2.as_path(), None, 0)
+            .unwrap_err();
+        engine.continue_background_work().unwrap();
+
         let path2 = dir.path().join("checkpoint");
         check_pointer.create_at(path2.as_path(), None, 0).unwrap();
         let engine2 = new_engine(path2.as_path().to_str().unwrap(), ALL_CFS).unwrap();

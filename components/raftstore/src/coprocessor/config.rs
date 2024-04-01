@@ -76,7 +76,11 @@ pub const RAFTSTORE_V2_SPLIT_SIZE: ReadableSize = ReadableSize::gb(10);
 /// Default batch split limit.
 pub const BATCH_SPLIT_LIMIT: u64 = 10;
 
-pub const DEFAULT_BUCKET_SIZE: ReadableSize = ReadableSize::mb(96);
+// A bucket will be split only when its size is larger than 2x of
+// DEFAULT_BUCKET_SIZE So the avg of the actual bucket size is 75MB, which is
+// slightly less than region size We don't use 48MB size because it will enable
+// the automatic bucket under default 96MB region size.
+pub const DEFAULT_BUCKET_SIZE: ReadableSize = ReadableSize::mb(50);
 
 pub const DEFAULT_REGION_BUCKET_MERGE_SIZE_RATIO: f64 = 0.33;
 
@@ -164,7 +168,7 @@ impl Config {
         Ok(())
     }
 
-    pub fn validate(&mut self) -> Result<()> {
+    pub fn validate(&mut self, raft_kv_v2: bool) -> Result<()> {
         if self.region_split_keys.is_none() {
             self.region_split_keys = Some((self.region_split_size().as_mb_f64() * 10000.0) as u64);
         }
@@ -195,11 +199,17 @@ impl Config {
             None => self.region_max_keys = Some(self.region_split_keys() / 2 * 3),
         }
         let res = self.validate_bucket_size();
-        // If it's OK to enable bucket, we will prefer to enable it if useful.
-        if let Ok(()) = res && self.enable_region_bucket.is_none() {
+        // If it's OK to enable bucket, we will prefer to enable it if useful for
+        // raftstore-v2.
+        if let Ok(()) = res
+            && self.enable_region_bucket.is_none()
+            && raft_kv_v2
+        {
             let useful = self.region_split_size() >= self.region_bucket_size * 2;
             self.enable_region_bucket = Some(useful);
-        } else if let Err(e) = res && self.enable_region_bucket() {
+        } else if let Err(e) = res
+            && self.enable_region_bucket()
+        {
             return Err(e);
         }
         Ok(())
@@ -233,39 +243,39 @@ mod tests {
     #[test]
     fn test_config_validate() {
         let mut cfg = Config::default();
-        cfg.validate().unwrap();
+        cfg.validate(false).unwrap();
 
         cfg = Config::default();
         cfg.region_max_size = Some(ReadableSize(10));
         cfg.region_split_size = Some(ReadableSize(20));
-        cfg.validate().unwrap_err();
+        cfg.validate(false).unwrap_err();
 
         cfg = Config::default();
         cfg.region_max_size = None;
         cfg.region_split_size = Some(ReadableSize(20));
-        cfg.validate().unwrap();
+        cfg.validate(false).unwrap();
         assert_eq!(cfg.region_max_size, Some(ReadableSize(30)));
 
         cfg = Config::default();
         cfg.region_max_keys = Some(10);
         cfg.region_split_keys = Some(20);
-        cfg.validate().unwrap_err();
+        cfg.validate(false).unwrap_err();
 
         cfg = Config::default();
         cfg.region_max_keys = None;
         cfg.region_split_keys = Some(20);
-        cfg.validate().unwrap();
+        cfg.validate(false).unwrap();
         assert_eq!(cfg.region_max_keys, Some(30));
 
         cfg = Config::default();
         cfg.enable_region_bucket = Some(false);
         cfg.region_split_size = Some(ReadableSize(20));
         cfg.region_bucket_size = ReadableSize(30);
-        cfg.validate().unwrap();
+        cfg.validate(false).unwrap();
 
         cfg = Config::default();
         cfg.region_split_size = Some(ReadableSize::mb(20));
-        cfg.validate().unwrap();
+        cfg.validate(false).unwrap();
         assert_eq!(cfg.region_split_keys, Some(200000));
     }
 }

@@ -3,14 +3,10 @@ name = "backup"
 version = "0.0.1"
 edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [features]
-default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
-cloud-aws = ["external_storage_export/cloud-aws"]
-cloud-gcp = ["external_storage_export/cloud-gcp"]
-cloud-azure = ["external_storage_export/cloud-azure"]
-cloud-storage-grpc = ["external_storage_export/cloud-storage-grpc"]
-cloud-storage-dylib = ["external_storage_export/cloud-storage-dylib"]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
 test-engine-kv-rocksdb = [
   "tikv/test-engine-kv-rocksdb"
 ]
@@ -45,7 +41,6 @@ engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 error_code = { workspace = true }
 external_storage = { workspace = true }
-external_storage_export = { workspace = true }
 file_system = { workspace = true }
 futures = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
@@ -58,8 +53,9 @@ log_wrappers = { workspace = true }
 online_config = { workspace = true }
 pd_client = { workspace = true }
 prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft = { workspace = true }
 raftstore = { workspace = true }
+resource_control = { workspace = true }
 security = { workspace = true }
 serde = "1.0"
 serde_derive = "1.0"

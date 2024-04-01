@@ -14,10 +14,7 @@ use tikv_util::{
     sys::SysQuota,
 };
 
-use crate::config::{
-    BLOCK_CACHE_RATE, DEFAULT_ROCKSDB_SUB_DIR, DEFAULT_TABLET_SUB_DIR, MIN_BLOCK_CACHE_SHARD_SIZE,
-    RAFTSTORE_V2_BLOCK_CACHE_RATE,
-};
+use crate::config::{DEFAULT_ROCKSDB_SUB_DIR, DEFAULT_TABLET_SUB_DIR, MIN_BLOCK_CACHE_SHARD_SIZE};
 
 pub const DEFAULT_DATA_DIR: &str = "./";
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
@@ -31,8 +28,38 @@ const MAX_SCHED_CONCURRENCY: usize = 2 * 1024 * 1024;
 // here we use 100MB as default value for tolerate 1s latency.
 const DEFAULT_SCHED_PENDING_WRITE_MB: u64 = 100;
 
+// The default memory quota for pending and running storage commands kv_get,
+// kv_prewrite, kv_commit, etc.
+//
+// The memory usage of a tikv::storage::txn::commands::Commands can be broken
+// down into:
+//
+// * The size of key-value pair which is assumed to be 1KB.
+// * The size of Command itself is approximately 448 bytes.
+// * The size of a future that executes Command, about 6184 bytes (see
+//   TxnScheduler::execute).
+//
+// Given the total memory capacity of 256MB, TiKV can support around 35,000
+// concurrently running commands or 182,000 commands waiting to be executed.
+//
+// With the default config on a single-node TiKV cluster, an empirical
+// memory quota usage for TPCC prepare with --threads 500 is about 50MB.
+// 256MB is large enough for most scenarios.
+const DEFAULT_TXN_MEMORY_QUOTA_CAPACITY: ReadableSize = ReadableSize::mb(256);
+
 const DEFAULT_RESERVED_SPACE_GB: u64 = 5;
 const DEFAULT_RESERVED_RAFT_SPACE_GB: u64 = 1;
+
+// In tests, we've observed 1.2M entries in the TxnStatusCache. We
+// conservatively set the limit to 5M entries in total.
+// As TxnStatusCache have 128 slots by default. We round it to 5.12M.
+// This consumes at most around 300MB memory theoretically, but usually it's
+// much less as it's hard to see the capacity being used up.
+const DEFAULT_TXN_STATUS_CACHE_CAPACITY: usize = 40_000 * 128;
+
+// Block cache capacity used when TikvConfig isn't validated. It should only
+// occur in tests.
+const FALLBACK_BLOCK_CACHE_CAPACITY: ReadableSize = ReadableSize::mb(128);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case")]
@@ -75,6 +102,9 @@ pub struct Config {
     pub background_error_recovery_window: ReadableDuration,
     /// Interval to check TTL for all SSTs,
     pub ttl_check_poll_interval: ReadableDuration,
+    #[online_config(skip)]
+    pub txn_status_cache_capacity: usize,
+    pub memory_quota: ReadableSize,
     #[online_config(submodule)]
     pub flow_control: FlowControlConfig,
     #[online_config(submodule)]
@@ -104,10 +134,12 @@ impl Default for Config {
             api_version: 1,
             enable_ttl: false,
             ttl_check_poll_interval: ReadableDuration::hours(12),
+            txn_status_cache_capacity: DEFAULT_TXN_STATUS_CACHE_CAPACITY,
             flow_control: FlowControlConfig::default(),
             block_cache: BlockCacheConfig::default(),
             io_rate_limit: IoRateLimitConfig::default(),
             background_error_recovery_window: ReadableDuration::hours(1),
+            memory_quota: DEFAULT_TXN_MEMORY_QUOTA_CAPACITY,
         }
     }
 }
@@ -172,12 +204,20 @@ impl Config {
         if self.scheduler_worker_pool_size == 0 || self.scheduler_worker_pool_size > max_pool_size {
             return Err(
                 format!(
-                    "storage.scheduler_worker_pool_size should be greater than 0 and less than or equal to {}",
+                    "storage.scheduler-worker-pool-size should be greater than 0 and less than or equal to {}",
                     max_pool_size
                 ).into()
             );
         }
         self.io_rate_limit.validate()?;
+        if self.memory_quota < self.scheduler_pending_write_threshold {
+            warn!(
+                "scheduler.memory-quota {:?} is smaller than scheduler.scheduler-pending-write-threshold, \
+                increase to {:?}",
+                self.memory_quota, self.scheduler_pending_write_threshold,
+            );
+            self.memory_quota = self.scheduler_pending_write_threshold;
+        }
 
         Ok(())
     }
@@ -250,6 +290,8 @@ pub struct BlockCacheConfig {
     #[online_config(skip)]
     pub high_pri_pool_ratio: f64,
     #[online_config(skip)]
+    pub low_pri_pool_ratio: f64,
+    #[online_config(skip)]
     pub memory_allocator: Option<String>,
 }
 
@@ -261,6 +303,7 @@ impl Default for BlockCacheConfig {
             num_shard_bits: 6,
             strict_capacity_limit: false,
             high_pri_pool_ratio: 0.8,
+            low_pri_pool_ratio: 0.2,
             memory_allocator: Some(String::from("nodump")),
         }
     }
@@ -276,26 +319,17 @@ impl BlockCacheConfig {
         }
     }
 
-    pub fn build_shared_cache(&self, engine_type: EngineType) -> Cache {
+    pub fn build_shared_cache(&self) -> Cache {
         if self.shared == Some(false) {
             warn!("storage.block-cache.shared is deprecated, cache is always shared.");
         }
-        let capacity = match self.capacity {
-            None => {
-                let total_mem = SysQuota::memory_limit_in_bytes();
-                if engine_type == EngineType::RaftKv2 {
-                    ((total_mem as f64) * RAFTSTORE_V2_BLOCK_CACHE_RATE) as usize
-                } else {
-                    ((total_mem as f64) * BLOCK_CACHE_RATE) as usize
-                }
-            }
-            Some(c) => c.0 as usize,
-        };
+        let capacity = self.capacity.unwrap_or(FALLBACK_BLOCK_CACHE_CAPACITY).0 as usize;
         let mut cache_opts = LRUCacheOptions::new();
         cache_opts.set_capacity(capacity);
         cache_opts.set_num_shard_bits(self.adjust_shard_bits(capacity) as c_int);
         cache_opts.set_strict_capacity_limit(self.strict_capacity_limit);
         cache_opts.set_high_pri_pool_ratio(self.high_pri_pool_ratio);
+        cache_opts.set_low_pri_pool_ratio(self.low_pri_pool_ratio);
         if let Some(allocator) = self.new_memory_allocator() {
             cache_opts.set_memory_allocator(allocator);
         }

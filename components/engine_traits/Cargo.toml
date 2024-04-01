@@ -3,6 +3,7 @@ name = "engine_traits"
 version = "0.0.1"
 edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [features]
 failpoints = ["fail/failpoints"]
@@ -19,7 +20,8 @@ kvproto = { workspace = true }
 lazy_static = "1.0"
 log_wrappers = { workspace = true }
 protobuf = "2"
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft = { workspace = true }
+encryption = { workspace = true }
 serde = "1.0"
 slog = { workspace = true }
 slog-global = { workspace = true }

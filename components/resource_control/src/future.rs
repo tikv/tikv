@@ -16,7 +16,7 @@ use tokio_timer::Delay;
 
 use crate::{
     resource_group::{ResourceConsumeType, ResourceController},
-    resource_limiter::ResourceLimiter,
+    resource_limiter::{ResourceLimiter, ResourceType},
 };
 
 const MAX_WAIT_DURATION: Duration = Duration::from_secs(10);
@@ -92,18 +92,19 @@ pub struct LimitedFuture<F: Future> {
     #[pin]
     post_delay: OptionalFuture<Compat01As03<Delay>>,
     resource_limiter: Arc<ResourceLimiter>,
-    res: Poll<F::Output>,
+    // if the future is first polled, we need to let it consume a 0 value
+    // to compensate the debt of previously finished tasks.
+    is_first_poll: bool,
 }
 
 impl<F: Future> LimitedFuture<F> {
-    #[allow(dead_code)]
     pub fn new(f: F, resource_limiter: Arc<ResourceLimiter>) -> Self {
         Self {
             f,
             pre_delay: None.into(),
             post_delay: None.into(),
             resource_limiter,
-            res: Poll::Pending,
+            is_first_poll: true,
         }
     }
 }
@@ -113,49 +114,72 @@ impl<F: Future> Future for LimitedFuture<F> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.project();
-        if !this.post_delay.is_done() {
-            assert!(this.pre_delay.is_done());
+        if *this.is_first_poll {
+            debug_assert!(this.pre_delay.finished && this.post_delay.finished);
+            *this.is_first_poll = false;
+            let wait_dur = this
+                .resource_limiter
+                .consume(Duration::ZERO, IoBytes::default(), true)
+                .min(MAX_WAIT_DURATION);
+            if wait_dur > Duration::ZERO {
+                *this.pre_delay = Some(
+                    GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + wait_dur)
+                        .compat(),
+                )
+                .into();
+            }
+        }
+        if !this.post_delay.finished {
+            assert!(this.pre_delay.finished);
             std::mem::swap(&mut *this.pre_delay, &mut *this.post_delay);
         }
-        if !this.pre_delay.is_done() {
+        if !this.pre_delay.finished {
             let res = this.pre_delay.poll(cx);
             if res.is_pending() {
                 return Poll::Pending;
             }
         }
-        if this.res.is_ready() {
-            return std::mem::replace(this.res, Poll::Pending);
-        }
-        let last_io_bytes = match get_thread_io_bytes_stats() {
-            Ok(b) => Some(b),
-            Err(e) => {
-                warn!("load thread io bytes failed"; "err" => e);
-                None
+        // get io stats is very expensive, so we only do so if only io control is
+        // enabled.
+        let mut last_io_bytes = None;
+        if this
+            .resource_limiter
+            .get_limiter(ResourceType::Io)
+            .get_rate_limit()
+            .is_finite()
+        {
+            match get_thread_io_bytes_stats() {
+                Ok(b) => {
+                    last_io_bytes = Some(b);
+                }
+                Err(e) => {
+                    warn!("load thread io bytes failed"; "err" => e);
+                }
             }
-        };
+        }
         let start = Instant::now();
         let res = this.f.poll(cx);
         let dur = start.saturating_elapsed();
         let io_bytes = if let Some(last_io_bytes) = last_io_bytes {
             match get_thread_io_bytes_stats() {
-                Ok(io_bytes) => {
-                    let delta = io_bytes - last_io_bytes;
-                    delta.read + delta.write
-                }
+                Ok(io_bytes) => io_bytes - last_io_bytes,
                 Err(e) => {
                     warn!("load thread io bytes failed"; "err" => e);
-                    0
+                    IoBytes::default()
                 }
             }
         } else {
-            0
+            IoBytes::default()
         };
-        let mut wait_dur = this.resource_limiter.consume(dur, io_bytes);
-        if wait_dur == Duration::ZERO {
+        let mut wait_dur = this
+            .resource_limiter
+            .consume(dur, io_bytes, res.is_pending());
+        if wait_dur == Duration::ZERO || res.is_ready() {
             return res;
         }
         if wait_dur > MAX_WAIT_DURATION {
-            warn!("limiter future wait too long"; "wait" => ?wait_dur, "io" => io_bytes, "cpu" => ?dur);
+            warn!("limiter future wait too long"; "wait" => ?wait_dur, "io_read" => io_bytes.read, "io_write" => io_bytes.write, "cpu" => ?dur);
             wait_dur = MAX_WAIT_DURATION;
         }
         *this.post_delay = Some(
@@ -164,31 +188,24 @@ impl<F: Future> Future for LimitedFuture<F> {
                 .compat(),
         )
         .into();
-        if this.post_delay.poll(cx).is_ready() {
-            return res;
-        }
-        *this.res = res;
+        _ = this.post_delay.poll(cx);
         Poll::Pending
     }
 }
 
 /// `OptionalFuture` is similar to futures::OptionFuture, but provide an extra
-/// `is_done` method.
+/// `finished` flag to determine if the future requires poll.
 #[pin_project]
 struct OptionalFuture<F> {
     #[pin]
     f: Option<F>,
-    done: bool,
+    finished: bool,
 }
 
 impl<F> OptionalFuture<F> {
     fn new(f: Option<F>) -> Self {
-        let done = f.is_none();
-        Self { f, done }
-    }
-
-    fn is_done(&self) -> bool {
-        self.done
+        let finished = f.is_none();
+        Self { f, finished }
     }
 }
 
@@ -205,11 +222,22 @@ impl<F: Future> Future for OptionalFuture<F> {
         let this = self.project();
         match this.f.as_pin_mut() {
             Some(x) => x.poll(cx).map(|r| {
-                *this.done = true;
+                *this.finished = true;
                 Some(r)
             }),
             None => Poll::Ready(None),
         }
+    }
+}
+
+pub async fn with_resource_limiter<F: Future>(
+    f: F,
+    limiter: Option<Arc<ResourceLimiter>>,
+) -> F::Output {
+    if let Some(limiter) = limiter {
+        LimitedFuture::new(f, limiter).await
+    } else {
+        f.await
     }
 }
 
@@ -220,7 +248,7 @@ mod tests {
     use tikv_util::yatp_pool::{DefaultTicker, FuturePool, YatpPoolBuilder};
 
     use super::*;
-    use crate::resource_limiter::GroupStatistics;
+    use crate::resource_limiter::{GroupStatistics, ResourceType::Io};
 
     #[pin_project]
     struct NotifyFuture<F> {
@@ -247,6 +275,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::unused_async)]
     async fn empty() {}
 
     #[test]
@@ -256,7 +285,13 @@ mod tests {
             .name_prefix("test")
             .build_future_pool();
 
-        let resource_limiter = Arc::new(ResourceLimiter::new(f64::INFINITY, 1000.0));
+        let resource_limiter = Arc::new(ResourceLimiter::new(
+            "".into(),
+            f64::INFINITY,
+            1000.0,
+            0,
+            true,
+        ));
 
         fn spawn_and_wait<F>(pool: &FuturePool, f: F, limiter: Arc<ResourceLimiter>)
         where
@@ -275,7 +310,7 @@ mod tests {
         loop {
             i += 1;
             spawn_and_wait(&pool, empty(), resource_limiter.clone());
-            stats = resource_limiter.io_limiter.get_statistics();
+            stats = resource_limiter.get_limit_statistics(Io);
             assert_eq!(stats.total_consumed, i * 150);
             if stats.total_wait_dur_us > 0 {
                 break;
@@ -284,11 +319,11 @@ mod tests {
 
         let start = Instant::now();
         spawn_and_wait(&pool, empty(), resource_limiter.clone());
-        let new_stats = resource_limiter.io_limiter.get_statistics();
+        let new_stats = resource_limiter.get_limit_statistics(Io);
         let delta = new_stats - stats;
         let dur = start.saturating_elapsed();
         assert_eq!(delta.total_consumed, 150);
-        assert_eq!(delta.total_wait_dur_us, 150_000);
+        assert!(delta.total_wait_dur_us >= 140_000 && delta.total_wait_dur_us <= 160_000);
         assert!(dur >= Duration::from_millis(150) && dur <= Duration::from_millis(160));
 
         // fetch io bytes failed, consumed value is 0.
@@ -296,7 +331,10 @@ mod tests {
         {
             fail::cfg("failed_to_get_thread_io_bytes_stats", "1*return").unwrap();
             spawn_and_wait(&pool, empty(), resource_limiter.clone());
-            assert_eq!(resource_limiter.io_limiter.get_statistics(), new_stats);
+            assert_eq!(
+                resource_limiter.get_limit_statistics(Io).total_consumed,
+                new_stats.total_consumed
+            );
             fail::remove("failed_to_get_thread_io_bytes_stats");
         }
     }

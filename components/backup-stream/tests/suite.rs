@@ -2,7 +2,8 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    path::Path,
+    fmt::Display,
+    path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
@@ -20,6 +21,7 @@ use backup_stream::{
     utils, BackupStreamResolver, Endpoint, GetCheckpointResult, RegionCheckpointOperation,
     RegionSet, Service, Task,
 };
+use engine_rocks::RocksEngine;
 use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt};
 use grpcio::{ChannelBuilder, Server, ServerBuilder};
 use kvproto::{
@@ -30,10 +32,10 @@ use kvproto::{
     tikvpb::*,
 };
 use pd_client::PdClient;
-use protobuf::parse_from_bytes;
-use raftstore::router::CdcRaftRouter;
+use raftstore::{router::CdcRaftRouter, RegionInfoAccessor};
 use resolved_ts::LeadershipResolver;
-use tempdir::TempDir;
+use tempfile::TempDir;
+use test_pd_client::TestPdClient;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
 use test_util::retry;
 use tikv::config::BackupStreamConfig;
@@ -42,12 +44,31 @@ use tikv_util::{
         number::NumberEncoder,
         stream_event::{EventIterator, Iterator},
     },
-    info,
+    debug, info,
     worker::LazyWorker,
     HandyRwLock,
 };
 use txn_types::{Key, TimeStamp, WriteRef};
 use walkdir::WalkDir;
+
+#[derive(Debug)]
+pub struct FileSegments {
+    path: PathBuf,
+    segments: Vec<(usize, usize)>,
+}
+
+#[derive(Default, Debug)]
+pub struct LogFiles {
+    default_cf: Vec<FileSegments>,
+    write_cf: Vec<FileSegments>,
+}
+
+pub type TestEndpoint = Endpoint<
+    ErrorStore<SlashEtcStore>,
+    RegionInfoAccessor,
+    engine_test::kv::KvTestEngine,
+    TestPdClient,
+>;
 
 pub fn mutation(k: Vec<u8>, v: Vec<u8>) -> Mutation {
     mutation_op(k, v, Op::Put)
@@ -166,8 +187,8 @@ impl SuiteBuilder {
             env: Arc::new(grpcio::Environment::new(1)),
             cluster,
 
-            temp_files: TempDir::new("temp").unwrap(),
-            flushed_files: TempDir::new("flush").unwrap(),
+            temp_files: TempDir::new().unwrap(),
+            flushed_files: TempDir::new().unwrap(),
             case_name: case,
         };
         for id in 1..=(n as u64) {
@@ -229,7 +250,7 @@ impl<S: MetaStore> MetaStore for ErrorStore<S> {
 pub struct Suite {
     pub endpoints: HashMap<u64, LazyWorker<Task>>,
     pub meta_store: ErrorStore<SlashEtcStore>,
-    pub cluster: Cluster<ServerCluster>,
+    pub cluster: Cluster<RocksEngine, ServerCluster<RocksEngine>>,
     tikv_cli: HashMap<u64, TikvClient>,
     log_backup_cli: HashMap<u64, LogBackupClient>,
     obs: HashMap<u64, BackupStreamObserver>,
@@ -375,6 +396,11 @@ impl Suite {
         MetadataClient::new(self.meta_store.clone(), 0)
     }
 
+    #[allow(dead_code)]
+    pub fn dump_slash_etc(&self) {
+        self.meta_store.inner.blocking_lock().dump();
+    }
+
     pub fn must_split(&mut self, key: &[u8]) {
         let region = self.cluster.get_region(key);
         self.cluster.must_split(&region, key);
@@ -391,7 +417,7 @@ impl Suite {
         ))
         .unwrap();
         let name = name.to_owned();
-        self.wait_with(move |r| block_on(r.get_task_info(&name)).is_ok())
+        self.wait_with_router(move |r| block_on(r.get_task_info(&name)).is_ok())
     }
 
     /// This function tries to calculate the global checkpoint from the flush
@@ -445,7 +471,12 @@ impl Suite {
         for ts in (from..(from + n)).map(|x| x * 2) {
             let ts = ts as u64;
             let key = make_record_key(for_table, ts);
-            let muts = vec![mutation(key.clone(), b"hello, world".to_vec())];
+            let value = if ts % 4 == 0 {
+                b"hello, world".to_vec()
+            } else {
+                [0xdd; 4096].to_vec()
+            };
+            let muts = vec![mutation(key.clone(), value)];
             let enc_key = Key::from_raw(&key).into_encoded();
             let region = self.cluster.get_region_id(&enc_key);
             let start_ts = self.cluster.pd_client.get_tso().await.unwrap();
@@ -502,45 +533,53 @@ impl Suite {
         }
     }
 
-    pub fn load_metadata_for_write_records(
-        &self,
-        path: &Path,
-    ) -> HashMap<String, Vec<(usize, usize)>> {
-        let mut meta_map: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
-        for entry in WalkDir::new(path) {
-            let entry = entry.unwrap();
-            if entry.file_type().is_file()
-                && entry
-                    .file_name()
-                    .to_str()
-                    .map_or(false, |s| s.ends_with(".meta"))
-            {
-                let content = std::fs::read(entry.path()).unwrap();
-                let meta = parse_from_bytes::<Metadata>(content.as_ref()).unwrap();
-                for g in meta.file_groups.into_iter() {
-                    let path = g.path.split('/').last().unwrap();
-                    for f in g.data_files_info.into_iter() {
-                        let file_info = meta_map.get_mut(path);
-                        if let Some(v) = file_info {
-                            v.push((
-                                f.range_offset as usize,
-                                (f.range_offset + f.range_length) as usize,
-                            ));
+    pub fn get_files_to_check(&self, path: &Path) -> std::io::Result<LogFiles> {
+        let mut res = LogFiles::default();
+        for entry in WalkDir::new(path.join("v1/backupmeta")) {
+            let entry = entry?;
+            println!("reading {}", entry.path().display());
+            if entry.file_name().to_str().unwrap().ends_with(".meta") {
+                let content = std::fs::read(entry.path())?;
+                let meta = protobuf::parse_from_bytes::<Metadata>(&content)?;
+                for fg in meta.get_file_groups() {
+                    let mut default_segs = vec![];
+                    let mut write_segs = vec![];
+                    for file in fg.get_data_files_info() {
+                        let v = if file.cf == "default" || file.cf.is_empty() {
+                            Some(&mut default_segs)
+                        } else if file.cf == "write" {
+                            Some(&mut write_segs)
                         } else {
-                            let v = vec![(
-                                f.range_offset as usize,
-                                (f.range_offset + f.range_length) as usize,
-                            )];
-                            meta_map.insert(String::from(path), v);
-                        }
+                            None
+                        };
+                        v.into_iter().for_each(|v| {
+                            v.push((
+                                file.get_range_offset() as usize,
+                                (file.get_range_offset() + file.get_range_length()) as usize,
+                            ))
+                        });
+                    }
+                    let p = path.join(fg.get_path());
+                    if !default_segs.is_empty() {
+                        res.default_cf.push(FileSegments {
+                            path: p.clone(),
+                            segments: default_segs,
+                        })
+                    }
+                    if !write_segs.is_empty() {
+                        res.write_cf.push(FileSegments {
+                            path: p,
+                            segments: write_segs,
+                        })
                     }
                 }
             }
         }
-        meta_map
+        Ok(res)
     }
 
-    pub async fn check_for_write_records<'a>(
+    #[track_caller]
+    pub fn check_for_write_records<'a>(
         &self,
         path: &Path,
         key_set: impl std::iter::Iterator<Item = &'a [u8]>,
@@ -549,41 +588,68 @@ impl Suite {
         let n = remain_keys.len();
         let mut extra_key = 0;
         let mut extra_len = 0;
-        let meta_map = self.load_metadata_for_write_records(path);
-        for entry in WalkDir::new(path) {
-            let entry = entry.unwrap();
-            println!("checking: {:?}", entry);
-            if entry.file_type().is_file()
-                && entry
-                    .file_name()
-                    .to_str()
-                    .map_or(false, |s| s.ends_with(".log"))
-            {
-                let buf = std::fs::read(entry.path()).unwrap();
-                let file_infos = meta_map.get(entry.file_name().to_str().unwrap()).unwrap();
-                for &file_info in file_infos {
-                    let mut decoder = ZstdDecoder::new(Vec::new());
-                    let pbuf: &[u8] = &buf[file_info.0..file_info.1];
-                    decoder.write_all(pbuf).await.unwrap();
-                    decoder.flush().await.unwrap();
-                    decoder.close().await.unwrap();
-                    let content = decoder.into_inner();
+        let files = self.get_files_to_check(path).unwrap_or_default();
+        let mut default_keys = HashSet::new();
+        let content_of = |buf: &[u8], range: (usize, usize)| {
+            let mut decoder = ZstdDecoder::new(Vec::new());
+            let pbuf: &[u8] = &buf[range.0..range.1];
+            run_async_test(async {
+                decoder.write_all(pbuf).await.unwrap();
+                decoder.flush().await.unwrap();
+                decoder.close().await.unwrap();
+            });
+            decoder.into_inner()
+        };
+        for entry in files.write_cf {
+            debug!("checking write: {:?}", entry);
 
-                    let mut iter = EventIterator::new(&content);
-                    loop {
-                        if !iter.valid() {
-                            break;
-                        }
-                        iter.next().unwrap();
-                        if !remain_keys.remove(iter.key()) {
-                            extra_key += 1;
-                            extra_len += iter.key().len() + iter.value().len();
-                        }
+            let buf = std::fs::read(&entry.path).unwrap();
+            for &file_info in entry.segments.iter() {
+                let data = content_of(&buf, file_info);
+                let mut iter = EventIterator::new(&data);
+                loop {
+                    if !iter.valid() {
+                        break;
+                    }
+                    iter.next().unwrap();
+                    if !remain_keys.remove(iter.key()) {
+                        extra_key += 1;
+                        extra_len += iter.key().len() + iter.value().len();
+                    }
 
-                        let value = iter.value();
-                        let wf = WriteRef::parse(value).unwrap();
+                    let value = iter.value();
+                    let wf = WriteRef::parse(value).unwrap();
+                    if wf.short_value.is_none() {
+                        let mut key = Key::from_encoded_slice(iter.key()).truncate_ts().unwrap();
+                        key.append_ts_inplace(wf.start_ts);
+
+                        default_keys.insert(key.into_encoded());
+                    } else {
                         assert_eq!(wf.short_value, Some(b"hello, world" as &[u8]));
                     }
+                }
+            }
+        }
+
+        for entry in files.default_cf {
+            debug!("checking default: {:?}", entry);
+
+            let buf = std::fs::read(&entry.path).unwrap();
+            for &file_info in entry.segments.iter() {
+                let data = content_of(&buf, file_info);
+                let mut iter = EventIterator::new(&data);
+                loop {
+                    if !iter.valid() {
+                        break;
+                    }
+                    iter.next().unwrap();
+                    if !default_keys.remove(iter.key()) {
+                        extra_key += 1;
+                        extra_len += iter.key().len() + iter.value().len();
+                    }
+
+                    let value = iter.value();
+                    assert_eq!(value, &[0xdd; 4096]);
                 }
             }
         }
@@ -597,17 +663,19 @@ impl Suite {
                 extra_len
             )
         }
-        if !remain_keys.is_empty() {
-            panic!(
-                "not all keys are recorded: it remains {:?} (total = {})",
-                remain_keys
-                    .iter()
-                    .take(3)
-                    .map(|v| hex::encode(v))
-                    .collect::<Vec<_>>(),
-                remain_keys.len()
-            );
-        }
+        assert_empty(&remain_keys, "not all keys are recorded");
+        assert_empty(&default_keys, "some keys don't have default entry");
+    }
+}
+
+#[track_caller]
+fn assert_empty(v: &HashSet<impl AsRef<[u8]>>, msg: impl Display) {
+    if !v.is_empty() {
+        panic!(
+            "{msg}: it remains {:?}... (total = {})",
+            v.iter().take(3).map(|v| hex::encode(v)).collect::<Vec<_>>(),
+            v.len()
+        );
     }
 }
 
@@ -762,19 +830,25 @@ impl Suite {
     }
 
     pub fn sync(&self) {
-        self.wait_with(|_| true)
+        self.wait_with_router(|_| true)
     }
 
-    pub fn wait_with(&self, cond: impl FnMut(&Router) -> bool + Send + 'static + Clone) {
+    pub fn wait_with(&self, cond: impl FnMut(&mut TestEndpoint) -> bool + Send + 'static + Clone) {
         self.endpoints
             .iter()
             .map({
                 move |(_, wkr)| {
                     let (tx, rx) = std::sync::mpsc::channel();
+                    let mut cond = cond.clone();
                     wkr.scheduler()
                         .schedule(Task::Sync(
                             Box::new(move || tx.send(()).unwrap()),
-                            Box::new(cond.clone()),
+                            Box::new(move |this| {
+                                let ep = this
+                                    .downcast_mut::<TestEndpoint>()
+                                    .expect("`Sync` with wrong type");
+                                cond(ep)
+                            }),
                         ))
                         .unwrap();
                     rx
@@ -783,32 +857,21 @@ impl Suite {
             .for_each(|rx| rx.recv().unwrap())
     }
 
+    pub fn wait_with_router(&self, mut cond: impl FnMut(&Router) -> bool + Send + 'static + Clone) {
+        self.wait_with(move |ep| cond(&ep.range_router))
+    }
+
     pub fn wait_for_flush(&self) {
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.run(|| {
-            let tx = tx.clone();
-            Task::Sync(
-                Box::new(move || {
-                    tx.send(()).unwrap();
-                }),
-                Box::new(move |r| {
-                    let task_names = block_on(r.select_task(TaskSelector::All.reference()));
-                    for task_name in task_names {
-                        let tsk = block_on(r.get_task_info(&task_name));
-                        if tsk.unwrap().is_flushing() {
-                            return false;
-                        }
-                    }
-                    true
-                }),
-            )
-        });
-        for _ in self.endpoints.iter() {
-            // Receive messages from each store.
-            if rx.recv_timeout(Duration::from_secs(30)).is_err() {
-                panic!("the temp isn't empty after the deadline");
+        self.wait_with_router(move |r| {
+            let task_names = block_on(r.select_task(TaskSelector::All.reference()));
+            for task_name in task_names {
+                let tsk = block_on(r.get_task_info(&task_name));
+                if tsk.unwrap().is_flushing() {
+                    return false;
+                }
             }
-        }
+            true
+        });
     }
 
     pub fn must_shuffle_leader(&mut self, region_id: u64) {

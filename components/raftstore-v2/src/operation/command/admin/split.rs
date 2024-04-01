@@ -35,6 +35,7 @@ use engine_traits::{
 use fail::fail_point;
 use futures::channel::oneshot;
 use kvproto::{
+    kvrpcpb::DiskFullOpt,
     metapb::{self, Region, RegionEpoch},
     pdpb::CheckPolicy,
     raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, SplitRequest},
@@ -55,7 +56,7 @@ use raftstore::{
     Result,
 };
 use slog::{error, info, warn};
-use tikv_util::{log::SlogFormat, slog_panic, time::Instant};
+use tikv_util::{box_err, log::SlogFormat, slog_panic, time::Instant};
 
 use crate::{
     batch::StoreContext,
@@ -75,6 +76,9 @@ pub struct SplitResult {
     // The index of the derived region in `regions`
     pub derived_index: usize,
     pub tablet_index: u64,
+    // new regions will share the region size if it's true.
+    // otherwise, the new region's size will be 0.
+    pub share_source_region_size: bool,
     // Hack: in common case we should use generic, but split is an infrequent
     // event that performance is not critical. And using `Any` can avoid polluting
     // all existing code.
@@ -92,8 +96,8 @@ pub struct SplitInit {
 
     /// In-memory pessimistic locks that should be inherited from parent region
     pub locks: PeerPessimisticLocks,
-    approximate_size: Option<u64>,
-    approximate_keys: Option<u64>,
+    pub approximate_size: Option<u64>,
+    pub approximate_keys: Option<u64>,
 }
 
 impl SplitInit {
@@ -148,6 +152,9 @@ pub struct RequestSplit {
     pub epoch: RegionEpoch,
     pub split_keys: Vec<Vec<u8>>,
     pub source: Cow<'static, str>,
+    // new regions will share the region size if it's true.
+    // otherwise, the new region's size will be 0.
+    pub share_source_region_size: bool,
 }
 
 #[derive(Debug)]
@@ -235,6 +242,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         {
             return true;
         }
+        fail_point!("on_split_region_check_tick", |_| true);
         if ctx.schedulers.split_check.is_busy() {
             return false;
         }
@@ -280,10 +288,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.add_pending_tick(PeerTick::SplitRegionCheck);
     }
 
-    pub fn update_split_flow_control(&mut self, metrics: &ApplyMetrics) {
+    pub fn update_split_flow_control(&mut self, metrics: &ApplyMetrics, threshold: i64) {
         let control = self.split_flow_control_mut();
         control.size_diff_hint += metrics.size_diff_hint;
-        if self.is_leader() {
+        let size_diff_hint = control.size_diff_hint;
+        if self.is_leader() && size_diff_hint >= threshold {
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
     }
@@ -315,6 +324,23 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             )));
             return;
         }
+        if self.storage().has_dirty_data() {
+            // If we split dirty tablet, the same trim compaction will be repeated
+            // exponentially more times.
+            info!(self.logger, "tablet still dirty, skip split.");
+            ch.set_result(cmd_resp::new_error(Error::Other(box_err!(
+                "tablet is dirty"
+            ))));
+            return;
+        }
+        // Check whether the admin request can be proposed when disk full.
+        if let Err(e) =
+            self.check_proposal_with_disk_full_opt(ctx, DiskFullOpt::AllowedOnAlmostFull)
+        {
+            info!(self.logger, "disk is full, skip split"; "err" => ?e);
+            ch.set_result(cmd_resp::new_error(e));
+            return;
+        }
         if let Err(e) = util::validate_split_region(
             self.region_id(),
             self.peer_id(),
@@ -326,7 +352,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.set_result(cmd_resp::new_error(e));
             return;
         }
-        self.ask_batch_split_pd(ctx, rs.split_keys, ch);
+        self.ask_batch_split_pd(ctx, rs.split_keys, rs.share_source_region_size, ch);
     }
 
     pub fn on_request_half_split<T>(
@@ -348,6 +374,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             info!(self.logger, "not leader, skip.");
             return;
         }
+        // Check whether the admin request can be proposed when disk full.
+        if let Err(e) =
+            self.check_proposal_with_disk_full_opt(ctx, DiskFullOpt::AllowedOnAlmostFull)
+        {
+            info!(self.logger, "disk is full, skip half split"; "err" => ?e);
+            return;
+        }
 
         let region = self.region();
         if util::is_epoch_stale(&rhs.epoch, region.get_region_epoch()) {
@@ -356,6 +389,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "receive a stale halfsplit message";
                 "is_key_range" => is_key_range,
             );
+            return;
+        }
+
+        if self.storage().has_dirty_data() {
+            info!(self.logger, "tablet still dirty, skip half split.");
             return;
         }
 
@@ -464,6 +502,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         let derived_req = &[derived_req];
 
         let right_derive = split_reqs.get_right_derive();
+        let share_source_region_size = split_reqs.get_share_source_region_size();
         let reqs = if right_derive {
             split_reqs.get_requests().iter().chain(derived_req)
         } else {
@@ -600,6 +639,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 derived_index,
                 tablet_index: log_index,
                 tablet: Box::new(tablet),
+                share_source_region_size,
             }),
         ))
     }
@@ -650,6 +690,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         fail_point!("on_split", self.peer().get_store_id() == 3, |_| {});
 
         let derived = &res.regions[res.derived_index];
+        let share_source_region_size = res.share_source_region_size;
         let region_id = derived.get_id();
 
         let region_locks = self.txn_context().split(&res.regions, derived);
@@ -680,8 +721,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let new_region_count = res.regions.len() as u64;
         let control = self.split_flow_control_mut();
-        let estimated_size = control.approximate_size.map(|v| v / new_region_count);
-        let estimated_keys = control.approximate_keys.map(|v| v / new_region_count);
+        // if share_source_region_size is true, it means the new region contains any
+        // data from the origin region.
+        let mut share_size = None;
+        let mut share_keys = None;
+        if share_source_region_size {
+            share_size = control.approximate_size.map(|v| v / new_region_count);
+            share_keys = control.approximate_keys.map(|v| v / new_region_count);
+        }
 
         self.post_split();
 
@@ -699,8 +746,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             // After split, the peer may need to update its metrics.
             let control = self.split_flow_control_mut();
             control.may_skip_split_check = false;
-            control.approximate_size = estimated_size;
-            control.approximate_keys = estimated_keys;
+            if share_source_region_size {
+                control.approximate_size = share_size;
+                control.approximate_keys = share_keys;
+            }
+
             self.add_pending_tick(PeerTick::SplitRegionCheck);
         }
         self.storage_mut().set_has_dirty_data(true);
@@ -745,8 +795,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 derived_region_id: region_id,
                 check_split: last_region_id == new_region_id,
                 scheduled: false,
-                approximate_size: estimated_size,
-                approximate_keys: estimated_keys,
+                approximate_size: share_size,
+                approximate_keys: share_keys,
                 locks,
             }));
 
@@ -773,6 +823,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 _ => unreachable!(),
             }
         }
+        info!(
+            self.logger,
+            "on_apply_res_split";
+            "new_ids" => ?new_ids,
+        );
         self.split_trace_mut().push((res.tablet_index, new_ids));
         let region_state = self.storage().region_state().clone();
         self.state_changes_mut()
@@ -893,7 +948,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let mut found = false;
         for (_, ids) in self.split_trace_mut() {
             if ids.remove(&region_id) {
+                let ids_len = ids.len();
                 found = true;
+                info!(
+                    self.logger,
+                    "region init finished after split";
+                    "split_region_id" => region_id,
+                    "remaining_region_count" => ids_len,
+                );
                 break;
             }
         }
@@ -1052,7 +1114,9 @@ mod test {
             }
         }
 
-        let AdminCmdResult::SplitRegion(SplitResult { tablet, .. }) = apply_res else { panic!() };
+        let AdminCmdResult::SplitRegion(SplitResult { tablet, .. }) = apply_res else {
+            panic!()
+        };
         // update cache
         let mut cache = apply.tablet_registry().get(parent_id).unwrap();
         cache.set(*tablet.downcast().unwrap());

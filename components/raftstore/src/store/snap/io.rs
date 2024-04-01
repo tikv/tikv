@@ -8,18 +8,17 @@ use std::{
     usize,
 };
 
-use encryption::{
-    from_engine_encryption_method, DataKeyManager, DecrypterReader, EncrypterWriter, Iv,
-};
+use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter, Iv};
 use engine_traits::{
-    CfName, EncryptionKeyManager, Error as EngineError, Iterable, KvEngine, Mutable,
-    SstCompressionType, SstWriter, SstWriterBuilder, WriteBatch,
+    CfName, Error as EngineError, Iterable, KvEngine, Mutable, SstCompressionType, SstReader,
+    SstWriter, SstWriterBuilder, WriteBatch,
 };
+use fail::fail_point;
 use kvproto::encryptionpb::EncryptionMethod;
 use tikv_util::{
     box_try,
     codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder},
-    debug, info,
+    debug, error, info,
     time::{Instant, Limiter},
 };
 
@@ -60,7 +59,7 @@ where
 
     if let Some(key_mgr) = key_mgr {
         let enc_info = box_try!(key_mgr.new_file(path));
-        let mthd = from_engine_encryption_method(enc_info.method);
+        let mthd = enc_info.method;
         if mthd != EncryptionMethod::Plaintext {
             let writer = box_try!(EncrypterWriter::new(
                 file.take().unwrap(),
@@ -116,6 +115,7 @@ pub fn build_sst_cf_file_list<E>(
     end_key: &[u8],
     raw_size_per_file: u64,
     io_limiter: &Limiter,
+    key_mgr: Option<Arc<DataKeyManager>>,
 ) -> Result<BuildStatistics, Error>
 where
     E: KvEngine,
@@ -132,6 +132,48 @@ where
         .to_string();
     let sst_writer = RefCell::new(create_sst_file_writer::<E>(engine, cf, &path)?);
     let mut file_length: usize = 0;
+
+    let finish_sst_writer = |sst_writer: E::SstWriter,
+                             path: String,
+                             key_mgr: Option<Arc<DataKeyManager>>|
+     -> Result<(), Error> {
+        sst_writer.finish()?;
+        (|| {
+            fail_point!("inject_sst_file_corruption", |_| {
+                static CALLED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if CALLED
+                    .compare_exchange(
+                        false,
+                        true,
+                        std::sync::atomic::Ordering::SeqCst,
+                        std::sync::atomic::Ordering::SeqCst,
+                    )
+                    .is_err()
+                {
+                    return;
+                }
+                // overwrite the file to break checksum
+                let mut f = OpenOptions::new().write(true).open(&path).unwrap();
+                f.write_all(b"x").unwrap();
+            });
+        })();
+
+        let sst_reader = E::SstReader::open(&path, key_mgr)?;
+        if let Err(e) = sst_reader.verify_checksum() {
+            // use sst reader to verify block checksum, it would detect corrupted SST due to
+            // memory bit-flip
+            fs::remove_file(&path)?;
+            error!(
+                "failed to pass block checksum verification";
+                "file" => path,
+                "err" => ?e,
+            );
+            return Err(io::Error::new(io::ErrorKind::InvalidData, e).into());
+        }
+        File::open(&path).and_then(|f| f.sync_all())?;
+        Ok(())
+    };
 
     let instant = Instant::now();
     box_try!(snap.scan(cf, start_key, end_key, false, |key, value| {
@@ -151,8 +193,7 @@ where
             match result {
                 Ok(new_sst_writer) => {
                     let old_writer = sst_writer.replace(new_sst_writer);
-                    box_try!(old_writer.finish());
-                    box_try!(File::open(prev_path).and_then(|f| f.sync_all()));
+                    box_try!(finish_sst_writer(old_writer, prev_path, key_mgr.clone()));
                 }
                 Err(e) => {
                     let io_error = io::Error::new(io::ErrorKind::Other, e);
@@ -178,9 +219,8 @@ where
         Ok(true)
     }));
     if stats.key_count > 0 {
+        box_try!(finish_sst_writer(sst_writer.into_inner(), path, key_mgr));
         cf_file.add_file(file_id);
-        box_try!(sst_writer.into_inner().finish());
-        box_try!(File::open(path).and_then(|f| f.sync_all()));
         info!(
             "build_sst_cf_file_list builds {} files in cf {}. Total keys {}, total size {}. raw_size_per_file {}, total takes {:?}",
             file_id + 1,
@@ -287,7 +327,7 @@ pub fn get_decrypter_reader(
     encryption_key_manager: &DataKeyManager,
 ) -> Result<Box<dyn Read + Send>, Error> {
     let enc_info = box_try!(encryption_key_manager.get_file(file));
-    let mthd = from_engine_encryption_method(enc_info.method);
+    let mthd = enc_info.method;
     debug!(
         "get_decrypter_reader gets enc_info for {:?}, method: {:?}",
         file, mthd
@@ -327,7 +367,7 @@ mod tests {
         for db_creater in db_creaters {
             let (_enc_dir, enc_opts) =
                 gen_db_options_with_encryption("test_cf_build_and_apply_plain_files_enc");
-            for db_opt in vec![None, Some(enc_opts)] {
+            for db_opt in [None, Some(enc_opts)] {
                 let dir = Builder::new().prefix("test-snap-cf-db").tempdir().unwrap();
                 let db: KvTestEngine = db_creater(dir.path(), db_opt.clone(), None).unwrap();
                 // Collect keys via the key_callback into a collection.
@@ -338,7 +378,7 @@ mod tests {
                     .unwrap();
                 let db1: KvTestEngine = open_test_empty_db(dir1.path(), db_opt, None).unwrap();
 
-                let snap = db.snapshot();
+                let snap = db.snapshot(None);
                 for cf in SNAPSHOT_CFS {
                     let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
                     let mut cf_file = CfFile {
@@ -408,7 +448,7 @@ mod tests {
             for db_creater in db_creaters {
                 let (_enc_dir, enc_opts) =
                     gen_db_options_with_encryption("test_cf_build_and_apply_sst_files_enc");
-                for db_opt in vec![None, Some(enc_opts)] {
+                for db_opt in [None, Some(enc_opts)] {
                     let dir = Builder::new().prefix("test-snap-cf-db").tempdir().unwrap();
                     let db = db_creater(dir.path(), db_opt.clone(), None).unwrap();
                     let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
@@ -422,11 +462,12 @@ mod tests {
                     let stats = build_sst_cf_file_list::<KvTestEngine>(
                         &mut cf_file,
                         &db,
-                        &db.snapshot(),
+                        &db.snapshot(None),
                         &keys::data_key(b"a"),
                         &keys::data_key(b"z"),
                         *max_file_size,
                         &limiter,
+                        db_opt.as_ref().and_then(|opt| opt.get_key_manager()),
                     )
                     .unwrap();
                     if stats.key_count == 0 {

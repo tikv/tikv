@@ -4,11 +4,9 @@
 
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::{
-    metapb,
     raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse},
-    raft_serverpb::PeerState,
+    raft_serverpb::{PeerState, RegionLocalState},
 };
-use protobuf::Message;
 use raftstore::{
     coprocessor::RegionChangeReason,
     store::{fsm::new_admin_request, metrics::PEER_ADMIN_CMD_COUNTER, LocksStatus, Transport},
@@ -23,12 +21,13 @@ use crate::{
     fsm::ApplyResReporter,
     operation::AdminCmdResult,
     raft::{Apply, Peer},
+    router::CmdResChannel,
 };
 
 #[derive(Debug)]
 pub struct RollbackMergeResult {
     commit: u64,
-    region: metapb::Region,
+    region_state: RegionLocalState,
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -38,25 +37,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         index: u64,
     ) {
-        if self
-            .merge_context()
-            .map_or(true, |c| c.prepare_merge_index() != Some(index))
-        {
+        fail::fail_point!("on_reject_commit_merge_1", store_ctx.store_id == 1, |_| {});
+        let self_index = self.merge_context().and_then(|c| c.prepare_merge_index());
+        if self_index != Some(index) {
+            info!(
+                self.logger,
+                "ignore RejectCommitMerge due to index not match";
+                "index" => index,
+                "self_index" => ?self_index,
+            );
             return;
         }
-        self.propose_rollback_merge(store_ctx, index);
-    }
-
-    pub fn propose_rollback_merge<T: Transport>(
-        &mut self,
-        store_ctx: &mut StoreContext<EK, ER, T>,
-        index: u64,
-    ) {
-        info!(
-            self.logger,
-            "rollback prepare merge";
-            "index" => index,
-        );
         let mut request = new_admin_request(self.region_id(), self.peer().clone());
         request
             .mut_header()
@@ -65,8 +56,16 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         admin.set_cmd_type(AdminCmdType::RollbackMerge);
         admin.mut_rollback_merge().set_commit(index);
         request.set_admin_request(admin);
-        if let Err(e) = self.propose(store_ctx, request.write_to_bytes().unwrap()) {
-            error!(self.logger, "failed to propose RollbackMerge"; "err" => ?e);
+        let (ch, res) = CmdResChannel::pair();
+        self.on_admin_command(store_ctx, request, ch);
+        if let Some(res) = res.take_result()
+            && res.get_header().has_error()
+        {
+            error!(
+                self.logger,
+                "failed to propose rollback merge";
+                "res" => ?res,
+            );
         }
     }
 }
@@ -76,8 +75,9 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
     pub fn apply_rollback_merge(
         &mut self,
         req: &AdminRequest,
-        _index: u64,
+        index: u64,
     ) -> Result<(AdminResponse, AdminCmdResult)> {
+        fail::fail_point!("apply_rollback_merge");
         PEER_ADMIN_CMD_COUNTER.rollback_merge.all.inc();
         if self.region_state().get_state() != PeerState::Merging {
             slog_panic!(
@@ -95,6 +95,15 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 "state" => ?merge_state,
             );
         }
+
+        let prepare_merge_commit = rollback.commit;
+        info!(
+            self.logger,
+            "execute RollbackMerge";
+            "commit" => prepare_merge_commit,
+            "index" => index,
+        );
+
         let mut region = self.region().clone();
         let version = region.get_region_epoch().get_version();
         // Update version to avoid duplicated rollback requests.
@@ -108,7 +117,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             AdminResponse::default(),
             AdminCmdResult::RollbackMerge(RollbackMergeResult {
                 commit: rollback.get_commit(),
-                region,
+                region_state: self.region_state().clone(),
             }),
         ))
     }
@@ -121,6 +130,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         res: RollbackMergeResult,
     ) {
+        let region = res.region_state.get_region();
         assert_ne!(res.commit, 0);
         let current = self.merge_context().and_then(|c| c.prepare_merge_index());
         if current != Some(res.commit) {
@@ -133,21 +143,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();
-            meta.set_region(&res.region, true, &self.logger);
-            let (reader, _) = meta.readers.get_mut(&res.region.get_id()).unwrap();
+            meta.set_region(region, true, &self.logger);
+            let (reader, _) = meta.readers.get_mut(&region.get_id()).unwrap();
             self.set_region(
                 &store_ctx.coprocessor_host,
                 reader,
-                res.region.clone(),
+                region.clone(),
                 RegionChangeReason::RollbackMerge,
                 self.storage().region_state().get_tablet_index(),
             );
         }
-        let region_state = self.storage().region_state().clone();
         let region_id = self.region_id();
         self.state_changes_mut()
-            .put_region_state(region_id, res.commit, &region_state)
+            .put_region_state(region_id, res.commit, &res.region_state)
             .unwrap();
+        self.storage_mut().set_region_state(res.region_state);
         self.set_has_extra_write();
 
         self.rollback_merge(store_ctx);

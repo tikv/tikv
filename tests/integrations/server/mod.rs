@@ -6,6 +6,7 @@ mod kv_service;
 mod lock_manager;
 mod raft_client;
 mod security;
+mod server;
 mod status_server;
 
 use std::sync::Arc;

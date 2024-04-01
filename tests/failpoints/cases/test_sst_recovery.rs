@@ -105,7 +105,7 @@ fn test_sst_recovery_overlap_range_sst_exist() {
     must_get_equal(&engine1, b"7", b"val_1");
 
     // Validate the damaged sst has been deleted.
-    compact_files_to_target_level(&engine1, true, 3).unwrap();
+    compact_files_to_target_level(&engine1, true, 6).unwrap();
     let files = engine1.as_inner().get_live_files();
     assert_eq!(files.get_files_count(), 1);
 
@@ -179,8 +179,11 @@ fn compact_files_to_target_level(
     engine.compact_files_cf(CF_DEFAULT, file_names, Some(level), 1, false)
 }
 
-fn create_tikv_cluster_with_one_node_damaged()
--> (Cluster<ServerCluster>, Arc<TestPdClient>, RocksEngine) {
+fn create_tikv_cluster_with_one_node_damaged() -> (
+    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    Arc<TestPdClient>,
+    RocksEngine,
+) {
     let mut cluster = new_server_cluster(0, 3);
     let pd_client = cluster.pd_client.clone();
     pd_client.disable_default_operator();
@@ -252,7 +255,7 @@ fn create_tikv_cluster_with_one_node_damaged()
     disturb_sst_file(&sst_path);
 
     // The sst file is damaged, so this action will fail.
-    assert_corruption(compact_files_to_target_level(&engine1, true, 3));
+    assert_corruption(compact_files_to_target_level(&engine1, true, 6));
 
     (cluster, pd_client, engine1)
 }

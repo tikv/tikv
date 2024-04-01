@@ -88,8 +88,8 @@ impl LockTable {
 
     /// Finds the first handle in the given range that `pred` returns `Some`.
     /// The `Some` return value of `pred` will be returned by `find_first`.
-    pub fn find_first<'m, T>(
-        &'m self,
+    pub fn find_first<T>(
+        &self,
         start_key: Option<&Key>,
         end_key: Option<&Key>,
         mut pred: impl FnMut(Arc<KeyHandle>) -> Option<T>,
@@ -111,6 +111,14 @@ impl LockTable {
         for entry in self.0.iter() {
             if let Some(handle) = entry.value().upgrade() {
                 f(handle);
+            }
+        }
+    }
+
+    pub fn for_each_kv(&self, mut f: impl FnMut(&Key, Arc<KeyHandle>)) {
+        for entry in self.0.iter() {
+            if let Some(handle) = entry.value().upgrade() {
+                f(entry.key(), handle);
             }
         }
     }

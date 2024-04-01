@@ -56,6 +56,7 @@ impl BackupStreamObserver {
             .scheduler
             .schedule(Task::ModifyObserve(ObserveOp::Start {
                 region: region.clone(),
+                handle: ObserveHandle::new(),
             }))
         {
             use crate::errors::Error;
@@ -102,7 +103,7 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
         assert!(!cmd_batches.is_empty());
         debug!(
             "observe backup stream kv";
-            "cmd_batches len" => cmd_batches.len(),
+            "cmd_batches_len" => cmd_batches.len(),
             "level" => ?max_level,
         );
 
@@ -128,6 +129,7 @@ impl<E: KvEngine> CmdObserver<E> for BackupStreamObserver {
                 self.scheduler,
                 Task::ModifyObserve(ObserveOp::Start {
                     region: region.clone(),
+                    handle: ObserveHandle::new(),
                 })
             );
         }

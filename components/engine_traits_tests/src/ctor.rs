@@ -9,7 +9,7 @@ use engine_test::{
     ctor::{CfOptions, DbOptions, KvEngineConstructorExt},
     kv::KvTestEngine,
 };
-use engine_traits::{EncryptionKeyManager, KvEngine, Peekable, SyncMutable, ALL_CFS, CF_DEFAULT};
+use engine_traits::{KvEngine, Peekable, SyncMutable, ALL_CFS, CF_DEFAULT};
 
 use super::tempdir;
 
@@ -118,7 +118,7 @@ fn new_engine_opt_renamed_dir() {
     let new_path = root_path.join("new").to_str().unwrap().to_owned();
     key_manager.link_file(&path, &new_path).unwrap();
     fs::rename(&path, &new_path).unwrap();
-    key_manager.delete_file(&path).unwrap();
+    key_manager.delete_file(&path, Some(&new_path)).unwrap();
     {
         let db =
             KvTestEngine::new_kv_engine_opt(&new_path, db_opts.clone(), cf_opts.clone()).unwrap();

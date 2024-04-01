@@ -63,13 +63,29 @@ impl<EK> StoreMeta<EK> {
             .regions
             .insert(region_id, (region.clone(), initialized));
         // `prev` only makes sense when it's initialized.
-        if let Some((prev, prev_init)) = prev && prev_init {
+        if let Some((prev, prev_init)) = prev
+            && prev_init
+        {
             assert!(initialized, "{} region corrupted", SlogFormat(logger));
             if prev.get_region_epoch().get_version() != version {
-                let prev_id = self.region_ranges.remove(&(data_end_key(prev.get_end_key()), prev.get_region_epoch().get_version()));
-                assert_eq!(prev_id, Some(region_id), "{} region corrupted", SlogFormat(logger));
+                let prev_id = self.region_ranges.remove(&(
+                    data_end_key(prev.get_end_key()),
+                    prev.get_region_epoch().get_version(),
+                ));
+                assert_eq!(
+                    prev_id,
+                    Some(region_id),
+                    "{} region corrupted",
+                    SlogFormat(logger)
+                );
             } else {
-                assert!(self.region_ranges.get(&(data_end_key(prev.get_end_key()), version)).is_some(), "{} region corrupted", SlogFormat(logger));
+                assert!(
+                    self.region_ranges
+                        .get(&(data_end_key(prev.get_end_key()), version))
+                        .is_some(),
+                    "{} region corrupted",
+                    SlogFormat(logger)
+                );
                 return;
             }
         }
@@ -297,8 +313,19 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
             match msg {
                 StoreMsg::Start => self.on_start(),
                 StoreMsg::Tick(tick) => self.on_tick(tick),
-                StoreMsg::RaftMessage(msg) => self.fsm.store.on_raft_message(self.store_ctx, msg),
-                StoreMsg::SplitInit(msg) => self.fsm.store.on_split_init(self.store_ctx, msg),
+                StoreMsg::RaftMessage(msg) => {
+                    self.fsm.store.on_raft_message(self.store_ctx, msg);
+                }
+                StoreMsg::SplitInit(msg) => {
+                    // For normal region split, it must not skip sending
+                    // SplitInit message, otherwise it requests a snapshot from
+                    // leader which is expensive.
+                    self.fsm.store.on_split_init(
+                        self.store_ctx,
+                        msg,
+                        false, // skip_if_exists
+                    )
+                }
                 StoreMsg::StoreUnreachable { to_store_id } => self
                     .fsm
                     .store
@@ -318,6 +345,14 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                     send_time,
                     inspector,
                 ),
+                StoreMsg::UnsafeRecoveryReport(report) => self
+                    .fsm
+                    .store
+                    .on_unsafe_recovery_report(self.store_ctx, report),
+                StoreMsg::UnsafeRecoveryCreatePeer { region, syncer } => self
+                    .fsm
+                    .store
+                    .on_unsafe_recovery_create_peer(self.store_ctx, region, syncer),
             }
         }
     }

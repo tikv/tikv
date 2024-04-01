@@ -104,8 +104,6 @@ pub mod kv {
         KvTestEngine::new_kv_engine_opt(path, db_opt, cfs_opts)
     }
 
-    const TOMBSTONE_SUFFIX: &str = ".tombstone";
-
     #[derive(Clone)]
     pub struct TestTabletFactory {
         db_opt: DbOptions,
@@ -129,13 +127,7 @@ pub mod kv {
         }
 
         fn destroy_tablet(&self, _ctx: TabletContext, path: &Path) -> Result<()> {
-            let tombstone_path = path.with_extension(TOMBSTONE_SUFFIX);
-            let _ = std::fs::remove_dir_all(&tombstone_path);
-            std::fs::rename(path, &tombstone_path)?;
-            if let Some(m) = &self.db_opt.key_manager {
-                m.remove_dir(path, Some(&tombstone_path))?;
-            }
-            std::fs::remove_dir_all(tombstone_path)?;
+            encryption::trash_dir_all(path, self.db_opt.get_key_manager().as_deref())?;
             Ok(())
         }
 
@@ -210,13 +202,17 @@ pub mod ctor {
 
     #[derive(Clone, Default)]
     pub struct DbOptions {
-        pub(crate) key_manager: Option<Arc<DataKeyManager>>,
+        key_manager: Option<Arc<DataKeyManager>>,
         rate_limiter: Option<Arc<IoRateLimiter>>,
         state_storage: Option<Arc<dyn StateStorage>>,
         enable_multi_batch_write: bool,
     }
 
     impl DbOptions {
+        pub fn get_key_manager(&self) -> Option<Arc<DataKeyManager>> {
+            self.key_manager.clone()
+        }
+
         pub fn set_key_manager(&mut self, key_manager: Option<Arc<DataKeyManager>>) {
             self.key_manager = key_manager;
         }
@@ -419,13 +415,10 @@ pub mod ctor {
                 rocks_db_opts.enable_multi_batch_write(false);
                 rocks_db_opts.allow_concurrent_memtable_write(false);
                 if let Some(storage) = db_opt.state_storage
-                    && let Some(flush_state) = ctx.flush_state {
-                    let listener = PersistenceListener::new(
-                        ctx.id,
-                        ctx.suffix.unwrap(),
-                        flush_state,
-                        storage,
-                    );
+                    && let Some(flush_state) = ctx.flush_state
+                {
+                    let listener =
+                        PersistenceListener::new(ctx.id, ctx.suffix.unwrap(), flush_state, storage);
                     rocks_db_opts.add_event_listener(RocksPersistenceListener::new(listener));
                 }
                 let factory =

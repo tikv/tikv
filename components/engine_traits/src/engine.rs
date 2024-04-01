@@ -39,7 +39,10 @@ pub trait KvEngine:
     type Snapshot: Snapshot;
 
     /// Create a snapshot
-    fn snapshot(&self) -> Self::Snapshot;
+    ///
+    /// SnapCtx will only be used by some type of trait implementors (ex:
+    /// HybridEngine)
+    fn snapshot(&self, snap_ctx: Option<SnapshotContext>) -> Self::Snapshot;
 
     /// Syncs any writes to disk
     fn sync(&self) -> Result<()>;
@@ -63,7 +66,13 @@ pub trait KvEngine:
     /// Some KvEngines need to do some transforms before apply data from
     /// snapshot. These procedures can be batched in background if there are
     /// more than one incoming snapshots, thus not blocking applying thread.
-    fn can_apply_snapshot(&self, _is_timeout: bool, _new_batch: bool, _region_id: u64) -> bool {
+    fn can_apply_snapshot(
+        &self,
+        _is_timeout: bool,
+        _new_batch: bool,
+        _region_id: u64,
+        _queue_size: usize,
+    ) -> bool {
         true
     }
 
@@ -71,4 +80,17 @@ pub trait KvEngine:
     /// full release of engine.
     #[cfg(feature = "testexport")]
     fn inner_refcount(&self) -> usize;
+}
+
+#[derive(Debug, Clone)]
+pub struct SnapshotContext {
+    pub range: Option<CacheRange>,
+    pub read_ts: u64,
+}
+
+impl SnapshotContext {
+    pub fn set_range(&mut self, range: CacheRange) {
+        assert!(self.range.is_none());
+        self.range = Some(range);
+    }
 }

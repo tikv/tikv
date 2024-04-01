@@ -95,9 +95,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 res.region_state.mut_region().set_is_in_flashback(false);
             })
         })();
-        slog::debug!(self.logger,
+        slog::debug!(
+            self.logger,
             "flashback update region";
-            "region" => ?res.region_state.get_region());
+            "region" => ?res.region_state.get_region()
+        );
         let region_id = self.region_id();
         {
             let mut meta = store_ctx.store_meta.lock().unwrap();

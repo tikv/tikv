@@ -5,12 +5,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use collections::HashSet;
 use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine};
 use futures::Future;
 use kvproto::{
     kvrpcpb::ExtraOp,
-    metapb::RegionEpoch,
+    metapb::{Peer, Region, RegionEpoch},
+    pdpb,
     raft_cmdpb::{RaftCmdRequest, RaftCmdResponse},
     raft_serverpb::RaftMessage,
 };
@@ -18,11 +20,16 @@ use raftstore::{
     router::CdcHandle,
     store::{
         fsm::ChangeObserver, AsyncReadNotifier, Callback, FetchedLogs, GenSnapRes, RegionSnapshot,
+        UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
+        UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle, UnsafeRecoveryWaitApplySyncer,
     },
 };
 use slog::warn;
+use tikv_util::box_err;
 
-use super::{build_any_channel, message::CaptureChange, PeerMsg, QueryResChannel, QueryResult};
+use super::{
+    build_any_channel, message::CaptureChange, PeerMsg, QueryResChannel, QueryResult, StoreMsg,
+};
 use crate::{batch::StoreRouter, operation::LocalReader, StoreMeta};
 
 impl<EK: KvEngine, ER: RaftEngine> AsyncReadNotifier for StoreRouter<EK, ER> {
@@ -36,12 +43,18 @@ impl<EK: KvEngine, ER: RaftEngine> AsyncReadNotifier for StoreRouter<EK, ER> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> raftstore::coprocessor::StoreHandle for StoreRouter<EK, ER> {
-    fn update_approximate_size(&self, region_id: u64, size: u64) {
-        let _ = self.send(region_id, PeerMsg::UpdateRegionSize { size });
+    // TODO: add splitable logic in raftstore-v2
+    fn update_approximate_size(&self, region_id: u64, size: Option<u64>, _may_split: Option<bool>) {
+        if let Some(size) = size {
+            let _ = self.send(region_id, PeerMsg::UpdateRegionSize { size });
+        }
     }
 
-    fn update_approximate_keys(&self, region_id: u64, keys: u64) {
-        let _ = self.send(region_id, PeerMsg::UpdateRegionKeys { keys });
+    // TODO: add splitable logic in raftstore-v2
+    fn update_approximate_keys(&self, region_id: u64, keys: Option<u64>, _may_split: Option<bool>) {
+        if let Some(keys) = keys {
+            let _ = self.send(region_id, PeerMsg::UpdateRegionKeys { keys });
+        }
     }
 
     fn ask_split(
@@ -51,7 +64,7 @@ impl<EK: KvEngine, ER: RaftEngine> raftstore::coprocessor::StoreHandle for Store
         split_keys: Vec<Vec<u8>>,
         source: Cow<'static, str>,
     ) {
-        let (msg, _) = PeerMsg::request_split(region_epoch, split_keys, source.to_string());
+        let (msg, _) = PeerMsg::request_split(region_epoch, split_keys, source.to_string(), true);
         let res = self.send(region_id, msg);
         if let Err(e) = res {
             warn!(
@@ -248,5 +261,97 @@ impl<EK: KvEngine, ER: RaftEngine> CdcHandle<EK> for RaftRouter<EK, ER> {
             return Err(crate::Error::RegionNotFound(region_id));
         }
         Ok(())
+    }
+}
+
+/// A wrapper of StoreRouter that is specialized for implementing
+/// UnsafeRecoveryRouter.
+pub struct UnsafeRecoveryRouter<EK: KvEngine, ER: RaftEngine>(Mutex<StoreRouter<EK, ER>>);
+
+impl<EK: KvEngine, ER: RaftEngine> UnsafeRecoveryRouter<EK, ER> {
+    pub fn new(router: StoreRouter<EK, ER>) -> UnsafeRecoveryRouter<EK, ER> {
+        UnsafeRecoveryRouter(Mutex::new(router))
+    }
+}
+
+impl<EK: KvEngine, ER: RaftEngine> UnsafeRecoveryHandle for UnsafeRecoveryRouter<EK, ER> {
+    fn send_enter_force_leader(
+        &self,
+        region_id: u64,
+        syncer: UnsafeRecoveryForceLeaderSyncer,
+        failed_stores: HashSet<u64>,
+    ) -> crate::Result<()> {
+        let router = self.0.lock().unwrap();
+        router.check_send(
+            region_id,
+            PeerMsg::EnterForceLeaderState {
+                syncer,
+                failed_stores,
+            },
+        )
+    }
+
+    fn broadcast_exit_force_leader(&self) {
+        let router = self.0.lock().unwrap();
+        router.broadcast_normal(|| PeerMsg::ExitForceLeaderState);
+    }
+
+    fn send_create_peer(
+        &self,
+        region: Region,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    ) -> crate::Result<()> {
+        let router = self.0.lock().unwrap();
+        match router.force_send_control(StoreMsg::UnsafeRecoveryCreatePeer { region, syncer }) {
+            Ok(()) => Ok(()),
+            Err(SendError(_)) => Err(box_err!("fail to send unsafe recovery create peer")),
+        }
+    }
+
+    fn send_destroy_peer(
+        &self,
+        region_id: u64,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    ) -> crate::Result<()> {
+        let router = self.0.lock().unwrap();
+        match router.check_send(region_id, PeerMsg::UnsafeRecoveryDestroy(syncer)) {
+            // The peer may be destroy already.
+            Err(crate::Error::RegionNotFound(_)) => Ok(()),
+            res => res,
+        }
+    }
+
+    fn send_demote_peers(
+        &self,
+        region_id: u64,
+        failed_voters: Vec<Peer>,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    ) -> crate::Result<()> {
+        let router = self.0.lock().unwrap();
+        router.check_send(
+            region_id,
+            PeerMsg::UnsafeRecoveryDemoteFailedVoters {
+                syncer,
+                failed_voters,
+            },
+        )
+    }
+
+    fn broadcast_wait_apply(&self, syncer: UnsafeRecoveryWaitApplySyncer) {
+        let router = self.0.lock().unwrap();
+        router.broadcast_normal(|| PeerMsg::UnsafeRecoveryWaitApply(syncer.clone()));
+    }
+
+    fn broadcast_fill_out_report(&self, syncer: UnsafeRecoveryFillOutReportSyncer) {
+        let router = self.0.lock().unwrap();
+        router.broadcast_normal(|| PeerMsg::UnsafeRecoveryFillOutReport(syncer.clone()));
+    }
+
+    fn send_report(&self, report: pdpb::StoreReport) -> crate::Result<()> {
+        let router = self.0.lock().unwrap();
+        match router.force_send_control(StoreMsg::UnsafeRecoveryReport(report)) {
+            Ok(()) => Ok(()),
+            Err(SendError(_)) => Err(box_err!("fail to send unsafe recovery store report")),
+        }
     }
 }

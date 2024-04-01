@@ -10,7 +10,7 @@ use std::{
 };
 
 use engine_rocks::RocksSnapshot;
-use kvproto::metapb;
+use kvproto::{metapb, raft_serverpb::RaftMessage};
 use more_asserts::assert_le;
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
@@ -427,7 +427,7 @@ fn test_node_callback_when_destroyed() {
     let get = new_get_cmd(b"k1");
     let mut req = new_request(1, epoch, vec![get], true);
     req.mut_header().set_peer(leader);
-    let (cb, mut rx) = make_cb(&req);
+    let (cb, mut rx) = make_cb_rocks(&req);
     cluster
         .sim
         .rl()
@@ -481,7 +481,7 @@ fn test_read_index_stale_in_suspect_lease() {
     configure_for_lease_read(&mut cluster.cfg, Some(50), Some(10_000));
     let max_lease = Duration::from_secs(2);
     // Stop log compaction to transfer leader with filter easier.
-    configure_for_request_snapshot(&mut cluster);
+    configure_for_request_snapshot(&mut cluster.cfg);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
 
     cluster.pd_client.disable_default_operator();
@@ -648,7 +648,7 @@ fn test_not_leader_read_lease() {
         true,
     );
     req.mut_header().set_peer(new_peer(1, 1));
-    let (cb, mut rx) = make_cb(&req);
+    let (cb, mut rx) = make_cb_rocks(&req);
     cluster.sim.rl().async_command_on_node(1, req, cb).unwrap();
 
     cluster.must_transfer_leader(region_id, new_peer(3, 3));
@@ -701,7 +701,7 @@ fn test_read_index_after_write() {
     req.mut_header()
         .set_peer(new_peer(1, region_on_store1.get_id()));
     // Don't care about the first one's read index
-    let (cb, _) = make_cb(&req);
+    let (cb, _) = make_cb_rocks(&req);
     cluster.sim.rl().async_command_on_node(1, req, cb).unwrap();
 
     cluster.must_put(b"k2", b"v2");
@@ -715,7 +715,7 @@ fn test_read_index_after_write() {
     );
     req.mut_header()
         .set_peer(new_peer(1, region_on_store1.get_id()));
-    let (cb, mut rx) = make_cb(&req);
+    let (cb, mut rx) = make_cb_rocks(&req);
     cluster.sim.rl().async_command_on_node(1, req, cb).unwrap();
 
     cluster.sim.wl().clear_recv_filters(2);
@@ -828,4 +828,84 @@ fn test_node_local_read_renew_lease() {
         assert_le!(detector.ctx.rl().len(), max_renew_lease_time + 1, "{}", i);
         thread::sleep(request_wait);
     }
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_lease_restart_during_isolation() {
+    let mut cluster = new_cluster(0, 3);
+    let election_timeout = configure_for_lease_read(&mut cluster.cfg, Some(500), Some(3));
+    cluster.cfg.raft_store.allow_unsafe_vote_after_start = false;
+    cluster.run();
+    sleep_ms(election_timeout.as_millis() as _);
+    let mut region;
+    let start = Instant::now_coarse();
+    let key = b"k";
+    loop {
+        region = cluster.get_region(key);
+        if region.get_peers().len() == 3
+            && region
+                .get_peers()
+                .iter()
+                .all(|p| p.get_role() == metapb::PeerRole::Voter)
+        {
+            break;
+        }
+        if start.saturating_elapsed() > Duration::from_secs(5) {
+            panic!("timeout");
+        }
+    }
+
+    let region_id = region.get_id();
+    let peer1 = find_peer(&region, 1).unwrap();
+    let peer2 = find_peer(&region, 2).unwrap();
+
+    cluster.must_put(key, b"v0");
+    cluster.must_transfer_leader(region_id, peer1.clone());
+    must_read_on_peer(&mut cluster, peer1.clone(), region.clone(), key, b"v0");
+    cluster.must_transfer_leader(region_id, peer2.clone());
+    must_read_on_peer(&mut cluster, peer2.clone(), region.clone(), key, b"v0");
+
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+
+    // Restart node 3.
+    cluster.stop_node(3);
+    cluster.run_node(3).unwrap();
+
+    // Let peer1 start election.
+    let mut timeout = RaftMessage::default();
+    timeout.mut_message().set_to(peer1.get_id());
+    timeout
+        .mut_message()
+        .set_msg_type(MessageType::MsgTimeoutNow);
+    timeout
+        .mut_message()
+        .set_msg_type(MessageType::MsgTimeoutNow);
+    timeout.set_region_id(region.get_id());
+    timeout.set_from_peer(peer2.clone());
+    timeout.set_to_peer(peer1.clone());
+    timeout.set_region_epoch(region.get_region_epoch().clone());
+    cluster.send_raft_msg(timeout).unwrap();
+
+    let (tx, rx) = mpsc::channel();
+    let append_resp_notifier = Box::new(MessageTypeNotifier::new(
+        MessageType::MsgAppendResponse,
+        tx,
+        Arc::from(AtomicBool::new(true)),
+    ));
+    cluster.sim.wl().add_send_filter(3, append_resp_notifier);
+    let timeout = Duration::from_secs(5);
+    rx.recv_timeout(timeout).unwrap();
+
+    let mut put = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_put_cmd(key, b"v1")],
+        false,
+    );
+    put.mut_header().set_peer(peer1.clone());
+    let resp = cluster.call_command(put, timeout).unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+    must_read_on_peer(&mut cluster, peer1.clone(), region.clone(), key, b"v1");
+    must_error_read_on_peer(&mut cluster, peer2.clone(), region.clone(), key, timeout);
 }

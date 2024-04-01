@@ -1,15 +1,10 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(once_cell)]
+#![feature(lazy_cell)]
 #![feature(let_chains)]
 
 #[macro_use]
 extern crate log;
-
-mod cmd;
-mod executor;
-mod fork_readonly_tikv;
-mod util;
 
 use std::{
     borrow::ToOwned,
@@ -18,19 +13,19 @@ use std::{
     path::Path,
     process, str,
     string::ToString,
-    sync::Arc,
+    sync::{Arc, Mutex, RwLock},
     thread,
     time::Duration,
     u64,
 };
 
 use collections::HashMap;
+use crypto::fips;
 use encryption_export::{
-    create_backend, data_key_manager_from_config, from_engine_encryption_method, DataKeyManager,
-    DecrypterReader, Iv,
+    create_backend, data_key_manager_from_config, DataKeyManager, DecrypterReader, Iv,
 };
 use engine_rocks::get_env;
-use engine_traits::{EncryptionKeyManager, Peekable};
+use engine_traits::Peekable;
 use file_system::calc_crc32;
 use futures::{executor::block_on, future::try_join_all};
 use gag::BufferRedirect;
@@ -60,11 +55,22 @@ use txn_types::Key;
 
 use crate::{cmd::*, executor::*, util::*};
 
+mod cmd;
+mod executor;
+mod fork_readonly_tikv;
+mod util;
+
 fn main() {
+    // OpenSSL FIPS mode should be enabled at the very start.
+    fips::maybe_enable();
+
     let opt = Opt::from_args();
 
     // Initialize logger.
     init_ctl_logger(&opt.log_level);
+
+    // Print OpenSSL FIPS mode status.
+    fips::log_status();
 
     // Initialize configuration and security manager.
     let cfg_path = opt.config.as_ref();
@@ -115,13 +121,13 @@ fn main() {
             }
         }
         Cmd::RaftEngineCtl { args } => {
+            if !validate_storage_data_dir(&mut cfg, opt.data_dir) {
+                return;
+            }
             let key_manager =
                 data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
                     .expect("data_key_manager_from_config should success");
-            let file_system = Arc::new(ManagedFileSystem::new(
-                key_manager.map(|m| Arc::new(m)),
-                None,
-            ));
+            let file_system = Arc::new(ManagedFileSystem::new(key_manager.map(Arc::new), None));
             raft_engine_ctl::run_command(args, file_system);
         }
         Cmd::BadSsts { manifest, pd } => {
@@ -136,6 +142,9 @@ fn main() {
             dump_snap_meta_file(path);
         }
         Cmd::DecryptFile { file, out_file } => {
+            if !validate_storage_data_dir(&mut cfg, opt.data_dir) {
+                return;
+            }
             let message =
                 "This action will expose sensitive data as plaintext on persistent storage";
             if !warning_prompt(message) {
@@ -160,7 +169,7 @@ fn main() {
             let infile1 = Path::new(infile).canonicalize().unwrap();
             let file_info = key_manager.get_file(infile1.to_str().unwrap()).unwrap();
 
-            let mthd = from_engine_encryption_method(file_info.method);
+            let mthd = file_info.method;
             if mthd == EncryptionMethod::Plaintext {
                 println!(
                     "{} is not encrypted, skip to decrypt it into {}",
@@ -184,28 +193,36 @@ fn main() {
             io::copy(&mut reader, &mut outf).unwrap();
             println!("crc32: {}", calc_crc32(outfile).unwrap());
         }
-        Cmd::EncryptionMeta { cmd: subcmd } => match subcmd {
-            EncryptionMetaCmd::DumpKey { ids } => {
-                let message = "This action will expose encryption key(s) as plaintext. Do not output the \
+        Cmd::EncryptionMeta { cmd: subcmd } => {
+            if !validate_storage_data_dir(&mut cfg, opt.data_dir) {
+                return;
+            }
+            match subcmd {
+                EncryptionMetaCmd::DumpKey { ids } => {
+                    let message = "This action will expose encryption key(s) as plaintext. Do not output the \
                     result in file on disk.";
-                if !warning_prompt(message) {
-                    return;
+                    if !warning_prompt(message) {
+                        return;
+                    }
+                    DataKeyManager::dump_key_dict(
+                        create_backend(&cfg.security.encryption.master_key)
+                            .expect("encryption-meta master key creation"),
+                        &cfg.storage.data_dir,
+                        ids,
+                    )
+                    .unwrap();
                 }
-                DataKeyManager::dump_key_dict(
-                    create_backend(&cfg.security.encryption.master_key)
-                        .expect("encryption-meta master key creation"),
-                    &cfg.storage.data_dir,
-                    ids,
-                )
-                .unwrap();
+                EncryptionMetaCmd::DumpFile { path } => {
+                    let path = path
+                        .map(|path| fs::canonicalize(path).unwrap().to_str().unwrap().to_owned());
+                    DataKeyManager::dump_file_dict(&cfg.storage.data_dir, path.as_deref()).unwrap();
+                }
             }
-            EncryptionMetaCmd::DumpFile { path } => {
-                let path =
-                    path.map(|path| fs::canonicalize(path).unwrap().to_str().unwrap().to_owned());
-                DataKeyManager::dump_file_dict(&cfg.storage.data_dir, path.as_deref()).unwrap();
-            }
-        },
+        }
         Cmd::CleanupEncryptionMeta {} => {
+            if !validate_storage_data_dir(&mut cfg, opt.data_dir) {
+                return;
+            }
             let key_manager =
                 match data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
                     .expect("data_key_manager_from_config should success")
@@ -653,6 +670,17 @@ fn main() {
                     debug_executor.dump_cluster_info();
                 }
                 Cmd::ResetToVersion { version } => debug_executor.reset_to_version(version),
+                Cmd::GetRegionReadProgress {
+                    region,
+                    log,
+                    min_start_ts,
+                } => {
+                    debug_executor.get_region_read_progress(
+                        region,
+                        log,
+                        min_start_ts.unwrap_or_default(),
+                    );
+                }
                 _ => {
                     unreachable!()
                 }
@@ -765,12 +793,18 @@ fn compact_whole_cluster(
     threads: u32,
     bottommost: BottommostLevelCompaction,
 ) {
-    let stores = pd_client
+    let all_stores = pd_client
         .get_all_stores(true) // Exclude tombstone stores.
         .unwrap_or_else(|e| perror_and_exit("Get all cluster stores from PD failed", e));
 
+    let tikv_stores = all_stores.iter().filter(|s| {
+        !s.get_labels()
+            .iter()
+            .any(|l| l.get_key() == "engine" && l.get_value() == "tiflash")
+    });
+
     let mut handles = Vec::new();
-    for s in stores {
+    for s in tikv_stores {
         let cfg = cfg.clone();
         let mgr = Arc::clone(&mgr);
         let addr = s.address.clone();
@@ -811,6 +845,10 @@ fn flashback_whole_cluster(
     start_key: Vec<u8>,
     end_key: Vec<u8>,
 ) {
+    println!(
+        "flashback whole cluster with version {} from {:?} to {:?}",
+        version, start_key, end_key
+    );
     let pd_client = pd_client.clone();
     let cfg = cfg.clone();
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -820,43 +858,68 @@ fn flashback_whole_cluster(
         .unwrap();
 
     block_on(runtime.spawn(async move {
-        // Prepare all regions for flashback.
+        // Pre-create the debug executors for all stores.
+        let stores = match pd_client.get_all_stores(false) {
+            Ok(stores) => stores,
+            Err(e) => {
+                println!("failed to load all stores: {:?}", e);
+                return;
+            }
+        };
+        let debuggers = Mutex::new(stores
+            .into_iter()
+            .map(|s| {
+                let addr = pd_client.get_store(s.get_id()).unwrap().address;
+                let cfg_inner = cfg.clone();
+                let mgr = Arc::clone(&mgr);
+                let debug_executor = new_debug_executor(&cfg_inner, None, Some(&addr), mgr);
+                (s.get_id(), debug_executor)
+            } )
+            .collect::<HashMap<_, _>>());
+        // Prepare flashback.
         let start_ts = pd_client.get_tso().await.unwrap();
-        let mut stores_leader = load_leaders_to_each_store(&pd_client, start_key, end_key);
-        // Need to retry if all regions are not finish prepare.
+        let key_range_to_prepare = RwLock::new(load_key_range(&pd_client, start_key, end_key));
+        // Need to retry if all regions are not finish.
+        let mut key_range_to_finish = key_range_to_prepare.read().unwrap().clone();
         loop {
+            // Traverse all regions and prepare flashback.
             let mut futures = Vec::default();
-            stores_leader
-                .clone()
-                .into_iter()
-                .for_each(|(store_id, leaders)| {
-                    let addr = pd_client.get_store(store_id).unwrap().address;
-                    leaders
-                        .into_iter()
-                        .filter(|(_, region_id)| {
-                            region_ids.is_empty() || region_ids.contains(region_id)
-                        })
-                        .for_each(|(key_range, region_id)| {
-                            // Prepare flashback region version by key range.
-                            let key_range = build_key_range(&key_range.0, &key_range.1, false);
-
-                            let addr = addr.clone();
-                            let cfg_inner = cfg.clone();
-                            let mgr = Arc::clone(&mgr);
-                            let f = async move {
-                                let debug_executor =
-                                    new_debug_executor(&cfg_inner, None, Some(&addr), mgr);
-                                debug_executor.flashback_to_version(
-                                    version,
-                                    region_id,
-                                    key_range,
-                                    start_ts.into_inner(),
-                                    0,
-                                )
-                            };
-                            futures.push(f);
-                        })
-                });
+            let read_result = key_range_to_prepare.read().unwrap().clone();
+            read_result.into_iter().
+            filter(|(_, (region_id, _))| {
+                region_ids.is_empty() || region_ids.contains(region_id)
+            })
+            .for_each(|((start_key, end_key), (region_id, store_id))| {
+                let debuggers = &debuggers;
+                let key_range_to_prepare = &key_range_to_prepare;
+                let key_range = build_key_range(&start_key, &end_key, false);
+                let f = async move {
+                    let debuggers = debuggers.lock().unwrap();
+                    match debuggers.get(&store_id).unwrap().flashback_to_version(
+                        version,
+                        region_id,
+                        key_range,
+                        start_ts.into_inner(),
+                        0,
+                    ) {
+                        Ok(_) => {
+                            key_range_to_prepare
+                                .write()
+                                .unwrap()
+                                .remove(&(start_key, end_key));
+                            Ok(())
+                        }
+                        Err(err) => {
+                            println!(
+                                "prepare flashback region {} with start_ts {:?} to version {} failed, error: {:?}",
+                                region_id, start_ts, version, err
+                            );
+                            Err(err)
+                        },
+                    }
+                };
+                futures.push(f);
+            });
 
             // Wait for finishing prepare flashback.
             match tokio::time::timeout(
@@ -866,20 +929,20 @@ fn flashback_whole_cluster(
             .await
             {
                 Ok(res) => {
-                    if let Err(key_range) = res {
+                    if let Err((key_range, _)) = res {
                         // Retry specific key range to prepare flashback.
-                        let retry_stores_leader = load_leaders_to_each_store(
-                            &pd_client,
-                            key_range.get_start_key().to_vec(),
-                            key_range.get_end_key().to_vec(),
-                        );
-                        // Need to update `stores_leader` to replace stale key range.
-                        for (store_id, leaders) in retry_stores_leader {
-                            let regions = stores_leader
-                                .entry(store_id)
-                                .or_insert_with(HashMap::default);
-                            regions.extend(leaders);
-                        }
+                        let stale_key_range = (key_range.start_key.clone(), key_range.end_key.clone());
+                        let mut key_range_to_prepare = key_range_to_prepare.write().unwrap();
+                        // Remove stale key range.
+                        key_range_to_prepare.remove(&stale_key_range);
+                        key_range_to_finish.remove(&stale_key_range);
+                        load_key_range(&pd_client, stale_key_range.0.clone(), stale_key_range.1.clone())
+                            .into_iter().for_each(|(key_range, region_info)| {
+                                // Need to update `key_range_to_prepare` to replace stale key range.
+                                key_range_to_prepare.insert(key_range.clone(), region_info);
+                                // Need to update `key_range_to_finish` as well.
+                                key_range_to_finish.insert(key_range, region_info);
+                            });
                         thread::sleep(Duration::from_micros(WAIT_APPLY_FLASHBACK_STATE));
                         continue;
                     }
@@ -895,41 +958,47 @@ fn flashback_whole_cluster(
             }
         }
 
-        // Start flashback for all regions.
+        // Flashback for all regions.
         let commit_ts = pd_client.get_tso().await.unwrap();
+        let key_range_to_finish = RwLock::new(key_range_to_finish);
         loop {
             let mut futures = Vec::default();
-            stores_leader
-                .clone()
-                .into_iter()
-                .for_each(|(store_id, leaders)| {
-                    let addr = pd_client.get_store(store_id).unwrap().address;
-                    leaders
-                        .into_iter()
-                        .filter(|(_, region_id)| {
-                            region_ids.is_empty() || region_ids.contains(region_id)
-                        })
-                        .for_each(|(key_range, region_id)| {
-                            // Flashback region version by key range.
-                            let key_range = build_key_range(&key_range.0, &key_range.1, false);
-
-                            let addr = addr.clone();
-                            let cfg_inner = cfg.clone();
-                            let mgr = Arc::clone(&mgr);
-                            let f = async move {
-                                let debug_executor =
-                                    new_debug_executor(&cfg_inner, None, Some(&addr), mgr);
-                                debug_executor.flashback_to_version(
-                                    version,
-                                    region_id,
-                                    key_range,
-                                    start_ts.into_inner(),
-                                    commit_ts.into_inner(),
-                                )
-                            };
-                            futures.push(f);
-                        })
-                });
+            let read_result = key_range_to_finish.read().unwrap().clone();
+            read_result.into_iter()
+            .filter(|(_, (region_id, _))| {
+                region_ids.is_empty() || region_ids.contains(region_id)
+            })
+            .for_each(|((start_key, end_key), (region_id, store_id))| {
+                let debuggers = &debuggers;
+                let key_range_to_finish = &key_range_to_finish;
+                let key_range = build_key_range(&start_key, &end_key, false);
+                let f = async move {
+                    let debuggers = debuggers.lock().unwrap();
+                    match debuggers.get(&store_id).unwrap().flashback_to_version(
+                        version,
+                        region_id,
+                        key_range,
+                        start_ts.into_inner(),
+                        commit_ts.into_inner(),
+                    ) {
+                        Ok(_) => {
+                            key_range_to_finish
+                                .write()
+                                .unwrap()
+                                .remove(&(start_key, end_key));
+                            Ok(())
+                        }
+                        Err(err) => {
+                            println!(
+                                "finish flashback region {} with start_ts {:?} to version {} failed, error: {:?}",
+                                region_id, start_ts, version, err
+                            );
+                            Err(err)
+                        },
+                    }
+                };
+                futures.push(f);
+            });
 
             // Wait for finishing flashback to version.
             match tokio::time::timeout(
@@ -940,7 +1009,21 @@ fn flashback_whole_cluster(
             {
                 Ok(res) => match res {
                     Ok(_) => break,
-                    Err(_) => {
+                    Err((key_range, err)) => {
+                        // Retry `NotLeader` or `RegionNotFound`.
+                        if err.to_string().contains("not leader") || err.to_string().contains("not found") {
+                            // When finished `PrepareFlashback`, the region may change leader in the `flashback in progress`
+                            // Neet to retry specific key range to finish flashback.
+                            let stale_key_range = (key_range.start_key.clone(), key_range.end_key.clone());
+                            let mut key_range_to_finish = key_range_to_finish.write().unwrap();
+                            // Remove stale key range.
+                            key_range_to_finish.remove(&stale_key_range);
+                            load_key_range(&pd_client, stale_key_range.0.clone(), stale_key_range.1.clone())
+                                .into_iter().for_each(|(key_range, region_info)| {
+                                // Need to update `key_range_to_finish` to replace stale key range.
+                                key_range_to_finish.insert(key_range, region_info);
+                            });
+                        }
                         thread::sleep(Duration::from_micros(WAIT_APPLY_FLASHBACK_STATE));
                         continue;
                     }
@@ -960,29 +1043,25 @@ fn flashback_whole_cluster(
     println!("flashback all stores success!");
 }
 
-fn load_leaders_to_each_store(
+// Load (region_id, leader's store id) in the cluster with key ranges.
+fn load_key_range(
     pd_client: &RpcClient,
     start_key: Vec<u8>,
     end_key: Vec<u8>,
-) -> HashMap<u64, HashMap<(Vec<u8>, Vec<u8>), u64>> {
+) -> HashMap<(Vec<u8>, Vec<u8>), (u64, u64)> {
     // Get all regions in the cluster.
     let res = pd_client.batch_load_regions(start_key, end_key);
-    // Put all regions in right stores.
-    let mut store_regions = HashMap::default();
-    res.into_iter().for_each(|batch| {
-        batch.into_iter().for_each(|r| {
-            let store_id = r.get_leader().get_store_id();
-            let regions = store_regions
-                .entry(store_id)
-                .or_insert_with(HashMap::default);
-            let mut cur_region = r.get_region().clone();
-            regions.insert(
-                (cur_region.take_start_key(), cur_region.take_end_key()),
-                cur_region.get_id(),
-            );
-        });
-    });
-    store_regions
+    res.into_iter()
+        .flatten()
+        .map(|r| {
+            let cur_region = r.get_region();
+            let start_key = cur_region.get_start_key().to_owned();
+            let end_key = cur_region.get_end_key().to_owned();
+            let region_id = cur_region.get_id();
+            let leader_store_id = r.get_leader().get_store_id();
+            ((start_key, end_key), (region_id, leader_store_id))
+        })
+        .collect::<HashMap<_, _>>()
 }
 
 fn read_fail_file(path: &str) -> Vec<(String, String)> {
@@ -1006,7 +1085,7 @@ fn build_rocks_opts(cfg: &TikvConfig) -> engine_rocks::RocksDbOptions {
         .unwrap()
         .map(Arc::new);
     let env = get_env(key_manager, None /* io_rate_limiter */).unwrap();
-    let resource = cfg.rocksdb.build_resources(env);
+    let resource = cfg.rocksdb.build_resources(env, cfg.storage.engine);
     cfg.rocksdb.build_opt(&resource, cfg.storage.engine)
 }
 
@@ -1252,14 +1331,13 @@ fn flush_std_buffer_to_log(
 }
 
 fn read_cluster_id(config: &TikvConfig) -> Result<u64, String> {
-    let env = config
-        .build_shared_rocks_env(None, None)
-        .map_err(|e| format!("build_shared_rocks_env fail: {}", e))?;
-    let cache = config
-        .storage
-        .block_cache
-        .build_shared_cache(config.storage.engine);
-    let kv_engine = KvEngineFactoryBuilder::new(env, config, cache)
+    let key_manager =
+        data_key_manager_from_config(&config.security.encryption, &config.storage.data_dir)
+            .unwrap()
+            .map(Arc::new);
+    let env = get_env(key_manager.clone(), None /* io_rate_limiter */).unwrap();
+    let cache = config.storage.block_cache.build_shared_cache();
+    let kv_engine = KvEngineFactoryBuilder::new(env, config, cache, key_manager)
         .build()
         .create_shared_db(&config.storage.data_dir)
         .map_err(|e| format!("create_shared_db fail: {}", e))?;
@@ -1268,4 +1346,18 @@ fn read_cluster_id(config: &TikvConfig) -> Result<u64, String> {
         .unwrap()
         .unwrap();
     Ok(ident.cluster_id)
+}
+
+fn validate_storage_data_dir(config: &mut TikvConfig, data_dir: Option<String>) -> bool {
+    if let Some(data_dir) = data_dir {
+        if !Path::new(&data_dir).exists() {
+            eprintln!("--data-dir {:?} not exists", data_dir);
+            return false;
+        }
+        config.storage.data_dir = data_dir;
+    } else if config.storage.data_dir.is_empty() {
+        eprintln!("--data-dir or data-dir in the config file should not be empty");
+        return false;
+    }
+    true
 }

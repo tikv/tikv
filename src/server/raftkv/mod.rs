@@ -22,8 +22,8 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot};
-use futures::{future::BoxFuture, task::AtomicWaker, Future, Stream, StreamExt};
+use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, SnapshotContext};
+use futures::{future::BoxFuture, task::AtomicWaker, Future, Stream, StreamExt, TryFutureExt};
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
@@ -45,7 +45,7 @@ use raftstore::{
     router::{LocalReadRouter, RaftStoreRouter},
     store::{
         self, util::encode_start_ts_into_flag_data, Callback as StoreCallback, RaftCmdExtraOpts,
-        ReadIndexContext, ReadResponse, RegionSnapshot, StoreMsg, WriteResponse,
+        ReadCallback, ReadIndexContext, ReadResponse, RegionSnapshot, StoreMsg, WriteResponse,
     },
 };
 use thiserror::Error;
@@ -55,6 +55,7 @@ use tikv_util::{
     future::{paired_future_callback, paired_must_called_future_callback},
     time::Instant,
 };
+use tracker::GLOBAL_TRACKERS;
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
@@ -195,18 +196,36 @@ fn exec_admin<E: KvEngine, S: RaftStoreRouter<E>>(
     router: &S,
     req: RaftCmdRequest,
 ) -> BoxFuture<'static, kv::Result<()>> {
+    let region_id = req.get_header().get_region_id();
+    let peer_id = req.get_header().get_peer().get_id();
+    let term = req.get_header().get_term();
+    let epoch = req.get_header().get_region_epoch().clone();
+    let admin_type = req.get_admin_request().get_cmd_type();
     let (cb, f) = paired_future_callback();
     let res = router.send_command(
         req,
         raftstore::store::Callback::write(cb),
         RaftCmdExtraOpts::default(),
     );
-    Box::pin(async move {
-        res?;
-        let mut resp = box_try!(f.await);
-        check_raft_cmd_response(&mut resp.response)?;
-        Ok(())
-    })
+    Box::pin(
+        async move {
+            res?;
+            let mut resp = box_try!(f.await);
+            check_raft_cmd_response(&mut resp.response)?;
+            Ok(())
+        }
+        .map_err(move |e| {
+            warn!("failed to execute admin command";
+                "err" => ?e,
+                "admin_type" => ?admin_type,
+                "term" => term,
+                "region_epoch" => ?epoch,
+                "peer_id" => peer_id,
+                "region_id" => region_id,
+            );
+            e
+        }),
+    )
 }
 
 pub fn drop_snapshot_callback<T>() -> kv::Result<T> {
@@ -506,60 +525,65 @@ where
         self.schedule_txn_extra(txn_extra);
 
         let (tx, rx) = WriteResFeed::pair();
-        let proposed_cb = if !WriteEvent::subscribed_proposed(subscribed) {
-            None
-        } else {
-            let tx = tx.clone();
-            Some(Box::new(move || tx.notify_proposed()) as store::ExtCallback)
-        };
-        let committed_cb = if !WriteEvent::subscribed_committed(subscribed) {
-            None
-        } else {
-            let tx = tx.clone();
-            Some(Box::new(move || tx.notify_committed()) as store::ExtCallback)
-        };
-        let applied_tx = tx.clone();
-        let applied_cb = must_call(
-            Box::new(move |resp: WriteResponse| {
-                fail_point!("applied_cb_return_undetermined_err", |_| {
-                    applied_tx.notify(Err(kv::Error::from(Error::Undetermined(
-                        ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG.to_string(),
-                    ))));
-                });
-                let mut res = match on_write_result::<E::Snapshot>(resp) {
-                    Ok(CmdRes::Resp(_)) => {
-                        fail_point!("raftkv_async_write_finish");
-                        Ok(())
-                    }
-                    Ok(CmdRes::Snap(_)) => {
-                        Err(box_err!("unexpect snapshot, should mutate instead."))
-                    }
-                    Err(e) => Err(kv::Error::from(e)),
-                };
-                if let Some(cb) = on_applied {
-                    cb(&mut res);
-                }
-                applied_tx.notify(res);
-            }),
-            drop_on_applied_callback,
-        );
-
-        let cb = StoreCallback::write_ext(applied_cb, proposed_cb, committed_cb);
-        let extra_opts = RaftCmdExtraOpts {
-            deadline: batch.deadline,
-            disk_full_opt: batch.disk_full_opt,
-        };
         if res.is_ok() {
+            let proposed_cb = if !WriteEvent::subscribed_proposed(subscribed) {
+                None
+            } else {
+                let tx = tx.clone();
+                Some(Box::new(move || tx.notify_proposed()) as store::ExtCallback)
+            };
+            let committed_cb = if !WriteEvent::subscribed_committed(subscribed) {
+                None
+            } else {
+                let tx = tx.clone();
+                Some(Box::new(move || tx.notify_committed()) as store::ExtCallback)
+            };
+            let applied_tx = tx.clone();
+            let applied_cb = must_call(
+                Box::new(move |resp: WriteResponse| {
+                    fail_point!("applied_cb_return_undetermined_err", |_| {
+                        applied_tx.notify(Err(kv::Error::from(Error::Undetermined(
+                            ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG.to_string(),
+                        ))));
+                    });
+                    let mut res = match on_write_result::<E::Snapshot>(resp) {
+                        Ok(CmdRes::Resp(_)) => {
+                            fail_point!("raftkv_async_write_finish");
+                            Ok(())
+                        }
+                        Ok(CmdRes::Snap(_)) => {
+                            Err(box_err!("unexpect snapshot, should mutate instead."))
+                        }
+                        Err(e) => Err(kv::Error::from(e)),
+                    };
+                    if let Some(cb) = on_applied {
+                        cb(&mut res);
+                    }
+                    applied_tx.notify(res);
+                }),
+                drop_on_applied_callback,
+            );
+
+            let cb = StoreCallback::write_ext(applied_cb, proposed_cb, committed_cb);
+            let extra_opts = RaftCmdExtraOpts {
+                deadline: batch.deadline,
+                disk_full_opt: batch.disk_full_opt,
+            };
             res = self
                 .router
                 .send_command(cmd, cb, extra_opts)
                 .map_err(kv::Error::from);
         }
         if res.is_err() {
+            // Note that `on_applied` is not called in this case. We send message to the
+            // channel here to notify the caller that the writing ended, like
+            // how the `applied_cb` does.
             tx.notify(res);
         }
         rx.inspect(move |ev| {
-            let WriteEvent::Finished(res) = ev else { return };
+            let WriteEvent::Finished(res) = ev else {
+                return;
+            };
             match res {
                 Ok(()) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();
@@ -593,7 +617,7 @@ where
                 .set_key_ranges(mem::take(&mut ctx.key_ranges).into());
         }
         ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();
-        let begin_instant = Instant::now_coarse();
+        let begin_instant = Instant::now();
         let (cb, f) = paired_must_called_future_callback(drop_snapshot_callback);
 
         let mut header = new_request_header(ctx.pb_ctx);
@@ -617,16 +641,20 @@ where
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
+        let store_cb = StoreCallback::read(Box::new(move |resp| {
+            cb(on_read_result(resp).map_err(Error::into));
+        }));
+        let tracker = store_cb.read_tracker().unwrap();
+
+        let snap_ctx = ctx.start_ts.map(|ts| SnapshotContext {
+            read_ts: ts.into_inner(),
+            range: None,
+        });
+
         if res.is_ok() {
             res = self
                 .router
-                .read(
-                    ctx.read_id,
-                    cmd,
-                    StoreCallback::read(Box::new(move |resp| {
-                        cb(on_read_result(resp).map_err(Error::into));
-                    })),
-                )
+                .read(snap_ctx, ctx.read_id, cmd, store_cb)
                 .map_err(kv::Error::from);
         }
         async move {
@@ -641,7 +669,7 @@ where
             match res {
                 Ok(CmdRes::Resp(mut r)) => {
                     let e = if r
-                        .get(0)
+                        .first()
                         .map(|resp| resp.get_read_index().has_locked())
                         .unwrap_or(false)
                     {
@@ -653,9 +681,31 @@ where
                     Err(e)
                 }
                 Ok(CmdRes::Snap(s)) => {
-                    ASYNC_REQUESTS_DURATIONS_VEC
-                        .snapshot
-                        .observe(begin_instant.saturating_elapsed_secs());
+                    let elapse = begin_instant.saturating_elapsed_secs();
+                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                        if tracker.metrics.read_index_propose_wait_nanos > 0 {
+                            ASYNC_REQUESTS_DURATIONS_VEC
+                                .snapshot_read_index_propose_wait
+                                .observe(
+                                    tracker.metrics.read_index_propose_wait_nanos as f64
+                                        / 1_000_000_000.0,
+                                );
+                            // snapshot may be handled by lease read in raftstore
+                            if tracker.metrics.read_index_confirm_wait_nanos > 0 {
+                                ASYNC_REQUESTS_DURATIONS_VEC
+                                    .snapshot_read_index_confirm
+                                    .observe(
+                                        tracker.metrics.read_index_confirm_wait_nanos as f64
+                                            / 1_000_000_000.0,
+                                    );
+                            }
+                        } else if tracker.metrics.local_read {
+                            ASYNC_REQUESTS_DURATIONS_VEC
+                                .snapshot_local_read
+                                .observe(elapse);
+                        }
+                    });
+                    ASYNC_REQUESTS_DURATIONS_VEC.snapshot.observe(elapse);
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
                     Ok(s)
                 }

@@ -1,7 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    sync::{Arc, Mutex},
+    sync::{atomic::AtomicU64, Arc, Mutex},
     thread,
     time::Duration,
 };
@@ -10,7 +10,7 @@ use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use causal_ts::CausalTsProviderImpl;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
-use grpcio_health::HealthService;
+use health_controller::HealthController;
 use kvproto::{
     kvrpcpb::ApiVersion, metapb, raft_serverpb::StoreIdent, replication_modepb::ReplicationStatus,
 };
@@ -25,6 +25,7 @@ use raftstore::{
     },
 };
 use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
 use tikv_util::{
     config::VersionTrack,
     worker::{LazyWorker, Scheduler, Worker},
@@ -102,7 +103,7 @@ pub struct Node<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
     pd_client: Arc<C>,
     state: Arc<Mutex<GlobalReplicationState>>,
     bg_worker: Worker,
-    health_service: Option<HealthService>,
+    health_controller: HealthController,
 }
 
 impl<C, EK, ER> Node<C, EK, ER>
@@ -120,7 +121,7 @@ where
         pd_client: Arc<C>,
         state: Arc<Mutex<GlobalReplicationState>>,
         bg_worker: Worker,
-        health_service: Option<HealthService>,
+        health_controller: HealthController,
         default_store: Option<metapb::Store>,
     ) -> Node<C, EK, ER> {
         let store = init_store(default_store, cfg);
@@ -135,7 +136,7 @@ where
             has_started: false,
             state,
             bg_worker,
-            health_service,
+            health_controller,
         }
     }
 
@@ -166,12 +167,14 @@ where
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<EK>,
-        importer: Arc<SstImporter>,
+        importer: Arc<SstImporter<EK>>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        grpc_service_mgr: GrpcServiceManager,
+        safe_point: Arc<AtomicU64>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -209,6 +212,8 @@ where
             concurrency_manager,
             collector_reg_handle,
             causal_ts_provider,
+            grpc_service_mgr,
+            safe_point,
         )?;
 
         Ok(())
@@ -286,7 +291,7 @@ where
         };
         if should_check {
             // Check if there are only TiDB data in the engine
-            let snapshot = engines.kv.snapshot();
+            let snapshot = engines.kv.snapshot(None);
             for cf in DATA_CFS {
                 for (start, end) in TIDB_RANGES_COMPLEMENT {
                     let mut unexpected_data_key = None;
@@ -450,12 +455,14 @@ where
         pd_worker: LazyWorker<PdTask<EK, ER>>,
         store_meta: Arc<Mutex<StoreMeta>>,
         coprocessor_host: CoprocessorHost<EK>,
-        importer: Arc<SstImporter>,
+        importer: Arc<SstImporter<EK>>,
         split_check_scheduler: Scheduler<SplitCheckTask>,
         auto_split_controller: AutoSplitController,
         concurrency_manager: ConcurrencyManager,
         collector_reg_handle: CollectorRegHandle,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+        grpc_service_mgr: GrpcServiceManager,
+        safe_point: Arc<AtomicU64>,
     ) -> Result<()>
     where
         T: Transport + 'static,
@@ -487,8 +494,10 @@ where
             self.state.clone(),
             concurrency_manager,
             collector_reg_handle,
-            self.health_service.clone(),
+            self.health_controller.clone(),
             causal_ts_provider,
+            grpc_service_mgr,
+            safe_point,
         )?;
         Ok(())
     }

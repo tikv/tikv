@@ -32,6 +32,8 @@ macro_rules! match_template_collator {
                 Utf8Mb4BinNoPadding => CollatorUtf8Mb4BinNoPadding,
                 Utf8Mb4GeneralCi => CollatorUtf8Mb4GeneralCi,
                 Utf8Mb4UnicodeCi => CollatorUtf8Mb4UnicodeCi,
+                Utf8Mb40900AiCi => CollatorUtf8Mb40900AiCi,
+                Utf8Mb40900Bin => CollatorUtf8Mb4BinNoPadding,
                 Latin1Bin => CollatorLatin1Bin,
                 GbkBin => CollatorGbkBin,
                 GbkChineseCi => CollatorGbkChineseCi,
@@ -139,13 +141,13 @@ pub trait Encoding {
 
     #[inline]
     fn lower(s: &str, writer: BytesWriter) -> BytesGuard {
-        let res = s.chars().flat_map(char::to_lowercase);
+        let res = s.chars().flat_map(|ch| encoding::unicode_to_lower(ch));
         writer.write_from_char_iter(res)
     }
 
     #[inline]
     fn upper(s: &str, writer: BytesWriter) -> BytesGuard {
-        let res = s.chars().flat_map(char::to_uppercase);
+        let res = s.chars().flat_map(|ch| encoding::unicode_to_upper(ch));
         writer.write_from_char_iter(res)
     }
 }

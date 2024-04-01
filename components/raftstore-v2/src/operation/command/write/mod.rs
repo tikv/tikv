@@ -12,7 +12,8 @@ use raftstore::{
         fsm::{apply, MAX_PROPOSAL_SIZE_RATIO},
         metrics::PEER_WRITE_CMD_COUNTER,
         msg::ErrorCallback,
-        util::{self, NORMAL_REQ_CHECK_CONF_VER, NORMAL_REQ_CHECK_VER},
+        util::{self},
+        RaftCmdExtraOpts,
     },
     Error, Result,
 };
@@ -42,6 +43,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         header: Box<RaftRequestHeader>,
         data: SimpleWriteBinary,
         ch: CmdResChannel,
+        extra_opts: Option<RaftCmdExtraOpts>,
     ) {
         if !self.serving() {
             apply::notify_req_region_removed(self.region_id(), ch);
@@ -59,6 +61,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.report_error(resp);
             return;
         }
+        if let Some(opts) = extra_opts {
+            if let Some(Err(e)) = opts.deadline.map(|deadline| deadline.check()) {
+                let resp = cmd_resp::new_error(e.into());
+                ch.report_error(resp);
+                return;
+            }
+            // Check whether the write request can be proposed with the given disk full
+            // option.
+            if let Err(e) = self.check_proposal_with_disk_full_opt(ctx, opts.disk_full_opt) {
+                let resp = cmd_resp::new_error(e);
+                ch.report_error(resp);
+                return;
+            }
+        }
         // To maintain propose order, we need to make pending proposal first.
         self.propose_pending_writes(ctx);
         if let Some(conflict) = self.proposal_control_mut().check_conflict(None) {
@@ -72,13 +88,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.report_error(resp);
             return;
         }
-        // ProposalControl is reliable only when applied to current term.
-        let call_proposed_on_success = self.applied_to_current_term();
         let mut encoder = SimpleWriteReqEncoder::new(
             header,
             data,
             (ctx.cfg.raft_entry_max_size.0 as f64 * MAX_PROPOSAL_SIZE_RATIO) as usize,
-            call_proposed_on_success,
         );
         encoder.add_response_channel(ch);
         self.set_has_ready();
@@ -98,7 +111,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             Box::<RaftRequestHeader>::default(),
             data,
             ctx.cfg.raft_entry_max_size.0 as usize,
-            false,
         )
         .encode()
         .0
@@ -110,30 +122,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
     pub fn propose_pending_writes<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
         if let Some(encoder) = self.simple_write_encoder_mut().take() {
-            let call_proposed_on_success = if encoder.notify_proposed() {
-                // The request has pass conflict check and called all proposed callbacks.
+            let header = encoder.header();
+            let res = self.validate_command(header, None, &mut ctx.raft_metrics);
+            let call_proposed_on_success = if matches!(res, Err(Error::EpochNotMatch { .. })) {
                 false
             } else {
-                // Epoch may have changed since last check.
-                let from_epoch = encoder.header().get_region_epoch();
-                let res = util::compare_region_epoch(
-                    from_epoch,
-                    self.region(),
-                    NORMAL_REQ_CHECK_CONF_VER,
-                    NORMAL_REQ_CHECK_VER,
-                    true,
-                );
-                if let Err(e) = res {
-                    // TODO: query sibling regions.
-                    ctx.raft_metrics.invalid_proposal.epoch_not_match.inc();
-                    encoder.encode().1.report_error(cmd_resp::new_error(e));
-                    return;
-                }
-                // Only when it applies to current term, the epoch check can be reliable.
                 self.applied_to_current_term()
             };
+
             let (data, chs) = encoder.encode();
-            let res = self.propose(ctx, data);
+            let res = res.and_then(|_| self.propose(ctx, data));
+
             fail_point!("after_propose_pending_writes");
 
             self.post_propose_command(ctx, res, chs, call_proposed_on_success);
@@ -248,16 +247,8 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
                 end_key
             ));
         }
-        // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(start_key, self.region())?;
-        let end_key = keys::data_end_key(end_key);
-        let region_end_key = keys::data_end_key(self.region().get_end_key());
-        if end_key > region_end_key {
-            return Err(Error::KeyNotInRegion(
-                end_key.to_vec(),
-                self.region().clone(),
-            ));
-        }
+        util::check_key_in_region_inclusive(end_key, self.region())?;
 
         if cf.is_empty() {
             cf = CF_DEFAULT;
@@ -268,6 +259,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         }
 
         let start_key = keys::data_key(start_key);
+        let end_key = keys::data_end_key(end_key);
 
         let start = Instant::now_coarse();
         // Use delete_files_in_range to drop as many sst files as possible, this

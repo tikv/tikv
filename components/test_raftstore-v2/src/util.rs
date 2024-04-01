@@ -1,6 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt::Write, path::Path, sync::Arc, thread, time::Duration};
+use std::{
+    fmt::Write,
+    path::Path,
+    sync::Arc,
+    thread,
+    time::{Duration, Instant},
+};
 
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{RocksEngine, RocksStatistics};
@@ -8,27 +14,30 @@ use engine_test::raft::RaftTestEngine;
 use engine_traits::{CfName, KvEngine, TabletRegistry, CF_DEFAULT};
 use file_system::IoRateLimiter;
 use futures::future::BoxFuture;
+use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     encryptionpb::EncryptionMethod,
-    kvrpcpb::Context,
+    kvrpcpb::{Context, DiskFullOpt, GetResponse, Mutation, PrewriteResponse},
     metapb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse},
+    tikvpb::TikvClient,
 };
 use raftstore::{store::ReadResponse, Result};
 use rand::{prelude::SliceRandom, RngCore};
 use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
-use test_raftstore::{new_get_cmd, new_put_cf_cmd, new_request, new_snap_cmd, Config};
+use test_pd_client::TestPdClient;
+use test_raftstore::{new_get_cmd, new_put_cf_cmd, new_request, new_snap_cmd, sleep_ms, Config};
 use tikv::{
     server::KvEngineFactoryBuilder,
     storage::{
-        config::EngineType,
         kv::{SnapContext, SnapshotExt},
         point_key_range, Engine, Snapshot,
     },
 };
 use tikv_util::{
-    config::ReadableDuration, escape, future::block_on_timeout, worker::LazyWorker, HandyRwLock,
+    config::ReadableDuration, escape, future::block_on_timeout, time::InstantExt,
+    worker::LazyWorker, HandyRwLock,
 };
 use txn_types::Key;
 
@@ -57,10 +66,7 @@ pub fn create_test_engine(
         data_key_manager_from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
             .unwrap()
             .map(Arc::new);
-    let cache = cfg
-        .storage
-        .block_cache
-        .build_shared_cache(EngineType::RaftKv2);
+    let cache = cfg.storage.block_cache.build_shared_cache();
     let env = cfg
         .build_shared_rocks_env(key_manager.clone(), limiter)
         .unwrap();
@@ -75,8 +81,8 @@ pub fn create_test_engine(
         bootstrap_store(&raft_engine, cluster_id, store_id).unwrap();
     }
 
-    let builder =
-        KvEngineFactoryBuilder::new(env, &cfg.tikv, cache).sst_recovery_sender(Some(scheduler));
+    let builder = KvEngineFactoryBuilder::new(env, &cfg.tikv, cache, key_manager.clone())
+        .sst_recovery_sender(Some(scheduler));
 
     let factory = Box::new(builder.build());
     let rocks_statistics = factory.rocks_statistics();
@@ -270,7 +276,7 @@ pub fn batch_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
         request.mut_header().set_peer(peer.clone());
         let snap = cluster.sim.wl().async_snapshot(node_id, request);
         let resp = block_on_timeout(
-            Box::pin(async move {
+            async move {
                 match snap.await {
                     Ok(snap) => ReadResponse {
                         response: Default::default(),
@@ -283,7 +289,7 @@ pub fn batch_read_on_peer<T: Simulator<EK>, EK: KvEngine>(
                         txn_extra_op: Default::default(),
                     },
                 }
-            }),
+            },
             Duration::from_secs(1),
         )
         .unwrap();
@@ -416,11 +422,171 @@ pub fn put_with_timeout<T: Simulator<EK>, EK: KvEngine>(
 ) -> Result<RaftCmdResponse> {
     let mut region = cluster.get_region(key);
     let region_id = region.get_id();
-    let req = new_request(
+    let mut req = new_request(
         region_id,
         region.take_region_epoch(),
         vec![new_put_cf_cmd(CF_DEFAULT, key, value)],
         false,
     );
+    req.mut_header().set_peer(
+        region
+            .get_peers()
+            .iter()
+            .find(|p| p.store_id == node_id)
+            .unwrap()
+            .clone(),
+    );
     cluster.call_command_on_node(node_id, req, timeout)
+}
+
+pub fn wait_down_peers<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &Cluster<T, EK>,
+    count: u64,
+    peer: Option<u64>,
+) {
+    let mut peers = cluster.get_down_peers();
+    for _ in 1..1000 {
+        if peers.len() == count as usize && peer.as_ref().map_or(true, |p| peers.contains_key(p)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        peers = cluster.get_down_peers();
+    }
+    panic!(
+        "got {:?}, want {} peers which should include {:?}",
+        peers, count, peer
+    );
+}
+
+pub fn wait_region_epoch_change<T: Simulator<EK>, EK: KvEngine>(
+    cluster: &Cluster<T, EK>,
+    waited_region: &metapb::Region,
+    timeout: Duration,
+) {
+    let timer = Instant::now();
+    loop {
+        if waited_region.get_region_epoch().get_version()
+            == cluster
+                .get_region_epoch(waited_region.get_id())
+                .get_version()
+        {
+            if timer.saturating_elapsed() > timeout {
+                panic!(
+                    "region {:?}, region epoch is still not changed.",
+                    waited_region
+                );
+            }
+        } else {
+            break;
+        }
+        sleep_ms(10);
+    }
+}
+
+pub struct PeerClient {
+    pub cli: TikvClient,
+    pub ctx: Context,
+}
+
+impl PeerClient {
+    pub fn new<EK: KvEngine>(
+        cluster: &Cluster<ServerCluster<EK>, EK>,
+        region_id: u64,
+        peer: metapb::Peer,
+    ) -> PeerClient {
+        let cli = {
+            let env = Arc::new(Environment::new(1));
+            let channel =
+                ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(peer.get_store_id()));
+            TikvClient::new(channel)
+        };
+        let ctx = {
+            let epoch = cluster.get_region_epoch(region_id);
+            let mut ctx = Context::default();
+            ctx.set_region_id(region_id);
+            ctx.set_peer(peer);
+            ctx.set_region_epoch(epoch);
+            ctx
+        };
+        PeerClient { cli, ctx }
+    }
+
+    pub fn kv_read(&self, key: Vec<u8>, ts: u64) -> GetResponse {
+        test_raftstore::kv_read(&self.cli, self.ctx.clone(), key, ts)
+    }
+
+    pub fn must_kv_read_equal(&self, key: Vec<u8>, val: Vec<u8>, ts: u64) {
+        test_raftstore::must_kv_read_equal(&self.cli, self.ctx.clone(), key, val, ts)
+    }
+
+    pub fn must_kv_write(&self, pd_client: &TestPdClient, kvs: Vec<Mutation>, pk: Vec<u8>) -> u64 {
+        test_raftstore::must_kv_write(pd_client, &self.cli, self.ctx.clone(), kvs, pk)
+    }
+
+    pub fn must_kv_prewrite(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
+        test_raftstore::must_kv_prewrite(&self.cli, self.ctx.clone(), muts, pk, ts)
+    }
+
+    pub fn try_kv_prewrite(
+        &self,
+        muts: Vec<Mutation>,
+        pk: Vec<u8>,
+        ts: u64,
+        opt: DiskFullOpt,
+    ) -> PrewriteResponse {
+        let mut ctx = self.ctx.clone();
+        ctx.disk_full_opt = opt;
+        test_raftstore::try_kv_prewrite(&self.cli, ctx, muts, pk, ts)
+    }
+
+    pub fn must_kv_prewrite_async_commit(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
+        test_raftstore::must_kv_prewrite_with(
+            &self.cli,
+            self.ctx.clone(),
+            muts,
+            vec![],
+            pk,
+            ts,
+            0,
+            true,
+            false,
+        )
+    }
+
+    pub fn must_kv_prewrite_one_pc(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
+        test_raftstore::must_kv_prewrite_with(
+            &self.cli,
+            self.ctx.clone(),
+            muts,
+            vec![],
+            pk,
+            ts,
+            0,
+            false,
+            true,
+        )
+    }
+
+    pub fn must_kv_commit(&self, keys: Vec<Vec<u8>>, start_ts: u64, commit_ts: u64) {
+        test_raftstore::must_kv_commit(
+            &self.cli,
+            self.ctx.clone(),
+            keys,
+            start_ts,
+            commit_ts,
+            commit_ts,
+        )
+    }
+
+    pub fn must_kv_rollback(&self, keys: Vec<Vec<u8>>, start_ts: u64) {
+        test_raftstore::must_kv_rollback(&self.cli, self.ctx.clone(), keys, start_ts)
+    }
+
+    pub fn must_kv_pessimistic_lock(&self, key: Vec<u8>, ts: u64) {
+        test_raftstore::must_kv_pessimistic_lock(&self.cli, self.ctx.clone(), key, ts)
+    }
+
+    pub fn must_kv_pessimistic_rollback(&self, key: Vec<u8>, ts: u64) {
+        test_raftstore::must_kv_pessimistic_rollback(&self.cli, self.ctx.clone(), key, ts, ts)
+    }
 }

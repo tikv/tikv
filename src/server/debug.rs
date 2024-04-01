@@ -155,7 +155,7 @@ pub trait Debugger {
         start: &[u8],
         end: &[u8],
         limit: u64,
-    ) -> Result<impl Iterator<Item = raftstore::Result<(Vec<u8>, MvccInfo)>> + Send>;
+    ) -> Result<impl Iterator<Item = raftstore::Result<(Vec<u8>, MvccInfo)>> + Send + 'static>;
 
     /// Compact the cf[start..end) in the db.
     fn compact(
@@ -887,7 +887,7 @@ where
         start: &[u8],
         end: &[u8],
         limit: u64,
-    ) -> Result<impl Iterator<Item = raftstore::Result<(Vec<u8>, MvccInfo)>> + Send> {
+    ) -> Result<impl Iterator<Item = raftstore::Result<(Vec<u8>, MvccInfo)>> + Send + 'static> {
         if end.is_empty() && limit == 0 {
             return Err(Error::InvalidArgument("no limit and to_key".to_owned()));
         }
@@ -959,7 +959,9 @@ where
 
     fn dump_kv_stats(&self) -> Result<String> {
         let mut kv_str = box_try!(MiscExt::dump_stats(&self.engines.kv));
-        if let Some(s) = self.kv_statistics.as_ref() && let Some(s) = s.to_string() {
+        if let Some(s) = self.kv_statistics.as_ref()
+            && let Some(s) = s.to_string()
+        {
             kv_str.push_str(&s);
         }
         Ok(kv_str)
@@ -967,7 +969,9 @@ where
 
     fn dump_raft_stats(&self) -> Result<String> {
         let mut raft_str = box_try!(RaftEngine::dump_stats(&self.engines.raft));
-        if let Some(s) = self.raft_statistics.as_ref() && let Some(s) = s.to_string() {
+        if let Some(s) = self.raft_statistics.as_ref()
+            && let Some(s) = s.to_string()
+        {
             raft_str.push_str(&s);
         }
         Ok(raft_str)
@@ -1111,9 +1115,11 @@ async fn async_key_range_flashback_to_version<E: Engine, L: LockManager, F: KvFo
             .unwrap();
         if !resp.get_error().is_empty() || resp.has_region_error() {
             error!("exec prepare flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
-            return Err(Error::FlashbackFailed(
-                "exec prepare flashback failed.".into(),
-            ));
+            return Err(Error::FlashbackFailed(format!(
+                "exec prepare flashback failed: resp err is: {:?}, region err is: {:?}",
+                resp.get_error(),
+                resp.get_region_error()
+            )));
         }
     } else {
         let mut req = kvrpcpb::FlashbackToVersionRequest::new();
@@ -1127,9 +1133,11 @@ async fn async_key_range_flashback_to_version<E: Engine, L: LockManager, F: KvFo
         let resp = future_flashback_to_version(storage, req).await.unwrap();
         if !resp.get_error().is_empty() || resp.has_region_error() {
             error!("exec finish flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
-            return Err(Error::FlashbackFailed(
-                "exec finish flashback failed.".into(),
-            ));
+            return Err(Error::FlashbackFailed(format!(
+                "exec finish flashback failed: resp err is: {:?}, region err is: {:?}",
+                resp.get_error(),
+                resp.get_region_error()
+            )));
         }
     }
     Ok(())

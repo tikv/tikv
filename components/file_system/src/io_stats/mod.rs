@@ -13,7 +13,7 @@ mod stub {
     }
 
     thread_local! {
-        static IO_TYPE: Cell<IoType> = Cell::new(IoType::Other);
+        static IO_TYPE: Cell<IoType> = const {Cell::new(IoType::Other)};
     }
 
     pub fn set_io_type(new_io_type: IoType) {
@@ -46,6 +46,15 @@ pub use biosnoop::*;
 mod proc;
 #[cfg(all(target_os = "linux", not(feature = "bcc-iosnoop")))]
 pub use proc::*;
+
+// A struct assists testing IO stats.
+//
+// O_DIRECT requires I/O to be 512-byte aligned.
+// See https://man7.org/linux/man-pages/man2/open.2.html#NOTES
+#[cfg(test)]
+#[repr(align(512))]
+#[cfg_attr(not(target_os = "linux"), allow(unused))]
+pub(crate) struct A512<const SZ: usize>(pub [u8; SZ]);
 
 #[cfg(test)]
 mod tests {

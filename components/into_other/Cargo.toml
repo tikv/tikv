@@ -3,8 +3,9 @@ name = "into_other"
 version = "0.0.1"
 edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [dependencies]
 engine_traits = { workspace = true }
 kvproto = { workspace = true }
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft = { workspace = true }

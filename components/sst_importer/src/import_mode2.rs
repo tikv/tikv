@@ -63,13 +63,13 @@ impl ImportModeSwitcherV2 {
         let inner = self.inner.clone();
         let switcher = Arc::downgrade(&inner);
         let timer_loop = async move {
-            let mut prev_range = None;
+            let mut prev_ranges = vec![];
             // loop until the switcher has been dropped
             while let Some(switcher) = switcher.upgrade() {
                 let next_check = {
                     let now = Instant::now();
                     let mut switcher = switcher.lock().unwrap();
-                    if let Some(range) = prev_range.take() {
+                    for range in prev_ranges.drain(..) {
                         if let Some(next_check) = switcher.import_mode_ranges.get(&range) {
                             if now >= *next_check {
                                 switcher.clear_import_mode_range(range);
@@ -79,9 +79,12 @@ impl ImportModeSwitcherV2 {
 
                     let mut min_next_check = now + switcher.timeout;
                     for (range, next_check) in &switcher.import_mode_ranges {
-                        if *next_check < min_next_check {
-                            min_next_check = *next_check;
-                            prev_range = Some(range.clone());
+                        if *next_check <= min_next_check {
+                            if *next_check < min_next_check {
+                                min_next_check = *next_check;
+                                prev_ranges.clear();
+                            }
+                            prev_ranges.push(range.clone());
                         }
                     }
                     min_next_check
@@ -96,18 +99,22 @@ impl ImportModeSwitcherV2 {
         executor.spawn(timer_loop);
     }
 
-    pub fn range_enter_import_mode(&self, range: Range) {
-        let range = HashRange::from(range);
+    pub fn ranges_enter_import_mode(&self, ranges: Vec<Range>) {
         let mut inner = self.inner.lock().unwrap();
         let next_check = Instant::now() + inner.timeout;
-        // if the range exists before, the timeout is updated
-        inner.import_mode_ranges.insert(range, next_check);
+        for range in ranges {
+            let range = HashRange::from(range);
+            // if the range exists before, the timeout is updated
+            inner.import_mode_ranges.insert(range, next_check);
+        }
     }
 
-    pub fn clear_import_mode_range(&self, range: Range) {
+    pub fn clear_import_mode_range(&self, ranges: Vec<Range>) {
         let mut inner = self.inner.lock().unwrap();
-        let range = HashRange::from(range);
-        inner.clear_import_mode_range(range);
+        for range in ranges {
+            let range = HashRange::from(range);
+            inner.clear_import_mode_range(range);
+        }
     }
 
     pub fn region_in_import_mode(&self, region: &Region) -> bool {
@@ -132,7 +139,7 @@ impl ImportModeSwitcherV2 {
 
     pub fn ranges_in_import(&self) -> HashSet<HashRange> {
         let inner = self.inner.lock().unwrap();
-        HashSet::from_iter(inner.import_mode_ranges.keys().into_iter().cloned())
+        HashSet::from_iter(inner.import_mode_ranges.keys().cloned())
     }
 }
 
@@ -212,7 +219,7 @@ mod test {
 
         let mut key_range = Range::default();
         key_range.set_end(b"j".to_vec());
-        switcher.range_enter_import_mode(key_range.clone());
+        switcher.ranges_enter_import_mode(vec![key_range.clone()]);
         // no regions should be set in import mode
         for i in 1..=5 {
             assert!(!switcher.region_in_import_mode(&regions[i - 1]));
@@ -225,7 +232,7 @@ mod test {
         // region 1 2 3 should be included
         key_range.set_start(b"k09".to_vec());
         key_range.set_end(b"k21".to_vec());
-        switcher.range_enter_import_mode(key_range.clone());
+        switcher.ranges_enter_import_mode(vec![key_range.clone()]);
         for i in 1..=3 {
             assert!(switcher.region_in_import_mode(&regions[i - 1]));
         }
@@ -237,12 +244,12 @@ mod test {
         // region 3 4 5 should be included
         key_range2.set_start(b"k29".to_vec());
         key_range2.set_end(b"".to_vec());
-        switcher.range_enter_import_mode(key_range2.clone());
+        switcher.ranges_enter_import_mode(vec![key_range2.clone()]);
         for i in 1..=5 {
             assert!(switcher.region_in_import_mode(&regions[i - 1]));
         }
 
-        switcher.clear_import_mode_range(key_range);
+        switcher.clear_import_mode_range(vec![key_range]);
         for i in 1..=2 {
             assert!(!switcher.region_in_import_mode(&regions[i - 1]));
         }
@@ -250,7 +257,7 @@ mod test {
             assert!(switcher.region_in_import_mode(&regions[i - 1]));
         }
 
-        switcher.clear_import_mode_range(key_range2);
+        switcher.clear_import_mode_range(vec![key_range2]);
         for i in 3..=5 {
             assert!(!switcher.region_in_import_mode(&regions[i - 1]));
         }
@@ -259,7 +266,7 @@ mod test {
     #[test]
     fn test_import_mode_timeout() {
         let cfg = Config {
-            import_mode_timeout: ReadableDuration::millis(300),
+            import_mode_timeout: ReadableDuration::millis(700),
             ..Config::default()
         };
 
@@ -277,29 +284,38 @@ mod test {
         region2.set_id(2);
         region2.set_start_key(b"k3".to_vec());
         region2.set_end_key(b"k5".to_vec());
+        let mut region3 = Region::default();
+        region3.set_id(3);
+        region3.set_start_key(b"k5".to_vec());
+        region3.set_end_key(b"k7".to_vec());
 
         let mut key_range = Range::default();
         key_range.set_start(b"k2".to_vec());
         key_range.set_end(b"k4".to_vec());
-        switcher.range_enter_import_mode(key_range);
+        let mut key_range2 = Range::default();
+        key_range2.set_start(b"k5".to_vec());
+        key_range2.set_end(b"k8".to_vec());
+        switcher.ranges_enter_import_mode(vec![key_range, key_range2.clone()]);
         assert!(switcher.region_in_import_mode(&region));
         assert!(switcher.region_in_import_mode(&region2));
+        assert!(switcher.region_in_import_mode(&region3));
 
         switcher.start(threads.handle());
 
-        thread::sleep(Duration::from_secs(1));
+        thread::sleep(Duration::from_millis(400));
+        // renew the timeout of key_range2
+        switcher.ranges_enter_import_mode(vec![key_range2]);
+        thread::sleep(Duration::from_millis(400));
+
         threads.block_on(tokio::task::yield_now());
 
-        let mut key_range = Range::default();
-        key_range.set_start(b"k4".to_vec());
-        key_range.set_end(b"k5".to_vec());
-        switcher.range_enter_import_mode(key_range);
-
+        // the range covering region and region2 should be cleared due to timeout.
         assert!(!switcher.region_in_import_mode(&region));
-        assert!(switcher.region_in_import_mode(&region2));
-
-        thread::sleep(Duration::from_secs(1));
-        threads.block_on(tokio::task::yield_now());
         assert!(!switcher.region_in_import_mode(&region2));
+        assert!(switcher.region_in_import_mode(&region3));
+
+        thread::sleep(Duration::from_millis(400));
+        threads.block_on(tokio::task::yield_now());
+        assert!(!switcher.region_in_import_mode(&region3));
     }
 }

@@ -30,7 +30,7 @@ fn generate_token(ast: DeriveInput) -> std::result::Result<TokenStream, Error> {
             // Avoid naming conflict
             let mut hasher = DefaultHasher::new();
             format!("{}", &name).hash(&mut hasher);
-            format!("{}_encoder_{:x}", name, hasher.finish()).as_str()
+            format!("{}Encoder{:x}", name, hasher.finish()).as_str()
         },
         Span::call_site(),
     );
@@ -330,15 +330,11 @@ fn is_option_type(ty: &Type) -> bool {
     // TODO store (with lazy static) the vec of string
     // TODO maybe optimization, reverse the order of segments
     fn extract_option_segment(path: &Path) -> Option<&PathSegment> {
-        let idents_of_path = path
-            .segments
-            .iter()
-            .into_iter()
-            .fold(String::new(), |mut acc, v| {
-                acc.push_str(&v.ident.to_string());
-                acc.push('|');
-                acc
-            });
+        let idents_of_path = path.segments.iter().fold(String::new(), |mut acc, v| {
+            acc.push_str(&v.ident.to_string());
+            acc.push('|');
+            acc
+        });
         vec!["Option|", "std|option|Option|", "core|option|Option|"]
             .into_iter()
             .find(|s| idents_of_path == *s)

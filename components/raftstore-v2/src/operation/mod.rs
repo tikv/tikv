@@ -2,12 +2,14 @@
 
 mod bucket;
 mod command;
+mod disk_snapshot_backup;
 mod life;
 mod misc;
 mod pd;
 mod query;
 mod ready;
 mod txn_ext;
+mod unsafe_recovery;
 
 pub use command::{
     merge_source_path, AdminCmdResult, ApplyFlowControl, CatchUpLogs, CommittedEntries,
@@ -16,6 +18,7 @@ pub use command::{
     SplitFlowControl, SplitPendingAppend, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX,
     SPLIT_PREFIX,
 };
+pub use disk_snapshot_backup::UnimplementedHandle as DiskSnapBackupHandle;
 pub use life::{AbnormalPeerContext, DestroyProgress, GcPeerContext};
 pub use ready::{
     write_initial_states, ApplyTrace, AsyncWriter, DataTrace, GenSnapTask, ReplayWatch, SnapState,
@@ -23,7 +26,6 @@ pub use ready::{
 };
 
 pub(crate) use self::{
-    bucket::BucketStatsInfo,
     command::SplitInit,
     query::{LocalReader, ReadDelegatePair, SharedReadTablet},
     txn_ext::TxnContext,
@@ -36,7 +38,7 @@ pub mod test_util {
         Arc,
     };
 
-    use engine_traits::{CfName, CF_DEFAULT};
+    use engine_traits::{CfName, KvEngine, CF_DEFAULT};
     use kvproto::{kvrpcpb::ApiVersion, metapb::RegionEpoch, raft_cmdpb::RaftRequestHeader};
     use raft::prelude::{Entry, EntryType};
     use raftstore::store::simple_write::SimpleWriteEncoder;
@@ -46,7 +48,7 @@ pub mod test_util {
     use super::{CatchUpLogs, SimpleWriteReqEncoder};
     use crate::{fsm::ApplyResReporter, router::ApplyRes};
 
-    pub fn create_tmp_importer() -> (TempDir, Arc<SstImporter>) {
+    pub fn create_tmp_importer<E: KvEngine>() -> (TempDir, Arc<SstImporter<E>>) {
         let dir = TempDir::new().unwrap();
         let importer = Arc::new(
             SstImporter::new(&Default::default(), dir.path(), None, ApiVersion::V1, true).unwrap(),
@@ -86,7 +88,7 @@ pub mod test_util {
         let mut header = Box::<RaftRequestHeader>::default();
         header.set_region_id(region_id);
         header.set_region_epoch(region_epoch);
-        let req_encoder = SimpleWriteReqEncoder::new(header, encoder.encode(), 512, false);
+        let req_encoder = SimpleWriteReqEncoder::new(header, encoder.encode(), 512);
         let (bin, _) = req_encoder.encode();
         let mut e = Entry::default();
         e.set_entry_type(EntryType::EntryNormal);
@@ -111,7 +113,7 @@ pub mod test_util {
         let mut header = Box::<RaftRequestHeader>::default();
         header.set_region_id(region_id);
         header.set_region_epoch(region_epoch);
-        let req_encoder = SimpleWriteReqEncoder::new(header, encoder.encode(), 512, false);
+        let req_encoder = SimpleWriteReqEncoder::new(header, encoder.encode(), 512);
         let (bin, _) = req_encoder.encode();
         let mut e = Entry::default();
         e.set_entry_type(EntryType::EntryNormal);

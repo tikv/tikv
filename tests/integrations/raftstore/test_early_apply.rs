@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use engine_rocks::RocksEngine;
 use engine_traits::{RaftEngine, RaftEngineDebug};
 use kvproto::raft_serverpb::RaftLocalState;
 use raft::eraftpb::MessageType;
@@ -43,10 +44,14 @@ enum DataLost {
     AllLost,
 }
 
-fn test<A, C>(cluster: &mut Cluster<NodeCluster>, action: A, check: C, mode: DataLost)
-where
-    A: FnOnce(&mut Cluster<NodeCluster>),
-    C: FnOnce(&mut Cluster<NodeCluster>),
+fn test<A, C>(
+    cluster: &mut Cluster<RocksEngine, NodeCluster<RocksEngine>>,
+    action: A,
+    check: C,
+    mode: DataLost,
+) where
+    A: FnOnce(&mut Cluster<RocksEngine, NodeCluster<RocksEngine>>),
+    C: FnOnce(&mut Cluster<RocksEngine, NodeCluster<RocksEngine>>),
 {
     let filter = match mode {
         DataLost::AllLost | DataLost::LeaderCommit => RegionPacketFilter::new(1, 1)
@@ -109,7 +114,7 @@ fn test_early_apply(mode: DataLost) {
     let mut cluster = new_node_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     // So compact log will not be triggered automatically.
-    configure_for_request_snapshot(&mut cluster);
+    configure_for_request_snapshot(&mut cluster.cfg);
     cluster.run();
     if mode == DataLost::LeaderCommit || mode == DataLost::AllLost {
         cluster.must_transfer_leader(1, new_peer(1, 1));
@@ -122,7 +127,7 @@ fn test_early_apply(mode: DataLost) {
     test(
         &mut cluster,
         |c| {
-            c.async_put(b"k2", b"v2").unwrap();
+            let _ = c.async_put(b"k2", b"v2").unwrap();
         },
         |c| must_get_equal(&c.get_engine(1), b"k2", b"v2"),
         mode,
@@ -140,7 +145,7 @@ fn test_early_apply(mode: DataLost) {
         test(
             &mut cluster,
             |c| {
-                c.async_remove_peer(1, new_peer(1, 1)).unwrap();
+                let _ = c.async_remove_peer(1, new_peer(1, 1)).unwrap();
             },
             |c| must_get_none(&c.get_engine(1), b"k2"),
             mode,
@@ -175,7 +180,7 @@ fn test_update_internal_apply_index() {
     let mut cluster = new_node_cluster(0, 4);
     cluster.pd_client.disable_default_operator();
     // So compact log will not be triggered automatically.
-    configure_for_request_snapshot(&mut cluster);
+    configure_for_request_snapshot(&mut cluster.cfg);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(3, 3));
     cluster.must_put(b"k1", b"v1");
@@ -186,8 +191,8 @@ fn test_update_internal_apply_index() {
         .direction(Direction::Recv);
     cluster.add_send_filter(CloneFilterFactory(filter));
     let last_index = cluster.raft_local_state(1, 1).get_last_index();
-    cluster.async_remove_peer(1, new_peer(4, 4)).unwrap();
-    cluster.async_put(b"k2", b"v2").unwrap();
+    let _ = cluster.async_remove_peer(1, new_peer(4, 4)).unwrap();
+    let _ = cluster.async_put(b"k2", b"v2").unwrap();
     let mut snaps = Vec::new();
     for id in 1..3 {
         cluster.wait_last_index(1, id, last_index + 2, Duration::from_secs(3));

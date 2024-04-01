@@ -24,12 +24,15 @@ command! {
     /// This means other write operations that involve these keys will be blocked.
     Pause:
         cmd_ty => (),
-        display => "kv::command::pause keys:({}) {} ms | {:?}", (keys.len, duration, ctx),
+        display => { "kv::command::pause keys:({}) {} ms | {:?}", (keys.len, duration, ctx), }
         content => {
             /// The keys to hold latches on.
             keys: Vec<Key>,
             /// The amount of time in milliseconds to latch for.
             duration: u64,
+        }
+        in_heap => {
+            keys,
         }
 }
 
@@ -53,6 +56,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Pause {
             new_acquired_locks: vec![],
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status: vec![],
         })
     }
 }

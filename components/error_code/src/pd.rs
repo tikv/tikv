@@ -11,7 +11,6 @@ define_error_codes!(
     STREAM_DISCONNECT => ("StreamDisconnect","",""),
     REGION_NOT_FOUND => ("RegionNotFound", "", ""),
     STORE_TOMBSTONE => ("StoreTombstone", "", ""),
-    GLOBAL_CONFIG_NOT_FOUND => ("GlobalConfigNotFound","",""),
     DATA_COMPACTED => ("DataCompacted","",""),
     UNKNOWN => ("Unknown", "", "")
 );

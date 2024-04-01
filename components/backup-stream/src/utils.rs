@@ -18,14 +18,12 @@ use std::{
 use async_compression::{tokio::write::ZstdEncoder, Level};
 use engine_rocks::ReadPerfInstant;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use futures::{channel::mpsc, executor::block_on, ready, task::Poll, FutureExt, StreamExt};
+use futures::{ready, task::Poll, FutureExt};
 use kvproto::{
     brpb::CompressionType,
     metapb::Region,
     raft_cmdpb::{CmdType, Request},
 };
-use raft::StateRole;
-use raftstore::{coprocessor::RegionInfoProvider, RegionInfo};
 use tikv::storage::CfStatistics;
 use tikv_util::{
     box_err,
@@ -33,7 +31,6 @@ use tikv_util::{
         self_thread_inspector, IoStat, ThreadInspector, ThreadInspectorImpl as OsInspector,
     },
     time::Instant,
-    warn,
     worker::Scheduler,
     Either,
 };
@@ -77,65 +74,6 @@ pub fn cf_name(s: &str) -> CfName {
 
 pub fn redact(key: &impl AsRef<[u8]>) -> log_wrappers::Value<'_> {
     log_wrappers::Value::key(key.as_ref())
-}
-
-/// RegionPager seeks regions with leader role in the range.
-pub struct RegionPager<P> {
-    regions: P,
-    start_key: Vec<u8>,
-    end_key: Vec<u8>,
-    reach_last_region: bool,
-}
-
-impl<P: RegionInfoProvider> RegionPager<P> {
-    pub fn scan_from(regions: P, start_key: Vec<u8>, end_key: Vec<u8>) -> Self {
-        Self {
-            regions,
-            start_key,
-            end_key,
-            reach_last_region: false,
-        }
-    }
-
-    pub fn next_page(&mut self, size: usize) -> Result<Vec<RegionInfo>> {
-        if self.start_key >= self.end_key || self.reach_last_region {
-            return Ok(vec![]);
-        }
-
-        let (mut tx, rx) = mpsc::channel(size);
-        let end_key = self.end_key.clone();
-        self.regions
-            .seek_region(
-                &self.start_key,
-                Box::new(move |i| {
-                    let r = i
-                        .filter(|r| r.role == StateRole::Leader)
-                        .take(size)
-                        .take_while(|r| r.region.start_key < end_key)
-                        .try_for_each(|r| tx.try_send(r.clone()));
-                    if let Err(_err) = r {
-                        warn!("failed to scan region and send to initlizer")
-                    }
-                }),
-            )
-            .map_err(|err| {
-                Error::Other(box_err!(
-                    "failed to seek region for start key {}: {}",
-                    redact(&self.start_key),
-                    err
-                ))
-            })?;
-        let collected_regions = block_on(rx.collect::<Vec<_>>());
-        self.start_key = collected_regions
-            .last()
-            .map(|region| region.region.end_key.to_owned())
-            // no leader region found.
-            .unwrap_or_default();
-        if self.start_key.is_empty() {
-            self.reach_last_region = true;
-        }
-        Ok(collected_regions)
-    }
 }
 
 /// StopWatch is a utility for record time cost in multi-stage tasks.
@@ -342,7 +280,8 @@ pub fn request_to_triple(mut req: Request) -> Either<(Vec<u8>, Vec<u8>, CfName),
 /// `try_send!(s: Scheduler<T>, task: T)` tries to send a task to the scheduler,
 /// once meet an error, would report it, with the current file and line (so it
 /// is made as a macro). returns whether it success.
-#[macro_export(crate)]
+// Note: perhaps we'd better using std::panic::Location.
+#[macro_export]
 macro_rules! try_send {
     ($s:expr, $task:expr) => {
         match $s.schedule($task) {
@@ -366,7 +305,7 @@ macro_rules! try_send {
 /// `backup_stream_debug`. because once we enable debug log for all crates, it
 /// would soon get too verbose to read. using this macro now we can enable debug
 /// log level for the crate only (even compile time...).
-#[macro_export(crate)]
+#[macro_export]
 macro_rules! debug {
     ($($t: tt)+) => {
         if cfg!(feature = "backup-stream-debug") {
@@ -830,7 +769,7 @@ impl<'a> slog::KV for SlogRegion<'a> {
 }
 
 /// A shortcut for making an opaque future type for return type or argument
-/// type, which is sendable and not borrowing any variables.  
+/// type, which is sendable and not borrowing any variables.
 ///
 /// `future![T]` == `impl Future<Output = T> + Send + 'static`
 #[macro_export]
@@ -1040,9 +979,9 @@ mod test {
     #[test]
     fn test_recorder() {
         use engine_traits::{Iterable, KvEngine, Mutable, WriteBatch, WriteBatchExt, CF_DEFAULT};
-        use tempdir::TempDir;
+        use tempfile::TempDir;
 
-        let p = TempDir::new("test_db").unwrap();
+        let p = TempDir::new().unwrap();
         let engine =
             engine_rocks::util::new_engine(p.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
         let mut wb = engine.write_batch();
@@ -1058,7 +997,7 @@ mod test {
 
         let (items, size) = super::with_record_read_throughput(|| {
             let mut items = vec![];
-            let snap = engine.snapshot();
+            let snap = engine.snapshot(None);
             snap.scan(CF_DEFAULT, b"", b"", false, |k, v| {
                 items.push((k.to_owned(), v.to_owned()));
                 Ok(true)
@@ -1087,12 +1026,12 @@ mod test {
 
     #[tokio::test]
     async fn test_files_reader() {
-        use tempdir::TempDir;
+        use tempfile::TempDir;
         use tokio::{fs::File, io::AsyncReadExt};
 
         use super::FilesReader;
 
-        let dir = TempDir::new("test_files").unwrap();
+        let dir = TempDir::new().unwrap();
         let files_num = 5;
         let mut files_path = Vec::new();
         let mut expect_content = String::new();
@@ -1125,12 +1064,12 @@ mod test {
     #[tokio::test]
     async fn test_compression_writer() {
         use kvproto::brpb::CompressionType;
-        use tempdir::TempDir;
+        use tempfile::TempDir;
         use tokio::{fs::File, io::AsyncReadExt};
 
         use super::compression_writer_dispatcher;
 
-        let dir = TempDir::new("test_files").unwrap();
+        let dir = TempDir::new().unwrap();
         let content = "test for compression writer. try to write to local path, and read it back.";
 
         // uncompressed writer

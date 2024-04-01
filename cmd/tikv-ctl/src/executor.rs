@@ -1,8 +1,8 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::ToOwned, cmp::Ordering, path::Path, pin::Pin, result, str, string::ToString, sync::Arc,
-    time::Duration, u64,
+    borrow::ToOwned, cmp::Ordering, path::Path, result, str, string::ToString, sync::Arc,
+    time::Duration,
 };
 
 use api_version::{ApiV1, KvFormat};
@@ -13,7 +13,12 @@ use engine_traits::{
     CF_WRITE, DATA_CFS,
 };
 use file_system::read_dir;
-use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
+use futures::{
+    executor::block_on,
+    future,
+    stream::{self, BoxStream},
+    StreamExt, TryStreamExt,
+};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     debugpb::{Db as DbType, *},
@@ -55,14 +60,16 @@ pub const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
 pub const METRICS_JEMALLOC: &str = "jemalloc";
 pub const LOCK_FILE_ERROR: &str = "IO error: While lock file";
 
-type MvccInfoStream = Pin<Box<dyn Stream<Item = result::Result<(Vec<u8>, MvccInfo), String>>>>;
+type MvccInfoStream = BoxStream<'static, result::Result<(Vec<u8>, MvccInfo), String>>;
 
 fn get_engine_type(dir: &str) -> EngineType {
     let mut entries = read_dir(dir).unwrap();
     let mut engine1 = false;
     let mut engine2 = false;
     while let Some(Ok(e)) = entries.next() {
-        if let Ok(ty) = e.file_type() && ty.is_dir() {
+        if let Ok(ty) = e.file_type()
+            && ty.is_dir()
+        {
             if e.file_name() == "tablets" {
                 engine2 = true;
             } else if e.file_name() == "db" {
@@ -83,9 +90,9 @@ pub fn new_debug_executor(
     data_dir: Option<&str>,
     host: Option<&str>,
     mgr: Arc<SecurityManager>,
-) -> Box<dyn DebugExecutor> {
+) -> Box<dyn DebugExecutor + Send> {
     if let Some(remote) = host {
-        return Box::new(new_debug_client(remote, mgr)) as Box<dyn DebugExecutor>;
+        return Box::new(new_debug_client(remote, mgr)) as Box<_>;
     }
 
     // TODO: perhaps we should allow user skip specifying data path.
@@ -96,12 +103,12 @@ pub fn new_debug_executor(
         .unwrap()
         .map(Arc::new);
 
-    let cache = cfg.storage.block_cache.build_shared_cache(engine_type);
+    let cache = cfg.storage.block_cache.build_shared_cache();
     let env = cfg
         .build_shared_rocks_env(key_manager.clone(), None /* io_rate_limiter */)
         .unwrap();
 
-    let factory = KvEngineFactoryBuilder::new(env.clone(), cfg, cache)
+    let factory = KvEngineFactoryBuilder::new(env.clone(), cfg, cache, key_manager.clone())
         .lite(true)
         .build();
 
@@ -128,7 +135,7 @@ pub fn new_debug_executor(
         let debugger: DebuggerImpl<_, MockEngine, MockLockManager, ApiV1> =
             DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller, None);
 
-        Box::new(debugger) as Box<dyn DebugExecutor>
+        Box::new(debugger) as Box<_>
     } else {
         let mut config = cfg.raft_engine.config();
         config.dir = cfg.infer_raft_engine_path(Some(data_dir)).unwrap();
@@ -146,14 +153,14 @@ pub fn new_debug_executor(
 
                 let debugger: DebuggerImpl<_, MockEngine, MockLockManager, ApiV1> =
                     DebuggerImpl::new(Engines::new(kv_db, raft_db), cfg_controller, None);
-                Box::new(debugger) as Box<dyn DebugExecutor>
+                Box::new(debugger) as Box<_>
             }
             EngineType::RaftKv2 => {
                 let registry =
                     TabletRegistry::new(Box::new(factory), Path::new(data_dir).join("tablets"))
                         .unwrap_or_else(|e| fatal!("failed to create tablet registry {:?}", e));
                 let debugger = DebuggerImplV2::new(registry, raft_db, cfg_controller);
-                Box::new(debugger) as Box<dyn DebugExecutor>
+                Box::new(debugger) as Box<_>
             }
         }
     }
@@ -715,7 +722,9 @@ pub trait DebugExecutor {
         _key_range: KeyRange,
         _start_ts: u64,
         _commit_ts: u64,
-    ) -> Result<(), KeyRange>;
+    ) -> Result<(), (KeyRange, grpcio::Error)>;
+
+    fn get_region_read_progress(&self, region_id: u64, log: bool, min_start_ts: u64);
 }
 
 impl DebugExecutor for DebugClient {
@@ -946,7 +955,7 @@ impl DebugExecutor for DebugClient {
         key_range: KeyRange,
         start_ts: u64,
         commit_ts: u64,
-    ) -> Result<(), KeyRange> {
+    ) -> Result<(), (KeyRange, grpcio::Error)> {
         let mut req = FlashbackToVersionRequest::default();
         req.set_version(version);
         req.set_region_id(region_id);
@@ -961,7 +970,84 @@ impl DebugExecutor for DebugClient {
                     "flashback key_range {:?} with start_ts {:?}, commit_ts {:?} need to retry, err is {:?}",
                     key_range, start_ts, commit_ts, err
                 );
-                Err(key_range)
+                Err((key_range, err))
+            }
+        }
+    }
+
+    fn get_region_read_progress(&self, region_id: u64, log: bool, min_start_ts: u64) {
+        let mut req = GetRegionReadProgressRequest::default();
+        req.set_region_id(region_id);
+        req.set_log_locks(log);
+        req.set_min_start_ts(min_start_ts);
+        let opt = grpcio::CallOption::default().timeout(Duration::from_secs(10));
+        let resp = self
+            .get_region_read_progress_opt(&req, opt)
+            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_region_read_progress", e));
+        if !resp.get_error().is_empty() {
+            println!("error: {}", resp.get_error());
+        }
+        let fields = [
+            ("Region read progress:", "".to_owned()),
+            ("exist", resp.get_region_read_progress_exist().to_string()),
+            ("safe_ts", resp.get_safe_ts().to_string()),
+            ("applied_index", resp.get_applied_index().to_string()),
+            ("read_state.ts", resp.get_read_state_ts().to_string()),
+            (
+                "read_state.apply_index",
+                resp.get_read_state_apply_index().to_string(),
+            ),
+            (
+                "pending front item (oldest) ts",
+                resp.get_pending_front_ts().to_string(),
+            ),
+            (
+                "pending front item (oldest) applied index",
+                resp.get_pending_front_applied_index().to_string(),
+            ),
+            (
+                "pending back item (latest) ts",
+                resp.get_pending_back_ts().to_string(),
+            ),
+            (
+                "pending back item (latest) applied index",
+                resp.get_pending_back_applied_index().to_string(),
+            ),
+            ("paused", resp.get_region_read_progress_paused().to_string()),
+            ("discarding", resp.get_discard().to_string()),
+            (
+                "duration since resolved-ts last called update_safe_ts()",
+                match resp.get_duration_to_last_update_safe_ts_ms() {
+                    u64::MAX => "none".to_owned(),
+                    x => format!("{} ms", x),
+                },
+            ),
+            (
+                "duration to last consume_leader_info()",
+                match resp.get_duration_to_last_consume_leader_ms() {
+                    u64::MAX => "none".to_owned(),
+                    x => format!("{} ms", x),
+                },
+            ),
+            ("Resolver:", "".to_owned()),
+            ("exist", resp.get_resolver_exist().to_string()),
+            ("resolved_ts", resp.get_resolved_ts().to_string()),
+            (
+                "tracked index",
+                resp.get_resolver_tracked_index().to_string(),
+            ),
+            ("number of locks", resp.get_num_locks().to_string()),
+            (
+                "number of transactions",
+                resp.get_num_transactions().to_string(),
+            ),
+            ("stopped", resp.get_resolver_stopped().to_string()),
+        ];
+        for (name, value) in &fields {
+            if value.is_empty() {
+                println!("{}", name);
+            } else {
+                println!("    {}: {}, ", name, value);
             }
         }
     }
@@ -1214,8 +1300,13 @@ where
         _key_range: KeyRange,
         _start_ts: u64,
         _commit_ts: u64,
-    ) -> Result<(), KeyRange> {
+    ) -> Result<(), (KeyRange, grpcio::Error)> {
         unimplemented!("only available for remote mode");
+    }
+
+    fn get_region_read_progress(&self, _region_id: u64, _log: bool, _min_start_ts: u64) {
+        println!("only available for remote mode");
+        tikv_util::logger::exit_process_gracefully(-1);
     }
 }
 
@@ -1248,11 +1339,16 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
     }
 
     fn get_region_size(&self, region: u64, cfs: Vec<&str>) -> Vec<(String, usize)> {
-        self.region_size(region, cfs)
-            .unwrap_or_else(|e| perror_and_exit("Debugger::region_size", e))
-            .into_iter()
-            .map(|(cf, size)| (cf.to_owned(), size))
-            .collect()
+        match self.region_size(region, cfs) {
+            Ok(v) => v
+                .into_iter()
+                .map(|(cf, size)| (cf.to_owned(), size))
+                .collect(),
+            Err(e) => {
+                println!("Debugger::region_size: {}", e);
+                vec![]
+            }
+        }
     }
 
     fn get_region_info(&self, region: u64) -> RegionInfo {
@@ -1426,7 +1522,12 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
         _key_range: KeyRange,
         _start_ts: u64,
         _commit_ts: u64,
-    ) -> Result<(), KeyRange> {
+    ) -> Result<(), (KeyRange, grpcio::Error)> {
         unimplemented!("only available for remote mode");
+    }
+
+    fn get_region_read_progress(&self, _region_id: u64, _log: bool, _min_start_ts: u64) {
+        println!("only available for remote mode");
+        tikv_util::logger::exit_process_gracefully(-1);
     }
 }

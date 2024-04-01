@@ -66,6 +66,46 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
     Ok(Some(base.as_ref().modify(&path_expr_list, values, mt)?))
 }
 
+#[rpn_fn(nullable, raw_varg, min_args = 2, extra_validator = json_modify_validator)]
+#[inline]
+fn json_array_append(args: &[ScalarValueRef]) -> Result<Option<Json>> {
+    assert!(args.len() >= 2);
+    // base Json argument
+    let base: Option<JsonRef> = args[0].as_json();
+    let base = base.map_or(Json::none(), |json| Ok(json.to_owned()))?;
+
+    let buf_size = args.len() / 2;
+
+    let mut path_expr_list = Vec::with_capacity(buf_size);
+    let mut values = Vec::with_capacity(buf_size);
+
+    for chunk in args[1..].chunks(2) {
+        let path: Option<BytesRef> = chunk[0].as_bytes();
+        let value: Option<JsonRef> = chunk[1].as_json();
+
+        path_expr_list.push(try_opt!(parse_json_path(path)));
+
+        let value = value
+            .as_ref()
+            .map_or(Json::none(), |json| Ok(json.to_owned()))?;
+        // extract the element from the path, then merge the value into the element
+        // 1. extrace the element from the path
+        let tmp_path_expr_list = vec![path_expr_list.last().unwrap().to_owned()];
+        let element = base.as_ref().extract(&tmp_path_expr_list)?;
+        // change element to JsonRef
+        let element_ref = element.as_ref().map(|e| e.as_ref());
+        // 2. merge the value into the element
+        let tmp_values: Vec<JsonRef> = vec![element_ref.unwrap(), value.as_ref()];
+
+        values.push(Json::merge(tmp_values)?);
+    }
+    Ok(Some(base.as_ref().modify(
+        &path_expr_list,
+        values,
+        ModifyType::Set,
+    )?))
+}
+
 /// validate the arguments are `(Option<JsonRef>, &[(Option<Bytes>,
 /// Option<Json>)])`
 fn json_modify_validator(expr: &tipb::Expr) -> Result<()> {
@@ -362,6 +402,34 @@ fn json_contains(args: &[ScalarValueRef]) -> Result<Option<i64>> {
     Ok(Some(j.as_ref().json_contains(target)? as i64))
 }
 
+// Args should be like `(Option<JsonRef> , Option<JsonRef>)`
+fn member_of_validator(expr: &tipb::Expr) -> Result<()> {
+    assert!(expr.get_children().len() == 2);
+    let children = expr.get_children();
+    super::function::validate_expr_return_type(&children[0], EvalType::Json)?;
+    super::function::validate_expr_return_type(&children[1], EvalType::Json)?;
+    Ok(())
+}
+
+#[rpn_fn(nullable, raw_varg,min_args= 2, max_args = 2, extra_validator = member_of_validator)]
+#[inline]
+fn member_of(args: &[ScalarValueRef]) -> Result<Option<i64>> {
+    assert!(args.len() == 2);
+    let value: Option<JsonRef> = args[0].as_json();
+    let value = match value {
+        None => return Ok(None),
+        Some(value) => value.to_owned(),
+    };
+
+    let json_array: Option<JsonRef> = args[1].as_json();
+    let json_array = match json_array {
+        None => return Ok(None),
+        Some(json_array) => json_array,
+    };
+
+    Ok(Some(value.as_ref().member_of(json_array)? as i64))
+}
+
 #[rpn_fn(nullable, raw_varg, min_args = 2, extra_validator = json_with_paths_validator)]
 #[inline]
 fn json_remove(args: &[ScalarValueRef]) -> Result<Option<Json>> {
@@ -465,7 +533,7 @@ mod tests {
             (Some(r#"null"#), Some("NULL")),
             (Some(r#"-3"#), Some("INTEGER")),
             (Some(r#"3"#), Some("INTEGER")),
-            (Some(r#"9223372036854775808"#), Some("DOUBLE")),
+            (Some(r#"9223372036854775808"#), Some("UNSIGNED INTEGER")),
             (Some(r#"3.14"#), Some("DOUBLE")),
             (Some(r#"[1, 2, 3]"#), Some("ARRAY")),
             (Some(r#"{"name": 123}"#), Some("OBJECT")),
@@ -1390,6 +1458,102 @@ mod tests {
             } else {
                 output.unwrap_err();
             }
+        }
+    }
+
+    #[test]
+    fn test_json_member_of() {
+        let test_cases = vec![
+            (Some(r#"1"#), Some(r#"[1,2]"#), Some(1)),
+            (Some(r#"1"#), Some(r#"[1]"#), Some(1)),
+            (Some(r#"1"#), Some(r#"[0]"#), Some(0)),
+            (Some(r#"1"#), Some(r#"[[1]]"#), Some(0)),
+            (Some(r#""1""#), Some(r#"[1]"#), Some(0)),
+            (Some(r#""1""#), Some(r#"["1"]"#), Some(1)),
+            (Some(r#""{\"a\":1}""#), Some(r#"{"a":1}"#), Some(0)),
+            (Some(r#""{\"a\":1}""#), Some(r#"[{"a":1}]"#), Some(0)),
+            (Some(r#""{\"a\":1}""#), Some(r#"[{"a":1}, 1]"#), Some(0)),
+            (Some(r#""{\"a\":1}""#), Some(r#"["{\"a\":1}"]"#), Some(1)),
+            (Some(r#""{\"a\":1}""#), Some(r#"["{\"a\":1}",1]"#), Some(1)),
+            (Some(r#"1"#), Some(r#"1"#), Some(1)),
+            (Some(r#"[4,5]"#), Some(r#"[[3,4],[4,5]]"#), Some(1)),
+            (Some(r#""[4,5]""#), Some(r#"[[3,4],"[4,5]"]"#), Some(1)),
+            (Some(r#"{"a":1}"#), Some(r#"{"a":1}"#), Some(1)),
+            (Some(r#"{"a":1}"#), Some(r#"{"a":1, "b":2}"#), Some(0)),
+            (Some(r#"{"a":1}"#), Some(r#"[{"a":1}]"#), Some(1)),
+            (Some(r#"{"a":1}"#), Some(r#"{"b": {"a":1}}"#), Some(0)),
+            (Some(r#"1"#), Some(r#"1"#), Some(1)),
+            (Some(r#"[1,2]"#), Some(r#"[1,2]"#), Some(0)),
+            (Some(r#"[1,2]"#), Some(r#"[[1,2]]"#), Some(1)),
+            (Some(r#"[[1,2]]"#), Some(r#"[[1,2]]"#), Some(0)),
+            (Some(r#"[[1,2]]"#), Some(r#"[[[1,2]]]"#), Some(1)),
+            (None, Some(r#"[[[1,2]]]"#), None),
+            (Some(r#"[[1,2]]"#), None, None),
+            (None, None, None),
+        ];
+        for (js, value, expected) in test_cases {
+            let args: Vec<ScalarValue> = vec![
+                js.map(|js| Json::from_str(js).unwrap()).into(),
+                value.map(|value| Json::from_str(value).unwrap()).into(),
+            ];
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(args.clone())
+                .evaluate(ScalarFuncSig::JsonMemberOfSig)
+                .unwrap();
+            assert_eq!(output, expected, "{:?}", args);
+        }
+    }
+
+    #[test]
+    fn test_json_array_append() {
+        let cases: Vec<(Vec<ScalarValue>, _)> = vec![
+            (
+                vec![
+                    None::<Json>.into(),
+                    None::<Bytes>.into(),
+                    None::<Json>.into(),
+                ],
+                None::<Json>,
+            ),
+            (
+                vec![
+                    Some(Json::from_i64(9).unwrap()).into(),
+                    Some(b"$".to_vec()).into(),
+                    Some(Json::from_u64(3).unwrap()).into(),
+                ],
+                Some(r#"[9,3]"#.parse().unwrap()),
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"["a", ["b", "c"], "d"]"#).unwrap()).into(),
+                    Some(b"$[1]".to_vec()).into(),
+                    Some(Json::from_u64(1).unwrap()).into(),
+                ],
+                Some(r#"["a", ["b", "c", 1], "d"]"#.parse().unwrap()),
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"["a", ["b", "c"], "d"]"#).unwrap()).into(),
+                    Some(b"$[0]".to_vec()).into(),
+                    Some(Json::from_u64(2).unwrap()).into(),
+                ],
+                Some(r#"[["a", 2], ["b", "c"], "d"]"#.parse().unwrap()),
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"["a", ["b", "c"], "d"]"#).unwrap()).into(),
+                    Some(b"$[1][0]".to_vec()).into(),
+                    Some(Json::from_u64(3).unwrap()).into(),
+                ],
+                Some(r#"["a", [["b", 3], "c"], "d"]"#.parse().unwrap()),
+            ),
+        ];
+        for (args, expect_output) in cases {
+            let output: Option<Json> = RpnFnScalarEvaluator::new()
+                .push_params(args.clone())
+                .evaluate(ScalarFuncSig::JsonArrayAppendSig)
+                .unwrap();
+            assert_eq!(output, expect_output, "{:?}", args);
         }
     }
 }

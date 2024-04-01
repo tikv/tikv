@@ -3,12 +3,7 @@ name = "test_backup"
 version = "0.0.1"
 edition = "2021"
 publish = false
-
-[features]
-default = ["cloud-aws", "cloud-gcp", "cloud-azure"]
-cloud-aws = ["external_storage_export/cloud-aws"]
-cloud-gcp = ["external_storage_export/cloud-gcp"]
-cloud-azure = ["external_storage_export/cloud-azure"]
+license = "Apache-2.0"
 
 [dependencies]
 api_version = { workspace = true }
@@ -16,8 +11,9 @@ backup = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crc64fast = "0.1"
+engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
-external_storage_export = { workspace = true }
+external_storage ={ workspace = true }
 file_system = { workspace = true }
 futures = "0.3"
 futures-executor = "0.3"
@@ -25,6 +21,7 @@ futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { workspace = true }
 kvproto = { workspace = true }
 protobuf = "2"
+raftstore = { workspace = true }
 rand = "0.8"
 tempfile = "3.0"
 test_raftstore = { workspace = true }

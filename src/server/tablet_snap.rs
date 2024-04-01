@@ -35,7 +35,7 @@ use std::{
 use collections::HashMap;
 use crc64fast::Digest;
 use encryption_export::{DataKeyImporter, DataKeyManager};
-use engine_traits::{Checkpointer, EncryptionKeyManager, KvEngine, TabletRegistry};
+use engine_traits::{Checkpointer, KvEngine, TabletRegistry};
 use file_system::{IoType, OpenOptions, WithIoType};
 use futures::{
     future::FutureExt,
@@ -154,13 +154,17 @@ pub trait SnapCacheBuilder: Send + Sync {
 
 impl<EK: KvEngine> SnapCacheBuilder for TabletRegistry<EK> {
     fn build(&self, region_id: u64, path: &Path) -> Result<()> {
-        if let Some(mut c) = self.get(region_id) && let Some(db) = c.latest() {
+        if let Some(mut c) = self.get(region_id)
+            && let Some(db) = c.latest()
+        {
             let mut checkpointer = db.new_checkpointer()?;
             // Avoid flush.
             checkpointer.create_at(path, None, u64::MAX)?;
             Ok(())
         } else {
-            Err(Error::Other(format!("region {} not found", region_id).into()))
+            Err(Error::Other(
+                format!("region {} not found", region_id).into(),
+            ))
         }
     }
 }
@@ -314,6 +318,9 @@ async fn cleanup_cache(
             }
         }
         fs::remove_file(entry.path())?;
+        if let Some(m) = key_manager {
+            m.delete_file(entry.path().to_str().unwrap(), None)?;
+        }
     }
     let mut missing = vec![];
     loop {
@@ -323,13 +330,18 @@ async fn cleanup_cache(
         };
         let mut buffer = Vec::with_capacity(PREVIEW_CHUNK_LEN);
         for meta in preview.take_metas().into_vec() {
-            if is_sst(&meta.file_name) && let Some(p) = exists.remove(&meta.file_name) {
+            if is_sst(&meta.file_name)
+                && let Some(p) = exists.remove(&meta.file_name)
+            {
                 if is_sst_match_preview(&meta, &p, &mut buffer, limiter, key_manager).await? {
                     reused += meta.file_size;
                     continue;
                 }
                 // We should not write to the file directly as it's hard linked.
-                fs::remove_file(p)?;
+                fs::remove_file(&p)?;
+                if let Some(m) = key_manager {
+                    m.delete_file(p.to_str().unwrap(), None)?;
+                }
             }
             missing.push(meta.file_name);
         }
@@ -338,7 +350,10 @@ async fn cleanup_cache(
         }
     }
     for (_, p) in exists {
-        fs::remove_file(p)?;
+        fs::remove_file(&p)?;
+        if let Some(m) = key_manager {
+            m.delete_file(p.to_str().unwrap(), None)?;
+        }
     }
     let mut resp = TabletSnapshotResponse::default();
     resp.mut_files().set_file_name(missing.clone().into());
@@ -487,7 +502,12 @@ async fn recv_snap_imp<'a>(
         ));
     }
     let path = snap_mgr.tmp_recv_path(&context.key);
-    info!("begin to receive tablet snapshot files"; "file" => %path.display(), "region_id" => region_id);
+    info!(
+        "begin to receive tablet snapshot files";
+        "file" => %path.display(),
+        "region_id" => region_id,
+        "temp_exists" => path.exists(),
+    );
     if path.exists() {
         if let Some(m) = snap_mgr.key_manager() {
             m.remove_dir(&path, None)?;
@@ -520,12 +540,19 @@ async fn recv_snap_imp<'a>(
     }
     fs::rename(&path, &final_path).map_err(|e| {
         if let Some(m) = snap_mgr.key_manager() {
-            let _ = m.delete_file(final_path.to_str().unwrap());
+            if let Err(e) = m.remove_dir(&final_path, Some(&path)) {
+                error!(
+                    "failed to clean up encryption keys after rename fails";
+                    "src" => %path.display(),
+                    "dst" => %final_path.display(),
+                    "err" => ?e,
+                );
+            }
         }
         e
     })?;
     if let Some(m) = snap_mgr.key_manager() {
-        m.delete_file(path.to_str().unwrap())?;
+        m.remove_dir(&path, Some(&final_path))?;
     }
     Ok(context)
 }
@@ -558,6 +585,7 @@ pub(crate) async fn recv_snap<R: RaftExtension + 'static>(
     match res {
         Ok(()) => sink.close().await?,
         Err(e) => {
+            info!("receive tablet snapshot aborted"; "err" => ?e);
             let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
             sink.fail(status).await?;
         }
@@ -1007,7 +1035,11 @@ pub fn copy_tablet_snapshot(
         if let Some(m) = sender_snap_mgr.key_manager()
             && let Some((iv, key)) = m.get_file_internal(path.to_str().unwrap())?
         {
-            key_importer.as_mut().unwrap().add(recv.to_str().unwrap(), iv, key).unwrap();
+            key_importer
+                .as_mut()
+                .unwrap()
+                .add(recv.to_str().unwrap(), iv, key)
+                .unwrap();
         }
     }
     if let Some(i) = key_importer {
@@ -1018,14 +1050,20 @@ pub fn copy_tablet_snapshot(
     if let Some(m) = recver_snap_mgr.key_manager() {
         m.link_file(recv_path.to_str().unwrap(), final_path.to_str().unwrap())?;
     }
+    // Remove final path to make snapshot retryable.
+    if fs::remove_dir_all(&final_path).is_ok() {
+        if let Some(m) = recver_snap_mgr.key_manager() {
+            let _ = m.remove_dir(&final_path, None);
+        }
+    }
     fs::rename(&recv_path, &final_path).map_err(|e| {
         if let Some(m) = recver_snap_mgr.key_manager() {
-            let _ = m.delete_file(final_path.to_str().unwrap());
+            let _ = m.remove_dir(&final_path, Some(&recv_path));
         }
         e
     })?;
     if let Some(m) = recver_snap_mgr.key_manager() {
-        m.delete_file(recv_path.to_str().unwrap())?;
+        m.remove_dir(&recv_path, Some(&final_path))?;
     }
 
     Ok(())

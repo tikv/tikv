@@ -42,7 +42,7 @@ impl<T: FileSystemInspector> DBFileSystemInspector for WrappedFileSystemInspecto
 mod tests {
     use std::sync::Arc;
 
-    use engine_traits::{CompactExt, MiscExt, SyncMutable, CF_DEFAULT};
+    use engine_traits::{CompactExt, ManualCompactionOptions, MiscExt, SyncMutable, CF_DEFAULT};
     use file_system::{IoOp, IoRateLimiter, IoRateLimiterStatistics, IoType};
     use keys::data_key;
     use tempfile::Builder;
@@ -93,10 +93,10 @@ mod tests {
         assert!(stats.fetch(IoType::Flush, IoOp::Write) < value_size * 2 + amplification_bytes);
         stats.reset();
         db.compact_range_cf(
-            CF_DEFAULT, None,  // start_key
-            None,  // end_key
-            false, // exclusive_manual
-            1,     // max_subcompactions
+            CF_DEFAULT,
+            None, // start_key
+            None, // end_key
+            ManualCompactionOptions::new(false, 1, false),
         )
         .unwrap();
         assert!(stats.fetch(IoType::LevelZeroCompaction, IoOp::Read) > value_size * 4);

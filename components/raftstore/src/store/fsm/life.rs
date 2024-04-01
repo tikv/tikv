@@ -5,6 +5,7 @@
 
 use engine_traits::{KvEngine, CF_RAFT};
 use kvproto::raft_serverpb::{ExtraMessageType, PeerState, RaftMessage, RegionLocalState};
+use tikv_util::warn;
 
 use crate::store::util::is_epoch_stale;
 
@@ -68,12 +69,17 @@ pub fn handle_tombstone_message_on_learner<EK: KvEngine>(
     let region_state_key = keys::region_state_key(region_id);
     let local_state: RegionLocalState = match engine.get_msg_cf(CF_RAFT, &region_state_key) {
         Ok(Some(s)) => s,
-        e => panic!(
-            "[store {}] failed to get regions state of {:?}: {:?}",
-            store_id,
-            msg.get_region_id(),
-            e
-        ),
+        e => {
+            warn!(
+                "[store {}] failed to get regions state of {:?}: {:?}",
+                store_id,
+                msg.get_region_id(),
+                e
+            );
+            // A peer may never be created if its parent peer skips split by
+            // applying a new snapshot.
+            return build_peer_destroyed_report(&mut msg);
+        }
     };
 
     if local_state.get_state() != PeerState::Tombstone {

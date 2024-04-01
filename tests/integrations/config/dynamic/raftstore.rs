@@ -2,13 +2,14 @@
 
 use std::{
     iter::FromIterator,
-    sync::{mpsc, Arc, Mutex},
+    sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
     time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use engine_traits::{Engines, ALL_CFS, CF_DEFAULT};
+use health_controller::HealthController;
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{
     coprocessor::CoprocessorHost,
@@ -20,6 +21,7 @@ use raftstore::{
     Result,
 };
 use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{
@@ -110,8 +112,10 @@ fn start_raftstore(
             Arc::default(),
             ConcurrencyManager::new(1.into()),
             CollectorRegHandle::new_for_test(),
+            HealthController::new(),
             None,
-            None,
+            GrpcServiceManager::dummy(),
+            Arc::new(AtomicU64::new(0)),
         )
         .unwrap();
 
@@ -233,6 +237,7 @@ fn test_update_raftstore_io_config() {
     // Start from SYNC mode.
     {
         let (mut resize_config, _dir) = TikvConfig::with_tmp().unwrap();
+        resize_config.raft_store.store_io_pool_size = 0; // SYNC mode
         resize_config.validate().unwrap();
         let (cfg_controller, _, _, mut system) = start_raftstore(resize_config, &_dir);
 

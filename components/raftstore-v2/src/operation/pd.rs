@@ -22,7 +22,7 @@ use crate::{
 impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
     #[inline]
     pub fn on_pd_store_heartbeat(&mut self) {
-        self.fsm.store.store_heartbeat_pd(self.store_ctx);
+        self.fsm.store.store_heartbeat_pd(self.store_ctx, None);
         self.schedule_tick(
             StoreTick::PdStoreHeartbeat,
             self.store_ctx.cfg.pd_store_heartbeat_tick_interval.0,
@@ -31,8 +31,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
 }
 
 impl Store {
-    pub fn store_heartbeat_pd<EK, ER, T>(&self, ctx: &StoreContext<EK, ER, T>)
-    where
+    pub fn store_heartbeat_pd<EK, ER, T>(
+        &self,
+        ctx: &StoreContext<EK, ER, T>,
+        report: Option<pdpb::StoreReport>,
+    ) where
         EK: KvEngine,
         ER: RaftEngine,
     {
@@ -45,7 +48,6 @@ impl Store {
         }
 
         let snap_stats = ctx.snap_mgr.stats();
-        // todo: imple snapshot status report
         stats.set_sending_snap_count(snap_stats.sending_count as u32);
         stats.set_receiving_snap_count(snap_stats.receiving_count as u32);
         stats.set_snapshot_stats(snap_stats.stats.into());
@@ -73,7 +75,7 @@ impl Store {
         );
         stats.set_is_busy(false);
         // TODO: add query stats
-        let task = pd::Task::StoreHeartbeat { stats };
+        let task = pd::Task::StoreHeartbeat { stats, report };
         if let Err(e) = ctx.schedulers.pd.schedule(task) {
             error!(self.logger(), "notify pd failed";
                 "store_id" => self.store_id(),
@@ -101,7 +103,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let task = pd::Task::RegionHeartbeat(pd::RegionHeartbeatTask {
             term: self.term(),
             region: self.region().clone(),
-            down_peers: self.collect_down_peers(ctx.cfg.max_peer_down_duration.0),
+            down_peers: self.collect_down_peers(ctx),
             peer: self.peer().clone(),
             pending_peers: self.collect_pending_peers(ctx),
             written_bytes: self.self_stat().written_bytes,
@@ -213,6 +215,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &self,
         ctx: &StoreContext<EK, ER, T>,
         split_keys: Vec<Vec<u8>>,
+        share_source_region_size: bool,
         ch: CmdResChannel,
     ) {
         let task = pd::Task::AskBatchSplit {
@@ -220,6 +223,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             split_keys,
             peer: self.peer().clone(),
             right_derive: ctx.cfg.right_derive_when_split,
+            share_source_region_size,
             ch,
         };
         if let Err(e) = ctx.schedulers.pd.schedule(task) {
