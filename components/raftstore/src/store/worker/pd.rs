@@ -74,6 +74,10 @@ use crate::{
 };
 
 pub const NUM_COLLECT_STORE_INFOS_PER_HEARTBEAT: u32 = 2;
+/// The upper bound of buffered stats messages.
+/// It prevents unexpected memory buildup when AutoSplitController
+/// runs slowly.
+const STATS_CHANNEL_CAPACITY_LIMIT: usize = 128;
 
 type RecordPairVec = Vec<pdpb::RecordPair>;
 
@@ -662,14 +666,12 @@ where
         let (timer_tx, timer_rx) = mpsc::channel();
         self.timer = Some(timer_tx);
 
-        // The upper bound of buffered stats messages.
-        // It prevents unexpected memory buildup when AutoSplitController
-        // runs slowly.
-        const STATS_LIMIT: usize = 128;
-        let (read_stats_sender, read_stats_receiver) = mpsc::sync_channel(STATS_LIMIT);
+        let (read_stats_sender, read_stats_receiver) =
+            mpsc::sync_channel(STATS_CHANNEL_CAPACITY_LIMIT);
         self.read_stats_sender = Some(read_stats_sender);
 
-        let (cpu_stats_sender, cpu_stats_receiver) = mpsc::sync_channel(STATS_LIMIT);
+        let (cpu_stats_sender, cpu_stats_receiver) =
+            mpsc::sync_channel(STATS_CHANNEL_CAPACITY_LIMIT);
         self.cpu_stats_sender = Some(cpu_stats_sender);
 
         let reporter = self.reporter.clone();
@@ -688,7 +690,8 @@ where
                 let mut collect_store_infos_thread_stats = ThreadInfoStatistics::new();
                 let mut load_base_split_thread_stats = ThreadInfoStatistics::new();
                 let mut region_cpu_records_collector = None;
-                let mut auto_split_controller_ctx = AutoSplitControllerContext::new(STATS_LIMIT);
+                let mut auto_split_controller_ctx =
+                    AutoSplitControllerContext::new(STATS_CHANNEL_CAPACITY_LIMIT);
                 // Register the region CPU records collector.
                 if auto_split_controller
                     .cfg
@@ -2667,8 +2670,10 @@ mod tests {
 
     use kvproto::{kvrpcpb, pdpb::QueryKind};
     use pd_client::{new_bucket_stats, BucketMeta};
+    use tikv_util::worker::LazyWorker;
 
     use super::*;
+    use crate::store::util::build_key_range;
 
     const DEFAULT_TEST_STORE_ID: u64 = 1;
 
@@ -2678,7 +2683,6 @@ mod tests {
         use std::{sync::Mutex, time::Instant};
 
         use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
-        use tikv_util::worker::LazyWorker;
 
         use crate::store::fsm::StoreMeta;
 
@@ -2991,5 +2995,65 @@ mod tests {
         assert_eq!(cap, 444);
         assert_eq!(used, 111);
         assert_eq!(avail, 333);
+    }
+
+    #[test]
+    fn test_pd_worker_send_stats_on_read_and_cpu() {
+        let mut pd_worker: LazyWorker<Task<KvTestEngine, RaftTestEngine>> =
+            LazyWorker::new("test-pd-worker-collect-stats");
+        // Set the interval long enough for mocking the channel full state.
+        let interval = 600_u64;
+        let mut stats_monitor = StatsMonitor::new(
+            Duration::from_secs(interval),
+            Duration::from_secs(interval),
+            WrappedScheduler(pd_worker.scheduler()),
+        );
+        stats_monitor
+            .start(
+                AutoSplitController::default(),
+                CollectorRegHandle::new_for_test(),
+            )
+            .unwrap();
+        // Add some read stats and cpu stats to the stats monitor.
+        {
+            for _ in 0..=STATS_CHANNEL_CAPACITY_LIMIT + 10 {
+                let mut read_stats = ReadStats::with_sample_num(1);
+                read_stats.add_query_num(
+                    1,
+                    &Peer::default(),
+                    build_key_range(b"a", b"b", false),
+                    QueryKind::Get,
+                );
+                stats_monitor.maybe_send_read_stats(read_stats);
+            }
+
+            let raw_records = Arc::new(RawRecords {
+                begin_unix_time_secs: UnixSecs::now().into_inner(),
+                duration: Duration::default(),
+                records: {
+                    let mut records = HashMap::default();
+                    records.insert(
+                        Arc::new(TagInfos {
+                            store_id: 0,
+                            region_id: 1,
+                            peer_id: 0,
+                            key_ranges: vec![],
+                            extra_attachment: b"a".to_vec(),
+                        }),
+                        RawRecord {
+                            cpu_time: 111,
+                            read_keys: 1,
+                            write_keys: 0,
+                        },
+                    );
+                    records
+                },
+            });
+            for _ in 0..=STATS_CHANNEL_CAPACITY_LIMIT + 10 {
+                stats_monitor.maybe_send_cpu_stats(&raw_records);
+            }
+        }
+
+        pd_worker.stop();
     }
 }
