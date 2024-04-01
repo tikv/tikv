@@ -1007,74 +1007,44 @@ where
     }
 
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        if !self.range_cache_engine_enabled_with_whole_range {
-            self.get_impl(CF_DEFAULT, key, false)
-        } else {
-            let ctx = SnapshotContext {
-                read_ts: u64::MAX,
-                range: Some(CacheRange::new(
-                    DATA_MIN_KEY.to_vec(),
-                    DATA_MAX_KEY.to_vec(),
-                )),
-            };
-            self.get_cf_with_snap_ctx(CF_DEFAULT, key, true, ctx)
-        }
+        self.get_cf(CF_DEFAULT, key)
     }
 
     pub fn get_cf(&mut self, cf: &str, key: &[u8]) -> Option<Vec<u8>> {
-        if !self.range_cache_engine_enabled_with_whole_range {
-            self.get_impl(cf, key, false)
-        } else {
-            let ctx = SnapshotContext {
+        let ctx = if self.range_cache_engine_enabled_with_whole_range {
+            Some(SnapshotContext {
                 read_ts: u64::MAX,
                 range: Some(CacheRange::new(
                     DATA_MIN_KEY.to_vec(),
                     DATA_MAX_KEY.to_vec(),
                 )),
-            };
-            self.get_cf_with_snap_ctx(cf, key, true, ctx)
-        }
+            })
+        } else {
+            None
+        };
+        self.get_cf_with_snap_ctx(cf, key, false, ctx)
     }
 
     pub fn must_get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        if !self.range_cache_engine_enabled_with_whole_range {
-            self.get_impl(CF_DEFAULT, key, true)
-        } else {
-            let ctx = SnapshotContext {
+        let ctx = if self.range_cache_engine_enabled_with_whole_range {
+            Some(SnapshotContext {
                 read_ts: u64::MAX,
                 range: Some(CacheRange::new(
                     DATA_MIN_KEY.to_vec(),
                     DATA_MAX_KEY.to_vec(),
                 )),
-            };
-            self.get_cf_with_snap_ctx(CF_DEFAULT, key, true, ctx)
-        }
-    }
-
-    fn get_impl(&mut self, cf: &str, key: &[u8], read_quorum: bool) -> Option<Vec<u8>> {
-        let mut resp = self.request(
-            key,
-            vec![new_get_cf_cmd(cf, key)],
-            read_quorum,
-            Duration::from_secs(5),
-        );
-        if resp.get_header().has_error() {
-            panic!("response {:?} has error", resp);
-        }
-        assert_eq!(resp.get_responses().len(), 1);
-        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
-        if resp.get_responses()[0].has_get() {
-            Some(resp.mut_responses()[0].mut_get().take_value())
+            })
         } else {
             None
-        }
+        };
+        self.get_cf_with_snap_ctx(CF_DEFAULT, key, true, ctx)
     }
 
     pub fn get_with_snap_ctx(
         &mut self,
         key: &[u8],
         read_quorum: bool,
-        snap_ctx: SnapshotContext,
+        snap_ctx: Option<SnapshotContext>,
     ) -> Option<Vec<u8>> {
         self.get_cf_with_snap_ctx(CF_DEFAULT, key, read_quorum, snap_ctx)
     }
@@ -1085,8 +1055,10 @@ where
         cf: &str,
         key: &[u8],
         read_quorum: bool,
-        snap_ctx: SnapshotContext,
+        snap_ctx: Option<SnapshotContext>,
     ) -> Option<Vec<u8>> {
+        // If whole range cache is enabled, we use a failpoint to verify the key is got
+        // from the range cache.
         let rx = if self.range_cache_engine_enabled_with_whole_range {
             fail::remove("on_range_cache_get_value");
             let (tx, rx) = sync_channel(1);
@@ -1104,7 +1076,7 @@ where
             vec![new_get_cf_cmd(cf, key)],
             read_quorum,
             Duration::from_secs(5),
-            Some(snap_ctx),
+            snap_ctx,
         );
         if resp.get_header().has_error() {
             panic!("response {:?} has error", resp);

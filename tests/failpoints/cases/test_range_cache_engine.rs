@@ -139,14 +139,14 @@ fn test_load() {
                 .append_ts(20.into())
                 .into_encoded();
             let val = cluster
-                .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, false, snap_ctx.clone())
+                .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, false, Some(snap_ctx.clone()))
                 .unwrap();
             assert_eq!(&val, b"val-write");
             // verify it's read from range cache engine
             assert!(rx.try_recv().unwrap());
 
             let val = cluster
-                .get_with_snap_ctx(&encoded_key, false, snap_ctx.clone())
+                .get_with_snap_ctx(&encoded_key, false, Some(snap_ctx.clone()))
                 .unwrap();
             assert_eq!(&val, b"val-default");
             // verify it's read from range cache engine

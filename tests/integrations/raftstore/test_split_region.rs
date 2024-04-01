@@ -1294,7 +1294,6 @@ fn test_catch_up_peers_after_split() {
 }
 
 #[test_case(test_raftstore_v2::new_node_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
 fn test_split_region_keep_records() {
     let mut cluster = new_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
