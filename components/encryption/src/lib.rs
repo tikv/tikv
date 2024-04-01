@@ -1,6 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(let_chains)]
+#![feature(noop_waker)]
 
 mod config;
 mod crypter;

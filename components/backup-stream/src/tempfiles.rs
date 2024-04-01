@@ -38,7 +38,6 @@ use tokio::{
 };
 use tokio_util::compat::{
     Compat, FuturesAsyncReadCompatExt, FuturesAsyncWriteCompatExt, TokioAsyncReadCompatExt,
-    TokioAsyncWriteCompatExt,
 };
 
 use crate::{
@@ -811,7 +810,7 @@ mod test {
 
     #[derive(Clone)]
     struct TestPool {
-        _tmpdir: Arc<TempDir>,
+        tmpdir: Arc<TempDir>,
         pool: Arc<TempFilePool>,
     }
 
@@ -835,7 +834,7 @@ mod test {
         };
         m(&mut cfg);
         TestPool {
-            _tmpdir: Arc::new(tmp),
+            tmpdir: Arc::new(tmp),
             pool: Arc::new(TempFilePool::new(cfg).unwrap()),
         }
     }
@@ -1121,14 +1120,12 @@ mod test {
     }
 
     fn test_encryption(enc: DataKeyManager) {
-        let tmp = tempdir().unwrap();
         let method = enc.encryption_method();
         let pool = test_pool_with_modify(|cfg| {
             cfg.encryption = Some(Arc::new(enc));
             cfg.minimal_swap_out_file_size = 15;
             cfg.write_buffer_size = 15;
             cfg.cache_size = AtomicUsize::new(15);
-            cfg.swap_files = tmp.path().to_owned();
         });
         let rt = rt_for_test();
         let content_to_write: [&[u8]; 4] = [
@@ -1145,7 +1142,7 @@ mod test {
         }
         rt.block_on(f.done()).unwrap();
         let mut the_local = rt
-            .block_on(tokio::fs::File::open(tmp.path().join(path)))
+            .block_on(tokio::fs::File::open(pool.tmpdir.path().join(path)))
             .unwrap();
         assert!(
             rt.block_on(the_local.metadata()).unwrap().len() > 0,
@@ -1155,7 +1152,6 @@ mod test {
         rt.block_on(the_local.read_to_end(&mut buf)).unwrap();
         // A naive check that the content has been encrypted.
         assert!(!buf.starts_with(content_to_write[0]));
-        println!("{}", buf.escape_ascii());
         buf.clear();
 
         drop(f);
@@ -1166,7 +1162,7 @@ mod test {
         assert_eq!(
             a,
             b,
-            "{}(len = {}) vs {}(len = {})",
+            "{}(len = {}) vs \n{}(len = {})",
             a.escape_ascii(),
             a.len(),
             b.escape_ascii(),
