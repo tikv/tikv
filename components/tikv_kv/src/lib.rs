@@ -36,8 +36,9 @@ use std::{
 };
 
 use collections::HashMap;
+use engine_rocks::PerfContext;
 use engine_traits::{
-    CfName, IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions,
+    CfName, IterOptions, KvEngine as LocalEngine, MetricsExt, Mutable, MvccProperties, ReadOptions,
     TabletRegistry, WriteBatch, CF_DEFAULT, CF_LOCK,
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
@@ -50,7 +51,7 @@ use kvproto::{
     raft_cmdpb,
 };
 use pd_client::BucketMeta;
-use raftstore::store::{PessimisticLockPair, TxnExt};
+use raftstore::store::{PessimisticLockPair, RegionIterator, TxnExt};
 use thiserror::Error;
 use tikv_util::{
     deadline::Deadline, escape, future::block_on_timeout, memory::HeapSize, time::ThreadReadId,
@@ -538,7 +539,7 @@ pub struct DummySnapshotExt;
 
 impl SnapshotExt for DummySnapshotExt {}
 
-pub trait Iterator: Send {
+pub trait Iterator: Send + MetricsExt {
     fn next(&mut self) -> Result<bool>;
     fn prev(&mut self) -> Result<bool>;
     fn seek(&mut self, key: &Key) -> Result<bool>;

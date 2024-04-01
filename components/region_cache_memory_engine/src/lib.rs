@@ -14,3 +14,4 @@ pub use write_batch::RangeCacheWriteBatch;
 mod memory_limiter;
 pub use background::{BackgroundRunner, GcTask};
 mod metrics;
+pub mod perf_context;

@@ -1,6 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{Iterable, Iterator, KvEngine, RangeCacheEngine, Result};
+use engine_traits::{Iterable, Iterator, KvEngine, MetricsExt, RangeCacheEngine, Result};
 use tikv_util::Either;
 
 pub struct HybridEngineIterator<EK, EC>
@@ -94,6 +94,19 @@ where
         match self.iter {
             Either::Left(ref iter) => iter.valid(),
             Either::Right(ref iter) => iter.valid(),
+        }
+    }
+}
+
+impl<EK, EC> MetricsExt for HybridEngineIterator<EK, EC>
+where
+    EK: KvEngine,
+    EC: RangeCacheEngine,
+{
+    fn engine_delete_skipped_count(&self) -> usize {
+        match self.iter {
+            Either::Left(ref iter) => iter.engine_delete_skipped_count(),
+            Either::Right(ref iter) => iter.engine_delete_skipped_count(),
         }
     }
 }

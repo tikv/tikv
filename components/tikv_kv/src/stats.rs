@@ -34,7 +34,9 @@ pub enum StatsKind {
     SeekForPrev,
 }
 
-pub struct StatsCollector<'a> {
+pub struct StatsCollector<'a, T: IterMetricsCollector> {
+    collector: T,
+
     stats: &'a mut CfStatistics,
     kind: StatsKind,
 
@@ -42,9 +44,10 @@ pub struct StatsCollector<'a> {
     raw_value_tombstone: usize,
 }
 
-impl<'a> StatsCollector<'a> {
-    pub fn new(kind: StatsKind, stats: &'a mut CfStatistics) -> Self {
+impl<'a, T: IterMetricsCollector> StatsCollector<'a, T> {
+    pub fn new(collector: T, kind: StatsKind, stats: &'a mut CfStatistics) -> Self {
         StatsCollector {
+            collector,
             stats,
             kind,
             internal_tombstone: PerfContext::get().internal_delete_skipped_count() as usize,

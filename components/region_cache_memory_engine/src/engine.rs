@@ -15,8 +15,8 @@ use crossbeam::{epoch, epoch::default_collector};
 use engine_rocks::{raw::SliceTransform, util::FixedSuffixSliceTransform, RocksEngine};
 use engine_traits::{
     CacheRange, CfNamesExt, DbVector, Error, FailedReason, IterOptions, Iterable, Iterator,
-    KvEngine, Peekable, RangeCacheEngine, ReadOptions, Result, Snapshot, SnapshotMiscExt,
-    CF_DEFAULT, CF_LOCK, CF_WRITE,
+    KvEngine, MetricsExt, Peekable, RangeCacheEngine, ReadOptions, Result, Snapshot,
+    SnapshotMiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE,
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
 use skiplist_rs::{base::OwnedIter, SkipList};
@@ -29,6 +29,7 @@ use crate::{
         decode_key, encode_key_for_eviction, encode_seek_for_prev_key, encode_seek_key,
         InternalBytes, InternalKey, ValueType,
     },
+    perf_context::PERF_CONTEXT,
     range_manager::{LoadFailedReason, RangeCacheStatus, RangeManager},
     write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
 };
@@ -670,6 +671,12 @@ impl Iterator for RangeCacheIterator {
     }
 }
 
+impl MetricsExt for RangeCacheIterator {
+    fn engine_delete_skipped_count(&self) -> usize {
+        PERF_CONTEXT.with(|perf_context| perf_context.borrow_mut().internal_delete_skipped_count)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RagneCacheSnapshotMeta {
     pub(crate) range_id: u64,
@@ -1016,7 +1023,7 @@ mod tests {
             InternalBytes::from_vec(val.to_owned().into_bytes()),
             guard,
         )
-        .release(guard);
+            .release(guard);
     }
 
     fn delete_key(
@@ -1044,7 +1051,7 @@ mod tests {
         assert_ne!(k, &key);
     }
 
-    fn verify_key_values<I: iter::Iterator<Item = u32>, J: iter::Iterator<Item = u32> + Clone>(
+    fn verify_key_values<I: iter::Iterator<Item=u32>, J: iter::Iterator<Item=u32> + Clone>(
         iter: &mut RangeCacheIterator,
         key_range: I,
         mvcc_range: J,
@@ -1937,7 +1944,7 @@ mod tests {
                     InternalBytes::from_vec(v.into_bytes()),
                     guard,
                 )
-                .release(guard);
+                    .release(guard);
             }
         }
 
@@ -1999,7 +2006,7 @@ mod tests {
                     InternalBytes::from_vec(v.clone().into_bytes()),
                     guard,
                 )
-                .release(guard);
+                    .release(guard);
             }
         }
 

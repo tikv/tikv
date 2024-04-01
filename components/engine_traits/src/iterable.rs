@@ -117,8 +117,12 @@ pub trait RefIterable {
     fn iter(&self, opts: IterOptions) -> Result<Self::Iterator<'_>>;
 }
 
+pub trait MetricsExt {
+    fn engine_delete_skipped_count(&self) -> usize;
+}
+
 pub trait Iterable {
-    type Iterator: Iterator;
+    type Iterator: Iterator + MetricsExt;
 
     fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator>;
 
