@@ -20,6 +20,9 @@ use crate::{
 // height 3, which is sufficiently conservative for estimating the node overhead
 // size.
 pub(crate) const NODE_OVERHEAD_SIZE_EXPECTATION: usize = 96;
+// As every key/value holds a Arc<MemoryController>, this overhead should be
+// taken into consideration.
+pub(crate) const MEM_CONTROLLER_OVERHEAD: usize = 8;
 
 // `prepare_for_range` should be called before raft command apply for each peer
 // delegate. It sets `range_cache_status` which is used to determine whether the
@@ -202,7 +205,7 @@ impl RangeCacheWriteBatch {
         if let Err(e) = self
             .engine
             .bg_worker_manager()
-            .schedule_task(BackgroundTask::MemoryCheck)
+            .schedule_task(BackgroundTask::MemoryCheckAndEvict)
         {
             error!(
                 "schedule memory check failed";
@@ -297,7 +300,7 @@ impl RangeCacheWriteBatchEntry {
     }
 
     pub fn calc_put_entry_size(key: &[u8], value: &[u8]) -> usize {
-        key.len() + value.len() + ENC_KEY_SEQ_LENGTH
+        key.len() + value.len() + ENC_KEY_SEQ_LENGTH + 2 * MEM_CONTROLLER_OVERHEAD /* one for key and one for value */
     }
 
     pub fn cal_delete_entry_size(key: &[u8]) -> usize {
@@ -767,13 +770,14 @@ mod tests {
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.prepare_for_range(r1.clone());
         // memory required:
-        // 4(key) + 8(sequencen number) + 100(value) + 96(node overhead) = 208
+        // 4(key) + 8(sequencen number) + 100(value) + 96(node overhead) + 16(2
+        // Arc<MemoryController) = 224
         wb.put(b"kk01", &val1).unwrap();
         wb.prepare_for_range(r2.clone());
-        // Now, 416
+        // Now, 448
         wb.put(b"kk11", &val1).unwrap();
         wb.prepare_for_range(r3.clone());
-        // Now, 624
+        // Now, 672
         wb.put(b"kk21", &val1).unwrap();
         let val2: Vec<u8> = (0..400).map(|_| 2).collect();
         // The memory will fail to acquire
@@ -782,15 +786,15 @@ mod tests {
         // The memory capacity is enough the the following two inserts
         let val3: Vec<u8> = (0..100).map(|_| 3).collect();
         wb.prepare_for_range(r4.clone());
-        // Now, 832
+        // Now, 896
         wb.put(b"kk32", &val3).unwrap();
 
         wb.prepare_for_range(r5.clone());
         wb.put(b"kk41", &val3).unwrap();
 
         let memory_controller = engine.memory_controller();
-        // We should have allocated 832 as calculated above
-        assert_eq!(832, memory_controller.mem_usage());
+        // We should have allocated 896 as calculated above
+        assert_eq!(896, memory_controller.mem_usage());
         wb.write_impl(1000).unwrap();
         let snap1 = engine.snapshot(r1.clone(), 1000, 1000).unwrap();
         assert_eq!(snap1.get_value(b"kk01").unwrap().unwrap(), &val1);
@@ -812,15 +816,15 @@ mod tests {
 
         // For range 3, one write is buffered but the other is rejected, so the range 3
         // is evicted and the keys of it are deleted. After flush the epoch, we should
-        // get 832-208 = 624 memory usage.
+        // get 896-224 = 672 memory usage.
         flush_epoch();
         wait_evict_done(&engine);
-        assert_eq!(624, memory_controller.mem_usage());
+        assert_eq!(672, memory_controller.mem_usage());
 
         drop(snap1);
         engine.evict_range(&r1);
         flush_epoch();
         wait_evict_done(&engine);
-        assert_eq!(416, memory_controller.mem_usage());
+        assert_eq!(448, memory_controller.mem_usage());
     }
 }

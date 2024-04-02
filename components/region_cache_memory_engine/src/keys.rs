@@ -10,7 +10,7 @@ use bytes::{BufMut, Bytes};
 use engine_traits::CacheRange;
 use txn_types::{Key, TimeStamp};
 
-use crate::memory_controller::MemoryController;
+use crate::{memory_controller::MemoryController, write_batch::MEM_CONTROLLER_OVERHEAD};
 
 /// The internal bytes used in the skiplist. See comments on
 /// `encode_internal_bytes`.
@@ -24,7 +24,7 @@ pub struct InternalBytes {
 
 impl Drop for InternalBytes {
     fn drop(&mut self) {
-        let size = self.bytes.len();
+        let size = self.bytes.len() + MEM_CONTROLLER_OVERHEAD;
         let controller = self.memory_controller.take();
         if let Some(controller) = controller {
             // Reclaim the memory though the bytes have not been drop. This time gap should

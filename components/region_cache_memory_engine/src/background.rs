@@ -52,7 +52,7 @@ fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
 pub enum BackgroundTask {
     Gc(GcTask),
     LoadRange,
-    MemoryCheck,
+    MemoryCheckAndEvict,
     DeleteRange(Vec<CacheRange>),
 }
 
@@ -61,7 +61,7 @@ impl Display for BackgroundTask {
         match self {
             BackgroundTask::Gc(ref t) => t.fmt(f),
             BackgroundTask::LoadRange => f.debug_struct("LoadTask").finish(),
-            BackgroundTask::MemoryCheck => f.debug_struct("MemoryCheck").finish(),
+            BackgroundTask::MemoryCheckAndEvict => f.debug_struct("MemoryCheckAndEvict").finish(),
             BackgroundTask::DeleteRange(ref r) => {
                 f.debug_struct("DeleteRange").field("range", r).finish()
             }
@@ -278,6 +278,26 @@ impl BackgroundRunnerCore {
         loop {
             // Consume the cached write batch after the snapshot is acquired.
             let mut core = self.engine.write();
+            // We still need to check whether the snapshot is canceled during the load
+            let canceled = core
+                .range_manager()
+                .pending_ranges_loading_data
+                .front()
+                .unwrap()
+                .2;
+            if canceled {
+                let (r, ..) = core
+                    .mut_range_manager()
+                    .pending_ranges_loading_data
+                    .pop_front()
+                    .unwrap();
+                assert_eq!(r, range);
+                drop(core);
+                // Clear the range directly here to quickly free the memory.
+                self.delete_ranges(&vec![r]);
+                return;
+            }
+
             if core.has_cached_write_batch(&range) {
                 let (cache_batch, skiplist_engine) = {
                     (
@@ -307,13 +327,23 @@ impl BackgroundRunnerCore {
 
     fn on_snapshot_load_canceled(&mut self, range: CacheRange) {
         let mut core = self.engine.write();
-        let (r, _, canceled) = core
+        let (r, ..) = core
             .mut_range_manager()
             .pending_ranges_loading_data
             .pop_front()
             .unwrap();
         assert_eq!(r, range);
-        assert!(canceled);
+    }
+
+    fn delete_ranges(&mut self, ranges: &[CacheRange]) {
+        let skiplist_engine = self.engine.read().engine();
+        for r in ranges {
+            skiplist_engine.delete_range(r);
+        }
+        self.engine
+            .write()
+            .mut_range_manager()
+            .on_delete_ranges(ranges);
     }
 }
 
@@ -396,23 +426,23 @@ impl Runnable for BackgroundRunner {
                 }
             }
             BackgroundTask::LoadRange => {
-                if self.core.memory_controller.reached_soft_limit() {
-                    // We are running out of memory, so not to load new range.
-                    return;
-                }
-
                 let mut core = self.core.clone();
                 let f = async move {
                     let skiplist_engine = {
                         let core = core.engine.read();
                         core.engine().clone()
                     };
-                    while let Some((range, snap, canceled)) = core.get_range_to_load() {
+                    while let Some((range, snap, mut canceled)) = core.get_range_to_load() {
                         let iter_opt = IterOptions::new(
                             Some(KeyBuilder::from_vec(range.start.clone(), 0, 0)),
                             Some(KeyBuilder::from_vec(range.end.clone(), 0, 0)),
                             false,
                         );
+                        if core.memory_controller.reached_soft_limit() {
+                            // We are running out of memory, so cancel the load.
+                            canceled = true;
+                        }
+
                         if canceled {
                             core.on_snapshot_load_canceled(range);
                             continue;
@@ -447,7 +477,7 @@ impl Runnable for BackgroundRunner {
                 };
                 self.range_load_remote.spawn(f);
             }
-            BackgroundTask::MemoryCheck => {
+            BackgroundTask::MemoryCheckAndEvict => {
                 let mem_usage = self.core.memory_controller.mem_usage();
                 if mem_usage > self.core.memory_controller.soft_limit_threshold() {
                     // todo: select ranges to evict
@@ -455,17 +485,8 @@ impl Runnable for BackgroundRunner {
                 self.core.memory_controller.set_memory_checking(false);
             }
             BackgroundTask::DeleteRange(ranges) => {
-                let core = self.core.clone();
-                let f = async move {
-                    let skiplist_engine = { core.engine.read().engine() };
-                    for r in &ranges {
-                        skiplist_engine.delete_range(r);
-                    }
-                    core.engine
-                        .write()
-                        .mut_range_manager()
-                        .on_delete_ranges(&ranges);
-                };
+                let mut core = self.core.clone();
+                let f = async move { core.delete_ranges(&ranges) };
                 self.delete_range_remote.spawn(f);
             }
         }
