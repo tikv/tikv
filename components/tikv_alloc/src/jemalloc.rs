@@ -333,6 +333,7 @@ mod profiling {
     const PROF_ACTIVE: &[u8] = b"prof.active\0";
     const PROF_DUMP: &[u8] = b"prof.dump\0";
     const PROF_RESET: &[u8] = b"prof.reset\0";
+    const PROF_SAMPLE: &[u8] = b"prof.lg_sample\0";
     const OPT_PROF: &[u8] = b"opt.prof\0";
     const ARENAS_CREATE: &[u8] = b"arenas.create\0";
     const THREAD_ARENA: &[u8] = b"thread.arena\0";
@@ -340,14 +341,16 @@ mod profiling {
     // Set exclusive arena for the current thread to avoid contention.
     pub fn thread_allocate_exclusive_arena() -> ProfResult<()> {
         unsafe {
-            let index: u32 = tikv_jemalloc_ctl::raw::read(ARENAS_CREATE)
+            // let index: u32 = tikv_jemalloc_ctl::raw::read(ARENAS_CREATE)
+            //     .map_err(|e| ProfError::JemallocError(format!("failed to create arena: {}", e)))?;
+            // if let Err(e) = tikv_jemalloc_ctl::raw::write(THREAD_ARENA, index) {
+            //     return Err(ProfError::JemallocError(format!(
+            //         "failed to set thread arena: {}",
+            //         e
+            //     )));
+            // }
+            let index: u32 = tikv_jemalloc_ctl::raw::read(THREAD_ARENA)
                 .map_err(|e| ProfError::JemallocError(format!("failed to create arena: {}", e)))?;
-            if let Err(e) = tikv_jemalloc_ctl::raw::write(THREAD_ARENA, index) {
-                return Err(ProfError::JemallocError(format!(
-                    "failed to set thread arena: {}",
-                    e
-                )));
-            }
             super::THREAD_ARENA_MAP.lock().unwrap().insert(
                 std::thread::current().id(),
                 (
@@ -388,6 +391,15 @@ mod profiling {
             }
         }
         Ok(())
+    }
+
+    pub fn get_prof_sample() -> u64 {
+        match unsafe { tikv_jemalloc_ctl::raw::read(PROF_SAMPLE) } {
+            Err(e) => {
+                panic!("get_prof_sample: {:?}", e);
+            }
+            Ok(prof) => prof,
+        }
     }
 
     pub fn activate_prof() -> ProfResult<()> {
@@ -467,6 +479,7 @@ mod profiling {
             assert!(!is_profiling_active());
 
             super::set_prof_sample(512 * 1024 * 1024).unwrap();
+            assert_eq!(19, super::get_prof_sample());
         }
 
         // Only trigger this test with jemallocs `opt.prof` set to
