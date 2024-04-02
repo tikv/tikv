@@ -896,7 +896,9 @@ impl StreamTaskInfo {
         temp_pool_cfg: tempfiles::Config,
     ) -> Result<Self> {
         let temp_dir = &temp_pool_cfg.swap_files;
-        tokio::fs::create_dir_all(temp_dir).await?;
+        tokio::fs::create_dir_all(temp_dir)
+            .await
+            .context(format_args!("creating {}", temp_dir.display()))?;
         let storage = Arc::from(create_storage(
             task.info.get_storage(),
             BackendConfig::default(),
@@ -916,7 +918,9 @@ impl StreamTaskInfo {
             flush_fail_count: AtomicUsize::new(0),
             global_checkpoint_ts: AtomicU64::new(start_ts),
             merged_file_size_limit,
-            temp_file_pool: Arc::new(TempFilePool::new(temp_pool_cfg)?),
+            temp_file_pool: Arc::new(
+                TempFilePool::new(temp_pool_cfg).context("creating temp file pool")?,
+            ),
         })
     }
 

@@ -25,7 +25,7 @@ use tokio::{
 
 use crate::{
     annotate,
-    errors::Result,
+    errors::{ContextualResultExt, Result},
     metrics::{
         IN_DISK_TEMP_FILE_SIZE, TEMP_FILE_COUNT, TEMP_FILE_MEMORY_USAGE, TEMP_FILE_SWAP_OUT_BYTES,
     },
@@ -136,10 +136,13 @@ struct FileSet {
 impl TempFilePool {
     pub fn new(cfg: Config) -> Result<Self> {
         if let Ok(true) = std::fs::metadata(&cfg.swap_files).map(|x| x.is_dir()) {
-            warn!("find content in the swap file directory node. truncating them."; "dir" => %cfg.swap_files.display());
-            std::fs::remove_dir_all(&cfg.swap_files)?;
+            let res = std::fs::remove_dir_all(&cfg.swap_files)
+                .context(format_args!("removing {}", cfg.swap_files.display()));
+            warn!("find content in the swap file directory node. truncating them."; 
+                "dir" => %cfg.swap_files.display(), "removing_res" => ?res);
         }
-        std::fs::create_dir_all(&cfg.swap_files)?;
+        std::fs::create_dir_all(&cfg.swap_files)
+            .context(format_args!("creating {}", cfg.swap_files.display()))?;
 
         let this = Self {
             cfg,
