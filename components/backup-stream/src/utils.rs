@@ -962,6 +962,10 @@ mod test {
                 repeat: 1,
             },
             Case {
+                bg_task: 16,
+                repeat: 10000,
+            },
+            Case {
                 bg_task: 2,
                 repeat: 100000,
             },
