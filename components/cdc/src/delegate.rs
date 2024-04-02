@@ -244,7 +244,7 @@ impl Downstream {
 
 // In `PendingLock`,  `key` is raw format instead of encoded.
 pub enum PendingLock {
-    Track { key: Key, start_ts: TimeStamp },
+    Track { key: Key, start_ts: MiniLock },
     Untrack { key: Key },
 }
 
@@ -263,8 +263,38 @@ pub enum LockTracker {
     Preparing(Vec<PendingLock>),
     Prepared {
         region: Region,
-        locks: BTreeMap<Key, TimeStamp>,
+        locks: BTreeMap<Key, MiniLock>,
     },
+}
+
+/// `MiniLock` is like `Lock`, but only contains fields that CDC cares about.
+#[derive(Eq, PartialEq, Debug)]
+pub struct MiniLock {
+    pub ts: TimeStamp,
+    pub txn_source: u64,
+}
+
+impl MiniLock {
+    pub fn new<T>(ts: T, txn_source: u64) -> Self
+    where
+        TimeStamp: From<T>,
+    {
+        MiniLock {
+            ts: TimeStamp::from(ts),
+            txn_source,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn from_ts<T>(ts: T) -> Self
+    where
+        TimeStamp: From<T>,
+    {
+        MiniLock {
+            ts: TimeStamp::from(ts),
+            txn_source: 0,
+        }
+    }
 }
 
 /// A CDC delegate of a raftstore region peer.
@@ -308,7 +338,7 @@ impl Drop for Delegate {
 }
 
 impl Delegate {
-    fn push_lock(&mut self, key: Key, start_ts: TimeStamp) -> Result<isize> {
+    fn push_lock(&mut self, key: Key, start_ts: MiniLock) -> Result<isize> {
         let bytes = key.approximate_heap_size();
         let mut lock_count_modify = 0;
         match &mut self.lock_tracker {
@@ -362,7 +392,7 @@ impl Delegate {
     fn finish_prepare_lock_tracker(
         &mut self,
         region: Region,
-        mut locks: BTreeMap<Key, TimeStamp>,
+        mut locks: BTreeMap<Key, MiniLock>,
     ) -> Result<()> {
         let delta_locks = match std::mem::replace(&mut self.lock_tracker, LockTracker::Pending) {
             LockTracker::Preparing(locks) => locks,
@@ -403,7 +433,7 @@ impl Delegate {
     pub(crate) fn finish_scan_locks(
         &mut self,
         region: Region,
-        locks: BTreeMap<Key, TimeStamp>,
+        locks: BTreeMap<Key, MiniLock>,
     ) -> Result<Vec<(&Downstream, Error)>> {
         fail::fail_point!("cdc_finish_scan_locks_memory_quota_exceed", |_| Err(
             Error::MemoryQuotaExceeded(tikv_util::memory::MemoryQuotaExceeded)
@@ -581,8 +611,14 @@ impl Delegate {
 
             if downstream.lock_heap.is_none() {
                 let mut lock_heap = BTreeMap::<TimeStamp, isize>::new();
-                for (_, ts) in locks.range(downstream.observed_range.to_range()) {
-                    let lock_count = lock_heap.entry(*ts).or_default();
+                for (_, lock) in locks.range(downstream.observed_range.to_range()) {
+                    if TxnSource::is_lossy_ddl_reorg_source_set(lock.txn_source)
+                        || downstream.filter_loop
+                            && TxnSource::is_cdc_write_source_set(lock.txn_source)
+                    {
+                        continue;
+                    }
+                    let lock_count = lock_heap.entry(lock.ts).or_default();
                     *lock_count += 1;
                 }
                 downstream.lock_heap = Some(lock_heap);
@@ -748,10 +784,9 @@ impl Delegate {
                     row_size = 0;
                 }
             }
-            let lossy_ddl_filter = TxnSource::is_lossy_ddl_reorg_source_set(row.txn_source);
-            let cdc_write_filter =
-                TxnSource::is_cdc_write_source_set(row.txn_source) && filter_loop;
-            if lossy_ddl_filter || cdc_write_filter {
+            if TxnSource::is_lossy_ddl_reorg_source_set(row.txn_source)
+                || filter_loop && TxnSource::is_cdc_write_source_set(row.txn_source)
+            {
                 continue;
             }
             if current_rows_size + row_size >= CDC_EVENT_MAX_BYTES {
@@ -869,14 +904,15 @@ impl Delegate {
         entries.retain(|(x, _)| !TxnSource::is_lossy_ddl_reorg_source_set(x.txn_source));
 
         for downstream in downstreams {
-            // Firstly, filter out entries not in the subscribed range;
-            // then, update the downstream lock heap;
-            // finally, filter out entries by txn_source.
             let mut filtered_entries = Vec::with_capacity(entries.len());
             for (entry, lock_count_modify) in &entries {
-                if !downstream.observed_range.contains_raw_key(&entry.key) {
+                if !downstream.observed_range.contains_raw_key(&entry.key)
+                    || downstream.filter_loop
+                        && TxnSource::is_cdc_write_source_set(entry.txn_source)
+                {
                     continue;
                 }
+
                 if *lock_count_modify != 0 && downstream.lock_heap.is_some() {
                     let lock_heap = downstream.lock_heap.as_mut().unwrap();
                     match lock_heap.entry(entry.start_ts.into()) {
@@ -890,12 +926,6 @@ impl Delegate {
                             }
                         }
                     }
-                }
-                if TxnSource::is_lossy_ddl_reorg_source_set(entry.txn_source)
-                    || downstream.filter_loop
-                        && TxnSource::is_cdc_write_source_set(entry.txn_source)
-                {
-                    continue;
                 }
                 filtered_entries.push(entry.clone());
             }
@@ -960,6 +990,7 @@ impl Delegate {
             "lock" => {
                 let lock = Lock::parse(put.get_value()).unwrap();
                 let for_update_ts = lock.for_update_ts;
+                let txn_source = lock.txn_source;
 
                 let key = Key::from_encoded_slice(&put.key);
                 let row = rows.txns_by_key.entry(key.clone()).or_default();
@@ -967,7 +998,7 @@ impl Delegate {
                     return Ok(());
                 }
 
-                row.2 = self.push_lock(key, row.0.start_ts.into())?;
+                row.2 = self.push_lock(key, MiniLock::new(row.0.start_ts, txn_source))?;
 
                 let read_old_ts = std::cmp::max(for_update_ts, row.0.start_ts.into());
                 read_old_value(&mut row.0, read_old_ts)?;
@@ -1786,7 +1817,7 @@ mod tests {
         let mut k1 = Vec::with_capacity(100);
         k1.extend_from_slice(Key::from_raw(b"key1").as_encoded());
         let k1 = Key::from_encoded(k1);
-        assert_eq!(delegate.push_lock(k1, 100.into()).unwrap(), 0);
+        assert_eq!(delegate.push_lock(k1, MiniLock::from_ts(100)).unwrap(), 0);
         assert_eq!(quota.in_use(), 100);
 
         delegate.pop_lock(Key::from_raw(b"key1")).unwrap();
@@ -1795,13 +1826,13 @@ mod tests {
         let mut k2 = Vec::with_capacity(200);
         k2.extend_from_slice(Key::from_raw(b"key2").as_encoded());
         let k2 = Key::from_encoded(k2);
-        assert_eq!(delegate.push_lock(k2, 100.into()).unwrap(), 0);
+        assert_eq!(delegate.push_lock(k2, MiniLock::from_ts(100)).unwrap(), 0);
         assert_eq!(quota.in_use(), 317);
 
         let mut scaned_locks = BTreeMap::default();
-        scaned_locks.insert(Key::from_raw(b"key1"), 100.into());
-        scaned_locks.insert(Key::from_raw(b"key2"), 100.into());
-        scaned_locks.insert(Key::from_raw(b"key3"), 100.into());
+        scaned_locks.insert(Key::from_raw(b"key1"), MiniLock::from_ts(100));
+        scaned_locks.insert(Key::from_raw(b"key2"), MiniLock::from_ts(100));
+        scaned_locks.insert(Key::from_raw(b"key3"), MiniLock::from_ts(100));
         delegate
             .finish_prepare_lock_tracker(Default::default(), scaned_locks)
             .unwrap();
@@ -1812,12 +1843,12 @@ mod tests {
         assert_eq!(quota.in_use(), 0);
 
         let v = delegate
-            .push_lock(Key::from_raw(b"key1"), 300.into())
+            .push_lock(Key::from_raw(b"key1"), MiniLock::from_ts(300))
             .unwrap();
         assert_eq!(v, 1);
         assert_eq!(quota.in_use(), 17);
         let v = delegate
-            .push_lock(Key::from_raw(b"key1"), 300.into())
+            .push_lock(Key::from_raw(b"key1"), MiniLock::from_ts(300))
             .unwrap();
         assert_eq!(v, 0);
         assert_eq!(quota.in_use(), 17);

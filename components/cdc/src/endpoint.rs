@@ -60,7 +60,7 @@ use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler};
 
 use crate::{
     channel::{CdcEvent, SendError},
-    delegate::{on_init_downstream, Delegate, Downstream, DownstreamId, DownstreamState},
+    delegate::{on_init_downstream, Delegate, Downstream, DownstreamId, DownstreamState, MiniLock},
     initializer::Initializer,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
@@ -186,7 +186,7 @@ pub enum Task {
     FinishScanLocks {
         observe_id: ObserveId,
         region: Region,
-        locks: BTreeMap<Key, TimeStamp>,
+        locks: BTreeMap<Key, MiniLock>,
     },
     RegisterMinTsEvent {
         leader_resolver: LeadershipResolver,
@@ -988,7 +988,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         &mut self,
         observe_id: ObserveId,
         region: Region,
-        locks: BTreeMap<Key, TimeStamp>,
+        locks: BTreeMap<Key, MiniLock>,
     ) {
         let region_id = region.get_id();
         let mut deregisters = Vec::new();
@@ -2737,8 +2737,11 @@ mod tests {
                 conn_id,
             });
 
-            let mut locks = BTreeMap::<Key, TimeStamp>::default();
-            locks.insert(Key::from_encoded(vec![]), TimeStamp::compose(0, id));
+            let mut locks = BTreeMap::<Key, MiniLock>::default();
+            locks.insert(
+                Key::from_encoded(vec![]),
+                MiniLock::from_ts(TimeStamp::compose(0, id)),
+            );
             let mut region = Region::default();
             region.id = id;
             region.set_region_epoch(region_epoch);

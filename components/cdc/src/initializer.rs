@@ -53,7 +53,9 @@ use txn_types::{Key, KvPair, LockType, OldValue, TimeStamp};
 
 use crate::{
     channel::CdcEvent,
-    delegate::{post_init_downstream, Delegate, DownstreamId, DownstreamState, ObservedRange},
+    delegate::{
+        post_init_downstream, Delegate, DownstreamId, DownstreamState, MiniLock, ObservedRange,
+    },
     endpoint::Deregister,
     metrics::*,
     old_value::{near_seek_old_value, OldValueCursors},
@@ -267,10 +269,10 @@ impl<E: KvEngine> Initializer<E> {
             let (key_locks, has_remain) =
                 reader.scan_locks_from_storage(None, None, |_, _| true, 0)?;
             assert!(!has_remain);
-            let mut locks = BTreeMap::<Key, TimeStamp>::new();
+            let mut locks = BTreeMap::<Key, MiniLock>::new();
             for (key, lock) in key_locks {
                 if matches!(lock.lock_type, LockType::Put | LockType::Delete) {
-                    locks.insert(key, lock.ts);
+                    locks.insert(key, MiniLock::new(lock.ts, lock.txn_source));
                 }
             }
             self.finish_scan_locks(region, locks);
@@ -514,7 +516,7 @@ impl<E: KvEngine> Initializer<E> {
         Ok(())
     }
 
-    fn finish_scan_locks(&self, region: Region, locks: BTreeMap<Key, TimeStamp>) {
+    fn finish_scan_locks(&self, region: Region, locks: BTreeMap<Key, MiniLock>) {
         let observe_id = self.observe_handle.id;
         info!(
             "cdc has scanned all incremental scan locks";
@@ -745,7 +747,7 @@ mod tests {
     fn test_initializer_scan_locks() {
         let mut engine = TestEngineBuilder::new().build_without_cache().unwrap();
 
-        let mut expected_locks = BTreeMap::<Key, TimeStamp>::new();
+        let mut expected_locks = BTreeMap::<Key, MiniLock>::new();
 
         // Only observe ["b\x00", "b\0x90"]
         let observed_range = ObservedRange::new(
@@ -763,7 +765,7 @@ mod tests {
         for i in 10..100 {
             let (k, v, ts) = (&[b'k', i], &[b'v', i], TimeStamp::new(i as _));
             must_prewrite_put(&mut engine, k, v, k, ts);
-            expected_locks.insert(Key::from_raw(k), ts);
+            expected_locks.insert(Key::from_raw(k), MiniLock::from_ts(ts));
         }
 
         let region = Region::default();
