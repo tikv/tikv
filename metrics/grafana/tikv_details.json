@@ -66724,7 +66724,7 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Newly Allocated Bytes by Thread",
+          "title": "Allocated Bytes Rate per Thread",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -66857,7 +66857,140 @@
           "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Recently Released Bytes by Thread",
+          "title": "Released Bytes Rate per Thread",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "bytes",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": null,
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 24,
+            "x": 0,
+            "y": 14
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 494,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_allocator_thread_stats\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"mapped\"}\n    \n)) by (thread_name) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{thread_name}}",
+              "metric": "",
+              "query": "sum((\n    tikv_allocator_thread_stats\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"mapped\"}\n    \n)) by (thread_name) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Mapped Allocation per Thread",
           "tooltip": {
             "msResolution": true,
             "shared": true,
@@ -66933,7 +67066,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 494,
+      "id": 495,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -66972,7 +67105,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 495,
+          "id": 496,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67173,7 +67306,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 496,
+          "id": 497,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67309,7 +67442,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 497,
+      "id": 498,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -67348,7 +67481,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 498,
+          "id": 499,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67481,7 +67614,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 499,
+          "id": 500,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67614,7 +67747,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 500,
+          "id": 501,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67747,7 +67880,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 501,
+          "id": 502,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67880,7 +68013,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 502,
+          "id": 503,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68028,7 +68161,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 503,
+          "id": 504,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68232,7 +68365,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 504,
+      "id": 505,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -68271,7 +68404,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 505,
+          "id": 506,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68404,7 +68537,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 506,
+          "id": 507,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68537,7 +68670,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 507,
+          "id": 508,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68670,7 +68803,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 508,
+          "id": 509,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68803,7 +68936,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 509,
+          "id": 510,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69000,7 +69133,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 510,
+          "id": 511,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,

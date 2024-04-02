@@ -13,6 +13,7 @@ pub fn monitor_allocator_stats<S: Into<String>>(namespace: S) -> Result<()> {
 struct AllocStatsCollector {
     descs: Vec<Desc>,
     memory_stats: IntGaugeVec,
+    thread_stats: IntGaugeVec,
     allocation: IntGaugeVec,
 }
 
@@ -23,6 +24,14 @@ impl AllocStatsCollector {
             Opts::new("allocator_stats", "Allocator stats").namespace(ns.clone()),
             &["type"],
         )?;
+        let thread_stats = IntGaugeVec::new(
+            Opts::new(
+                "allocator_thread_stats",
+                "The allocation statistic for threads.",
+            )
+            .namespace(ns.clone()),
+            &["type", "thread_name"],
+        )?;
         let allocation = IntGaugeVec::new(
             Opts::new(
                 "allocator_thread_allocation",
@@ -32,12 +41,13 @@ impl AllocStatsCollector {
             &["type", "thread_name"],
         )?;
         Ok(AllocStatsCollector {
-            descs: [&stats, &allocation]
+            descs: [&stats, &thread_stats, &allocation]
                 .iter()
                 .flat_map(|m| m.desc().into_iter().cloned())
                 .collect(),
-            allocation,
             memory_stats: stats,
+            thread_stats,
+            allocation,
         })
     }
 }
@@ -56,13 +66,13 @@ impl Collector for AllocStatsCollector {
             }
         }
         tikv_alloc::iterate_arena_allocation_stats(|name, resident, mapped, retained| {
-            self.allocation
+            self.thread_stats
                 .with_label_values(&["resident", name])
                 .set(resident as _);
-            self.allocation
+            self.thread_stats
                 .with_label_values(&["mapped", name])
                 .set(mapped as _);
-            self.allocation
+            self.thread_stats
                 .with_label_values(&["retained", name])
                 .set(retained as _);
         });

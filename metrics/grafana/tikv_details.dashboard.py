@@ -7560,7 +7560,7 @@ def Memory() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Newly Allocated Bytes by Thread",
+                title="Allocated Bytes Rate per Thread",
                 description=None,
                 yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 targets=[
@@ -7574,7 +7574,7 @@ def Memory() -> RowPanel:
                 ],
             ),
             graph_panel(
-                title="Recently Released Bytes by Thread",
+                title="Released Bytes Rate per Thread",
                 description=None,
                 yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 targets=[
@@ -7584,6 +7584,24 @@ def Memory() -> RowPanel:
                             label_selectors=['type="dealloc"'],
                             by_labels=["thread_name"],
                         ),
+                    )
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Mapped Allocation per Thread",
+                description=None,
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_allocator_thread_stats",
+                            label_selectors=['type="mapped"'],
+                            by_labels=["thread_name"],
+                        )
                     )
                 ],
             ),
