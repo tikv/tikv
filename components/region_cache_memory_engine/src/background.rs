@@ -22,6 +22,7 @@ use yatp::Remote;
 use crate::{
     engine::RangeCacheMemoryEngineCore,
     keys::{decode_key, encode_key, encoding_for_filter, InternalBytes, InternalKey, ValueType},
+    metrics::GC_FILTERED_STATIC,
 };
 
 /// Try to extract the key and `u64` timestamp from `encoded_key`.
@@ -183,11 +184,11 @@ impl BackgroundRunnerCore {
         Some(ranges)
     }
 
-    fn gc_range(&self, range: &CacheRange, safe_point: u64) {
+    fn gc_range(&self, range: &CacheRange, safe_point: u64) -> FilterMetrics {
         let (skiplist_engine, safe_ts) = {
             let mut core = self.engine.write();
             let Some(range_meta) = core.mut_range_manager().mut_range_meta(range) else {
-                return;
+                return FilterMetrics::default();
             };
             let min_snapshot = range_meta
                 .range_snapshot_list()
@@ -201,7 +202,7 @@ impl BackgroundRunnerCore {
                     "prev" => range_meta.safe_point(),
                     "current" => safe_point,
                 );
-                return;
+                return FilterMetrics::default();
             }
 
             // todo: change it to debug!
@@ -222,7 +223,6 @@ impl BackgroundRunnerCore {
         let mut iter = write_cf_handle.owned_iter();
         let guard = &epoch::pin();
         iter.seek_to_first(guard);
-        let mut count = 0;
         while iter.valid() {
             let k = iter.key();
             let v = iter.value();
@@ -233,18 +233,19 @@ impl BackgroundRunnerCore {
                 );
             }
             iter.next(guard);
-            count += 1;
         }
 
         info!(
             "range gc complete";
             "range" => ?range,
-            "total_version" => count,
-            "unique_keys" => filter.unique_key,
-            "outdated_version" => filter.versions,
-            "outdated_delete_version" => filter.delete_versions,
-            "filtered_version" => filter.filtered,
+            "total_version" => filter.metrics.total,
+            "filtered_version" => filter.metrics.filtered,
+            "below_safe_point_unique_keys" => filter.metrics.unique_key,
+            "below_safe_point_version" => filter.metrics.versions,
+            "below_safe_point_delete_version" => filter.metrics.delete_versions,
         );
+
+        std::mem::take(&mut filter.metrics)
     }
 
     fn on_gc_finished(&mut self, ranges: BTreeSet<CacheRange>) {
@@ -351,10 +352,13 @@ impl Runnable for BackgroundRunner {
                 let mut core = self.core.clone();
                 if let Some(ranges) = core.ranges_for_gc() {
                     let f = async move {
+                        let mut metrics = FilterMetrics::default();
                         for range in &ranges {
-                            core.gc_range(range, t.safe_point);
+                            let m = core.gc_range(range, t.safe_point);
+                            metrics.merge(&m);
                         }
                         core.on_gc_finished(ranges);
+                        metrics.flush();
                     };
                     self.gc_range_remote.spawn(f);
                 }
@@ -420,6 +424,38 @@ impl Runnable for BackgroundRunner {
     }
 }
 
+#[derive(Default)]
+struct FilterMetrics {
+    total: usize,
+    versions: usize,
+    delete_versions: usize,
+    filtered: usize,
+    unique_key: usize,
+    mvcc_rollback_and_locks: usize,
+}
+
+impl FilterMetrics {
+    fn merge(&mut self, other: &FilterMetrics) {
+        self.total += other.total;
+        self.versions += other.versions;
+        self.delete_versions += other.delete_versions;
+        self.filtered += other.filtered;
+        self.unique_key += other.unique_key;
+        self.mvcc_rollback_and_locks += other.mvcc_rollback_and_locks;
+    }
+
+    fn flush(&self) {
+        GC_FILTERED_STATIC.total.inc_by(self.total as u64);
+        GC_FILTERED_STATIC
+            .below_safe_point_total
+            .inc_by(self.versions as u64);
+        GC_FILTERED_STATIC.filtered.inc_by(self.filtered as u64);
+        GC_FILTERED_STATIC
+            .below_safe_point_unique
+            .inc_by(self.unique_key as u64);
+    }
+}
+
 struct Filter {
     safe_point: u64,
     mvcc_key_prefix: Vec<u8>,
@@ -432,11 +468,7 @@ struct Filter {
     // version appears.
     cached_delete_key: Option<Vec<u8>>,
 
-    versions: usize,
-    delete_versions: usize,
-    filtered: usize,
-    unique_key: usize,
-    mvcc_rollback_and_locks: usize,
+    metrics: FilterMetrics,
 }
 
 impl Drop for Filter {
@@ -463,18 +495,15 @@ impl Filter {
             safe_point,
             default_cf_handle,
             write_cf_handle,
-            unique_key: 0,
             mvcc_key_prefix: vec![],
-            delete_versions: 0,
-            versions: 0,
-            filtered: 0,
             cached_delete_key: None,
-            mvcc_rollback_and_locks: 0,
             remove_older: false,
+            metrics: FilterMetrics::default(),
         }
     }
 
     fn filter(&mut self, key: &Bytes, value: &Bytes) -> Result<(), String> {
+        self.metrics.total += 1;
         let InternalKey { user_key, .. } = decode_key(key);
 
         let (mvcc_key_prefix, commit_ts) = split_ts(user_key)?;
@@ -483,9 +512,9 @@ impl Filter {
         }
 
         let guard = &epoch::pin();
-        self.versions += 1;
+        self.metrics.versions += 1;
         if self.mvcc_key_prefix != mvcc_key_prefix {
-            self.unique_key += 1;
+            self.metrics.unique_key += 1;
             self.mvcc_key_prefix.clear();
             self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
             self.remove_older = false;
@@ -504,12 +533,12 @@ impl Filter {
         if !self.remove_older {
             match write.write_type {
                 WriteType::Rollback | WriteType::Lock => {
-                    self.mvcc_rollback_and_locks += 1;
+                    self.metrics.mvcc_rollback_and_locks += 1;
                     filtered = true;
                 }
                 WriteType::Put => self.remove_older = true,
                 WriteType::Delete => {
-                    self.delete_versions += 1;
+                    self.metrics.delete_versions += 1;
                     self.remove_older = true;
 
                     // The first mvcc type below safe point is the mvcc delete. We should delay to
@@ -523,7 +552,7 @@ impl Filter {
         if !filtered {
             return Ok(());
         }
-        self.filtered += 1;
+        self.metrics.filtered += 1;
         if let Some(e) = self
             .write_cf_handle
             .remove(&InternalBytes::from_bytes(key.clone()), guard)
@@ -779,9 +808,7 @@ pub mod tests {
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let (write, default) = {
-            let mut core = engine.core().write();
-            let skiplist_engine = core.engine();
-            core.mut_range_manager().set_range_readable(&range, true);
+            let skiplist_engine = engine.core().write().engine();
             (
                 skiplist_engine.cf_handle(CF_WRITE),
                 skiplist_engine.cf_handle(CF_DEFAULT),
@@ -835,9 +862,7 @@ pub mod tests {
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let (write, default) = {
-            let mut core = engine.core().write();
-            let skiplist_engine = core.engine();
-            core.mut_range_manager().set_range_readable(&range, true);
+            let skiplist_engine = engine.core().write().engine();
             (
                 skiplist_engine.cf_handle(CF_WRITE),
                 skiplist_engine.cf_handle(CF_DEFAULT),
