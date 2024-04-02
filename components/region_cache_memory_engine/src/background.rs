@@ -294,7 +294,7 @@ impl BackgroundRunnerCore {
                 assert_eq!(r, range);
                 drop(core);
                 // Clear the range directly here to quickly free the memory.
-                self.delete_ranges(&vec![r]);
+                self.delete_ranges(&[r]);
                 return;
             }
 
