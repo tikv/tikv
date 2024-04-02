@@ -383,7 +383,6 @@ mod tests {
         engine.new_range(r.clone());
         {
             let mut core = engine.core.write();
-            core.mut_range_manager().set_range_readable(&r, true);
             core.mut_range_manager().set_safe_point(&r, 10);
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
@@ -404,7 +403,6 @@ mod tests {
         engine.new_range(r.clone());
         {
             let mut core = engine.core.write();
-            core.mut_range_manager().set_range_readable(&r, true);
             core.mut_range_manager().set_safe_point(&r, 10);
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
@@ -430,7 +428,6 @@ mod tests {
         engine.new_range(r.clone());
         {
             let mut core = engine.core.write();
-            core.mut_range_manager().set_range_readable(&r, true);
             core.mut_range_manager().set_safe_point(&r, 10);
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
@@ -467,7 +464,6 @@ mod tests {
         {
             engine.new_range(r1.clone());
             let mut core = engine.core.write();
-            core.mut_range_manager().set_range_readable(&r1, true);
             core.mut_range_manager().set_safe_point(&r1, 10);
 
             let snap = Arc::new(rocks_engine.snapshot(None));
