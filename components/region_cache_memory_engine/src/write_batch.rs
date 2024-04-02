@@ -109,7 +109,6 @@ impl RangeCacheWriteBatch {
             std::mem::take(&mut self.pending_range_in_loading_buffer),
         );
         let guard = &epoch::pin();
-        let entry_counts = entries_to_write.len() + self.buffer.len();
         // Some entries whose ranges may be marked as evicted above, but it does not
         // matter, they will be deleted later.
         let res = entries_to_write
@@ -118,18 +117,19 @@ impl RangeCacheWriteBatch {
             .try_for_each(|e| {
                 e.write_to_memory(seq, &engine, self.memory_controller.clone(), guard)
             });
-        self.memory_controller.on_node_written(entry_counts);
 
-        if let Err(e) = self
-            .engine
-            .bg_worker_manager()
-            .schedule_task(BackgroundTask::DeleteRange(ranges_to_delete))
-        {
-            error!(
-                "schedule delete range failed";
-                "err" => ?e,
-            );
-            assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+        if !ranges_to_delete.is_empty() {
+            if let Err(e) = self
+                .engine
+                .bg_worker_manager()
+                .schedule_task(BackgroundTask::DeleteRange(ranges_to_delete))
+            {
+                error!(
+                    "schedule delete range failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+            }
         }
 
         res
@@ -766,36 +766,41 @@ mod tests {
             let _ = engine.snapshot(r.clone(), 1000, 1000).unwrap();
         }
 
-        let val1: Vec<u8> = (0..100).map(|_| 0).collect();
+        let val1: Vec<u8> = (0..150).map(|_| 0).collect();
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.prepare_for_range(r1.clone());
         // memory required:
-        // 4(key) + 8(sequencen number) + 100(value) + 96(node overhead) + 16(2
-        // Arc<MemoryController) = 224
+        // 4(key) + 8(sequencen number) + 150(value) + 16(2 Arc<MemoryController) = 178
         wb.put(b"kk01", &val1).unwrap();
         wb.prepare_for_range(r2.clone());
-        // Now, 448
+        // Now, 356
         wb.put(b"kk11", &val1).unwrap();
         wb.prepare_for_range(r3.clone());
-        // Now, 672
+        // Now, 534
         wb.put(b"kk21", &val1).unwrap();
-        let val2: Vec<u8> = (0..400).map(|_| 2).collect();
+        let val2: Vec<u8> = (0..500).map(|_| 2).collect();
         // The memory will fail to acquire
         wb.put(b"kk22", &val2).unwrap();
 
         // The memory capacity is enough the the following two inserts
-        let val3: Vec<u8> = (0..100).map(|_| 3).collect();
+        let val3: Vec<u8> = (0..150).map(|_| 3).collect();
         wb.prepare_for_range(r4.clone());
-        // Now, 896
+        // Now, 712
         wb.put(b"kk32", &val3).unwrap();
 
+        let val4: Vec<u8> = (0..300).map(|_| 3).collect();
         wb.prepare_for_range(r5.clone());
-        wb.put(b"kk41", &val3).unwrap();
+        wb.put(b"kk41", &val4).unwrap();
 
         let memory_controller = engine.memory_controller();
         // We should have allocated 896 as calculated above
-        assert_eq!(896, memory_controller.mem_usage());
+        assert_eq!(712, memory_controller.mem_usage());
         wb.write_impl(1000).unwrap();
+        // We dont count the node overhead in write batch, so after they are written
+        // into the engine, the mem usage can even exceed the hard limit. But this
+        // should be fine as this amount should be at most MB level.
+        assert_eq!(1096, memory_controller.mem_usage());
+
         let snap1 = engine.snapshot(r1.clone(), 1000, 1000).unwrap();
         assert_eq!(snap1.get_value(b"kk01").unwrap().unwrap(), &val1);
         let snap2 = engine.snapshot(r2.clone(), 1000, 1000).unwrap();
@@ -816,15 +821,15 @@ mod tests {
 
         // For range 3, one write is buffered but the other is rejected, so the range 3
         // is evicted and the keys of it are deleted. After flush the epoch, we should
-        // get 896-224 = 672 memory usage.
+        // get 1096-178(kv)-96(node overhead) = 822 memory usage.
         flush_epoch();
         wait_evict_done(&engine);
-        assert_eq!(672, memory_controller.mem_usage());
+        assert_eq!(822, memory_controller.mem_usage());
 
         drop(snap1);
         engine.evict_range(&r1);
         flush_epoch();
         wait_evict_done(&engine);
-        assert_eq!(448, memory_controller.mem_usage());
+        assert_eq!(548, memory_controller.mem_usage());
     }
 }
