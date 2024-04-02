@@ -537,4 +537,10 @@ mod profiling {
     pub fn is_profiling_active() -> bool {
         false
     }
+    pub fn thread_allocate_exclusive_arena() -> ProfResult<()> {
+        Err(ProfError::MemProfilingNotEnabled)
+    }
+    pub fn fetch_arena_stats(_index: usize) -> (u64, u64, u64) {
+        (0, 0, 0)
+    }
 }
