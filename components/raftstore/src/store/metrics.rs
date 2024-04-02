@@ -959,4 +959,11 @@ lazy_static! {
         "The events of the lease to denying new admin commands being proposed by snapshot br.",
         &["event"]
     ).unwrap();
+
+    pub static ref STORE_BUSY_ON_APPLY_REGIONS_GAUGE_VEC: IntGaugeVec =
+        register_int_gauge_vec!(
+            "tikv_raftstore_busy_on_apply_region_total",
+            "Total number of regions busy on apply or complete apply.",
+            &["type"]
+        ).unwrap();
 }

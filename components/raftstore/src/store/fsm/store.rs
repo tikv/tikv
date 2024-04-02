@@ -2747,6 +2747,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         busy_apply_peers_count: u64,
         completed_apply_peers_count: Option<u64>,
     ) -> bool {
+        STORE_BUSY_ON_APPLY_REGIONS_GAUGE_VEC
+            .with_label_values(&["busy_apply_peers"])
+            .set(busy_apply_peers_count as i64);
+        STORE_BUSY_ON_APPLY_REGIONS_GAUGE_VEC
+            .with_label_values(&["completed_apply_peers"])
+            .set(completed_apply_peers_count.unwrap_or_default() as i64);
         // No need to check busy status if there are no regions.
         if completed_apply_peers_count.is_none() || region_count == 0 {
             return false;
