@@ -156,8 +156,6 @@ mod tests {
                 memory_engine.new_range(range_clone.clone());
                 {
                     let mut core = memory_engine.core().write();
-                    core.mut_range_manager()
-                        .set_range_readable(&range_clone, true);
                     core.mut_range_manager().set_safe_point(&range_clone, 5);
                 }
             })
@@ -197,7 +195,6 @@ mod tests {
                 memory_engine.new_range(range.clone());
                 {
                     let mut core = memory_engine.core().write();
-                    core.mut_range_manager().set_range_readable(&range, true);
                     core.mut_range_manager().set_safe_point(&range, 10);
                 }
             })
