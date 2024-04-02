@@ -2817,11 +2817,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-<<<<<<< HEAD
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.1#dd213275abc5613f22815323d7b77ee046bf6a86"
-=======
-source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
->>>>>>> 0e3c1bb462 (rocksdb: Fix partial synced inactive WAL (#16706))
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.1#f9615d673d416c219163588d2e24e3ee254b83d7"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2840,11 +2836,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-<<<<<<< HEAD
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.1#dd213275abc5613f22815323d7b77ee046bf6a86"
-=======
-source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
->>>>>>> 0e3c1bb462 (rocksdb: Fix partial synced inactive WAL (#16706))
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.1#f9615d673d416c219163588d2e24e3ee254b83d7"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4716,11 +4708,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-<<<<<<< HEAD
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.1#dd213275abc5613f22815323d7b77ee046bf6a86"
-=======
-source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
->>>>>>> 0e3c1bb462 (rocksdb: Fix partial synced inactive WAL (#16706))
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.1#f9615d673d416c219163588d2e24e3ee254b83d7"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",
@@ -6966,15 +6954,7 @@ dependencies = [
 name = "twox-hash"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-<<<<<<< HEAD
 checksum = "3bfd5b7557925ce778ff9b9ef90e3ade34c524b5ff10e239c69a42d546d2af56"
-=======
-checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
-dependencies = [
- "cfg-if 1.0.0",
- "static_assertions",
-]
->>>>>>> 0e3c1bb462 (rocksdb: Fix partial synced inactive WAL (#16706))
 
 [[package]]
 name = "txn_types"
