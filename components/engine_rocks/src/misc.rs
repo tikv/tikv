@@ -266,6 +266,33 @@ impl MiscExt for RocksEngine {
         self.as_inner().sync_wal().map_err(r2e)
     }
 
+<<<<<<< HEAD
+=======
+    fn disable_manual_compaction(&self) -> Result<()> {
+        self.as_inner().disable_manual_compaction();
+        Ok(())
+    }
+
+    fn enable_manual_compaction(&self) -> Result<()> {
+        self.as_inner().enable_manual_compaction();
+        Ok(())
+    }
+
+    fn pause_background_work(&self) -> Result<()> {
+        // This will make manual compaction return error instead of waiting. In practice
+        // we might want to identify this case by parsing error message.
+        self.disable_manual_compaction()?;
+        self.as_inner().pause_bg_work();
+        Ok(())
+    }
+
+    fn continue_background_work(&self) -> Result<()> {
+        self.enable_manual_compaction()?;
+        self.as_inner().continue_bg_work();
+        Ok(())
+    }
+
+>>>>>>> 5294727510 (server: stop manual compaction jobs in engines before shutdown (#16700))
     fn exists(path: &str) -> bool {
         crate::util::db_exist(path)
     }

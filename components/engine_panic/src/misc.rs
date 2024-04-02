@@ -46,6 +46,25 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
+<<<<<<< HEAD
+=======
+    fn disable_manual_compaction(&self) -> Result<()> {
+        panic!()
+    }
+
+    fn enable_manual_compaction(&self) -> Result<()> {
+        panic!()
+    }
+
+    fn pause_background_work(&self) -> Result<()> {
+        panic!()
+    }
+
+    fn continue_background_work(&self) -> Result<()> {
+        panic!()
+    }
+
+>>>>>>> 5294727510 (server: stop manual compaction jobs in engines before shutdown (#16700))
     fn exists(path: &str) -> bool {
         panic!()
     }

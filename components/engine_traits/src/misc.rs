@@ -85,6 +85,21 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
 
     fn sync_wal(&self) -> Result<()>;
 
+<<<<<<< HEAD
+=======
+    /// Disable manual compactions, some on-going manual compactions may be
+    /// aborted.
+    fn disable_manual_compaction(&self) -> Result<()>;
+
+    fn enable_manual_compaction(&self) -> Result<()>;
+
+    /// Depending on the implementation, some on-going manual compactions may be
+    /// aborted.
+    fn pause_background_work(&self) -> Result<()>;
+
+    fn continue_background_work(&self) -> Result<()>;
+
+>>>>>>> 5294727510 (server: stop manual compaction jobs in engines before shutdown (#16700))
     /// Check whether a database exists at a given path
     fn exists(path: &str) -> bool;
 
