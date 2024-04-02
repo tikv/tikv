@@ -44,6 +44,34 @@ impl Json {
         }
         merge_binary_array(&result)
     }
+
+    /// `merge_patch` is the implementation for JSON_MERGE_PATCH in mysql
+    /// <https://dev.mysql.com/doc/refman/8.3/en/json-modification-functions.html#function_json-merge-patch>
+    ///
+    /// The merge_patch rules are listed as following:
+    /// 1. If the first argument is not an object, the result of the merge is the same as if an empty object had been merged with the second argument.
+    /// 2. If the second argument is not an object, the result of the merge is the second argument.
+    /// 3. If both arguments are objects, the result of the merge is an object with the following members:
+    ///     3.1. All members of the first object which do not have a corresponding member with the same key in the second object.
+    ///     3.2. All members of the second object which do not have a corresponding key in the first object, and whose value is not the JSON null literal.
+    ///     3.3. All members with a key that exists in both the first and the second object, and whose value in the second object is not the JSON null literal. The values of these members are the results of recursively merging the value in the first object with the value in the second object.
+    /// See `MergePatchBinaryJSON()` in TiDB `pkg/types/json_binary_functions.go`
+    #[allow(clippy::comparison_chain)]
+    pub fn merge_patch(bjs: Vec<JsonRef<'_>>) -> Result<Json> {
+        let mut objects = vec![];
+        let mut index = 0;
+        for (i, element) in bjs.iter().rev().enumerate() {
+            if element.get_type() != JsonType::Object {
+                index = i;
+                break;
+            }
+        }
+
+        objects.extend(bjs.iter().take(index).cloned());
+        let target = objects[0].to_owned();
+        
+        return Ok(target);
+    }
 }
 
 enum MergeUnit<'a> {
@@ -165,6 +193,24 @@ mod tests {
                 .collect::<Vec<Json>>();
             let refs = jsons.iter().map(|j| j.as_ref()).collect::<Vec<_>>();
             let res = Json::merge(refs).unwrap();
+            let expect: Json = expect[0].parse().unwrap();
+            assert_eq!(res, expect);
+        }
+    }
+
+    #[test]
+    fn test_merge_patch() {
+        let test_cases = vec![
+            vec![r#"[1]"#, r#"4"#, r#"4"#],
+        ];
+        for case in test_cases {
+            let (to_be_merged, expect) = case.split_at(case.len() - 1);
+            let jsons = to_be_merged
+                .iter()
+                .map(|s| s.parse::<Json>().unwrap())
+                .collect::<Vec<Json>>();
+            let refs = jsons.iter().map(|j| j.as_ref()).collect::<Vec<_>>();
+            let res = Json::merge_patch(refs).unwrap();
             let expect: Json = expect[0].parse().unwrap();
             assert_eq!(res, expect);
         }
