@@ -243,7 +243,7 @@ fn test_serde_custom_tikv_config() {
         perf_level: PerfLevel::Disable,
         evict_cache_on_memory_ratio: 0.8,
         cmd_batch: false,
-        cmd_batch_concurrent_ready_max_count: Some(123),
+        cmd_batch_concurrent_ready_max_count: 123,
         raft_write_size_limit: ReadableSize::mb(34),
         waterfall_metrics: true,
         io_reschedule_concurrent_max_count: 1234,

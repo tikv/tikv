@@ -321,11 +321,7 @@ pub struct Config {
     /// be proposed until the previous ready has been persisted.
     /// If `cmd_batch` is 0, this config will have no effect.
     /// If it is 0, it means no limit.
-    /// The default value depends on the value of
-    /// `max_apply_unpersisted_log_limit`,
-    /// if max_apply_unpersisted_log_limit = 0, the default value is 1,
-    /// if max_apply_unpersisted_log_limit > 0, the default value is 128.
-    pub cmd_batch_concurrent_ready_max_count: Option<usize>,
+    pub cmd_batch_concurrent_ready_max_count: usize,
 
     /// When the size of raft db writebatch exceeds this value, write will be
     /// triggered.
@@ -518,7 +514,7 @@ impl Default for Config {
             perf_level: PerfLevel::Uninitialized,
             evict_cache_on_memory_ratio: 0.1,
             cmd_batch: true,
-            cmd_batch_concurrent_ready_max_count: None,
+            cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
             waterfall_metrics: true,
             io_reschedule_concurrent_max_count: 4,
@@ -671,17 +667,6 @@ impl Config {
 
         if self.raft_log_gc_count_limit.is_none() && raft_kv_v2 {
             self.raft_log_gc_count_limit = Some(10000);
-        }
-
-        if self.cmd_batch_concurrent_ready_max_count.is_none() {
-            let max_count = if self.max_apply_unpersisted_log_limit == 0 {
-                1
-            } else {
-                // set a relative large value to avoid the batch wait block raft log propose
-                // when raft disk io is slow.
-                128
-            };
-            self.cmd_batch_concurrent_ready_max_count = Some(max_count);
         }
     }
 

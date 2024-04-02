@@ -728,14 +728,13 @@ where
 
     #[inline]
     fn on_loop_finished(&mut self) {
-        let ready_concurrency = self
-            .ctx
-            .cfg
-            .cmd_batch_concurrent_ready_max_count
-            .unwrap_or(0);
+        let ready_concurrency = self.ctx.cfg.cmd_batch_concurrent_ready_max_count;
+        // allow propose pending commands iff all ongoing commands are
+        // persisted or committed.
         let should_propose = self.ctx.sync_write_worker.is_some()
             || ready_concurrency == 0
-            || self.fsm.peer.unpersisted_ready_len() < ready_concurrency;
+            || self.fsm.peer.unpersisted_ready_len() < ready_concurrency
+            || !self.fms.peer.has_uncommitted_log();
         let force_delay_fp = || {
             fail_point!(
                 "force_delay_propose_batch_raft_command",
