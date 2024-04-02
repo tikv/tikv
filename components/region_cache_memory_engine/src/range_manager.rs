@@ -15,7 +15,6 @@ use crate::engine::{RagneCacheSnapshotMeta, SnapshotList};
 pub struct RangeMeta {
     id: u64,
     range_snapshot_list: SnapshotList,
-    can_read: bool,
     safe_point: u64,
 }
 
@@ -24,7 +23,6 @@ impl RangeMeta {
         Self {
             id,
             range_snapshot_list: SnapshotList::default(),
-            can_read: false,
             safe_point: 0,
         }
     }
@@ -42,7 +40,6 @@ impl RangeMeta {
         Self {
             id,
             range_snapshot_list: SnapshotList::default(),
-            can_read: r.can_read,
             safe_point: r.safe_point,
         }
     }
@@ -126,11 +123,6 @@ impl RangeManager {
         self.ranges.insert(range, range_meta);
     }
 
-    pub fn set_range_readable(&mut self, range: &CacheRange, set_readable: bool) {
-        let meta = self.ranges.get_mut(range).unwrap();
-        meta.can_read = set_readable;
-    }
-
     pub fn mut_range_meta(&mut self, range: &CacheRange) -> Option<&mut RangeMeta> {
         self.ranges.get_mut(range)
     }
@@ -192,8 +184,7 @@ impl RangeManager {
         };
         let meta = self.ranges.get_mut(&range_key).unwrap();
 
-        if read_ts <= meta.safe_point || !meta.can_read {
-            // todo(SpadeA): add metrics for it
+        if read_ts <= meta.safe_point {
             return Err(FailedReason::TooOldRead);
         }
 
@@ -350,7 +341,6 @@ mod tests {
         let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
 
         range_mgr.new_range(r1.clone());
-        range_mgr.set_range_readable(&r1, true);
         range_mgr.set_safe_point(&r1, 5);
         assert_eq!(
             range_mgr.range_snapshot(&r1, 5).unwrap_err(),
@@ -379,7 +369,6 @@ mod tests {
         let meta2 = range_mgr.ranges.get(&r_left).unwrap();
         let meta3 = range_mgr.ranges.get(&r_right).unwrap();
         assert!(meta1.safe_point == meta2.safe_point && meta1.safe_point == meta3.safe_point);
-        assert!(meta2.can_read && meta3.can_read);
 
         // evict a range with accurate match
         let _ = range_mgr.range_snapshot(&r_left, 10);

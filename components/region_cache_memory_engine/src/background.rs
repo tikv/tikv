@@ -931,9 +931,7 @@ pub mod tests {
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let (write, default) = {
-            let mut core = engine.core().write();
-            let skiplist_engine = core.engine();
-            core.mut_range_manager().set_range_readable(&range, true);
+            let skiplist_engine = engine.core().write().engine();
             (
                 skiplist_engine.cf_handle(CF_WRITE),
                 skiplist_engine.cf_handle(CF_DEFAULT),
@@ -1018,9 +1016,7 @@ pub mod tests {
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let (write, default) = {
-            let mut core = engine.core().write();
-            let skiplist_engine = core.engine();
-            core.mut_range_manager().set_range_readable(&range, true);
+            let skiplist_engine = engine.core().write().engine();
             (
                 skiplist_engine.cf_handle(CF_WRITE),
                 skiplist_engine.cf_handle(CF_DEFAULT),

@@ -214,7 +214,6 @@ impl RangeCacheMemoryEngineCore {
         assert_eq!(&r, range);
         assert!(!canceled);
         range_manager.new_range(r);
-        range_manager.set_range_readable(range, true);
     }
 }
 
@@ -971,10 +970,6 @@ mod tests {
             }
         };
 
-        {
-            let mut core = engine.core.write();
-            core.range_manager.set_range_readable(&range, true);
-        }
         let s1 = engine.snapshot(range.clone(), 5, u64::MAX).unwrap();
 
         {
@@ -1136,7 +1131,6 @@ mod tests {
 
         {
             let mut core = engine.core.write();
-            core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_point(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
             fill_data_in_skiplist(sl.clone(), (1..10).step_by(1), 1..50, 1);
@@ -1216,7 +1210,6 @@ mod tests {
 
         {
             let mut core = engine.core.write();
-            core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_point(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
             fill_data_in_skiplist(sl.clone(), (1..100).step_by(step as usize), 1..10, 1);
@@ -1402,7 +1395,6 @@ mod tests {
 
         {
             let mut core = engine.core.write();
-            core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_point(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
             fill_data_in_skiplist(sl.clone(), (1..100).step_by(step as usize), 1..10, 1);
@@ -1504,7 +1496,6 @@ mod tests {
 
         {
             let mut core = engine.core.write();
-            core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_point(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
 
@@ -1626,7 +1617,6 @@ mod tests {
 
         {
             let mut core = engine.core.write();
-            core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_point(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
 
@@ -1726,7 +1716,6 @@ mod tests {
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
-                core.range_manager.set_range_readable(&range, true);
                 core.range_manager.set_safe_point(&range, 5);
                 core.engine.data[cf_to_id("write")].clone()
             };
@@ -1763,7 +1752,6 @@ mod tests {
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
-                core.range_manager.set_range_readable(&range, true);
                 core.range_manager.set_safe_point(&range, 5);
                 core.engine.data[cf_to_id("write")].clone()
             };
@@ -1793,7 +1781,6 @@ mod tests {
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
-                core.range_manager.set_range_readable(&range, true);
                 core.range_manager.set_safe_point(&range, 5);
                 core.engine.data[cf_to_id("write")].clone()
             };
@@ -1825,7 +1812,6 @@ mod tests {
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
-                core.range_manager.set_range_readable(&range, true);
                 core.range_manager.set_safe_point(&range, 5);
                 core.engine.data[cf_to_id("write")].clone()
             };
@@ -1858,7 +1844,6 @@ mod tests {
 
         {
             let mut core = engine.core.write();
-            core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_point(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
 
@@ -1984,7 +1969,6 @@ mod tests {
         let guard = &epoch::pin();
         {
             let mut core = engine.core.write();
-            core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_point(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
             for i in 0..30 {
@@ -2042,7 +2026,6 @@ mod tests {
         let guard = &epoch::pin();
         {
             let mut core = engine.core.write();
-            core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_point(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
             for i in 0..30 {
