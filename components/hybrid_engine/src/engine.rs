@@ -235,7 +235,6 @@ mod tests {
         memory_engine.new_range(range.clone());
         {
             let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_range_readable(&range, true);
             core.mut_range_manager().set_safe_point(&range, 10);
         }
 
@@ -250,17 +249,6 @@ mod tests {
         let s = hybrid_engine.snapshot(Some(snap_ctx.clone()));
         assert!(s.region_cache_snapshot_available());
 
-        {
-            let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_range_readable(&range, false);
-        }
-        let s = hybrid_engine.snapshot(Some(snap_ctx.clone()));
-        assert!(!s.region_cache_snapshot_available());
-
-        {
-            let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_range_readable(&range, true);
-        }
         snap_ctx.read_ts = 5;
         let s = hybrid_engine.snapshot(Some(snap_ctx));
         assert!(!s.region_cache_snapshot_available());
