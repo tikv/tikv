@@ -107,6 +107,12 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt {
 
     fn sync_wal(&self) -> Result<()>;
 
+    /// Disable manual compactions, some on-going manual compactions may be
+    /// aborted.
+    fn disable_manual_compaction(&self) -> Result<()>;
+
+    fn enable_manual_compaction(&self) -> Result<()>;
+
     /// Depending on the implementation, some on-going manual compactions may be
     /// aborted.
     fn pause_background_work(&self) -> Result<()>;
