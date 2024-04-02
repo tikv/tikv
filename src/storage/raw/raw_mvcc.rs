@@ -236,7 +236,11 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
 pub struct RawMvccIterMetricsCollector;
 
 impl IterMetricsCollector for RawMvccIterMetricsCollector {
-    fn engine_delete_skipped_count(&self) -> usize {
+    fn internal_delete_skipped_count(&self) -> usize {
+        unimplemented!()
+    }
+
+    fn internal_key_skipped_count(&self) -> usize {
         unimplemented!()
     }
 }

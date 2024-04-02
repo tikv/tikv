@@ -199,7 +199,11 @@ impl<I: Iterator, F: KvFormat> Iterator for RawEncodeIterator<I, F> {
 pub struct RawEncodeIterMetricsCollector;
 
 impl IterMetricsCollector for RawEncodeIterMetricsCollector {
-    fn engine_delete_skipped_count(&self) -> usize {
+    fn internal_delete_skipped_count(&self) -> usize {
+        unimplemented!()
+    }
+
+    fn internal_key_skipped_count(&self) -> usize {
         unimplemented!()
     }
 }

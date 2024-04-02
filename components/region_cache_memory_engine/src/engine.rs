@@ -30,6 +30,7 @@ use crate::{
         InternalBytes, InternalKey, ValueType,
     },
     perf_context::PERF_CONTEXT,
+    perf_counter_add,
     range_manager::{LoadFailedReason, RangeCacheStatus, RangeManager},
     write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
 };
@@ -452,7 +453,7 @@ impl RangeCacheIterator {
             if self.is_visible(sequence) {
                 if skip_saved_key && user_key == self.saved_user_key.as_slice() {
                     // the user key has been met before, skip it.
-                    // todo(SpadeA): add metrics if neede
+                    perf_counter_add!(internal_key_skipped_count, 1);
                 } else {
                     self.saved_user_key.clear();
                     self.saved_user_key.extend_from_slice(user_key);
@@ -462,6 +463,7 @@ impl RangeCacheIterator {
                     match v_type {
                         ValueType::Deletion => {
                             skip_saved_key = true;
+                            perf_counter_add!(internal_delete_skipped_count, 1);
                         }
                         ValueType::Value => {
                             self.valid = true;
@@ -559,9 +561,11 @@ impl RangeCacheIterator {
                 }
                 ValueType::Deletion => {
                     self.saved_value.take();
+                    perf_counter_add!(internal_delete_skipped_count, 1);
                 }
             }
 
+            perf_counter_add!(internal_key_skipped_count, 1);
             self.iter.prev(guard);
         }
 
@@ -577,6 +581,10 @@ impl RangeCacheIterator {
 
             if user_key < self.saved_user_key.as_slice() {
                 return;
+            }
+
+            if self.is_visible(self.sequence_number) {
+                perf_counter_add!(internal_key_skipped_count, 1);
             }
 
             self.iter.prev(guard);
@@ -604,6 +612,7 @@ impl Iterator for RangeCacheIterator {
         assert!(self.direction == Direction::Forward);
         let guard = &epoch::pin();
         self.iter.next(guard);
+        perf_counter_add!(internal_key_skipped_count, 1);
         self.valid = self.iter.valid();
         if self.valid {
             self.find_next_visible_key(true, guard);
@@ -674,8 +683,12 @@ impl Iterator for RangeCacheIterator {
 pub struct RangeCacheIterMetricsCollector;
 
 impl IterMetricsCollector for RangeCacheIterMetricsCollector {
-    fn engine_delete_skipped_count(&self) -> usize {
-        PERF_CONTEXT.with(|perf_context| perf_context.borrow_mut().internal_delete_skipped_count)
+    fn internal_delete_skipped_count(&self) -> usize {
+        PERF_CONTEXT.with(|perf_context| perf_context.borrow().internal_delete_skipped_count)
+    }
+
+    fn internal_key_skipped_count(&self) -> usize {
+        PERF_CONTEXT.with(|perf_context| perf_context.borrow().internal_key_skipped_count)
     }
 }
 
@@ -879,8 +892,8 @@ mod tests {
     use bytes::{BufMut, Bytes};
     use crossbeam::epoch;
     use engine_traits::{
-        CacheRange, FailedReason, IterOptions, Iterable, Iterator, Peekable, RangeCacheEngine,
-        ReadOptions,
+        CacheRange, FailedReason, IterMetricsCollector, IterOptions, Iterable, Iterator,
+        MetricsExt, Peekable, RangeCacheEngine, ReadOptions,
     };
     use skiplist_rs::SkipList;
 
@@ -2062,5 +2075,48 @@ mod tests {
 
         drop(s4);
         verify_evict_range_deleted(&engine, &range_left_eviction);
+    }
+
+    #[test]
+    fn test_tombstone_count_when_iterating() {
+        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(range.clone());
+
+        {
+            let mut core = engine.core.write();
+            core.range_manager.set_range_readable(&range, true);
+            core.range_manager.set_safe_point(&range, 5);
+            let sl = core.engine.data[cf_to_id("write")].clone();
+
+            delete_key(&sl, "a", 10, 5);
+            delete_key(&sl, "b", 10, 5);
+            put_key_val(&sl, "c", "valc", 10, 5);
+            put_key_val(&sl, "d", "vald", 10, 5);
+            put_key_val(&sl, "e", "vale", 10, 5);
+            delete_key(&sl, "f", 10, 5);
+            delete_key(&sl, "g", 10, 5);
+        }
+
+        let mut iter_opt = IterOptions::default();
+        iter_opt.set_upper_bound(&range.end, 0);
+        iter_opt.set_lower_bound(&range.start, 0);
+        let snapshot = engine.snapshot(range.clone(), u64::MAX, 100).unwrap();
+        let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+        iter.seek_to_first().unwrap();
+        while iter.valid().unwrap() {
+            iter.next().unwrap();
+        }
+
+        let collector = iter.metrics_collector();
+        assert_eq!(4, collector.internal_delete_skipped_count());
+        assert_eq!(3, collector.internal_key_skipped_count());
+
+        iter.seek_to_last().unwrap();
+        while iter.valid().unwrap() {
+            iter.prev().unwrap();
+        }
+        assert_eq!(8, collector.internal_delete_skipped_count());
+        assert_eq!(10, collector.internal_key_skipped_count());
     }
 }

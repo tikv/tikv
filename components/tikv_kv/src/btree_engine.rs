@@ -233,7 +233,11 @@ impl Iterator for BTreeEngineIterator {
 pub struct BTreeEngineIterMetricsCollector;
 
 impl IterMetricsCollector for BTreeEngineIterMetricsCollector {
-    fn engine_delete_skipped_count(&self) -> usize {
+    fn internal_delete_skipped_count(&self) -> usize {
+        unimplemented!()
+    }
+
+    fn internal_key_skipped_count(&self) -> usize {
         unimplemented!()
     }
 }

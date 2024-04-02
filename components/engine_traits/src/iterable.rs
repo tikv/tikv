@@ -118,7 +118,9 @@ pub trait RefIterable {
 }
 
 pub trait IterMetricsCollector {
-    fn engine_delete_skipped_count(&self) -> usize;
+    fn internal_delete_skipped_count(&self) -> usize;
+
+    fn internal_key_skipped_count(&self) -> usize;
 }
 
 pub trait MetricsExt {
