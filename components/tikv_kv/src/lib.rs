@@ -36,7 +36,6 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_rocks::PerfContext;
 use engine_traits::{
     CfName, IterOptions, KvEngine as LocalEngine, MetricsExt, Mutable, MvccProperties, ReadOptions,
     TabletRegistry, WriteBatch, CF_DEFAULT, CF_LOCK,
@@ -51,7 +50,7 @@ use kvproto::{
     raft_cmdpb,
 };
 use pd_client::BucketMeta;
-use raftstore::store::{PessimisticLockPair, RegionIterator, TxnExt};
+use raftstore::store::{PessimisticLockPair, TxnExt};
 use thiserror::Error;
 use tikv_util::{
     deadline::Deadline, escape, future::block_on_timeout, memory::HeapSize, time::ThreadReadId,

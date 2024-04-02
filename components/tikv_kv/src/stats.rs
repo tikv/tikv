@@ -2,8 +2,7 @@
 
 use std::cell::RefCell;
 
-use engine_rocks::PerfContext;
-use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{IterMetricsCollector, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{ScanDetail, ScanDetailV2, ScanInfo};
 pub use raftstore::store::{FlowStatistics, FlowStatsReporter};
 
@@ -46,22 +45,23 @@ pub struct StatsCollector<'a, T: IterMetricsCollector> {
 
 impl<'a, T: IterMetricsCollector> StatsCollector<'a, T> {
     pub fn new(collector: T, kind: StatsKind, stats: &'a mut CfStatistics) -> Self {
+        let internal_tombstone = collector.engine_delete_skipped_count();
         StatsCollector {
             collector,
             stats,
             kind,
-            internal_tombstone: PerfContext::get().internal_delete_skipped_count() as usize,
+            internal_tombstone,
             raw_value_tombstone: RAW_VALUE_TOMBSTONE.with(|m| *m.borrow()),
         }
     }
 }
 
-impl Drop for StatsCollector<'_> {
+impl<T: IterMetricsCollector> Drop for StatsCollector<'_, T> {
     fn drop(&mut self) {
         self.stats.raw_value_tombstone +=
             RAW_VALUE_TOMBSTONE.with(|m| *m.borrow()) - self.raw_value_tombstone;
         let internal_tombstone =
-            PerfContext::get().internal_delete_skipped_count() as usize - self.internal_tombstone;
+            self.collector.engine_delete_skipped_count() - self.internal_tombstone;
         match self.kind {
             StatsKind::Next => {
                 self.stats.next += 1;

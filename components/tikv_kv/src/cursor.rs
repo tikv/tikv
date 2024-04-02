@@ -381,7 +381,8 @@ impl<I: Iterator> Cursor<I> {
     #[inline]
     pub fn prev(&mut self, statistics: &mut CfStatistics) -> bool {
         self.mark_unread();
-        let _guard = StatsCollector::new(StatsKind::Prev, statistics);
+        let _guard =
+            StatsCollector::new(self.iter.metrics_collector(), StatsKind::Prev, statistics);
         self.iter.prev().expect("Invalid Iterator")
     }
 

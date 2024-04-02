@@ -281,8 +281,9 @@ pub struct RegionIterator<S: Snapshot> {
 }
 
 impl<S: Snapshot> MetricsExt for RegionIterator<S> {
-    fn engine_delete_skipped_count(&self) -> usize {
-        self.iter.engine_delete_skipped_count()
+    type Collector = <<S as Iterable>::Iterator as MetricsExt>::Collector;
+    fn metrics_collector(&self) -> Self::Collector {
+        self.iter.metrics_collector()
     }
 }
 
