@@ -404,11 +404,15 @@ impl<'a> Future for WaitAll<'a> {
             return Poll::Ready(());
         }
 
-        self.0.wakers.lock().unwrap().push(cx.waker().clone());
-        // We have missed some calls!
+        // <1>
+        let mut callbacks = self.0.wakers.lock().unwrap();
+        callbacks.push(cx.waker().clone());
         let running = self.0.running.load(Ordering::SeqCst);
+        // Unlikely path: if all background tasks finish at <1>, there will be a long
+        // period that nobody will wake the `wakers` even the condition is ready.
+        // We need to help ourselves here.
         if running == 0 {
-            cx.waker().wake_by_ref();
+            callbacks.drain(..).for_each(|w| w.wake());
         }
         Poll::Pending
     }
