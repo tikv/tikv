@@ -34,11 +34,11 @@ concurrency_manager = { workspace = true }
 crossbeam = "0.8"
 crossbeam-channel = "0.5"
 dashmap = "5"
+encryption = { workspace = true }
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 error_code = { workspace = true }
 external_storage = { workspace = true }
-encryption = {workspace = true}
 fail = "0.5"
 file_system = { workspace = true }
 futures = "0.3"
@@ -82,6 +82,7 @@ yatp = { workspace = true }
 
 [dev-dependencies]
 async-trait = "0.1"
+encryption = { workspace = true, features = ["sm4"] }
 engine_panic = { workspace = true }
 engine_test = { workspace = true }
 grpcio = { workspace = true }
@@ -95,6 +96,5 @@ test_pd_client = { workspace = true }
 test_raftstore = { workspace = true }
 test_util = { workspace = true }
 tokio = { version = "1.5", features = ["test-util"] }
-encryption = { workspace = true, features = ["sm4"]}
 url = "2"
 walkdir = "2"

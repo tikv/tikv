@@ -1620,7 +1620,7 @@ mod tests {
             content_compression: CompressionType::Zstd,
             minimal_swap_out_file_size: 0,
             write_buffer_size: 0,
-            encryption: None
+            encryption: None,
         }
     }
 
