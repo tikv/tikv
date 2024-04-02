@@ -142,13 +142,8 @@ fn test_stale_learner_restart() {
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_stale_peer_destroy_when_apply_snapshot() {
-<<<<<<< HEAD
     let mut cluster = new_node_cluster(0, 3);
     configure_for_snapshot(&mut cluster.cfg);
-=======
-    let mut cluster = test_raftstore::new_node_cluster(0, 3);
-    configure_for_snapshot(&mut cluster);
->>>>>>> dd11ffcb0f (Raftstore: destroy peer after applying snapshot (or aborted) if necessary (#16579) (#16695))
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
