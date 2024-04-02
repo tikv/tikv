@@ -756,7 +756,6 @@ mod tests {
             engine.new_range(r.clone());
             {
                 let mut core = engine.core.write();
-                core.mut_range_manager().set_range_readable(r, true);
                 core.mut_range_manager().set_safe_point(r, 10);
             }
             let _ = engine.snapshot(r.clone(), 1000, 1000).unwrap();
