@@ -140,9 +140,6 @@ impl BgWorkManager {
         load_and_prepare_fn: LoadAndPrepareRangeFn,
     ) {
         self.load_and_prepare_fn = Some(load_and_prepare_fn);
-        //  self.worker.remote().spawn(move || {
-        //
-        // });
     }
 
     pub fn start_bg_range_sync(&mut self, pd_client: Arc<RpcClient>) {
