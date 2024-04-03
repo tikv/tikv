@@ -64,7 +64,13 @@ pub mod raft {
     #[cfg(feature = "test-engine-raft-rocksdb")]
     pub use engine_rocks::RocksEngine as RaftTestEngine;
     use engine_traits::Result;
-    #[cfg(feature = "test-engine-raft-raft-engine")]
+    #[cfg(any(
+        feature = "test-engine-raft-raft-engine",
+        not(any(
+            feature = "test-engine-raft-panic",
+            feature = "test-engine-raft-rocksdb"
+        ))
+    ))]
     pub use raft_log_engine::RaftLogEngine as RaftTestEngine;
 
     use crate::ctor::{RaftDbOptions, RaftEngineConstructorExt};
@@ -83,7 +89,10 @@ pub mod kv {
         PanicEngine as KvTestEngine, PanicEngineIterator as KvTestEngineIterator,
         PanicSnapshot as KvTestSnapshot, PanicWriteBatch as KvTestWriteBatch,
     };
-    #[cfg(feature = "test-engine-kv-rocksdb")]
+    #[cfg(any(
+        feature = "test-engine-kv-rocksdb",
+        not(feature = "test-engine-kv-panic")
+    ))]
     pub use engine_rocks::{
         RocksEngine as KvTestEngine, RocksEngineIterator as KvTestEngineIterator,
         RocksSnapshot as KvTestSnapshot, RocksWriteBatchVec as KvTestWriteBatch,
