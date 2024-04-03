@@ -277,8 +277,8 @@ mod tests {
         kv::{new_engine, new_engine_opt, KvTestEngine},
     };
     use engine_traits::{
-        CompactExt, MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT,
-        CF_WRITE,
+        CompactExt, MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK,
+        CF_RAFT, CF_WRITE,
     };
     use keys::data_key;
     use tempfile::Builder;
@@ -322,13 +322,7 @@ mod tests {
             let _ = db.disable_manual_compaction();
 
             // Manually compact range.
-            let _ = db.compact_range_cf(
-                CF_DEFAULT,
-                None,
-                None,
-                false,
-                1,
-            );
+            let _ = db.compact_range_cf(CF_DEFAULT, None, None, false, 1);
 
             // Get the total SST files size after compact range.
             let new_sst_files_size = db.get_total_sst_files_size_cf(CF_DEFAULT).unwrap().unwrap();
@@ -339,13 +333,7 @@ mod tests {
             let _ = db.enable_manual_compaction();
 
             // Manually compact range.
-            let _ = db.compact_range_cf(
-                CF_DEFAULT,
-                None,
-                None,
-                false,
-                1,
-            );
+            let _ = db.compact_range_cf(CF_DEFAULT, None, None, false, 1);
 
             // Get the total SST files size after compact range.
             let new_sst_files_size = db.get_total_sst_files_size_cf(CF_DEFAULT).unwrap().unwrap();
