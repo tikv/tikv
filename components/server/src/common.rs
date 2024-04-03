@@ -719,9 +719,9 @@ impl KvEngineBuilder for HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
         // todo(SpadeA): make time configurable
         let mut memory_engine = RangeCacheMemoryEngine::new(EngineConfig::default());
         memory_engine.set_disk_engine(disk_engine.clone());
-        pd_client
-            .as_ref()
-            .map(|pd_client| memory_engine.set_pd_client(pd_client.clone()));
+        if let Some(pd_client) = pd_client.as_ref() {
+            memory_engine.set_pd_client(pd_client.clone())
+        }
         HybridEngine::new(disk_engine, memory_engine)
     }
 }
