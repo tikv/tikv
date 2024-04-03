@@ -734,7 +734,7 @@ where
         let should_propose = self.ctx.sync_write_worker.is_some()
             || ready_concurrency == 0
             || self.fsm.peer.unpersisted_ready_len() < ready_concurrency
-            || !self.fms.peer.has_uncommitted_log();
+            || !self.fsm.peer.has_uncommitted_log();
         let force_delay_fp = || {
             fail_point!(
                 "force_delay_propose_batch_raft_command",

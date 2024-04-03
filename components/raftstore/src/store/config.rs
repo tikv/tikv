@@ -1182,7 +1182,7 @@ impl Config {
             .set((self.cmd_batch as i32).into());
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["cmd_batch_concurrent_ready_max_count"])
-            .set(self.cmd_batch_concurrent_ready_max_count.unwrap_or(0) as f64);
+            .set(self.cmd_batch_concurrent_ready_max_count as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["raft_write_size_limit"])
             .set(self.raft_write_size_limit.0 as f64);
