@@ -75,6 +75,14 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
+    fn disable_manual_compaction(&self) -> Result<()> {
+        panic!()
+    }
+
+    fn enable_manual_compaction(&self) -> Result<()> {
+        panic!()
+    }
+
     fn pause_background_work(&self) -> Result<()> {
         panic!()
     }
