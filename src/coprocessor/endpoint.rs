@@ -42,7 +42,7 @@ use crate::{
         statistics::analyze_context::AnalyzeContext, tracker::Tracker, *,
     },
     read_pool::ReadPoolHandle,
-    server::Config,
+    server::{config::DEFAULT_ENDPOINT_MEMORY_QUOTA, Config},
     storage::{
         self,
         kv::{self, with_tls_engine, SnapContext},
@@ -112,7 +112,12 @@ impl<E: Engine> Endpoint<E> {
             }
             _ => None,
         };
-        let memory_quota = Arc::new(MemoryQuota::new(cfg.end_point_memory_quota.unwrap().0 as _));
+        let memory_quota_cap = cfg.end_point_memory_quota.unwrap_or_else(|| {
+            let default = *DEFAULT_ENDPOINT_MEMORY_QUOTA;
+            info!("using default coprocessor quota"; "quota" => ?default);
+            default
+        });
+        let memory_quota = Arc::new(MemoryQuota::new(memory_quota_cap.0 as _));
         COPR_MEMORY_QUOTA.capacity.set(memory_quota.capacity() as _);
         Self {
             read_pool,

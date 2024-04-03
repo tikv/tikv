@@ -52,7 +52,17 @@ const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 //
 // The 12.5% default quota is a balance between efficient memory usage and
 // maintaining performance under load.
-const DEFAULT_ENDPOINT_MEMORY_QUOTA_RATE: f64 = 0.125;
+const DEFAULT_ENDPOINT_MEMORY_QUOTA_RATIO: f64 = 0.125;
+
+lazy_static! {
+    pub (crate) static ref DEFAULT_ENDPOINT_MEMORY_QUOTA: ReadableSize = {
+        let total_mem = SysQuota::memory_limit_in_bytes();
+        let quota = (total_mem as f64) * DEFAULT_ENDPOINT_MEMORY_QUOTA_RATIO;
+        // In order to ensure that coprocessor can function properly under low
+        // memory conditions, we use 500MB as the minimum default value.
+        ReadableSize(cmp::max(ReadableSize::mb(500).0, quota as _))
+    };
+}
 
 // At least 4 long coprocessor requests are allowed to run concurrently.
 const MIN_ENDPOINT_MAX_CONCURRENCY: usize = 4;
@@ -382,9 +392,7 @@ impl Config {
         }
 
         if self.end_point_memory_quota.is_none() {
-            let total_mem = SysQuota::memory_limit_in_bytes();
-            let quota = (total_mem as f64) * DEFAULT_ENDPOINT_MEMORY_QUOTA_RATE;
-            self.end_point_memory_quota = Some(ReadableSize(quota as _));
+            self.end_point_memory_quota = Some(*DEFAULT_ENDPOINT_MEMORY_QUOTA);
         }
 
         if self.max_grpc_send_msg_len <= 0 {
