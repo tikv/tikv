@@ -61,7 +61,9 @@ impl RegionLabelRulesManager {
         let _ = self
             .region_labels
             .insert(label_rule.id.clone(), label_rule.clone());
-        self.region_label_added_cb.as_ref().map(|cb| cb(label_rule));
+        if let Some(cb) = self.region_label_added_cb.as_ref() {
+            cb(label_rule)
+        }
     }
 
     pub fn region_labels(&self) -> Vec<LabelRule> {
@@ -91,6 +93,7 @@ pub type RuleFilterFn = Arc<dyn Fn(&LabelRule) -> bool + Send + Sync>;
 pub struct RegionLabelService {
     manager: Arc<RegionLabelRulesManager>, // May be invert this? This was patterned on RU usage.
     _pd_client: Arc<RpcClient>,
+    // Another approach is to abstract this out.
     meta_client: Checked<Sourced<Arc<RpcClient>>>,
     revision: i64,
     cluster_id: u64,
