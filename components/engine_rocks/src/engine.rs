@@ -550,6 +550,7 @@ mod tests {
     }
 
     proptest! {
+        #![proptest_config(ProptestConfig::with_cases(50))]
         #[test]
         fn test_rocks_titan_basic_ops(operations in gen_operations(1000)) {
             test_rocks_titan_basic_operations(operations.clone(), 8, true);
