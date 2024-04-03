@@ -138,7 +138,6 @@ fn handle_qe_response(
                     "warns_size" => sel_resp.get_warnings().iter().map(|r| r.compute_size() as u64).sum::<u64>(),
                     "exec_summary_size" => sel_resp.get_execution_summaries().iter().map(|r| r.compute_size() as u64).sum::<u64>(),
                     "exec_summary" => ?sel_resp.get_execution_summaries(),
-                    "data_version" => ?data_version,
                 );
             }
             resp.set_data(box_try!(data));
