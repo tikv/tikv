@@ -48,15 +48,20 @@ pub struct KeyRangeRule {
     pub end_key: String,
 }
 
+pub type RegionLabelAddedCb = Arc<dyn Fn(LabelRule) + Send + Sync>;
 // Todo: more efficient way to do this for cache use case?
 #[derive(Default)]
 pub struct RegionLabelRulesManager {
     pub(crate) region_labels: DashMap<String, LabelRule>,
+    pub(crate) region_label_added_cb: Option<RegionLabelAddedCb>,
 }
 
 impl RegionLabelRulesManager {
     pub fn add_region_label(&self, label_rule: LabelRule) {
-        let _ = self.region_labels.insert(label_rule.id.clone(), label_rule);
+        let _ = self
+            .region_labels
+            .insert(label_rule.id.clone(), label_rule.clone());
+        self.region_label_added_cb.as_ref().map(|cb| cb(label_rule));
     }
 
     pub fn region_labels(&self) -> Vec<LabelRule> {
