@@ -128,7 +128,20 @@ fn handle_qe_response(
     match result {
         Ok(sel_resp) => {
             let mut resp = Response::default();
-            resp.set_data(box_try!(sel_resp.write_to_bytes()));
+            let data = sel_resp.write_to_bytes();
+            if let Err(e) = &data {
+                info!(
+                    "handle copr select resp error";
+                    "compute_size" => sel_resp.compute_size(),
+                    "rows_size" => sel_resp.get_rows().iter().map(|r| r.compute_size() as u64).sum::<u64>(),
+                    "chunks_size" => sel_resp.get_chunks().iter().map(|r| r.compute_size() as u64).sum::<u64>(),
+                    "warns_size" => sel_resp.get_warnings().iter().map(|r| r.compute_size() as u64).sum::<u64>(),
+                    "exec_summary_size" => sel_resp.get_execution_summaries().iter().map(|r| r.compute_size() as u64).sum::<u64>(),
+                    "exec_summary" => ?sel_resp.get_execution_summaries(),
+                    "error" => ?e,
+                );
+            }
+            resp.set_data(box_try!(data));
             resp.set_can_be_cached(can_be_cached);
             resp.set_is_cache_hit(false);
             if let Some(v) = data_version {
