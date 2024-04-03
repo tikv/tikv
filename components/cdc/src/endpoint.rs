@@ -197,6 +197,7 @@ pub enum Task {
     // the downstream switches to Normal after the previous commands was sunk.
     InitDownstream {
         region_id: u64,
+        observe_id: ObserveId,
         downstream_id: DownstreamId,
         downstream_state: Arc<AtomicCell<DownstreamState>>,
         sink: crate::channel::Sink,
@@ -274,11 +275,13 @@ impl fmt::Debug for Task {
             }
             Task::InitDownstream {
                 ref region_id,
+                ref observe_id,
                 ref downstream_id,
                 ..
             } => de
                 .field("type", &"init_downstream")
                 .field("region_id", &region_id)
+                .field("observe_id", &observe_id)
                 .field("downstream", &downstream_id)
                 .finish(),
             Task::TxnExtra(_) => de.field("type", &"txn_extra").finish(),
@@ -294,7 +297,7 @@ impl fmt::Debug for Task {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct ResolvedRegion {
     region_id: u64,
     resolved_ts: TimeStamp,
@@ -312,7 +315,7 @@ impl Ord for ResolvedRegion {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub(crate) struct ResolvedRegionHeap {
     // BinaryHeap is max heap, so we reverse order to get a min heap.
     heap: BinaryHeap<Reverse<ResolvedRegion>>,
@@ -348,7 +351,7 @@ impl ResolvedRegionHeap {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub(crate) struct Advance {
     // multiplexing means one region can be subscribed multiple times in one `Conn`,
     // in which case progresses are grouped by (ConnId, request_id).
@@ -1201,6 +1204,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
             } => self.register_min_ts_event(leader_resolver, event_time),
             Task::InitDownstream {
                 region_id,
+                observe_id,
                 downstream_id,
                 downstream_state,
                 sink,
@@ -1208,24 +1212,31 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 incremental_scan_barrier,
                 cb,
             } => {
-                if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-                    if delegate.init_lock_tracker() {
-                        build_resolver.store(true, Ordering::Release);
+                match self.capture_regions.get_mut(&region_id) {
+                    Some(delegate) if delegate.handle.id == observe_id => {
+                        if delegate.init_lock_tracker() {
+                            build_resolver.store(true, Ordering::Release);
+                        }
                     }
+                    _ => return,
                 }
                 if let Err(e) = sink.unbounded_send(incremental_scan_barrier, true) {
                     error!("cdc failed to schedule barrier for delta before delta scan";
                         "region_id" => region_id,
+                        "observe_id" => ?observe_id,
+                        "downstream_id" => ?downstream_id,
                         "error" => ?e);
                     return;
                 }
                 if on_init_downstream(&downstream_state) {
                     info!("cdc downstream starts to initialize";
                         "region_id" => region_id,
+                        "observe_id" => ?observe_id,
                         "downstream_id" => ?downstream_id);
                 } else {
-                    warn!("cdc downstream fails to initialize";
+                    warn!("cdc downstream fails to initialize: canceled";
                         "region_id" => region_id,
+                        "observe_id" => ?observe_id,
                         "downstream_id" => ?downstream_id);
                 }
                 cb();

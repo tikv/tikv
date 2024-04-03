@@ -132,6 +132,7 @@ impl<E: KvEngine> Initializer<E> {
         let sched = self.sched.clone();
         let region_id = self.region_id;
         let region_epoch = self.region_epoch.clone();
+        let observe_id = self.observe_handle.id;
         let downstream_id = self.downstream_id;
         let downstream_state = self.downstream_state.clone();
         let (cb, fut) = tikv_util::future::paired_future_callback();
@@ -150,6 +151,7 @@ impl<E: KvEngine> Initializer<E> {
             Callback::read(Box::new(move |resp| {
                 if let Err(e) = sched.schedule(Task::InitDownstream {
                     region_id,
+                    observe_id,
                     downstream_id,
                     downstream_state,
                     sink,

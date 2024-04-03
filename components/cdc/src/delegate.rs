@@ -267,6 +267,16 @@ pub enum LockTracker {
     },
 }
 
+impl fmt::Debug for LockTracker {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LockTracker::Pending => write!(f, "LockTracker::Pending"),
+            LockTracker::Preparing(..) => write!(f, "LockTracker::Preparing"),
+            LockTracker::Prepared { .. } => write!(f, "LockTracker::Prepared"),
+        }
+    }
+}
+
 /// `MiniLock` is like `Lock`, but only contains fields that CDC cares about.
 #[derive(Eq, PartialEq, Debug)]
 pub struct MiniLock {
@@ -595,6 +605,7 @@ impl Delegate {
                         "cdc region scan locks too slow";
                         "region_id" => self.region_id,
                         "elapsed" => ?elapsed,
+                        "stage" => ?self.lock_tracker,
                     );
                     self.last_lag_warn = now;
                 }
