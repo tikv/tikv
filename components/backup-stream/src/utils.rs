@@ -5,20 +5,21 @@ use std::{
     borrow::Borrow,
     cell::RefCell,
     collections::{hash_map::RandomState, BTreeMap, HashMap},
+    future::Future,
     ops::{Bound, RangeBounds},
     path::Path,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
-    task::Context,
+    task::{Context, Waker},
     time::Duration,
 };
 
 use async_compression::{tokio::write::ZstdEncoder, Level};
 use engine_rocks::ReadPerfInstant;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
-use futures::{ready, task::Poll, FutureExt};
+use futures::{ready, task::Poll};
 use kvproto::{
     brpb::CompressionType,
     metapb::Region,
@@ -37,13 +38,12 @@ use tikv_util::{
 use tokio::{
     fs::File,
     io::{AsyncRead, AsyncWrite, AsyncWriteExt, BufWriter},
-    sync::{oneshot, Mutex, RwLock},
+    sync::{Mutex, RwLock},
 };
 use txn_types::{Key, Lock, LockType};
 
 use crate::{
     errors::{Error, Result},
-    metadata::store::BoxFuture,
     router::TaskSelector,
     Task,
 };
@@ -378,47 +378,65 @@ pub fn should_track_lock(l: &Lock) -> bool {
     }
 }
 
-pub struct CallbackWaitGroup {
+pub struct FutureWaitGroup {
     running: AtomicUsize,
-    on_finish_all: std::sync::Mutex<Vec<Box<dyn FnOnce() + Send + 'static>>>,
+    wakers: std::sync::Mutex<Vec<Waker>>,
 }
 
-impl CallbackWaitGroup {
+pub struct Work(Arc<FutureWaitGroup>);
+
+impl Drop for Work {
+    fn drop(&mut self) {
+        self.0.work_done();
+    }
+}
+
+pub struct WaitAll<'a>(&'a FutureWaitGroup);
+
+impl<'a> Future for WaitAll<'a> {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        // Fast path: nothing to wait.
+        let running = self.0.running.load(Ordering::SeqCst);
+        if running == 0 {
+            return Poll::Ready(());
+        }
+
+        // <1>
+        let mut callbacks = self.0.wakers.lock().unwrap();
+        callbacks.push(cx.waker().clone());
+        let running = self.0.running.load(Ordering::SeqCst);
+        // Unlikely path: if all background tasks finish at <1>, there will be a long
+        // period that nobody will wake the `wakers` even the condition is ready.
+        // We need to help ourselves here.
+        if running == 0 {
+            callbacks.drain(..).for_each(|w| w.wake());
+        }
+        Poll::Pending
+    }
+}
+
+impl FutureWaitGroup {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             running: AtomicUsize::new(0),
-            on_finish_all: std::sync::Mutex::default(),
+            wakers: Default::default(),
         })
     }
 
     fn work_done(&self) {
         let last = self.running.fetch_sub(1, Ordering::SeqCst);
         if last == 1 {
-            self.on_finish_all
-                .lock()
-                .unwrap()
-                .drain(..)
-                .for_each(|x| x())
+            self.wakers.lock().unwrap().drain(..).for_each(|x| {
+                x.wake();
+            })
         }
     }
 
     /// wait until all running tasks done.
-    pub fn wait(&self) -> BoxFuture<()> {
-        // Fast path: no uploading.
-        if self.running.load(Ordering::SeqCst) == 0 {
-            return Box::pin(futures::future::ready(()));
-        }
-
-        let (tx, rx) = oneshot::channel();
-        self.on_finish_all.lock().unwrap().push(Box::new(move || {
-            // The waiter may timed out.
-            let _ = tx.send(());
-        }));
-        // try to acquire the lock again.
-        if self.running.load(Ordering::SeqCst) == 0 {
-            return Box::pin(futures::future::ready(()));
-        }
-        Box::pin(rx.map(|_| ()))
+    pub fn wait(&self) -> WaitAll<'_> {
+        WaitAll(self)
     }
 
     /// make a work, as long as the return value held, mark a work in the group
@@ -426,14 +444,6 @@ impl CallbackWaitGroup {
     pub fn work(self: Arc<Self>) -> Work {
         self.running.fetch_add(1, Ordering::SeqCst);
         Work(self)
-    }
-}
-
-pub struct Work(Arc<CallbackWaitGroup>);
-
-impl Drop for Work {
-    fn drop(&mut self) {
-        self.0.work_done();
     }
 }
 
@@ -805,7 +815,7 @@ mod test {
     use kvproto::metapb::{Region, RegionEpoch};
     use tokio::io::{AsyncWriteExt, BufReader};
 
-    use crate::utils::{is_in_range, CallbackWaitGroup, SegmentMap};
+    use crate::utils::{is_in_range, FutureWaitGroup, SegmentMap};
 
     #[test]
     fn test_redact() {
@@ -914,8 +924,8 @@ mod test {
         }
 
         fn run_case(c: Case) {
+            let wg = FutureWaitGroup::new();
             for i in 0..c.repeat {
-                let wg = CallbackWaitGroup::new();
                 let cnt = Arc::new(AtomicUsize::new(c.bg_task));
                 for _ in 0..c.bg_task {
                     let cnt = cnt.clone();
@@ -926,7 +936,7 @@ mod test {
                     });
                 }
                 block_on(tokio::time::timeout(Duration::from_secs(20), wg.wait())).unwrap();
-                assert_eq!(cnt.load(Ordering::SeqCst), 0, "{:?}@{}", c, i);
+                assert_eq!(cnt.load(Ordering::SeqCst), 0, "{:?}@{}", c, i,);
             }
         }
 
@@ -942,6 +952,10 @@ mod test {
             Case {
                 bg_task: 512,
                 repeat: 1,
+            },
+            Case {
+                bg_task: 16,
+                repeat: 10000,
             },
             Case {
                 bg_task: 2,
