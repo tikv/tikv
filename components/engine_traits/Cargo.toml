@@ -19,6 +19,7 @@ keys = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.0"
 log_wrappers = { workspace = true }
+pd_client = { workspace = true }
 protobuf = "2"
 raft = { workspace = true }
 encryption = { workspace = true }

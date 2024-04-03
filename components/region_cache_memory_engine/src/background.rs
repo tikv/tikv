@@ -9,7 +9,9 @@ use crossbeam::{
 };
 use engine_rocks::RocksSnapshot;
 use engine_traits::{CacheRange, IterOptions, Iterable, Iterator, CF_DEFAULT, CF_WRITE, DATA_CFS};
+use keys::{data_end_key, data_key};
 use parking_lot::RwLock;
+use pd_client::RpcClient;
 use slog_global::{error, info, warn};
 use tikv_util::{
     keybuilder::KeyBuilder,
@@ -24,6 +26,9 @@ use crate::{
     memory_controller::MemoryController,
     metrics::GC_FILTERED_STATIC,
     range_manager::RangeCacheStatus,
+    region_label::{
+        LabelRule, RegionLabelAddedCb, RegionLabelRulesManager, RegionLabelServiceBuilder,
+    },
 };
 
 /// Try to extract the key and `u64` timestamp from `encoded_key`.
@@ -83,7 +88,7 @@ impl Display for GcTask {
     }
 }
 
-pub(crate) type PrepareForApplyFn = Arc<dyn Fn(CacheRange) -> RangeCacheStatus + Send + Sync>;
+pub(crate) type LoadAndPrepareRangeFn = Arc<dyn Fn(CacheRange) -> RangeCacheStatus + Send + Sync>;
 // BgWorkManager managers the worker inits, stops, and task schedules. When
 // created, it starts a worker which receives tasks such as gc task, range
 // delete task, range snapshot load and so on, and starts a thread for
@@ -92,7 +97,7 @@ pub struct BgWorkManager {
     worker: Worker,
     scheduler: Scheduler<BackgroundTask>,
     tick_stopper: Option<(JoinHandle<()>, Sender<bool>)>,
-    prepare_for_apply_fn: Option<PrepareForApplyFn>,
+    load_and_prepare_fn: Option<LoadAndPrepareRangeFn>,
 }
 
 impl Drop for BgWorkManager {
@@ -122,7 +127,7 @@ impl BgWorkManager {
             worker,
             scheduler,
             tick_stopper: Some((handle, tx)),
-            prepare_for_apply_fn: None,
+            load_and_prepare_fn: None,
         }
     }
 
@@ -130,8 +135,56 @@ impl BgWorkManager {
         self.scheduler.schedule_force(task)
     }
 
-    pub fn set_prepare_for_apply_fn(&mut self, prepare_for_apply_fn: PrepareForApplyFn) {
-        self.prepare_for_apply_fn = Some(prepare_for_apply_fn)
+    pub fn set_load_range_and_prepare_for_apply_fn(
+        &mut self,
+        load_and_prepare_fn: LoadAndPrepareRangeFn,
+    ) {
+        self.load_and_prepare_fn = Some(load_and_prepare_fn);
+        //  self.worker.remote().spawn(move || {
+        //
+        // });
+    }
+
+    pub fn start_bg_range_sync(&mut self, pd_client: Arc<RpcClient>) {
+        let pd_client = pd_client.clone();
+        let scheduler = self.scheduler.clone();
+        let prepare_for_apply = self.load_and_prepare_fn.as_ref().unwrap().clone();
+        let region_label_added_cb: Option<RegionLabelAddedCb> =
+            Some(Arc::new(move |label_rule: LabelRule| {
+                if !label_rule
+                    .labels
+                    .iter()
+                    .any(|e| e.key == "cache" && e.value == "always")
+                {
+                    // not related to caching, skip.
+                    return;
+                }
+                let to_load = label_rule
+                    .data
+                    .iter()
+                    .map(|key_range| {
+                        let start_key = data_key(&hex::decode(&key_range.start_key).unwrap());
+                        let end_key = data_end_key(&hex::decode(&key_range.end_key).unwrap());
+                        CacheRange::new(start_key, end_key)
+                    })
+                    .collect::<Vec<_>>();
+                for cache_range in to_load {
+                    prepare_for_apply(cache_range);
+                    scheduler.schedule(BackgroundTask::LoadRange).unwrap();
+                }
+            }));
+        self.worker.remote().spawn(async move {
+            let region_label_mgr = RegionLabelRulesManager {
+                region_label_added_cb,
+                ..RegionLabelRulesManager::default()
+            };
+
+            let region_label_mgr = Arc::new(region_label_mgr);
+            let mut region_label_svc = RegionLabelServiceBuilder::new(region_label_mgr, pd_client)
+                .build()
+                .unwrap();
+            region_label_svc.watch_region_labels().await;
+        });
     }
 
     fn start_tick(

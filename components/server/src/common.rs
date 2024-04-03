@@ -700,20 +700,22 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
 }
 
 pub trait KvEngineBuilder: KvEngine {
-    fn build(disk_engine: RocksEngine) -> Self;
+    fn build(disk_engine: RocksEngine, pd_client: &Arc<RpcClient>) -> Self;
 }
 
 impl KvEngineBuilder for RocksEngine {
-    fn build(disk_engine: RocksEngine) -> Self {
+    fn build(disk_engine: RocksEngine, _pd_client: &Arc<RpcClient>) -> Self {
         disk_engine
     }
 }
 
 impl KvEngineBuilder for HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
-    fn build(disk_engine: RocksEngine) -> Self {
-        // todo(SpadeA): add config for it
+
+    fn build(disk_engine: RocksEngine, pd_client: &Arc<RpcClient>) -> Self {
+        // todo(SpadeA): make time configurable
         let mut memory_engine = RangeCacheMemoryEngine::new(EngineConfig::default());
         memory_engine.set_disk_engine(disk_engine.clone());
+        memory_engine.set_pd_client(pd_client.clone());
         HybridEngine::new(disk_engine, memory_engine)
     }
 }

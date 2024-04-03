@@ -17,13 +17,17 @@ use engine_traits::{
     KvEngine, Peekable, RangeCacheEngine, ReadOptions, Result, Snapshot, SnapshotMiscExt,
     CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
-use parking_lot::{lock_api::{RwLockReadGuard, RwLockUpgradableReadGuard}, RawRwLock, RwLock, RwLockWriteGuard};
+use parking_lot::{
+    lock_api::{RwLockReadGuard, RwLockUpgradableReadGuard},
+    RawRwLock, RwLock, RwLockWriteGuard,
+};
+use pd_client::RpcClient;
 use skiplist_rs::{base::OwnedIter, SkipList};
 use slog_global::error;
 use tikv_util::box_err;
 
 use crate::{
-    background::{BackgroundTask, BgWorkManager, PrepareForApplyFn},
+    background::{BackgroundTask, BgWorkManager},
     keys::{
         decode_key, encode_key_for_eviction, encode_seek_for_prev_key, encode_seek_key,
         InternalBytes, InternalKey, ValueType,
@@ -427,10 +431,25 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
     fn set_disk_engine(&mut self, disk_engine: Self::DiskEngine) {
         self.rocks_engine = Some(disk_engine);
         let mut bg_work_manager = self.bg_work_manager.write();
+        // TODO (afeinberg): This could probably be an Arc, with WeakReferences where
+        // needed.
         let self_with_rocks_engine = self.clone();
-        bg_work_manager.set_prepare_for_apply_fn(Arc::new(move |cache_range| {
+        bg_work_manager.set_load_range_and_prepare_for_apply_fn(Arc::new(move |cache_range| {
+            {
+                let mut engine = self_with_rocks_engine.core().write();
+                engine
+                    .mut_range_manager()
+                    .load_range(cache_range.clone())
+                    .unwrap(); // TODO (afeinberg): error handling
+            };
             self_with_rocks_engine.prepare_for_apply(&cache_range)
         }));
+    }
+
+    type RangeMetadataClient = RpcClient;
+    fn set_pd_client(&mut self, pd_client: Arc<Self::RangeMetadataClient>) {
+        let mut bg_work_manager = self.bg_work_manager.write();
+        bg_work_manager.start_bg_range_sync(pd_client);
     }
 
     fn get_range_for_key(&self, key: &[u8]) -> Option<CacheRange> {
