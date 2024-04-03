@@ -383,7 +383,6 @@ pub struct FutureWaitGroup {
     wakers: std::sync::Mutex<Vec<Waker>>,
 }
 
-<<<<<<< HEAD
 /// A shortcut for making an opaque future type for return type or argument
 /// type, which is sendable and not borrowing any variables.  
 ///
@@ -393,44 +392,7 @@ macro_rules! future {
     ($t:ty) => { impl core::future::Future<Output = $t> + Send + 'static };
 }
 
-impl CallbackWaitGroup {
-=======
-pub struct Work(Arc<FutureWaitGroup>);
-
-impl Drop for Work {
-    fn drop(&mut self) {
-        self.0.work_done();
-    }
-}
-
-pub struct WaitAll<'a>(&'a FutureWaitGroup);
-
-impl<'a> Future for WaitAll<'a> {
-    type Output = ();
-
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        // Fast path: nothing to wait.
-        let running = self.0.running.load(Ordering::SeqCst);
-        if running == 0 {
-            return Poll::Ready(());
-        }
-
-        // <1>
-        let mut callbacks = self.0.wakers.lock().unwrap();
-        callbacks.push(cx.waker().clone());
-        let running = self.0.running.load(Ordering::SeqCst);
-        // Unlikely path: if all background tasks finish at <1>, there will be a long
-        // period that nobody will wake the `wakers` even the condition is ready.
-        // We need to help ourselves here.
-        if running == 0 {
-            callbacks.drain(..).for_each(|w| w.wake());
-        }
-        Poll::Pending
-    }
-}
-
 impl FutureWaitGroup {
->>>>>>> 81d62b2e0e (log_backup: make a more rusty `CallbackWaitGroup` (#16740))
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             running: AtomicUsize::new(0),
