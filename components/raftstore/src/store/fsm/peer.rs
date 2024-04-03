@@ -729,11 +729,14 @@ where
     #[inline]
     fn on_loop_finished(&mut self) {
         let ready_concurrency = self.ctx.cfg.cmd_batch_concurrent_ready_max_count;
-        // allow propose pending commands iff all ongoing commands are
-        // persisted or committed.
+        // allow propose pending commands iff all ongoing commands are persisted or
+        // committed. this is trying to batch proposes as many as possible to
+        // minimize the cpu overhead.
         let should_propose = self.ctx.sync_write_worker.is_some()
             || ready_concurrency == 0
             || self.fsm.peer.unpersisted_ready_len() < ready_concurrency
+            // allow propose if all ongoing proposes are committed to avoid io jitter block
+            // new commands.
             || !self.fsm.peer.has_uncommitted_log();
         let force_delay_fp = || {
             fail_point!(
