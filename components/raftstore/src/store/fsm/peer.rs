@@ -6605,6 +6605,16 @@ where
             if let Some(count) = meta.completed_apply_peers_count.as_mut() {
                 *count += 1;
             }
+            STORE_BUSY_ON_APPLY_REGIONS_GAUGE_VEC
+                .with_label_values(&["busy_apply_peers"])
+                .set(meta.busy_apply_peers.len() as i64);
+            info!(
+                "no need to check initialized peer";
+                "last_commit_idx" => last_idx,
+                "last_applied_idx" => applied_idx,
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => peer_id,
+            );
             return;
         }
         assert!(self.fsm.peer.busy_on_apply.is_some());
@@ -6614,9 +6624,12 @@ where
             if !self.fsm.peer.busy_on_apply.unwrap() {
                 let mut meta = self.ctx.store_meta.lock().unwrap();
                 meta.busy_apply_peers.insert(peer_id);
+                STORE_BUSY_ON_APPLY_REGIONS_GAUGE_VEC
+                    .with_label_values(&["busy_apply_peers"])
+                    .set(meta.busy_apply_peers.len() as i64);
             }
             self.fsm.peer.busy_on_apply = Some(true);
-            debug!(
+            info!(
                 "peer is busy on applying logs";
                 "last_commit_idx" => last_idx,
                 "last_applied_idx" => applied_idx,
@@ -6631,8 +6644,11 @@ where
                 if let Some(count) = meta.completed_apply_peers_count.as_mut() {
                     *count += 1;
                 }
+                STORE_BUSY_ON_APPLY_REGIONS_GAUGE_VEC
+                    .with_label_values(&["busy_apply_peers"])
+                    .set(meta.busy_apply_peers.len() as i64);
             }
-            debug!(
+            info!(
                 "peer completes applying logs";
                 "last_commit_idx" => last_idx,
                 "last_applied_idx" => applied_idx,
