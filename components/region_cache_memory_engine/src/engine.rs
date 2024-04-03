@@ -21,13 +21,12 @@ use parking_lot::{
     lock_api::{RwLockReadGuard, RwLockUpgradableReadGuard},
     RawRwLock, RwLock, RwLockWriteGuard,
 };
-use pd_client::RpcClient;
 use skiplist_rs::{base::OwnedIter, SkipList};
 use slog_global::error;
 use tikv_util::box_err;
 
 use crate::{
-    background::{BackgroundTask, BgWorkManager},
+    background::{BackgroundTask, BgWorkManager, PdRangeHintService},
     keys::{
         decode_key, encode_key_for_eviction, encode_seek_for_prev_key, encode_seek_key,
         InternalBytes, InternalKey, ValueType,
@@ -446,10 +445,10 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
         }));
     }
 
-    type RangeMetadataClient = RpcClient;
-    fn set_pd_client(&mut self, pd_client: Arc<Self::RangeMetadataClient>) {
-        let mut bg_work_manager = self.bg_work_manager.write();
-        bg_work_manager.start_bg_range_sync(pd_client);
+    type RangeHintService = PdRangeHintService;
+    fn start_hint_service(&self, range_hint_service: Self::RangeHintService) {
+        self.bg_worker_manager()
+            .start_bg_hint_service(range_hint_service)
     }
 
     fn get_range_for_key(&self, key: &[u8]) -> Option<CacheRange> {

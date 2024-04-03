@@ -1,10 +1,9 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, fmt::Debug, result, sync::Arc};
+use std::{cmp, fmt::Debug, result};
 
 use keys::{enc_end_key, enc_start_key};
 use kvproto::metapb;
-use pd_client::PdClient;
 
 use crate::{Iterable, KvEngine, Snapshot, WriteBatchExt};
 
@@ -38,11 +37,11 @@ pub trait RangeCacheEngine:
     // return the range containing the key
     fn get_range_for_key(&self, key: &[u8]) -> Option<CacheRange>;
 
-    // TODO (afeinberg): Extract relevant parts from PdClient and abstract this
-    // away.
-    type RangeMetadataClient: PdClient;
-    fn set_pd_client(&mut self, pd_client: Arc<Self::RangeMetadataClient>);
+    type RangeHintService: RangeHintService;
+    fn start_hint_service(&self, range_hint_service: Self::RangeHintService);
 }
+
+pub trait RangeHintService: Send + Sync {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CacheRange {

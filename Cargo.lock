@@ -1632,7 +1632,6 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
- "pd_client",
  "protobuf",
  "raft",
  "serde",

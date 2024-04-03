@@ -8,7 +8,9 @@ use crossbeam::{
     epoch, select,
 };
 use engine_rocks::RocksSnapshot;
-use engine_traits::{CacheRange, IterOptions, Iterable, Iterator, CF_DEFAULT, CF_WRITE, DATA_CFS};
+use engine_traits::{
+    CacheRange, IterOptions, Iterable, Iterator, RangeHintService, CF_DEFAULT, CF_WRITE, DATA_CFS,
+};
 use keys::{data_end_key, data_key};
 use parking_lot::RwLock;
 use pd_client::RpcClient;
@@ -109,6 +111,61 @@ impl Drop for BgWorkManager {
     }
 }
 
+pub struct PdRangeHintService(Arc<RpcClient>);
+
+impl RangeHintService for PdRangeHintService {}
+
+impl From<Arc<RpcClient>> for PdRangeHintService {
+    fn from(pd_client: Arc<RpcClient>) -> Self {
+        PdRangeHintService(pd_client)
+    }
+}
+
+impl PdRangeHintService {
+    pub fn start(
+        &self,
+        scheduler: Scheduler<BackgroundTask>,
+        remote: Remote<yatp::task::future::TaskCell>,
+        load_and_prepare: LoadAndPrepareRangeFn,
+    ) {
+        let pd_client = self.0.clone();
+        let region_label_added_cb: RegionLabelAddedCb = Arc::new(move |label_rule: LabelRule| {
+            if !label_rule
+                .labels
+                .iter()
+                .any(|e| e.key == "cache" && e.value == "always")
+            {
+                // not related to caching, skip.
+                return;
+            }
+            let to_load = label_rule
+                .data
+                .iter()
+                .map(|key_range| {
+                    let start_key = data_key(&hex::decode(&key_range.start_key).unwrap());
+                    let end_key = data_end_key(&hex::decode(&key_range.end_key).unwrap());
+                    CacheRange::new(start_key, end_key)
+                })
+                .collect::<Vec<_>>();
+            for cache_range in to_load {
+                info!("Loading range"; "cache_range" => ?&cache_range);
+                load_and_prepare(cache_range);
+                scheduler.schedule(BackgroundTask::LoadRange).unwrap();
+            }
+        });
+        let mut region_label_svc = RegionLabelServiceBuilder::new(
+            Arc::new(RegionLabelRulesManager {
+                region_label_added_cb: Some(region_label_added_cb),
+                ..RegionLabelRulesManager::default()
+            }),
+            pd_client,
+        )
+        .build()
+        .unwrap();
+        remote.spawn(async move { region_label_svc.watch_region_labels().await })
+    }
+}
+
 impl BgWorkManager {
     pub fn new(
         core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
@@ -142,48 +199,12 @@ impl BgWorkManager {
         self.load_and_prepare_fn = Some(load_and_prepare_fn);
     }
 
-    pub fn start_bg_range_sync(&mut self, pd_client: Arc<RpcClient>) {
-        let pd_client = pd_client.clone();
-        let scheduler = self.scheduler.clone();
-        let prepare_for_apply = self.load_and_prepare_fn.as_ref().unwrap().clone();
-        info!("Starting background range metadata synchronization");
-        let region_label_added_cb: Option<RegionLabelAddedCb> =
-            Some(Arc::new(move |label_rule: LabelRule| {
-                if !label_rule
-                    .labels
-                    .iter()
-                    .any(|e| e.key == "cache" && e.value == "always")
-                {
-                    // not related to caching, skip.
-                    return;
-                }
-                let to_load = label_rule
-                    .data
-                    .iter()
-                    .map(|key_range| {
-                        let start_key = data_key(&hex::decode(&key_range.start_key).unwrap());
-                        let end_key = data_end_key(&hex::decode(&key_range.end_key).unwrap());
-                        CacheRange::new(start_key, end_key)
-                    })
-                    .collect::<Vec<_>>();
-                for cache_range in to_load {
-                    info!("Loading range"; "cache_range" => ?&cache_range);
-                    prepare_for_apply(cache_range);
-                    scheduler.schedule(BackgroundTask::LoadRange).unwrap();
-                }
-            }));
-        self.worker.remote().spawn(async move {
-            let region_label_mgr = RegionLabelRulesManager {
-                region_label_added_cb,
-                ..RegionLabelRulesManager::default()
-            };
-
-            let region_label_mgr = Arc::new(region_label_mgr);
-            let mut region_label_svc = RegionLabelServiceBuilder::new(region_label_mgr, pd_client)
-                .build()
-                .unwrap();
-            region_label_svc.watch_region_labels().await;
-        });
+    pub fn start_bg_hint_service(&self, range_hint_service: PdRangeHintService) {
+        range_hint_service.start(
+            self.scheduler.clone(),
+            self.worker.remote(),
+            self.load_and_prepare_fn.as_ref().unwrap().clone(),
+        )
     }
 
     fn start_tick(
