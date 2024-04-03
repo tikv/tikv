@@ -84,9 +84,12 @@ impl RegionLabelRulesManager {
 
 pub type RuleFilterFn = Arc<dyn Fn(&LabelRule) -> bool + Send + Sync>;
 
+// TODO (afeinberg): This should be implemented as an interface that has a mock
+// implementation without PdClient and passed in directly to
+// region_cache_memory_engine.
 #[derive(Clone)]
 pub struct RegionLabelService {
-    manager: Arc<RegionLabelRulesManager>,
+    manager: Arc<RegionLabelRulesManager>, // May be invert this? This was patterned on RU usage.
     _pd_client: Arc<RpcClient>,
     meta_client: Checked<Sourced<Arc<RpcClient>>>,
     revision: i64,

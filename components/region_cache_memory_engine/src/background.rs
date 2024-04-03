@@ -149,6 +149,7 @@ impl BgWorkManager {
         let pd_client = pd_client.clone();
         let scheduler = self.scheduler.clone();
         let prepare_for_apply = self.load_and_prepare_fn.as_ref().unwrap().clone();
+        info!("Starting background range metadata synchronization");
         let region_label_added_cb: Option<RegionLabelAddedCb> =
             Some(Arc::new(move |label_rule: LabelRule| {
                 if !label_rule
@@ -169,6 +170,7 @@ impl BgWorkManager {
                     })
                     .collect::<Vec<_>>();
                 for cache_range in to_load {
+                    info!("Loading range"; "cache_range" => ?&cache_range);
                     prepare_for_apply(cache_range);
                     scheduler.schedule(BackgroundTask::LoadRange).unwrap();
                 }
@@ -494,6 +496,7 @@ impl Runnable for BackgroundRunner {
                         core.engine().clone()
                     };
                     while let Some((range, snap, mut canceled)) = core.get_range_to_load() {
+                        info!("Loading range"; "range" => ?&range);
                         let iter_opt = IterOptions::new(
                             Some(KeyBuilder::from_vec(range.start.clone(), 0, 0)),
                             Some(KeyBuilder::from_vec(range.end.clone(), 0, 0)),
