@@ -58,11 +58,14 @@ pub struct RegionLabelRulesManager {
 
 impl RegionLabelRulesManager {
     pub fn add_region_label(&self, label_rule: LabelRule) {
-        let _ = self
+        let old_value = self
             .region_labels
             .insert(label_rule.id.clone(), label_rule.clone());
         if let Some(cb) = self.region_label_added_cb.as_ref() {
-            cb(label_rule)
+            match old_value {
+                Some(old_value) if old_value == label_rule => {}
+                _ => cb(label_rule),
+            }
         }
     }
 
@@ -106,6 +109,14 @@ pub struct RegionLabelServiceBuilder {
     rule_filter_fn: Option<RuleFilterFn>,
 }
 
+pub(crate) fn region_label_meta_client(
+    pd_client: Arc<RpcClient>,
+) -> Checked<Sourced<Arc<RpcClient>>> {
+    Checked::new(Sourced::new(
+        pd_client,
+        pd_client::meta_storage::Source::RegionLabel,
+    ))
+}
 impl RegionLabelServiceBuilder {
     pub fn new(
         manager: Arc<RegionLabelRulesManager>,
@@ -135,10 +146,7 @@ impl RegionLabelServiceBuilder {
             cluster_id,
             manager: self.manager,
             revision: 0,
-            meta_client: Checked::new(Sourced::new(
-                Arc::clone(&self.pd_client.clone()),
-                pd_client::meta_storage::Source::RegionLabel,
-            )),
+            meta_client: region_label_meta_client(self.pd_client.clone()),
             _pd_client: self.pd_client,
             path_suffix: self.path_suffix,
             rule_filter_fn: self.rule_filter_fn,
@@ -295,7 +303,7 @@ pub mod tests {
         assert!(!region_labels.is_empty());
     }
 
-    fn new_test_server_and_client(
+    pub(crate) fn new_test_server_and_client(
         update_interval: ReadableDuration,
     ) -> (MockServer<MetaStorage>, RpcClient) {
         let server = MockServer::with_case(1, Arc::<MetaStorage>::default());
@@ -304,7 +312,7 @@ pub mod tests {
         (server, client)
     }
 
-    fn add_region_label_rule(
+    pub(crate) fn add_region_label_rule(
         meta_client: Checked<Sourced<Arc<RpcClient>>>,
         cluster_id: u64,
         label_rule: LabelRule,
@@ -324,7 +332,7 @@ pub mod tests {
         block_on(async move { meta_client.delete(Delete::of(key)).await }).unwrap();
     }
 
-    fn new_region_label_rule(id: &str, start_key: &str, end_key: &str) -> LabelRule {
+    pub(crate) fn new_region_label_rule(id: &str, start_key: &str, end_key: &str) -> LabelRule {
         LabelRule {
             id: id.to_string(),
             labels: vec![RegionLabel {

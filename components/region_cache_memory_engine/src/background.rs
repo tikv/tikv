@@ -736,11 +736,14 @@ pub mod tests {
     use engine_traits::{
         CacheRange, RangeCacheEngine, SyncMutable, CF_DEFAULT, CF_WRITE, DATA_CFS,
     };
-    use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
+    use keys::{data_end_key, data_key, DATA_MAX_KEY, DATA_MIN_KEY};
+    use pd_client::PdClient;
+    use skiplist_rs::SkipList;
     use tempfile::Builder;
+    use tikv_util::config::ReadableDuration;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
-    use super::Filter;
+    use super::{Filter, PdRangeHintService};
     use crate::{
         background::BackgroundRunner,
         engine::{SkiplistEngine, SkiplistHandle},
@@ -750,6 +753,11 @@ pub mod tests {
         },
         memory_controller::MemoryController,
         EngineConfig, RangeCacheMemoryEngine,
+        region_label::{
+            region_label_meta_client,
+            tests::{add_region_label_rule, new_region_label_rule, new_test_server_and_client},
+        },
+        RangeCacheMemoryEngine,
     };
 
     fn put_data(
@@ -1389,5 +1397,90 @@ pub mod tests {
 
         let ranges = runner.core.ranges_for_gc().unwrap();
         assert_eq!(2, ranges.len());
+    }
+
+    // Test creating and loading cache hint using a region label rule:
+    // 1. Insert some data into rocks engine, which is set as disk engine for the
+    //    memory engine.
+    // 2. Use test pd client server to create a label rule for portion of the data.
+    // 3. Wait until data is loaded.
+    // 4. Verify that only the labeled key range has been loaded.
+    //
+    // TODO (afeinberg): in follow up PR (with proper interaction with apply
+    // thread), test writing during load.
+    #[test]
+    fn test_load_from_pd_hint_service() {
+        let mut engine = RangeCacheMemoryEngine::new(Duration::from_secs(1000));
+        let path = Builder::new()
+            .prefix("test_load_from_pd_hint_service")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+        engine.set_disk_engine(rocks_engine.clone());
+
+        for i in 10..20 {
+            let key = construct_key(i, 1);
+            let key = data_key(&key);
+            let value = construct_value(i, i);
+            rocks_engine
+                .put_cf(CF_DEFAULT, &key, value.as_bytes())
+                .unwrap();
+            rocks_engine
+                .put_cf(CF_WRITE, &key, value.as_bytes())
+                .unwrap();
+        }
+
+        let (mut pd_server, pd_client) = new_test_server_and_client(ReadableDuration::millis(100));
+        let cluster_id = pd_client.get_cluster_id().unwrap();
+        let pd_client = Arc::new(pd_client);
+        engine.start_hint_service(PdRangeHintService::from(pd_client.clone()));
+        let meta_client = region_label_meta_client(pd_client.clone());
+        let start_key = format!("k{:08}", 10).into_bytes();
+        let end_key = format!("k{:08}", 15).into_bytes();
+        add_region_label_rule(
+            meta_client,
+            cluster_id,
+            new_region_label_rule("cache/0", &hex::encode(&start_key), &hex::encode(&end_key)),
+        );
+
+        // Wait for the watch to fire on the label rule and for the range to be loaded.
+        std::thread::sleep(Duration::from_secs(2));
+        let r1 = CacheRange::new(data_key(&start_key), data_end_key(&end_key));
+        let _ = engine.snapshot(r1, u64::MAX, u64::MAX).unwrap();
+
+        let (write, default) = {
+            let core = engine.core().write();
+            let skiplist_engine = core.engine();
+            (
+                skiplist_engine.cf_handle(CF_WRITE),
+                skiplist_engine.cf_handle(CF_DEFAULT),
+            )
+        };
+
+        let guard = &epoch::pin();
+        for i in 10..15 {
+            let key = construct_key(i, 1);
+            let key = data_key(&key);
+            let value = construct_value(i, i);
+            let key = encode_seek_key(&key, u64::MAX);
+            assert_eq!(
+                get_value(&write, &key, guard).unwrap().as_slice(),
+                value.as_bytes()
+            );
+            assert_eq!(
+                get_value(&default, &key, guard).unwrap().as_slice(),
+                value.as_bytes()
+            );
+        }
+        for i in 15..=20 {
+            let key = construct_key(i, 1);
+            let key = data_key(&key);
+            let key = encode_seek_key(&key, u64::MAX);
+            assert!(!key_exist(&write, &key, guard));
+            assert!(!key_exist(&default, &key, guard));
+        }
+
+        pd_server.stop();
     }
 }
