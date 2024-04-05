@@ -2540,7 +2540,6 @@ mod tests {
         memory_engine.new_range(range.clone());
         {
             let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_range_readable(&range, true);
             core.mut_range_manager().set_safe_point(&range, 1);
         }
         let kv = (&[DATA_PREFIX, b'a'], b"b");
@@ -2588,11 +2587,10 @@ mod tests {
 
         {
             let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_range_readable(&range, true);
             core.mut_range_manager().set_safe_point(&range, 10);
         }
 
-        let mut snap_ctx = SnapshotContext {
+        let snap_ctx = SnapshotContext {
             read_ts: 15,
             range: None,
         };
@@ -2600,19 +2598,5 @@ mod tests {
         let s = get_snapshot(Some(snap_ctx.clone()), &mut reader, cmd.clone(), &rx);
         assert!(s.region_cache_snapshot_available());
         assert_eq!(s.get_value(kv.0).unwrap().unwrap(), kv.1);
-
-        {
-            let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_range_readable(&range, false);
-        }
-        let s = get_snapshot(Some(snap_ctx.clone()), &mut reader, cmd.clone(), &rx);
-        assert!(!s.region_cache_snapshot_available());
-
-        {
-            let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_range_readable(&range, true);
-        }
-        snap_ctx.read_ts = 5;
-        assert!(!s.region_cache_snapshot_available());
     }
 }

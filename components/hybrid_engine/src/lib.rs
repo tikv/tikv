@@ -14,6 +14,7 @@ mod flow_control_factors;
 mod hybrid_metrics;
 mod import;
 mod iterable;
+mod metrics;
 mod misc;
 mod mvcc_properties;
 mod perf_context;

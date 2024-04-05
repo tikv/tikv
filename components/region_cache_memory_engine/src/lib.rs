@@ -13,3 +13,4 @@ mod write_batch;
 pub use write_batch::RangeCacheWriteBatch;
 mod memory_limiter;
 pub use background::{BackgroundRunner, GcTask};
+mod metrics;

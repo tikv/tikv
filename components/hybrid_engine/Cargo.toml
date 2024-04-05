@@ -15,6 +15,9 @@ tikv_util = { workspace = true }
 engine_rocks = { workspace = true }
 region_cache_memory_engine = { workspace = true }
 tempfile = "3.0"
+prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
+prometheus-static-metric = "0.5"
+lazy_static = "1.4.0"
 
 [dev-dependencies]
 tempfile = "3.0"
