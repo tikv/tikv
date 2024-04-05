@@ -1575,25 +1575,45 @@ mod tests {
     #[test]
     fn test_json_merge_patch() {
         let cases = vec![
-            (vec![Some(r#"{"a": 1}"#), Some(r#"{"b": 2}"#)], Some(r#"{"a": 1, "b": 2}"#)),
-            (vec![Some(r#"[1, 2]"#), Some(r#"[true, false]"#)], Some(r#"[true, false]"#)),
-            (vec![Some(r#"{"name": "x"}"#), Some(r#"{"id": 47}"#)], Some(r#"{"id": 47, "name": "x"}"#)),
+            (
+                vec![Some(r#"{"a": 1}"#), Some(r#"{"b": 2}"#)],
+                Some(r#"{"a": 1, "b": 2}"#),
+            ),
+            (
+                vec![Some(r#"[1, 2]"#), Some(r#"[true, false]"#)],
+                Some(r#"[true, false]"#),
+            ),
+            (
+                vec![Some(r#"{"name": "x"}"#), Some(r#"{"id": 47}"#)],
+                Some(r#"{"id": 47, "name": "x"}"#),
+            ),
             (vec![Some(r#"1"#), Some(r#"true"#)], Some(r#"true"#)),
             (vec![Some(r#"1"#), Some(r#"null"#)], Some(r#"null"#)),
-            (vec![Some(r#"{"a": 1}"#), Some(r#"{"b": 2}"#), Some(r#"null"#)], Some(r#"null"#)),
-            (vec![Some(r#"{"a":1, "b":2}"#), Some(r#"{"b":null}"#)], Some(r#"{"a": 1}"#)),
-            (vec![
-                Some(r#"{"a": 1, "b": {"c": 3, "d": 4}, "e": [5, 6]}"#),
-                Some(r#"{"c": 7, "b": {"a": 8, "c": 9}, "f": [1, 2]}"#),
-                Some(r#"{"d": 9, "b": {"b": 10, "c": 11}, "e": 8}"#)],
-                Some(r#"{
+            (
+                vec![Some(r#"{"a": 1}"#), Some(r#"{"b": 2}"#), Some(r#"null"#)],
+                Some(r#"null"#),
+            ),
+            (
+                vec![Some(r#"{"a":1, "b":2}"#), Some(r#"{"b":null}"#)],
+                Some(r#"{"a": 1}"#),
+            ),
+            (
+                vec![
+                    Some(r#"{"a": 1, "b": {"c": 3, "d": 4}, "e": [5, 6]}"#),
+                    Some(r#"{"c": 7, "b": {"a": 8, "c": 9}, "f": [1, 2]}"#),
+                    Some(r#"{"d": 9, "b": {"b": 10, "c": 11}, "e": 8}"#),
+                ],
+                Some(
+                    r#"{
                     "a": 1,
                     "b": {"a": 8, "b": 10, "c": 11, "d": 4},
                     "c": 7,
                     "d": 9,
                     "e": 8,
                     "f": [1, 2]
-                }"#)),
+                }"#,
+                ),
+            ),
         ];
 
         for (vargs, expected) in cases {

@@ -161,7 +161,6 @@ fn merge_binary_object(objects: &mut Vec<JsonRef<'_>>) -> Result<Json> {
 }
 
 // See `mergePatchBinaryJSON()` in TiDB `pkg/types/json_binary_functions.go`
-//func mergePatchBinaryJSON(target, patch *BinaryJSON) (result *BinaryJSON, err error) {
 fn merge_patch_binary_object(target: JsonRef<'_>, patch: JsonRef<'_>) -> Result<Json> {
     // translate the function from go to rust
     if patch.get_type() != JsonType::Object {
@@ -188,7 +187,6 @@ fn merge_patch_binary_object(target: JsonRef<'_>, patch: JsonRef<'_>) -> Result<
         let val = patch.object_get_val(i)?;
         let k = String::from_utf8(key.to_owned()).map_err(Error::from)?;
 
-        //if val.get_type() == JsonType::Literal && val.get_literal().unwrap() == "null" {
         if val.get_type() == JsonType::Literal && val.get_literal().is_none() {
             if key_val_map.contains_key(&k) {
                 key_val_map.remove(&k);
@@ -205,7 +203,6 @@ fn merge_patch_binary_object(target: JsonRef<'_>, patch: JsonRef<'_>) -> Result<
     }
 
     Json::from_object(key_val_map)
-
 }
 
 #[cfg(test)]
@@ -279,7 +276,11 @@ mod tests {
     fn test_merge_patch() {
         let test_cases = vec![
             vec![r#"[1, 2]"#, r#"[true, false]"#, r#"[true, false]"#],
-            vec![r#"{"name": "x"}"#, r#"{"id": 47}"#, r#"{"id": 47, "name": "x"}"#],
+            vec![
+                r#"{"name": "x"}"#,
+                r#"{"id": 47}"#,
+                r#"{"id": 47, "name": "x"}"#,
+            ],
             vec![r#"1"#, r#"true"#, r#"true"#],
             vec![r#"1"#, r#"null"#, r#"null"#],
             vec![r#"{"a": 1}"#, r#"{"b": 2}"#, r#"null"#, r#"null"#],
@@ -293,11 +294,7 @@ mod tests {
                 r#"{"a": {"b": [2, 3]}}"#,
                 r#"{"a": {"b": [2, 3]}}"#,
             ],
-            vec![
-                r#"{"a": {"b": [2, 3]}}"#,
-                r#"{"a": 1}"#,
-                r#"{"a": 1}"#,
-            ],
+            vec![r#"{"a": {"b": [2, 3]}}"#, r#"{"a": 1}"#, r#"{"a": 1}"#],
             vec![
                 r#"{"a": [1, 2]}"#,
                 r#"{"a": {"b": [3, 4]}}"#,
