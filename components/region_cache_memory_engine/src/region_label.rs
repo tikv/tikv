@@ -60,8 +60,7 @@ impl TryFrom<&KeyRangeRule> for CacheRange {
     }
 }
 pub type RegionLabelAddedCb = Arc<dyn Fn(LabelRule) + Send + Sync>;
-// TODO (afeinberg): There could be efficient way to do this for cache use case.
-// Come back region stats based eviction has been implemented.
+
 #[derive(Default)]
 pub struct RegionLabelRulesManager {
     pub(crate) region_labels: DashMap<String, LabelRule>,
@@ -75,7 +74,7 @@ impl RegionLabelRulesManager {
             .insert(label_rule.id.clone(), label_rule.clone());
         if let Some(cb) = self.region_label_added_cb.as_ref() {
             match old_value {
-                // If a watch first twice on an identical label rule, ignore the second invocation.
+                // If a watch fires twice on an identical label rule, ignore the second invocation.
                 Some(old_value) if old_value == label_rule => {}
                 _ => cb(label_rule),
             }

@@ -26,7 +26,7 @@ use crate::{
     keys::{decode_key, encode_key, encoding_for_filter, InternalBytes, InternalKey, ValueType},
     memory_controller::MemoryController,
     metrics::GC_FILTERED_STATIC,
-    range_manager::RangeCacheStatus,
+    range_manager::{LoadFailedReason, RangeCacheStatus},
     region_label::{
         LabelRule, RegionLabelAddedCb, RegionLabelRulesManager, RegionLabelServiceBuilder,
     },
@@ -89,7 +89,8 @@ impl Display for GcTask {
     }
 }
 
-pub(crate) type LoadAndPrepareRangeFn = Arc<dyn Fn(CacheRange) -> RangeCacheStatus + Send + Sync>;
+pub(crate) type LoadAndPrepareRangeFn =
+    Arc<dyn Fn(&CacheRange) -> Result<RangeCacheStatus, LoadFailedReason> + Send + Sync>;
 // BgWorkManager managers the worker inits, stops, and task schedules. When
 // created, it starts a worker which receives tasks such as gc task, range
 // delete task, range snapshot load and so on, and starts a thread for
@@ -144,8 +145,11 @@ impl PdRangeHintService {
                 match CacheRange::try_from(key_range) {
                     Ok(cache_range) => {
                         info!("Loading range"; "cache_range" => ?&cache_range);
-                        load_and_prepare(cache_range);
-                        scheduler.schedule(BackgroundTask::LoadRange).unwrap();
+                        if let Err(reason) = load_and_prepare(&cache_range) {
+                            error!("Load and prepare failed"; "range" => ?&cache_range, "reason" => ?reason);
+                        } else {
+                            scheduler.schedule(BackgroundTask::LoadRange).unwrap();
+                        }
                     }
                     Err(e) => {
                         error!("Unable to convert key_range rule to cache range"; "err" => ?e);

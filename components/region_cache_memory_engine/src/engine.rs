@@ -436,12 +436,9 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
         bg_work_manager.set_load_range_and_prepare_for_apply_fn(Arc::new(move |cache_range| {
             {
                 let mut engine = self_with_rocks_engine.core().write();
-                engine
-                    .mut_range_manager()
-                    .load_range(cache_range.clone())
-                    .unwrap(); // TODO (afeinberg): error handling
+                engine.mut_range_manager().load_range(cache_range.clone())?
             };
-            self_with_rocks_engine.prepare_for_apply(&cache_range)
+            Ok(self_with_rocks_engine.prepare_for_apply(cache_range))
         }));
     }
 
