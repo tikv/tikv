@@ -59,7 +59,7 @@ impl TryFrom<&KeyRangeRule> for CacheRange {
         Ok(CacheRange::new(start_key, end_key))
     }
 }
-pub type RegionLabelAddedCb = Arc<dyn Fn(LabelRule) + Send + Sync>;
+pub type RegionLabelAddedCb = Arc<dyn Fn(&LabelRule) + Send + Sync>;
 
 #[derive(Default)]
 pub struct RegionLabelRulesManager {
@@ -68,14 +68,16 @@ pub struct RegionLabelRulesManager {
 }
 
 impl RegionLabelRulesManager {
-    pub fn add_region_label(&self, label_rule: LabelRule) {
+    pub fn add_region_label(&self, label_rule: &LabelRule) {
         let old_value = self
             .region_labels
             .insert(label_rule.id.clone(), label_rule.clone());
         if let Some(cb) = self.region_label_added_cb.as_ref() {
-            match old_value {
+            match old_value.as_ref() {
                 // If a watch fires twice on an identical label rule, ignore the second invocation.
-                Some(old_value) if old_value == label_rule => {}
+                Some(old_value) if old_value == label_rule => {
+                    info!("Identical region label rule added twice; ignoring."; "rule_id" => &label_rule.id)
+                }
                 _ => cb(label_rule),
             }
         }
@@ -185,7 +187,7 @@ impl RegionLabelService {
             .as_ref()
             .map_or_else(|| true, |r_f_fn| r_f_fn(label_rule));
         if should_add_label {
-            self.manager.add_region_label(label_rule.clone())
+            self.manager.add_region_label(label_rule)
         }
     }
     pub async fn watch_region_labels(&mut self) {

@@ -127,12 +127,11 @@ const CACHE_LABEL_RULE_ALWAYS: &str = "always";
 impl PdRangeHintService {
     pub fn start(
         &self,
-        scheduler: Scheduler<BackgroundTask>,
         remote: Remote<yatp::task::future::TaskCell>,
         load_and_prepare: LoadAndPrepareRangeFn,
     ) {
         let pd_client = self.0.clone();
-        let region_label_added_cb: RegionLabelAddedCb = Arc::new(move |label_rule: LabelRule| {
+        let region_label_added_cb: RegionLabelAddedCb = Arc::new(move |label_rule: &LabelRule| {
             if !label_rule
                 .labels
                 .iter()
@@ -147,8 +146,6 @@ impl PdRangeHintService {
                         info!("Loading range"; "cache_range" => ?&cache_range);
                         if let Err(reason) = load_and_prepare(&cache_range) {
                             error!("Load and prepare failed"; "range" => ?&cache_range, "reason" => ?reason);
-                        } else {
-                            scheduler.schedule(BackgroundTask::LoadRange).unwrap();
                         }
                     }
                     Err(e) => {
@@ -211,7 +208,6 @@ impl BgWorkManager {
 
     pub fn start_bg_hint_service(&self, range_hint_service: PdRangeHintService) {
         range_hint_service.start(
-            self.scheduler.clone(),
             self.worker.remote(),
             self.load_and_prepare_fn.as_ref().unwrap().clone(),
         )
