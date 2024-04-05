@@ -1,11 +1,17 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, fmt::Debug};
+use std::{cmp, fmt::Debug, result};
 
 use keys::{enc_end_key, enc_start_key};
 use kvproto::metapb;
 
 use crate::{Iterable, KvEngine, Snapshot, WriteBatchExt};
+
+#[derive(Debug, PartialEq)]
+pub enum FailedReason {
+    NotCached,
+    TooOldRead,
+}
 
 /// RangeCacheEngine works as a range cache caching some ranges (in Memory or
 /// NVME for instance) to improve the read performance.
@@ -18,7 +24,12 @@ pub trait RangeCacheEngine:
     // region or read_ts.
     // Sequence number is shared between RangeCacheEngine and disk KvEnigne to
     // provide atomic write
-    fn snapshot(&self, range: CacheRange, read_ts: u64, seq_num: u64) -> Option<Self::Snapshot>;
+    fn snapshot(
+        &self,
+        range: CacheRange,
+        read_ts: u64,
+        seq_num: u64,
+    ) -> result::Result<Self::Snapshot, FailedReason>;
 
     type DiskEngine: KvEngine;
     fn set_disk_engine(&mut self, disk_engine: Self::DiskEngine);

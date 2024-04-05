@@ -133,6 +133,7 @@ mod tests {
         CacheRange, IterOptions, Iterable, Iterator, KvEngine, Mutable, SnapshotContext,
         WriteBatch, WriteBatchExt, CF_DEFAULT,
     };
+    use region_cache_memory_engine::range_manager::RangeCacheStatus;
 
     use crate::util::hybrid_engine_for_tests;
 
@@ -149,8 +150,6 @@ mod tests {
                 memory_engine.new_range(range_clone.clone());
                 {
                     let mut core = memory_engine.core().write();
-                    core.mut_range_manager()
-                        .set_range_readable(&range_clone, true);
                     core.mut_range_manager().set_safe_point(&range_clone, 5);
                 }
             })
@@ -161,7 +160,9 @@ mod tests {
             assert!(!iter.seek_to_first().unwrap());
         }
         let mut write_batch = hybrid_engine.write_batch();
-        write_batch.cache_write_batch.set_range_in_cache(true);
+        write_batch
+            .cache_write_batch
+            .set_range_cache_status(RangeCacheStatus::Cached);
         write_batch.put(b"hello", b"world").unwrap();
         let seq = write_batch.write().unwrap();
         assert!(seq > 0);
