@@ -3,10 +3,12 @@
 use std::{sync::Arc, time::Duration};
 
 use dashmap::DashMap;
+use engine_traits::CacheRange;
 use futures::{
     compat::Future01CompatExt,
     stream::{self, StreamExt},
 };
+use keys::{data_end_key, data_key};
 use kvproto::meta_storagepb::EventEventType;
 use pd_client::{
     meta_storage::{Checked, Get, MetaStorageClient, Sourced, Watch},
@@ -48,8 +50,18 @@ pub struct KeyRangeRule {
     pub end_key: String,
 }
 
+impl TryFrom<&KeyRangeRule> for CacheRange {
+    type Error = Box<dyn std::error::Error>;
+
+    fn try_from(key_range: &KeyRangeRule) -> Result<Self, Self::Error> {
+        let start_key = data_key(&hex::decode(&key_range.start_key)?);
+        let end_key = data_end_key(&hex::decode(&key_range.end_key)?);
+        Ok(CacheRange::new(start_key, end_key))
+    }
+}
 pub type RegionLabelAddedCb = Arc<dyn Fn(LabelRule) + Send + Sync>;
-// Todo: more efficient way to do this for cache use case?
+// TODO (afeinberg): There could be efficient way to do this for cache use case.
+// Come back region stats based eviction has been implemented.
 #[derive(Default)]
 pub struct RegionLabelRulesManager {
     pub(crate) region_labels: DashMap<String, LabelRule>,
@@ -63,6 +75,7 @@ impl RegionLabelRulesManager {
             .insert(label_rule.id.clone(), label_rule.clone());
         if let Some(cb) = self.region_label_added_cb.as_ref() {
             match old_value {
+                // If a watch first twice on an identical label rule, ignore the second invocation.
                 Some(old_value) if old_value == label_rule => {}
                 _ => cb(label_rule),
             }
@@ -135,8 +148,11 @@ impl RegionLabelServiceBuilder {
         self
     }
 
-    pub fn rule_filter_fn(mut self, rule_filter_fn: RuleFilterFn) -> Self {
-        self.rule_filter_fn = Some(rule_filter_fn);
+    pub fn rule_filter_fn<F>(mut self, rule_filter_fn: F) -> Self
+    where
+        F: Fn(&LabelRule) -> bool + Send + Sync + 'static,
+    {
+        self.rule_filter_fn = Some(Arc::new(rule_filter_fn));
         self
     }
 
@@ -303,6 +319,7 @@ pub mod tests {
         assert!(!region_labels.is_empty());
     }
 
+    /// Creates a new test pd server and an RPC client.
     pub(crate) fn new_test_server_and_client(
         update_interval: ReadableDuration,
     ) -> (MockServer<MetaStorage>, RpcClient) {
@@ -312,14 +329,17 @@ pub mod tests {
         (server, client)
     }
 
+    /// Adds `label_rule` to pd via `meta_client`.
     pub(crate) fn add_region_label_rule(
         meta_client: Checked<Sourced<Arc<RpcClient>>>,
         cluster_id: u64,
-        label_rule: LabelRule,
+        label_rule: &LabelRule,
     ) {
-        let id = &label_rule.id;
-        let key = format!("/pd/{}/{}/{}", cluster_id, REGION_LABEL_PATH_PREFIX, id);
-        let buf = serde_json::to_vec::<LabelRule>(&label_rule).unwrap();
+        let key = format!(
+            "/pd/{}/{}/{}",
+            cluster_id, REGION_LABEL_PATH_PREFIX, label_rule.id
+        );
+        let buf = serde_json::to_vec::<LabelRule>(label_rule).unwrap();
         block_on(async move { meta_client.put(Put::of(key, buf)).await }).unwrap();
     }
 
@@ -332,6 +352,8 @@ pub mod tests {
         block_on(async move { meta_client.delete(Delete::of(key)).await }).unwrap();
     }
 
+    /// Sets range (in hex, per tidb convention, with no prefix) to
+    /// `cache`:`always` label.
     pub(crate) fn new_region_label_rule(id: &str, start_key: &str, end_key: &str) -> LabelRule {
         LabelRule {
             id: id.to_string(),
@@ -362,7 +384,7 @@ pub mod tests {
         add_region_label_rule(
             s.meta_client.clone(),
             cluster_id,
-            new_region_label_rule("cache/0", "a", "b"),
+            &new_region_label_rule("cache/0", "a", "b"),
         );
         block_on(s.reload_all_region_labels());
         assert_eq!(s.manager.region_labels().len(), 1);
@@ -405,17 +427,17 @@ pub mod tests {
         add_region_label_rule(
             s.meta_client.clone(),
             cluster_id,
-            new_region_label_rule("cache/0", "a", "b"),
+            &new_region_label_rule("cache/0", "a", "b"),
         );
         add_region_label_rule(
             s.meta_client.clone(),
             cluster_id,
-            new_region_label_rule("cache/1", "c", "d"),
+            &new_region_label_rule("cache/1", "c", "d"),
         );
         add_region_label_rule(
             s.meta_client.clone(),
             cluster_id,
-            new_region_label_rule("cache/2", "e", "f"),
+            &new_region_label_rule("cache/2", "e", "f"),
         );
 
         wait_watch_ready(&s, 3);

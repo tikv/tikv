@@ -11,7 +11,6 @@ use engine_rocks::RocksSnapshot;
 use engine_traits::{
     CacheRange, IterOptions, Iterable, Iterator, RangeHintService, CF_DEFAULT, CF_WRITE, DATA_CFS,
 };
-use keys::{data_end_key, data_key};
 use parking_lot::RwLock;
 use pd_client::RpcClient;
 use slog_global::{error, info, warn};
@@ -121,6 +120,9 @@ impl From<Arc<RpcClient>> for PdRangeHintService {
     }
 }
 
+const CACHE_LABEL_RULE_KEY: &str = "cache";
+const CACHE_LABEL_RULE_ALWAYS: &str = "always";
+
 impl PdRangeHintService {
     pub fn start(
         &self,
@@ -133,24 +135,22 @@ impl PdRangeHintService {
             if !label_rule
                 .labels
                 .iter()
-                .any(|e| e.key == "cache" && e.value == "always")
+                .any(|e| e.key == CACHE_LABEL_RULE_KEY && e.value == CACHE_LABEL_RULE_ALWAYS)
             {
                 // not related to caching, skip.
                 return;
             }
-            let to_load = label_rule
-                .data
-                .iter()
-                .map(|key_range| {
-                    let start_key = data_key(&hex::decode(&key_range.start_key).unwrap());
-                    let end_key = data_end_key(&hex::decode(&key_range.end_key).unwrap());
-                    CacheRange::new(start_key, end_key)
-                })
-                .collect::<Vec<_>>();
-            for cache_range in to_load {
-                info!("Loading range"; "cache_range" => ?&cache_range);
-                load_and_prepare(cache_range);
-                scheduler.schedule(BackgroundTask::LoadRange).unwrap();
+            for key_range in &label_rule.data {
+                match CacheRange::try_from(key_range) {
+                    Ok(cache_range) => {
+                        info!("Loading range"; "cache_range" => ?&cache_range);
+                        load_and_prepare(cache_range);
+                        scheduler.schedule(BackgroundTask::LoadRange).unwrap();
+                    }
+                    Err(e) => {
+                        error!("Unable to convert key_range rule to cache range"; "err" => ?e);
+                    }
+                }
             }
         });
         let mut region_label_svc = RegionLabelServiceBuilder::new(
@@ -160,6 +160,12 @@ impl PdRangeHintService {
             }),
             pd_client,
         )
+        .rule_filter_fn(|label_rule| {
+            label_rule
+                .labels
+                .iter()
+                .any(|e| e.key == CACHE_LABEL_RULE_KEY)
+        })
         .build()
         .unwrap();
         remote.spawn(async move { region_label_svc.watch_region_labels().await })
@@ -736,7 +742,7 @@ pub mod tests {
     use engine_traits::{
         CacheRange, RangeCacheEngine, SyncMutable, CF_DEFAULT, CF_WRITE, DATA_CFS,
     };
-    use keys::{data_end_key, data_key, DATA_MAX_KEY, DATA_MIN_KEY};
+    use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
     use pd_client::PdClient;
     use skiplist_rs::SkipList;
     use tempfile::Builder;
@@ -1405,9 +1411,6 @@ pub mod tests {
     // 2. Use test pd client server to create a label rule for portion of the data.
     // 3. Wait until data is loaded.
     // 4. Verify that only the labeled key range has been loaded.
-    //
-    // TODO (afeinberg): in follow up PR (with proper interaction with apply
-    // thread), test writing during load.
     #[test]
     fn test_load_from_pd_hint_service() {
         let mut engine = RangeCacheMemoryEngine::new(Duration::from_secs(1000));
@@ -1436,17 +1439,16 @@ pub mod tests {
         let pd_client = Arc::new(pd_client);
         engine.start_hint_service(PdRangeHintService::from(pd_client.clone()));
         let meta_client = region_label_meta_client(pd_client.clone());
-        let start_key = format!("k{:08}", 10).into_bytes();
-        let end_key = format!("k{:08}", 15).into_bytes();
-        add_region_label_rule(
-            meta_client,
-            cluster_id,
-            new_region_label_rule("cache/0", &hex::encode(&start_key), &hex::encode(&end_key)),
+        let label_rule = new_region_label_rule(
+            "cache/0",
+            &hex::encode(format!("k{:08}", 10).into_bytes()),
+            &hex::encode(format!("k{:08}", 15).into_bytes()),
         );
+        add_region_label_rule(meta_client, cluster_id, &label_rule);
 
         // Wait for the watch to fire on the label rule and for the range to be loaded.
-        std::thread::sleep(Duration::from_secs(2));
-        let r1 = CacheRange::new(data_key(&start_key), data_end_key(&end_key));
+        std::thread::sleep(Duration::from_secs(1));
+        let r1 = CacheRange::try_from(&label_rule.data[0]).unwrap();
         let _ = engine.snapshot(r1, u64::MAX, u64::MAX).unwrap();
 
         let (write, default) = {
