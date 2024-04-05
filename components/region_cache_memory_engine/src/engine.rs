@@ -430,15 +430,13 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
     fn set_disk_engine(&mut self, disk_engine: Self::DiskEngine) {
         self.rocks_engine = Some(disk_engine);
         let mut bg_work_manager = self.bg_work_manager.write();
-        // TODO (afeinberg): This could probably be an Arc, with WeakReferences where
-        // needed.
-        let self_with_rocks_engine = self.clone();
+        let self_clone = self.clone();
         bg_work_manager.set_load_range_and_prepare_for_apply_fn(Arc::new(move |cache_range| {
             {
-                let mut engine = self_with_rocks_engine.core().write();
+                let mut engine = self_clone.core().write();
                 engine.mut_range_manager().load_range(cache_range.clone())?
             };
-            Ok(self_with_rocks_engine.prepare_for_apply(cache_range))
+            Ok(self_clone.prepare_for_apply(cache_range))
         }));
     }
 
