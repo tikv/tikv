@@ -281,6 +281,8 @@ mod tests {
             vec![r#"[1, 2]"#, r#"[true, false]"#, r#"[true, false]"#],
             vec![r#"{"name": "x"}"#, r#"{"id": 47}"#, r#"{"id": 47, "name": "x"}"#],
             vec![r#"1"#, r#"true"#, r#"true"#],
+            vec![r#"1"#, r#"null"#, r#"null"#],
+            vec![r#"{"a": 1}"#, r#"{"b": 2}"#, r#"null"#, r#"null"#],
             vec![r#"[1, 2]"#, r#"{"id": 47}"#, r#"{"id": 47}"#],
             vec![r#"{"a":1, "b":2}"#, r#"{"b":null}"#, r#"{"a": 1}"#],
             vec![r#"{"a": 1}"#, r#"{"b": 2}"#, r#"{"a": 1, "b": 2}"#],

@@ -198,6 +198,21 @@ pub fn json_merge(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
     Ok(Some(Json::merge(jsons)?))
 }
 
+// arguments of json_merge_patch should not be less than 2.
+#[rpn_fn(nullable, varg, min_args = 2)]
+#[inline]
+pub fn json_merge_patch(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
+    let mut jsons: Vec<JsonRef> = vec![];
+    let json_none = Json::none()?;
+    for arg in args {
+        match arg {
+            None => jsons.push(json_none.as_ref()),
+            Some(j) => jsons.push(*j),
+        }
+    }
+    Ok(Some(Json::merge_patch(jsons)?))
+}
+
 #[rpn_fn(writer)]
 #[inline]
 fn json_quote(input: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
@@ -1554,6 +1569,45 @@ mod tests {
                 .evaluate(ScalarFuncSig::JsonArrayAppendSig)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", args);
+        }
+    }
+
+    #[test]
+    fn test_json_merge_patch() {
+        let cases = vec![
+            (vec![Some(r#"{"a": 1}"#), Some(r#"{"b": 2}"#)], Some(r#"{"a": 1, "b": 2}"#)),
+            (vec![Some(r#"[1, 2]"#), Some(r#"[true, false]"#)], Some(r#"[true, false]"#)),
+            (vec![Some(r#"{"name": "x"}"#), Some(r#"{"id": 47}"#)], Some(r#"{"id": 47, "name": "x"}"#)),
+            (vec![Some(r#"1"#), Some(r#"true"#)], Some(r#"true"#)),
+            (vec![Some(r#"1"#), Some(r#"null"#)], Some(r#"null"#)),
+            (vec![Some(r#"{"a": 1}"#), Some(r#"{"b": 2}"#), Some(r#"null"#)], Some(r#"null"#)),
+            (vec![Some(r#"{"a":1, "b":2}"#), Some(r#"{"b":null}"#)], Some(r#"{"a": 1}"#)),
+            (vec![
+                Some(r#"{"a": 1, "b": {"c": 3, "d": 4}, "e": [5, 6]}"#),
+                Some(r#"{"c": 7, "b": {"a": 8, "c": 9}, "f": [1, 2]}"#),
+                Some(r#"{"d": 9, "b": {"b": 10, "c": 11}, "e": 8}"#)],
+                Some(r#"{
+                    "a": 1,
+                    "b": {"a": 8, "b": 10, "c": 11, "d": 4},
+                    "c": 7,
+                    "d": 9,
+                    "e": 8,
+                    "f": [1, 2]
+                }"#)),
+        ];
+
+        for (vargs, expected) in cases {
+            let vargs: Vec<Option<Json>> = vargs
+                .into_iter()
+                .map(|input| input.map(|s| Json::from_str(s).unwrap()))
+                .collect::<Vec<_>>();
+            let expected = expected.map(|s| Json::from_str(s).unwrap());
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(vargs.clone())
+                .evaluate(ScalarFuncSig::JsonMergePatchSig)
+                .unwrap();
+            assert_eq!(output, expected, "{:?}", vargs);
         }
     }
 }
