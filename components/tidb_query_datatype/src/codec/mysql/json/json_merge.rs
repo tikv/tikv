@@ -99,7 +99,7 @@ impl Json {
                 target = merge_patch_binary_object(target.as_ref(), objects[i])?;
             }
         }
-        Ok(target);
+        Ok(target)
     }
 }
 
