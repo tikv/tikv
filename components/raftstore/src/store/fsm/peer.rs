@@ -6623,13 +6623,12 @@ where
         }
         assert!(self.fsm.peer.busy_on_apply.is_some());
 
-        // Get the last replicated index of the peer.
-        for (id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
-            if id == peer_id {
-                last_idx = p.matched;
-                break;
-            }
-        }
+        // Get the last replicated index of the leader to calculate the gap
+        // of unapplied raft logs on this peer.
+        let leader_id = self.fsm.peer.leader_id();
+        self.fsm.peer.raft_group.raft.prs().get(leader_id).map(|p| {
+            last_idx = p.matched;
+        });
         // If the peer has large unapplied logs, this peer should be recorded until
         // the lag is less than the given threshold.
         if last_idx >= applied_idx + self.ctx.cfg.leader_transfer_max_log_lag {
