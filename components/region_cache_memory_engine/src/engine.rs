@@ -7,16 +7,15 @@ use std::{
     ops::Deref,
     result,
     sync::Arc,
-    time::Duration,
 };
 
 use bytes::Bytes;
-use crossbeam::{epoch, epoch::default_collector};
+use crossbeam::epoch::{self, default_collector, Guard};
 use engine_rocks::{raw::SliceTransform, util::FixedSuffixSliceTransform, RocksEngine};
 use engine_traits::{
     CacheRange, CfNamesExt, DbVector, Error, FailedReason, IterOptions, Iterable, Iterator,
     KvEngine, Peekable, RangeCacheEngine, ReadOptions, Result, Snapshot, SnapshotMiscExt,
-    CF_DEFAULT, CF_LOCK, CF_WRITE,
+    CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
 use skiplist_rs::{base::OwnedIter, SkipList};
@@ -29,8 +28,10 @@ use crate::{
         decode_key, encode_key_for_eviction, encode_seek_for_prev_key, encode_seek_key,
         InternalBytes, InternalKey, ValueType,
     },
+    memory_controller::MemoryController,
     range_manager::{LoadFailedReason, RangeCacheStatus, RangeManager},
     write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
+    EngineConfig,
 };
 
 pub(crate) fn cf_to_id(cf: &str) -> usize {
@@ -39,6 +40,29 @@ pub(crate) fn cf_to_id(cf: &str) -> usize {
         CF_LOCK => 1,
         CF_WRITE => 2,
         _ => panic!("unrecognized cf {}", cf),
+    }
+}
+
+// A wrapper for skiplist to provide some check and clean up worker
+#[derive(Clone)]
+pub struct SkiplistHandle(Arc<SkipList<InternalBytes, InternalBytes>>);
+
+impl SkiplistHandle {
+    pub fn insert(&self, key: InternalBytes, value: InternalBytes, guard: &Guard) {
+        assert!(key.memory_controller_set() && value.memory_controller_set());
+        self.0.insert(key, value, guard).release(guard);
+    }
+
+    pub fn remove(&self, key: &InternalBytes, guard: &Guard) {
+        if let Some(entry) = self.0.remove(key, guard) {
+            entry.release(guard);
+        }
+    }
+
+    pub fn iterator(
+        &self,
+    ) -> OwnedIter<Arc<SkipList<InternalBytes, InternalBytes>>, InternalBytes, InternalBytes> {
+        self.0.owned_iter()
     }
 }
 
@@ -66,22 +90,29 @@ impl SkiplistEngine {
         }
     }
 
-    pub fn cf_handle(&self, cf: &str) -> Arc<SkipList<InternalBytes, InternalBytes>> {
-        self.data[cf_to_id(cf)].clone()
+    pub fn cf_handle(&self, cf: &str) -> SkiplistHandle {
+        SkiplistHandle(self.data[cf_to_id(cf)].clone())
     }
 
-    pub fn delete_range(&self, range: &CacheRange) {
-        self.data.iter().for_each(|d| {
+    pub fn node_count(&self) -> usize {
+        let mut count = 0;
+        self.data.iter().for_each(|s| count += s.len());
+        count
+    }
+
+    pub(crate) fn delete_range(&self, range: &CacheRange) {
+        DATA_CFS.iter().for_each(|&cf| {
             let (start, end) = encode_key_for_eviction(range);
-            let mut iter = d.owned_iter();
+            let handle = self.cf_handle(cf);
+            let mut iter = handle.iterator();
             let guard = &epoch::pin();
             iter.seek(&start, guard);
             while iter.valid() && iter.key() < &end {
-                if let Some(e) = d.remove(iter.key(), guard) {
-                    e.release(guard)
-                }
+                handle.remove(iter.key(), guard);
                 iter.next(guard);
             }
+            // guard will buffer 8 drop methods, flush here to clear the buffer.
+            guard.flush();
         });
     }
 }
@@ -176,14 +207,13 @@ impl RangeCacheMemoryEngineCore {
         fail::fail_point!("on_pending_range_completes_loading");
         assert!(!core.has_cached_write_batch(range));
         let range_manager = core.mut_range_manager();
-        let r = range_manager
+        let (r, _, canceled) = range_manager
             .pending_ranges_loading_data
             .pop_front()
-            .unwrap()
-            .0;
+            .unwrap();
         assert_eq!(&r, range);
+        assert!(!canceled);
         range_manager.new_range(r);
-        range_manager.set_range_readable(range, true);
     }
 }
 
@@ -209,15 +239,31 @@ pub struct RangeCacheMemoryEngine {
     pub(crate) core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
     pub(crate) rocks_engine: Option<RocksEngine>,
     bg_work_manager: Arc<BgWorkManager>,
+    memory_controller: Arc<MemoryController>,
 }
 
 impl RangeCacheMemoryEngine {
-    pub fn new(gc_interval: Duration) -> Self {
+    pub fn new(config: EngineConfig) -> Self {
         let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
+        let skiplist_engine = { core.read().engine().clone() };
+
+        let memory_controller = Arc::new(MemoryController::new(
+            config.soft_limit_threshold,
+            config.hard_limit_threshold,
+            skiplist_engine,
+        ));
+
+        let bg_work_manager = Arc::new(BgWorkManager::new(
+            core.clone(),
+            config.gc_interval,
+            memory_controller.clone(),
+        ));
+
         Self {
-            core: core.clone(),
+            core,
             rocks_engine: None,
-            bg_work_manager: Arc::new(BgWorkManager::new(core, gc_interval)),
+            bg_work_manager,
+            memory_controller,
         }
     }
 
@@ -293,7 +339,7 @@ impl RangeCacheMemoryEngine {
             // the region may be splitted.
             range_manager
                 .pending_ranges_loading_data
-                .push_back((pending_range, rocks_snap));
+                .push_back((pending_range, rocks_snap, false));
             if let Err(e) = self
                 .bg_worker_manager()
                 .schedule_task(BackgroundTask::LoadRange)
@@ -346,6 +392,10 @@ impl RangeCacheMemoryEngine {
 
     pub fn bg_worker_manager(&self) -> &BgWorkManager {
         &self.bg_work_manager
+    }
+
+    pub(crate) fn memory_controller(&self) -> Arc<MemoryController> {
+        self.memory_controller.clone()
     }
 }
 
@@ -799,6 +849,14 @@ impl Peekable for RangeCacheSnapshot {
         key: &[u8],
     ) -> Result<Option<Self::DbVector>> {
         fail::fail_point!("on_range_cache_get_value");
+        if !self.snapshot_meta.range.contains_key(key) {
+            return Err(Error::Other(box_err!(
+                "key {} not in range[{}, {}]",
+                log_wrappers::Value(key),
+                log_wrappers::Value(&self.snapshot_meta.range.start),
+                log_wrappers::Value(&self.snapshot_meta.range.end)
+            )));
+        }
         let mut iter = self.skiplist_engine.data[cf_to_id(cf)].owned_iter();
         let seek_key = encode_seek_key(key, self.sequence_number());
 
@@ -874,12 +932,12 @@ mod tests {
             construct_key, construct_user_key, construct_value, decode_key, encode_key,
             encode_seek_key, InternalBytes, ValueType,
         },
-        RangeCacheMemoryEngine,
+        EngineConfig, RangeCacheMemoryEngine,
     };
 
     #[test]
     fn test_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
         let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
         engine.new_range(range.clone());
 
@@ -912,10 +970,6 @@ mod tests {
             }
         };
 
-        {
-            let mut core = engine.core.write();
-            core.range_manager.set_range_readable(&range, true);
-        }
         let s1 = engine.snapshot(range.clone(), 5, u64::MAX).unwrap();
 
         {
@@ -1071,13 +1125,12 @@ mod tests {
 
     #[test]
     fn test_get_value() {
-        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
 
         {
             let mut core = engine.core.write();
-            core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_point(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
             fill_data_in_skiplist(sl.clone(), (1..10).step_by(1), 1..50, 1);
@@ -1150,14 +1203,13 @@ mod tests {
 
     #[test]
     fn test_iterator_forawrd() {
-        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let step: i32 = 2;
 
         {
             let mut core = engine.core.write();
-            core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_point(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
             fill_data_in_skiplist(sl.clone(), (1..100).step_by(step as usize), 1..10, 1);
@@ -1336,14 +1388,13 @@ mod tests {
 
     #[test]
     fn test_iterator_backward() {
-        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let step: i32 = 2;
 
         {
             let mut core = engine.core.write();
-            core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_point(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
             fill_data_in_skiplist(sl.clone(), (1..100).step_by(step as usize), 1..10, 1);
@@ -1439,13 +1490,12 @@ mod tests {
 
     #[test]
     fn test_seq_visibility() {
-        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
 
         {
             let mut core = engine.core.write();
-            core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_point(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
 
@@ -1561,13 +1611,12 @@ mod tests {
 
     #[test]
     fn test_seq_visibility_backward() {
-        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
 
         {
             let mut core = engine.core.write();
-            core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_point(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
 
@@ -1663,11 +1712,10 @@ mod tests {
 
         // backward, all put
         {
-            let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+            let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
-                core.range_manager.set_range_readable(&range, true);
                 core.range_manager.set_safe_point(&range, 5);
                 core.engine.data[cf_to_id("write")].clone()
             };
@@ -1700,11 +1748,10 @@ mod tests {
 
         // backward, all deletes
         {
-            let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+            let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
-                core.range_manager.set_range_readable(&range, true);
                 core.range_manager.set_safe_point(&range, 5);
                 core.engine.data[cf_to_id("write")].clone()
             };
@@ -1730,11 +1777,10 @@ mod tests {
 
         // backward, all deletes except for last put, last put's seq
         {
-            let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+            let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
-                core.range_manager.set_range_readable(&range, true);
                 core.range_manager.set_safe_point(&range, 5);
                 core.engine.data[cf_to_id("write")].clone()
             };
@@ -1762,11 +1808,10 @@ mod tests {
 
         // all deletes except for last put, deletions' seq
         {
-            let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+            let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
-                core.range_manager.set_range_readable(&range, true);
                 core.range_manager.set_safe_point(&range, 5);
                 core.engine.data[cf_to_id("write")].clone()
             };
@@ -1793,13 +1838,12 @@ mod tests {
 
     #[test]
     fn test_prefix_seek() {
-        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
         let range = CacheRange::new(b"k000".to_vec(), b"k100".to_vec());
         engine.new_range(range.clone());
 
         {
             let mut core = engine.core.write();
-            core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_point(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
 
@@ -1897,7 +1941,7 @@ mod tests {
                 .core
                 .read()
                 .range_manager()
-                .evicted_ranges()
+                .ranges_being_deleted
                 .is_empty()
             {
                 std::thread::sleep(Duration::from_millis(200));
@@ -1907,7 +1951,7 @@ mod tests {
         }
         let write_handle = engine.core.read().engine.cf_handle("write");
         let start_key = encode_seek_key(&range.start, u64::MAX);
-        let mut iter = write_handle.owned_iter();
+        let mut iter = write_handle.iterator();
 
         let guard = &epoch::pin();
         iter.seek(&start_key, guard);
@@ -1917,7 +1961,7 @@ mod tests {
 
     #[test]
     fn test_evict_range_without_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
         let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
         let evict_range = CacheRange::new(construct_user_key(10), construct_user_key(20));
         engine.new_range(range.clone());
@@ -1925,19 +1969,14 @@ mod tests {
         let guard = &epoch::pin();
         {
             let mut core = engine.core.write();
-            core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_point(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
             for i in 0..30 {
                 let user_key = construct_key(i, 10);
                 let internal_key = encode_key(&user_key, 10, ValueType::Value);
                 let v = construct_value(i, 10);
-                sl.insert(
-                    internal_key.clone(),
-                    InternalBytes::from_vec(v.into_bytes()),
-                    guard,
-                )
-                .release(guard);
+                sl.insert(internal_key, InternalBytes::from_vec(v.into_bytes()), guard)
+                    .release(guard);
             }
         }
 
@@ -1979,7 +2018,7 @@ mod tests {
 
     #[test]
     fn test_evict_range_with_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
         let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
         let evict_range = CacheRange::new(construct_user_key(10), construct_user_key(20));
         engine.new_range(range.clone());
@@ -1987,7 +2026,6 @@ mod tests {
         let guard = &epoch::pin();
         {
             let mut core = engine.core.write();
-            core.range_manager.set_range_readable(&range, true);
             core.range_manager.set_safe_point(&range, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
             for i in 0..30 {
@@ -1995,7 +2033,7 @@ mod tests {
                 let internal_key = encode_key(&user_key, 10, ValueType::Value);
                 let v = construct_value(i, 10);
                 sl.insert(
-                    internal_key.clone(),
+                    internal_key,
                     InternalBytes::from_vec(v.clone().into_bytes()),
                     guard,
                 )
@@ -2023,7 +2061,7 @@ mod tests {
                     .core
                     .read()
                     .range_manager()
-                    .evicted_ranges()
+                    .ranges_being_deleted
                     .contains(&evict_range)
             );
         }
@@ -2036,7 +2074,7 @@ mod tests {
                     .core
                     .read()
                     .range_manager()
-                    .evicted_ranges()
+                    .ranges_being_deleted
                     .contains(&evict_range)
             );
         }

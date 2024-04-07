@@ -513,8 +513,8 @@ mod tests {
         kv::{new_engine, new_engine_opt, KvTestEngine},
     };
     use engine_traits::{
-        MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT,
-        CF_WRITE,
+        CompactExt, MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK,
+        CF_RAFT, CF_WRITE,
     };
     use keys::data_key;
     use tempfile::Builder;
@@ -532,6 +532,71 @@ mod tests {
             pool.clone(),
             Runner::new(engine, pool.remote().clone(), Tracker::default(), false),
         )
+    }
+
+    #[test]
+    fn test_disable_manual_compaction() {
+        let path = Builder::new()
+            .prefix("test_disable_manual_compaction")
+            .tempdir()
+            .unwrap();
+        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+
+        // Generate the first SST file.
+        let mut wb = db.write_batch();
+        for i in 0..1000 {
+            let k = format!("key_{}", i);
+            wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")
+                .unwrap();
+        }
+        wb.write().unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
+
+        // Generate another SST file has the same content with first SST file.
+        let mut wb = db.write_batch();
+        for i in 0..1000 {
+            let k = format!("key_{}", i);
+            wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")
+                .unwrap();
+        }
+        wb.write().unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
+
+        // Get the total SST files size.
+        let old_sst_files_size = db.get_total_sst_files_size_cf(CF_DEFAULT).unwrap().unwrap();
+
+        // Stop the assistant.
+        {
+            let _ = db.disable_manual_compaction();
+
+            // Manually compact range.
+            let _ = db.compact_range_cf(
+                CF_DEFAULT,
+                None,
+                None,
+                ManualCompactionOptions::new(false, 1, true),
+            );
+
+            // Get the total SST files size after compact range.
+            let new_sst_files_size = db.get_total_sst_files_size_cf(CF_DEFAULT).unwrap().unwrap();
+            assert_eq!(old_sst_files_size, new_sst_files_size);
+        }
+        // Restart the assistant.
+        {
+            let _ = db.enable_manual_compaction();
+
+            // Manually compact range.
+            let _ = db.compact_range_cf(
+                CF_DEFAULT,
+                None,
+                None,
+                ManualCompactionOptions::new(false, 1, true),
+            );
+
+            // Get the total SST files size after compact range.
+            let new_sst_files_size = db.get_total_sst_files_size_cf(CF_DEFAULT).unwrap().unwrap();
+            assert!(old_sst_files_size > new_sst_files_size);
+        }
     }
 
     #[test]
