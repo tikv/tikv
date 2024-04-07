@@ -341,16 +341,23 @@ mod profiling {
     // Set exclusive arena for the current thread to avoid contention.
     pub fn thread_allocate_exclusive_arena() -> ProfResult<()> {
         unsafe {
-            // let index: u32 = tikv_jemalloc_ctl::raw::read(ARENAS_CREATE)
-            //     .map_err(|e| ProfError::JemallocError(format!("failed to create arena: {}", e)))?;
-            // if let Err(e) = tikv_jemalloc_ctl::raw::write(THREAD_ARENA, index) {
-            //     return Err(ProfError::JemallocError(format!(
-            //         "failed to set thread arena: {}",
-            //         e
-            //     )));
-            // }
-            let index: u32 = tikv_jemalloc_ctl::raw::read(THREAD_ARENA)
-                .map_err(|e| ProfError::JemallocError(format!("failed to create arena: {}", e)))?;
+            let mut index: u32 = tikv_jemalloc_ctl::raw::read(THREAD_ARENA)
+                .map_err(|e| ProfError::JemallocError(format!("failed to get thread's arena: {}", e)))?;
+            let count: usize = unsafe {
+                tikv_jemalloc_ctl::raw::read(format!("stats.arenas.{}.nthreads\0", index).as_bytes())
+                .unwrap_or(0)
+            }; 
+            // If the arena has already been bind to the other thread, create a new arena.
+            if count >= 1 {
+                index = tikv_jemalloc_ctl::raw::read(ARENAS_CREATE)
+                    .map_err(|e| ProfError::JemallocError(format!("failed to create arena: {}", e)))?;
+                if let Err(e) = tikv_jemalloc_ctl::raw::write(THREAD_ARENA, index) {
+                    return Err(ProfError::JemallocError(format!(
+                        "failed to set thread's arena: {}",
+                        e
+                    )));
+                }
+            }
             super::THREAD_ARENA_MAP.lock().unwrap().insert(
                 std::thread::current().id(),
                 (
