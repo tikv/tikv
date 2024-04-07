@@ -85,6 +85,7 @@ impl Collector for AllocStatsCollector {
                 .set(dealloc as _);
         });
         let mut g = self.memory_stats.collect();
+        g.extend(self.thread_stats.collect());
         g.extend(self.allocation.collect());
         g
     }
