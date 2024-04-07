@@ -69,7 +69,7 @@ fn test_load() {
         cluster.must_split(&r, &split_key2);
 
         let (tx, rx) = sync_channel(1);
-        fail::cfg_callback("on_snapshot_loaded", move || {
+        fail::cfg_callback("on_snapshot_load_finished", move || {
             tx.send(true).unwrap();
         })
         .unwrap();
@@ -172,7 +172,7 @@ fn test_write_batch_cache_during_load() {
         cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
     }
 
-    fail::cfg("on_snapshot_loaded", "pause").unwrap();
+    fail::cfg("on_snapshot_load_finished", "pause").unwrap();
     // load range
     {
         let range_cache_engine = cluster.get_range_cache_engine(1);
@@ -202,7 +202,7 @@ fn test_write_batch_cache_during_load() {
     // use it to mock concurrency between consuming cached write batch and cache
     // further writes
     fail::cfg("on_cached_write_batch_consumed", "pause").unwrap();
-    fail::remove("on_snapshot_loaded");
+    fail::remove("on_snapshot_load_finished");
 
     let (tx2, rx2) = sync_channel(1);
     fail::cfg_callback("on_range_cache_get_value", move || {
@@ -281,7 +281,7 @@ fn test_load_with_split() {
     // let channel to make load process block at finishing loading snapshot
     let (tx2, rx2) = sync_channel(0);
     let rx2 = Arc::new(Mutex::new(rx2));
-    fail::cfg_callback("on_snapshot_loaded", move || {
+    fail::cfg_callback("on_snapshot_load_finished", move || {
         tx.send(true).unwrap();
         let _ = rx2.lock().unwrap().recv().unwrap();
     })
