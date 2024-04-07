@@ -6592,10 +6592,14 @@ where
         if self.fsm.peer.busy_on_apply.is_none() {
             return;
         }
+        // No need to check the applying state if the peer is leader.
+        if self.fsm.peer.is_leader() {
+            return;
+        }
 
         let peer_id = self.fsm.peer.peer_id();
         let applied_idx = self.fsm.peer.get_store().applied_index();
-        let last_idx = self.fsm.peer.get_store().last_index();
+        let mut last_idx = self.fsm.peer.get_store().last_index();
         // If the peer is newly added or created, no need to check the apply status.
         if last_idx <= RAFT_INIT_LOG_INDEX {
             self.fsm.peer.busy_on_apply = None;
@@ -6618,6 +6622,14 @@ where
             return;
         }
         assert!(self.fsm.peer.busy_on_apply.is_some());
+
+        // Get the last replicated index of the peer.
+        for (id, p) in self.fsm.peer.raft_group.raft.prs().iter() {
+            if id == peer_id {
+                last_idx = p.matched;
+                break;
+            }
+        }
         // If the peer has large unapplied logs, this peer should be recorded until
         // the lag is less than the given threshold.
         if last_idx >= applied_idx + self.ctx.cfg.leader_transfer_max_log_lag {
