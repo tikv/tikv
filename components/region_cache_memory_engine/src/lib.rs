@@ -24,6 +24,16 @@ pub struct EngineConfig {
     hard_limit_threshold: usize,
 }
 
+impl Default for EngineConfig {
+    fn default() -> Self {
+        Self {
+            gc_interval: Duration::from_secs(180),
+            soft_limit_threshold: ReadableSize::gb(10).0 as usize,
+            hard_limit_threshold: ReadableSize::gb(15).0 as usize,
+        }
+    }
+}
+
 impl EngineConfig {
     pub fn new(
         gc_interval: Duration,
