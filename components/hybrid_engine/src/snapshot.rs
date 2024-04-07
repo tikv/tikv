@@ -127,13 +127,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
 
     use engine_traits::{
         CacheRange, IterOptions, Iterable, Iterator, KvEngine, Mutable, SnapshotContext,
         WriteBatch, WriteBatchExt, CF_DEFAULT,
     };
-    use region_cache_memory_engine::range_manager::RangeCacheStatus;
+    use region_cache_memory_engine::{range_manager::RangeCacheStatus, EngineConfig};
 
     use crate::util::hybrid_engine_for_tests;
 
@@ -145,15 +144,18 @@ mod tests {
         iter_opt.set_lower_bound(&range.start, 0);
 
         let range_clone = range.clone();
-        let (_path, hybrid_engine) =
-            hybrid_engine_for_tests("temp", Duration::from_secs(1000), move |memory_engine| {
+        let (_path, hybrid_engine) = hybrid_engine_for_tests(
+            "temp",
+            EngineConfig::config_for_test(),
+            move |memory_engine| {
                 memory_engine.new_range(range_clone.clone());
                 {
                     let mut core = memory_engine.core().write();
                     core.mut_range_manager().set_safe_point(&range_clone, 5);
                 }
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         let snap = hybrid_engine.snapshot(None);
         {
             let mut iter = snap.iterator_opt(CF_DEFAULT, iter_opt.clone()).unwrap();
