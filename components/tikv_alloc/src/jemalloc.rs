@@ -382,6 +382,7 @@ mod profiling {
     }
 
     pub fn set_prof_sample(rate: u64) -> ProfResult<()> {
+        let rate = (rate as f64).log2().ceil() as u64;
         unsafe {
             if let Err(e) = tikv_jemalloc_ctl::raw::write(PROF_RESET, rate) {
                 return Err(ProfError::JemallocError(format!(
@@ -394,12 +395,13 @@ mod profiling {
     }
 
     pub fn get_prof_sample() -> u64 {
-        match unsafe { tikv_jemalloc_ctl::raw::read(PROF_SAMPLE) } {
+        let rate: u64 = match unsafe { tikv_jemalloc_ctl::raw::read(PROF_SAMPLE) } {
             Err(e) => {
                 panic!("get_prof_sample: {:?}", e);
             }
             Ok(prof) => prof,
-        }
+        };
+        2_u64.pow(rate as u32)
     }
 
     pub fn activate_prof() -> ProfResult<()> {
@@ -478,8 +480,8 @@ mod profiling {
             deactivate_prof().unwrap();
             assert!(!is_profiling_active());
 
-            super::set_prof_sample(512 * 1024 * 1024).unwrap();
-            assert_eq!(19, super::get_prof_sample());
+            super::set_prof_sample(256 * 1024).unwrap();
+            assert_eq!(256 * 1024, super::get_prof_sample());
         }
 
         // Only trigger this test with jemallocs `opt.prof` set to
