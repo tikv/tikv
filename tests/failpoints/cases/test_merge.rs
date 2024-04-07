@@ -221,8 +221,6 @@ fn test_async_io_apply_before_leader_persist_merge() {
 
     let peer_1 = find_peer(&left, 1).cloned().unwrap();
     cluster.must_transfer_leader(left.get_id(), peer_1.clone());
-    // let peer_2 = find_peer(&right, 1).cloned().unwrap();
-    // cluster.must_transfer_leader(right.get_id(), peer_2);
 
     cluster.must_put(b"k1", b"v1");
     cluster.must_put(b"k3", b"v3");
