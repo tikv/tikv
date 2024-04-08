@@ -153,7 +153,7 @@ where
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
         if let Some(range) = self.region_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(&range);
+            batch.prepare_for_range(range);
         }
         batch.put(key, value)?;
         let _ = batch.write()?;
@@ -163,7 +163,7 @@ where
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
         if let Some(range) = self.region_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(&range);
+            batch.prepare_for_range(range);
         }
         batch.put_cf(cf, key, value)?;
         let _ = batch.write()?;
@@ -173,7 +173,7 @@ where
     fn delete(&self, key: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
         if let Some(range) = self.region_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(&range);
+            batch.prepare_for_range(range);
         }
         batch.delete(key)?;
         let _ = batch.write()?;
@@ -183,7 +183,7 @@ where
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
         if let Some(range) = self.region_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(&range);
+            batch.prepare_for_range(range);
         }
         batch.delete_cf(cf, key)?;
         let _ = batch.write()?;
@@ -193,7 +193,7 @@ where
     fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
         if let Some(range) = self.region_cache_engine.get_range_for_key(begin_key) {
-            batch.prepare_for_range(&range);
+            batch.prepare_for_range(range);
         }
         batch.delete_range(begin_key, end_key)?;
         let _ = batch.write()?;
@@ -203,7 +203,7 @@ where
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
         if let Some(range) = self.region_cache_engine.get_range_for_key(begin_key) {
-            batch.prepare_for_range(&range);
+            batch.prepare_for_range(range);
         }
         batch.delete_range_cf(cf, begin_key, end_key)?;
         let _ = batch.write()?;
@@ -213,11 +213,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
 
     use engine_rocks::util::new_engine;
     use engine_traits::{CacheRange, KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
-    use region_cache_memory_engine::RangeCacheMemoryEngine;
+    use region_cache_memory_engine::{EngineConfig, RangeCacheMemoryEngine};
     use tempfile::Builder;
 
     use crate::HybridEngine;
@@ -230,12 +229,11 @@ mod tests {
             &[CF_DEFAULT, CF_LOCK, CF_WRITE],
         )
         .unwrap();
-        let memory_engine = RangeCacheMemoryEngine::new(Duration::from_secs(100));
+        let memory_engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
         let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
         memory_engine.new_range(range.clone());
         {
             let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_range_readable(&range, true);
             core.mut_range_manager().set_safe_point(&range, 10);
         }
 
@@ -250,17 +248,6 @@ mod tests {
         let s = hybrid_engine.snapshot(Some(snap_ctx.clone()));
         assert!(s.region_cache_snapshot_available());
 
-        {
-            let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_range_readable(&range, false);
-        }
-        let s = hybrid_engine.snapshot(Some(snap_ctx.clone()));
-        assert!(!s.region_cache_snapshot_available());
-
-        {
-            let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_range_readable(&range, true);
-        }
         snap_ctx.read_ts = 5;
         let s = hybrid_engine.snapshot(Some(snap_ctx));
         assert!(!s.region_cache_snapshot_available());

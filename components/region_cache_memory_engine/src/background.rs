@@ -10,7 +10,6 @@ use crossbeam::{
 use engine_rocks::RocksSnapshot;
 use engine_traits::{CacheRange, IterOptions, Iterable, Iterator, CF_DEFAULT, CF_WRITE, DATA_CFS};
 use parking_lot::RwLock;
-use skiplist_rs::SkipList;
 use slog_global::{error, info, warn};
 use tikv_util::{
     keybuilder::KeyBuilder,
@@ -20,8 +19,9 @@ use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 use yatp::Remote;
 
 use crate::{
-    engine::RangeCacheMemoryEngineCore,
+    engine::{RangeCacheMemoryEngineCore, SkiplistHandle},
     keys::{decode_key, encode_key, encoding_for_filter, InternalBytes, InternalKey, ValueType},
+    memory_controller::MemoryController,
     metrics::GC_FILTERED_STATIC,
 };
 
@@ -52,6 +52,7 @@ fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
 pub enum BackgroundTask {
     Gc(GcTask),
     LoadRange,
+    MemoryCheckAndEvict,
     DeleteRange(Vec<CacheRange>),
 }
 
@@ -60,6 +61,7 @@ impl Display for BackgroundTask {
         match self {
             BackgroundTask::Gc(ref t) => t.fmt(f),
             BackgroundTask::LoadRange => f.debug_struct("LoadTask").finish(),
+            BackgroundTask::MemoryCheckAndEvict => f.debug_struct("MemoryCheckAndEvict").finish(),
             BackgroundTask::DeleteRange(ref r) => {
                 f.debug_struct("DeleteRange").field("range", r).finish()
             }
@@ -100,9 +102,13 @@ impl Drop for BgWorkManager {
 }
 
 impl BgWorkManager {
-    pub fn new(core: Arc<RwLock<RangeCacheMemoryEngineCore>>, gc_interval: Duration) -> Self {
+    pub fn new(
+        core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
+        gc_interval: Duration,
+        memory_controller: Arc<MemoryController>,
+    ) -> Self {
         let worker = Worker::new("range-cache-background-worker");
-        let runner = BackgroundRunner::new(core.clone());
+        let runner = BackgroundRunner::new(core.clone(), memory_controller);
         let scheduler = worker.start("range-cache-engine-background", runner);
 
         let scheduler_clone = scheduler.clone();
@@ -158,6 +164,7 @@ impl BgWorkManager {
 #[derive(Clone)]
 struct BackgroundRunnerCore {
     engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
+    memory_controller: Arc<MemoryController>,
 }
 
 impl BackgroundRunnerCore {
@@ -220,7 +227,7 @@ impl BackgroundRunnerCore {
         let default_cf_handle = skiplist_engine.cf_handle(CF_DEFAULT);
         let mut filter = Filter::new(safe_ts, default_cf_handle, write_cf_handle.clone());
 
-        let mut iter = write_cf_handle.owned_iter();
+        let mut iter = write_cf_handle.iterator();
         let guard = &epoch::pin();
         iter.seek_to_first(guard);
         while iter.valid() {
@@ -253,10 +260,12 @@ impl BackgroundRunnerCore {
         core.mut_range_manager().on_gc_finished(ranges);
     }
 
-    /// Returns the first range to load with RocksDB snapshot.
+    /// Returns the first range to load with RocksDB snapshot. The `bool`
+    /// returned indicates whether the task has been canceled due to memory
+    /// issue.
     ///
     /// Returns `None` if there are no ranges to load.
-    fn get_range_to_load(&self) -> Option<(CacheRange, Arc<RocksSnapshot>)> {
+    fn get_range_to_load(&self) -> Option<(CacheRange, Arc<RocksSnapshot>, bool)> {
         let core = self.engine.read();
         core.range_manager()
             .pending_ranges_loading_data
@@ -264,11 +273,31 @@ impl BackgroundRunnerCore {
             .cloned()
     }
 
-    fn on_snapshot_loaded(&mut self, range: CacheRange) -> engine_traits::Result<()> {
-        fail::fail_point!("on_snapshot_loaded");
+    fn on_snapshot_load_finished(&mut self, range: CacheRange) {
+        fail::fail_point!("on_snapshot_load_finished");
         loop {
             // Consume the cached write batch after the snapshot is acquired.
             let mut core = self.engine.write();
+            // We still need to check whether the snapshot is canceled during the load
+            let canceled = core
+                .range_manager()
+                .pending_ranges_loading_data
+                .front()
+                .unwrap()
+                .2;
+            if canceled {
+                let (r, ..) = core
+                    .mut_range_manager()
+                    .pending_ranges_loading_data
+                    .pop_front()
+                    .unwrap();
+                assert_eq!(r, range);
+                drop(core);
+                // Clear the range directly here to quickly free the memory.
+                self.delete_ranges(&[r]);
+                return;
+            }
+
             if core.has_cached_write_batch(&range) {
                 let (cache_batch, skiplist_engine) = {
                     (
@@ -279,7 +308,14 @@ impl BackgroundRunnerCore {
                 drop(core);
                 let guard = &epoch::pin();
                 for (seq, entry) in cache_batch {
-                    entry.write_to_memory(&skiplist_engine, seq, guard)?;
+                    entry
+                        .write_to_memory(
+                            seq,
+                            &skiplist_engine,
+                            self.memory_controller.clone(),
+                            guard,
+                        )
+                        .unwrap();
                 }
                 fail::fail_point!("on_cached_write_batch_consumed");
             } else {
@@ -287,7 +323,27 @@ impl BackgroundRunnerCore {
                 break;
             }
         }
-        Ok(())
+    }
+
+    fn on_snapshot_load_canceled(&mut self, range: CacheRange) {
+        let mut core = self.engine.write();
+        let (r, ..) = core
+            .mut_range_manager()
+            .pending_ranges_loading_data
+            .pop_front()
+            .unwrap();
+        assert_eq!(r, range);
+    }
+
+    fn delete_ranges(&mut self, ranges: &[CacheRange]) {
+        let skiplist_engine = self.engine.read().engine();
+        for r in ranges {
+            skiplist_engine.delete_range(r);
+        }
+        self.engine
+            .write()
+            .mut_range_manager()
+            .on_delete_ranges(ranges);
     }
 }
 
@@ -315,7 +371,10 @@ impl Drop for BackgroundRunner {
 }
 
 impl BackgroundRunner {
-    pub fn new(engine: Arc<RwLock<RangeCacheMemoryEngineCore>>) -> Self {
+    pub fn new(
+        engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
+        memory_controller: Arc<MemoryController>,
+    ) -> Self {
         let range_load_worker = Builder::new("background-range-load-worker")
             // Range load now is implemented sequentially, so we must use exactly one thread to handle it.
             // todo(SpadeA): if the load speed is a bottleneck, we may consider to use multiple threads to load ranges.
@@ -332,7 +391,10 @@ impl BackgroundRunner {
             .create();
         let gc_range_remote = delete_range_worker.remote();
         Self {
-            core: BackgroundRunnerCore { engine },
+            core: BackgroundRunnerCore {
+                engine,
+                memory_controller,
+            },
             range_load_worker,
             range_load_remote,
             delete_range_worker,
@@ -370,12 +432,21 @@ impl Runnable for BackgroundRunner {
                         let core = core.engine.read();
                         core.engine().clone()
                     };
-                    while let Some((range, snap)) = core.get_range_to_load() {
+                    while let Some((range, snap, mut canceled)) = core.get_range_to_load() {
                         let iter_opt = IterOptions::new(
                             Some(KeyBuilder::from_vec(range.start.clone(), 0, 0)),
                             Some(KeyBuilder::from_vec(range.end.clone(), 0, 0)),
                             false,
                         );
+                        if core.memory_controller.reached_soft_limit() {
+                            // We are running out of memory, so cancel the load.
+                            canceled = true;
+                        }
+
+                        if canceled {
+                            core.on_snapshot_load_canceled(range);
+                            continue;
+                        }
                         for &cf in DATA_CFS {
                             let guard = &epoch::pin();
                             let handle = skiplist_engine.cf_handle(cf);
@@ -383,16 +454,16 @@ impl Runnable for BackgroundRunner {
                                 Ok(mut iter) => {
                                     iter.seek_to_first().unwrap();
                                     while iter.valid().unwrap() {
-                                        // use 0 sequence number here as the kv is clearly visible
-                                        let encoded_key =
+                                        // use 0 sequence number here as the kv is clearly
+                                        // visible
+                                        let mut encoded_key =
                                             encode_key(iter.key(), 0, ValueType::Value);
-                                        handle
-                                            .insert(
-                                                encoded_key,
-                                                InternalBytes::from_vec(iter.value().to_vec()),
-                                                guard,
-                                            )
-                                            .release(guard);
+                                        let mut val =
+                                            InternalBytes::from_vec(iter.value().to_vec());
+                                        encoded_key
+                                            .set_memory_controller(core.memory_controller.clone());
+                                        val.set_memory_controller(core.memory_controller.clone());
+                                        handle.insert(encoded_key, val, guard);
                                         iter.next().unwrap();
                                     }
                                 }
@@ -401,23 +472,21 @@ impl Runnable for BackgroundRunner {
                                 }
                             }
                         }
-                        core.on_snapshot_loaded(range).unwrap();
+                        core.on_snapshot_load_finished(range);
                     }
                 };
                 self.range_load_remote.spawn(f);
             }
+            BackgroundTask::MemoryCheckAndEvict => {
+                let mem_usage = self.core.memory_controller.mem_usage();
+                if mem_usage > self.core.memory_controller.soft_limit_threshold() {
+                    // todo: select ranges to evict
+                }
+                self.core.memory_controller.set_memory_checking(false);
+            }
             BackgroundTask::DeleteRange(ranges) => {
-                let core = self.core.clone();
-                let f = async move {
-                    let skiplist_engine = { core.engine.read().engine() };
-                    for r in &ranges {
-                        skiplist_engine.delete_range(r);
-                    }
-                    core.engine
-                        .write()
-                        .mut_range_manager()
-                        .on_delete_ranges(&ranges);
-                };
+                let mut core = self.core.clone();
+                let f = async move { core.delete_ranges(&ranges) };
                 self.delete_range_remote.spawn(f);
             }
         }
@@ -461,8 +530,8 @@ struct Filter {
     mvcc_key_prefix: Vec<u8>,
     remove_older: bool,
 
-    default_cf_handle: Arc<SkipList<InternalBytes, InternalBytes>>,
-    write_cf_handle: Arc<SkipList<InternalBytes, InternalBytes>>,
+    default_cf_handle: SkiplistHandle,
+    write_cf_handle: SkiplistHandle,
 
     // When deleting some keys, the latest one should be deleted at last to avoid the older
     // version appears.
@@ -475,12 +544,8 @@ impl Drop for Filter {
     fn drop(&mut self) {
         if let Some(cached_delete_key) = self.cached_delete_key.take() {
             let guard = &epoch::pin();
-            if let Some(e) = self
-                .write_cf_handle
-                .remove(&InternalBytes::from_vec(cached_delete_key), guard)
-            {
-                e.release(guard);
-            };
+            self.write_cf_handle
+                .remove(&InternalBytes::from_vec(cached_delete_key), guard);
         }
     }
 }
@@ -488,8 +553,8 @@ impl Drop for Filter {
 impl Filter {
     fn new(
         safe_point: u64,
-        default_cf_handle: Arc<SkipList<InternalBytes, InternalBytes>>,
-        write_cf_handle: Arc<SkipList<InternalBytes, InternalBytes>>,
+        default_cf_handle: SkiplistHandle,
+        write_cf_handle: SkiplistHandle,
     ) -> Self {
         Self {
             safe_point,
@@ -519,12 +584,8 @@ impl Filter {
             self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
             self.remove_older = false;
             if let Some(cached_delete_key) = self.cached_delete_key.take() {
-                if let Some(e) = self
-                    .write_cf_handle
-                    .remove(&InternalBytes::from_vec(cached_delete_key), guard)
-                {
-                    e.release(guard)
-                }
+                self.write_cf_handle
+                    .remove(&InternalBytes::from_vec(cached_delete_key), guard);
             }
         }
 
@@ -553,12 +614,8 @@ impl Filter {
             return Ok(());
         }
         self.metrics.filtered += 1;
-        if let Some(e) = self
-            .write_cf_handle
-            .remove(&InternalBytes::from_bytes(key.clone()), guard)
-        {
-            e.release(guard)
-        }
+        self.write_cf_handle
+            .remove(&InternalBytes::from_bytes(key.clone()), guard);
         self.handle_filtered_write(write, guard)?;
 
         Ok(())
@@ -577,12 +634,10 @@ impl Filter {
             // seek(both get and remove invovle seek). Maybe we can provide the API to
             // delete the mvcc keys with all sequence numbers.
             let default_key = encoding_for_filter(&self.mvcc_key_prefix, write.start_ts);
-            let mut iter = self.default_cf_handle.owned_iter();
+            let mut iter = self.default_cf_handle.iterator();
             iter.seek(&default_key, guard);
             while iter.valid() && iter.key().same_user_key_with(&default_key) {
-                if let Some(e) = self.default_cf_handle.remove(iter.key(), guard) {
-                    e.release(guard)
-                }
+                self.default_cf_handle.remove(iter.key(), guard);
                 iter.next(guard);
             }
         }
@@ -600,19 +655,19 @@ pub mod tests {
         CacheRange, RangeCacheEngine, SyncMutable, CF_DEFAULT, CF_WRITE, DATA_CFS,
     };
     use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
-    use skiplist_rs::SkipList;
     use tempfile::Builder;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::Filter;
     use crate::{
         background::BackgroundRunner,
-        engine::SkiplistEngine,
+        engine::{SkiplistEngine, SkiplistHandle},
         keys::{
             construct_key, construct_value, encode_key, encode_seek_key, encoding_for_filter,
             InternalBytes, ValueType,
         },
-        RangeCacheMemoryEngine,
+        memory_controller::MemoryController,
+        EngineConfig, RangeCacheMemoryEngine,
     };
 
     fn put_data(
@@ -622,13 +677,15 @@ pub mod tests {
         commit_ts: u64,
         seq_num: u64,
         short_value: bool,
-        default_cf: &Arc<SkipList<InternalBytes, InternalBytes>>,
-        write_cf: &Arc<SkipList<InternalBytes, InternalBytes>>,
+        default_cf: &SkiplistHandle,
+        write_cf: &SkiplistHandle,
+        mem_controller: Arc<MemoryController>,
     ) {
         let write_k = Key::from_raw(key)
             .append_ts(TimeStamp::new(commit_ts))
             .into_encoded();
-        let write_k = encode_key(&write_k, seq_num, ValueType::Value);
+        let mut write_k = encode_key(&write_k, seq_num, ValueType::Value);
+        write_k.set_memory_controller(mem_controller.clone());
         let write_v = Write::new(
             WriteType::Put,
             TimeStamp::new(start_ts),
@@ -638,23 +695,20 @@ pub mod tests {
                 None
             },
         );
+        let mut val = InternalBytes::from_vec(write_v.as_ref().to_bytes());
+        val.set_memory_controller(mem_controller.clone());
         let guard = &epoch::pin();
-        write_cf
-            .insert(
-                write_k,
-                InternalBytes::from_vec(write_v.as_ref().to_bytes()),
-                guard,
-            )
-            .release(guard);
+        write_cf.insert(write_k, val, guard);
 
         if !short_value {
             let default_k = Key::from_raw(key)
                 .append_ts(TimeStamp::new(start_ts))
                 .into_encoded();
-            let default_k = encode_key(&default_k, seq_num + 1, ValueType::Value);
-            default_cf
-                .insert(default_k, InternalBytes::from_vec(value.to_vec()), guard)
-                .release(guard);
+            let mut default_k = encode_key(&default_k, seq_num + 1, ValueType::Value);
+            default_k.set_memory_controller(mem_controller.clone());
+            let mut val = InternalBytes::from_vec(value.to_vec());
+            val.set_memory_controller(mem_controller);
+            default_cf.insert(default_k, val, guard);
         }
     }
 
@@ -662,48 +716,44 @@ pub mod tests {
         key: &[u8],
         ts: u64,
         seq_num: u64,
-        write_cf: &Arc<SkipList<InternalBytes, InternalBytes>>,
+        write_cf: &SkiplistHandle,
+        mem_controller: Arc<MemoryController>,
     ) {
         let write_k = Key::from_raw(key)
             .append_ts(TimeStamp::new(ts))
             .into_encoded();
-        let write_k = encode_key(&write_k, seq_num, ValueType::Value);
+        let mut write_k = encode_key(&write_k, seq_num, ValueType::Value);
+        write_k.set_memory_controller(mem_controller.clone());
         let write_v = Write::new(WriteType::Delete, TimeStamp::new(ts), None);
+        let mut val = InternalBytes::from_vec(write_v.as_ref().to_bytes());
+        val.set_memory_controller(mem_controller);
         let guard = &epoch::pin();
-        write_cf
-            .insert(
-                write_k,
-                InternalBytes::from_vec(write_v.as_ref().to_bytes()),
-                guard,
-            )
-            .release(guard);
+        write_cf.insert(write_k, val, guard);
     }
 
     fn rollback_data(
         key: &[u8],
         ts: u64,
         seq_num: u64,
-        write_cf: &Arc<SkipList<InternalBytes, InternalBytes>>,
+        write_cf: &SkiplistHandle,
+        mem_controller: Arc<MemoryController>,
     ) {
         let write_k = Key::from_raw(key)
             .append_ts(TimeStamp::new(ts))
             .into_encoded();
-        let write_k = encode_key(&write_k, seq_num, ValueType::Value);
+        let mut write_k = encode_key(&write_k, seq_num, ValueType::Value);
+        write_k.set_memory_controller(mem_controller.clone());
         let write_v = Write::new(WriteType::Rollback, TimeStamp::new(ts), None);
+        let mut val = InternalBytes::from_vec(write_v.as_ref().to_bytes());
+        val.set_memory_controller(mem_controller);
         let guard = &epoch::pin();
-        write_cf
-            .insert(
-                write_k,
-                InternalBytes::from_vec(write_v.as_ref().to_bytes()),
-                guard,
-            )
-            .release(guard);
+        write_cf.insert(write_k, val, guard);
     }
 
-    fn element_count(sklist: &Arc<SkipList<InternalBytes, InternalBytes>>) -> u64 {
+    fn element_count(sklist: &SkiplistHandle) -> u64 {
         let guard = &epoch::pin();
         let mut count = 0;
-        let mut iter = sklist.owned_iter();
+        let mut iter = sklist.iterator();
         iter.seek_to_first(guard);
         while iter.valid() {
             count += 1;
@@ -714,12 +764,8 @@ pub mod tests {
 
     // We should not use skiplist.get directly as we only cares keys without
     // sequence number suffix
-    fn key_exist(
-        sl: &Arc<SkipList<InternalBytes, InternalBytes>>,
-        key: &InternalBytes,
-        guard: &epoch::Guard,
-    ) -> bool {
-        let mut iter = sl.owned_iter();
+    fn key_exist(sl: &SkiplistHandle, key: &InternalBytes, guard: &epoch::Guard) -> bool {
+        let mut iter = sl.iterator();
         iter.seek(key, guard);
         if iter.valid() && iter.key().same_user_key_with(key) {
             return true;
@@ -730,16 +776,20 @@ pub mod tests {
     // We should not use skiplist.get directly as we only cares keys without
     // sequence number suffix
     fn get_value(
-        sl: &Arc<SkipList<InternalBytes, InternalBytes>>,
+        sl: &SkiplistHandle,
         key: &InternalBytes,
         guard: &epoch::Guard,
-    ) -> Option<InternalBytes> {
-        let mut iter = sl.owned_iter();
+    ) -> Option<Vec<u8>> {
+        let mut iter = sl.iterator();
         iter.seek(key, guard);
         if iter.valid() && iter.key().same_user_key_with(key) {
-            return Some(iter.value().clone());
+            return Some(iter.value().as_slice().to_vec());
         }
         None
+    }
+
+    fn dummy_controller(skip_engine: SkiplistEngine) -> Arc<MemoryController> {
+        Arc::new(MemoryController::new(usize::MAX, usize::MAX, skip_engine))
     }
 
     #[test]
@@ -748,21 +798,93 @@ pub mod tests {
         let write = skiplist_engine.cf_handle(CF_WRITE);
         let default = skiplist_engine.cf_handle(CF_DEFAULT);
 
-        put_data(b"key1", b"value1", 10, 15, 10, false, &default, &write);
-        put_data(b"key2", b"value21", 10, 15, 12, false, &default, &write);
-        put_data(b"key2", b"value22", 20, 25, 14, false, &default, &write);
+        let memory_controller = dummy_controller(skiplist_engine.clone());
+
+        put_data(
+            b"key1",
+            b"value1",
+            10,
+            15,
+            10,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key2",
+            b"value21",
+            10,
+            15,
+            12,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key2",
+            b"value22",
+            20,
+            25,
+            14,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
         // mock repeate apply
-        put_data(b"key2", b"value22", 20, 25, 15, false, &default, &write);
-        put_data(b"key2", b"value23", 30, 35, 16, false, &default, &write);
-        put_data(b"key3", b"value31", 20, 25, 18, false, &default, &write);
-        put_data(b"key3", b"value32", 30, 35, 20, false, &default, &write);
-        delete_data(b"key3", 40, 22, &write);
+        put_data(
+            b"key2",
+            b"value22",
+            20,
+            25,
+            15,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key2",
+            b"value23",
+            30,
+            35,
+            16,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key3",
+            b"value31",
+            20,
+            25,
+            18,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key3",
+            b"value32",
+            30,
+            35,
+            20,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        delete_data(b"key3", 40, 22, &write, memory_controller.clone());
         assert_eq!(7, element_count(&default));
         assert_eq!(8, element_count(&write));
 
         let mut filter = Filter::new(50, default.clone(), write.clone());
         let mut count = 0;
-        let mut iter = write.owned_iter();
+        let mut iter = write.iterator();
         let guard = &epoch::pin();
         iter.seek_to_first(guard);
         while iter.valid() {
@@ -804,13 +926,12 @@ pub mod tests {
 
     #[test]
     fn test_gc() {
-        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let memory_controller = engine.memory_controller();
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let (write, default) = {
-            let mut core = engine.core().write();
-            let skiplist_engine = core.engine();
-            core.mut_range_manager().set_range_readable(&range, true);
+            let skiplist_engine = engine.core().write().engine();
             (
                 skiplist_engine.cf_handle(CF_WRITE),
                 skiplist_engine.cf_handle(CF_DEFAULT),
@@ -822,13 +943,43 @@ pub mod tests {
             encoding_for_filter(key.as_encoded(), ts)
         };
 
-        put_data(b"key1", b"value1", 10, 11, 10, false, &default, &write);
-        put_data(b"key1", b"value2", 12, 13, 12, false, &default, &write);
-        put_data(b"key1", b"value3", 14, 15, 14, false, &default, &write);
+        put_data(
+            b"key1",
+            b"value1",
+            10,
+            11,
+            10,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key1",
+            b"value2",
+            12,
+            13,
+            12,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key1",
+            b"value3",
+            14,
+            15,
+            14,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
 
-        let worker = BackgroundRunner::new(engine.core.clone());
+        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
 
         // gc will not remove the latest mvcc put below safe point
         worker.core.gc_range(&range, 14);
@@ -840,7 +991,7 @@ pub mod tests {
         assert_eq!(1, element_count(&write));
 
         // rollback will not make the first older version be filtered
-        rollback_data(b"key1", 17, 16, &write);
+        rollback_data(b"key1", 17, 16, &write, memory_controller.clone());
         worker.core.gc_range(&range, 17);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
@@ -852,7 +1003,7 @@ pub mod tests {
 
         // unlike in WriteCompactionFilter, the latest mvcc delete below safe point will
         // be filtered
-        delete_data(b"key1", 19, 18, &write);
+        delete_data(b"key1", 19, 18, &write, memory_controller.clone());
         worker.core.gc_range(&range, 19);
         assert_eq!(0, element_count(&write));
         assert_eq!(0, element_count(&default));
@@ -860,29 +1011,88 @@ pub mod tests {
 
     #[test]
     fn test_snapshot_block_gc() {
-        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let memory_controller = engine.memory_controller();
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let (write, default) = {
-            let mut core = engine.core().write();
-            let skiplist_engine = core.engine();
-            core.mut_range_manager().set_range_readable(&range, true);
+            let skiplist_engine = engine.core().write().engine();
             (
                 skiplist_engine.cf_handle(CF_WRITE),
                 skiplist_engine.cf_handle(CF_DEFAULT),
             )
         };
 
-        put_data(b"key1", b"value1", 10, 11, 10, false, &default, &write);
-        put_data(b"key2", b"value21", 10, 11, 12, false, &default, &write);
-        put_data(b"key2", b"value22", 15, 16, 14, false, &default, &write);
-        put_data(b"key2", b"value23", 20, 21, 16, false, &default, &write);
-        put_data(b"key3", b"value31", 5, 6, 18, false, &default, &write);
-        put_data(b"key3", b"value32", 10, 11, 20, false, &default, &write);
+        put_data(
+            b"key1",
+            b"value1",
+            10,
+            11,
+            10,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key2",
+            b"value21",
+            10,
+            11,
+            12,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key2",
+            b"value22",
+            15,
+            16,
+            14,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key2",
+            b"value23",
+            20,
+            21,
+            16,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key3",
+            b"value31",
+            5,
+            6,
+            18,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key3",
+            b"value32",
+            10,
+            11,
+            20,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let worker = BackgroundRunner::new(engine.core.clone());
+        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller);
         let s1 = engine.snapshot(range.clone(), 10, u64::MAX);
         let s2 = engine.snapshot(range.clone(), 11, u64::MAX);
         let s3 = engine.snapshot(range.clone(), 20, u64::MAX);
@@ -910,7 +1120,10 @@ pub mod tests {
 
     #[test]
     fn test_gc_worker() {
-        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1));
+        let mut config = EngineConfig::config_for_test();
+        config.gc_interval = Duration::from_secs(1);
+        let engine = RangeCacheMemoryEngine::new(config);
+        let memory_controller = engine.memory_controller();
         let (write, default) = {
             let mut core = engine.core.write();
             core.mut_range_manager()
@@ -922,25 +1135,57 @@ pub mod tests {
         let start_ts = TimeStamp::physical_now() - Duration::from_secs(10).as_millis() as u64;
         let commit_ts1 = TimeStamp::physical_now() - Duration::from_secs(9).as_millis() as u64;
         put_data(
-            b"k", b"v1", start_ts, commit_ts1, 100, false, &default, &write,
+            b"k",
+            b"v1",
+            start_ts,
+            commit_ts1,
+            100,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
         );
 
         let start_ts = TimeStamp::physical_now() - Duration::from_secs(8).as_millis() as u64;
         let commit_ts2 = TimeStamp::physical_now() - Duration::from_secs(7).as_millis() as u64;
         put_data(
-            b"k", b"v2", start_ts, commit_ts2, 110, false, &default, &write,
+            b"k",
+            b"v2",
+            start_ts,
+            commit_ts2,
+            110,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
         );
 
         let start_ts = TimeStamp::physical_now() - Duration::from_secs(6).as_millis() as u64;
         let commit_ts3 = TimeStamp::physical_now() - Duration::from_secs(5).as_millis() as u64;
         put_data(
-            b"k", b"v3", start_ts, commit_ts3, 110, false, &default, &write,
+            b"k",
+            b"v3",
+            start_ts,
+            commit_ts3,
+            110,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
         );
 
         let start_ts = TimeStamp::physical_now() - Duration::from_secs(4).as_millis() as u64;
         let commit_ts4 = TimeStamp::physical_now() - Duration::from_secs(3).as_millis() as u64;
         put_data(
-            b"k", b"v4", start_ts, commit_ts4, 110, false, &default, &write,
+            b"k",
+            b"v4",
+            start_ts,
+            commit_ts4,
+            110,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
         );
 
         let guard = &epoch::pin();
@@ -966,7 +1211,7 @@ pub mod tests {
 
     #[test]
     fn test_background_worker_load() {
-        let mut engine = RangeCacheMemoryEngine::new(Duration::from_secs(1000));
+        let mut engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
         let path = Builder::new().prefix("test_load").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
         let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
@@ -1045,13 +1290,14 @@ pub mod tests {
 
     #[test]
     fn test_ranges_for_gc() {
-        let engine = RangeCacheMemoryEngine::new(Duration::from_secs(1000));
+        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let memory_controller = engine.memory_controller();
         let r1 = CacheRange::new(b"a".to_vec(), b"b".to_vec());
         let r2 = CacheRange::new(b"b".to_vec(), b"c".to_vec());
         engine.new_range(r1);
         engine.new_range(r2);
 
-        let mut runner = BackgroundRunner::new(engine.core.clone());
+        let mut runner = BackgroundRunner::new(engine.core.clone(), memory_controller);
         let ranges = runner.core.ranges_for_gc().unwrap();
         assert_eq!(2, ranges.len());
 
