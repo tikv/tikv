@@ -534,6 +534,7 @@ pub fn init_last_term<ER: RaftEngine>(
 pub fn init_applied_term<ER: RaftEngine>(
     raft_engine: &ER,
     region: &metapb::Region,
+    raft_state: &RaftLocalState,
     apply_state: &RaftApplyState,
 ) -> Result<u64> {
     if apply_state.applied_index == RAFT_INIT_LOG_INDEX {
@@ -546,8 +547,20 @@ pub fn init_applied_term<ER: RaftEngine>(
 
     match raft_engine.get_entry(region.get_id(), apply_state.applied_index)? {
         Some(e) => Ok(e.term),
-        // None means apply is ahead of persist, in this case the raft term must not be changed.
-        None => Ok(apply_state.commit_term),
+        None => {
+            // if applied_index > last_index, that some committed entries have applied but
+            // not persisted, in this case, the raft term must not be changed, so we use the
+            // term persisted in apply_state.
+            if apply_state.applied_index > raft_state.get_last_index() {
+                Ok(apply_state.commit_term)
+            } else {
+                Err(box_err!(
+                    "[region {}] entry at apply index {} doesn't exist, may lose data.",
+                    region.get_id(),
+                    apply_state.applied_index
+                ))
+            }
+        }
     }
 }
 
@@ -655,7 +668,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             ));
         }
         let last_term = init_last_term(&raft_engine, region, &raft_state, &apply_state)?;
-        let applied_term = init_applied_term(&raft_engine, region, &apply_state)?;
+        let applied_term = init_applied_term(&raft_engine, region, &raft_state, &apply_state)?;
         Ok(Self {
             region_id: region.id,
             peer_id,
