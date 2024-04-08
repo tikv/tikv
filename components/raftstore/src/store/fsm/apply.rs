@@ -3793,8 +3793,13 @@ impl<EK: KvEngine> ResourceMetered for Box<Msg<EK>> {
         if !resource_ctl.is_customized() {
             return None;
         }
+<<<<<<< HEAD
         match **self {
             Msg::Apply { ref apply, .. } => {
+=======
+        match self {
+            Msg::Apply { apply, .. } => {
+>>>>>>> 7b0e224c84 (raftstore: Avoid consuming resource when there is only one resource group (#16775))
                 let mut dominant_group = "".to_owned();
                 let mut max_write_bytes = 0;
                 for cached_entries in &apply.entries {
