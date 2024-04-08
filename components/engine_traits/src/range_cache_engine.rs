@@ -36,7 +36,18 @@ pub trait RangeCacheEngine:
 
     // return the range containing the key
     fn get_range_for_key(&self, key: &[u8]) -> Option<CacheRange>;
+
+    type RangeHintService: RangeHintService;
+    fn start_hint_service(&self, range_hint_service: Self::RangeHintService);
 }
+
+/// A service that should run in the background to retrieve and apply cache
+/// hints.
+///
+/// TODO (afeinberg): Presently, this is only a marker trait with a single
+/// implementation. Methods and/or associated types will be added to this trait
+/// as it continues to evolve to handle eviction, using stats.
+pub trait RangeHintService: Send + Sync {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CacheRange {
