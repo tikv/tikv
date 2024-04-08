@@ -1179,6 +1179,16 @@ where
         if self.min_safe_index_for_unpersisted_apply > 0
             && self.min_safe_index_for_unpersisted_apply < applied_index
         {
+            if self.max_apply_unpersisted_log_limit > 0
+                && self
+                    .raft_group
+                    .raft
+                    .raft_log
+                    .max_apply_unpersisted_log_limit
+                    == 0
+            {
+                RAFT_DISABLE_UNPERSISTED_APPLY_GAUGE.dec();
+            }
             self.raft_group
                 .raft
                 .set_max_apply_unpersisted_log_limit(self.max_apply_unpersisted_log_limit);
@@ -1190,7 +1200,16 @@ where
     fn disable_apply_unpersisted_log(&mut self, min_enable_index: u64) {
         self.min_safe_index_for_unpersisted_apply =
             std::cmp::max(self.min_safe_index_for_unpersisted_apply, min_enable_index);
-        self.raft_group.raft.set_max_apply_unpersisted_log_limit(0);
+        if self
+            .raft_group
+            .raft
+            .raft_log
+            .max_apply_unpersisted_log_limit
+            > 0
+        {
+            self.raft_group.raft.set_max_apply_unpersisted_log_limit(0);
+            RAFT_DISABLE_UNPERSISTED_APPLY_GAUGE.inc();
+        }
     }
 
     pub fn maybe_append_merge_entries(&mut self, merge: &CommitMergeRequest) -> Option<u64> {
