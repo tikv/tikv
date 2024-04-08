@@ -26,7 +26,7 @@ use crate::{
     keys::{decode_key, encode_key, encoding_for_filter, InternalBytes, InternalKey, ValueType},
     memory_controller::MemoryController,
     metrics::GC_FILTERED_STATIC,
-    range_manager::{LoadFailedReason, RangeCacheStatus},
+    range_manager::LoadFailedReason,
     region_label::{
         LabelRule, RegionLabelAddedCb, RegionLabelRulesManager, RegionLabelServiceBuilder,
     },
@@ -89,18 +89,6 @@ impl Display for GcTask {
     }
 }
 
-/// This function is executed by a background task to load a cache range. It
-/// should call [`crate::range_manager::RangeManager::load_range`] and if this
-/// is succesful call [`crate::RangeCacheMemoryEngine::prepare_for_apply`].
-///
-/// A late binding style is used as this function would need to hold a valid
-/// reference to `RocksEngine` in order load a snapshot into memory.
-///
-/// See also: [`BgWorkManager::set_load_range_and_prepare_for_apply_fn`] and its
-/// usage.
-pub(crate) type LoadAndPrepareRangeFn =
-    Arc<dyn Fn(&CacheRange) -> Result<RangeCacheStatus, LoadFailedReason> + Send + Sync>;
-
 // BgWorkManager managers the worker inits, stops, and task schedules. When
 // created, it starts a worker which receives tasks such as gc task, range
 // delete task, range snapshot load and so on, and starts a thread for
@@ -109,7 +97,7 @@ pub struct BgWorkManager {
     worker: Worker,
     scheduler: Scheduler<BackgroundTask>,
     tick_stopper: Option<(JoinHandle<()>, Sender<bool>)>,
-    load_and_prepare_fn: Option<LoadAndPrepareRangeFn>,
+    core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
 }
 
 impl Drop for BgWorkManager {
@@ -139,16 +127,15 @@ const CACHE_LABEL_RULE_ALWAYS: &str = "always";
 impl PdRangeHintService {
     /// Spawn a background task on `remote` to continuosly watch for region
     /// label rules that contain the label `cache`; if a new added for which
-    /// `cache` is set to `always`, load the label's keyranges using
-    /// `load_and_prepare`.
+    /// `cache` is set to `always`, request loading the label's keyranges using
+    /// `range_manager_load_cb`.
     ///
     /// TODO (afeinberg): Add support for evicting key ranges when the `cache`
     /// label is removed or no longer set to always.
-    pub fn start(
-        &self,
-        remote: Remote<yatp::task::future::TaskCell>,
-        load_and_prepare: LoadAndPrepareRangeFn,
-    ) {
+    pub fn start<F>(&self, remote: Remote<yatp::task::future::TaskCell>, range_manager_load_cb: F)
+    where
+        F: Fn(&CacheRange) -> Result<(), LoadFailedReason> + Send + Sync + 'static,
+    {
         let pd_client = self.0.clone();
         let region_label_added_cb: RegionLabelAddedCb = Arc::new(move |label_rule: &LabelRule| {
             if !label_rule
@@ -162,9 +149,9 @@ impl PdRangeHintService {
             for key_range in &label_rule.data {
                 match CacheRange::try_from(key_range) {
                     Ok(cache_range) => {
-                        info!("Loading range"; "cache_range" => ?&cache_range);
-                        if let Err(reason) = load_and_prepare(&cache_range) {
-                            error!("Load and prepare failed"; "range" => ?&cache_range, "reason" => ?reason);
+                        info!("Requested to cache range"; "cache_range" => ?&cache_range);
+                        if let Err(reason) = range_manager_load_cb(&cache_range) {
+                            error!("Cache range load failed"; "range" => ?&cache_range, "reason" => ?reason);
                         }
                     }
                     Err(e) => {
@@ -210,7 +197,7 @@ impl BgWorkManager {
             worker,
             scheduler,
             tick_stopper: Some((handle, tx)),
-            load_and_prepare_fn: None,
+            core,
         }
     }
 
@@ -218,18 +205,16 @@ impl BgWorkManager {
         self.scheduler.schedule_force(task)
     }
 
-    pub fn set_load_range_and_prepare_for_apply_fn(
-        &mut self,
-        load_and_prepare_fn: LoadAndPrepareRangeFn,
-    ) {
-        self.load_and_prepare_fn = Some(load_and_prepare_fn);
-    }
-
     pub fn start_bg_hint_service(&self, range_hint_service: PdRangeHintService) {
-        range_hint_service.start(
-            self.worker.remote(),
-            self.load_and_prepare_fn.as_ref().unwrap().clone(),
-        )
+        let core = self.core.clone();
+        range_hint_service.start(self.worker.remote(), move |cache_range: &CacheRange| {
+            let mut engine = core.write();
+            engine.mut_range_manager().load_range(cache_range.clone())?;
+            // TODO (afeinberg): This does not actually load the range. The load happens
+            // the apply thread begins to apply raft entries. To force this (for read-only
+            // use-cases) we should propose a No-Op command.
+            Ok(())
+        });
     }
 
     fn start_tick(
@@ -1463,9 +1448,13 @@ pub mod tests {
         );
         add_region_label_rule(meta_client, cluster_id, &label_rule);
 
-        // Wait for the watch to fire on the label rule and for the range to be loaded.
-        std::thread::sleep(Duration::from_secs(1));
+        // Wait for the watch to fire.
+        std::thread::sleep(Duration::from_millis(200));
         let r1 = CacheRange::try_from(&label_rule.data[0]).unwrap();
+        engine.prepare_for_apply(&r1);
+
+        // Wait for the range to be loaded.
+        std::thread::sleep(Duration::from_secs(1));
         let _ = engine.snapshot(r1, u64::MAX, u64::MAX).unwrap();
 
         let (write, default) = {
