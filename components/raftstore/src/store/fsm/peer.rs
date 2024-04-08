@@ -2625,6 +2625,21 @@ where
             return Ok(());
         }
 
+        {
+            // If this peer is restarting, it may lose some logs, so it should update
+            // the `last_leader_commited_idx` with the commited index of the first
+            // message it received from leader.
+            if self.fsm.peer.last_leader_commited_idx.is_none() {
+                let last_committed_idx = msg.get_message().get_commit();
+                self.fsm.peer.last_leader_commited_idx = Some(last_committed_idx);
+                info!(
+                    "update last commited index from leader";
+                    "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(),
+                    "last_commited_index" => last_committed_idx
+                );
+            }
+        }
+
         let is_snapshot = msg.get_message().has_snapshot();
 
         // TODO: spin off the I/O code (delete_snapshot)
@@ -6626,10 +6641,23 @@ where
 
         // Get the last replicated index of the leader to calculate the gap
         // of unapplied raft logs on this peer.
-        let leader_id = self.fsm.peer.leader_id();
-        if let Some(p) = self.fsm.peer.raft_group.raft.prs().get(leader_id) {
-            last_idx = p.matched;
+        // let leader_id = self.fsm.peer.leader_id();
+        // TODO: only leader can get the matched index of each followers / peers
+        // (ProgressTracker). As a learner or follower, it cannot get the leader's
+        // matched index.
+        // Q: how to get the leader index ?
+        // if let Some(p) = self.fsm.peer.raft_group.raft.prs().get(leader_id) {
+        //     last_idx = p.matched;
+        // }
+
+        {
+            // This peer is restarted and the last leader commit index is not set, so
+            // it use `u64::MAX` as the last commit index to make it wait for the update
+            // of the `last_leader_commited_idx` until the `last_leader_commited_idx` has
+            // been updated.
+            last_idx = self.fsm.peer.last_leader_commited_idx.unwrap_or(u64::MAX);
         }
+
         // If the peer has large unapplied logs, this peer should be recorded until
         // the lag is less than the given threshold.
         if last_idx >= applied_idx + self.ctx.cfg.leader_transfer_max_log_lag {
