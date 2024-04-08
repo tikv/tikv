@@ -711,7 +711,7 @@ impl KvEngineBuilder for RocksEngine {
 
 impl KvEngineBuilder for HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
     fn build(disk_engine: RocksEngine, pd_client: Option<Arc<RpcClient>>) -> Self {
-        // todo(SpadeA): make time configurable
+        // todo(SpadeA): add config for it
         let mut memory_engine = RangeCacheMemoryEngine::new(EngineConfig::default());
         memory_engine.set_disk_engine(disk_engine.clone());
         if let Some(pd_client) = pd_client.as_ref() {
