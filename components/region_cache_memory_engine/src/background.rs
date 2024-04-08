@@ -8,8 +8,11 @@ use crossbeam::{
     epoch, select,
 };
 use engine_rocks::RocksSnapshot;
-use engine_traits::{CacheRange, IterOptions, Iterable, Iterator, CF_DEFAULT, CF_WRITE, DATA_CFS};
+use engine_traits::{
+    CacheRange, IterOptions, Iterable, Iterator, RangeHintService, CF_DEFAULT, CF_WRITE, DATA_CFS,
+};
 use parking_lot::RwLock;
+use pd_client::RpcClient;
 use slog_global::{error, info, warn};
 use tikv_util::{
     keybuilder::KeyBuilder,
@@ -23,6 +26,10 @@ use crate::{
     keys::{decode_key, encode_key, encoding_for_filter, InternalBytes, InternalKey, ValueType},
     memory_controller::MemoryController,
     metrics::GC_FILTERED_STATIC,
+    range_manager::LoadFailedReason,
+    region_label::{
+        LabelRule, RegionLabelAddedCb, RegionLabelRulesManager, RegionLabelServiceBuilder,
+    },
 };
 
 /// Try to extract the key and `u64` timestamp from `encoded_key`.
@@ -90,6 +97,7 @@ pub struct BgWorkManager {
     worker: Worker,
     scheduler: Scheduler<BackgroundTask>,
     tick_stopper: Option<(JoinHandle<()>, Sender<bool>)>,
+    core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
 }
 
 impl Drop for BgWorkManager {
@@ -98,6 +106,76 @@ impl Drop for BgWorkManager {
         let _ = tx.send(true);
         let _ = h.join();
         self.worker.stop();
+    }
+}
+
+pub struct PdRangeHintService(Arc<RpcClient>);
+
+impl RangeHintService for PdRangeHintService {}
+
+impl From<Arc<RpcClient>> for PdRangeHintService {
+    fn from(pd_client: Arc<RpcClient>) -> Self {
+        PdRangeHintService(pd_client)
+    }
+}
+
+const CACHE_LABEL_RULE_KEY: &str = "cache";
+const CACHE_LABEL_RULE_ALWAYS: &str = "always";
+
+/// This implementation starts a background task using to pull down region label
+/// rules from PD.
+impl PdRangeHintService {
+    /// Spawn a background task on `remote` to continuosly watch for region
+    /// label rules that contain the label `cache`; if a new added for which
+    /// `cache` is set to `always`, request loading the label's keyranges using
+    /// `range_manager_load_cb`.
+    ///
+    /// TODO (afeinberg): Add support for evicting key ranges when the `cache`
+    /// label is removed or no longer set to always.
+    pub fn start<F>(&self, remote: Remote<yatp::task::future::TaskCell>, range_manager_load_cb: F)
+    where
+        F: Fn(&CacheRange) -> Result<(), LoadFailedReason> + Send + Sync + 'static,
+    {
+        let pd_client = self.0.clone();
+        let region_label_added_cb: RegionLabelAddedCb = Arc::new(move |label_rule: &LabelRule| {
+            if !label_rule
+                .labels
+                .iter()
+                .any(|e| e.key == CACHE_LABEL_RULE_KEY && e.value == CACHE_LABEL_RULE_ALWAYS)
+            {
+                // not related to caching, skip.
+                return;
+            }
+            for key_range in &label_rule.data {
+                match CacheRange::try_from(key_range) {
+                    Ok(cache_range) => {
+                        info!("Requested to cache range"; "cache_range" => ?&cache_range);
+                        if let Err(reason) = range_manager_load_cb(&cache_range) {
+                            error!("Cache range load failed"; "range" => ?&cache_range, "reason" => ?reason);
+                        }
+                    }
+                    Err(e) => {
+                        error!("Unable to convert key_range rule to cache range"; "err" => ?e);
+                    }
+                }
+            }
+        });
+        let mut region_label_svc = RegionLabelServiceBuilder::new(
+            Arc::new(RegionLabelRulesManager {
+                region_label_added_cb: Some(region_label_added_cb),
+                ..RegionLabelRulesManager::default()
+            }),
+            pd_client,
+        )
+        .rule_filter_fn(|label_rule| {
+            label_rule
+                .labels
+                .iter()
+                .any(|e| e.key == CACHE_LABEL_RULE_KEY)
+        })
+        .build()
+        .unwrap();
+        remote.spawn(async move { region_label_svc.watch_region_labels().await })
     }
 }
 
@@ -119,11 +197,24 @@ impl BgWorkManager {
             worker,
             scheduler,
             tick_stopper: Some((handle, tx)),
+            core,
         }
     }
 
     pub fn schedule_task(&self, task: BackgroundTask) -> Result<(), ScheduleError<BackgroundTask>> {
         self.scheduler.schedule_force(task)
+    }
+
+    pub fn start_bg_hint_service(&self, range_hint_service: PdRangeHintService) {
+        let core = self.core.clone();
+        range_hint_service.start(self.worker.remote(), move |cache_range: &CacheRange| {
+            let mut engine = core.write();
+            engine.mut_range_manager().load_range(cache_range.clone())?;
+            // TODO (afeinberg): This does not actually load the range. The load happens
+            // the apply thread begins to apply raft entries. To force this (for read-only
+            // use-cases) we should propose a No-Op command.
+            Ok(())
+        });
     }
 
     fn start_tick(
@@ -433,6 +524,7 @@ impl Runnable for BackgroundRunner {
                         core.engine().clone()
                     };
                     while let Some((range, snap, mut canceled)) = core.get_range_to_load() {
+                        info!("Loading range"; "range" => ?&range);
                         let iter_opt = IterOptions::new(
                             Some(KeyBuilder::from_vec(range.start.clone(), 0, 0)),
                             Some(KeyBuilder::from_vec(range.end.clone(), 0, 0)),
@@ -655,10 +747,12 @@ pub mod tests {
         CacheRange, RangeCacheEngine, SyncMutable, CF_DEFAULT, CF_WRITE, DATA_CFS,
     };
     use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
+    use pd_client::PdClient;
     use tempfile::Builder;
+    use tikv_util::config::ReadableDuration;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
-    use super::Filter;
+    use super::{Filter, PdRangeHintService};
     use crate::{
         background::BackgroundRunner,
         engine::{SkiplistEngine, SkiplistHandle},
@@ -667,6 +761,10 @@ pub mod tests {
             InternalBytes, ValueType,
         },
         memory_controller::MemoryController,
+        region_label::{
+            region_label_meta_client,
+            tests::{add_region_label_rule, new_region_label_rule, new_test_server_and_client},
+        },
         EngineConfig, RangeCacheMemoryEngine,
     };
 
@@ -1307,5 +1405,90 @@ pub mod tests {
 
         let ranges = runner.core.ranges_for_gc().unwrap();
         assert_eq!(2, ranges.len());
+    }
+
+    // Test creating and loading cache hint using a region label rule:
+    // 1. Insert some data into rocks engine, which is set as disk engine for the
+    //    memory engine.
+    // 2. Use test pd client server to create a label rule for portion of the data.
+    // 3. Wait until data is loaded.
+    // 4. Verify that only the labeled key range has been loaded.
+    #[test]
+    fn test_load_from_pd_hint_service() {
+        let mut engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let path = Builder::new()
+            .prefix("test_load_from_pd_hint_service")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+        engine.set_disk_engine(rocks_engine.clone());
+
+        for i in 10..20 {
+            let key = construct_key(i, 1);
+            let key = data_key(&key);
+            let value = construct_value(i, i);
+            rocks_engine
+                .put_cf(CF_DEFAULT, &key, value.as_bytes())
+                .unwrap();
+            rocks_engine
+                .put_cf(CF_WRITE, &key, value.as_bytes())
+                .unwrap();
+        }
+
+        let (mut pd_server, pd_client) = new_test_server_and_client(ReadableDuration::millis(100));
+        let cluster_id = pd_client.get_cluster_id().unwrap();
+        let pd_client = Arc::new(pd_client);
+        engine.start_hint_service(PdRangeHintService::from(pd_client.clone()));
+        let meta_client = region_label_meta_client(pd_client.clone());
+        let label_rule = new_region_label_rule(
+            "cache/0",
+            &hex::encode(format!("k{:08}", 10).into_bytes()),
+            &hex::encode(format!("k{:08}", 15).into_bytes()),
+        );
+        add_region_label_rule(meta_client, cluster_id, &label_rule);
+
+        // Wait for the watch to fire.
+        std::thread::sleep(Duration::from_millis(200));
+        let r1 = CacheRange::try_from(&label_rule.data[0]).unwrap();
+        engine.prepare_for_apply(&r1);
+
+        // Wait for the range to be loaded.
+        std::thread::sleep(Duration::from_secs(1));
+        let _ = engine.snapshot(r1, u64::MAX, u64::MAX).unwrap();
+
+        let (write, default) = {
+            let core = engine.core().write();
+            let skiplist_engine = core.engine();
+            (
+                skiplist_engine.cf_handle(CF_WRITE),
+                skiplist_engine.cf_handle(CF_DEFAULT),
+            )
+        };
+
+        let guard = &epoch::pin();
+        for i in 10..15 {
+            let key = construct_key(i, 1);
+            let key = data_key(&key);
+            let value = construct_value(i, i);
+            let key = encode_seek_key(&key, u64::MAX);
+            assert_eq!(
+                get_value(&write, &key, guard).unwrap().as_slice(),
+                value.as_bytes()
+            );
+            assert_eq!(
+                get_value(&default, &key, guard).unwrap().as_slice(),
+                value.as_bytes()
+            );
+        }
+        for i in 15..=20 {
+            let key = construct_key(i, 1);
+            let key = data_key(&key);
+            let key = encode_seek_key(&key, u64::MAX);
+            assert!(!key_exist(&write, &key, guard));
+            assert!(!key_exist(&default, &key, guard));
+        }
+
+        pd_server.stop();
     }
 }
