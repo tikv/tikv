@@ -1,5 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use engine_rocks::PerfContext;
 use engine_traits::{
     CfName, IterMetricsCollector, IterOptions, MetricsExt, ReadOptions, CF_DEFAULT,
     DATA_KEY_PREFIX_LEN,
@@ -237,11 +238,11 @@ pub struct RawMvccIterMetricsCollector;
 
 impl IterMetricsCollector for RawMvccIterMetricsCollector {
     fn internal_delete_skipped_count(&self) -> usize {
-        unimplemented!()
+        PerfContext::get().internal_delete_skipped_count() as usize
     }
 
     fn internal_key_skipped_count(&self) -> usize {
-        unimplemented!()
+        PerfContext::get().internal_key_skipped_count() as usize
     }
 }
 

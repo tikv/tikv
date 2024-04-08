@@ -822,11 +822,11 @@ mod tests {
 
     impl IterMetricsCollector for MockRangeSnapIterMetricsCollector {
         fn internal_delete_skipped_count(&self) -> usize {
-            unimplemented!()
+            0
         }
 
         fn internal_key_skipped_count(&self) -> usize {
-            unimplemented!()
+            0
         }
     }
 

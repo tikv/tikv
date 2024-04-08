@@ -4,6 +4,7 @@
 use std::marker::PhantomData;
 
 use api_version::KvFormat;
+use engine_rocks::PerfContext;
 use engine_traits::{
     raw_ttl::ttl_current_ts, CfName, IterMetricsCollector, IterOptions, MetricsExt, ReadOptions,
 };
@@ -200,11 +201,11 @@ pub struct RawEncodeIterMetricsCollector;
 
 impl IterMetricsCollector for RawEncodeIterMetricsCollector {
     fn internal_delete_skipped_count(&self) -> usize {
-        unimplemented!()
+        PerfContext::get().internal_delete_skipped_count() as usize
     }
 
     fn internal_key_skipped_count(&self) -> usize {
-        unimplemented!()
+        PerfContext::get().internal_key_skipped_count() as usize
     }
 }
 
