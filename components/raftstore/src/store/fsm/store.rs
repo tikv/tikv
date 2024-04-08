@@ -2766,7 +2766,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // regarded as the candidate for balancing leaders.
         if during_starting_stage {
             let completed_target_count = (|| {
-                fail_point!("on_mock_store_completed_target_count", |_| 100);
+                fail_point!("on_mock_store_completed_target_count", |_| 0);
                 std::cmp::max(
                     1,
                     STORE_CHECK_COMPLETE_APPLY_REGIONS_PERCENT * region_count / 100,

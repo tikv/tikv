@@ -907,7 +907,7 @@ where
     /// The index of last commited idx in the leader. It's used to check whether
     /// this peer has raft log gaps and whether should be marked busy on
     /// apply.
-    pub last_leader_commited_idx: Option<u64>,
+    pub last_leader_committed_idx: Option<u64>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1053,7 +1053,7 @@ where
             unsafe_recovery_state: None,
             snapshot_recovery_state: None,
             busy_on_apply: Some(false),
-            last_leader_commited_idx: None,
+            last_leader_committed_idx: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.

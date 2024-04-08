@@ -2625,19 +2625,19 @@ where
             return Ok(());
         }
 
-        {
-            // If this peer is restarting, it may lose some logs, so it should update
-            // the `last_leader_commited_idx` with the commited index of the first
-            // message it received from leader.
-            if self.fsm.peer.last_leader_commited_idx.is_none() {
-                let last_committed_idx = msg.get_message().get_commit();
-                self.fsm.peer.last_leader_commited_idx = Some(last_committed_idx);
-                info!(
-                    "update last commited index from leader";
-                    "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(),
-                    "last_commited_index" => last_committed_idx
-                );
-            }
+        // Get the last replicated index of the leader to calculate the gap
+        // of unapplied raft logs on this peer.
+        if self.fsm.peer.last_leader_committed_idx.is_none() && msg_type == MessageType::MsgAppend {
+            // Use the commited index of the first message it received from leader to update
+            // the `last_leader_committed_idx`.
+            let last_committed_idx = msg.get_message().get_commit();
+            self.fsm.peer.last_leader_committed_idx = Some(last_committed_idx);
+            info!(
+                "update last committed index from leader";
+                "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(),
+                "last_committed_index" => last_committed_idx,
+                "last_index" => self.fsm.peer.get_store().last_index(),
+            );
         }
 
         let is_snapshot = msg.get_message().has_snapshot();
@@ -6610,6 +6610,7 @@ where
         }
         // No need to check the applying state if the peer is leader.
         if self.fsm.peer.is_leader() {
+            self.fsm.peer.busy_on_apply = None;
             return;
         }
 
@@ -6628,7 +6629,7 @@ where
             STORE_BUSY_ON_APPLY_REGIONS_GAUGE_VEC
                 .with_label_values(&["busy_apply_peers"])
                 .set(meta.busy_apply_peers.len() as i64);
-            info!(
+            debug!(
                 "no need to check initialized peer";
                 "last_commit_idx" => last_idx,
                 "last_applied_idx" => applied_idx,
@@ -6639,24 +6640,11 @@ where
         }
         assert!(self.fsm.peer.busy_on_apply.is_some());
 
-        // Get the last replicated index of the leader to calculate the gap
-        // of unapplied raft logs on this peer.
-        // let leader_id = self.fsm.peer.leader_id();
-        // TODO: only leader can get the matched index of each followers / peers
-        // (ProgressTracker). As a learner or follower, it cannot get the leader's
-        // matched index.
-        // Q: how to get the leader index ?
-        // if let Some(p) = self.fsm.peer.raft_group.raft.prs().get(leader_id) {
-        //     last_idx = p.matched;
-        // }
-
-        {
-            // This peer is restarted and the last leader commit index is not set, so
-            // it use `u64::MAX` as the last commit index to make it wait for the update
-            // of the `last_leader_commited_idx` until the `last_leader_commited_idx` has
-            // been updated.
-            last_idx = self.fsm.peer.last_leader_commited_idx.unwrap_or(u64::MAX);
-        }
+        // This peer is restarted and the last leader commit index is not set, so
+        // it use `u64::MAX` as the last commit index to make it wait for the update
+        // of the `last_leader_committed_idx` until the `last_leader_committed_idx` has
+        // been updated.
+        last_idx = self.fsm.peer.last_leader_committed_idx.unwrap_or(u64::MAX);
 
         // If the peer has large unapplied logs, this peer should be recorded until
         // the lag is less than the given threshold.
@@ -6669,7 +6657,7 @@ where
                     .set(meta.busy_apply_peers.len() as i64);
             }
             self.fsm.peer.busy_on_apply = Some(true);
-            info!(
+            debug!(
                 "peer is busy on applying logs";
                 "last_commit_idx" => last_idx,
                 "last_applied_idx" => applied_idx,
@@ -6688,7 +6676,7 @@ where
                     .with_label_values(&["busy_apply_peers"])
                     .set(meta.busy_apply_peers.len() as i64);
             }
-            info!(
+            debug!(
                 "peer completes applying logs";
                 "last_commit_idx" => last_idx,
                 "last_applied_idx" => applied_idx,
