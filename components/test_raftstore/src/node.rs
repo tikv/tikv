@@ -39,7 +39,7 @@ use test_pd_client::TestPdClient;
 use tikv::{
     config::{ConfigController, Module},
     import::SstImporter,
-    server::{raftkv::ReplicaReadLockChecker, Node, Result as ServerResult},
+    server::{raftkv::ReplicaReadLockChecker, RaftServer, Result as ServerResult},
 };
 use tikv_util::{
     config::VersionTrack,
@@ -155,7 +155,7 @@ type SimulateChannelTransport<EK> = SimulateTransport<ChannelTransport<EK>, EK>;
 pub struct NodeCluster<EK: KvEngine> {
     trans: ChannelTransport<EK>,
     pd_client: Arc<TestPdClient>,
-    nodes: HashMap<u64, Node<TestPdClient, EK, RaftTestEngine>>,
+    nodes: HashMap<u64, RaftServer<TestPdClient, EK, RaftTestEngine>>,
     snap_mgrs: HashMap<u64, SnapManager>,
     cfg_controller: HashMap<u64, ConfigController>,
     simulate_trans: HashMap<u64, SimulateChannelTransport<EK>>,
@@ -206,7 +206,7 @@ impl<EK: KvEngine> NodeCluster<EK> {
     pub fn get_node(
         &mut self,
         node_id: u64,
-    ) -> Option<&mut Node<TestPdClient, EK, RaftTestEngine>> {
+    ) -> Option<&mut RaftServer<TestPdClient, EK, RaftTestEngine>> {
         self.nodes.get_mut(&node_id)
     }
 
@@ -247,7 +247,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             .unwrap();
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
         let store_config = Arc::new(VersionTrack::new(raft_store));
-        let mut node = Node::new(
+        let mut node = RaftServer::new(
             system,
             &cfg.server,
             store_config.clone(),

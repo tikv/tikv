@@ -62,7 +62,7 @@ use tikv::{
         resolve::{self, StoreAddrResolver},
         service::DebugService,
         tablet_snap::NoSnapshotCache,
-        ConnectionBuilder, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv,
+        ConnectionBuilder, Error, PdStoreAddrResolver, RaftClient, RaftKv, RaftServer,
         Result as ServerResult, Server, ServerTransport,
     },
     storage::{
@@ -128,7 +128,7 @@ impl StoreAddrResolver for AddressMap {
 }
 
 struct ServerMeta<EK: KvEngine> {
-    node: Node<TestPdClient, EK, RaftTestEngine>,
+    node: RaftServer<TestPdClient, EK, RaftTestEngine>,
     server: Server<PdStoreAddrResolver, SimulateEngine<EK>>,
     sim_router: SimulateStoreTransport<EK>,
     sim_trans: SimulateServerTransport<EK>,
@@ -526,7 +526,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
             )
             .unwrap();
         let health_controller = HealthController::new();
-        let mut node = Node::new(
+        let mut node = RaftServer::new(
             system,
             &server_cfg.value().clone(),
             Arc::new(VersionTrack::new(raft_store)),

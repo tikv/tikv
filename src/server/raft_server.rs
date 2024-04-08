@@ -92,7 +92,7 @@ pub(crate) fn init_store(store: Option<metapb::Store>, cfg: &ServerConfig) -> me
 
 /// A wrapper for the raftstore which runs Multi-Raft.
 // TODO: we will rename another better name like RaftStore later.
-pub struct Node<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
+pub struct RaftServer<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
@@ -106,13 +106,13 @@ pub struct Node<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
     health_controller: HealthController,
 }
 
-impl<C, EK, ER> Node<C, EK, ER>
+impl<C, EK, ER> RaftServer<C, EK, ER>
 where
     C: PdClient,
     EK: KvEngine,
     ER: RaftEngine,
 {
-    /// Creates a new Node.
+    /// Creates a new RaftServer.
     pub fn new(
         system: RaftBatchSystem<EK, ER>,
         cfg: &ServerConfig,
@@ -123,10 +123,10 @@ where
         bg_worker: Worker,
         health_controller: HealthController,
         default_store: Option<metapb::Store>,
-    ) -> Node<C, EK, ER> {
+    ) -> RaftServer<C, EK, ER> {
         let store = init_store(default_store, cfg);
 
-        Node {
+        RaftServer {
             cluster_id: cfg.cluster_id,
             store,
             store_cfg,
@@ -155,9 +155,9 @@ where
         Ok(())
     }
 
-    /// Starts the Node. It tries to bootstrap cluster if the cluster is not
-    /// bootstrapped yet. Then it spawns a thread to run the raftstore in
-    /// background.
+    /// Starts the RaftServer. It tries to bootstrap cluster if the cluster is
+    /// not bootstrapped yet. Then it spawns a thread to run the raftstore
+    /// in background.
     #[allow(clippy::too_many_arguments)]
     pub fn start<T>(
         &mut self,
@@ -507,7 +507,7 @@ where
         self.system.shutdown();
     }
 
-    /// Stops the Node.
+    /// Stops the RaftServer.
     pub fn stop(&mut self) {
         let store_id = self.store.get_id();
         self.stop_store(store_id);
