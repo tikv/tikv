@@ -744,7 +744,6 @@ pub mod tests {
     };
     use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
     use pd_client::PdClient;
-    use skiplist_rs::SkipList;
     use tempfile::Builder;
     use tikv_util::config::ReadableDuration;
     use txn_types::{Key, TimeStamp, Write, WriteType};
@@ -758,12 +757,11 @@ pub mod tests {
             InternalBytes, ValueType,
         },
         memory_controller::MemoryController,
-        EngineConfig, RangeCacheMemoryEngine,
         region_label::{
             region_label_meta_client,
             tests::{add_region_label_rule, new_region_label_rule, new_test_server_and_client},
         },
-        RangeCacheMemoryEngine,
+        EngineConfig, RangeCacheMemoryEngine,
     };
 
     fn put_data(
@@ -1413,7 +1411,7 @@ pub mod tests {
     // 4. Verify that only the labeled key range has been loaded.
     #[test]
     fn test_load_from_pd_hint_service() {
-        let mut engine = RangeCacheMemoryEngine::new(Duration::from_secs(1000));
+        let mut engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
         let path = Builder::new()
             .prefix("test_load_from_pd_hint_service")
             .tempdir()
