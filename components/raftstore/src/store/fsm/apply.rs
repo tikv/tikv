@@ -540,7 +540,7 @@ where
         self.applied_batch
             .push_batch(&delegate.observe_info, delegate.region.get_id());
         let range = CacheRange::from_region(&delegate.region);
-        self.kv_wb.prepare_for_range(&range);
+        self.kv_wb.prepare_for_range(range);
     }
 
     /// Commits all changes have done for delegate. `persistent` indicates
@@ -3784,6 +3784,9 @@ where
 
 impl<EK: KvEngine> ResourceMetered for Msg<EK> {
     fn consume_resource(&self, resource_ctl: &Arc<ResourceController>) -> Option<String> {
+        if !resource_ctl.is_customized() {
+            return None;
+        }
         match self {
             Msg::Apply { apply, .. } => {
                 let mut dominant_group = "".to_owned();
