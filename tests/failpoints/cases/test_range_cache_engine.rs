@@ -103,15 +103,10 @@ fn test_load() {
             cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
         }
 
-        if concurrent_with_split {
-            // The range is not splitted at the time of becoming pending
-            rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        } else {
-            // ensure the snapshot is loaded
-            rx.recv_timeout(Duration::from_secs(5)).unwrap();
-            rx.recv_timeout(Duration::from_secs(5)).unwrap();
-            rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        }
+        // ensure the snapshot is loaded
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
         for i in (1..30).step_by(2) {
             let key = format!("key-{:04}", i);
