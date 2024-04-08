@@ -89,8 +89,18 @@ impl Display for GcTask {
     }
 }
 
+/// This function is executed by a background task to load a cache range. It
+/// should call [`crate::range_manager::RangeManager::load_range`] and if this
+/// is succesful call [`crate::RangeCacheMemoryEngine::prepare_for_apply`].
+///
+/// A late binding style is used as this function would need to hold a valid
+/// reference to `RocksEngine` in order load a snapshot into memory.
+///
+/// See also: [`BgWorkManager::set_load_range_and_prepare_for_apply_fn`] and its
+/// usage.
 pub(crate) type LoadAndPrepareRangeFn =
     Arc<dyn Fn(&CacheRange) -> Result<RangeCacheStatus, LoadFailedReason> + Send + Sync>;
+
 // BgWorkManager managers the worker inits, stops, and task schedules. When
 // created, it starts a worker which receives tasks such as gc task, range
 // delete task, range snapshot load and so on, and starts a thread for
@@ -124,7 +134,16 @@ impl From<Arc<RpcClient>> for PdRangeHintService {
 const CACHE_LABEL_RULE_KEY: &str = "cache";
 const CACHE_LABEL_RULE_ALWAYS: &str = "always";
 
+/// This implementation starts a background task using to pull down region label
+/// rules from PD.
 impl PdRangeHintService {
+    /// Spawn a background task on `remote` to continuosly watch for region
+    /// label rules that contain the label `cache`; if a new added for which
+    /// `cache` is set to `always`, load the label's keyranges using
+    /// `load_and_prepare`.
+    ///
+    /// TODO (afeinberg): Add support for evicting key ranges when the `cache`
+    /// label is removed or no longer set to always.
     pub fn start(
         &self,
         remote: Remote<yatp::task::future::TaskCell>,
