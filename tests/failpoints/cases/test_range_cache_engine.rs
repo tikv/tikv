@@ -353,6 +353,94 @@ fn test_load_with_split() {
     }
 }
 
+// It tests race between split and load.
+// Takes k1-k10 as an example:
+// We want to load k1-k10 where k1-k10 is already split into k1-k5, and k5-k10.
+// And before we `load_range` k1-k10, k1-k5 has cached some writes, say k1, in
+// write_batch which means k1 cannot be loaded from snapshot. Now, `load_range`
+// k1-k10 is called, and k5-k10 calls prepare_for_apply and the snapshot is
+// acquired and load task of k1-k10 is scheduled. We will loss data of k1 before
+// this PR.
+#[test]
+fn test_load_with_split2() {
+    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 4;
+    cluster.run();
+
+    cluster.must_put(b"k01", b"val");
+    cluster.must_put(b"k10", b"val");
+
+    let r = cluster.get_region(b"");
+    cluster.must_split(&r, b"k05");
+
+    fail::cfg("on_handle_put", "pause").unwrap();
+    let write_req = make_write_req(&mut cluster, b"k02");
+    let (cb, _) = make_cb::<HybridEngineImpl>(&write_req);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(1, write_req, cb)
+        .unwrap();
+
+    std::thread::sleep(Duration::from_secs(1));
+    {
+        let range_cache_engine = cluster.get_range_cache_engine(1);
+        let mut core = range_cache_engine.core().write();
+        core.mut_range_manager()
+            .load_range(CacheRange::new(
+                DATA_MIN_KEY.to_vec(),
+                DATA_MAX_KEY.to_vec(),
+            ))
+            .unwrap();
+    }
+
+    let (tx, rx) = sync_channel(1);
+    fail::cfg_callback("on_snapshot_load_finished", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+
+    let write_req = make_write_req(&mut cluster, b"k09");
+    let (cb2, _) = make_cb::<HybridEngineImpl>(&write_req);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(1, write_req, cb2)
+        .unwrap();
+    let _ = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    fail::remove("on_handle_put");
+    std::thread::sleep(Duration::from_secs(1));
+
+    let (tx, rx) = sync_channel(1);
+    fail::cfg_callback("on_range_cache_get_value", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+    let snap_ctx = SnapshotContext {
+        read_ts: 20,
+        range: None,
+    };
+
+    let _ = cluster
+        .get_with_snap_ctx(b"k09", false, snap_ctx.clone())
+        .unwrap();
+    assert!(rx.try_recv().unwrap());
+
+    // k1-k5 should not cached now
+    let _ = cluster
+        .get_with_snap_ctx(b"k02", false, snap_ctx.clone())
+        .unwrap();
+    rx.try_recv().unwrap_err();
+
+    // write a key to trigger load task
+    cluster.must_put(b"k03", b"val");
+    let _ = cluster
+        .get_with_snap_ctx(b"k02", false, snap_ctx.clone())
+        .unwrap();
+    assert!(rx.try_recv().unwrap());
+}
+
 fn make_write_req(
     cluster: &mut Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>>,
     k: &[u8],
