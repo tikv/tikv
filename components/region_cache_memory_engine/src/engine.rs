@@ -23,7 +23,7 @@ use slog_global::error;
 use tikv_util::box_err;
 
 use crate::{
-    background::{BackgroundTask, BgWorkManager},
+    background::{BackgroundTask, BgWorkManager, PdRangeHintService},
     keys::{
         decode_key, encode_key_for_eviction, encode_seek_for_prev_key, encode_seek_key,
         InternalBytes, InternalKey, ValueType,
@@ -428,6 +428,12 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
     type DiskEngine = RocksEngine;
     fn set_disk_engine(&mut self, disk_engine: Self::DiskEngine) {
         self.rocks_engine = Some(disk_engine);
+    }
+
+    type RangeHintService = PdRangeHintService;
+    fn start_hint_service(&self, range_hint_service: Self::RangeHintService) {
+        self.bg_worker_manager()
+            .start_bg_hint_service(range_hint_service)
     }
 
     fn get_range_for_key(&self, key: &[u8]) -> Option<CacheRange> {
