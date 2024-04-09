@@ -316,13 +316,16 @@ impl RangeCacheMemoryEngine {
 
         // check whether the range is in pending_range and we can schedule load task if
         // it is
-        if let Some((idx, pending_range)) = range_manager
+        if let Some((idx, (left_range, right_range))) = range_manager
             .pending_ranges
             .iter()
             .enumerate()
             .find_map(|(idx, r)| {
                 if r.contains_range(range) {
-                    Some((idx, r.clone()))
+                    // The `range` may be a proper subset of `r` and we should split it in this case
+                    // and push the rest back to `pending_range` so that each range only schedules
+                    // load task of its own.
+                    Some((idx, r.split_off(range)))
                 } else if range.contains_range(r) {
                     // todo(SpadeA): merge occurs
                     unimplemented!()
@@ -332,6 +335,16 @@ impl RangeCacheMemoryEngine {
             })
         {
             let mut core = RwLockUpgradableReadGuard::upgrade(core);
+
+            let range_manager = core.mut_range_manager();
+            if let Some(left_range) = left_range {
+                range_manager.pending_ranges.push(left_range);
+            }
+
+            if let Some(right_range) = right_range {
+                range_manager.pending_ranges.push(right_range);
+            }
+
             let range_manager = core.mut_range_manager();
             range_manager.pending_ranges.swap_remove(idx);
             let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
@@ -339,7 +352,7 @@ impl RangeCacheMemoryEngine {
             // the region may be splitted.
             range_manager
                 .pending_ranges_loading_data
-                .push_back((pending_range, rocks_snap, false));
+                .push_back((range.clone(), rocks_snap, false));
             if let Err(e) = self
                 .bg_worker_manager()
                 .schedule_task(BackgroundTask::LoadRange)
