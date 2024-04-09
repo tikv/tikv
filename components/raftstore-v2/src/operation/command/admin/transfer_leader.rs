@@ -50,21 +50,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// to target follower first to ensures it's ready to become leader.
     /// After that the real transfer leader process begin.
     ///
-    /// 1. pre_transfer_leader on leader:
-    ///     Leader will send a MsgTransferLeader to follower.
-    /// 2. execute_transfer_leader on follower
-    ///     If follower passes all necessary checks, it will reply an
-    ///     ACK with type MsgTransferLeader and its promised applied index.
-    /// 3. ready_to_transfer_leader on leader:
-    ///     Leader checks if it's appropriate to transfer leadership. If it
-    ///     does, it calls raft transfer_leader API to do the remaining work.
+    /// 1. pre_transfer_leader on leader: Leader will send a MsgTransferLeader
+    ///    to follower.
+    /// 2. execute_transfer_leader on follower: If follower passes all necessary
+    ///    checks, it will reply an ACK with type MsgTransferLeader and its
+    ///    promised applied index.
+    /// 3. ready_to_transfer_leader on leader: Leader checks if it's appropriate
+    ///    to transfer leadership. If it does, it calls raft transfer_leader API
+    ///    to do the remaining work.
     ///
     /// Additional steps when there are remaining pessimistic
     /// locks to propose (detected in function on_transfer_leader_msg).
     ///    1. Leader firstly proposes pessimistic locks and then proposes a
     ///       TransferLeader command.
-    ///    2. The follower applies the TransferLeader command and replies an
-    ///       ACK with special context TRANSFER_LEADER_COMMAND_REPLY_CTX.
+    ///    2. The follower applies the TransferLeader command and replies an ACK
+    ///       with special context TRANSFER_LEADER_COMMAND_REPLY_CTX.
     ///
     /// See also: tikv/rfcs#37.
     pub fn propose_transfer_leader<T>(
@@ -100,7 +100,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             });
         let peer = match peers.len() {
             0 => transfer_leader.get_peer(),
-            1 => peers.get(0).unwrap(),
+            1 => peers.first().unwrap(),
             _ => peers.choose(&mut rand::thread_rng()).unwrap(),
         };
 
@@ -118,7 +118,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         transferee
     }
 
-    fn pre_transfer_leader(&mut self, peer: &metapb::Peer) -> bool {
+    pub fn pre_transfer_leader(&mut self, peer: &metapb::Peer) -> bool {
         if self.raft_group().raft.has_pending_conf() {
             info!(
                 self.logger,
@@ -132,12 +132,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // It's only necessary to ping the target peer, but ping all for simplicity.
         self.raft_group_mut().ping();
 
-        // todo: entry cache warmup
-
         let mut msg = eraftpb::Message::new();
         msg.set_to(peer.get_id());
         msg.set_msg_type(eraftpb::MessageType::MsgTransferLeader);
         msg.set_from(self.peer_id());
+        msg.set_index(self.entry_storage().entry_cache_first_index().unwrap_or(0));
         // log term here represents the term of last log. For leader, the term of last
         // log is always its current term. Not just set term because raft library
         // forbids setting it for MsgTransferLeader messages.
@@ -159,69 +158,74 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         if !self.is_leader() {
-            self.execute_transfer_leader(ctx, msg.get_from(), peer_disk_usage, false);
-        } else {
-            let from = match self.peer_from_cache(msg.get_from()) {
-                Some(p) => p,
-                None => return,
-            };
-            match self.ready_to_transfer_leader(ctx, msg.get_index(), &from) {
-                Some(reason) => {
+            if self.maybe_reject_transfer_leader_msg(ctx, msg.get_from(), peer_disk_usage)
+                || !self.pre_ack_transfer_leader_msg(ctx, msg)
+            {
+                return;
+            }
+
+            self.ack_transfer_leader_msg(false);
+            return;
+        }
+
+        let from = match self.peer_from_cache(msg.get_from()) {
+            Some(p) => p,
+            None => return,
+        };
+        match self.ready_to_transfer_leader(ctx, msg.get_index(), &from) {
+            Some(reason) => {
+                info!(
+                    self.logger,
+                    "reject to transfer leader";
+                    "to" => ?from,
+                    "reason" => reason,
+                    "index" => msg.get_index(),
+                    "last_index" => self.storage().last_index().unwrap_or_default(),
+                );
+            }
+            None => {
+                self.propose_pending_writes(ctx);
+                if self.propose_locks_before_transfer_leader(ctx, msg) {
+                    // If some pessimistic locks are just proposed, we propose another
+                    // TransferLeader command instead of transferring leader immediately.
                     info!(
                         self.logger,
-                        "reject to transfer leader";
+                        "propose transfer leader command";
                         "to" => ?from,
-                        "reason" => reason,
-                        "index" => msg.get_index(),
-                        "last_index" => self.storage().last_index().unwrap_or_default(),
                     );
-                }
-                None => {
-                    self.propose_pending_writes(ctx);
-                    if self.propose_locks_before_transfer_leader(ctx, msg) {
-                        // If some pessimistic locks are just proposed, we propose another
-                        // TransferLeader command instead of transferring leader immediately.
-                        info!(
-                            self.logger,
-                            "propose transfer leader command";
-                            "to" => ?from,
-                        );
-                        let mut cmd =
-                            new_admin_request(self.region().get_id(), self.peer().clone());
-                        cmd.mut_header()
-                            .set_region_epoch(self.region().get_region_epoch().clone());
-                        // Set this flag to propose this command like a normal proposal.
-                        cmd.mut_header()
-                            .set_flags(WriteBatchFlags::TRANSFER_LEADER_PROPOSAL.bits());
-                        cmd.mut_admin_request()
-                            .set_cmd_type(AdminCmdType::TransferLeader);
-                        cmd.mut_admin_request().mut_transfer_leader().set_peer(from);
-                        if let PeerMsg::AdminCommand(req) = PeerMsg::admin_command(cmd).0 {
-                            self.on_admin_command(ctx, req.request, req.ch);
-                        } else {
-                            unreachable!();
-                        }
+                    let mut cmd = new_admin_request(self.region().get_id(), self.peer().clone());
+                    cmd.mut_header()
+                        .set_region_epoch(self.region().get_region_epoch().clone());
+                    // Set this flag to propose this command like a normal proposal.
+                    cmd.mut_header()
+                        .set_flags(WriteBatchFlags::TRANSFER_LEADER_PROPOSAL.bits());
+                    cmd.mut_admin_request()
+                        .set_cmd_type(AdminCmdType::TransferLeader);
+                    cmd.mut_admin_request().mut_transfer_leader().set_peer(from);
+                    if let PeerMsg::AdminCommand(req) = PeerMsg::admin_command(cmd).0 {
+                        self.on_admin_command(ctx, req.request, req.ch);
                     } else {
-                        info!(
-                            self.logger,
-                            "transfer leader";
-                            "peer" => ?from,
-                        );
-                        self.raft_group_mut().transfer_leader(from.get_id());
-                        self.refresh_leader_transferee();
+                        unreachable!();
                     }
+                } else {
+                    info!(
+                        self.logger,
+                        "transfer leader";
+                        "peer" => ?from,
+                    );
+                    self.raft_group_mut().transfer_leader(from.get_id());
+                    self.refresh_leader_transferee();
                 }
             }
         }
     }
 
-    pub fn execute_transfer_leader<T>(
+    fn maybe_reject_transfer_leader_msg<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         from: u64,
         peer_disk_usage: DiskUsage,
-        reply_cmd: bool, // whether it is a reply to a TransferLeader command
-    ) {
+    ) -> bool {
         let pending_snapshot = self.is_handling_snapshot() || self.has_pending_snapshot();
         if pending_snapshot
             || from != self.leader_id()
@@ -238,9 +242,79 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "pending_snapshot" => pending_snapshot,
                 "disk_usage" => ?ctx.self_disk_usage,
             );
-            return;
+            return true;
+        }
+        false
+    }
+
+    /// Before ack the transfer leader message sent by the leader.
+    /// Currently, it only warms up the entry cache in this stage.
+    ///
+    /// This return whether the msg should be acked. When cache is warmed up
+    /// or the warmup operation is timeout, it is true.
+    fn pre_ack_transfer_leader_msg<T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        msg: &eraftpb::Message,
+    ) -> bool {
+        if !ctx.cfg.warmup_entry_cache_enabled() {
+            return true;
         }
 
+        // The start index of warmup range. It is leader's entry_cache_first_index,
+        // which in general is equal to the lowest matched index.
+        let mut low = msg.get_index();
+        let last_index = self.entry_storage().last_index();
+        let mut should_ack_now = false;
+
+        // Need not to warm up when the index is 0.
+        // There are two cases where index can be 0:
+        // 1. During rolling upgrade, old instances may not support warmup.
+        // 2. The leader's entry cache is empty.
+        if low == 0 || low > last_index {
+            // There is little possibility that the warmup_range_start
+            // is larger than the last index. Check the test case
+            // `test_when_warmup_range_start_is_larger_than_last_index`
+            // for details.
+            should_ack_now = true;
+        } else {
+            if low < self.compact_log_context().last_compacted_idx() {
+                low = self.compact_log_context().last_compacted_idx()
+            };
+            // Check if the entry cache is already warmed up.
+            if let Some(first_index) = self.entry_storage().entry_cache_first_index() {
+                if low >= first_index {
+                    fail::fail_point!("entry_cache_already_warmed_up");
+                    should_ack_now = true;
+                }
+            }
+        }
+
+        if should_ack_now {
+            return true;
+        }
+
+        // Check if the warmup operation is timeout if warmup is already started.
+        if let Some(state) = self
+            .storage_mut()
+            .entry_storage_mut()
+            .entry_cache_warmup_state_mut()
+        {
+            // If it is timeout, this peer should ack the message so that
+            // the leadership transfer process can continue.
+            state.check_task_timeout(ctx.cfg.max_entry_cache_warmup_duration.0)
+        } else {
+            self.storage_mut()
+                .entry_storage_mut()
+                .async_warm_up_entry_cache(low)
+                .is_none()
+        }
+    }
+
+    pub fn ack_transfer_leader_msg(
+        &mut self,
+        reply_cmd: bool, // whether it is a reply to a TransferLeader command
+    ) {
         let mut msg = eraftpb::Message::new();
         msg.set_from(self.peer_id());
         msg.set_to(self.leader_id());
@@ -314,7 +388,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
-    pub fn on_transfer_leader<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>, term: u64) {
+    pub fn on_transfer_leader(&mut self, term: u64) {
         // If the term has changed between proposing and executing the TransferLeader
         // request, ignore it because this request may be stale.
         if term != self.term() {
@@ -322,7 +396,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         // Reply to leader that it is ready to transfer leader now.
-        self.execute_transfer_leader(ctx, self.leader_id(), DiskUsage::Normal, true);
+        self.ack_transfer_leader_msg(true);
 
         self.set_has_ready();
     }

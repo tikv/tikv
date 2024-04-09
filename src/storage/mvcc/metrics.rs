@@ -36,6 +36,11 @@ make_static_metric! {
         write_not_loaded_skip
     }
 
+    pub label_enum ScanLockReadTimeSource {
+        resolve_lock,
+        pessimistic_rollback,
+    }
+
     pub struct MvccConflictCounterVec: IntCounter {
         "type" => MvccConflictKind,
     }
@@ -50,6 +55,17 @@ make_static_metric! {
 
     pub struct MvccPrewriteAssertionPerfCounterVec: IntCounter {
         "type" => MvccPrewriteAssertionPerfKind,
+    }
+
+    pub struct MvccPrewriteRequestAfterCommitCounterVec: IntCounter {
+        "type" => {
+            non_retry_req,
+            retry_req,
+        },
+    }
+
+    pub struct ScanLockReadTimeVec: Histogram {
+        "type" => ScanLockReadTimeSource,
     }
 }
 
@@ -104,4 +120,21 @@ lazy_static! {
         )
         .unwrap()
     };
+    pub static ref MVCC_PREWRITE_REQUEST_AFTER_COMMIT_COUNTER_VEC: MvccPrewriteRequestAfterCommitCounterVec = {
+        register_static_int_counter_vec!(
+            MvccPrewriteRequestAfterCommitCounterVec,
+            "tikv_storage_mvcc_prewrite_request_after_commit_counter",
+            "Counter of prewrite requests of already-committed transactions that are determined by checking TxnStatucCache",
+            &["type"]
+        )
+        .unwrap()
+    };
+    pub static ref SCAN_LOCK_READ_TIME_VEC: ScanLockReadTimeVec = register_static_histogram_vec!(
+        ScanLockReadTimeVec,
+        "tikv_storage_mvcc_scan_lock_read_duration_seconds",
+        "Bucketed histogram of memory lock read lock hold for scan lock",
+        &["type"],
+        exponential_buckets(0.00001, 2.0, 20).unwrap()
+    )
+    .unwrap();
 }

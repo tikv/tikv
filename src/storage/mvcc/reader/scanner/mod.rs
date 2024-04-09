@@ -20,7 +20,9 @@ use self::{
     },
 };
 use crate::storage::{
-    kv::{CfStatistics, Cursor, CursorBuilder, Iterator, ScanMode, Snapshot, Statistics},
+    kv::{
+        CfStatistics, Cursor, CursorBuilder, Iterator, LoadDataHint, ScanMode, Snapshot, Statistics,
+    },
     mvcc::{default_not_found_error, NewerTsCheckState, Result},
     need_check_locks,
     txn::{Result as TxnResult, Scanner as StoreScanner},
@@ -342,7 +344,8 @@ impl<S: Snapshot> ScannerConfig<S> {
 /// Reads user key's value in default CF according to the given write CF value
 /// (`write`).
 ///
-/// Internally, there will be a `near_seek` operation.
+/// Internally, there will be a `near_seek` or `seek` operation depending on
+/// write CF stats.
 ///
 /// Notice that the value may be already carried in the `write` (short value).
 /// In this case, you should not call this function.
@@ -363,7 +366,11 @@ where
     I: Iterator,
 {
     let seek_key = user_key.clone().append_ts(write_start_ts);
-    default_cursor.near_seek(&seek_key, &mut statistics.data)?;
+    match statistics.load_data_hint() {
+        LoadDataHint::NearSeek => default_cursor.near_seek(&seek_key, &mut statistics.data)?,
+        LoadDataHint::Seek => default_cursor.seek(&seek_key, &mut statistics.data)?,
+    };
+
     if !default_cursor.valid()?
         || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
     {
@@ -388,7 +395,12 @@ where
     I: Iterator,
 {
     let seek_key = user_key.clone().append_ts(write_start_ts);
-    default_cursor.near_seek_for_prev(&seek_key, &mut statistics.data)?;
+    match statistics.load_data_hint() {
+        LoadDataHint::NearSeek => {
+            default_cursor.near_seek_for_prev(&seek_key, &mut statistics.data)?
+        }
+        LoadDataHint::Seek => default_cursor.seek_for_prev(&seek_key, &mut statistics.data)?,
+    };
     if !default_cursor.valid()?
         || default_cursor.key(&mut statistics.data) != seek_key.as_encoded().as_slice()
     {
@@ -928,7 +940,7 @@ mod tests {
         let (key, val1) = (b"foo", b"bar1");
 
         if deep_write_seek {
-            for i in 0..SEEK_BOUND {
+            for i in 1..SEEK_BOUND {
                 must_prewrite_put(&mut engine, key, val1, key, i);
                 must_commit(&mut engine, key, i, i);
             }

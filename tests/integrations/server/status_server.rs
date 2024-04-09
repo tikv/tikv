@@ -5,6 +5,7 @@ use std::{error::Error, net::SocketAddr, sync::Arc};
 use hyper::{body, Client, StatusCode, Uri};
 use raftstore::store::region_meta::RegionMeta;
 use security::SecurityConfig;
+use service::service_manager::GrpcServiceManager;
 use test_raftstore::new_server_cluster;
 use tikv::{config::ConfigController, server::status_server::StatusServer};
 
@@ -35,7 +36,7 @@ fn test_region_meta_endpoint() {
     cluster.run();
     let region = cluster.get_region(b"");
     let region_id = region.get_id();
-    let peer = region.get_peers().get(0);
+    let peer = region.get_peers().first();
     assert!(peer.is_some());
     let store_id = peer.unwrap().get_store_id();
     let router = cluster.raft_extension(store_id);
@@ -44,8 +45,8 @@ fn test_region_meta_endpoint() {
         ConfigController::default(),
         Arc::new(SecurityConfig::default()),
         router,
-        std::env::temp_dir(),
         None,
+        GrpcServiceManager::dummy(),
     )
     .unwrap();
     let addr = format!("127.0.0.1:{}", test_util::alloc_port());

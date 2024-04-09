@@ -1,0 +1,36 @@
+coverage:
+  precision: 4
+  round: down
+  range: "65...90"
+
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 3% # Allow the coverage to drop by threshold %, and posting a success status.
+    patch:
+      default:
+        target: auto
+        threshold: 3%
+
+comment:
+  layout: "header, diff, flags"
+  behavior: default
+  require_changes: false
+
+flag_management:
+  default_rules: # the rules that will be followed for any flag added, generally
+    carryforward: true
+    statuses:
+      - type: project
+        target: 85%
+      - type: patch
+        target: 85%
+
+# Ref: https://docs.codecov.com/docs/ignoring-paths
+ignore:
+  - tests # integration test cases or tools.
+  - fuzz # fuzz test cases or tools.
+  - components/test_*/**
+  - components/*_tests/**
+  - components/*/tests

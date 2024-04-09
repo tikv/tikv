@@ -4,7 +4,7 @@ use std::{error::Error, io::Write};
 
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    CachedTablet, CfOptionsExt, DbOptions, DbOptionsExt, TabletRegistry, CF_DEFAULT,
+    CachedTablet, CfOptions, CfOptionsExt, DbOptions, DbOptionsExt, TabletRegistry, CF_DEFAULT,
 };
 
 pub type ConfigRes = Result<(), Box<dyn Error>>;
@@ -15,8 +15,10 @@ pub trait ConfigurableDb {
     fn set_rate_bytes_per_sec(&self, rate_bytes_per_sec: i64) -> ConfigRes;
     fn set_rate_limiter_auto_tuned(&self, auto_tuned: bool) -> ConfigRes;
     fn set_flush_size(&self, f: usize) -> ConfigRes;
+    fn set_cf_flush_size(&self, cf: &str, f: usize) -> ConfigRes;
     fn set_flush_oldest_first(&self, f: bool) -> ConfigRes;
     fn set_shared_block_cache_capacity(&self, capacity: usize) -> ConfigRes;
+    fn set_high_priority_background_threads(&self, n: i32, allow_reduce: bool) -> ConfigRes;
 }
 
 impl ConfigurableDb for RocksEngine {
@@ -56,6 +58,11 @@ impl ConfigurableDb for RocksEngine {
         opt.set_flush_size(f).map_err(Box::from)
     }
 
+    fn set_cf_flush_size(&self, cf: &str, f: usize) -> ConfigRes {
+        let mut cf_option = self.get_options_cf(cf)?;
+        cf_option.set_flush_size(f).map_err(Box::from)
+    }
+
     fn set_flush_oldest_first(&self, f: bool) -> ConfigRes {
         let mut opt = self.get_db_options();
         opt.set_flush_oldest_first(f).map_err(Box::from)
@@ -66,9 +73,24 @@ impl ConfigurableDb for RocksEngine {
         opt.set_block_cache_capacity(capacity as u64)
             .map_err(Box::from)
     }
+
+    fn set_high_priority_background_threads(&self, n: i32, allow_reduce: bool) -> ConfigRes {
+        assert!(n > 0);
+        if let Some(env) = self.as_inner().as_ref().env() {
+            let origin_threads = env.get_high_priority_background_threads();
+            if n > origin_threads || allow_reduce {
+                env.set_high_priority_background_threads(n);
+            }
+            Ok(())
+        } else {
+            Err(Box::from(
+                "set high priority background threads failed as env is not set".to_string(),
+            ))
+        }
+    }
 }
 
-fn loop_registry(
+pub fn loop_registry(
     registry: &TabletRegistry<RocksEngine>,
     mut f: impl FnMut(&mut CachedTablet<RocksEngine>) -> std::result::Result<bool, Box<dyn Error>>,
 ) -> ConfigRes {
@@ -155,6 +177,17 @@ impl ConfigurableDb for TabletRegistry<RocksEngine> {
         })
     }
 
+    fn set_cf_flush_size(&self, cf: &str, f: usize) -> ConfigRes {
+        loop_registry(self, |cache| {
+            if let Some(latest) = cache.latest() {
+                latest.set_cf_flush_size(cf, f)?;
+                Ok(false)
+            } else {
+                Ok(true)
+            }
+        })
+    }
+
     fn set_flush_oldest_first(&self, f: bool) -> ConfigRes {
         loop_registry(self, |cache| {
             if let Some(latest) = cache.latest() {
@@ -170,6 +203,18 @@ impl ConfigurableDb for TabletRegistry<RocksEngine> {
         loop_registry(self, |cache| {
             if let Some(latest) = cache.latest() {
                 latest.set_shared_block_cache_capacity(capacity)?;
+                Ok(false)
+            } else {
+                Ok(true)
+            }
+        })
+    }
+
+    fn set_high_priority_background_threads(&self, n: i32, allow_reduce: bool) -> ConfigRes {
+        assert!(n > 0);
+        loop_registry(self, |cache| {
+            if let Some(latest) = cache.latest() {
+                latest.set_high_priority_background_threads(n, allow_reduce)?;
                 Ok(false)
             } else {
                 Ok(true)

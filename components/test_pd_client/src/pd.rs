@@ -547,7 +547,9 @@ impl PdCluster {
     fn get_store(&self, store_id: u64) -> Result<metapb::Store> {
         match self.stores.get(&store_id) {
             Some(s) if s.store.get_id() != 0 => Ok(s.store.clone()),
-            _ => Err(box_err!("store {} not found", store_id)),
+            // Matches PD error message.
+            // See https://github.com/tikv/pd/blob/v7.3.0/server/grpc_service.go#L777-L780
+            _ => Err(box_err!("invalid store ID {}, not found", store_id)),
         }
     }
 
@@ -1328,9 +1330,21 @@ impl TestPdClient {
     }
 
     pub fn must_merge(&self, from: u64, target: u64) {
+        let epoch = self.get_region_epoch(target);
         self.merge_region(from, target);
 
-        self.check_merged_timeout(from, Duration::from_secs(5));
+        self.check_merged_timeout(from, Duration::from_secs(10));
+        let timer = Instant::now();
+        loop {
+            if epoch.get_version() == self.get_region_epoch(target).get_version() {
+                if timer.saturating_elapsed() > Duration::from_secs(1) {
+                    panic!("region {:?} is still not merged.", target);
+                }
+            } else {
+                return;
+            }
+            sleep_ms(10);
+        }
     }
 
     pub fn check_merged(&self, from: u64) -> bool {
@@ -1423,12 +1437,23 @@ impl TestPdClient {
         cluster.replication_status = Some(status);
     }
 
-    pub fn switch_replication_mode(&self, state: DrAutoSyncState, available_stores: Vec<u64>) {
+    pub fn switch_replication_mode(
+        &self,
+        state: Option<DrAutoSyncState>,
+        available_stores: Vec<u64>,
+    ) {
         let mut cluster = self.cluster.wl();
         let status = cluster.replication_status.as_mut().unwrap();
-        let mut dr = status.mut_dr_auto_sync();
+        if state.is_none() {
+            status.set_mode(ReplicationMode::Majority);
+            let dr = status.mut_dr_auto_sync();
+            dr.state_id += 1;
+            return;
+        }
+        status.set_mode(ReplicationMode::DrAutoSync);
+        let dr = status.mut_dr_auto_sync();
         dr.state_id += 1;
-        dr.set_state(state);
+        dr.set_state(state.unwrap());
         dr.available_stores = available_stores;
     }
 

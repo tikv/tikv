@@ -18,4 +18,4 @@ impl CoprocessorPlugin for ExamplePlugin {
     }
 }
 
-declare_plugin!(ExamplePlugin::default());
+declare_plugin!(ExamplePlugin);

@@ -1,9 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
-
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc::{self, channel},
+        mpsc::{self, channel, sync_channel},
         Arc, Mutex,
     },
     thread,
@@ -18,6 +17,7 @@ use kvproto::{
         Mutation, Op, PessimisticLockRequest, PrewriteRequest, PrewriteRequestPessimisticAction::*,
     },
     metapb::Region,
+    pdpb::{self, CheckPolicy},
     raft_serverpb::{PeerState, RaftMessage},
     tikvpb::TikvClient,
 };
@@ -32,6 +32,7 @@ use raftstore::{
     Result,
 };
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::{
     config::{ReadableDuration, ReadableSize},
@@ -39,7 +40,86 @@ use tikv_util::{
     time::Instant,
     HandyRwLock,
 };
-use txn_types::{Key, PessimisticLock};
+use txn_types::{Key, LastChange, PessimisticLock, TimeStamp};
+
+#[test]
+fn test_meta_inconsistency() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.store_batch_system.pool_size = 2;
+    cluster.cfg.raft_store.store_batch_system.max_batch_size = Some(1);
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
+    cluster.cfg.raft_store.apply_batch_system.max_batch_size = Some(1);
+    cluster.cfg.raft_store.hibernate_regions = false;
+    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    cluster.must_transfer_leader(region_id, new_peer(1, 1));
+    cluster.must_put(b"k1", b"v1");
+
+    // Add new peer on node 3, its snapshot apply is paused.
+    fail::cfg("before_set_region_on_peer_3", "pause").unwrap();
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+
+    // Let only heartbeat msg to pass so a replicate peer could be created on node 3
+    // for peer 1003.
+    let region_packet_filter_region_1000_peer_1003 =
+        RegionPacketFilter::new(1000, 3).skip(MessageType::MsgHeartbeat);
+    cluster
+        .sim
+        .wl()
+        .add_recv_filter(3, Box::new(region_packet_filter_region_1000_peer_1003));
+
+    // Trigger a region split to create region 1000 with peer 1001, 1002 and 1003.
+    let region = cluster.get_region(b"");
+    cluster.must_split(&region, b"k5");
+
+    // Scheduler a larger peed id heartbeat msg to trigger peer destroy for peer
+    // 1003, pause it before the meta.lock operation so new region insertions by
+    // region split could go first.
+    // Thus a inconsistency could happen because the destroy is handled
+    // by a uninitialized peer but the new initialized region info is inserted into
+    // the meta by region split.
+    fail::cfg("before_destroy_peer_on_peer_1003", "pause").unwrap();
+    let new_region = cluster.get_region(b"k4");
+    let mut larger_id_msg = Box::<RaftMessage>::default();
+    larger_id_msg.set_region_id(1000);
+    larger_id_msg.set_to_peer(new_peer(3, 1113));
+    larger_id_msg.set_region_epoch(new_region.get_region_epoch().clone());
+    larger_id_msg
+        .mut_region_epoch()
+        .set_conf_ver(new_region.get_region_epoch().get_conf_ver() + 1);
+    larger_id_msg.set_from_peer(new_peer(1, 1001));
+    let raft_message = larger_id_msg.mut_message();
+    raft_message.set_msg_type(MessageType::MsgHeartbeat);
+    raft_message.set_from(1001);
+    raft_message.set_to(1113);
+    raft_message.set_term(6);
+    cluster.sim.wl().send_raft_msg(*larger_id_msg).unwrap();
+    thread::sleep(Duration::from_millis(500));
+
+    // Let snapshot apply continue on peer 3 from region 0, then region split would
+    // be applied too.
+    fail::remove("before_set_region_on_peer_3");
+    thread::sleep(Duration::from_millis(2000));
+
+    // Let self destroy continue after the region split is finished.
+    fail::remove("before_destroy_peer_on_peer_1003");
+    sleep_ms(1000);
+
+    // Clear the network partition nemesis, trigger a new region split, panic would
+    // be encountered The thread 'raftstore-3-1::test_message_order_3' panicked
+    // at 'meta corrupted: no region for 1000 7A6B35 when creating 1004
+    // region_id: 1004 from_peer { id: 1005 store_id: 1 } to_peer { id: 1007
+    // store_id: 3 } message { msg_type: MsgRequestPreVote to: 1007 from: 1005
+    // term: 6 log_term: 5 index: 5 commit: 5 commit_term: 5 } region_epoch {
+    // conf_ver: 3 version: 3 } end_key: 6B32'.
+    cluster.sim.wl().clear_recv_filters(3);
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+    cluster.must_put(b"k1", b"v1");
+}
 
 #[test]
 fn test_follower_slow_split() {
@@ -266,6 +346,68 @@ impl Filter for PrevoteRangeFilter {
         }
         Ok(())
     }
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_region_size_after_split() {
+    let mut cluster = new_cluster(0, 1);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_split_check_diff = Some(ReadableSize(10));
+    let region_max_size = 1440;
+    let region_split_size = 960;
+    cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(region_max_size));
+    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(region_split_size));
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let _r = cluster.run_conf_change();
+
+    // insert 20 key value pairs into the cluster.
+    // from 000000001 to 000000020
+    let mut range = 1..;
+    put_till_size(&mut cluster, region_max_size - 100, &mut range);
+    sleep_ms(100);
+    // disable check split.
+    fail::cfg("on_split_region_check_tick", "return").unwrap();
+    let max_key = put_till_size(&mut cluster, region_max_size, &mut range);
+    // split by use key, split region 1 to region 1 and region 2.
+    // region 1: ["000000010",""]
+    // region 2: ["","000000010")
+    let region = pd_client.get_region(&max_key).unwrap();
+    cluster.must_split(&region, b"000000010");
+    let size = cluster
+        .pd_client
+        .get_region_approximate_size(region.get_id())
+        .unwrap_or_default();
+    assert!(size >= region_max_size - 100, "{}", size);
+
+    let region = pd_client.get_region(b"000000009").unwrap();
+    let size1 = cluster
+        .pd_client
+        .get_region_approximate_size(region.get_id())
+        .unwrap_or_default();
+    assert_eq!(0, size1, "{}", size1);
+
+    // split region by size check, the region 1 will be split to region 1 and region
+    // 3. and the region3 will contains one half region size data.
+    let region = pd_client.get_region(&max_key).unwrap();
+    pd_client.split_region(region.clone(), CheckPolicy::Scan, vec![]);
+    sleep_ms(200);
+    let size2 = cluster
+        .pd_client
+        .get_region_approximate_size(region.get_id())
+        .unwrap_or_default();
+    assert!(size > size2, "{}:{}", size, size2);
+    fail::remove("on_split_region_check_tick");
+
+    let region = pd_client.get_region(b"000000010").unwrap();
+    let size3 = cluster
+        .pd_client
+        .get_region_approximate_size(region.get_id())
+        .unwrap_or_default();
+    assert!(size3 > 0, "{}", size3);
 }
 
 // Test if a peer is created from splitting when another initialized peer with
@@ -674,7 +816,7 @@ impl Filter for CollectSnapshotFilter {
 #[test]
 fn test_split_duplicated_batch() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_request_snapshot(&mut cluster);
+    configure_for_request_snapshot(&mut cluster.cfg);
     // Disable raft log gc in this test case.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
     // Use one thread to make it more possible to be fetched into one batch.
@@ -950,8 +1092,8 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
         ttl: 3000,
         for_update_ts: (commit_ts + 10).into(),
         min_commit_ts: (commit_ts + 10).into(),
-        last_change_ts: 5.into(),
-        versions_to_last_change: 3,
+        last_change: LastChange::make_exist(5.into(), 3),
+        is_locked_with_conflict: false,
     };
     let lock_c = PessimisticLock {
         primary: b"c".to_vec().into_boxed_slice(),
@@ -959,8 +1101,8 @@ fn test_split_pessimistic_locks_with_concurrent_prewrite() {
         ttl: 3000,
         for_update_ts: (commit_ts + 10).into(),
         min_commit_ts: (commit_ts + 10).into(),
-        last_change_ts: 5.into(),
-        versions_to_last_change: 3,
+        last_change: LastChange::make_exist(5.into(), 3),
+        is_locked_with_conflict: false,
     };
     {
         let mut locks = txn_ext.pessimistic_locks.write();
@@ -1284,8 +1426,7 @@ impl Filter for TeeFilter {
 // 2. the splitted region set has_dirty_data be true in `apply_snapshot`
 // 3. the splitted region schedule tablet trim task in `on_applied_snapshot`
 //    with tablet index 5
-// 4. the splitted region received a snapshot sent from its
-//    leader
+// 4. the splitted region received a snapshot sent from its leader
 // 5. after finishing applying this snapshot, the tablet index in storage
 //    changed to 6
 // 6. tablet trim complete and callbacked to raftstore
@@ -1355,4 +1496,179 @@ fn test_not_reset_has_dirty_data_due_to_slow_split() {
     cluster.run_node(1).unwrap();
 
     cluster.must_put(b"k00001", b"val");
+}
+
+#[test]
+fn test_split_region_with_no_valid_split_keys() {
+    let mut cluster = test_raftstore::new_node_cluster(0, 3);
+    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize::kb(1));
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(500);
+    cluster.run();
+
+    let (tx, rx) = sync_channel(5);
+    fail::cfg_callback("on_compact_range_cf", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+
+    let safe_point_inject = "safe_point_inject";
+    fail::cfg(safe_point_inject, "return(100)").unwrap();
+
+    let mut raw_key = String::new();
+    let _ = (0..250)
+        .map(|i: u8| {
+            raw_key.push(i as char);
+        })
+        .collect::<Vec<_>>();
+    for i in 0..20 {
+        let key = Key::from_raw(raw_key.as_bytes());
+        let key = key.append_ts(TimeStamp::new(i));
+        cluster.must_put_cf(CF_WRITE, key.as_encoded(), b"val");
+    }
+
+    // one for default cf, one for write cf
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    for i in 0..20 {
+        let key = Key::from_raw(raw_key.as_bytes());
+        let key = key.append_ts(TimeStamp::new(i));
+        cluster.must_put_cf(CF_WRITE, key.as_encoded(), b"val");
+    }
+    // at most one compaction will be triggered for each safe_point
+    rx.try_recv().unwrap_err();
+
+    fail::cfg(safe_point_inject, "return(200)").unwrap();
+    for i in 0..20 {
+        let key = Key::from_raw(raw_key.as_bytes());
+        let key = key.append_ts(TimeStamp::new(i));
+        cluster.must_put_cf(CF_WRITE, key.as_encoded(), b"val");
+    }
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    rx.try_recv().unwrap_err();
+}
+
+/// This test case test if a split failed for some reason,
+/// it can continue run split check and eventually the split will finish
+#[test_case(test_raftstore::new_node_cluster)]
+fn test_split_by_split_check_on_size() {
+    let mut cluster = new_cluster(0, 1);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_split_check_diff = Some(ReadableSize(10));
+    let region_max_size = 1440;
+    let region_split_size = 960;
+    cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(region_max_size));
+    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(region_split_size));
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let _r = cluster.run_conf_change();
+
+    // make first split fail
+    // 1*return means it would run "return" action once
+    fail::cfg("fail_pre_propose_split", "1*return").unwrap();
+
+    // Insert region_max_size into the cluster.
+    // It should trigger the split
+    let mut range = 1..;
+    let key = put_till_size(&mut cluster, region_max_size / 2, &mut range);
+    let region = pd_client.get_region(&key).unwrap();
+    put_till_size(&mut cluster, region_max_size / 2 + 100, &mut range);
+    // waiting the split,
+    cluster.wait_region_split(&region);
+}
+
+/// This test case test if a split failed for some reason,
+/// it can continue run split check and eventually the split will finish
+#[test_case(test_raftstore::new_node_cluster)]
+fn test_split_by_split_check_on_keys() {
+    let mut cluster = new_cluster(0, 1);
+    cluster.cfg.raft_store.right_derive_when_split = true;
+    cluster.cfg.raft_store.split_region_check_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.region_split_check_diff = Some(ReadableSize(10));
+    let region_max_keys = 15;
+    let region_split_keys = 10;
+    cluster.cfg.coprocessor.region_max_keys = Some(region_max_keys);
+    cluster.cfg.coprocessor.region_split_keys = Some(region_split_keys);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let _r = cluster.run_conf_change();
+
+    // make first split fail
+    // 1*return means it would run "return" action once
+    fail::cfg("fail_pre_propose_split", "1*return").unwrap();
+
+    // Insert region_max_size into the cluster.
+    // It should trigger the split
+    let mut range = 1..;
+    let key = put_till_count(&mut cluster, region_max_keys / 2, &mut range);
+    let region = pd_client.get_region(&key).unwrap();
+    put_till_count(&mut cluster, region_max_keys / 2 + 3, &mut range);
+    // waiting the split,
+    cluster.wait_region_split(&region);
+}
+
+fn change(name: &str, value: &str) -> std::collections::HashMap<String, String> {
+    let mut m = std::collections::HashMap::new();
+    m.insert(name.to_owned(), value.to_owned());
+    m
+}
+
+#[test]
+fn test_turn_off_manual_compaction_caused_by_no_valid_split_key() {
+    let mut cluster = new_node_cluster(0, 1);
+    cluster.run();
+    let r = cluster.get_region(b"");
+    cluster.must_split(&r, b"k1");
+    let r = cluster.get_region(b"k1");
+    cluster.must_split(&r, b"k2");
+    cluster.must_put(b"k1", b"val");
+
+    let (tx, rx) = sync_channel(5);
+    fail::cfg_callback("on_compact_range_cf", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+
+    let safe_point_inject = "safe_point_inject";
+    fail::cfg(safe_point_inject, "return(100)").unwrap();
+
+    {
+        let sim = cluster.sim.rl();
+        let cfg_controller = sim.get_cfg_controller(1).unwrap();
+        cfg_controller
+            .update(change(
+                "raftstore.skip-manual-compaction-in-clean_up-worker",
+                "true",
+            ))
+            .unwrap();
+    }
+
+    let r = cluster.get_region(b"k1");
+    cluster
+        .pd_client
+        .split_region(r.clone(), pdpb::CheckPolicy::Usekey, vec![b"k1".to_vec()]);
+    rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
+
+    {
+        let sim = cluster.sim.rl();
+        let cfg_controller = sim.get_cfg_controller(1).unwrap();
+        cfg_controller
+            .update(change(
+                "raftstore.skip-manual-compaction-in-clean_up-worker",
+                "false",
+            ))
+            .unwrap();
+    }
+
+    cluster
+        .pd_client
+        .split_region(r, pdpb::CheckPolicy::Usekey, vec![b"k1".to_vec()]);
+    fail::cfg(safe_point_inject, "return(200)").unwrap();
+    rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    rx.try_recv().unwrap_err();
 }

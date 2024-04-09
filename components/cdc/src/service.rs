@@ -1,36 +1,35 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    collections::hash_map::Entry,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
 };
 
-use collections::HashMap;
+use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
-use futures::{
-    future::{self, TryFutureExt},
-    sink::SinkExt,
-    stream::TryStreamExt,
-};
-use grpcio::{DuplexSink, Error as GrpcError, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
+use futures::stream::TryStreamExt;
+use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{
     cdcpb::{
-        ChangeData, ChangeDataEvent, ChangeDataRequest, ChangeDataRequestKvApi, Compatibility,
+        ChangeData, ChangeDataEvent, ChangeDataRequest, ChangeDataRequestKvApi,
+        ChangeDataRequest_oneof_request,
     },
     kvrpcpb::ApiVersion,
 };
-use tikv_util::{error, info, warn, worker::*};
+use tikv_util::{error, info, memory::MemoryQuota, warn, worker::*};
 
 use crate::{
-    channel::{channel, MemoryQuota, Sink, CDC_CHANNLE_CAPACITY},
+    channel::{channel, Sink, CDC_CHANNLE_CAPACITY},
     delegate::{Downstream, DownstreamId, DownstreamState, ObservedRange},
     endpoint::{Deregister, Task},
 };
 
 static CONNECTION_ID_ALLOC: AtomicUsize = AtomicUsize::new(0);
+
+pub fn validate_kv_api(kv_api: ChangeDataRequestKvApi, api_version: ApiVersion) -> bool {
+    kv_api == ChangeDataRequestKvApi::TiDb
+        || (kv_api == ChangeDataRequestKvApi::RawKv && api_version == ApiVersion::V2)
+}
 
 /// A unique identifier of a Connection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -48,38 +47,56 @@ impl Default for ConnId {
     }
 }
 
+// FeatureGate checks whether a feature is enabled or not on client versions.
+//
+// NOTE: default features can't be disabled by clients. Clients can only enable
+// features by specifying GRPC headers. See `EventFeedHeaders`.
 bitflags::bitflags! {
     pub struct FeatureGate: u8 {
         const BATCH_RESOLVED_TS = 0b00000001;
-        // Uncomment when its ready.
-        // const LargeTxn       = 0b00000010;
+        const VALIDATE_CLUSTER_ID = 0b00000010;
+        const STREAM_MULTIPLEXING = 0b00000100;
     }
 }
 
 impl FeatureGate {
-    // Returns the first version (v4.0.8) that supports batch resolved ts.
+    fn default_features(version: &semver::Version) -> FeatureGate {
+        let mut features = FeatureGate::empty();
+        if *version >= semver::Version::new(4, 0, 8) {
+            features.set(FeatureGate::BATCH_RESOLVED_TS, true);
+        }
+        if *version >= semver::Version::new(5, 3, 0) {
+            features.set(FeatureGate::VALIDATE_CLUSTER_ID, true);
+        }
+        features
+    }
+
+    /// Returns the first version (v4.0.8) that supports batch resolved ts.
     pub fn batch_resolved_ts() -> semver::Version {
         semver::Version::new(4, 0, 8)
-    }
-
-    // Returns the first version (v5.3.0) that supports validate cluster id.
-    pub(crate) fn validate_cluster_id() -> semver::Version {
-        semver::Version::new(5, 3, 0)
-    }
-
-    pub(crate) fn validate_kv_api(kv_api: ChangeDataRequestKvApi, api_version: ApiVersion) -> bool {
-        kv_api == ChangeDataRequestKvApi::TiDb
-            || (kv_api == ChangeDataRequestKvApi::RawKv && api_version == ApiVersion::V2)
     }
 }
 
 pub struct Conn {
     id: ConnId,
     sink: Sink,
-    // region id -> DownstreamId
-    downstreams: HashMap<u64, (DownstreamId, Arc<AtomicCell<DownstreamState>>)>,
+    downstreams: HashMap<DownstreamKey, DownstreamValue>,
     peer: String,
+
+    // Set when the connection established, or the first request received.
     version: Option<(semver::Version, FeatureGate)>,
+}
+
+#[derive(PartialEq, Eq, Hash)]
+struct DownstreamKey {
+    request_id: u64,
+    region_id: u64,
+}
+
+#[derive(Clone)]
+struct DownstreamValue {
+    id: DownstreamId,
+    state: Arc<AtomicCell<DownstreamState>>,
 }
 
 impl Conn {
@@ -88,44 +105,30 @@ impl Conn {
             id: ConnId::new(),
             sink,
             downstreams: HashMap::default(),
-            version: None,
             peer,
+            version: None,
         }
     }
 
-    // TODO refactor into Error::Version.
-    pub fn check_version_and_set_feature(&mut self, ver: semver::Version) -> Option<Compatibility> {
-        match &self.version {
-            Some((version, _)) => {
-                if version == &ver {
-                    None
-                } else {
-                    error!("cdc different version on the same connection";
-                        "previous version" => ?version, "version" => ?ver,
-                        "downstream" => ?self.peer, "conn_id" => ?self.id);
-                    Some(Compatibility {
-                        required_version: version.to_string(),
-                        ..Default::default()
-                    })
-                }
-            }
-            None => {
-                let mut features = FeatureGate::empty();
-                if FeatureGate::batch_resolved_ts() <= ver {
-                    features.toggle(FeatureGate::BATCH_RESOLVED_TS);
-                }
-                info!("cdc connection version";
-                    "version" => ver.to_string(), "features" => ?features, "downstream" => ?self.peer);
-                self.version = Some((ver, features));
-                None
-            }
+    pub fn check_version_and_set_feature(
+        &mut self,
+        version: semver::Version,
+        explicit_features: Vec<&'static str>,
+    ) {
+        let mut features = FeatureGate::default_features(&version);
+        if explicit_features.contains(&EventFeedHeaders::STREAM_MULTIPLEXING) {
+            features.set(FeatureGate::STREAM_MULTIPLEXING, true);
+        } else {
+            // NOTE: we can handle more explicit features here.
         }
-        // Return Err(Compatibility) when TiKV reaches the next major release,
-        // so that we can remove feature gates.
+
+        if self.version.replace((version, features)).is_some() {
+            panic!("should never be some");
+        }
     }
 
-    pub fn get_feature(&self) -> Option<&FeatureGate> {
-        self.version.as_ref().map(|(_, f)| f)
+    pub fn features(&self) -> &FeatureGate {
+        self.version.as_ref().map(|(_, f)| f).unwrap()
     }
 
     pub fn get_peer(&self) -> &str {
@@ -136,43 +139,102 @@ impl Conn {
         self.id
     }
 
-    pub fn get_downstreams(
-        &self,
-    ) -> &HashMap<u64, (DownstreamId, Arc<AtomicCell<DownstreamState>>)> {
-        &self.downstreams
-    }
-
-    pub fn take_downstreams(
-        self,
-    ) -> HashMap<u64, (DownstreamId, Arc<AtomicCell<DownstreamState>>)> {
-        self.downstreams
-    }
-
     pub fn get_sink(&self) -> &Sink {
         &self.sink
     }
 
+    pub fn get_downstream(&self, request_id: u64, region_id: u64) -> Option<DownstreamId> {
+        let key = DownstreamKey {
+            request_id,
+            region_id,
+        };
+        self.downstreams.get(&key).map(|v| v.id)
+    }
+
     pub fn subscribe(
         &mut self,
+        request_id: u64,
         region_id: u64,
         downstream_id: DownstreamId,
         downstream_state: Arc<AtomicCell<DownstreamState>>,
-    ) -> bool {
-        match self.downstreams.entry(region_id) {
-            Entry::Occupied(_) => false,
-            Entry::Vacant(v) => {
-                v.insert((downstream_id, downstream_state));
-                true
+    ) -> Option<DownstreamId> {
+        let key = DownstreamKey {
+            request_id,
+            region_id,
+        };
+        match self.downstreams.entry(key) {
+            HashMapEntry::Occupied(value) => Some(value.get().id),
+            HashMapEntry::Vacant(v) => {
+                v.insert(DownstreamValue {
+                    id: downstream_id,
+                    state: downstream_state,
+                });
+                None
             }
         }
     }
 
-    pub fn unsubscribe(&mut self, region_id: u64) {
-        self.downstreams.remove(&region_id);
+    pub fn unsubscribe(&mut self, request_id: u64, region_id: u64) -> Option<DownstreamId> {
+        let key = DownstreamKey {
+            request_id,
+            region_id,
+        };
+        self.downstreams.remove(&key).map(|value| value.id)
     }
 
-    pub fn downstream_id(&self, region_id: u64) -> Option<DownstreamId> {
-        self.downstreams.get(&region_id).map(|x| x.0)
+    pub fn unsubscribe_request(&mut self, request_id: u64) -> Vec<(u64, DownstreamId)> {
+        let mut downstreams = Vec::new();
+        self.downstreams.retain(|key, value| -> bool {
+            if key.request_id == request_id {
+                downstreams.push((key.region_id, value.id));
+                return false;
+            }
+            true
+        });
+        downstreams
+    }
+
+    pub fn iter_downstreams<F>(&self, mut f: F)
+    where
+        F: FnMut(u64, u64, DownstreamId, &Arc<AtomicCell<DownstreamState>>),
+    {
+        for (key, value) in &self.downstreams {
+            f(key.request_id, key.region_id, value.id, &value.state);
+        }
+    }
+
+    #[cfg(test)]
+    pub fn downstreams_count(&self) -> usize {
+        self.downstreams.len()
+    }
+}
+
+// Examaples for all available headers:
+//  * features -> feature_a,feature_b
+#[derive(Debug, Default)]
+struct EventFeedHeaders {
+    features: Vec<&'static str>,
+}
+
+impl EventFeedHeaders {
+    const FEATURES_KEY: &'static str = "features";
+    const STREAM_MULTIPLEXING: &'static str = "stream-multiplexing";
+    const FEATURES: &'static [&'static str] = &[Self::STREAM_MULTIPLEXING];
+
+    fn parse_features(value: &[u8]) -> Result<Vec<&'static str>, String> {
+        let value = std::str::from_utf8(value).unwrap_or_default();
+        let (mut features, mut unknowns) = (Vec::new(), Vec::new());
+        for feature in value.split(',').map(|x| x.trim()) {
+            if let Some(i) = Self::FEATURES.iter().position(|x| *x == feature) {
+                features.push(Self::FEATURES[i]);
+            } else {
+                unknowns.push(feature);
+            }
+        }
+        if !unknowns.is_empty() {
+            return Err(unknowns.join(","));
+        }
+        Ok(features)
     }
 }
 
@@ -182,18 +244,243 @@ impl Conn {
 #[derive(Clone)]
 pub struct Service {
     scheduler: Scheduler<Task>,
-    memory_quota: MemoryQuota,
+    memory_quota: Arc<MemoryQuota>,
 }
 
 impl Service {
     /// Create a ChangeData service.
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
-    pub fn new(scheduler: Scheduler<Task>, memory_quota: MemoryQuota) -> Service {
+    pub fn new(scheduler: Scheduler<Task>, memory_quota: Arc<MemoryQuota>) -> Service {
         Service {
             scheduler,
             memory_quota,
         }
+    }
+
+    // Parse HTTP/2 headers. Only for `Self::event_feed_v2`.
+    fn parse_headers(ctx: &RpcContext<'_>) -> Result<EventFeedHeaders, String> {
+        let mut header = EventFeedHeaders::default();
+        let metadata = ctx.request_headers();
+        for i in 0..metadata.len() {
+            let (key, value) = metadata.get(i).unwrap();
+            if key == EventFeedHeaders::FEATURES_KEY {
+                header.features = EventFeedHeaders::parse_features(value)?;
+            }
+        }
+        Ok(header)
+    }
+
+    fn parse_version_from_request_header(
+        request: &ChangeDataRequest,
+        peer: &str,
+    ) -> semver::Version {
+        let version_field = request.get_header().get_ticdc_version();
+        match semver::Version::parse(version_field) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(
+                    "empty or invalid TiCDC version, please upgrading TiCDC";
+                    "version" => version_field,
+                    "downstream" => ?peer, "region_id" => request.region_id,
+                    "error" => ?e,
+                );
+                semver::Version::new(0, 0, 0)
+            }
+        }
+    }
+
+    fn set_conn_version(
+        scheduler: &Scheduler<Task>,
+        conn_id: ConnId,
+        version: semver::Version,
+        explicit_features: Vec<&'static str>,
+    ) -> Result<(), String> {
+        let task = Task::SetConnVersion {
+            conn_id,
+            version,
+            explicit_features,
+        };
+        scheduler.schedule(task).map_err(|e| format!("{:?}", e))
+    }
+
+    // ### Command types:
+    // * Register registers a region. 1) both `request_id` and `region_id` must be
+    //   specified; 2) `request_id` can be 0 but `region_id` can not.
+    // * Deregister deregisters some regions in one same `request_id` or just one
+    //   region. 1) if both `request_id` and `region_id` are specified, just
+    //   deregister the region; 2) if only `request_id` is specified, all region
+    //   subscriptions with the same `request_id` will be deregistered.
+    fn handle_request(
+        scheduler: &Scheduler<Task>,
+        peer: &str,
+        request: ChangeDataRequest,
+        conn_id: ConnId,
+    ) -> Result<(), String> {
+        match request.request {
+            None | Some(ChangeDataRequest_oneof_request::Register(_)) => {
+                Self::handle_register(scheduler, peer, request, conn_id)
+            }
+            Some(ChangeDataRequest_oneof_request::Deregister(_)) => {
+                Self::handle_deregister(scheduler, request, conn_id)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn handle_register(
+        scheduler: &Scheduler<Task>,
+        peer: &str,
+        request: ChangeDataRequest,
+        conn_id: ConnId,
+    ) -> Result<(), String> {
+        let observed_range =
+            match ObservedRange::new(request.start_key.clone(), request.end_key.clone()) {
+                Ok(observed_range) => observed_range,
+                Err(e) => {
+                    warn!(
+                        "cdc invalid observed start key or end key version";
+                        "downstream" => ?peer, "region_id" => request.region_id,
+                        "error" => ?e,
+                    );
+                    ObservedRange::default()
+                }
+            };
+        let downstream = Downstream::new(
+            peer.to_owned(),
+            request.get_region_epoch().clone(),
+            request.request_id,
+            conn_id,
+            request.kv_api,
+            request.filter_loop,
+            observed_range,
+        );
+        let task = Task::Register {
+            request,
+            downstream,
+            conn_id,
+        };
+        scheduler.schedule(task).map_err(|e| format!("{:?}", e))
+    }
+
+    fn handle_deregister(
+        scheduler: &Scheduler<Task>,
+        request: ChangeDataRequest,
+        conn_id: ConnId,
+    ) -> Result<(), String> {
+        let task = if request.region_id != 0 {
+            Task::Deregister(Deregister::Region {
+                conn_id,
+                request_id: request.request_id,
+                region_id: request.region_id,
+            })
+        } else {
+            Task::Deregister(Deregister::Request {
+                conn_id,
+                request_id: request.request_id,
+            })
+        };
+        scheduler.schedule(task).map_err(|e| format!("{:?}", e))
+    }
+
+    // Differences between `Self::event_feed` and `Self::event_feed_v2`:
+    //
+    // ### Why `v2`
+    // `v2` is expected to resolve this problem: clients version is higher than
+    // server, In which case, `v1` compatibility check mechanism doesn't work.
+    //
+    // ### How `v2`
+    // In `v2`, clients tells requested features to connected servers. If a
+    // server finds a client requires unavailable features, it can fail the
+    // connection with an UNIMPLEMENTED status code.
+    //
+    // ### Details about `v2` features
+    // * stream-multiplexing: a region can be subscribed multiple times in one
+    //   `Conn` with different `request_id`.
+    fn handle_event_feed(
+        &mut self,
+        ctx: RpcContext<'_>,
+        stream: RequestStream<ChangeDataRequest>,
+        mut sink: DuplexSink<ChangeDataEvent>,
+        event_feed_v2: bool,
+    ) {
+        sink.enhance_batch(true);
+        let (event_sink, mut event_drain) =
+            channel(CDC_CHANNLE_CAPACITY, self.memory_quota.clone());
+        let conn = Conn::new(event_sink, ctx.peer());
+        let conn_id = conn.get_id();
+        let mut explicit_features = vec![];
+
+        if event_feed_v2 {
+            let headers = match Self::parse_headers(&ctx) {
+                Ok(headers) => headers,
+                Err(e) => {
+                    let peer = ctx.peer();
+                    error!("cdc connection with bad headers"; "downstream" => ?peer, "headers" => &e);
+                    ctx.spawn(async move {
+                        let status = RpcStatus::with_message(RpcStatusCode::UNIMPLEMENTED, e);
+                        if let Err(e) = sink.fail(status).await {
+                            error!("cdc failed to send error"; "downstream" => ?peer, "error" => ?e);
+                        }
+                    });
+                    return;
+                }
+            };
+            explicit_features = headers.features;
+        }
+        info!("cdc connection created"; "downstream" => ctx.peer(), "features" => ?explicit_features);
+
+        if let Err(e) = self.scheduler.schedule(Task::OpenConn { conn }) {
+            let peer = ctx.peer();
+            error!("cdc connection initiate failed"; "downstream" => ?peer, "error" => ?e);
+            ctx.spawn(async move {
+                let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
+                if let Err(e) = sink.fail(status).await {
+                    error!("cdc failed to send error"; "downstream" => ?peer, "error" => ?e);
+                }
+            });
+            return;
+        }
+
+        let peer = ctx.peer();
+        let scheduler = self.scheduler.clone();
+        let recv_req = async move {
+            let mut stream = stream.map_err(|e| format!("{:?}", e));
+            if let Some(request) = stream.try_next().await? {
+                // Get version from the first request in the stream.
+                let version = Self::parse_version_from_request_header(&request, &peer);
+                Self::set_conn_version(&scheduler, conn_id, version, explicit_features)?;
+                Self::handle_request(&scheduler, &peer, request, conn_id)?;
+            }
+            while let Some(request) = stream.try_next().await? {
+                Self::handle_request(&scheduler, &peer, request, conn_id)?;
+            }
+            let deregister = Deregister::Conn(conn_id);
+            if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
+                error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
+            }
+            Ok::<(), String>(())
+        };
+
+        let peer = ctx.peer();
+        ctx.spawn(async move {
+            if let Err(e) = recv_req.await {
+                warn!("cdc receive failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
+            } else {
+                info!("cdc receive closed"; "downstream" => peer, "conn_id" => ?conn_id);
+            }
+        });
+
+        let peer = ctx.peer();
+        ctx.spawn(async move {
+            #[cfg(feature = "failpoints")]
+            sleep_before_drain_change_event().await;
+            if let Err(e) = event_drain.forward(&mut sink).await {
+                warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
+            } else {
+                info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
+            }
+        });
     }
 }
 
@@ -202,122 +489,18 @@ impl ChangeData for Service {
         &mut self,
         ctx: RpcContext<'_>,
         stream: RequestStream<ChangeDataRequest>,
-        mut sink: DuplexSink<ChangeDataEvent>,
+        sink: DuplexSink<ChangeDataEvent>,
     ) {
-        let (event_sink, mut event_drain) =
-            channel(CDC_CHANNLE_CAPACITY, self.memory_quota.clone());
-        let peer = ctx.peer();
-        let conn = Conn::new(event_sink, peer.clone());
-        let conn_id = conn.get_id();
+        self.handle_event_feed(ctx, stream, sink, false);
+    }
 
-        if let Err(status) = self
-            .scheduler
-            .schedule(Task::OpenConn { conn })
-            .map_err(|e| {
-                RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, format!("{:?}", e))
-            })
-        {
-            error!("cdc connection initiate failed";
-                "downstream" => ?peer, "error" => ?status);
-            ctx.spawn(sink.fail(status).unwrap_or_else(move |e| {
-                error!("cdc failed to send error";
-                    "downstream" => ?peer, "error" => ?e)
-            }));
-            return;
-        }
-
-        let peer = ctx.peer();
-        let scheduler = self.scheduler.clone();
-        let recv_req = stream.try_for_each(move |request| {
-            let region_epoch = request.get_region_epoch().clone();
-            let req_id = request.get_request_id();
-            let req_kvapi = request.get_kv_api();
-            let version = match semver::Version::parse(request.get_header().get_ticdc_version()) {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!("empty or invalid TiCDC version, please upgrading TiCDC";
-                        "version" => request.get_header().get_ticdc_version(),
-                        "downstream" => ?peer,
-                        "error" => ?e);
-                    semver::Version::new(0, 0, 0)
-                }
-            };
-            let observed_range =
-                match ObservedRange::new(request.start_key.clone(), request.end_key.clone()) {
-                    Ok(observed_range) => observed_range,
-                    Err(e) => {
-                        warn!("cdc invalid observed start key or end key version";
-                            "downstream" => ?peer, "error" => ?e);
-                        ObservedRange::default()
-                    }
-                };
-            let downstream = Downstream::new(
-                peer.clone(),
-                region_epoch,
-                req_id,
-                conn_id,
-                req_kvapi,
-                request.filter_loop,
-                observed_range,
-            );
-            let ret = scheduler
-                .schedule(Task::Register {
-                    request,
-                    downstream,
-                    conn_id,
-                    version,
-                })
-                .map_err(|e| {
-                    GrpcError::RpcFailure(RpcStatus::with_message(
-                        RpcStatusCode::INVALID_ARGUMENT,
-                        format!("{:?}", e),
-                    ))
-                });
-            future::ready(ret)
-        });
-
-        let peer = ctx.peer();
-        let scheduler = self.scheduler.clone();
-        ctx.spawn(async move {
-            let res = recv_req.await;
-            // Unregister this downstream only.
-            let deregister = Deregister::Conn(conn_id);
-            if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
-                error!("cdc deregister failed"; "error" => ?e, "conn_id" => ?conn_id);
-            }
-            match res {
-                Ok(()) => {
-                    info!("cdc receive closed"; "downstream" => peer, "conn_id" => ?conn_id);
-                }
-                Err(e) => {
-                    warn!("cdc receive failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
-                }
-            }
-        });
-
-        let peer = ctx.peer();
-        let scheduler = self.scheduler.clone();
-
-        ctx.spawn(async move {
-            #[cfg(feature = "failpoints")]
-            sleep_before_drain_change_event().await;
-
-            let res = event_drain.forward(&mut sink).await;
-            // Unregister this downstream only.
-            let deregister = Deregister::Conn(conn_id);
-            if let Err(e) = scheduler.schedule(Task::Deregister(deregister)) {
-                error!("cdc deregister failed"; "error" => ?e);
-            }
-            match res {
-                Ok(_s) => {
-                    info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
-                    let _ = sink.close().await;
-                }
-                Err(e) => {
-                    warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
-                }
-            }
-        });
+    fn event_feed_v2(
+        &mut self,
+        ctx: RpcContext<'_>,
+        stream: RequestStream<ChangeDataRequest>,
+        sink: DuplexSink<ChangeDataEvent>,
+    ) {
+        self.handle_event_feed(ctx, stream, sink, true);
     }
 }
 
@@ -341,15 +524,16 @@ async fn sleep_before_drain_change_event() {
 mod tests {
     use std::{sync::Arc, time::Duration};
 
-    use futures::executor::block_on;
+    use futures::{executor::block_on, SinkExt};
     use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
     use kvproto::cdcpb::{create_change_data, ChangeDataClient, ResolvedTs};
+    use tikv_util::future::block_on_timeout;
 
     use super::*;
-    use crate::channel::{poll_timeout, recv_timeout, CdcEvent};
+    use crate::channel::{recv_timeout, CdcEvent};
 
     fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
-        let memory_quota = MemoryQuota::new(capacity);
+        let memory_quota = Arc::new(MemoryQuota::new(capacity));
         let (scheduler, rx) = dummy_scheduler();
         let cdc_service = Service::new(scheduler, memory_quota);
         let env = Arc::new(EnvBuilder::new().build());
@@ -397,7 +581,7 @@ mod tests {
             let mut window_size = 0;
             loop {
                 if matches!(
-                    poll_timeout(&mut send(), Duration::from_millis(100)),
+                    block_on_timeout(send(), Duration::from_millis(100)),
                     Err(_) | Ok(Err(_))
                 ) {
                     // Window is filled and flow control in sink is triggered.
@@ -418,7 +602,7 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap();
-        poll_timeout(&mut send(), Duration::from_millis(100))
+        block_on_timeout(send(), Duration::from_millis(100))
             .unwrap()
             .unwrap();
         // gRPC client may update window size after receiving a message,

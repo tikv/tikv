@@ -6,10 +6,10 @@ use std::{
 };
 
 use byteorder::{BigEndian, ByteOrder};
+use crypto::rand;
 use file_system::{rename, File, OpenOptions};
 use kvproto::encryptionpb::{EncryptedContent, FileDictionary, FileInfo};
 use protobuf::Message;
-use rand::{thread_rng, RngCore};
 use tikv_util::{box_err, info, set_panic_mark, warn};
 
 use crate::{
@@ -127,7 +127,7 @@ impl FileDictionaryFile {
         if self.enable_log {
             let origin_path = self.file_path();
             let mut tmp_path = origin_path.clone();
-            tmp_path.set_extension(format!("{}.{}", thread_rng().next_u64(), TMP_FILE_SUFFIX));
+            tmp_path.set_extension(format!("{}.{}", rand::rand_u64()?, TMP_FILE_SUFFIX));
             let mut tmp_file = OpenOptions::new()
                 .create(true)
                 .write(true)
@@ -349,9 +349,9 @@ impl FileDictionaryFile {
         if remained.len() < name_len + info_len {
             warn!(
                 "file corrupted! record content size is too small, discarded the tail record";
-                "content size" => remained.len(),
-                "expected name length" => name_len,
-                "expected content length" =>info_len,
+                "content_size" => remained.len(),
+                "expected_name_length" => name_len,
+                "expected_content_length" =>info_len,
             );
             return Err(Error::TailRecordParseIncomplete);
         }
@@ -366,8 +366,8 @@ impl FileDictionaryFile {
                 // Only when this record is the last one can the panic be skipped.
                 warn!(
                     "file corrupted! crc32 mismatch, discarded the tail record";
-                    "expected crc32" => crc32,
-                    "checksum crc32" => crc32_checksum,
+                    "expected_crc32" => crc32,
+                    "checksum_crc32" => crc32_checksum,
                 );
                 return Err(Error::TailRecordParseIncomplete);
             } else {

@@ -11,7 +11,7 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_traits::{KvEngine, SnapshotContext};
 use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
 use raft::eraftpb::MessageType;
 use raftstore::{
@@ -140,16 +140,19 @@ impl Filter for DelayFilter {
 }
 
 #[derive(Clone)]
-pub struct SimulateTransport<C> {
+pub struct SimulateTransport<C, EK: KvEngine> {
     filters: Arc<RwLock<Vec<Box<dyn Filter>>>>,
     ch: C,
+
+    _p: PhantomData<EK>,
 }
 
-impl<C> SimulateTransport<C> {
-    pub fn new(ch: C) -> SimulateTransport<C> {
+impl<C, EK: KvEngine> SimulateTransport<C, EK> {
+    pub fn new(ch: C) -> SimulateTransport<C, EK> {
         SimulateTransport {
             filters: Arc::new(RwLock::new(vec![])),
             ch,
+            _p: PhantomData,
         }
     }
 
@@ -195,7 +198,7 @@ where
     res
 }
 
-impl<C: Transport> Transport for SimulateTransport<C> {
+impl<EK: KvEngine, C: Transport> Transport for SimulateTransport<C, EK> {
     fn send(&mut self, m: RaftMessage) -> Result<()> {
         let ch = &mut self.ch;
         filter_send(&self.filters, m, |m| ch.send(m))
@@ -214,49 +217,52 @@ impl<C: Transport> Transport for SimulateTransport<C> {
     }
 }
 
-impl<C: RaftStoreRouter<RocksEngine>> StoreRouter<RocksEngine> for SimulateTransport<C> {
-    fn send(&self, msg: StoreMsg<RocksEngine>) -> Result<()> {
+impl<EK: KvEngine, C: RaftStoreRouter<EK>> StoreRouter<EK> for SimulateTransport<C, EK> {
+    fn send(&self, msg: StoreMsg<EK>) -> Result<()> {
         StoreRouter::send(&self.ch, msg)
     }
 }
 
-impl<C: RaftStoreRouter<RocksEngine>> ProposalRouter<RocksSnapshot> for SimulateTransport<C> {
+impl<EK: KvEngine, C: RaftStoreRouter<EK>> ProposalRouter<<EK as KvEngine>::Snapshot>
+    for SimulateTransport<C, EK>
+{
     fn send(
         &self,
-        cmd: RaftCommand<RocksSnapshot>,
-    ) -> std::result::Result<(), TrySendError<RaftCommand<RocksSnapshot>>> {
-        ProposalRouter::<RocksSnapshot>::send(&self.ch, cmd)
+        cmd: RaftCommand<<EK as KvEngine>::Snapshot>,
+    ) -> std::result::Result<(), TrySendError<RaftCommand<<EK as KvEngine>::Snapshot>>> {
+        ProposalRouter::<<EK as KvEngine>::Snapshot>::send(&self.ch, cmd)
     }
 }
 
-impl<C: RaftStoreRouter<RocksEngine>> CasualRouter<RocksEngine> for SimulateTransport<C> {
-    fn send(&self, region_id: u64, msg: CasualMessage<RocksEngine>) -> Result<()> {
-        CasualRouter::<RocksEngine>::send(&self.ch, region_id, msg)
+impl<EK: KvEngine, C: RaftStoreRouter<EK>> CasualRouter<EK> for SimulateTransport<C, EK> {
+    fn send(&self, region_id: u64, msg: CasualMessage<EK>) -> Result<()> {
+        CasualRouter::<EK>::send(&self.ch, region_id, msg)
     }
 }
 
-impl<C: RaftStoreRouter<RocksEngine>> SignificantRouter<RocksEngine> for SimulateTransport<C> {
-    fn significant_send(&self, region_id: u64, msg: SignificantMsg<RocksSnapshot>) -> Result<()> {
+impl<EK: KvEngine, C: RaftStoreRouter<EK>> SignificantRouter<EK> for SimulateTransport<C, EK> {
+    fn significant_send(&self, region_id: u64, msg: SignificantMsg<EK::Snapshot>) -> Result<()> {
         self.ch.significant_send(region_id, msg)
     }
 }
 
-impl<C: RaftStoreRouter<RocksEngine>> RaftStoreRouter<RocksEngine> for SimulateTransport<C> {
+impl<EK: KvEngine, C: RaftStoreRouter<EK>> RaftStoreRouter<EK> for SimulateTransport<C, EK> {
     fn send_raft_msg(&self, msg: RaftMessage) -> Result<()> {
         filter_send(&self.filters, msg, |m| self.ch.send_raft_msg(m))
     }
 
-    fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<RocksEngine>) {}
+    fn broadcast_normal(&self, _: impl FnMut() -> PeerMsg<EK>) {}
 }
 
-impl<C: LocalReadRouter<RocksEngine>> LocalReadRouter<RocksEngine> for SimulateTransport<C> {
+impl<EK: KvEngine, C: LocalReadRouter<EK>> LocalReadRouter<EK> for SimulateTransport<C, EK> {
     fn read(
         &mut self,
+        snap_ctx: Option<SnapshotContext>,
         read_id: Option<ThreadReadId>,
         req: RaftCmdRequest,
-        cb: Callback<RocksSnapshot>,
+        cb: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()> {
-        self.ch.read(read_id, req, cb)
+        self.ch.read(snap_ctx, read_id, req, cb)
     }
 
     fn release_snapshot_cache(&mut self) {
@@ -266,6 +272,12 @@ impl<C: LocalReadRouter<RocksEngine>> LocalReadRouter<RocksEngine> for SimulateT
 
 pub trait FilterFactory {
     fn generate(&self, node_id: u64) -> Vec<Box<dyn Filter>>;
+}
+
+impl<F: Fn(u64) -> Fl, Fl: Filter + 'static> FilterFactory for F {
+    fn generate(&self, node_id: u64) -> Vec<Box<dyn Filter>> {
+        vec![Box::new(self(node_id)) as _]
+    }
 }
 
 #[derive(Default)]

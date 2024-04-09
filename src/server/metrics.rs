@@ -63,6 +63,8 @@ make_auto_flush_static_metric! {
         read_index,
         check_leader,
         batch_commands,
+        kv_flush,
+        kv_buffer_batch_get,
     }
 
     pub label_enum GcCommandKind {
@@ -86,6 +88,7 @@ make_auto_flush_static_metric! {
         failed,
         success,
         tombstone,
+        not_found,
     }
 
     pub label_enum ReplicaReadLockCheckResult {
@@ -96,6 +99,13 @@ make_auto_flush_static_metric! {
     pub label_enum WhetherSuccess {
         success,
         fail,
+    }
+
+    pub label_enum ResourcePriority {
+        high,
+        medium,
+        low,
+        unknown,
     }
 
     pub struct GcCommandCounterVec: LocalIntCounter {
@@ -133,6 +143,7 @@ make_auto_flush_static_metric! {
 
     pub struct GrpcMsgHistogramVec: LocalHistogram {
         "type" => GrpcTypeKind,
+        "priority" => ResourcePriority,
     }
 
     pub struct ReplicaReadLockCheckHistogramVec: LocalHistogram {
@@ -208,10 +219,11 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    // TODO: deprecate the "name" label in v8.0.
     pub static ref GRPC_RESOURCE_GROUP_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_grpc_resource_group_total",
         "Total number of handle grpc message for each resource group",
-        &["name"]
+        &["name", "resource_group"]
     )
     .unwrap();
     pub static ref GRPC_PROXY_MSG_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
@@ -233,7 +245,7 @@ lazy_static! {
     pub static ref GRPC_MSG_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_grpc_msg_duration_seconds",
         "Bucketed histogram of grpc server messages",
-        &["type"],
+        &["type","priority"],
         exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
     )
     .unwrap();
@@ -400,6 +412,13 @@ lazy_static! {
         &["type", "store_id"]
     )
     .unwrap();
+    pub static ref RAFT_CLIENT_WAIT_CONN_READY_DURATION_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_server_raft_client_wait_ready_duration",
+        "Duration of wait raft client connection ready",
+        &["to"],
+        exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
+    )
+    .unwrap();
     pub static ref RAFT_MESSAGE_FLUSH_COUNTER: RaftMessageFlushCounterVec =
         register_static_int_counter_vec!(
             RaftMessageFlushCounterVec,
@@ -447,6 +466,11 @@ lazy_static! {
         &["type"],
     )
     .unwrap();
+    pub static ref MEMORY_LIMIT_GAUGE: Gauge = register_gauge!(
+        "tikv_server_memory_quota_bytes",
+        "Total memory bytes quota for TiKV server"
+    )
+    .unwrap();
 }
 
 make_auto_flush_static_metric! {
@@ -469,11 +493,28 @@ make_auto_flush_static_metric! {
         err_store_not_match,
         err_raft_entry_too_large,
         err_leader_memory_lock_check,
+        err_read_index_not_ready,
+        err_proposal_in_merging_mode,
+        err_data_is_not_ready,
+        err_region_not_initialized,
+        err_disk_full,
+        err_recovery_in_progress,
+        err_flashback_in_progress,
+        err_buckets_version_not_match,
+        err_undetermind,
     }
 
     pub label_enum RequestTypeKind {
         write,
         snapshot,
+        // exclude those handled by raftstore
+        snapshot_local_read,
+        // If async snapshot is involved with read index request(due to lease
+        // expire or explicitly specified), the async snapshot duration will
+        // includes the duration before raft leader propsoe it (snapshot_read_index_propose_wait)
+        // and the time used for checking quorum (snapshot_read_index_confirm).
+        snapshot_read_index_propose_wait,
+        snapshot_read_index_confirm,
     }
 
     pub struct AsyncRequestsCounterVec: LocalIntCounter {
@@ -497,6 +538,16 @@ impl From<ErrorHeaderKind> for RequestStatusKind {
             ErrorHeaderKind::StaleCommand => RequestStatusKind::err_stale_command,
             ErrorHeaderKind::StoreNotMatch => RequestStatusKind::err_store_not_match,
             ErrorHeaderKind::RaftEntryTooLarge => RequestStatusKind::err_raft_entry_too_large,
+            ErrorHeaderKind::ReadIndexNotReady => RequestStatusKind::err_read_index_not_ready,
+            ErrorHeaderKind::ProposalInMergeMode => RequestStatusKind::err_proposal_in_merging_mode,
+            ErrorHeaderKind::DataNotReady => RequestStatusKind::err_data_is_not_ready,
+            ErrorHeaderKind::RegionNotInitialized => RequestStatusKind::err_region_not_found,
+            ErrorHeaderKind::DiskFull => RequestStatusKind::err_disk_full,
+            ErrorHeaderKind::RecoveryInProgress => RequestStatusKind::err_recovery_in_progress,
+            ErrorHeaderKind::FlashbackInProgress => RequestStatusKind::err_flashback_in_progress,
+            ErrorHeaderKind::BucketsVersionNotMatch => {
+                RequestStatusKind::err_buckets_version_not_match
+            }
             ErrorHeaderKind::Other => RequestStatusKind::err_other,
         }
     }
@@ -513,7 +564,7 @@ lazy_static! {
         "tikv_storage_engine_async_request_duration_seconds",
         "Bucketed histogram of processing successful asynchronous requests.",
         &["type"],
-        exponential_buckets(0.00001, 2.0, 26).unwrap()
+        exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
     )
     .unwrap();
 }
@@ -571,4 +622,20 @@ pub fn record_request_source_metrics(source: String, duration: Duration) {
             metrics.duration_us.flush();
         }
     });
+}
+
+impl From<u64> for ResourcePriority {
+    fn from(priority: u64) -> Self {
+        // the mapping definition of priority in TIDB repo,
+        // see: https://github.com/tikv/tikv/blob/a0dbe2d0b893489015fc99ae73c6646f7989fe32/components/resource_control/src/resource_group.rs#L79-L89
+        if priority == 0 {
+            Self::unknown
+        } else if priority < 6 {
+            Self::low
+        } else if priority < 11 {
+            Self::medium
+        } else {
+            Self::high
+        }
+    }
 }

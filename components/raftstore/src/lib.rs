@@ -5,10 +5,11 @@
 #![feature(div_duration)]
 #![feature(min_specialization)]
 #![feature(box_patterns)]
-#![feature(hash_drain_filter)]
+#![feature(hash_extract_if)]
 #![feature(let_chains)]
 #![feature(assert_matches)]
 #![feature(type_alias_impl_trait)]
+#![feature(impl_trait_in_assoc_type)]
 #![recursion_limit = "256"]
 
 #[cfg(test)]

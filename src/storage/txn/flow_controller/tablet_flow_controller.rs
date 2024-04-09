@@ -13,7 +13,7 @@ use std::{
 
 use collections::{HashMap, HashMapEntry};
 use engine_rocks::FlowInfo;
-use engine_traits::{CfNamesExt, FlowControlFactorsExt, TabletRegistry};
+use engine_traits::{CfNamesExt, FlowControlFactorsExt, TabletRegistry, DATA_CFS};
 use rand::Rng;
 use tikv_util::{sys::thread::StdThreadBuildWrapper, time::Limiter};
 
@@ -65,6 +65,7 @@ pub struct TabletFlowController {
     tx: Option<SyncSender<Msg>>,
     handle: Option<std::thread::JoinHandle<()>>,
     limiters: Limiters,
+    global_discard_ratio: Arc<AtomicU32>,
 }
 
 impl Drop for TabletFlowController {
@@ -100,6 +101,7 @@ impl TabletFlowController {
         .unwrap();
         let flow_checkers = Arc::new(RwLock::new(HashMap::default()));
         let limiters: Limiters = Arc::new(RwLock::new(HashMap::default()));
+        let global_discard_ratio = Arc::new(AtomicU32::new(0));
         Self {
             enabled: Arc::new(AtomicBool::new(config.enable)),
             tx: Some(tx),
@@ -111,7 +113,9 @@ impl TabletFlowController {
                 flow_checkers,
                 limiters,
                 config.clone(),
+                global_discard_ratio.clone(),
             )),
+            global_discard_ratio,
         }
     }
 
@@ -131,13 +135,19 @@ impl FlowInfoDispatcher {
         flow_checkers: Arc<RwLock<HashMap<u64, FlowChecker<TabletFlowFactorStore<E>>>>>,
         limiters: Limiters,
         config: FlowControlConfig,
+        global_discard_ratio: Arc<AtomicU32>,
     ) -> JoinHandle<()> {
         Builder::new()
             .name(thd_name!("flow-checker"))
             .spawn_wrapper(move || {
-                tikv_alloc::add_thread_memory_accessor();
                 let mut deadline = std::time::Instant::now();
-                let mut enabled = true;
+                let mut enabled = config.enable;
+                let engine = TabletFlowFactorStore::new(registry.clone());
+                let mut pending_compaction_checker = CompactionPendingBytesChecker::new(
+                    config.clone(),
+                    global_discard_ratio,
+                    engine,
+                );
                 loop {
                     match rx.try_recv() {
                         Ok(Msg::Close) => break,
@@ -158,11 +168,26 @@ impl FlowInfoDispatcher {
                     match msg.clone() {
                         Ok(FlowInfo::L0(_cf, _, region_id))
                         | Ok(FlowInfo::L0Intra(_cf, _, region_id))
-                        | Ok(FlowInfo::Flush(_cf, _, region_id))
-                        | Ok(FlowInfo::Compaction(_cf, region_id)) => {
+                        | Ok(FlowInfo::Flush(_cf, _, region_id)) => {
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
                             if let Some(checker) = checkers.get_mut(&region_id) {
                                 checker.on_flow_info_msg(enabled, msg);
+                            }
+                        }
+                        Ok(FlowInfo::Compaction(cf, region_id)) => {
+                            if !enabled {
+                                continue;
+                            }
+                            let mut checkers = flow_checkers.as_ref().write().unwrap();
+                            if let Some(checker) = checkers.get_mut(&region_id) {
+                                let current_pending_bytes =
+                                    checker.on_pending_compaction_bytes_change(cf.clone());
+                                pending_compaction_checker.report_pending_compaction_bytes(
+                                    region_id,
+                                    cf.clone(),
+                                    current_pending_bytes,
+                                );
+                                pending_compaction_checker.on_pending_compaction_bytes_change(cf);
                             }
                         }
                         Ok(FlowInfo::BeforeUnsafeDestroyRange(region_id))
@@ -174,6 +199,7 @@ impl FlowInfoDispatcher {
                         }
                         Ok(FlowInfo::Created(region_id)) => {
                             let mut checkers = flow_checkers.as_ref().write().unwrap();
+                            let current_count = checkers.len();
                             match checkers.entry(region_id) {
                                 HashMapEntry::Occupied(e) => {
                                     let val = e.into_mut();
@@ -192,6 +218,11 @@ impl FlowInfoDispatcher {
                                         ),
                                         discard_ratio,
                                     ));
+                                    info!(
+                                        "add FlowChecker";
+                                        "region_id" => region_id,
+                                        "current_count" => current_count,
+                                    );
                                     e.insert(FlowChecker::new_with_region_id(
                                         region_id,
                                         &config,
@@ -204,8 +235,10 @@ impl FlowInfoDispatcher {
                         }
                         Ok(FlowInfo::Destroyed(region_id)) => {
                             let mut remove_limiter = false;
+                            let current_count: usize;
                             {
                                 let mut checkers = flow_checkers.as_ref().write().unwrap();
+                                current_count = checkers.len();
                                 if let Some(checker) = checkers.get(&region_id) {
                                     // if the previous value is 1, then the updated reference count
                                     // will be 0
@@ -217,6 +250,12 @@ impl FlowInfoDispatcher {
                             }
                             if remove_limiter {
                                 limiters.as_ref().write().unwrap().remove(&region_id);
+                                pending_compaction_checker.on_region_destroy(&region_id);
+                                info!(
+                                    "remove FlowChecker";
+                                    "region_id" => region_id,
+                                    "current_count" => current_count,
+                                );
                             }
                         }
                         Err(RecvTimeoutError::Timeout) => {
@@ -245,7 +284,6 @@ impl FlowInfoDispatcher {
                         }
                     }
                 }
-                tikv_alloc::remove_thread_memory_accessor();
             })
             .unwrap()
     }
@@ -255,7 +293,10 @@ impl TabletFlowController {
     pub fn should_drop(&self, region_id: u64) -> bool {
         let limiters = self.limiters.as_ref().read().unwrap();
         if let Some(limiter) = limiters.get(&region_id) {
-            let ratio = limiter.1.load(Ordering::Relaxed);
+            let ratio = std::cmp::max(
+                limiter.1.load(Ordering::Relaxed),
+                self.global_discard_ratio.load(Ordering::Relaxed),
+            );
             let mut rng = rand::thread_rng();
             return rng.gen_ratio(ratio, RATIO_SCALE_FACTOR);
         }
@@ -266,7 +307,10 @@ impl TabletFlowController {
     pub fn discard_ratio(&self, region_id: u64) -> f64 {
         let limiters = self.limiters.as_ref().read().unwrap();
         if let Some(limiter) = limiters.get(&region_id) {
-            let ratio = limiter.1.load(Ordering::Relaxed);
+            let ratio = std::cmp::max(
+                limiter.1.load(Ordering::Relaxed),
+                self.global_discard_ratio.load(Ordering::Relaxed),
+            );
             return ratio as f64 / RATIO_SCALE_FACTOR as f64;
         }
         0.0
@@ -325,6 +369,74 @@ impl TabletFlowController {
             return limiter.0.speed_limit() == f64::INFINITY;
         }
         true
+    }
+}
+
+struct CompactionPendingBytesChecker<E: FlowControlFactorStore + Send + 'static> {
+    pending_compaction_bytes: HashMap<u64, HashMap<String, u64>>,
+    checker: FlowChecker<E>,
+}
+
+impl<E: FlowControlFactorStore + Send + 'static> CompactionPendingBytesChecker<E> {
+    pub fn new(config: FlowControlConfig, discard_ratio: Arc<AtomicU32>, engine: E) -> Self {
+        CompactionPendingBytesChecker {
+            pending_compaction_bytes: HashMap::default(),
+            checker: FlowChecker::new_with_region_id(
+                0, // global checker
+                &config,
+                engine,
+                discard_ratio,
+                Arc::new(
+                    <Limiter>::builder(f64::INFINITY)
+                        .refill(Duration::from_millis(1))
+                        .build(), // not used
+                ),
+            ),
+        }
+    }
+
+    fn total_pending_compaction_bytes(&self, cf: &String) -> u64 {
+        let mut total = 0;
+        for pending_compaction_bytes_cf in self.pending_compaction_bytes.values() {
+            if let Some(v) = pending_compaction_bytes_cf.get(cf) {
+                total += v;
+            }
+        }
+        total
+    }
+
+    /// Update region's pending compaction bytes on cf
+    pub fn report_pending_compaction_bytes(
+        &mut self,
+        region_id: u64,
+        cf: String,
+        pending_bytes: u64,
+    ) {
+        match self.pending_compaction_bytes.entry(region_id) {
+            HashMapEntry::Occupied(e) => {
+                let val = e.into_mut();
+                val.insert(cf, pending_bytes);
+            }
+            HashMapEntry::Vacant(e) => {
+                let mut pending_bytes_cf = HashMap::default();
+                pending_bytes_cf.insert(cf, pending_bytes);
+                e.insert(pending_bytes_cf);
+            }
+        };
+    }
+
+    /// called when region is destroy
+    pub fn on_region_destroy(&mut self, region_id: &u64) {
+        self.pending_compaction_bytes.remove(region_id);
+        for cf in DATA_CFS {
+            self.on_pending_compaction_bytes_change(cf.to_string());
+        }
+    }
+
+    /// called when a specific cf's pending compaction bytes is changed
+    pub fn on_pending_compaction_bytes_change(&mut self, cf: String) {
+        self.checker
+            .on_pending_compaction_bytes_change_cf(self.total_pending_compaction_bytes(&cf), cf);
     }
 }
 
@@ -458,6 +570,51 @@ mod tests {
         test_flow_controller_l0_impl(&flow_controller, &stub, &tx, region_id);
     }
 
+    pub fn test_tablet_flow_controller_pending_compaction_bytes_impl(
+        flow_controller: &FlowController,
+        stub: &EngineStub,
+        tx: &mpsc::SyncSender<FlowInfo>,
+        region_id: u64,
+    ) {
+        // exceeds the threshold
+        stub.0
+            .pending_compaction_bytes
+            .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(tx, region_id);
+        // on start check forbids flow control
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+        // once fall below the threshold, pass the on start check
+        stub.0
+            .pending_compaction_bytes
+            .store(100 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(tx, region_id);
+
+        stub.0
+            .pending_compaction_bytes
+            .store(1000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
+
+        stub.0
+            .pending_compaction_bytes
+            .store(1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        // unfreeze the control
+        stub.0
+            .pending_compaction_bytes
+            .store(1024 * 1024, Ordering::Relaxed);
+        send_flow_info(tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) < f64::EPSILON);
+
+        stub.0
+            .pending_compaction_bytes
+            .store(1000000000 * 1024 * 1024 * 1024, Ordering::Relaxed);
+        send_flow_info(tx, region_id);
+        assert!(flow_controller.discard_ratio(region_id) > f64::EPSILON);
+    }
+
     #[test]
     fn test_tablet_flow_controller_pending_compaction_bytes() {
         let (_dir, flow_controller, tx, reg) = create_tablet_flow_controller();
@@ -470,6 +627,11 @@ mod tests {
         tx.send(FlowInfo::L0Intra("default".to_string(), 0, region_id))
             .unwrap();
 
-        test_flow_controller_pending_compaction_bytes_impl(&flow_controller, &stub, &tx, region_id);
+        test_tablet_flow_controller_pending_compaction_bytes_impl(
+            &flow_controller,
+            &stub,
+            &tx,
+            region_id,
+        );
     }
 }

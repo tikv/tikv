@@ -1,6 +1,18 @@
 groups:
 - name: alert.rules
   rules:
+  - alert: TiKV_critical_error
+    expr: sum(rate(tikv_critical_error_total[1m])) BY (type, instance) > 0
+    # without the for clause will become active on the first evaluation.
+    labels:
+      env: ENV_LABELS_ENV
+      level: critical
+      expr: sum(rate(tikv_critical_error_total[1m])) BY (type, instance) > 0
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV encounters critical error
+
   - alert: TiKV_memory_used_too_fast
     expr: process_resident_memory_bytes{job=~"tikv",instance=~".*"} - (process_resident_memory_bytes{job=~"tikv",instance=~".*"} offset 5m) > 5*1024*1024*1024
     for: 5m
@@ -15,7 +27,7 @@ groups:
 
   - alert: TiKV_GC_can_not_work
     expr: sum(increase(tikv_gcworker_gc_tasks_vec{task="gc"}[1d])) < 1 and (sum(increase(tikv_gc_compaction_filter_perform[1d])) < 1 and sum(increase(tikv_engine_event_total{db="kv", cf="write", type="compaction"}[1d])) >= 1)
-    for: 1m
+    for: 5m
     labels:
       env: ENV_LABELS_ENV
       level: emergency
@@ -98,12 +110,12 @@ groups:
       summary: TiKV async request write duration seconds more than 1s
 
   - alert: TiKV_coprocessor_request_wait_seconds
-    expr: histogram_quantile(0.9999, sum(rate(tikv_coprocessor_request_wait_seconds_bucket[1m])) by (le, instance, req)) > 10
+    expr: histogram_quantile(0.9999, sum(rate(tikv_coprocessor_request_wait_seconds_bucket{type="all"}[1m])) by (le, instance, req)) > 10
     for: 1m
     labels:
       env: ENV_LABELS_ENV
       level: critical
-      expr:  histogram_quantile(0.9999, sum(rate(tikv_coprocessor_request_wait_seconds_bucket[1m])) by (le, instance, req)) > 10
+      expr:  histogram_quantile(0.9999, sum(rate(tikv_coprocessor_request_wait_seconds_bucket{type="all"}[1m])) by (le, instance, req)) > 10
     annotations:
       description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
       value: '{{ $value }}'
@@ -312,3 +324,27 @@ groups:
       description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
       value: '{{ $value }}'
       summary: TiKV server has been restarted
+
+  - alert: TiKV_cpu_quota
+    expr:  irate(process_cpu_seconds_total{job="tikv"}[30s]) / tikv_server_cpu_cores_quota > 0.8
+    for: 45s
+    labels:
+      env: ENV_LABELS_ENV
+      level: warning
+      expr: irate(process_cpu_seconds_total{job="tikv"}[30s]) / tikv_server_cpu_cores_quota > 0.8
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV CPU usage is over 80% of CPU quota
+
+  - alert: TiKV_memory_quota
+    expr:  process_resident_memory_bytes{job="tikv"} / tikv_server_memory_quota_bytes > 0.8
+    for: 15s
+    labels:
+      env: ENV_LABELS_ENV
+      level: warning
+      expr: process_resident_memory_bytes{job="tikv"} / tikv_server_memory_quota_bytes > 0.8
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV memory usage is over 80% of memory quota

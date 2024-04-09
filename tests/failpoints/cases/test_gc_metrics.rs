@@ -7,7 +7,7 @@ use std::{
 };
 
 use api_version::{ApiV2, KvFormat, RawValue};
-use engine_rocks::{util::get_cf_handle, RocksEngine};
+use engine_rocks::{raw::FlushOptions, util::get_cf_handle, RocksEngine};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use kvproto::{
     kvrpcpb::*,
@@ -158,7 +158,7 @@ fn test_txn_gc_keys_handled() {
 
     let sp_provider = MockSafePointProvider(200);
     let mut host = CoprocessorHost::<RocksEngine>::default();
-    let ri_provider = RegionInfoAccessor::new(&mut host);
+    let ri_provider = RegionInfoAccessor::new(&mut host, Arc::new(|| false));
     let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
     let safe_point = Arc::new(AtomicU64::new(500));
 
@@ -176,7 +176,9 @@ fn test_txn_gc_keys_handled() {
         must_commit(&mut prefixed_engine, &k, 151, 152);
     }
 
-    db.flush_cf(cf, true, false).unwrap();
+    let mut fopts = FlushOptions::default();
+    fopts.set_wait(true);
+    db.flush_cf(cf, &fopts).unwrap();
 
     db.compact_range_cf(cf, None, None);
 
@@ -301,7 +303,7 @@ fn test_raw_gc_keys_handled() {
 
     let sp_provider = MockSafePointProvider(200);
     let mut host = CoprocessorHost::<RocksEngine>::default();
-    let ri_provider = RegionInfoAccessor::new(&mut host);
+    let ri_provider = RegionInfoAccessor::new(&mut host, Arc::new(|| false));
     let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, store_id);
     let safe_point = Arc::new(AtomicU64::new(500));
 
@@ -344,7 +346,9 @@ fn test_raw_gc_keys_handled() {
     engine.write(&ctx, batch).unwrap();
 
     let cf = get_cf_handle(&db, CF_DEFAULT).unwrap();
-    db.flush_cf(cf, true, false).unwrap();
+    let mut fopts = FlushOptions::default();
+    fopts.set_wait(true);
+    db.flush_cf(cf, &fopts).unwrap();
 
     db.compact_range_cf(cf, None, None);
 

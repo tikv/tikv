@@ -21,8 +21,8 @@ use kvproto::{
 use raft::eraftpb::Entry;
 use raftstore::errors::DiscardReason;
 use tikv::server::{
-    self, load_statistics::ThreadLoadPool, raftkv::RaftRouterWrap, resolve, resolve::Callback,
-    Config, ConnectionBuilder, RaftClient, StoreAddrResolver, TestRaftStoreRouter,
+    load_statistics::ThreadLoadPool, raftkv::RaftRouterWrap, resolve, Config, ConnectionBuilder,
+    RaftClient, StoreAddrResolver, TestRaftStoreRouter,
 };
 use tikv_kv::{FakeExtension, RaftExtension};
 use tikv_util::{
@@ -31,24 +31,6 @@ use tikv_util::{
 };
 
 use super::*;
-
-#[derive(Clone)]
-pub struct StaticResolver {
-    port: u16,
-}
-
-impl StaticResolver {
-    fn new(port: u16) -> StaticResolver {
-        StaticResolver { port }
-    }
-}
-
-impl StoreAddrResolver for StaticResolver {
-    fn resolve(&self, _store_id: u64, cb: Callback) -> server::Result<()> {
-        cb(Ok(format!("localhost:{}", self.port)));
-        Ok(())
-    }
-}
 
 fn get_raft_client<R, T>(router: R, resolver: T) -> RaftClient<T, R>
 where
@@ -75,8 +57,16 @@ where
     RaftClient::new(0, builder)
 }
 
-fn get_raft_client_by_port(port: u16) -> RaftClient<StaticResolver, FakeExtension> {
-    get_raft_client(FakeExtension, StaticResolver::new(port))
+fn get_raft_client_by_port(port: u16) -> RaftClient<resolve::MockStoreAddrResolver, FakeExtension> {
+    get_raft_client(
+        FakeExtension,
+        resolve::MockStoreAddrResolver {
+            resolve_fn: Arc::new(move |_, cb| {
+                cb(Ok(format!("localhost:{}", port)));
+                Ok(())
+            }),
+        },
+    )
 }
 
 #[derive(Clone)]
@@ -177,7 +167,15 @@ fn test_raft_client_reconnect() {
     let (significant_msg_sender, _significant_msg_receiver) = mpsc::channel();
     let router = TestRaftStoreRouter::new(tx, significant_msg_sender);
     let wrap = RaftRouterWrap::new(router);
-    let mut raft_client = get_raft_client(wrap, StaticResolver::new(port));
+    let mut raft_client = get_raft_client(
+        wrap,
+        resolve::MockStoreAddrResolver {
+            resolve_fn: Arc::new(move |_, cb| {
+                cb(Ok(format!("localhost:{}", port)));
+                Ok(())
+            }),
+        },
+    );
     (0..50).for_each(|_| raft_client.send(RaftMessage::default()).unwrap());
     raft_client.flush();
 

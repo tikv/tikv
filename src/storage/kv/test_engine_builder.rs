@@ -96,8 +96,7 @@ impl TestEngineBuilder {
         if !enable_block_cache {
             cache_opt.capacity = Some(ReadableSize::kb(0));
         }
-        let shared =
-            cfg_rocksdb.build_cf_resources(cache_opt.build_shared_cache(EngineType::RaftKv));
+        let shared = cfg_rocksdb.build_cf_resources(cache_opt.build_shared_cache());
         let cfs_opts = cfs
             .iter()
             .map(|cf| match *cf {
@@ -127,7 +126,9 @@ impl TestEngineBuilder {
                 _ => (*cf, RocksCfOptions::default()),
             })
             .collect();
-        let engine = RocksEngine::new(&path, None, cfs_opts, self.io_rate_limiter)?;
+        let resources = cfg_rocksdb.build_resources(Default::default(), EngineType::RaftKv);
+        let db_opts = cfg_rocksdb.build_opt(&resources, EngineType::RaftKv);
+        let engine = RocksEngine::new(&path, Some(db_opts), cfs_opts, self.io_rate_limiter)?;
         Ok(engine)
     }
 }

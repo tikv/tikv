@@ -8,7 +8,8 @@ use std::{
 use batch_system::{BatchRouter, Fsm, FsmTypes, HandlerBuilder, Poller, PoolState, Priority};
 use file_system::{set_io_type, IoType};
 use tikv_util::{
-    debug, error, info, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name, worker::Runnable,
+    debug, error, info, safe_panic, sys::thread::StdThreadBuildWrapper, thd_name, warn,
+    worker::Runnable, yatp_pool::FuturePool,
 };
 
 use crate::store::{
@@ -49,7 +50,7 @@ where
             if let Err(e) = self.state.fsm_sender.send(FsmTypes::Empty, None) {
                 error!(
                     "failed to decrease thread pool";
-                    "decrease to" => size,
+                    "decrease_to" => size,
                     "err" => %e,
                 );
                 return;
@@ -115,7 +116,7 @@ where
     }
 }
 
-struct WriterContoller<EK, ER, T, N>
+pub struct WriterContoller<EK, ER, T, N>
 where
     EK: engine_traits::KvEngine,
     ER: engine_traits::RaftEngine,
@@ -145,6 +146,22 @@ where
             expected_writers_size: writers_size,
         }
     }
+
+    pub fn expected_writers_size(&self) -> usize {
+        self.expected_writers_size
+    }
+
+    pub fn set_expected_writers_size(&mut self, size: usize) {
+        self.expected_writers_size = size;
+    }
+
+    pub fn mut_store_writers(&mut self) -> &mut StoreWriters<EK, ER> {
+        &mut self.store_writers
+    }
+
+    pub fn writer_meta(&self) -> &StoreWritersContext<EK, ER, T, N> {
+        &self.writer_meta
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -171,6 +188,7 @@ pub enum Task {
     ScalePool(BatchComponent, usize),
     ScaleBatchSize(BatchComponent, usize),
     ScaleWriters(usize),
+    ScaleAsyncReader(usize),
 }
 
 impl Display for Task {
@@ -184,6 +202,9 @@ impl Display for Task {
             }
             Task::ScaleWriters(size) => {
                 write!(f, "Scale store_io_pool_size adjusts {} ", size)
+            }
+            Task::ScaleAsyncReader(size) => {
+                write!(f, "Scale snap_generator_pool_size adjusts {} ", size)
             }
         }
     }
@@ -200,6 +221,7 @@ where
     writer_ctrl: WriterContoller<EK, ER, T, RaftRouter<EK, ER>>,
     apply_pool: PoolController<ApplyFsm<EK>, ControlFsm, AH>,
     raft_pool: PoolController<PeerFsm<EK, ER>, StoreFsm<EK>, RH>,
+    snap_generator_pool: FuturePool,
 }
 
 impl<EK, ER, AH, RH, T> Runner<EK, ER, AH, RH, T>
@@ -217,6 +239,7 @@ where
         raft_router: BatchRouter<PeerFsm<EK, ER>, StoreFsm<EK>>,
         apply_pool_state: PoolState<ApplyFsm<EK>, ControlFsm, AH>,
         raft_pool_state: PoolState<PeerFsm<EK, ER>, StoreFsm<EK>, RH>,
+        snap_generator_pool: FuturePool,
     ) -> Self {
         let writer_ctrl = WriterContoller::new(writer_meta, store_writers);
         let apply_pool = PoolController::new(apply_router, apply_pool_state);
@@ -226,6 +249,7 @@ where
             writer_ctrl,
             apply_pool,
             raft_pool,
+            snap_generator_pool,
         }
     }
 
@@ -292,6 +316,31 @@ where
             "to" => size
         );
     }
+
+    fn resize_snap_generator_read_pool(&mut self, size: usize) {
+        let current_pool_size = self.snap_generator_pool.get_pool_size();
+        // It may not take effect immediately. See comments of
+        // ThreadPool::scale_workers.
+        // Also, the size will be clamped between min_thread_count and the max_pool_size
+        // set when the pool is initialized. This is fine as max_pool_size
+        // is relatively a large value.
+        self.snap_generator_pool.scale_pool_size(size);
+        let (min_thread_count, max_thread_count) = self.snap_generator_pool.thread_count_limit();
+        if size > max_thread_count || size < min_thread_count {
+            warn!(
+                "apply pool scale size is out of bound, and the size is clamped";
+                "size" => size,
+                "min_thread_limit" => min_thread_count,
+                "max_thread_count" => max_thread_count,
+            );
+        } else {
+            info!(
+                "resize apply pool";
+                "from" => current_pool_size,
+                "to" => size,
+            );
+        }
+    }
 }
 
 impl<EK, ER, AH, RH, T> Runnable for Runner<EK, ER, AH, RH, T>
@@ -319,6 +368,9 @@ where
                 }
             },
             Task::ScaleWriters(size) => self.resize_store_writers(size),
+            Task::ScaleAsyncReader(size) => {
+                self.resize_snap_generator_read_pool(size);
+            }
         }
     }
 }

@@ -26,24 +26,36 @@
 //! `merged_records`, to avoid race between destroy and merge, leader needs to
 //! ask target peer to destroy source peer.
 
-use std::{cmp, mem};
+use std::{cmp, collections::HashSet, mem};
 
 use batch_system::BasicMailbox;
 use crossbeam::channel::{SendError, TrySendError};
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
+use health_controller::types;
 use kvproto::{
-    metapb::{self, Region},
+    kvrpcpb::DiskFullOpt,
+    metapb::{self, PeerRole, Region},
     raft_cmdpb::{AdminCmdType, RaftCmdRequest},
     raft_serverpb::{ExtraMessage, ExtraMessageType, PeerState, RaftMessage},
 };
-use raftstore::store::{
-    fsm::life::{build_peer_destroyed_report, forward_destroy_to_source_peer},
-    metrics::RAFT_PEER_PENDING_DURATION,
-    util, Transport, WriteTask,
+use raft::eraftpb::MessageType;
+use raftstore::{
+    store::{
+        fsm::{
+            apply,
+            life::{build_peer_destroyed_report, forward_destroy_to_source_peer},
+            Proposal,
+        },
+        local_metrics::IoType as InspectIoType,
+        metrics::RAFT_PEER_PENDING_DURATION,
+        util, DiskFullPeers, Transport, WriteTask,
+    },
+    Error, Result,
 };
 use slog::{debug, error, info, warn};
 use tikv_util::{
     store::find_peer,
+    sys::disk::DiskUsage,
     time::{duration_to_sec, Instant},
 };
 
@@ -122,16 +134,22 @@ pub struct AbnormalPeerContext {
     pending_peers: Vec<(u64, Instant)>,
     /// A inaccurate cache about which peer is marked as down.
     down_peers: Vec<u64>,
+    // disk full peer set.
+    disk_full_peers: DiskFullPeers,
+    // show whether an already disk full TiKV appears in the potential majority set.
+    dangerous_majority_set: bool,
 }
 
 impl AbnormalPeerContext {
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.pending_peers.is_empty() && self.down_peers.is_empty()
+        self.pending_peers.is_empty() && self.down_peers.is_empty() /* && self.disk_full_peers.is_empty() */
     }
 
     #[inline]
     pub fn reset(&mut self) {
+        // No need to refresh disk_full_peers as it will be refreshed
+        // automatically when the disk usage updated.
         self.pending_peers.clear();
         self.down_peers.clear();
     }
@@ -170,6 +188,26 @@ impl AbnormalPeerContext {
             RAFT_PEER_PENDING_DURATION.observe(elapsed);
         });
     }
+
+    #[inline]
+    pub fn disk_full_peers(&self) -> &DiskFullPeers {
+        &self.disk_full_peers
+    }
+
+    #[inline]
+    pub fn disk_full_peers_mut(&mut self) -> &mut DiskFullPeers {
+        &mut self.disk_full_peers
+    }
+
+    #[inline]
+    pub fn is_dangerous_majority_set(&self) -> bool {
+        self.dangerous_majority_set
+    }
+
+    #[inline]
+    pub fn setup_dangerous_majority_set(&mut self, is_dangerous: bool) {
+        self.dangerous_majority_set = is_dangerous;
+    }
 }
 
 #[derive(Default)]
@@ -203,7 +241,9 @@ fn check_if_to_peer_destroyed<ER: RaftEngine>(
     if util::is_epoch_stale(msg.get_region_epoch(), local_epoch) {
         return Ok(true);
     }
-    if let Some(local_peer) = find_peer(local_state.get_region(), store_id) && to_peer.id <= local_peer.get_id() {
+    if let Some(local_peer) = find_peer(local_state.get_region(), store_id)
+        && to_peer.id <= local_peer.get_id()
+    {
         return Ok(true);
     }
     // If the peer is destroyed by conf change, all above checks will pass.
@@ -248,6 +288,7 @@ impl Store {
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         msg: Box<SplitInit>,
+        skip_if_exists: bool,
     ) where
         EK: KvEngine,
         ER: RaftEngine,
@@ -282,13 +323,17 @@ impl Store {
         })();
 
         // It will create the peer if it does not exist
-        self.on_raft_message(ctx, raft_msg);
+        let create = self.on_raft_message(ctx, raft_msg);
+        if !create && skip_if_exists {
+            warn!(self.logger(), "skip sending SplitInit"; "msg" => ?msg);
+            return;
+        }
 
         if let Err(SendError(m)) = ctx.router.force_send(region_id, PeerMsg::SplitInit(msg)) {
             warn!(
                 self.logger(),
-                "Split peer is destroyed before sending the intialization msg";
-                "split init msg" => ?m,
+                "split peer is destroyed before sending the initialization msg";
+                "msg" => ?m,
             );
             report_split_init_finish(ctx, derived_region_id, region_id, true);
         }
@@ -313,17 +358,37 @@ impl Store {
         // It will create the peer if it does not exist
         self.on_raft_message(ctx, raft_msg);
 
-        if let Err(SendError(PeerMsg::AskCommitMerge(req))) = ctx
+        let commit_merge = req.get_admin_request().get_commit_merge();
+        // v2 specific.
+        assert!(commit_merge.has_source_state());
+        let source_index = commit_merge
+            .get_source_state()
+            .get_merge_state()
+            .get_commit();
+        let source_id = commit_merge.get_source_state().get_region().get_id();
+
+        if let Err(SendError(PeerMsg::AskCommitMerge(_))) = ctx
             .router
             .force_send(region_id, PeerMsg::AskCommitMerge(req))
         {
-            let commit_merge = req.get_admin_request().get_commit_merge();
-            let source_id = commit_merge.get_source().get_id();
             let _ = ctx.router.force_send(
                 source_id,
                 PeerMsg::RejectCommitMerge {
-                    index: commit_merge.get_commit(),
+                    index: source_index,
                 },
+            );
+            info!(
+                self.logger(),
+                "Store rejects CommitMerge request";
+                "source" => source_id,
+                "index" => source_index,
+            );
+        } else {
+            info!(
+                self.logger(),
+                "Store forwards CommitMerge request to peer";
+                "source" => source_id,
+                "index" => source_index,
             );
         }
     }
@@ -331,24 +396,36 @@ impl Store {
     /// When a message's recipient doesn't exist, it will be redirected to
     /// store. Store is responsible for checking if it's neccessary to create
     /// a peer to handle the message.
+    ///
+    /// Return true if the peer is created by the message, false indicates
+    /// either the message is invalid or the peer had already been created
+    /// before the message.
     #[inline]
     pub fn on_raft_message<EK, ER, T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         msg: Box<RaftMessage>,
-    ) where
+    ) -> bool
+    where
         EK: KvEngine,
         ER: RaftEngine,
         T: Transport,
     {
+        debug!(
+            self.logger(),
+            "store handle raft message";
+            "message_type" => %util::MsgType(&msg),
+            "from_peer_id" => msg.get_from_peer().get_id(),
+            "to_peer_id" => msg.get_to_peer().get_id(),
+        );
         let region_id = msg.get_region_id();
         // The message can be sent when the peer is being created, so try send it first.
-        let mut msg = if let Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m))) =
-            ctx.router.send(region_id, PeerMsg::RaftMessage(msg))
+        let mut msg = if let Err(TrySendError::Disconnected(PeerMsg::RaftMessage(m, _))) =
+            ctx.router.send(region_id, PeerMsg::RaftMessage(msg, None))
         {
             m
         } else {
-            return;
+            return false;
         };
         let from_peer = msg.get_from_peer();
         let to_peer = msg.get_to_peer();
@@ -363,30 +440,50 @@ impl Store {
         );
         if to_peer.store_id != self.store_id() {
             ctx.raft_metrics.message_dropped.mismatch_store_id.inc();
-            return;
+            return false;
         }
         if !msg.has_region_epoch() {
             ctx.raft_metrics.message_dropped.mismatch_region_epoch.inc();
-            return;
+            return false;
         }
         if msg.has_merge_target() {
             // Target tombstone peer doesn't exist, so ignore it.
             ctx.raft_metrics.message_dropped.stale_msg.inc();
-            return;
+            return false;
         }
+        // Check whether this message should be dropped when disk full.
+        let msg_type = msg.get_message().get_msg_type();
+        if matches!(ctx.self_disk_usage, DiskUsage::AlreadyFull)
+            && MessageType::MsgTimeoutNow == msg_type
+        {
+            debug!(
+                self.logger(),
+                "skip {:?} because of disk full", msg_type;
+                "region_id" => region_id, "peer_id" => to_peer.id,
+            );
+            ctx.raft_metrics.message_dropped.disk_full.inc();
+            return false;
+        }
+
         let destroyed = match check_if_to_peer_destroyed(&ctx.engine, &msg, self.store_id()) {
             Ok(d) => d,
             Err(e) => {
                 error!(self.logger(), "failed to get region state"; "region_id" => region_id, "err" => ?e);
-                return;
+                return false;
             }
         };
         if destroyed {
             if msg.get_is_tombstone() {
+                let msg_region_epoch = msg.get_region_epoch().clone();
                 if let Some(msg) = build_peer_destroyed_report(&mut msg) {
+                    info!(self.logger(), "peer reports destroyed";
+                        "from_peer" => ?msg.get_from_peer(),
+                        "from_region_epoch" => ?msg_region_epoch,
+                        "region_id" => ?msg.get_region_id(),
+                        "to_peer_id" => ?msg.get_to_peer().get_id());
                     let _ = ctx.trans.send(msg);
                 }
-                return;
+                return false;
             }
             if msg.has_extra_msg() {
                 let extra_msg = msg.get_extra_msg();
@@ -398,11 +495,11 @@ impl Store {
                     forward_destroy_to_source_peer(&msg, |m| {
                         let _ = ctx.router.send_raft_message(m.into());
                     });
-                    return;
+                    return false;
                 }
             }
             ctx.raft_metrics.message_dropped.region_tombstone_peer.inc();
-            return;
+            return false;
         }
         // If it's not destroyed, and the message is a tombstone message, create the
         // peer and destroy immediately to leave a tombstone record.
@@ -446,7 +543,7 @@ impl Store {
             Ok(p) => p,
             res => {
                 error!(self.logger(), "failed to create peer"; "region_id" => region_id, "peer_id" => to_peer.id, "err" => ?res.err());
-                return;
+                return false;
             }
         };
         ctx.store_meta
@@ -456,7 +553,7 @@ impl Store {
         let mailbox = BasicMailbox::new(tx, fsm, ctx.router.state_cnt().clone());
         if ctx
             .router
-            .send_and_register(region_id, mailbox, PeerMsg::Start)
+            .send_and_register(region_id, mailbox, PeerMsg::Start(None))
             .is_err()
         {
             panic!(
@@ -469,8 +566,27 @@ impl Store {
         if from_peer.id != raft::INVALID_ID {
             // For now the peer only exists in memory. It will persist its states when
             // handling its first readiness.
-            let _ = ctx.router.send(region_id, PeerMsg::RaftMessage(msg));
+            let _ = ctx.router.send(region_id, PeerMsg::RaftMessage(msg, None));
         }
+        true
+    }
+
+    pub fn on_update_latency_inspectors<EK, ER, T>(
+        &self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        start_ts: Instant,
+        mut inspector: types::LatencyInspector,
+    ) where
+        EK: KvEngine,
+        ER: RaftEngine,
+        T: Transport,
+    {
+        // Record the last statistics of commit-log-duration and store-write-duration.
+        inspector.record_store_wait(start_ts.saturating_elapsed());
+        inspector.record_store_commit(ctx.raft_metrics.health_stats.avg(InspectIoType::Network));
+        // Reset the health_stats and wait it to be refreshed in the next tick.
+        ctx.raft_metrics.health_stats.reset();
+        ctx.pending_latency_inspect.push(inspector);
     }
 }
 
@@ -521,7 +637,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .iter()
             .find(|p| p.id == msg.get_from_peer().get_id())
         {
-            let tombstone_msg = self.tombstone_message_for_same_region(peer.clone());
+            let tombstone_msg = self.tombstone_message(
+                self.region_id(),
+                self.region().get_region_epoch().clone(),
+                peer.clone(),
+            );
             self.add_message(tombstone_msg);
             true
         } else {
@@ -529,13 +649,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
-    fn tombstone_message_for_same_region(&self, peer: metapb::Peer) -> RaftMessage {
-        let region_id = self.region_id();
+    fn tombstone_message(
+        &self,
+        region_id: u64,
+        region_epoch: metapb::RegionEpoch,
+        peer: metapb::Peer,
+    ) -> RaftMessage {
         let mut tombstone_message = RaftMessage::default();
+        if self.region_id() != region_id {
+            // After merge, target region needs to GC peers of source region.
+            let extra_msg = tombstone_message.mut_extra_msg();
+            extra_msg.set_type(ExtraMessageType::MsgGcPeerRequest);
+            let check_peer = extra_msg.mut_check_gc_peer();
+            check_peer.set_from_region_id(self.region_id());
+        }
         tombstone_message.set_region_id(region_id);
         tombstone_message.set_from_peer(self.peer().clone());
         tombstone_message.set_to_peer(peer);
-        tombstone_message.set_region_epoch(self.region().get_region_epoch().clone());
+        tombstone_message.set_region_epoch(region_epoch);
         tombstone_message.set_is_tombstone(true);
         tombstone_message
     }
@@ -544,6 +675,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         match msg.get_to_peer().get_id().cmp(&self.peer_id()) {
             cmp::Ordering::Less => {
                 if let Some(msg) = build_peer_destroyed_report(msg) {
+                    info!(self.logger, "peer reports destroyed";
+                        "from_peer" => ?msg.get_from_peer(),
+                        "from_region_epoch" => ?msg.get_region_epoch(),
+                        "to_peer_id" => ?msg.get_to_peer().get_id());
                     self.add_message(msg);
                 }
             }
@@ -577,8 +712,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let check_peer_id = check.get_check_peer().get_id();
         let records = self.storage().region_state().get_merged_records();
         let Some(record) = records.iter().find(|r| {
-            r.get_source_peers().iter().any(|p| p.get_id() == check_peer_id)
-        }) else { return };
+            r.get_source_peers()
+                .iter()
+                .any(|p| p.get_id() == check_peer_id)
+        }) else {
+            return;
+        };
         let source_index = record.get_source_index();
         forward_destroy_to_source_peer(msg, |m| {
             let source_checkpoint = super::merge_source_path(
@@ -596,6 +735,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         let _ = router.send_raft_message(m.into());
                     },
                 );
+            } else {
+                // Source peer is already destroyed. Forward to store, and let
+                // it report GcPeer response.
+                let _ = ctx.router.send_raft_message(m.into());
             }
         });
     }
@@ -611,6 +754,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             && state.get_merged_records().iter().all(|p| {
                 p.get_source_peers()
                     .iter()
+                    .chain(p.get_source_removed_records())
                     .all(|p| p.get_id() != gc_peer_id)
             })
         {
@@ -621,6 +765,37 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         ctx.confirmed_ids.push(gc_peer_id);
+    }
+
+    // Clean up removed and merged records for peers on tombstone stores,
+    // otherwise it may keep sending gc peer request to the tombstone store.
+    pub fn on_store_maybe_tombstone_gc_peer(&mut self, store_id: u64) {
+        let mut peers_on_tombstone = vec![];
+        let state = self.storage().region_state();
+        for peer in state.get_removed_records() {
+            if peer.get_store_id() == store_id {
+                peers_on_tombstone.push(peer.clone());
+            }
+        }
+        for record in state.get_merged_records() {
+            for peer in record.get_source_peers() {
+                if peer.get_store_id() == store_id {
+                    peers_on_tombstone.push(peer.clone());
+                }
+            }
+        }
+        if peers_on_tombstone.is_empty() {
+            return;
+        }
+        info!(self.logger, "gc peer on tombstone store";
+            "tombstone_store_id" => store_id,
+            "peers" => ?peers_on_tombstone);
+        let ctx = self.gc_peer_context_mut();
+        for peer in peers_on_tombstone {
+            if !ctx.confirmed_ids.contains(&peer.get_id()) {
+                ctx.confirmed_ids.push(peer.get_id());
+            }
+        }
     }
 
     // Removes deleted peers from region state by proposing a `UpdateGcPeer`
@@ -635,27 +810,50 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         let mut need_gc_ids = Vec::with_capacity(5);
         let gc_context = self.gc_peer_context();
-        for peer in state.get_removed_records() {
-            need_gc_ids.push(peer.get_id());
-            if gc_context.confirmed_ids.contains(&peer.get_id()) {
-                continue;
-            }
+        let mut tombstone_removed_records =
+            |region_id, region_epoch: &metapb::RegionEpoch, peer: &metapb::Peer| {
+                need_gc_ids.push(peer.get_id());
+                if gc_context.confirmed_ids.contains(&peer.get_id()) {
+                    return;
+                }
 
-            let msg = self.tombstone_message_for_same_region(peer.clone());
-            // For leader, it's OK to send gc message immediately.
-            let _ = ctx.trans.send(msg);
+                let msg = self.tombstone_message(region_id, region_epoch.clone(), peer.clone());
+                // For leader, it's OK to send gc message immediately.
+                let _ = ctx.trans.send(msg);
+            };
+        for peer in state.get_removed_records() {
+            tombstone_removed_records(self.region_id(), self.region().get_region_epoch(), peer);
         }
+        // For merge, we need to
+        // 1. ask source removed peers to destroy.
         for record in state.get_merged_records() {
-            // For merge, we ask target to check whether source should be deleted.
-            for (source, target) in record
-                .get_source_peers()
-                .iter()
-                .zip(record.get_target_peers())
-            {
+            for peer in record.get_source_removed_records() {
+                tombstone_removed_records(
+                    record.get_source_region_id(),
+                    record.get_source_epoch(),
+                    peer,
+                );
+            }
+        }
+        // 2. ask target to check whether source should be deleted.
+        for record in state.get_merged_records() {
+            for source in record.get_source_peers() {
                 need_gc_ids.push(source.get_id());
                 if gc_context.confirmed_ids.contains(&source.get_id()) {
                     continue;
                 }
+                let Some(target) = record
+                    .get_target_peers()
+                    .iter()
+                    .find(|p| p.get_store_id() == source.get_store_id())
+                else {
+                    panic!(
+                        "[region {}] {} target peer not found, {:?}",
+                        self.region_id(),
+                        self.peer_id(),
+                        state
+                    );
+                };
 
                 let mut msg = RaftMessage::default();
                 msg.set_region_id(record.get_target_region_id());
@@ -692,11 +890,274 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.maybe_schedule_gc_peer_tick();
     }
 
-    /// A peer can be destroyed in three cases:
+    pub fn adjust_peers_max_inflight_msgs(&mut self, peers: &[u64], raft_max_inflight_msgs: usize) {
+        peers.iter().for_each(|id| {
+            self.raft_group_mut()
+                .raft
+                .adjust_max_inflight_msgs(*id, raft_max_inflight_msgs);
+            debug!(
+                self.logger,
+                "adjust max inflight msgs";
+                "raft_max_inflight_msgs" => raft_max_inflight_msgs,
+                "peer_id" => id
+            );
+        });
+    }
+
+    // Check disk usages for the peer itself and other peers in the raft group.
+    // The return value indicates whether the proposal is allowed or not.
+    pub fn check_proposal_with_disk_full_opt<T>(
+        &mut self,
+        ctx: &StoreContext<EK, ER, T>,
+        disk_full_opt: DiskFullOpt,
+    ) -> Result<()> {
+        let leader_allowed = match ctx.self_disk_usage {
+            DiskUsage::Normal => true,
+            DiskUsage::AlmostFull => !matches!(disk_full_opt, DiskFullOpt::NotAllowedOnFull),
+            DiskUsage::AlreadyFull => false,
+        };
+        let mut disk_full_stores = Vec::new();
+        let abnormal_peer_context = self.abnormal_peer_context();
+        let disk_full_peers = abnormal_peer_context.disk_full_peers();
+        if !leader_allowed {
+            disk_full_stores.push(ctx.store_id);
+            // Try to transfer leader to a node with disk usage normal to maintain write
+            // availability. If majority node is disk full, to transfer leader or not is not
+            // necessary. Note: Need to exclude learner node.
+            if !disk_full_peers.majority() {
+                let target_peer = self
+                    .region()
+                    .get_peers()
+                    .iter()
+                    .find(|x| {
+                        !disk_full_peers.has(x.get_id())
+                            && x.get_id() != self.peer_id()
+                            && !self
+                                .abnormal_peer_context()
+                                .down_peers()
+                                .contains(&x.get_id())
+                            && !matches!(x.get_role(), PeerRole::Learner)
+                    })
+                    .cloned();
+                if let Some(p) = target_peer {
+                    debug!(
+                        self.logger,
+                        "try to transfer leader because of current leader disk full";
+                        "region_id" => self.region().get_id(),
+                        "peer_id" => self.peer_id(),
+                        "target_peer_id" => p.get_id(),
+                    );
+                    self.pre_transfer_leader(&p);
+                }
+            }
+        } else {
+            // Check followers.
+            if disk_full_peers.is_empty() {
+                return Ok(());
+            }
+            if !abnormal_peer_context.is_dangerous_majority_set() {
+                if !disk_full_peers.majority() {
+                    return Ok(());
+                }
+                // Majority peers are in disk full status but the request carries a special
+                // flag.
+                if matches!(disk_full_opt, DiskFullOpt::AllowedOnAlmostFull)
+                    && disk_full_peers.peers().values().any(|x| x.1)
+                {
+                    return Ok(());
+                }
+            }
+            for peer in self.region().get_peers() {
+                let (peer_id, store_id) = (peer.get_id(), peer.get_store_id());
+                if disk_full_peers.peers().get(&peer_id).is_some() {
+                    disk_full_stores.push(store_id);
+                }
+            }
+        }
+        let errmsg = format!(
+            "propose failed: tikv disk full, cmd diskFullOpt={:?}, leader diskUsage={:?}",
+            disk_full_opt, ctx.self_disk_usage
+        );
+        Err(Error::DiskFull(disk_full_stores, errmsg))
+    }
+
+    pub fn clear_disk_full_peers<T>(&mut self, ctx: &StoreContext<EK, ER, T>) {
+        let disk_full_peers = mem::take(self.abnormal_peer_context_mut().disk_full_peers_mut());
+        let raft = &mut self.raft_group_mut().raft;
+        for peer in disk_full_peers.peers().iter() {
+            raft.adjust_max_inflight_msgs(*peer.0, ctx.cfg.raft_max_inflight_msgs);
+        }
+    }
+
+    pub fn refill_disk_full_peers<T>(&mut self, ctx: &StoreContext<EK, ER, T>) {
+        self.clear_disk_full_peers(ctx);
+        debug!(
+            self.logger,
+            "region id {}, peer id {}, store id {}: refill disk full peers when peer disk usage status changed or merge triggered",
+            self.region().get_id(),
+            self.peer_id(),
+            ctx.store_id,
+        );
+
+        // Collect disk full peers and all peers' `next_idx` to find a potential quorum.
+        let peers_len = self.region().get_peers().len();
+        let mut normal_peers = HashSet::default();
+        let mut next_idxs = Vec::with_capacity(peers_len);
+        let mut min_peer_index = u64::MAX;
+        for peer in self.region().get_peers() {
+            let (peer_id, store_id) = (peer.get_id(), peer.get_store_id());
+            let usage = ctx.store_disk_usages.get(&store_id);
+            if usage.is_none() {
+                // Always treat the leader itself as normal.
+                normal_peers.insert(peer_id);
+            }
+            if let Some(pr) = self.raft_group().raft.prs().get(peer_id) {
+                // status 3-normal, 2-almostfull, 1-alreadyfull, only for simplying the sort
+                // func belowing.
+                let mut status = 3;
+                if let Some(usg) = usage {
+                    status = match usg {
+                        DiskUsage::Normal => 3,
+                        DiskUsage::AlmostFull => 2,
+                        DiskUsage::AlreadyFull => 1,
+                    };
+                }
+
+                if !self.abnormal_peer_context().down_peers().contains(&peer_id) {
+                    next_idxs.push((peer_id, pr.next_idx, usage, status));
+                    if min_peer_index > pr.next_idx {
+                        min_peer_index = pr.next_idx;
+                    }
+                }
+            }
+        }
+        if self.has_region_merge_proposal {
+            debug!(
+                self.logger,
+                "region id {}, peer id {}, store id {} has a merge request, with region_merge_proposal_index {}",
+                self.region_id(),
+                self.peer_id(),
+                ctx.store_id,
+                self.region_merge_proposal_index
+            );
+            if min_peer_index > self.region_merge_proposal_index {
+                self.has_region_merge_proposal = false;
+            }
+        }
+
+        if normal_peers.len() == peers_len {
+            return;
+        }
+
+        // Reverse sort peers based on `next_idx`, `usage` and `store healthy status`,
+        // then try to get a potential quorum.
+        next_idxs.sort_by(|x, y| {
+            if x.3 == y.3 {
+                y.1.cmp(&x.1)
+            } else {
+                y.3.cmp(&x.3)
+            }
+        });
+
+        let majority = !self.raft_group().raft.prs().has_quorum(&normal_peers);
+        self.abnormal_peer_context_mut()
+            .disk_full_peers_mut()
+            .set_majority(majority);
+        // Here set all peers can be sent when merging.
+        for &(peer, _, usage, ..) in &next_idxs {
+            if let Some(usage) = usage {
+                if self.has_region_merge_proposal && !matches!(*usage, DiskUsage::AlreadyFull) {
+                    self.abnormal_peer_context_mut()
+                        .disk_full_peers_mut()
+                        .peers_mut()
+                        .insert(peer, (*usage, true));
+                    self.raft_group_mut()
+                        .raft
+                        .adjust_max_inflight_msgs(peer, ctx.cfg.raft_max_inflight_msgs);
+                    debug!(
+                        self.logger,
+                        "refill disk full peer max inflight to {} on a merging region: region id {}, peer id {}",
+                        ctx.cfg.raft_max_inflight_msgs,
+                        self.region_id(),
+                        peer
+                    );
+                } else {
+                    self.abnormal_peer_context_mut()
+                        .disk_full_peers_mut()
+                        .peers_mut()
+                        .insert(peer, (*usage, false));
+                    self.raft_group_mut().raft.adjust_max_inflight_msgs(peer, 0);
+                    debug!(
+                        self.logger,
+                        "refill disk full peer max inflight to {} on region without merging: region id {}, peer id {}",
+                        0,
+                        self.region_id(),
+                        peer
+                    );
+                }
+            }
+        }
+
+        if !self.abnormal_peer_context().disk_full_peers().majority() {
+            // Less than majority peers are in disk full status.
+            return;
+        }
+
+        let (mut potential_quorum, mut quorum_ok) = (HashSet::default(), false);
+        let mut is_dangerous_set = false;
+        for &(peer_id, _, _, status) in &next_idxs {
+            potential_quorum.insert(peer_id);
+
+            if status == 1 {
+                // already full peer.
+                is_dangerous_set = true;
+            }
+
+            if self.raft_group().raft.prs().has_quorum(&potential_quorum) {
+                quorum_ok = true;
+                break;
+            }
+        }
+
+        self.abnormal_peer_context_mut()
+            .setup_dangerous_majority_set(is_dangerous_set);
+
+        // For the Peer with AlreadFull in potential quorum set, we still need to send
+        // logs to it. To support incoming configure change.
+        if quorum_ok {
+            let has_region_merge_proposal = self.has_region_merge_proposal;
+            let peers = self
+                .abnormal_peer_context_mut()
+                .disk_full_peers_mut()
+                .peers_mut();
+            let mut inflight_peers = vec![];
+            for peer in potential_quorum {
+                if let Some(x) = peers.get_mut(&peer) {
+                    // It can help to establish a quorum.
+                    x.1 = true;
+                    // for merge region, all peers have been set to the max.
+                    if !has_region_merge_proposal {
+                        inflight_peers.push(peer);
+                    }
+                }
+            }
+            debug!(
+                self.logger,
+                "refill disk full peer max inflight to 1 in potential quorum set: region id {}",
+                self.region_id(),
+            );
+            self.adjust_peers_max_inflight_msgs(&inflight_peers, 1);
+        }
+    }
+
+    /// A peer can be destroyed in four cases:
+    ///
     /// 1. Received a gc message;
     /// 2. Received a message whose target peer's ID is larger than this;
     /// 3. Applied a conf remove self command.
-    /// In all cases, the peer will be destroyed asynchronousely in next
+    /// 4. Received UnsafeRecoveryDestroy message.
+    ///
+    /// In all cases, the peer will be destroyed asynchronously in next
     /// handle_raft_ready.
     /// `triggered_msg` will be sent to store fsm after destroy is finished.
     /// Should set the message only when the target peer is supposed to be
@@ -719,10 +1180,34 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // If it's marked as tombstone, then it must be changed by conf change. In
         // this case, all following entries are skipped so applied_index never equals
         // to last_applying_index.
-        (self.storage().region_state().get_state() != PeerState::Tombstone
-            && entry_storage.applied_index() != last_applying_index)
-            // Wait for critical commands like split.
-            || self.has_pending_tombstone_tablets()
+        if self.storage().region_state().get_state() != PeerState::Tombstone
+            && entry_storage.applied_index() != last_applying_index
+        {
+            info!(
+                self.logger,
+                "postpone destroy because there're pending apply logs";
+                "applied" => entry_storage.applied_index(),
+                "last_applying" => last_applying_index,
+            );
+            return true;
+        }
+        // Wait for critical commands like split.
+        if self.has_pending_tombstone_tablets() {
+            let applied_index = self.entry_storage().applied_index();
+            let last_index = self.entry_storage().last_index();
+            let persisted = self
+                .remember_persisted_tablet_index()
+                .load(std::sync::atomic::Ordering::Relaxed);
+            info!(
+                self.logger,
+                "postpone destroy because there're pending tombstone tablets";
+                "applied_index" => applied_index,
+                "last_index" => last_index,
+                "persisted_applied" => persisted,
+            );
+            return true;
+        }
+        false
     }
 
     /// Start the destroy progress. It will write `Tombstone` state
@@ -738,10 +1223,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if self.postponed_destroy() {
             return;
         }
+        // No need to wait for the apply anymore.
+        self.unsafe_recovery_maybe_finish_wait_apply(true);
+        self.unsafe_recovery_maybe_finish_wait_initialized(true);
+
+        // Use extra write to ensure these writes are the last writes to raft engine.
         let raft_engine = self.entry_storage().raft_engine();
         let mut region_state = self.storage().region_state().clone();
         let region_id = region_state.get_region().get_id();
-        // Use extra write to ensure these writes are the last writes to raft engine.
         let lb = write_task
             .extra_write
             .ensure_v2(|| raft_engine.log_batch(2));
@@ -766,6 +1255,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let mut meta = ctx.store_meta.lock().unwrap();
             meta.remove_region(region_id);
             meta.readers.remove(&region_id);
+            meta.region_read_progress.remove(&region_id);
             ctx.tablet_registry.remove(region_id);
         }
         // Remove tablet first, otherwise in extreme cases, a new peer can be created
@@ -777,6 +1267,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let _ = ctx.router.send_raft_message(msg);
         }
         self.pending_reads_mut().clear_all(Some(region_id));
+        for Proposal { cb, .. } in self.proposals_mut().queue_mut().drain(..) {
+            apply::notify_req_region_removed(region_id, cb);
+        }
+
         self.clear_apply_scheduler();
     }
 }

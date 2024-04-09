@@ -19,7 +19,6 @@ use raft::eraftpb::MessageType;
 use raftstore::{store::ReadIndexContext, Result};
 use test_raftstore::{Simulator as S1, *};
 use test_raftstore_macro::test_case;
-use test_raftstore_v2::Simulator as S2;
 use tikv_util::{config::*, future::block_on_timeout, time::Instant, HandyRwLock};
 use txn_types::{Key, Lock, LockType};
 use uuid::Uuid;
@@ -375,6 +374,7 @@ fn test_read_index_retry_lock_checking() {
         10.into(),
         1,
         20.into(),
+        false,
     )
     .use_async_commit(vec![]);
     let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));
@@ -396,7 +396,7 @@ fn test_read_index_retry_lock_checking() {
         !resp.get_header().has_error()
             && resp
                 .get_responses()
-                .get(0)
+                .first()
                 .map_or(true, |r| !r.get_read_index().has_locked()),
         "{:?}",
         resp,
@@ -451,15 +451,18 @@ fn test_split_isolation() {
     cluster.run_node(2).unwrap();
     // Originally leader of region ['', 'k2'] will go to sleep, so the learner peer
     // cannot be created.
-    for _ in 0..10 {
+    let start = Instant::now();
+    loop {
         let resp = async_read_on_peer(&mut cluster, peer.clone(), r2.clone(), b"k1", true, true);
         let resp = block_on_timeout(resp, Duration::from_secs(1)).unwrap();
         if !resp.get_header().has_error() {
             return;
         }
+        if start.saturating_elapsed() > Duration::from_secs(5) {
+            panic!("test failed: {:?}", resp);
+        }
         thread::sleep(Duration::from_millis(200));
     }
-    panic!("test failed");
 }
 
 /// Testing after applying snapshot, the `ReadDelegate` stored at `StoreMeta`
@@ -591,4 +594,48 @@ fn test_malformed_read_index() {
     cluster.clear_send_filters();
     let resp = block_on_timeout(resp, Duration::from_secs(10)).unwrap();
     assert_eq!(resp.get_responses()[0].get_get().get_value(), b"v1");
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_replica_read_with_pending_peer() {
+    let mut cluster = new_cluster(0, 3);
+
+    cluster.cfg.tikv.raft_store.raft_log_gc_count_limit = Some(100);
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(100));
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let r = cluster.run_conf_change();
+    assert_eq!(r, 1);
+    pd_client.must_add_peer(1, new_peer(2, 2));
+    pd_client.must_add_peer(1, new_peer(3, 3));
+
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    // Make sure the peer 3 exists
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    // Make sure the peer 3 is pending
+    let new_region = cluster.get_region(b"k1");
+    let filter = Box::new(
+        RegionPacketFilter::new(new_region.get_id(), 3)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend)
+            .msg_type(MessageType::MsgSnapshot),
+    );
+    cluster.sim.wl().add_recv_filter(3, filter);
+    cluster.must_put(b"k1", b"v2");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+    for i in 0..200 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v2");
+    }
+
+    let new_region = cluster.get_region(b"k1");
+    let resp_ch = async_read_on_peer(&mut cluster, new_peer(3, 3), new_region, b"k1", true, true);
+
+    let response = block_on_timeout(resp_ch, Duration::from_secs(3)).unwrap();
+    assert!(response.get_header().get_error().has_read_index_not_ready());
 }

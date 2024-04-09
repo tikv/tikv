@@ -24,11 +24,17 @@ command! {
     /// This should be following a [`Prewrite`](Command::Prewrite) on the given key.
     Rollback:
         cmd_ty => (),
-        display => "kv::command::rollback keys({:?}) @ {} | {:?}", (keys, start_ts, ctx),
+        display => {
+            "kv::command::rollback keys({:?}) @ {} | {:?}",
+            (keys, start_ts, ctx),
+        }
         content => {
             keys: Vec<Key>,
             /// The transaction timestamp.
             start_ts: TimeStamp,
+        }
+        in_heap => {
+            keys,
         }
 }
 
@@ -71,6 +77,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
             new_acquired_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status: vec![],
         })
     }
 }

@@ -3,9 +3,6 @@
 define_error_codes! {
     "KV:LogBackup:",
 
-    ETCD => ("Etcd",
-        "Error during requesting the meta store(etcd)",
-        "Please check the connectivity between TiKV and PD."),
     PROTO => ("Proto",
         "Error during decode / encoding protocol buffer messages",
         "Please check the version of TiKV / BR are compatible, or whether data is corrupted."
@@ -13,6 +10,10 @@ define_error_codes! {
     NO_SUCH_TASK => ("NoSuchTask",
         "A task not found.",
         "Please check the spell of your task name."
+    ),
+    OUT_OF_QUOTA => ("OutOfQuota",
+        "Some of quota has been exceed, hence the task cannot continue.",
+        "For memory quotas, please check whether there are huge transactions. You may also increase the quota by modifying config."
     ),
     OBSERVE_CANCELED => (
         "ObserveCancel",

@@ -4,7 +4,7 @@ use std::ops::Deref;
 
 use async_trait::async_trait;
 use cloud::{
-    error::{Error, KmsError, Result},
+    error::{Error, KmsError, OtherError, Result},
     kms::{Config, CryptographyType, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey},
 };
 use rusoto_core::{request::DispatchSignedRequest, RusotoError};
@@ -148,11 +148,13 @@ fn classify_generate_data_key_error(err: RusotoError<GenerateDataKeyError>) -> E
         match &e {
             GenerateDataKeyError::NotFound(_) => Error::ApiNotFound(err.into()),
             GenerateDataKeyError::InvalidKeyUsage(_) => {
-                Error::KmsError(KmsError::Other(err.into()))
+                Error::KmsError(KmsError::Other(OtherError::from_box(err.into())))
             }
             GenerateDataKeyError::DependencyTimeout(_) => Error::ApiTimeout(err.into()),
             GenerateDataKeyError::KMSInternal(_) => Error::ApiInternal(err.into()),
-            _ => Error::KmsError(KmsError::Other(FixRusotoErrorDisplay(err).into())),
+            _ => Error::KmsError(KmsError::Other(OtherError::from_box(
+                FixRusotoErrorDisplay(err).into(),
+            ))),
         }
     } else {
         classify_error(err)
@@ -167,7 +169,9 @@ fn classify_decrypt_error(err: RusotoError<DecryptError>) -> Error {
             }
             DecryptError::DependencyTimeout(_) => Error::ApiTimeout(err.into()),
             DecryptError::KMSInternal(_) => Error::ApiInternal(err.into()),
-            _ => Error::KmsError(KmsError::Other(FixRusotoErrorDisplay(err).into())),
+            _ => Error::KmsError(KmsError::Other(OtherError::from_box(
+                FixRusotoErrorDisplay(err).into(),
+            ))),
         }
     } else {
         classify_error(err)
@@ -179,7 +183,9 @@ fn classify_error<E: std::error::Error + Send + Sync + 'static>(err: RusotoError
         RusotoError::HttpDispatch(_) => Error::ApiTimeout(err.into()),
         RusotoError::Credentials(_) => Error::ApiAuthentication(err.into()),
         e if e.is_retryable() => Error::ApiInternal(err.into()),
-        _ => Error::KmsError(KmsError::Other(FixRusotoErrorDisplay(err).into())),
+        _ => Error::KmsError(KmsError::Other(OtherError::from_box(
+            FixRusotoErrorDisplay(err).into(),
+        ))),
     }
 }
 
@@ -218,6 +224,8 @@ mod tests {
                 region: "ap-southeast-2".to_string(),
                 endpoint: String::new(),
             },
+            azure: None,
+            gcp: None,
         };
 
         let dispatcher =
@@ -261,6 +269,8 @@ mod tests {
                 region: "ap-southeast-2".to_string(),
                 endpoint: String::new(),
             },
+            azure: None,
+            gcp: None,
         };
 
         // IncorrectKeyException

@@ -3,8 +3,8 @@
 use std::{cmp, error::Error as StdError, i32, result, sync::Arc, thread, time::Duration};
 
 use encryption_export::data_key_manager_from_config;
-use engine_rocks::{util::new_engine_opt, RocksEngine};
-use engine_traits::{Engines, Error as EngineError, Peekable, RaftEngine, SyncMutable};
+use engine_rocks::util::new_engine_opt;
+use engine_traits::{Engines, Error as EngineError, KvEngine, RaftEngine};
 use kvproto::{metapb, raft_serverpb::StoreIdent};
 use pd_client::{Error as PdError, PdClient};
 use raft_log_engine::RaftLogEngine;
@@ -81,9 +81,25 @@ pub fn enter_snap_recovery_mode(config: &mut TikvConfig) {
     config.raft_store.snap_generator_pool_size = 20;
     // applied snapshot mem size
     config.raft_store.snap_apply_batch_size = ReadableSize::gb(1);
+
+    // unlimit the snapshot I/O.
+    config.server.snap_io_max_bytes_per_sec = ReadableSize::gb(16);
+    config.server.concurrent_recv_snap_limit = 256;
+    config.server.concurrent_send_snap_limit = 256;
+
     // max snapshot file size, if larger than it, file be splitted.
     config.raft_store.max_snapshot_file_raw_size = ReadableSize::gb(1);
     config.raft_store.hibernate_regions = false;
+
+    // Disable prevote so it is possible to regenerate leaders.
+    config.raft_store.prevote = false;
+    // Because we have increased the election tick to inf, once there is a leader,
+    // the follower will believe it holds an eternal lease. So, once the leader
+    // reboots, the followers will reject to vote for it again.
+    // We need to disable the lease for avoiding that.
+    config.raft_store.unsafe_disable_check_quorum = true;
+    // The election is fully controlled by the restore procedure of BR.
+    config.raft_store.allow_unsafe_vote_after_start = true;
 
     // disable auto compactions during the restore
     config.rocksdb.defaultcf.disable_auto_compactions = true;
@@ -235,21 +251,21 @@ pub trait LocalEngineService {
 }
 
 // init engine and read local engine info
-pub struct LocalEngines<ER: RaftEngine> {
-    engines: Engines<RocksEngine, ER>,
+pub struct LocalEngines<EK: KvEngine, ER: RaftEngine> {
+    engines: Engines<EK, ER>,
 }
 
-impl<ER: RaftEngine> LocalEngines<ER> {
-    pub fn new(engines: Engines<RocksEngine, ER>) -> LocalEngines<ER> {
+impl<EK: KvEngine, ER: RaftEngine> LocalEngines<EK, ER> {
+    pub fn new(engines: Engines<EK, ER>) -> LocalEngines<EK, ER> {
         LocalEngines { engines }
     }
 
-    pub fn get_engine(&self) -> &Engines<RocksEngine, ER> {
+    pub fn get_engine(&self) -> &Engines<EK, ER> {
         &self.engines
     }
 }
 
-impl<ER: RaftEngine> LocalEngineService for LocalEngines<ER> {
+impl<EK: KvEngine, ER: RaftEngine> LocalEngineService for LocalEngines<EK, ER> {
     fn set_cluster_id(&self, cluster_id: u64) {
         let res = self
             .get_engine()
@@ -319,15 +335,13 @@ pub fn create_local_engine_service(
     let env = config
         .build_shared_rocks_env(key_manager.clone(), None)
         .map_err(|e| format!("build shared rocks env: {}", e))?;
-    let block_cache = config
-        .storage
-        .block_cache
-        .build_shared_cache(config.storage.engine);
+    let block_cache = config.storage.block_cache.build_shared_cache();
 
     // init rocksdb / kv db
-    let factory = KvEngineFactoryBuilder::new(env.clone(), config, block_cache)
-        .lite(true)
-        .build();
+    let factory =
+        KvEngineFactoryBuilder::new(env.clone(), config, block_cache, key_manager.clone())
+            .lite(true)
+            .build();
     let kv_db = match factory.create_shared_db(&config.storage.data_dir) {
         Ok(db) => db,
         Err(e) => handle_engine_error(e),

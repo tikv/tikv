@@ -22,8 +22,8 @@ use raftstore::{
     coprocessor::CoprocessorHost,
     errors::Error as RaftError,
     store::{
-        AutoSplitController, GlobalReplicationState, RegionSnapshot, SplitConfigManager,
-        TabletSnapKey, TabletSnapManager, Transport,
+        config::RaftstoreConfigManager, AutoSplitController, GlobalReplicationState,
+        RegionSnapshot, SplitConfigManager, TabletSnapKey, TabletSnapManager, Transport,
     },
     Result,
 };
@@ -33,6 +33,7 @@ use raftstore_v2::{
 };
 use resource_control::ResourceGroupManager;
 use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{Config, Filter};
@@ -47,6 +48,7 @@ use tikv::{
 use tikv_util::{
     box_err,
     config::VersionTrack,
+    mpsc,
     worker::{Builder as WorkerBuilder, LazyWorker},
 };
 
@@ -151,6 +153,7 @@ pub struct NodeCluster<EK: KvEngine> {
     simulate_trans: HashMap<u64, SimulateChannelTransport<EK>>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     snap_mgrs: HashMap<u64, TabletSnapManager>,
+    cfg_controller: HashMap<u64, ConfigController>,
 }
 
 impl<EK: KvEngine> NodeCluster<EK> {
@@ -162,11 +165,16 @@ impl<EK: KvEngine> NodeCluster<EK> {
             simulate_trans: HashMap::default(),
             concurrency_managers: HashMap::default(),
             snap_mgrs: HashMap::default(),
+            cfg_controller: HashMap::default(),
         }
     }
 
     pub fn get_concurrency_manager(&self, node_id: u64) -> ConcurrencyManager {
         self.concurrency_managers.get(&node_id).unwrap().clone()
+    }
+
+    pub fn get_cfg_controller(&self, node_id: u64) -> Option<&ConfigController> {
+        self.cfg_controller.get(&node_id)
     }
 }
 
@@ -197,7 +205,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         key_manager: Option<Arc<DataKeyManager>>,
         raft_engine: RaftTestEngine,
         tablet_registry: TabletRegistry<EK>,
-        _resource_manager: &Option<Arc<ResourceGroupManager>>,
+        resource_manager: &Option<Arc<ResourceGroupManager>>,
     ) -> ServerResult<u64> {
         assert!(!self.nodes.contains_key(&node_id));
         let pd_worker = LazyWorker::new("test-pd-worker");
@@ -210,10 +218,18 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
                 cfg.coprocessor.region_split_size(),
                 cfg.coprocessor.enable_region_bucket(),
                 cfg.coprocessor.region_bucket_size,
+                true,
             )
             .unwrap();
 
-        let mut node = NodeV2::new(&cfg.server, self.pd_client.clone(), None);
+        let mut node = NodeV2::new(
+            &cfg.server,
+            self.pd_client.clone(),
+            None,
+            resource_manager
+                .as_ref()
+                .map(|r| r.derive_controller("raft-v2".into(), false)),
+        );
         node.try_bootstrap_store(&raft_store, &raft_engine).unwrap();
         assert_eq!(node.id(), node_id);
 
@@ -242,7 +258,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             )
         } else {
             let trans = self.trans.core.lock().unwrap();
-            let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
+            let (snap_mgr, _) = &trans.snap_paths[&node_id];
             (snap_mgr.clone(), None)
         };
         self.snap_mgrs.insert(node_id, snap_mgr.clone());
@@ -286,13 +302,16 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
                     dir,
                     key_manager.clone(),
                     cfg.storage.api_version(),
+                    true,
                 )
                 .unwrap(),
             )
         };
 
+        let (sender, _) = mpsc::unbounded();
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
         let state: Arc<Mutex<GlobalReplicationState>> = Arc::default();
+        let store_config = Arc::new(VersionTrack::new(raft_store));
         node.start(
             raft_engine.clone(),
             tablet_registry,
@@ -306,10 +325,11 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             CollectorRegHandle::new_for_test(),
             bg_worker,
             pd_worker,
-            Arc::new(VersionTrack::new(raft_store)),
+            store_config.clone(),
             &state,
             importer,
             key_manager,
+            GrpcServiceManager::new(sender),
         )?;
         assert!(
             raft_engine
@@ -319,24 +339,13 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
         );
         assert!(node_id == 0 || node_id == node.id());
         let node_id = node.id();
-
-        let region_split_size = cfg.coprocessor.region_split_size();
-        let enable_region_bucket = cfg.coprocessor.enable_region_bucket();
-        let region_bucket_size = cfg.coprocessor.region_bucket_size;
-        let mut raftstore_cfg = cfg.tikv.raft_store;
-        raftstore_cfg.optimize_for(true);
-        raftstore_cfg
-            .validate(region_split_size, enable_region_bucket, region_bucket_size)
-            .unwrap();
-
-        // let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
-        // cfg_controller.register(
-        //     Module::Raftstore,
-        //     Box::new(RaftstoreConfigManager::new(
-        //         node.refresh_config_scheduler(),
-        //         raft_store,
-        //     )),
-        // );
+        cfg_controller.register(
+            Module::Raftstore,
+            Box::new(RaftstoreConfigManager::new(
+                node.refresh_config_scheduler(),
+                store_config,
+            )),
+        );
 
         if let Some(tmp) = snap_mgs_path {
             self.trans
@@ -356,6 +365,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
 
         self.nodes.insert(node_id, node);
         self.simulate_trans.insert(node_id, simulate_trans);
+        self.cfg_controller.insert(node_id, cfg_controller);
         Ok(node_id)
     }
 

@@ -5,9 +5,12 @@ use std::{
     fmt::{self, Debug, Display, Formatter},
 };
 
+use chrono::{FixedOffset, NaiveTime};
 pub use online_config_derive::*;
 
 pub type ConfigChange = HashMap<String, ConfigValue>;
+pub type OffsetTime = (NaiveTime, FixedOffset);
+pub type Schedule = Vec<OffsetTime>;
 
 #[derive(Clone, PartialEq)]
 pub enum ConfigValue {
@@ -21,6 +24,8 @@ pub enum ConfigValue {
     Bool(bool),
     String(String),
     Module(ConfigChange),
+    OffsetTime(OffsetTime),
+    Schedule(Schedule),
     Skip,
     None,
 }
@@ -38,6 +43,8 @@ impl Display for ConfigValue {
             ConfigValue::Bool(v) => write!(f, "{}", v),
             ConfigValue::String(v) => write!(f, "{}", v),
             ConfigValue::Module(v) => write!(f, "{:?}", v),
+            ConfigValue::OffsetTime((t, o)) => write!(f, "{} {}", t, o),
+            ConfigValue::Schedule(v) => write!(f, "{:?}", v),
             ConfigValue::Skip => write!(f, "ConfigValue::Skip"),
             ConfigValue::None => write!(f, ""),
         }
@@ -140,6 +147,8 @@ mod tests {
 
     #[derive(Clone, OnlineConfig, Debug, Default, PartialEq)]
     pub struct TestConfig {
+        // Test doc hidden fields support online config change.
+        #[doc(hidden)]
         field1: usize,
         field2: String,
         optional_field1: Option<usize>,

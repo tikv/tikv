@@ -47,3 +47,5 @@ pub use worker::{
     pd::{PdReporter, Task as PdTask},
     tablet::Task as TabletTask,
 };
+
+pub use crate::raft::Storage;

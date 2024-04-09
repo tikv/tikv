@@ -132,6 +132,7 @@ impl ResetToVersionWorker {
             box_try!(wb.delete_cf(CF_DEFAULT, default_key.as_encoded()));
         }
         if !wb.is_empty() {
+            // TODO: v2 needs disable_wal=true.
             wb.write().unwrap();
             wb.clear();
         }
@@ -163,6 +164,7 @@ impl ResetToVersionWorker {
             }
         }
         if !wb.is_empty() {
+            // TODO: v2 needs disable_wal=true.
             wb.write().unwrap();
             wb.clear();
         }
@@ -229,7 +231,6 @@ impl ResetToVersionManager {
                 .name("reset_to_version".to_string())
                 .spawn_wrapper(move || {
                     tikv_util::thread_group::set_properties(props);
-                    tikv_alloc::add_thread_memory_accessor();
 
                     while worker
                         .process_next_batch(BATCH_SIZE, &mut wb)
@@ -243,8 +244,6 @@ impl ResetToVersionManager {
                     {}
                     *worker.state.lock().unwrap() = ResetToVersionState::Done;
                     info!("Reset to version done!");
-
-                    tikv_alloc::remove_thread_memory_accessor();
                 })
                 .expect("failed to spawn reset_to_version thread"),
         );
@@ -333,6 +332,7 @@ mod tests {
                 for_update_ts.into(),
                 0,
                 TimeStamp::zero(),
+                false,
             );
             kv.push((CF_LOCK, Key::from_raw(key), lock.to_bytes()));
         }

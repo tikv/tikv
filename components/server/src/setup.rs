@@ -10,7 +10,8 @@ use std::{
 use chrono::Local;
 use clap::ArgMatches;
 use collections::HashMap;
-use tikv::config::{check_critical_config, persist_config, MetricConfig, TikvConfig};
+use fail;
+use tikv::config::{MetricConfig, TikvConfig};
 use tikv_util::{self, config, logger};
 
 // A workaround for checking if log is initialized.
@@ -73,8 +74,10 @@ fn make_engine_log_path(path: &str, sub_path: &str, filename: &str) -> String {
     })
 }
 
-#[allow(dead_code)]
 pub fn initial_logger(config: &TikvConfig) {
+    fail::fail_point!("mock_force_uninitial_logger", |_| {
+        LOG_INITIALIZED.store(false, Ordering::SeqCst);
+    });
     let rocksdb_info_log_path = if !config.rocksdb.info_log_dir.is_empty() {
         make_engine_log_path(&config.rocksdb.info_log_dir, "", DEFAULT_ROCKSDB_LOG_FILE)
     } else {
@@ -241,12 +244,10 @@ pub fn initial_metric(cfg: &MetricConfig) {
 pub fn overwrite_config_with_cmd_args(config: &mut TikvConfig, matches: &ArgMatches<'_>) {
     if let Some(level) = matches.value_of("log-level") {
         config.log.level = logger::get_level_by_string(level).unwrap().into();
-        config.log_level = slog::Level::Info.into();
     }
 
     if let Some(file) = matches.value_of("log-file") {
         config.log.file.filename = file.to_owned();
-        config.log_file = "".to_owned();
     }
 
     if let Some(addr) = matches.value_of("addr") {
@@ -302,21 +303,9 @@ pub fn overwrite_config_with_cmd_args(config: &mut TikvConfig, matches: &ArgMatc
     }
 }
 
-#[allow(dead_code)]
 pub fn validate_and_persist_config(config: &mut TikvConfig, persist: bool) {
-    config.compatible_adjust();
-    if let Err(e) = config.validate() {
-        fatal!("invalid configuration: {}", e);
-    }
-
-    if let Err(e) = check_critical_config(config) {
-        fatal!("critical config check failed: {}", e);
-    }
-
-    if persist {
-        if let Err(e) = persist_config(config) {
-            fatal!("persist critical config failed: {}", e);
-        }
+    if let Err(e) = tikv::config::validate_and_persist_config(config, persist) {
+        fatal!("failed to validate config: {}", e);
     }
 }
 

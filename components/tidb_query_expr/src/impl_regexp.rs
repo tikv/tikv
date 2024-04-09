@@ -272,28 +272,96 @@ pub fn regexp_instr<C: Collator>(
     Ok(Some(0))
 }
 
+#[derive(Clone)]
+enum ReplaceInstruction {
+    SubstitutionNum(usize),
+    Literal(Vec<u8>),
+}
+
+pub struct ReplaceMetaData {
+    regex: Option<Regex>,
+    instructions: Option<Vec<ReplaceInstruction>>,
+}
+
+fn init_regexp_replace_data<C: Collator>(expr: &mut Expr) -> Result<ReplaceMetaData> {
+    let mut meta = ReplaceMetaData {
+        regex: init_regexp_data::<C, REPLACE_MATCH_IDX>(expr)?,
+        instructions: None,
+    };
+
+    let children = expr.mut_children();
+    if children.len() >= 3 {
+        match children[2].get_tp() {
+            ExprType::Bytes | ExprType::String => {
+                meta.instructions = Some(init_replace_instructions(children[2].get_val()));
+            }
+            _ => {}
+        };
+    }
+
+    Ok(meta)
+}
+
+fn init_replace_instructions(replace_expr: &[u8]) -> Vec<ReplaceInstruction> {
+    let mut instructions = Vec::new();
+    let len = replace_expr.len();
+    let mut literal = Vec::new();
+    let mut i = 0;
+    while i < len {
+        if replace_expr[i] == b'\\' {
+            if i + 1 >= len {
+                // This slash is in the end. Ignore it and break the loop.
+                break;
+            }
+            if replace_expr[i + 1].is_ascii_digit() {
+                if !literal.is_empty() {
+                    instructions.push(ReplaceInstruction::Literal(literal));
+                    literal = Vec::new();
+                }
+                instructions.push(ReplaceInstruction::SubstitutionNum(
+                    (replace_expr[i + 1] - b'0').into(),
+                ));
+            } else {
+                literal.push(replace_expr[i + 1]);
+            }
+            i += 2;
+        } else {
+            literal.push(replace_expr[i]);
+            i += 1;
+        }
+    }
+    if !literal.is_empty() {
+        instructions.push(ReplaceInstruction::Literal(literal));
+    }
+
+    instructions
+}
+
 /// Currently, TiDB only supports regular expressions for utf-8 strings.
 /// See https://dev.mysql.com/doc/refman/8.0/en/regexp.html#function_regexp-replace.
-#[rpn_fn(nullable, raw_varg, min_args = 3, max_args = 6, capture = [metadata], metadata_mapper = init_regexp_data::<C, REPLACE_MATCH_IDX>)]
+#[rpn_fn(nullable, raw_varg, min_args = 3, max_args = 6, capture = [metadata], metadata_mapper = init_regexp_replace_data::<C>)]
 #[inline]
 pub fn regexp_replace<C: Collator>(
-    metadata: &Option<Regex>,
+    metadata: &ReplaceMetaData,
     args: &[ScalarValueRef<'_>],
 ) -> Result<Option<Bytes>> {
     let expr = match args[0].as_bytes() {
         Some(e) => std::str::from_utf8(e)?,
         None => return Ok(None),
     };
-    let regex = match metadata {
+    let regex = match metadata.regex.as_ref() {
         Some(r) => Cow::Borrowed(r),
         None => match build_regexp_from_args::<C>(args, REPLACE_MATCH_IDX)? {
             Some(r) => Cow::Owned(r),
             None => return Ok(None),
         },
     };
-    let replace_expr = match args[2].as_bytes() {
-        Some(e) => std::str::from_utf8(e)?,
-        None => return Ok(None),
+    let replace_inst = match metadata.instructions.as_ref() {
+        Some(i) => Cow::Borrowed(i),
+        None => match args[2].as_bytes() {
+            Some(e) => Cow::Owned(init_replace_instructions(e)),
+            None => return Ok(None),
+        },
     };
 
     let (mut before_trimmed, mut trimmed) = ("", expr);
@@ -328,36 +396,56 @@ pub fn regexp_replace<C: Collator>(
         }
     };
 
-    if occurrence == 0 {
-        let rep = regex.replace_all(trimmed, replace_expr);
-        let mut result = String::with_capacity(before_trimmed.len() + rep.len());
-        result.push_str(before_trimmed);
-        result.push_str(&rep);
-
-        Ok(Some(result.into_bytes()))
-    } else {
-        if let Some(m) = regex.find_iter(trimmed).nth((occurrence - 1) as usize) {
-            let mut result = String::with_capacity(
-                before_trimmed.len()
-                    + trimmed[..m.start()].len()
-                    + replace_expr.len()
-                    + trimmed[m.end()..].len(),
-            );
-            result.push_str(before_trimmed);
-            result.push_str(&trimmed[..m.start()]);
-            result.push_str(replace_expr);
-            result.push_str(&trimmed[m.end()..]);
-
-            return Ok(Some(result.into_bytes()));
+    let replace_work = |capture: &regex::Captures, res: &mut Vec<u8>| -> Result<()> {
+        for inst in replace_inst.as_ref() {
+            match inst {
+                ReplaceInstruction::SubstitutionNum(num) => {
+                    let m = capture.get(*num).ok_or_else(|| {
+                        Error::regexp_error(format!(
+                            "Substitution number is out of range: {}",
+                            *num
+                        ))
+                    })?;
+                    res.extend(m.as_str().as_bytes());
+                }
+                ReplaceInstruction::Literal(lit) => {
+                    res.extend(lit);
+                }
+            }
         }
+        Ok(())
+    };
 
-        Ok(Some(expr.as_bytes().to_vec()))
+    let mut result = Vec::new();
+    result.extend(before_trimmed.as_bytes());
+    let mut last_match = 0;
+    if occurrence == 0 {
+        for capture in regex.captures_iter(trimmed) {
+            // unwrap on 0 is OK because captures only reports matches.
+            let m = capture.get(0).unwrap();
+            result.extend(trimmed[last_match..m.start()].as_bytes());
+            last_match = m.end();
+            replace_work(&capture, &mut result)?;
+        }
+    } else if let Some(capture) = regex.captures_iter(trimmed).nth((occurrence - 1) as usize) {
+        // unwrap on 0 is OK because captures only reports matches.
+        let m = capture.get(0).unwrap();
+        result.extend(trimmed[0..m.start()].as_bytes());
+        last_match = m.end();
+        replace_work(&capture, &mut result)?;
     }
+    result.extend(trimmed[last_match..].as_bytes());
+
+    Ok(Some(result))
 }
 
 #[cfg(test)]
 mod tests {
-    use tidb_query_datatype::{codec::batch::LazyBatchColumnVec, expr::EvalContext, FieldTypeTp};
+    use tidb_query_datatype::{
+        codec::batch::{LazyBatchColumn, LazyBatchColumnVec},
+        expr::EvalContext,
+        EvalType, FieldTypeTp,
+    };
     use tipb::ScalarFuncSig;
     use tipb_helper::ExprDefBuilder;
 
@@ -1232,51 +1320,260 @@ mod tests {
                 Some("的的的的的的的的"),
                 false,
             ),
+            (
+                r"abc",
+                r"\d*",
+                r"d",
+                None,
+                None,
+                None,
+                Some(r"dadbdcd"),
+                false,
+            ),
+            // Test capture group
+            (
+                r"seafood fool",
+                r"foo(.?)",
+                r"123",
+                Some(3),
+                None,
+                None,
+                Some(r"sea123 123"),
+                false,
+            ),
+            (
+                r"seafood fool",
+                r"foo(.?)",
+                r"123",
+                Some(5),
+                None,
+                None,
+                Some(r"seafood 123"),
+                false,
+            ),
+            (
+                r"seafood fool",
+                r"foo(.?)",
+                r"z\12",
+                Some(3),
+                None,
+                None,
+                Some(r"seazd2 zl2"),
+                false,
+            ),
+            (
+                r"seafood fool",
+                r"foo(.?)",
+                r"z\12",
+                Some(5),
+                None,
+                None,
+                Some(r"seafood zl2"),
+                false,
+            ),
+            (
+                r"seafood fool",
+                r"foo(.?)",
+                r"z\12",
+                Some(3),
+                Some(0),
+                None,
+                Some(r"seazd2 zl2"),
+                false,
+            ),
+            (
+                r"seafood foo",
+                r"foo(.?)",
+                r"z\12",
+                Some(3),
+                Some(2),
+                None,
+                Some(r"seafood z2"),
+                false,
+            ),
+            (
+                r"stackoverflow",
+                r"(.{5})(.*)",
+                r"\\+\2+\1+\2+\1\",
+                None,
+                None,
+                None,
+                Some(r"\+overflow+stack+overflow+stack"),
+                false,
+            ),
+            (
+                r"fooabcdefghij fooABCDEFGHIJ",
+                r"foo(.)(.)(.)(.)(.)(.)(.)(.)(.)(.)",
+                r"\\\9\\\8-\7\\\6-\5\\\4-\3\\\2-\1\\",
+                Some(1),
+                Some(0),
+                None,
+                Some(r"\i\h-g\f-e\d-c\b-a\ \I\H-G\F-E\D-C\B-A\"),
+                false,
+            ),
+            (
+                r"fool food foo",
+                r"foo(.?)",
+                r"\0+\1",
+                None,
+                None,
+                None,
+                Some(r"fool+l food+d foo+"),
+                false,
+            ),
+            // \2 is out of capture group's range.
+            (
+                r"fool food foo",
+                r"foo(.?)",
+                r"\0+\2",
+                None,
+                None,
+                None,
+                None,
+                true,
+            ),
+            (
+                r"https://go.mail/folder-1/online/ru-en/#lingvo/#1О 50000&price_ashka/rav4/page=/check.xml",
+                r"^https?://(?:www\\.)?([^/]+)/.*$",
+                r"a\12\13",
+                None,
+                None,
+                None,
+                Some(r"ago.mail2go.mail3"),
+                false,
+            ),
+            (
+                r"http://saint-peters-total=меньше 1000-rublyayusche/catalogue/kolasuryat-v-2-kadyirovka-personal/serial_id=0&input_state/apartments/mokrotochki.net/upravda.ru/yandex.ru/GameMain.aspx?mult]/on/orders/50195&text=мыс и орелка в Балаш смотреть онлайн бесплатно в хорошем камбалакс&lr=20030393833539353862643188&op_promo=C-Teaser_id=06d162.html",
+                r"^https?://(?:www\\.)?([^/]+)/.*$",
+                r"aaa\1233",
+                None,
+                None,
+                None,
+                Some(r"aaasaint-peters-total=меньше 1000-rublyayusche233"),
+                false,
+            ),
         ];
 
         for (expr, pattern, replace, pos, occur, match_type, expected, error) in cases {
-            let mut ctx = EvalContext::default();
+            for i in 0..2 {
+                let use_column_ref = i == 1;
 
-            let mut builder =
-                ExprDefBuilder::scalar_func(ScalarFuncSig::RegexpReplaceSig, FieldTypeTp::String);
-            builder = builder
-                .push_child(ExprDefBuilder::constant_bytes(expr.as_bytes().to_vec()))
-                .push_child(ExprDefBuilder::constant_bytes(pattern.as_bytes().to_vec()))
-                .push_child(ExprDefBuilder::constant_bytes(replace.as_bytes().to_vec()));
-            if let Some(p) = pos {
-                builder = builder.push_child(ExprDefBuilder::constant_int(p));
-            }
-            if let Some(o) = occur {
-                builder = builder.push_child(ExprDefBuilder::constant_int(o));
-            }
-            if let Some(m) = match_type {
-                builder = builder.push_child(ExprDefBuilder::constant_bytes(m.as_bytes().to_vec()));
-            }
+                let mut ctx = EvalContext::default();
 
-            let node = builder.build();
-            let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, 1).unwrap();
+                let mut builder = ExprDefBuilder::scalar_func(
+                    ScalarFuncSig::RegexpReplaceSig,
+                    FieldTypeTp::String,
+                );
 
-            let schema = &[];
-            let mut columns = LazyBatchColumnVec::empty();
+                let mut schema = Vec::new();
+                let mut columns = LazyBatchColumnVec::empty();
+                if use_column_ref {
+                    schema.extend_from_slice(&[
+                        FieldTypeTp::String.into(),
+                        FieldTypeTp::String.into(),
+                        FieldTypeTp::String.into(),
+                    ]);
+                    builder = builder
+                        .push_child(ExprDefBuilder::column_ref(0, FieldTypeTp::String))
+                        .push_child(ExprDefBuilder::column_ref(1, FieldTypeTp::String))
+                        .push_child(ExprDefBuilder::column_ref(2, FieldTypeTp::String));
+                    let mut col_vec = Vec::new();
+                    let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Bytes);
+                    col.mut_decoded().push_bytes(Some(expr.as_bytes().to_vec()));
+                    col_vec.push(col);
 
-            let val = exp.eval(&mut ctx, schema, &mut columns, &[], 1);
+                    let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Bytes);
+                    col.mut_decoded()
+                        .push_bytes(Some(pattern.as_bytes().to_vec()));
+                    col_vec.push(col);
 
-            match val {
-                Ok(val) => {
-                    assert!(val.is_vector());
-                    let v = val.vector_value().unwrap().as_ref().to_bytes_vec();
-                    assert_eq!(v.len(), 1);
-                    assert_eq!(
-                        v[0],
-                        expected.map(|e| e.as_bytes().to_vec()),
-                        "{:?} {:?} {:?}",
-                        expr,
-                        pattern,
-                        replace,
-                    );
+                    let mut col = LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Bytes);
+                    col.mut_decoded()
+                        .push_bytes(Some(replace.as_bytes().to_vec()));
+                    col_vec.push(col);
+
+                    let mut count = 0;
+                    if let Some(p) = pos {
+                        count += 1;
+                        schema.push(FieldTypeTp::Long.into());
+                        let mut col =
+                            LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Int);
+                        col.mut_decoded().push_int(Some(p));
+                        col_vec.push(col);
+
+                        builder =
+                            builder.push_child(ExprDefBuilder::column_ref(3, FieldTypeTp::Long));
+                    }
+                    if let Some(o) = occur {
+                        assert_eq!(count, 1);
+                        count += 1;
+                        schema.push(FieldTypeTp::Long.into());
+                        let mut col =
+                            LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Int);
+                        col.mut_decoded().push_int(Some(o));
+                        col_vec.push(col);
+
+                        builder =
+                            builder.push_child(ExprDefBuilder::column_ref(4, FieldTypeTp::Long));
+                    }
+                    if let Some(m) = match_type {
+                        assert_eq!(count, 2);
+                        schema.push(FieldTypeTp::String.into());
+                        let mut col =
+                            LazyBatchColumn::decoded_with_capacity_and_tp(1, EvalType::Bytes);
+                        col.mut_decoded().push_bytes(Some(m.as_bytes().to_vec()));
+                        col_vec.push(col);
+
+                        builder =
+                            builder.push_child(ExprDefBuilder::column_ref(5, FieldTypeTp::String));
+                    }
+
+                    columns = LazyBatchColumnVec::from(col_vec);
+                } else {
+                    builder = builder
+                        .push_child(ExprDefBuilder::constant_bytes(expr.as_bytes().to_vec()))
+                        .push_child(ExprDefBuilder::constant_bytes(pattern.as_bytes().to_vec()))
+                        .push_child(ExprDefBuilder::constant_bytes(replace.as_bytes().to_vec()));
+                    let mut count = 0;
+                    if let Some(p) = pos {
+                        count += 1;
+                        builder = builder.push_child(ExprDefBuilder::constant_int(p));
+                    }
+                    if let Some(o) = occur {
+                        assert_eq!(count, 1);
+                        count += 1;
+                        builder = builder.push_child(ExprDefBuilder::constant_int(o));
+                    }
+                    if let Some(m) = match_type {
+                        assert_eq!(count, 2);
+                        builder = builder
+                            .push_child(ExprDefBuilder::constant_bytes(m.as_bytes().to_vec()));
+                    }
                 }
-                Err(e) => {
-                    assert!(error, "val has error {:?}", e);
+
+                let node = builder.build();
+                let exp = RpnExpressionBuilder::build_from_expr_tree(node, &mut ctx, schema.len())
+                    .unwrap();
+
+                let val = exp.eval(&mut ctx, &schema, &mut columns, &[0], 1);
+
+                match val {
+                    Ok(val) => {
+                        assert!(val.is_vector());
+                        let v = val.vector_value().unwrap().as_ref().to_bytes_vec();
+                        assert_eq!(v.len(), 1);
+                        assert_eq!(
+                            v[0],
+                            expected.map(|e| e.as_bytes().to_vec()),
+                            "{:?} {:?} {:?}",
+                            expr,
+                            pattern,
+                            replace,
+                        );
+                    }
+                    Err(e) => {
+                        assert!(error, "val has error {:?}", e);
+                    }
                 }
             }
         }

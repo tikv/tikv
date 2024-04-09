@@ -64,7 +64,9 @@ where
         let region_id = msg.get_region_id();
         let msg_ty = msg.get_message().get_msg_type();
         // Channel full and region not found are ignored unless it's a key message.
-        if let Err(e) = self.router.send_raft_msg(msg) && key_message {
+        if let Err(e) = self.router.send_raft_msg(msg)
+            && key_message
+        {
             error!("failed to send raft message"; "region_id" => region_id, "msg_ty" => ?msg_ty, "err" => ?e);
         }
     }
@@ -121,6 +123,7 @@ where
             split_keys,
             callback: raftstore::store::Callback::write(cb),
             source: source.into(),
+            share_source_region_size: false,
         };
         let res = self.router.send_casual_msg(region_id, req);
         Box::pin(async move {

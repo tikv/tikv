@@ -13,13 +13,93 @@ use kvproto::{
     raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, Request},
     raft_serverpb::RegionLocalState,
 };
-use raftstore::store::Callback;
+use raftstore::store::{Callback, LocksStatus};
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use txn_types::WriteBatchFlags;
+use tikv::storage::kv::SnapContext;
+use txn_types::{Key, LastChange, PessimisticLock, WriteBatchFlags};
 
 const TEST_KEY: &[u8] = b"k1";
 const TEST_VALUE: &[u8] = b"v1";
+
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_flashback_with_in_memory_pessimistic_locks() {
+    let mut cluster = new_cluster(0, 3);
+    cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let region = cluster.get_region(TEST_KEY);
+    // Write a pessimistic lock to the in-memory pessimistic lock table.
+    {
+        let snapshot = cluster.must_get_snapshot_of_region(region.get_id());
+        let txn_ext = snapshot.txn_ext.unwrap();
+        let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
+        assert!(pessimistic_locks.is_writable());
+        pessimistic_locks
+            .insert(vec![(
+                Key::from_raw(TEST_KEY),
+                PessimisticLock {
+                    primary: TEST_KEY.to_vec().into_boxed_slice(),
+                    start_ts: 10.into(),
+                    ttl: 3000,
+                    for_update_ts: 20.into(),
+                    min_commit_ts: 30.into(),
+                    last_change: LastChange::make_exist(5.into(), 3),
+                    is_locked_with_conflict: false,
+                },
+            )])
+            .unwrap();
+        assert_eq!(pessimistic_locks.len(), 1);
+    }
+    // Prepare flashback.
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
+    // Check the in-memory pessimistic lock table.
+    {
+        let snapshot = cluster.must_get_snapshot_of_region_with_ctx(
+            region.get_id(),
+            SnapContext {
+                allowed_in_flashback: true,
+                ..Default::default()
+            },
+        );
+        let txn_ext = snapshot.txn_ext.unwrap();
+        eventually_meet(
+            Box::new(move || {
+                let pessimistic_locks = txn_ext.pessimistic_locks.read();
+                !pessimistic_locks.is_writable()
+                    && pessimistic_locks.status == LocksStatus::IsInFlashback
+                    && pessimistic_locks.is_empty()
+            }),
+            "pessimistic locks status should be LocksStatus::IsInFlashback",
+        );
+    }
+    // Finish flashback.
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
+    // Check the in-memory pessimistic lock table.
+    {
+        let snapshot = cluster.must_get_snapshot_of_region(region.get_id());
+        let txn_ext = snapshot.txn_ext.unwrap();
+        eventually_meet(
+            Box::new(move || {
+                let pessimistic_locks = txn_ext.pessimistic_locks.read();
+                pessimistic_locks.is_writable() && pessimistic_locks.is_empty()
+            }),
+            "pessimistic locks should be writable again",
+        );
+    }
+}
+
+fn eventually_meet(condition: Box<dyn Fn() -> bool>, purpose: &str) {
+    for _ in 0..30 {
+        if condition() {
+            return;
+        }
+        sleep(Duration::from_millis(100));
+    }
+    panic!("condition never meet: {}", purpose);
+}
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
@@ -159,7 +239,7 @@ fn test_prepare_flashback_after_conf_change() {
     let on_handle_apply_fp = "on_handle_apply";
     fail::cfg(on_handle_apply_fp, "pause").unwrap();
     // Send the conf change msg.
-    cluster.async_add_peer(region_id, new_peer(2, 2)).unwrap();
+    let _ = cluster.async_add_peer(region_id, new_peer(2, 2)).unwrap();
     // Make sure the conf change cmd is ready.
     sleep(Duration::from_millis(100));
     // Send the prepare flashback msg.
@@ -475,9 +555,11 @@ trait ClusterI {
     ) -> raftstore::Result<RaftCmdResponse>;
 }
 
-impl ClusterI for Cluster<NodeCluster> {
+impl ClusterI for Cluster<RocksEngine, NodeCluster<RocksEngine>> {
     fn region_local_state(&self, region_id: u64, store_id: u64) -> RegionLocalState {
-        Cluster::<NodeCluster>::region_local_state(self, region_id, store_id)
+        Cluster::<RocksEngine, NodeCluster<RocksEngine>>::region_local_state(
+            self, region_id, store_id,
+        )
     }
     fn query_leader(
         &self,
@@ -485,14 +567,16 @@ impl ClusterI for Cluster<NodeCluster> {
         region_id: u64,
         timeout: Duration,
     ) -> Option<metapb::Peer> {
-        Cluster::<NodeCluster>::query_leader(self, store_id, region_id, timeout)
+        Cluster::<RocksEngine, NodeCluster<RocksEngine>>::query_leader(
+            self, store_id, region_id, timeout,
+        )
     }
     fn call_command(
         &self,
         request: RaftCmdRequest,
         timeout: Duration,
     ) -> raftstore::Result<RaftCmdResponse> {
-        Cluster::<NodeCluster>::call_command(self, request, timeout)
+        Cluster::<RocksEngine, NodeCluster<RocksEngine>>::call_command(self, request, timeout)
     }
 }
 

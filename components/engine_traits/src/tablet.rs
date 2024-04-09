@@ -34,7 +34,7 @@ pub struct CachedTablet<EK> {
 }
 
 impl<EK> CachedTablet<EK> {
-    fn release(&mut self) {
+    pub fn release(&mut self) {
         self.cache = None;
         self.version = 0;
     }
@@ -241,7 +241,7 @@ impl<EK> TabletRegistry<EK> {
         let mut parts = name.rsplit('_');
         let suffix = parts.next()?.parse().ok()?;
         let id = parts.next()?.parse().ok()?;
-        let prefix = parts.as_str();
+        let prefix = parts.remainder().unwrap_or("");
         Some((prefix, id, suffix))
     }
 

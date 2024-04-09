@@ -25,7 +25,7 @@ use raftstore::{
     store::{
         cmd_resp, local_metrics::RaftMetrics, metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::ErrorCallback, region_meta::RegionMeta, util, util::LeaseState, GroupState,
-        ReadIndexContext, ReadProgress, RequestPolicy, Transport,
+        ReadIndexContext, ReadProgress, RequestPolicy,
     },
     Error, Result,
 };
@@ -141,12 +141,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ));
         }
 
-        // TODO: add flashback_state check
-
         // Check whether the store has the right peer to handle the request.
         let request = msg.get_requests();
-
-        // TODO: add force leader
 
         // ReadIndex can be processed on the replicas.
         let is_read_index_request =
@@ -162,6 +158,13 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if let Err(e) = util::check_peer_id(msg.get_header(), self.peer_id()) {
             raft_metrics.invalid_proposal.mismatch_peer_id.inc();
             return Err(e);
+        }
+
+        if self.has_force_leader() {
+            raft_metrics.invalid_proposal.force_leader.inc();
+            // in force leader state, forbid requests to make the recovery
+            // progress less error-prone.
+            return Err(Error::RecoveryInProgress(self.region_id()));
         }
 
         // Check whether the peer is initialized.
@@ -185,7 +188,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     // 1. The region is in merging or splitting;
     // 2. The message is stale and dropped by the Raft group internally;
     // 3. There is already a read request proposed in the current lease;
-    fn read_index<T: Transport>(
+    fn read_index<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         req: RaftCmdRequest,
@@ -279,10 +282,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 && read.cmds()[0].0.get_requests().len() == 1
                 && read.cmds()[0].0.get_requests()[0].get_cmd_type() == CmdType::ReadIndex;
 
+            let read_index = read.read_index.unwrap();
             if is_read_index_request {
                 self.respond_read_index(&mut read);
-            } else if self.ready_to_handle_unsafe_replica_read(read.read_index.unwrap()) {
+            } else if self.ready_to_handle_unsafe_replica_read(read_index) {
                 self.respond_replica_read(&mut read);
+            } else if self.storage().apply_state().get_applied_index()
+                + ctx.cfg.follower_read_max_log_gap()
+                <= read_index
+            {
+                let mut response = cmd_resp::new_error(Error::ReadIndexNotReady {
+                    region_id: self.region_id(),
+                    reason: "applied index fail behind read index too long",
+                });
+                cmd_resp::bind_term(&mut response, self.term());
+                self.respond_replica_read_error(&mut read, response);
             } else {
                 // TODO: `ReadIndex` requests could be blocked.
                 self.pending_reads_mut().push_front(read);
@@ -457,6 +471,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // Only leaders need to update applied_term.
         if progress_to_be_updated && self.is_leader() {
             if applied_term == self.term() {
+                fail::fail_point!("on_applied_current_term");
                 ctx.coprocessor_host
                     .on_applied_current_term(StateRole::Leader, self.region());
             }

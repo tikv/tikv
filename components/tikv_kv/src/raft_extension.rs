@@ -32,6 +32,9 @@ pub trait RaftExtension: Clone + Send {
     /// Report the target store is unreachable.
     fn report_store_unreachable(&self, _store_id: u64) {}
 
+    /// Report the target store may be tombstone.
+    fn report_store_maybe_tombstone(&self, _store_id: u64) {}
+
     /// Report the status of snapshot.
     fn report_snapshot_status(&self, _region_id: u64, _to_peer_id: u64, _status: SnapshotStatus) {}
 

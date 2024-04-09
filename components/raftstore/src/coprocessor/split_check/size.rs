@@ -158,13 +158,14 @@ impl<C: StoreHandle, E: KvEngine> SplitCheckObserver<E> for SizeCheckObserver<C>
         };
 
         // send it to raftstore to update region approximate size
-        self.router.update_approximate_size(region_id, region_size);
+        self.router
+            .update_approximate_size(region_id, Some(region_size), None);
 
+        let need_split_region = region_size >= host.cfg.region_max_size().0;
         let need_bucket_checker =
             host.cfg.enable_region_bucket() && region_size >= 2 * host.cfg.region_bucket_size.0;
         REGION_SIZE_HISTOGRAM.observe(region_size as f64);
 
-        let need_split_region = region_size >= host.cfg.region_max_size().0;
         if need_split_region || need_bucket_checker {
             // when it's a large region use approximate way to produce split keys
             if need_split_region {
@@ -265,11 +266,23 @@ pub mod tests {
         exp_split_keys: Vec<Vec<u8>>,
         ignore_split_keys: bool,
     ) {
+        let mut split = false;
         loop {
             match rx.try_recv() {
-                Ok(SchedTask::UpdateApproximateKeys { region_id, .. })
-                | Ok(SchedTask::UpdateApproximateSize { region_id, .. })
-                | Ok(SchedTask::RefreshRegionBuckets { region_id, .. }) => {
+                Ok(SchedTask::UpdateApproximateKeys {
+                    region_id,
+                    splitable,
+                    ..
+                })
+                | Ok(SchedTask::UpdateApproximateSize {
+                    region_id,
+                    splitable,
+                    ..
+                }) => {
+                    assert_eq!(region_id, exp_region.get_id());
+                    split = split || splitable.unwrap_or(false);
+                }
+                Ok(SchedTask::RefreshRegionBuckets { region_id, .. }) => {
                     assert_eq!(region_id, exp_region.get_id());
                 }
                 Ok(SchedTask::AskSplit {
@@ -283,6 +296,7 @@ pub mod tests {
                     if !ignore_split_keys {
                         assert_eq!(split_keys, exp_split_keys);
                     }
+                    assert!(split);
                     break;
                 }
                 others => panic!("expect split check result, but got {:?}", others),
@@ -303,11 +317,23 @@ pub mod tests {
         exp_region: &Region,
         exp_split_keys_count: usize,
     ) {
+        let mut split = false;
         loop {
             match rx.try_recv() {
-                Ok(SchedTask::UpdateApproximateSize { region_id, .. })
-                | Ok(SchedTask::UpdateApproximateKeys { region_id, .. })
-                | Ok(SchedTask::RefreshRegionBuckets { region_id, .. }) => {
+                Ok(SchedTask::UpdateApproximateSize {
+                    region_id,
+                    splitable,
+                    ..
+                })
+                | Ok(SchedTask::UpdateApproximateKeys {
+                    region_id,
+                    splitable,
+                    ..
+                }) => {
+                    assert_eq!(region_id, exp_region.get_id());
+                    split = split || splitable.unwrap_or(false);
+                }
+                Ok(SchedTask::RefreshRegionBuckets { region_id, .. }) => {
                     assert_eq!(region_id, exp_region.get_id());
                 }
                 Ok(SchedTask::AskSplit {
@@ -319,6 +345,7 @@ pub mod tests {
                     assert_eq!(region_id, exp_region.get_id());
                     assert_eq!(&region_epoch, exp_region.get_region_epoch());
                     assert_eq!(split_keys.len(), exp_split_keys_count);
+                    assert!(split);
                     break;
                 }
                 others => panic!("expect split check result, but got {:?}", others),

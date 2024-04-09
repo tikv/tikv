@@ -2,8 +2,7 @@
 
 use std::{cell::RefCell, error::Error as StdError, result, thread::JoinHandle};
 
-use engine_rocks::RocksEngine;
-use engine_traits::{Engines, Iterable, Peekable, RaftEngine, CF_RAFT};
+use engine_traits::{Engines, KvEngine, RaftEngine, CF_RAFT};
 use futures::channel::mpsc::UnboundedSender;
 use kvproto::{
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
@@ -11,6 +10,8 @@ use kvproto::{
 };
 use thiserror::Error;
 use tikv_util::sys::thread::StdThreadBuildWrapper;
+
+use crate::metrics::REGION_EVENT_COUNTER;
 
 pub type Result<T> = result::Result<T, Error>;
 
@@ -28,9 +29,13 @@ pub enum Error {
 }
 
 /// `RegionMetaCollector` is the collector that collector all region meta
-pub struct RegionMetaCollector<ER: RaftEngine> {
+pub struct RegionMetaCollector<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     /// The engine we are working on
-    engines: Engines<RocksEngine, ER>,
+    engines: Engines<EK, ER>,
     /// region meta report to br
     tx: UnboundedSender<RegionMeta>,
     /// Current working workers
@@ -38,8 +43,12 @@ pub struct RegionMetaCollector<ER: RaftEngine> {
 }
 
 #[allow(dead_code)]
-impl<ER: RaftEngine> RegionMetaCollector<ER> {
-    pub fn new(engines: Engines<RocksEngine, ER>, tx: UnboundedSender<RegionMeta>) -> Self {
+impl<EK, ER> RegionMetaCollector<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    pub fn new(engines: Engines<EK, ER>, tx: UnboundedSender<RegionMeta>) -> Self {
         RegionMetaCollector {
             engines,
             tx,
@@ -55,13 +64,10 @@ impl<ER: RaftEngine> RegionMetaCollector<ER> {
                 .name("collector_region_meta".to_string())
                 .spawn_wrapper(move || {
                     tikv_util::thread_group::set_properties(props);
-                    tikv_alloc::add_thread_memory_accessor();
 
                     worker
                         .collect_report()
                         .expect("collect region meta and report to br failure.");
-
-                    tikv_alloc::remove_thread_memory_accessor();
                 })
                 .expect("failed to spawn collector_region_meta thread"),
         );
@@ -75,14 +81,22 @@ impl<ER: RaftEngine> RegionMetaCollector<ER> {
     }
 }
 
-struct CollectWorker<ER: RaftEngine> {
+struct CollectWorker<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
     /// The engine we are working on
-    engines: Engines<RocksEngine, ER>,
+    engines: Engines<EK, ER>,
     tx: UnboundedSender<RegionMeta>,
 }
 
-impl<ER: RaftEngine> CollectWorker<ER> {
-    pub fn new(engines: Engines<RocksEngine, ER>, tx: UnboundedSender<RegionMeta>) -> Self {
+impl<EK, ER> CollectWorker<EK, ER>
+where
+    EK: KvEngine,
+    ER: RaftEngine,
+{
+    pub fn new(engines: Engines<EK, ER>, tx: UnboundedSender<RegionMeta>) -> Self {
         CollectWorker { engines, tx }
     }
 
@@ -146,6 +160,7 @@ impl<ER: RaftEngine> CollectWorker<ER> {
             // send to br
             let response = region_state.to_region_meta();
 
+            REGION_EVENT_COUNTER.collect_meta.inc();
             if let Err(e) = self.tx.unbounded_send(response) {
                 warn!("send the region meta failure";
                 "err" => ?e);

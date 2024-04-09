@@ -6,10 +6,12 @@ pub mod commands;
 pub mod flow_controller;
 pub mod sched_pool;
 pub mod scheduler;
+pub mod txn_status_cache;
 
 mod actions;
 mod latch;
 mod store;
+mod task;
 
 use std::{error::Error as StdError, io::Error as IoError};
 

@@ -128,7 +128,9 @@ mod tests {
             .unwrap();
 
         let backend = MemAesGcmBackend::new(key).unwrap();
-        let encrypted_content = backend.encrypt_content(&pt, Iv::new_gcm()).unwrap();
+        let encrypted_content = backend
+            .encrypt_content(&pt, Iv::new_gcm().unwrap())
+            .unwrap();
         let plaintext = backend.decrypt_content(&encrypted_content).unwrap();
         assert_eq!(plaintext, pt);
 

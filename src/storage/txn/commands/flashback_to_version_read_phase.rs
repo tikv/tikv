@@ -84,7 +84,10 @@ pub fn new_flashback_write_cmd(
 command! {
     FlashbackToVersionReadPhase:
         cmd_ty => (),
-        display => "kv::command::flashback_to_version_read_phase -> {} | {} {} | {:?}", (version, start_ts, commit_ts, ctx),
+        display => {
+            "kv::command::flashback_to_version_read_phase -> {} | {} {} | {:?}",
+            (version, start_ts, commit_ts, ctx),
+        }
         content => {
             start_ts: TimeStamp,
             commit_ts: TimeStamp,
@@ -92,6 +95,10 @@ command! {
             start_key: Key,
             end_key: Option<Key>,
             state: FlashbackToVersionState,
+        }
+        in_heap => {
+            start_key,
+            end_key,
         }
 }
 
@@ -153,6 +160,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
     fn process_read(self, snapshot: S, statistics: &mut Statistics) -> Result<ProcessResult> {
         let tag = self.tag().get_str();
         let mut reader = MvccReader::new_with_ctx(snapshot, Some(ScanMode::Forward), &self.ctx);
+        reader.set_allow_in_flashback(true);
         // Filter out the SST that does not have a newer version than `self.version` in
         // `CF_WRITE`, i.e, whose latest `commit_ts` <= `self.version` in the later
         // scan. By doing this, we can only flashback those keys that have version

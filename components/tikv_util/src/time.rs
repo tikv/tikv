@@ -150,7 +150,7 @@ impl Monitor {
             .name(thd_name!("time-monitor"))
             .spawn_wrapper(move || {
                 crate::thread_group::set_properties(props);
-                tikv_alloc::add_thread_memory_accessor();
+
                 while rx.try_recv().is_err() {
                     let before = now();
                     thread::sleep(Duration::from_millis(DEFAULT_WAIT_MS));
@@ -166,7 +166,6 @@ impl Monitor {
                         on_jumped()
                     }
                 }
-                tikv_alloc::remove_thread_memory_accessor();
             })
             .unwrap();
 
@@ -201,10 +200,9 @@ impl Drop for Monitor {
     }
 }
 
-use self::inner::monotonic_coarse_now;
-pub use self::inner::monotonic_now;
 /// Returns the monotonic raw time since some unspecified starting point.
 pub use self::inner::monotonic_raw_now;
+pub use self::inner::{monotonic_coarse_now, monotonic_now};
 use crate::sys::thread::StdThreadBuildWrapper;
 
 const NANOSECONDS_PER_SECOND: u64 = 1_000_000_000;
@@ -512,7 +510,7 @@ pub struct ThreadReadId {
     pub create_time: Timespec,
 }
 
-thread_local!(static READ_SEQUENCE: RefCell<u64> = RefCell::new(0));
+thread_local!(static READ_SEQUENCE: RefCell<u64> = const { RefCell::new(0) });
 
 impl ThreadReadId {
     pub fn new() -> ThreadReadId {
@@ -545,6 +543,8 @@ mod tests {
         thread,
         time::{Duration, SystemTime},
     };
+
+    use test::Bencher;
 
     use super::*;
 
@@ -685,5 +685,19 @@ mod tests {
             assert!(now.saturating_elapsed() >= zero);
             assert!(now_coarse.saturating_elapsed() >= zero);
         }
+    }
+
+    #[bench]
+    fn bench_instant_now(b: &mut Bencher) {
+        b.iter(|| {
+            let _now = Instant::now();
+        });
+    }
+
+    #[bench]
+    fn bench_instant_now_coarse(b: &mut Bencher) {
+        b.iter(|| {
+            let _now = Instant::now_coarse();
+        });
     }
 }

@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use online_config::{ConfigChange, ConfigManager, OnlineConfig};
-use tikv_util::config::{ReadableSize, VersionTrack};
+use tikv_util::{
+    config::{ReadableSize, VersionTrack},
+    yatp_pool::FuturePool,
+};
 
 const DEFAULT_GC_RATIO_THRESHOLD: f64 = 1.1;
 pub const DEFAULT_GC_BATCH_KEYS: usize = 512;
@@ -22,6 +25,8 @@ pub struct GcConfig {
     /// greater than 5.0.0. Change `compaction_filter_skip_version_check`
     /// can enable it by force.
     pub compaction_filter_skip_version_check: bool,
+    /// gc threads count
+    pub num_threads: usize,
 }
 
 impl Default for GcConfig {
@@ -32,6 +37,7 @@ impl Default for GcConfig {
             max_write_bytes_per_sec: ReadableSize(DEFAULT_GC_MAX_WRITE_BYTES_PER_SEC),
             enable_compaction_filter: true,
             compaction_filter_skip_version_check: false,
+            num_threads: 1,
         }
     }
 }
@@ -41,12 +47,15 @@ impl GcConfig {
         if self.batch_keys == 0 {
             return Err("gc.batch_keys should not be 0".into());
         }
+        if self.num_threads == 0 {
+            return Err("gc.thread_count should not be 0".into());
+        }
         Ok(())
     }
 }
 
 #[derive(Clone, Default)]
-pub struct GcWorkerConfigManager(pub Arc<VersionTrack<GcConfig>>);
+pub struct GcWorkerConfigManager(pub Arc<VersionTrack<GcConfig>>, pub Option<FuturePool>);
 
 impl ConfigManager for GcWorkerConfigManager {
     fn dispatch(
@@ -55,6 +64,16 @@ impl ConfigManager for GcWorkerConfigManager {
     ) -> std::result::Result<(), Box<dyn std::error::Error>> {
         {
             let change = change.clone();
+            if let Some(pool) = self.1.as_ref() {
+                if let Some(v) = change.get("num_threads") {
+                    let pool_size: usize = v.into();
+                    pool.scale_pool_size(pool_size);
+                    info!(
+                        "GC worker thread count is changed";
+                        "new_thread_count" => pool_size,
+                    );
+                }
+            }
             self.0
                 .update(move |cfg: &mut GcConfig| cfg.update(change))?;
         }

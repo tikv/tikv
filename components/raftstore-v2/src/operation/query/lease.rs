@@ -3,16 +3,21 @@
 use std::sync::Mutex;
 
 use engine_traits::{KvEngine, RaftEngine};
-use kvproto::raft_cmdpb::RaftCmdRequest;
+use kvproto::raft_cmdpb::{RaftCmdRequest, RaftRequestHeader};
 use raft::{
     eraftpb::{self, MessageType},
     Storage,
 };
 use raftstore::{
     store::{
-        can_amend_read, fsm::apply::notify_stale_req, metrics::RAFT_READ_INDEX_PENDING_COUNT,
-        msg::ReadCallback, propose_read_index, should_renew_lease, util::LeaseState, ReadDelegate,
-        ReadIndexRequest, ReadProgress, Transport,
+        can_amend_read, cmd_resp,
+        fsm::{apply::notify_stale_req, new_read_index_request},
+        metrics::RAFT_READ_INDEX_PENDING_COUNT,
+        msg::{ErrorCallback, ReadCallback},
+        propose_read_index, should_renew_lease,
+        simple_write::SimpleWriteEncoder,
+        util::{check_req_region_epoch, LeaseState},
+        ReadDelegate, ReadIndexRequest, ReadProgress, Transport,
     },
     Error, Result,
 };
@@ -23,9 +28,9 @@ use tracker::GLOBAL_TRACKERS;
 
 use crate::{
     batch::StoreContext,
-    fsm::StoreMeta,
+    fsm::{PeerFsmDelegate, StoreMeta},
     raft::Peer,
-    router::{QueryResChannel, QueryResult, ReadResponse},
+    router::{CmdResChannel, PeerTick, QueryResChannel, QueryResult, ReadResponse},
 };
 
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
@@ -95,7 +100,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         Ok(())
     }
 
-    pub(crate) fn read_index_leader<T: Transport>(
+    pub(crate) fn read_index_leader<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
@@ -146,26 +151,24 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "request_id" => ?id,
         );
 
-        self.set_has_ready();
         // TimeoutNow has been sent out, so we need to propose explicitly to
         // update leader lease.
-        // TODO:add following when propose is done
-        // if self.leader_lease.is_suspect() {
-        // let req = RaftCmdRequest::default();
-        // if let Ok(Either::Left(index)) = self.propose_normal(ctx, req) {
-        // let (callback, _) = CmdResChannel::pair();
-        // let p = Proposal {
-        // is_conf_change: false,
-        // index,
-        // term: self.term(),
-        // cb: callback,
-        // propose_time: Some(now),
-        // must_pass_epoch_check: false,
-        // };
-        //
-        // self.post_propose(ctx, p);
-        // }
-        // }
+        if self.leader_lease().is_suspect() {
+            self.propose_no_op(ctx);
+        }
+
+        self.set_has_ready();
+    }
+
+    fn propose_no_op<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
+        let mut header = Box::<RaftRequestHeader>::default();
+        header.set_region_id(self.region_id());
+        header.set_peer(self.peer().clone());
+        header.set_region_epoch(self.region().get_region_epoch().clone());
+        header.set_term(self.term());
+        let empty_data = SimpleWriteEncoder::with_capacity(0).encode();
+        let (ch, _) = CmdResChannel::pair();
+        self.on_simple_write(ctx, header, empty_data, ch, None);
     }
 
     /// response the read index request
@@ -183,7 +186,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         );
         RAFT_READ_INDEX_PENDING_COUNT.sub(read_index_req.cmds().len() as i64);
         let time = monotonic_raw_now();
-        for (_, ch, mut read_index) in read_index_req.take_cmds().drain(..) {
+        for (req, ch, mut read_index) in read_index_req.take_cmds().drain(..) {
             ch.read_tracker().map(|tracker| {
                 GLOBAL_TRACKERS.with_tracker(tracker, |t| {
                     t.metrics.read_index_confirm_wait_nanos = (time - read_index_req.propose_time)
@@ -193,6 +196,20 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         as u64;
                 })
             });
+
+            // Check region epoch before responding read index because region
+            // may be splitted or merged during read index.
+            if let Err(e) = check_req_region_epoch(&req, self.region(), true) {
+                debug!(self.logger,
+                    "read index epoch not match";
+                    "region_id" => self.region_id(),
+                    "err" => ?e,
+                );
+                let mut response = cmd_resp::new_error(e);
+                cmd_resp::bind_term(&mut response, self.term());
+                ch.report_error(response);
+                return;
+            }
 
             // Key lock should not happen when read_index is running at the leader.
             // Because it only happens when concurrent read and write requests on the same
@@ -291,5 +308,65 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.leader_lease_mut().expire();
         }
         state
+    }
+
+    // If lease expired, we will send a noop read index to renew lease.
+    fn try_renew_leader_lease<T>(&mut self, ctx: &mut StoreContext<EK, ER, T>) {
+        debug!(self.logger,
+            "renew lease";
+            "region_id" => self.region_id(),
+            "peer_id" => self.peer_id(),
+        );
+
+        let current_time = *ctx.current_time.get_or_insert_with(monotonic_raw_now);
+        if self.need_renew_lease_at(ctx, current_time) {
+            let mut cmd = new_read_index_request(
+                self.region_id(),
+                self.region().get_region_epoch().clone(),
+                self.peer().clone(),
+            );
+            cmd.mut_header().set_read_quorum(true);
+            let (ch, _) = QueryResChannel::pair();
+            self.read_index(ctx, cmd, ch);
+        }
+    }
+
+    fn need_renew_lease_at<T>(
+        &self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        current_time: Timespec,
+    ) -> bool {
+        let renew_bound = match self.leader_lease().need_renew(current_time) {
+            Some(ts) => ts,
+            None => return false,
+        };
+        let max_lease = ctx.cfg.raft_store_max_leader_lease();
+        let has_overlapped_reads = self.pending_reads().back().map_or(false, |read| {
+            // If there is any read index whose lease can cover till next heartbeat
+            // then we don't need to propose a new one
+            read.propose_time + max_lease > renew_bound
+        });
+        let has_overlapped_writes = self.proposals().back().map_or(false, |proposal| {
+            // If there is any write whose lease can cover till next heartbeat
+            // then we don't need to propose a new one
+            proposal
+                .propose_time
+                .map_or(false, |propose_time| propose_time + max_lease > renew_bound)
+        });
+        !has_overlapped_reads && !has_overlapped_writes
+    }
+}
+
+impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
+    fn register_check_leader_lease_tick(&mut self) {
+        self.schedule_tick(PeerTick::CheckLeaderLease)
+    }
+
+    pub fn on_check_leader_lease_tick(&mut self) {
+        if !self.fsm.peer_mut().is_leader() {
+            return;
+        }
+        self.fsm.peer_mut().try_renew_leader_lease(self.store_ctx);
+        self.register_check_leader_lease_tick();
     }
 }

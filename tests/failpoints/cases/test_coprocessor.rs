@@ -1,15 +1,17 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{sync::Arc, thread, time::Duration};
 
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
+    coprocessor::Request,
     kvrpcpb::{Context, IsolationLevel},
     tikvpb::TikvClient,
 };
 use more_asserts::{assert_ge, assert_le};
 use protobuf::Message;
+use raftstore::store::Bucket;
 use test_coprocessor::*;
 use test_raftstore_macro::test_case;
 use test_storage::*;
@@ -29,8 +31,15 @@ fn test_deadline() {
 
     fail::cfg("deadline_check_fail", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
-
-    assert!(resp.get_other_error().contains("exceeding the deadline"));
+    let region_err = resp.get_region_error();
+    assert_eq!(
+        region_err.get_server_is_busy().reason,
+        "deadline is exceeded".to_string()
+    );
+    assert_eq!(
+        region_err.get_message(),
+        "Coprocessor task terminated due to exceeding the deadline"
+    );
 }
 
 #[test]
@@ -44,8 +53,15 @@ fn test_deadline_2() {
     fail::cfg("rockskv_async_snapshot", "panic").unwrap();
     fail::cfg("deadline_check_fail", "return()").unwrap();
     let resp = handle_request(&endpoint, req);
-
-    assert!(resp.get_other_error().contains("exceeding the deadline"));
+    let region_err = resp.get_region_error();
+    assert_eq!(
+        region_err.get_server_is_busy().reason,
+        "deadline is exceeded".to_string()
+    );
+    assert_eq!(
+        region_err.get_message(),
+        "Coprocessor task terminated due to exceeding the deadline"
+    );
 }
 
 /// Test deadline exceeded when request is handling
@@ -63,7 +79,9 @@ fn test_deadline_3() {
     let (_, endpoint, _) = {
         let engine = tikv::storage::TestEngineBuilder::new().build().unwrap();
         let cfg = tikv::server::Config {
-            end_point_request_max_handle_duration: tikv_util::config::ReadableDuration::secs(1),
+            end_point_request_max_handle_duration: Some(tikv_util::config::ReadableDuration::secs(
+                1,
+            )),
             ..Default::default()
         };
         init_data_with_details(Context::default(), engine, &product, &data, true, &cfg)
@@ -76,12 +94,14 @@ fn test_deadline_3() {
     let mut resp = SelectResponse::default();
     resp.merge_from_bytes(cop_resp.get_data()).unwrap();
 
-    assert!(
-        cop_resp.other_error.contains("exceeding the deadline")
-            || resp
-                .get_error()
-                .get_msg()
-                .contains("exceeding the deadline")
+    let region_err = cop_resp.get_region_error();
+    assert_eq!(
+        region_err.get_server_is_busy().reason,
+        "deadline is exceeded".to_string()
+    );
+    assert_eq!(
+        region_err.get_message(),
+        "Coprocessor task terminated due to exceeding the deadline"
     );
 }
 
@@ -403,6 +423,7 @@ fn test_read_index_lock_checking_on_follower() {
         10.into(),
         1,
         20.into(),
+        false,
     )
     .use_async_commit(vec![]);
     // Set a memory lock which is in the coprocessor query range on the leader
@@ -417,4 +438,64 @@ fn test_read_index_lock_checking_on_follower() {
         "{:?}",
         resp
     );
+}
+
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_follower_buckets() {
+    let mut cluster = new_cluster(0, 3);
+    cluster.run();
+    fail::cfg("skip_check_stale_read_safe", "return()").unwrap();
+    let product = ProductTable::new();
+    let (raft_engine, ctx) = leader_raft_engine!(cluster, "");
+    let (_, endpoint, _) =
+        init_data_with_engine_and_commit(ctx.clone(), raft_engine, &product, &[], true);
+
+    let mut req = DagSelect::from(&product).build_with(ctx, &[0]);
+    let resp = handle_request(&endpoint, req.clone());
+    assert_eq!(resp.get_latest_buckets_version(), 0);
+
+    let mut bucket_key = product.get_record_range_all().get_start().to_owned();
+    bucket_key.push(0);
+    let region = cluster.get_region(&bucket_key);
+    let bucket = Bucket {
+        keys: vec![bucket_key],
+        size: 1024,
+    };
+
+    cluster.refresh_region_bucket_keys(&region, vec![bucket], None, None);
+    thread::sleep(Duration::from_millis(100));
+    let wait_refresh_buckets = |endpoint, req: &mut Request| {
+        for _ in 0..10 {
+            req.mut_context().set_buckets_version(0);
+            let resp = handle_request(&endpoint, req.clone());
+            if resp.get_latest_buckets_version() == 0 {
+                thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+
+            req.mut_context().set_buckets_version(1);
+            let resp = handle_request(&endpoint, req.clone());
+            if !resp.has_region_error() {
+                thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+            assert_ge!(
+                resp.get_region_error()
+                    .get_bucket_version_not_match()
+                    .version,
+                1
+            );
+            return;
+        }
+        panic!("test_follower_buckets test case failed, can not get bucket version in time");
+    };
+    wait_refresh_buckets(endpoint, &mut req.clone());
+    for (engine, ctx) in follower_raft_engine!(cluster, "") {
+        req.set_context(ctx.clone());
+        let (_, endpoint, _) =
+            init_data_with_engine_and_commit(ctx.clone(), engine, &product, &[], true);
+        wait_refresh_buckets(endpoint, &mut req.clone());
+    }
+    fail::remove("skip_check_stale_read_safe");
 }

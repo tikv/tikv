@@ -2,10 +2,11 @@
 name = "fuzzer-afl"
 version = "0.0.1"
 publish = false
+license = "Apache-2.0"
 
 [dependencies]
 fuzz-targets = { path = "../targets" }
 
 # AFL only works for x86 targets
 [target.'cfg(all(not(target_os = "windows"), target_arch = "x86_64"))'.dependencies]
-afl = "0.6"
+afl = "0.14"

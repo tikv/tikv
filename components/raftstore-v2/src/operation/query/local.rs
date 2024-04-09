@@ -28,6 +28,7 @@ use raftstore::{
 use slog::{debug, Logger};
 use tikv_util::{box_err, codec::number::decode_u64, time::monotonic_raw_now, Either};
 use time::Timespec;
+use tracker::{get_tls_tracker_token, GLOBAL_TRACKERS};
 use txn_types::WriteBatchFlags;
 
 use crate::{
@@ -200,7 +201,7 @@ where
     fn try_get_snapshot(
         &mut self,
         req: &RaftCmdRequest,
-        after_read_index: bool,
+        has_read_index_success: bool,
     ) -> ReadResult<RegionSnapshot<E::Snapshot>, RaftCmdResponse> {
         match self.pre_propose_raft_command(req) {
             ReadResult::Ok((mut delegate, policy)) => {
@@ -208,22 +209,27 @@ where
                     ReadRequestPolicy::ReadLocal => {
                         let region = Arc::clone(&delegate.region);
                         let snap = RegionSnapshot::from_snapshot(
-                            Arc::new(delegate.cached_tablet.cache().snapshot()),
+                            Arc::new(delegate.cached_tablet.cache().snapshot(None)),
                             region,
                         );
+
                         // Ensures the snapshot is acquired before getting the time
                         atomic::fence(atomic::Ordering::Release);
                         let snapshot_ts = monotonic_raw_now();
 
-                        if !delegate.is_in_leader_lease(snapshot_ts) {
+                        if !delegate.is_in_leader_lease(snapshot_ts) && !has_read_index_success {
+                            // Redirect if it's not in lease and it has not finish read index.
                             return ReadResult::Redirect;
                         }
 
                         TLS_LOCAL_READ_METRICS
                             .with(|m| m.borrow_mut().local_executed_requests.inc());
 
-                        // Try renew lease in advance
-                        self.maybe_renew_lease_in_advance(&delegate, req, snapshot_ts);
+                        if !has_read_index_success {
+                            // Try renew lease in advance only if it has not read index before.
+                            // Because a successful read index has already renewed lease.
+                            self.maybe_renew_lease_in_advance(&delegate, req, snapshot_ts);
+                        }
                         snap
                     }
                     ReadRequestPolicy::StaleRead => {
@@ -234,7 +240,7 @@ where
 
                         let region = Arc::clone(&delegate.region);
                         let snap = RegionSnapshot::from_snapshot(
-                            Arc::new(delegate.cached_tablet.cache().snapshot()),
+                            Arc::new(delegate.cached_tablet.cache().snapshot(None)),
                             region,
                         );
 
@@ -251,14 +257,14 @@ where
                     }
                     ReadRequestPolicy::ReadIndex => {
                         // ReadIndex is returned only for replica read.
-                        if !after_read_index {
+                        if !has_read_index_success {
                             // It needs to read index before getting snapshot.
                             return ReadResult::Redirect;
                         }
 
                         let region = Arc::clone(&delegate.region);
                         let snap = RegionSnapshot::from_snapshot(
-                            Arc::new(delegate.cached_tablet.cache().snapshot()),
+                            Arc::new(delegate.cached_tablet.cache().snapshot(None)),
                             region,
                         );
 
@@ -271,6 +277,7 @@ where
                     }
                 };
 
+                snap.set_from_v2();
                 snap.txn_ext = Some(delegate.txn_ext.clone());
                 snap.term = NonZeroU64::new(delegate.term);
                 snap.txn_extra_op = delegate.txn_extra_op.load();
@@ -329,7 +336,12 @@ where
 
         async move {
             let (mut fut, mut reader) = match res {
-                Either::Left(Ok(snap)) => return Ok(snap),
+                Either::Left(Ok(snap)) => {
+                    GLOBAL_TRACKERS.with_tracker(get_tls_tracker_token(), |t| {
+                        t.metrics.local_read = true;
+                    });
+                    return Ok(snap);
+                }
                 Either::Left(Err(e)) => return Err(e),
                 Either::Right((fut, reader)) => (fut, reader),
             };
@@ -339,14 +351,16 @@ where
                 match fut.await? {
                     Some(query_res) => {
                         if query_res.read().is_none() {
-                            let QueryResult::Response(res) = query_res else { unreachable!() };
+                            let QueryResult::Response(res) = query_res else {
+                                unreachable!()
+                            };
                             // Get an error explicitly in header,
                             // or leader reports KeyIsLocked error via read index.
                             assert!(
                                 res.get_header().has_error()
                                     || res
                                         .get_responses()
-                                        .get(0)
+                                        .first()
                                         .map_or(false, |r| r.get_read_index().has_locked()),
                                 "{:?}",
                                 res
@@ -574,6 +588,10 @@ impl<'r> SnapRequestInspector<'r> {
             ));
         }
 
+        fail::fail_point!("perform_read_index", |_| Ok(ReadRequestPolicy::ReadIndex));
+
+        fail::fail_point!("perform_read_local", |_| Ok(ReadRequestPolicy::ReadLocal));
+
         let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {
             return Ok(ReadRequestPolicy::StaleRead);
@@ -590,7 +608,6 @@ impl<'r> SnapRequestInspector<'r> {
         }
 
         // Local read should be performed, if and only if leader is in lease.
-        // None for now.
         match self.inspect_lease() {
             LeaseState::Valid => Ok(ReadRequestPolicy::ReadLocal),
             LeaseState::Expired | LeaseState::Suspect => {

@@ -237,10 +237,8 @@ mod tests {
         cfg.raft_store.raftdb_path = raftdb_path.to_str().unwrap().to_owned();
         cfg.raftdb.wal_dir = raftdb_wal_path.to_str().unwrap().to_owned();
         cfg.raft_engine.mut_config().dir = raft_engine_path.to_str().unwrap().to_owned();
-        let cache = cfg
-            .storage
-            .block_cache
-            .build_shared_cache(cfg.storage.engine);
+        cfg.validate().unwrap();
+        let cache = cfg.storage.block_cache.build_shared_cache();
 
         // Dump logs from RocksEngine to RaftLogEngine.
         let raft_engine = RaftLogEngine::new(

@@ -2,7 +2,7 @@
 
 use std::fmt::Debug;
 
-use crate::{iterable::Iterable, peekable::Peekable, CfNamesExt};
+use crate::{iterable::Iterable, peekable::Peekable, CfNamesExt, SnapshotMiscExt};
 
 /// A consistent read-only view of the database.
 ///
@@ -10,6 +10,7 @@ use crate::{iterable::Iterable, peekable::Peekable, CfNamesExt};
 /// clonable, call `into_sync` to create a `SyncSnapshot`.
 pub trait Snapshot
 where
-    Self: 'static + Peekable + Iterable + CfNamesExt + Send + Sync + Sized + Debug,
+    Self:
+        'static + Peekable + Iterable + CfNamesExt + SnapshotMiscExt + Send + Sync + Sized + Debug,
 {
 }

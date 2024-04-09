@@ -203,7 +203,7 @@ impl<E: Engine> Store<E> {
     }
 
     pub fn put(&mut self, ctx: Context, mut kv: Vec<(Vec<u8>, Vec<u8>)>) {
-        self.handles.extend(kv.iter().map(|&(ref k, _)| k.clone()));
+        self.handles.extend(kv.iter().map(|(k, _)| k.clone()));
         let pk = kv[0].0.clone();
         let kv = kv
             .drain(..)
@@ -271,8 +271,7 @@ impl<E: Engine> Store<E> {
             )
             .unwrap()
             .into_iter()
-            .filter(Result::is_ok)
-            .map(Result::unwrap)
+            .flatten()
             .collect()
     }
 
@@ -298,6 +297,26 @@ impl<E: Engine> Store<E> {
             .map(|(key, value)| (Key::from_raw(&key), Ok(value)))
             .collect();
         FixtureStore::new(data)
+    }
+
+    pub fn insert_all_null_row(
+        &mut self,
+        tbl: &Table,
+        ctx: Context,
+        with_checksum: bool,
+        extra_checksum: Option<u32>,
+    ) {
+        self.begin();
+        let inserts = self
+            .insert_into(tbl)
+            .set(&tbl["id"], Datum::Null)
+            .set(&tbl["name"], Datum::Null)
+            .set(&tbl["count"], Datum::Null)
+            .set_v2(&tbl["id"], ScalarValue::Int(None))
+            .set_v2(&tbl["name"], ScalarValue::Bytes(None))
+            .set_v2(&tbl["count"], ScalarValue::Int(None));
+        inserts.execute_with_v2_checksum(ctx, with_checksum, extra_checksum);
+        self.commit();
     }
 }
 

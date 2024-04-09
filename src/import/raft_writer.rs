@@ -259,9 +259,11 @@ mod test {
         let rt = Builder::new_multi_thread()
             .enable_all()
             .worker_threads(1)
-            .after_start_wrapper(move || tikv_kv::set_tls_engine(engine.lock().unwrap().clone()))
-            // SAFETY: see the line above.
-            .before_stop_wrapper(|| unsafe { tikv_kv::destroy_tls_engine::<RocksEngine>() })
+            .with_sys_and_custom_hooks(
+                move || tikv_kv::set_tls_engine(engine.lock().unwrap().clone()),
+                // SAFETY: see the line above.
+                || unsafe { tikv_kv::destroy_tls_engine::<RocksEngine>() },
+            )
             .build()
             .unwrap();
         let handle =

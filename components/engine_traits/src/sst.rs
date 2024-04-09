@@ -2,9 +2,10 @@
 
 use std::{path::PathBuf, sync::Arc};
 
+use encryption::DataKeyManager;
 use kvproto::import_sstpb::SstMeta;
 
-use crate::{errors::Result, EncryptionKeyManager, RefIterable};
+use crate::{errors::Result, RefIterable};
 
 #[derive(Clone, Debug)]
 pub struct SstMetaInfo {
@@ -20,10 +21,10 @@ pub trait SstExt: Sized {
 }
 
 /// SstReader is used to read an SST file.
-pub trait SstReader: RefIterable + Sized {
-    fn open(path: &str) -> Result<Self>;
-    fn open_encrypted<E: EncryptionKeyManager>(path: &str, mgr: Arc<E>) -> Result<Self>;
+pub trait SstReader: RefIterable + Sized + Send {
+    fn open(path: &str, mgr: Option<Arc<DataKeyManager>>) -> Result<Self>;
     fn verify_checksum(&self) -> Result<()>;
+    fn kv_count_and_size(&self) -> (u64, u64);
 }
 
 /// SstWriter is used to create sst files that can be added to database later.

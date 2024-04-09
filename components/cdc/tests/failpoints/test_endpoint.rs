@@ -17,7 +17,7 @@ use test_raftstore::*;
 use tikv_util::{debug, worker::Scheduler, HandyRwLock};
 use txn_types::TimeStamp;
 
-use crate::{new_event_feed, ClientReceiver, TestSuite, TestSuiteBuilder};
+use crate::{new_event_feed, new_event_feed_v2, ClientReceiver, TestSuite, TestSuiteBuilder};
 
 #[test]
 fn test_cdc_double_scan_deregister() {
@@ -524,4 +524,74 @@ fn test_cdc_rawkv_resolved_ts() {
 
     fail::remove(pause_write_fp);
     handle.join().unwrap();
+}
+
+// Test one region can be subscribed multiple times in one stream with different
+// `request_id`s.
+#[test]
+fn test_cdc_stream_multiplexing() {
+    let cluster = new_server_cluster(0, 2);
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let rid = suite.cluster.get_region(&[]).id;
+    let (mut req_tx, _, receive_event) = new_event_feed_v2(suite.get_region_cdc_client(rid));
+
+    // Subscribe the region with request_id 1.
+    let mut req = suite.new_changedata_request(rid);
+    req.request_id = 1;
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    receive_event(false);
+
+    // Subscribe the region with request_id 2.
+    fail::cfg("before_post_incremental_scan", "pause").unwrap();
+    let mut req = suite.new_changedata_request(rid);
+    req.request_id = 2;
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    receive_event(false);
+
+    // Request 2 can't receive a ResolvedTs, because it's not ready.
+    for _ in 0..10 {
+        let event = receive_event(true);
+        let req_id = event.get_resolved_ts().get_request_id();
+        assert_eq!(req_id, 1);
+    }
+
+    // After request 2 is ready, it must receive a ResolvedTs.
+    fail::remove("before_post_incremental_scan");
+    let mut request_2_ready = false;
+    for _ in 0..20 {
+        let event = receive_event(true);
+        let req_id = event.get_resolved_ts().get_request_id();
+        if req_id == 2 {
+            request_2_ready = true;
+            break;
+        }
+    }
+    assert!(request_2_ready);
+}
+
+// This case tests pending regions can still get region split/merge
+// notifications.
+#[test]
+fn test_cdc_notify_pending_regions() {
+    let cluster = new_server_cluster(0, 1);
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let region = suite.cluster.get_region(&[]);
+    let rid = region.id;
+    let (mut req_tx, _, receive_event) = new_event_feed_v2(suite.get_region_cdc_client(rid));
+
+    fail::cfg("cdc_before_initialize", "pause").unwrap();
+    let mut req = suite.new_changedata_request(rid);
+    req.request_id = 1;
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    thread::sleep(Duration::from_millis(100));
+    suite.cluster.must_split(&region, b"x");
+    let event = receive_event(false);
+    matches!(
+        event.get_events()[0].event,
+        Some(Event_oneof_event::Error(ref e)) if e.has_region_not_found(),
+    );
+    fail::remove("cdc_before_initialize");
 }

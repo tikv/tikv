@@ -382,8 +382,7 @@ fn test_cdc_cluster_id_mismatch_impl<F: KvFormat>() {
     let mut req = suite.new_changedata_request(1);
     req.mut_header().set_ticdc_version("5.3.0".into());
     req.mut_header().set_cluster_id(DEFAULT_CLUSTER_ID + 1);
-    let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
+    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
 
     // Assert mismatch.
@@ -399,6 +398,8 @@ fn test_cdc_cluster_id_mismatch_impl<F: KvFormat>() {
     // Low version request.
     req.mut_header().set_ticdc_version("4.0.8".into());
     req.mut_header().set_cluster_id(DEFAULT_CLUSTER_ID + 1);
+    let (mut req_tx, event_feed_wrap, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
@@ -1228,6 +1229,7 @@ fn test_cdc_resolve_ts_checking_concurrency_manager_impl<F: KvFormat>() {
                 0.into(),
                 1,
                 ts.into(),
+                false,
             ))
         });
         guard

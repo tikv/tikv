@@ -130,10 +130,10 @@ impl<E: KvEngine> TxnSstWriter<E> {
         }
 
         info!("finish write to sst";
-            "default entries" => default_entries,
-            "default bytes" => default_bytes,
-            "write entries" => write_entries,
-            "write bytes" => write_bytes,
+            "default_entries" => default_entries,
+            "default_bytes" => default_bytes,
+            "write_entries" => write_entries,
+            "write_bytes" => write_bytes,
         );
         IMPORT_LOCAL_WRITE_KEYS_VEC
             .with_label_values(&["txn_default_cf"])
@@ -270,9 +270,9 @@ impl<E: KvEngine> RawSstWriter<E> {
 
         info!(
             "finish raw write to sst";
-            "default entries" => self.default_entries,
-            "default bytes" => self.default_deletes,
-            "default bytes" => self.default_bytes
+            "default_entries" => self.default_entries,
+            "default_deletes" => self.default_deletes,
+            "default_bytes" => self.default_bytes
         );
         IMPORT_LOCAL_WRITE_KEYS_VEC
             .with_label_values(&["raw_default_cf"])
@@ -301,7 +301,7 @@ mod tests {
     use crate::{Config, SstImporter};
 
     // Return the temp dir path to avoid it drop out of the scope.
-    fn new_writer<W, F: Fn(&SstImporter, &RocksEngine, SstMeta) -> Result<W>>(
+    fn new_writer<W, F: Fn(&SstImporter<RocksEngine>, &RocksEngine, SstMeta) -> Result<W>>(
         f: F,
         api_version: ApiVersion,
     ) -> (W, TempDir) {
@@ -310,7 +310,8 @@ mod tests {
 
         let importer_dir = tempfile::tempdir().unwrap();
         let cfg = Config::default();
-        let importer = SstImporter::new(&cfg, &importer_dir, None, api_version).unwrap();
+        let importer =
+            SstImporter::<RocksEngine>::new(&cfg, &importer_dir, None, api_version, false).unwrap();
         let db_path = importer_dir.path().join("db");
         let db = new_test_engine(db_path.to_str().unwrap(), DATA_CFS);
         (f(&importer, &db, meta).unwrap(), importer_dir)
