@@ -729,9 +729,15 @@ where
     #[inline]
     fn on_loop_finished(&mut self) {
         let ready_concurrency = self.ctx.cfg.cmd_batch_concurrent_ready_max_count;
+        // Allow to propose pending commands iff all ongoing commands are persisted or
+        // committed. this is trying to batch proposes as many as possible to
+        // minimize the cpu overhead.
         let should_propose = self.ctx.sync_write_worker.is_some()
             || ready_concurrency == 0
-            || self.fsm.peer.unpersisted_ready_len() < ready_concurrency;
+            || self.fsm.peer.unpersisted_ready_len() < ready_concurrency
+            // Allow to propose if all ongoing proposals are committed to avoiding io jitter block
+            // new commands.
+            || !self.fsm.peer.has_uncommitted_log();
         let force_delay_fp = || {
             fail_point!(
                 "force_delay_propose_batch_raft_command",
@@ -2402,6 +2408,9 @@ where
                     self.register_pd_heartbeat_tick();
                     self.register_split_region_check_tick();
                     self.retry_pending_prepare_merge(applied_index);
+                    self.fsm
+                        .peer
+                        .maybe_update_apply_unpersisted_log_state(applied_index);
                 }
             }
             ApplyTaskRes::Destroy {
@@ -5776,6 +5785,10 @@ where
         } else {
             replicated_idx
         };
+        // Avoid compacting unpersisted raft logs when persist is far behind apply.
+        if compact_idx > self.fsm.peer.raft_group.raft.raft_log.persisted {
+            compact_idx = self.fsm.peer.raft_group.raft.raft_log.persisted;
+        }
         assert!(compact_idx >= first_idx);
         // Have no idea why subtract 1 here, but original code did this by magic.
         compact_idx -= 1;

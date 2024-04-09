@@ -87,6 +87,9 @@ pub struct Config {
     // When the approximate size of raft log entries exceed this value,
     // gc will be forced trigger.
     pub raft_log_gc_size_limit: Option<ReadableSize>,
+    /// The maximum raft log numbers that applied_index can be ahead of
+    /// persisted_index.
+    pub max_apply_unpersisted_log_limit: u64,
     // follower will reject this follower request to avoid falling behind leader too far,
     // when the read index is ahead of the sum between the applied index and
     // follower_read_max_log_gap,
@@ -442,6 +445,7 @@ impl Default for Config {
             raft_log_gc_threshold: 50,
             raft_log_gc_count_limit: None,
             raft_log_gc_size_limit: None,
+            max_apply_unpersisted_log_limit: 0,
             follower_read_max_log_gap: 100,
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),

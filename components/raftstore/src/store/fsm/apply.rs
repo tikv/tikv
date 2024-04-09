@@ -540,7 +540,7 @@ where
         self.applied_batch
             .push_batch(&delegate.observe_info, delegate.region.get_id());
         let range = CacheRange::from_region(&delegate.region);
-        self.kv_wb.prepare_for_range(&range);
+        self.kv_wb.prepare_for_range(range);
     }
 
     /// Commits all changes have done for delegate. `persistent` indicates
@@ -1824,6 +1824,7 @@ where
     EK: KvEngine,
 {
     fn handle_put(&mut self, ctx: &mut ApplyContext<EK>, req: &Request) -> Result<()> {
+        fail::fail_point!("on_handle_put");
         PEER_WRITE_CMD_COUNTER.put.inc();
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
@@ -3784,6 +3785,9 @@ where
 
 impl<EK: KvEngine> ResourceMetered for Msg<EK> {
     fn consume_resource(&self, resource_ctl: &Arc<ResourceController>) -> Option<String> {
+        if !resource_ctl.is_customized() {
+            return None;
+        }
         match self {
             Msg::Apply { apply, .. } => {
                 let mut dominant_group = "".to_owned();
