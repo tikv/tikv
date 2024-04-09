@@ -49,6 +49,51 @@ fn test_async_io_commit_without_leader_persist() {
     must_get_equal(&cluster.get_engine(3), b"k9", b"v1");
 }
 
+#[test]
+fn test_async_io_apply_without_leader_persist() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.cmd_batch_concurrent_ready_max_count = 0;
+    cluster.cfg.raft_store.store_io_pool_size = 1;
+    cluster.cfg.raft_store.max_apply_unpersisted_log_limit = 10000;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    let peer_1 = find_peer(&region, 1).cloned().unwrap();
+
+    cluster.must_transfer_leader(region.get_id(), peer_1);
+    cluster.must_put(b"k1", b"v1");
+
+    let raft_before_save_on_store_1_fp = "raft_before_persist_on_store_1";
+    // Skip persisting to simulate raft log persist lag but not block node restart.
+    fail::cfg(raft_before_save_on_store_1_fp, "return").unwrap();
+
+    for i in 2..10 {
+        let _ = cluster
+            .async_put(format!("k{}", i).as_bytes(), b"v1")
+            .unwrap();
+    }
+
+    // All node can apply these entries.
+    for i in 1..=3 {
+        must_get_equal(&cluster.get_engine(i), b"k9", b"v1");
+    }
+
+    cluster.stop_node(1);
+    fail::remove(raft_before_save_on_store_1_fp);
+
+    // Node 1 can recover successfully.
+    cluster.run_node(1).unwrap();
+
+    cluster.must_put(b"k1", b"v2");
+    sleep_ms(100);
+    for i in 1..=3 {
+        must_get_equal(&cluster.get_engine(i), b"k1", b"v2");
+    }
+}
+
 /// Test if the leader delays its destroy after applying conf change to
 /// remove itself.
 #[test_case(test_raftstore::new_node_cluster)]
