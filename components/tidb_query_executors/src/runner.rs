@@ -172,8 +172,7 @@ impl BatchExecutorsRunner<()> {
 
 #[inline]
 fn is_arrow_encodable<'a>(mut schema: impl Iterator<Item = &'a FieldType>) -> bool {
-    schema
-        .all(|schema| EvalType::try_from(schema.as_accessor().tp()).is_ok())
+    schema.all(|schema| EvalType::try_from(schema.as_accessor().tp()).is_ok())
 }
 
 #[allow(clippy::explicit_counter_loop)]
