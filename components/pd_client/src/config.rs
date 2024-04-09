@@ -16,7 +16,7 @@ pub struct Config {
     ///
     /// Default is `"127.0.0.1:2379"`.
     pub endpoints: Vec<String>,
-    /// The interval at which to retry a PD connection initialization.
+    /// The interval at which to retry a PD connection.
     ///
     /// Default is 300ms.
     pub retry_interval: ReadableDuration,

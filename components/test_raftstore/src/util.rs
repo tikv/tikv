@@ -4,7 +4,10 @@ use std::{
     fmt::Write,
     path::Path,
     str::FromStr,
-    sync::{mpsc, Arc, Mutex},
+    sync::{
+        mpsc::{self},
+        Arc, Mutex,
+    },
     thread,
     time::Duration,
 };
@@ -13,15 +16,19 @@ use collections::HashMap;
 use encryption_export::{
     data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
 };
-use engine_rocks::{config::BlobRunMode, RocksEngine, RocksSnapshot, RocksStatistics};
+use engine_rocks::{
+    config::BlobRunMode, RocksCompactedEvent, RocksEngine, RocksSnapshot, RocksStatistics,
+};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     CfName, CfNamesExt, Engines, Iterable, KvEngine, Peekable, RaftEngineDebug, RaftEngineReadOnly,
-    CF_DEFAULT, CF_RAFT,
+    CF_DEFAULT, CF_RAFT, CF_WRITE,
 };
+use fail::fail_point;
 use file_system::IoRateLimiter;
 use futures::{executor::block_on, future::BoxFuture, StreamExt};
 use grpcio::{ChannelBuilder, Environment};
+use hybrid_engine::HybridEngine;
 use kvproto::{
     encryptionpb::EncryptionMethod,
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
@@ -43,7 +50,8 @@ use raftstore::{
     RaftRouterCompactedEventSender, Result,
 };
 use rand::{seq::SliceRandom, RngCore};
-use server::common::ConfiguredRaftEngine;
+use region_cache_memory_engine::RangeCacheMemoryEngine;
+use server::common::{ConfiguredRaftEngine, KvEngineBuilder};
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{
@@ -60,7 +68,9 @@ use tikv_util::{
 };
 use txn_types::Key;
 
-use crate::{Cluster, Config, RawEngine, ServerCluster, Simulator};
+use crate::{Cluster, Config, KvEngineWithRocks, RawEngine, ServerCluster, Simulator};
+
+pub type HybridEngineImpl = HybridEngine<RocksEngine, RangeCacheMemoryEngine>;
 
 pub fn must_get<EK: KvEngine>(
     engine: &impl RawEngine<EK>,
@@ -81,15 +91,14 @@ pub fn must_get<EK: KvEngine>(
     }
     debug!("last try to get {}", log_wrappers::hex_encode_upper(key));
     let res = engine.get_value_cf(cf, &keys::data_key(key)).unwrap();
-    if value.is_none() && res.is_none()
-        || value.is_some() && res.is_some() && value.unwrap() == &*res.unwrap()
-    {
+    if value == res.as_ref().map(|r| r.as_ref()) {
         return;
     }
     panic!(
-        "can't get value {:?} for key {}",
+        "can't get value {:?} for key {}, actual={:?}",
         value.map(escape),
-        log_wrappers::hex_encode_upper(key)
+        log_wrappers::hex_encode_upper(key),
+        res
     )
 }
 
@@ -151,13 +160,16 @@ lazy_static! {
     pub static ref TEST_CONFIG: TikvConfig = {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let common_test_cfg = manifest_dir.join("src/common-test.toml");
-        TikvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
+        let mut cfg = TikvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
             panic!(
                 "invalid auto generated configuration file {}, err {}",
                 manifest_dir.display(),
                 e
             );
-        })
+        });
+        // To speed up leader transfer.
+        cfg.raft_store.allow_unsafe_vote_after_start = true;
+        cfg
     };
 }
 
@@ -171,7 +183,18 @@ pub fn new_tikv_config_with_api_ver(cluster_id: u64, api_ver: ApiVersion) -> Tik
     let mut cfg = TEST_CONFIG.clone();
     cfg.server.cluster_id = cluster_id;
     cfg.storage.set_api_version(api_ver);
+    cfg.raft_store.pd_report_min_resolved_ts_interval = config(ReadableDuration::secs(1));
     cfg
+}
+
+fn config(interval: ReadableDuration) -> ReadableDuration {
+    fail_point!("mock_min_resolved_ts_interval", |_| {
+        ReadableDuration::millis(50)
+    });
+    fail_point!("mock_min_resolved_ts_interval_disable", |_| {
+        ReadableDuration::millis(0)
+    });
+    interval
 }
 
 // Create a base request.
@@ -382,14 +405,20 @@ pub fn check_raft_cmd_request(cmd: &RaftCmdRequest) -> bool {
     is_read
 }
 
-pub fn make_cb(
+pub fn make_cb_rocks(
     cmd: &RaftCmdRequest,
 ) -> (Callback<RocksSnapshot>, future::Receiver<RaftCmdResponse>) {
+    make_cb::<RocksEngine>(cmd)
+}
+
+pub fn make_cb<EK: KvEngine>(
+    cmd: &RaftCmdRequest,
+) -> (Callback<EK::Snapshot>, future::Receiver<RaftCmdResponse>) {
     let is_read = check_raft_cmd_request(cmd);
     let (tx, rx) = future::bounded(1, future::WakePolicy::Immediately);
     let mut detector = CallbackLeakDetector::default();
     let cb = if is_read {
-        Callback::read(Box::new(move |resp: ReadResponse<RocksSnapshot>| {
+        Callback::read(Box::new(move |resp: ReadResponse<EK::Snapshot>| {
             detector.called = true;
             // we don't care error actually.
             let _ = tx.send(resp.response);
@@ -404,12 +433,12 @@ pub fn make_cb(
     (cb, rx)
 }
 
-pub fn make_cb_ext(
+pub fn make_cb_ext<EK: KvEngine>(
     cmd: &RaftCmdRequest,
     proposed: Option<ExtCallback>,
     committed: Option<ExtCallback>,
-) -> (Callback<RocksSnapshot>, future::Receiver<RaftCmdResponse>) {
-    let (cb, receiver) = make_cb(cmd);
+) -> (Callback<EK::Snapshot>, future::Receiver<RaftCmdResponse>) {
+    let (cb, receiver) = make_cb::<EK>(cmd);
     if let Callback::Write { cb, .. } = cb {
         (Callback::write_ext(cb, proposed, committed), receiver)
     } else {
@@ -418,8 +447,8 @@ pub fn make_cb_ext(
 }
 
 // Issue a read request on the specified peer.
-pub fn read_on_peer<T: Simulator>(
-    cluster: &mut Cluster<T>,
+pub fn read_on_peer<EK: KvEngineWithRocks, T: Simulator<EK>>(
+    cluster: &mut Cluster<EK, T>,
     peer: metapb::Peer,
     region: metapb::Region,
     key: &[u8],
@@ -433,11 +462,11 @@ pub fn read_on_peer<T: Simulator>(
         read_quorum,
     );
     request.mut_header().set_peer(peer);
-    cluster.read(None, request, timeout)
+    cluster.read(None, None, request, timeout)
 }
 
-pub fn async_read_on_peer<T: Simulator>(
-    cluster: &mut Cluster<T>,
+pub fn async_read_on_peer<EK: KvEngineWithRocks, T: Simulator<EK>>(
+    cluster: &mut Cluster<EK, T>,
     peer: metapb::Peer,
     region: metapb::Region,
     key: &[u8],
@@ -455,17 +484,20 @@ pub fn async_read_on_peer<T: Simulator>(
     request.mut_header().set_replica_read(replica_read);
     let (tx, mut rx) = future::bounded(1, future::WakePolicy::Immediately);
     let cb = Callback::read(Box::new(move |resp| drop(tx.send(resp.response))));
-    cluster.sim.wl().async_read(node_id, None, request, cb);
+    cluster
+        .sim
+        .wl()
+        .async_read(None, node_id, None, request, cb);
     Box::pin(async move {
         let fut = rx.next();
         fut.await.unwrap()
     })
 }
 
-pub fn batch_read_on_peer<T: Simulator>(
-    cluster: &mut Cluster<T>,
+pub fn batch_read_on_peer<EK: KvEngineWithRocks, T: Simulator<EK>>(
+    cluster: &mut Cluster<EK, T>,
     requests: &[(metapb::Peer, metapb::Region)],
-) -> Vec<ReadResponse<RocksSnapshot>> {
+) -> Vec<ReadResponse<EK::Snapshot>> {
     let batch_id = Some(ThreadReadId::new());
     let (tx, rx) = mpsc::sync_channel(3);
     let mut results = vec![];
@@ -486,7 +518,7 @@ pub fn batch_read_on_peer<T: Simulator>(
         cluster
             .sim
             .wl()
-            .async_read(node_id, batch_id.clone(), request, cb);
+            .async_read(None, node_id, batch_id.clone(), request, cb);
         len += 1;
     }
     while results.len() < len {
@@ -496,8 +528,8 @@ pub fn batch_read_on_peer<T: Simulator>(
     results.into_iter().map(|resp| resp.1).collect()
 }
 
-pub fn read_index_on_peer<T: Simulator>(
-    cluster: &mut Cluster<T>,
+pub fn read_index_on_peer<EK: KvEngineWithRocks, T: Simulator<EK>>(
+    cluster: &mut Cluster<EK, T>,
     peer: metapb::Peer,
     region: metapb::Region,
     read_quorum: bool,
@@ -510,11 +542,11 @@ pub fn read_index_on_peer<T: Simulator>(
         read_quorum,
     );
     request.mut_header().set_peer(peer);
-    cluster.read(None, request, timeout)
+    cluster.read(None, None, request, timeout)
 }
 
-pub fn async_read_index_on_peer<T: Simulator>(
-    cluster: &mut Cluster<T>,
+pub fn async_read_index_on_peer<EK: KvEngineWithRocks, T: Simulator<EK>>(
+    cluster: &mut Cluster<EK, T>,
     peer: metapb::Peer,
     region: metapb::Region,
     key: &[u8],
@@ -535,19 +567,22 @@ pub fn async_read_index_on_peer<T: Simulator>(
     request.mut_header().set_peer(peer);
     let (tx, mut rx) = future::bounded(1, future::WakePolicy::Immediately);
     let cb = Callback::read(Box::new(move |resp| drop(tx.send(resp.response))));
-    cluster.sim.wl().async_read(node_id, None, request, cb);
+    cluster
+        .sim
+        .wl()
+        .async_read(None, node_id, None, request, cb);
     Box::pin(async move {
         let fut = rx.next();
         fut.await.unwrap()
     })
 }
 
-pub fn async_command_on_node<T: Simulator>(
-    cluster: &mut Cluster<T>,
+pub fn async_command_on_node<EK: KvEngineWithRocks, T: Simulator<EK>>(
+    cluster: &mut Cluster<EK, T>,
     node_id: u64,
     request: RaftCmdRequest,
 ) -> BoxFuture<'static, RaftCmdResponse> {
-    let (cb, mut rx) = make_cb(&request);
+    let (cb, mut rx) = make_cb::<EK>(&request);
     cluster
         .sim
         .rl()
@@ -569,8 +604,8 @@ pub fn must_get_value(resp: &RaftCmdResponse) -> Vec<u8> {
     resp.get_responses()[0].get_get().get_value().to_vec()
 }
 
-pub fn must_read_on_peer<T: Simulator>(
-    cluster: &mut Cluster<T>,
+pub fn must_read_on_peer<EK: KvEngineWithRocks, T: Simulator<EK>>(
+    cluster: &mut Cluster<EK, T>,
     peer: metapb::Peer,
     region: metapb::Region,
     key: &[u8],
@@ -588,8 +623,8 @@ pub fn must_read_on_peer<T: Simulator>(
     }
 }
 
-pub fn must_error_read_on_peer<T: Simulator>(
-    cluster: &mut Cluster<T>,
+pub fn must_error_read_on_peer<EK: KvEngineWithRocks, T: Simulator<EK>>(
+    cluster: &mut Cluster<EK, T>,
     peer: metapb::Peer,
     region: metapb::Region,
     key: &[u8],
@@ -607,6 +642,7 @@ pub fn must_error_read_on_peer<T: Simulator>(
     }
 }
 
+#[track_caller]
 pub fn must_contains_error(resp: &RaftCmdResponse, msg: &str) {
     let header = resp.get_header();
     assert!(header.has_error());
@@ -614,19 +650,22 @@ pub fn must_contains_error(resp: &RaftCmdResponse, msg: &str) {
     assert!(err_msg.contains(msg), "{:?}", resp);
 }
 
-pub fn create_test_engine(
+pub fn create_test_engine<EK>(
     // TODO: pass it in for all cases.
-    router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
+    router: Option<RaftRouter<EK, RaftTestEngine>>,
     limiter: Option<Arc<IoRateLimiter>>,
     cfg: &Config,
 ) -> (
-    Engines<RocksEngine, RaftTestEngine>,
+    Engines<EK, RaftTestEngine>,
     Option<Arc<DataKeyManager>>,
     TempDir,
     LazyWorker<String>,
     Arc<RocksStatistics>,
     Option<Arc<RocksStatistics>>,
-) {
+)
+where
+    EK: KvEngine<DiskEngine = RocksEngine, CompactedEvent = RocksCompactedEvent> + KvEngineBuilder,
+{
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
     let mut cfg = cfg.clone();
     cfg.storage.data_dir = dir.path().to_str().unwrap().to_string();
@@ -636,10 +675,7 @@ pub fn create_test_engine(
         data_key_manager_from_config(&cfg.security.encryption, dir.path().to_str().unwrap())
             .unwrap()
             .map(Arc::new);
-    let cache = cfg
-        .storage
-        .block_cache
-        .build_shared_cache(cfg.storage.engine);
+    let cache = cfg.storage.block_cache.build_shared_cache();
     let env = cfg
         .build_shared_rocks_env(key_manager.clone(), limiter)
         .unwrap();
@@ -649,16 +685,17 @@ pub fn create_test_engine(
 
     let (raft_engine, raft_statistics) = RaftTestEngine::build(&cfg, &env, &key_manager, &cache);
 
-    let mut builder =
-        KvEngineFactoryBuilder::new(env, &cfg, cache).sst_recovery_sender(Some(scheduler));
+    let mut builder = KvEngineFactoryBuilder::new(env, &cfg, cache, key_manager.clone())
+        .sst_recovery_sender(Some(scheduler));
     if let Some(router) = router {
         builder = builder.compaction_event_sender(Arc::new(RaftRouterCompactedEventSender {
             router: Mutex::new(router),
         }));
     }
     let factory = builder.build();
-    let engine = factory.create_shared_db(dir.path()).unwrap();
-    let engines = Engines::new(engine, raft_engine);
+    let disk_engine = factory.create_shared_db(dir.path()).unwrap();
+    let kv_engine: EK = KvEngineBuilder::build(disk_engine, None);
+    let engines = Engines::new(kv_engine, raft_engine);
     (
         engines,
         key_manager,
@@ -669,11 +706,11 @@ pub fn create_test_engine(
     )
 }
 
-pub fn configure_for_request_snapshot<T: Simulator>(cluster: &mut Cluster<T>) {
+pub fn configure_for_request_snapshot(config: &mut Config) {
     // We don't want to generate snapshots due to compact log.
-    cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
-    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
-    cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
+    config.raft_store.raft_log_gc_threshold = 1000;
+    config.raft_store.raft_log_gc_count_limit = Some(1000);
+    config.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
 }
 
 pub fn configure_for_hibernate(config: &mut Config) {
@@ -735,23 +772,27 @@ pub fn configure_for_lease_read(
     election_timeout
 }
 
-pub fn configure_for_enable_titan<T: Simulator>(
-    cluster: &mut Cluster<T>,
+pub fn configure_for_enable_titan<EK: KvEngineWithRocks, T: Simulator<EK>>(
+    cluster: &mut Cluster<EK, T>,
     min_blob_size: ReadableSize,
 ) {
-    cluster.cfg.rocksdb.titan.enabled = true;
+    cluster.cfg.rocksdb.titan.enabled = Some(true);
     cluster.cfg.rocksdb.titan.purge_obsolete_files_period = ReadableDuration::secs(1);
     cluster.cfg.rocksdb.titan.max_background_gc = 10;
-    cluster.cfg.rocksdb.defaultcf.titan.min_blob_size = min_blob_size;
+    cluster.cfg.rocksdb.defaultcf.titan.min_blob_size = Some(min_blob_size);
     cluster.cfg.rocksdb.defaultcf.titan.blob_run_mode = BlobRunMode::Normal;
     cluster.cfg.rocksdb.defaultcf.titan.min_gc_batch_size = ReadableSize::kb(0);
 }
 
-pub fn configure_for_disable_titan<T: Simulator>(cluster: &mut Cluster<T>) {
-    cluster.cfg.rocksdb.titan.enabled = false;
+pub fn configure_for_disable_titan<EK: KvEngineWithRocks, T: Simulator<EK>>(
+    cluster: &mut Cluster<EK, T>,
+) {
+    cluster.cfg.rocksdb.titan.enabled = Some(false);
 }
 
-pub fn configure_for_encryption<T: Simulator>(cluster: &mut Cluster<T>) {
+pub fn configure_for_encryption<EK: KvEngineWithRocks, T: Simulator<EK>>(
+    cluster: &mut Cluster<EK, T>,
+) {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let master_key_file = manifest_dir.join("src/master-key.data");
 
@@ -765,8 +806,8 @@ pub fn configure_for_encryption<T: Simulator>(cluster: &mut Cluster<T>) {
     }
 }
 
-pub fn configure_for_causal_ts<T: Simulator>(
-    cluster: &mut Cluster<T>,
+pub fn configure_for_causal_ts<EK: KvEngineWithRocks, T: Simulator<EK>>(
+    cluster: &mut Cluster<EK, T>,
     renew_interval: &str,
     renew_batch_min_size: u32,
 ) {
@@ -776,16 +817,24 @@ pub fn configure_for_causal_ts<T: Simulator>(
 }
 
 /// Keep putting random kvs until specified size limit is reached.
-pub fn put_till_size<T: Simulator>(
-    cluster: &mut Cluster<T>,
+pub fn put_till_size<EK: KvEngineWithRocks, T: Simulator<EK>>(
+    cluster: &mut Cluster<EK, T>,
     limit: u64,
     range: &mut dyn Iterator<Item = u64>,
 ) -> Vec<u8> {
     put_cf_till_size(cluster, CF_DEFAULT, limit, range)
 }
 
-pub fn put_cf_till_size<T: Simulator>(
-    cluster: &mut Cluster<T>,
+pub fn put_till_count<EK: KvEngineWithRocks, T: Simulator<EK>>(
+    cluster: &mut Cluster<EK, T>,
+    limit: u64,
+    range: &mut dyn Iterator<Item = u64>,
+) -> Vec<u8> {
+    put_cf_till_count(cluster, CF_WRITE, limit, range)
+}
+
+pub fn put_cf_till_size<EK: KvEngineWithRocks, T: Simulator<EK>>(
+    cluster: &mut Cluster<EK, T>,
     cf: &'static str,
     limit: u64,
     range: &mut dyn Iterator<Item = u64>,
@@ -808,6 +857,36 @@ pub fn put_cf_till_size<T: Simulator>(
             len += value.len() as u64;
             reqs.push(new_put_cf_cmd(cf, key.as_bytes(), &value));
         }
+        cluster.batch_put(key.as_bytes(), reqs).unwrap();
+        // Approximate size of memtable is inaccurate for small data,
+        // we flush it to SST so we can use the size properties instead.
+        cluster.must_flush_cf(cf, true);
+    }
+    key.into_bytes()
+}
+
+pub fn put_cf_till_count<EK: KvEngineWithRocks, T: Simulator<EK>>(
+    cluster: &mut Cluster<EK, T>,
+    cf: &'static str,
+    limit: u64,
+    range: &mut dyn Iterator<Item = u64>,
+) -> Vec<u8> {
+    assert!(limit > 0);
+    let mut len = 0;
+    let mut rng = rand::thread_rng();
+    let mut key = String::new();
+    let mut value = vec![0; 64];
+    while len < limit {
+        let batch_size = std::cmp::min(5, limit - len);
+        let mut reqs = vec![];
+        for _ in 0..batch_size {
+            key.clear();
+            let key_id = range.next().unwrap();
+            write!(key, "{:09}", key_id).unwrap();
+            rng.fill_bytes(&mut value);
+            reqs.push(new_put_cf_cmd(cf, key.as_bytes(), &value));
+        }
+        len += batch_size;
         cluster.batch_put(key.as_bytes(), reqs).unwrap();
         // Approximate size of memtable is inaccurate for small data,
         // we flush it to SST so we can use the size properties instead.
@@ -959,6 +1038,7 @@ pub fn must_kv_prewrite_with(
     client: &TikvClient,
     ctx: Context,
     muts: Vec<Mutation>,
+    pessimistic_actions: Vec<PrewriteRequestPessimisticAction>,
     pk: Vec<u8>,
     ts: u64,
     for_update_ts: u64,
@@ -968,7 +1048,7 @@ pub fn must_kv_prewrite_with(
     let mut prewrite_req = PrewriteRequest::default();
     prewrite_req.set_context(ctx);
     if for_update_ts != 0 {
-        prewrite_req.pessimistic_actions = vec![DoPessimisticCheck; muts.len()];
+        prewrite_req.pessimistic_actions = pessimistic_actions;
     }
     prewrite_req.set_mutations(muts.into_iter().collect());
     prewrite_req.primary_lock = pk;
@@ -995,16 +1075,42 @@ pub fn try_kv_prewrite_with(
     client: &TikvClient,
     ctx: Context,
     muts: Vec<Mutation>,
+    pessimistic_actions: Vec<PrewriteRequestPessimisticAction>,
     pk: Vec<u8>,
     ts: u64,
     for_update_ts: u64,
     use_async_commit: bool,
     try_one_pc: bool,
 ) -> PrewriteResponse {
+    try_kv_prewrite_with_impl(
+        client,
+        ctx,
+        muts,
+        pessimistic_actions,
+        pk,
+        ts,
+        for_update_ts,
+        use_async_commit,
+        try_one_pc,
+    )
+    .unwrap()
+}
+
+pub fn try_kv_prewrite_with_impl(
+    client: &TikvClient,
+    ctx: Context,
+    muts: Vec<Mutation>,
+    pessimistic_actions: Vec<PrewriteRequestPessimisticAction>,
+    pk: Vec<u8>,
+    ts: u64,
+    for_update_ts: u64,
+    use_async_commit: bool,
+    try_one_pc: bool,
+) -> grpcio::Result<PrewriteResponse> {
     let mut prewrite_req = PrewriteRequest::default();
     prewrite_req.set_context(ctx);
     if for_update_ts != 0 {
-        prewrite_req.pessimistic_actions = vec![DoPessimisticCheck; muts.len()];
+        prewrite_req.pessimistic_actions = pessimistic_actions;
     }
     prewrite_req.set_mutations(muts.into_iter().collect());
     prewrite_req.primary_lock = pk;
@@ -1014,7 +1120,7 @@ pub fn try_kv_prewrite_with(
     prewrite_req.min_commit_ts = prewrite_req.start_version + 1;
     prewrite_req.use_async_commit = use_async_commit;
     prewrite_req.try_one_pc = try_one_pc;
-    client.kv_prewrite(&prewrite_req).unwrap()
+    client.kv_prewrite(&prewrite_req)
 }
 
 pub fn try_kv_prewrite(
@@ -1024,7 +1130,7 @@ pub fn try_kv_prewrite(
     pk: Vec<u8>,
     ts: u64,
 ) -> PrewriteResponse {
-    try_kv_prewrite_with(client, ctx, muts, pk, ts, 0, false, false)
+    try_kv_prewrite_with(client, ctx, muts, vec![], pk, ts, 0, false, false)
 }
 
 pub fn try_kv_prewrite_pessimistic(
@@ -1034,7 +1140,18 @@ pub fn try_kv_prewrite_pessimistic(
     pk: Vec<u8>,
     ts: u64,
 ) -> PrewriteResponse {
-    try_kv_prewrite_with(client, ctx, muts, pk, ts, ts, false, false)
+    let len = muts.len();
+    try_kv_prewrite_with(
+        client,
+        ctx,
+        muts,
+        vec![DoPessimisticCheck; len],
+        pk,
+        ts,
+        ts,
+        false,
+        false,
+    )
 }
 
 pub fn must_kv_prewrite(
@@ -1044,7 +1161,7 @@ pub fn must_kv_prewrite(
     pk: Vec<u8>,
     ts: u64,
 ) {
-    must_kv_prewrite_with(client, ctx, muts, pk, ts, 0, false, false)
+    must_kv_prewrite_with(client, ctx, muts, vec![], pk, ts, 0, false, false)
 }
 
 pub fn must_kv_prewrite_pessimistic(
@@ -1054,7 +1171,18 @@ pub fn must_kv_prewrite_pessimistic(
     pk: Vec<u8>,
     ts: u64,
 ) {
-    must_kv_prewrite_with(client, ctx, muts, pk, ts, ts, false, false)
+    let len = muts.len();
+    must_kv_prewrite_with(
+        client,
+        ctx,
+        muts,
+        vec![DoPessimisticCheck; len],
+        pk,
+        ts,
+        ts,
+        false,
+        false,
+    )
 }
 
 pub fn must_kv_commit(
@@ -1189,6 +1317,21 @@ pub fn must_kv_pessimistic_rollback(
     assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
 }
 
+pub fn must_kv_pessimistic_rollback_with_scan_first(
+    client: &TikvClient,
+    ctx: Context,
+    ts: u64,
+    for_update_ts: u64,
+) {
+    let mut req = PessimisticRollbackRequest::default();
+    req.set_context(ctx);
+    req.start_version = ts;
+    req.for_update_ts = for_update_ts;
+    let resp = client.kv_pessimistic_rollback(&req).unwrap();
+    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+    assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
+}
+
 pub fn must_check_txn_status(
     client: &TikvClient,
     ctx: Context,
@@ -1208,6 +1351,87 @@ pub fn must_check_txn_status(
     assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
     assert!(resp.error.is_none(), "{:?}", resp.get_error());
     resp
+}
+
+pub fn must_kv_have_locks(
+    client: &TikvClient,
+    ctx: Context,
+    ts: u64,
+    start_key: &[u8],
+    end_key: &[u8],
+    expected_locks: &[(
+        // key
+        &[u8],
+        Op,
+        // start_ts
+        u64,
+        // for_update_ts
+        u64,
+    )],
+) {
+    let mut req = ScanLockRequest::default();
+    req.set_context(ctx);
+    req.set_limit(100);
+    req.set_start_key(start_key.to_vec());
+    req.set_end_key(end_key.to_vec());
+    req.set_max_version(ts);
+    let resp = client.kv_scan_lock(&req).unwrap();
+    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+    assert!(resp.error.is_none(), "{:?}", resp.get_error());
+
+    assert_eq!(
+        resp.locks.len(),
+        expected_locks.len(),
+        "lock count not match, expected: {:?}; got: {:?}",
+        expected_locks,
+        resp.locks
+    );
+
+    for (lock_info, (expected_key, expected_op, expected_start_ts, expected_for_update_ts)) in
+        resp.locks.into_iter().zip(expected_locks.iter())
+    {
+        assert_eq!(lock_info.get_key(), *expected_key);
+        assert_eq!(lock_info.get_lock_type(), *expected_op);
+        assert_eq!(lock_info.get_lock_version(), *expected_start_ts);
+        assert_eq!(lock_info.get_lock_for_update_ts(), *expected_for_update_ts);
+    }
+}
+
+/// Scan scan_limit number of locks within [start_key, end_key), the returned
+/// lock number should equal the input expected_cnt.
+pub fn must_lock_cnt(
+    client: &TikvClient,
+    ctx: Context,
+    ts: u64,
+    start_key: &[u8],
+    end_key: &[u8],
+    lock_type: Op,
+    expected_cnt: usize,
+    scan_limit: usize,
+) {
+    let mut req = ScanLockRequest::default();
+    req.set_context(ctx);
+    req.set_limit(scan_limit as u32);
+    req.set_start_key(start_key.to_vec());
+    req.set_end_key(end_key.to_vec());
+    req.set_max_version(ts);
+    let resp = client.kv_scan_lock(&req).unwrap();
+    assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+    assert!(resp.error.is_none(), "{:?}", resp.get_error());
+
+    let lock_cnt = resp
+        .locks
+        .iter()
+        .filter(|lock_info| lock_info.get_lock_type() == lock_type)
+        .count();
+
+    assert_eq!(
+        lock_cnt,
+        expected_cnt,
+        "lock count not match, expected: {:?}; got: {:?}",
+        expected_cnt,
+        resp.locks.len()
+    );
 }
 
 pub fn get_tso(pd_client: &TestPdClient) -> u64 {
@@ -1371,7 +1595,11 @@ pub struct PeerClient {
 }
 
 impl PeerClient {
-    pub fn new(cluster: &Cluster<ServerCluster>, region_id: u64, peer: metapb::Peer) -> PeerClient {
+    pub fn new<EK: KvEngineWithRocks>(
+        cluster: &Cluster<EK, ServerCluster<EK>>,
+        region_id: u64,
+        peer: metapb::Peer,
+    ) -> PeerClient {
         let cli = {
             let env = Arc::new(Environment::new(1));
             let channel =
@@ -1418,11 +1646,31 @@ impl PeerClient {
     }
 
     pub fn must_kv_prewrite_async_commit(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
-        must_kv_prewrite_with(&self.cli, self.ctx.clone(), muts, pk, ts, 0, true, false)
+        must_kv_prewrite_with(
+            &self.cli,
+            self.ctx.clone(),
+            muts,
+            vec![],
+            pk,
+            ts,
+            0,
+            true,
+            false,
+        )
     }
 
     pub fn must_kv_prewrite_one_pc(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
-        must_kv_prewrite_with(&self.cli, self.ctx.clone(), muts, pk, ts, 0, false, true)
+        must_kv_prewrite_with(
+            &self.cli,
+            self.ctx.clone(),
+            muts,
+            vec![],
+            pk,
+            ts,
+            0,
+            false,
+            true,
+        )
     }
 
     pub fn must_kv_commit(&self, keys: Vec<Vec<u8>>, start_ts: u64, commit_ts: u64) {
@@ -1458,7 +1706,11 @@ pub fn peer_on_store(region: &metapb::Region, store_id: u64) -> metapb::Peer {
         .clone()
 }
 
-pub fn wait_for_synced(cluster: &mut Cluster<ServerCluster>, node_id: u64, region_id: u64) {
+pub fn wait_for_synced<EK: KvEngineWithRocks>(
+    cluster: &mut Cluster<EK, ServerCluster<EK>>,
+    node_id: u64,
+    region_id: u64,
+) {
     let mut storage = cluster
         .sim
         .read()
@@ -1488,7 +1740,10 @@ pub fn wait_for_synced(cluster: &mut Cluster<ServerCluster>, node_id: u64, regio
     assert!(snapshot.ext().is_max_ts_synced());
 }
 
-pub fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>, cf: CfName) {
+pub fn test_delete_range<EK: KvEngineWithRocks, T: Simulator<EK>>(
+    cluster: &mut Cluster<EK, T>,
+    cf: CfName,
+) {
     let data_set: Vec<_> = (1..500)
         .map(|i| {
             (
@@ -1519,4 +1774,41 @@ pub fn test_delete_range<T: Simulator>(cluster: &mut Cluster<T>, cf: CfName) {
         let k = &data_set.choose(&mut rng).unwrap().0;
         assert!(cluster.get_cf(cf, k).is_none());
     }
+}
+
+pub fn put_with_timeout<EK: KvEngineWithRocks, T: Simulator<EK>>(
+    cluster: &mut Cluster<EK, T>,
+    node_id: u64,
+    key: &[u8],
+    value: &[u8],
+    timeout: Duration,
+) -> Result<RaftCmdResponse> {
+    let mut region = cluster.get_region(key);
+    let region_id = region.get_id();
+    let req = new_request(
+        region_id,
+        region.take_region_epoch(),
+        vec![new_put_cf_cmd(CF_DEFAULT, key, value)],
+        false,
+    );
+    cluster.call_command_on_node(node_id, req, timeout)
+}
+
+pub fn wait_down_peers<EK: KvEngineWithRocks, T: Simulator<EK>>(
+    cluster: &Cluster<EK, T>,
+    count: u64,
+    peer: Option<u64>,
+) {
+    let mut peers = cluster.get_down_peers();
+    for _ in 1..1000 {
+        if peers.len() == count as usize && peer.as_ref().map_or(true, |p| peers.contains_key(p)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        peers = cluster.get_down_peers();
+    }
+    panic!(
+        "got {:?}, want {} peers which should include {:?}",
+        peers, count, peer
+    );
 }

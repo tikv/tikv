@@ -28,8 +28,11 @@ command! {
     /// This can be rolled back with a [`PessimisticRollback`](Command::PessimisticRollback) command.
     AcquirePessimisticLock:
         cmd_ty => StorageResult<PessimisticLockResults>,
-        display => "kv::command::acquirepessimisticlock keys({:?}) @ {} {} {} {:?} {} {} {} | {:?}",
-        (keys, start_ts, lock_ttl, for_update_ts, wait_timeout, min_commit_ts, check_existence, lock_only_if_exists, ctx),
+        display => {
+            "kv::command::acquirepessimisticlock keys({:?}) @ {} {} {} {:?} {} {} {} | {:?}",
+            (keys, start_ts, lock_ttl, for_update_ts, wait_timeout, min_commit_ts,
+                check_existence, lock_only_if_exists, ctx),
+        }
         content => {
             /// The set of keys to lock.
             keys: Vec<(Key, bool)>,
@@ -50,6 +53,10 @@ command! {
             check_existence: bool,
             lock_only_if_exists: bool,
             allow_lock_with_conflict: bool,
+        }
+        in_heap => {
+            primary,
+            keys,
         }
 }
 
@@ -183,6 +190,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for AcquirePessimisticLock 
             new_acquired_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnProposed,
+            known_txn_status: vec![],
         })
     }
 }

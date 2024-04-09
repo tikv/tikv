@@ -199,6 +199,7 @@ mod tests {
                 Collation::Utf8Mb4GeneralCi,
                 Some(0),
             ),
+            (r#"Ⱕ"#, r#"ⱕ"#, '\\', Collation::Utf8Mb40900AiCi, Some(1)),
         ];
         for (target, pattern, escape, collation, expected) in cases {
             let output = RpnFnScalarEvaluator::new()

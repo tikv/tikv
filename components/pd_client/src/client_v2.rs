@@ -12,7 +12,6 @@
 //! connection subscribe changes instead of altering it themselves.
 
 use std::{
-    collections::HashMap,
     fmt::Debug,
     pin::Pin,
     sync::{
@@ -117,7 +116,7 @@ impl RawClient {
 
     /// Returns Ok(true) when a new connection is established.
     async fn maybe_reconnect(&mut self, ctx: &ConnectContext, force: bool) -> Result<bool> {
-        PD_RECONNECT_COUNTER_VEC.with_label_values(&["try"]).inc();
+        PD_RECONNECT_COUNTER_VEC.try_connect.inc();
         let start = Instant::now();
 
         let members = self.members.clone();
@@ -135,21 +134,15 @@ impl RawClient {
             .await
         {
             Err(e) => {
-                PD_RECONNECT_COUNTER_VEC
-                    .with_label_values(&["failure"])
-                    .inc();
+                PD_RECONNECT_COUNTER_VEC.failure.inc();
                 return Err(e);
             }
             Ok(None) => {
-                PD_RECONNECT_COUNTER_VEC
-                    .with_label_values(&["no-need"])
-                    .inc();
+                PD_RECONNECT_COUNTER_VEC.no_need.inc();
                 return Ok(false);
             }
             Ok(Some(tuple)) => {
-                PD_RECONNECT_COUNTER_VEC
-                    .with_label_values(&["success"])
-                    .inc();
+                PD_RECONNECT_COUNTER_VEC.success.inc();
                 tuple
             }
         };
@@ -413,7 +406,7 @@ async fn reconnect_loop(
             use tikv_util::config::ReadableDuration;
             ReadableDuration::from_str(&s.unwrap()).unwrap().0
         });
-        request_timeout()
+        cfg.retry_interval.0
     })();
     let mut last_connect = StdInstant::now();
     loop {
@@ -561,12 +554,6 @@ pub trait PdClient {
     ) -> Result<(mpsc::Sender<TsoRequest>, Self::ResponseChannel<TsoResponse>)>;
 
     fn fetch_cluster_id(&mut self) -> Result<u64>;
-
-    fn load_global_config(&mut self, config_path: String) -> PdFuture<HashMap<String, String>>;
-
-    fn watch_global_config(
-        &mut self,
-    ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>>;
 
     fn bootstrap_cluster(
         &mut self,
@@ -811,35 +798,6 @@ impl PdClient for RpcClient {
             }
         });
         Ok((tx, resp_rx))
-    }
-
-    fn load_global_config(&mut self, config_path: String) -> PdFuture<HashMap<String, String>> {
-        use kvproto::pdpb::LoadGlobalConfigRequest;
-        let mut req = LoadGlobalConfigRequest::new();
-        req.set_config_path(config_path);
-        let mut raw_client = self.raw_client.clone();
-        Box::pin(async move {
-            raw_client.wait_for_ready().await?;
-            let fut = raw_client.stub().load_global_config_async(&req)?;
-            match fut.await {
-                Ok(grpc_response) => {
-                    let mut res = HashMap::with_capacity(grpc_response.get_items().len());
-                    for c in grpc_response.get_items() {
-                        res.insert(c.get_name().to_owned(), c.get_value().to_owned());
-                    }
-                    Ok(res)
-                }
-                Err(err) => Err(box_err!("{:?}", err)),
-            }
-        })
-    }
-
-    fn watch_global_config(
-        &mut self,
-    ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
-        let req = pdpb::WatchGlobalConfigRequest::default();
-        block_on(self.raw_client.wait_for_ready())?;
-        Ok(self.raw_client.stub().watch_global_config(&req)?)
     }
 
     fn fetch_cluster_id(&mut self) -> Result<u64> {

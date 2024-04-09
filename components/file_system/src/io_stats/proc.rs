@@ -26,7 +26,7 @@ lazy_static! {
 
 thread_local! {
     /// A private copy of I/O type. Optimized for local access.
-    static IO_TYPE: Cell<IoType> = Cell::new(IoType::Other);
+    static IO_TYPE: Cell<IoType> = const { Cell::new(IoType::Other) };
 }
 
 #[derive(Debug)]
@@ -180,6 +180,13 @@ pub fn fetch_io_bytes() -> [IoBytes; IoType::COUNT] {
     bytes
 }
 
+pub fn get_thread_io_bytes_total() -> Result<IoBytes, String> {
+    match LOCAL_IO_STATS.get() {
+        Some(s) => s.lock().id.fetch_io_bytes(),
+        None => Err("thread local io stats is None".into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -189,12 +196,11 @@ mod tests {
     };
 
     use libc::O_DIRECT;
-    use maligned::{AsBytes, AsBytesMut, A512};
     use tempfile::{tempdir, tempdir_in};
     use tikv_util::sys::thread::StdThreadBuildWrapper;
 
     use super::*;
-    use crate::{OpenOptions, WithIoType};
+    use crate::{io_stats::A512, OpenOptions, WithIoType};
 
     #[test]
     fn test_read_bytes() {
@@ -209,8 +215,8 @@ mod tests {
                 .custom_flags(O_DIRECT)
                 .open(&file_path)
                 .unwrap();
-            let w = vec![A512::default(); 10];
-            f.write_all(w.as_bytes()).unwrap();
+            let w = Box::new(A512([0u8; 512 * 10]));
+            f.write_all(&w.0).unwrap();
             f.sync_all().unwrap();
         }
         let mut f = OpenOptions::new()
@@ -218,10 +224,10 @@ mod tests {
             .custom_flags(O_DIRECT)
             .open(&file_path)
             .unwrap();
-        let mut w = vec![A512::default(); 1];
+        let mut w = A512([0u8; 512]);
         let base_local_bytes = id.fetch_io_bytes().unwrap();
         for i in 1..=10 {
-            f.read_exact(w.as_bytes_mut()).unwrap();
+            f.read_exact(&mut w.0).unwrap();
 
             let local_bytes = id.fetch_io_bytes().unwrap();
             assert_eq!(i * 512 + base_local_bytes.read, local_bytes.read);
@@ -240,10 +246,10 @@ mod tests {
             .custom_flags(O_DIRECT)
             .open(file_path)
             .unwrap();
-        let w = vec![A512::default(); 8];
+        let w = Box::new(A512([0u8; 512 * 8]));
         let base_local_bytes = id.fetch_io_bytes().unwrap();
         for i in 1..=10 {
-            f.write_all(w.as_bytes()).unwrap();
+            f.write_all(&w.0).unwrap();
             f.sync_all().unwrap();
 
             let local_bytes = id.fetch_io_bytes().unwrap();
@@ -268,8 +274,8 @@ mod tests {
                     .custom_flags(O_DIRECT)
                     .open(file_path)
                     .unwrap();
-                let w = vec![A512::default(); 8];
-                f.write_all(w.as_bytes()).unwrap();
+                let w = Box::new(A512([0u8; 512 * 8]));
+                f.write_all(&w.0).unwrap();
                 f.sync_all().unwrap();
                 tx1.send(()).unwrap();
                 tx1.send(()).unwrap();
@@ -286,8 +292,8 @@ mod tests {
                     .custom_flags(O_DIRECT)
                     .open(file_path)
                     .unwrap();
-                let w = vec![A512::default(); 8];
-                f.write_all(w.as_bytes()).unwrap();
+                let w = Box::new(A512([0u8; 512 * 8]));
+                f.write_all(&w.0).unwrap();
                 f.sync_all().unwrap();
                 tx2.send(()).unwrap();
                 tx2.send(()).unwrap();

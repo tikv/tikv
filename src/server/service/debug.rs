@@ -1,5 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::{Arc, Mutex};
+
 use futures::{
     future::{Future, FutureExt, TryFutureExt},
     sink::SinkExt,
@@ -10,8 +12,9 @@ use grpcio::{
     WriteFlags,
 };
 use kvproto::debugpb::{self, *};
+use raftstore::store::fsm::store::StoreRegionMeta;
 use tikv_kv::RaftExtension;
-use tikv_util::metrics;
+use tikv_util::{future::paired_future_callback, metrics};
 use tokio::runtime::Handle;
 
 use crate::server::debug::{Debugger, Error, Result};
@@ -21,6 +24,8 @@ fn error_to_status(e: Error) -> RpcStatus {
         Error::NotFound(msg) => (RpcStatusCode::NOT_FOUND, msg),
         Error::InvalidArgument(msg) => (RpcStatusCode::INVALID_ARGUMENT, msg),
         Error::Other(e) => (RpcStatusCode::UNKNOWN, format!("{:?}", e)),
+        Error::EngineTrait(e) => (RpcStatusCode::UNKNOWN, format!("{:?}", e)),
+        Error::FlashbackFailed(msg) => (RpcStatusCode::UNKNOWN, msg),
     };
     RpcStatus::with_message(code, msg)
 }
@@ -36,30 +41,79 @@ fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
     e
 }
 
+pub type Callback<T> = Box<dyn FnOnce(T) + Send>;
+pub type ResolvedTsDiagnosisCallback = Callback<
+    Option<(
+        bool, // stopped
+        u64,  // resolved_ts
+        u64,  // tracked index
+        u64,  // num_locks
+        u64,  // num_transactions
+    )>,
+>;
+pub type ScheduleResolvedTsTask = Arc<
+    dyn Fn(
+            u64,  // region id
+            bool, // log_locks
+            u64,  // min_start_ts
+            ResolvedTsDiagnosisCallback,
+        ) -> bool
+        + Send
+        + Sync,
+>;
+
 /// Service handles the RPC messages for the `Debug` service.
-#[derive(Clone)]
-pub struct Service<T, D>
+pub struct Service<T, D, S>
 where
-    T: RaftExtension,
-    D: Debugger,
+    T: RaftExtension + Clone,
+    D: Debugger + Clone,
+    S: StoreRegionMeta,
 {
     pool: Handle,
     debugger: D,
     raft_router: T,
+    store_meta: Arc<Mutex<S>>,
+    resolved_ts_scheduler: ScheduleResolvedTsTask,
 }
 
-impl<T, D> Service<T, D>
+impl<T, D, S> Clone for Service<T, D, S>
 where
-    T: RaftExtension,
-    D: Debugger,
+    T: RaftExtension + Clone,
+    D: Debugger + Clone,
+    S: StoreRegionMeta,
 {
-    /// Constructs a new `Service` with `Engines`, a `RaftExtension` and a
-    /// `GcWorker`.
-    pub fn new(debugger: D, pool: Handle, raft_router: T) -> Self {
+    fn clone(&self) -> Self {
+        Service {
+            pool: self.pool.clone(),
+            debugger: self.debugger.clone(),
+            raft_router: self.raft_router.clone(),
+            store_meta: self.store_meta.clone(),
+            resolved_ts_scheduler: self.resolved_ts_scheduler.clone(),
+        }
+    }
+}
+
+impl<T, D, S> Service<T, D, S>
+where
+    T: RaftExtension + Clone,
+    D: Debugger + Clone,
+    S: StoreRegionMeta,
+{
+    /// Constructs a new `Service` with `Engines`, a `RaftExtension`, a
+    /// `GcWorker` and a `RegionInfoAccessor`.
+    pub fn new(
+        debugger: D,
+        pool: Handle,
+        raft_router: T,
+        store_meta: Arc<Mutex<S>>,
+        resolved_ts_scheduler: ScheduleResolvedTsTask,
+    ) -> Self {
         Service {
             pool,
             debugger,
             raft_router,
+            store_meta,
+            resolved_ts_scheduler,
         }
     }
 
@@ -84,10 +138,11 @@ where
     }
 }
 
-impl<T, D> debugpb::Debug for Service<T, D>
+impl<T, D, S> debugpb::Debug for Service<T, D, S>
 where
     T: RaftExtension + 'static,
     D: Debugger + Clone + Send + 'static,
+    S: StoreRegionMeta,
 {
     fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
         const TAG: &str = "debug_get";
@@ -245,7 +300,6 @@ where
         let debugger = self.debugger.clone();
 
         let res = self.pool.spawn(async move {
-            let req = req;
             debugger
                 .compact(
                     req.get_db(),
@@ -545,6 +599,121 @@ where
     ) {
         self.debugger.reset_to_version(req.get_ts());
         sink.success(ResetToVersionResponse::default());
+    }
+
+    fn flashback_to_version(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: FlashbackToVersionRequest,
+        sink: UnarySink<FlashbackToVersionResponse>,
+    ) {
+        let debugger = self.debugger.clone();
+        let f = self
+            .pool
+            .spawn(async move {
+                let check = debugger.key_range_flashback_to_version(
+                    req.get_version(),
+                    req.get_region_id(),
+                    req.get_start_key(),
+                    req.get_end_key(),
+                    req.get_start_ts(),
+                    req.get_commit_ts(),
+                );
+                match check.await {
+                    Ok(_) => Ok(FlashbackToVersionResponse::default()),
+                    Err(err) => Err(err),
+                }
+            })
+            .map(|res| res.unwrap());
+
+        self.handle_response(ctx, sink, f, "debug_flashback_to_version");
+    }
+
+    fn get_region_read_progress(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: GetRegionReadProgressRequest,
+        sink: UnarySink<GetRegionReadProgressResponse>,
+    ) {
+        let store_meta = self.store_meta.lock().unwrap();
+        let rrp = store_meta.region_read_progress();
+        let mut resp = GetRegionReadProgressResponse::default();
+        rrp.with(|registry| {
+            let region = registry.get(&req.get_region_id());
+            if let Some(r) = region {
+                resp.set_region_read_progress_exist(true);
+                resp.set_safe_ts(r.safe_ts());
+                let core = r.get_core();
+                resp.set_applied_index(core.applied_index());
+                resp.set_region_read_progress_paused(core.paused());
+                if let Some(back) = core.pending_items().back() {
+                    resp.set_pending_back_ts(back.ts);
+                    resp.set_pending_back_applied_index(back.idx);
+                }
+                if let Some(front) = core.pending_items().front() {
+                    resp.set_pending_front_ts(front.ts);
+                    resp.set_pending_front_applied_index(front.idx)
+                }
+                resp.set_read_state_ts(core.read_state().ts);
+                resp.set_read_state_apply_index(core.read_state().idx);
+                resp.set_discard(core.discarding());
+                resp.set_duration_to_last_consume_leader_ms(
+                    core.last_instant_of_consume_leader()
+                        .map(|t| t.saturating_elapsed().as_millis() as u64)
+                        .unwrap_or(u64::MAX),
+                );
+                resp.set_duration_to_last_update_safe_ts_ms(
+                    core.last_instant_of_update_ts()
+                        .map(|t| t.saturating_elapsed().as_millis() as u64)
+                        .unwrap_or(u64::MAX),
+                );
+            } else {
+                resp.set_region_read_progress_exist(false);
+            }
+        });
+
+        // get from resolver
+        let (cb, f) = paired_future_callback();
+        if (*self.resolved_ts_scheduler)(
+            req.get_region_id(),
+            req.get_log_locks(),
+            req.get_min_start_ts(),
+            cb,
+        ) {
+            let f = async move {
+                let res = f.await;
+                match res {
+                    Err(e) => {
+                        resp.set_error("get resolved-ts info failed".to_owned());
+                        error!("tikv-ctl get resolved-ts info failed"; "err" => ?e);
+                    }
+                    Ok(Some((
+                        stopped,
+                        resolved_ts,
+                        resolver_tracked_index,
+                        num_locks,
+                        num_transactions,
+                    ))) => {
+                        resp.set_resolver_exist(true);
+                        resp.set_resolver_stopped(stopped);
+                        resp.set_resolved_ts(resolved_ts);
+                        resp.set_resolver_tracked_index(resolver_tracked_index);
+                        resp.set_num_locks(num_locks);
+                        resp.set_num_transactions(num_transactions);
+                    }
+                    Ok(None) => {
+                        resp.set_resolver_exist(false);
+                    }
+                }
+
+                Ok(resp)
+            };
+            self.handle_response(ctx, sink, f, "debug_get_region_read_progress");
+        } else {
+            resp.set_error("resolved-ts is not enabled".to_owned());
+            let f = async move { Ok(resp) };
+            self.handle_response(ctx, sink, f, "debug_get_region_read_progress");
+        }
     }
 }
 

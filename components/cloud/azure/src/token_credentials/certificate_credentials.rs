@@ -102,13 +102,14 @@ impl ClientCertificateCredentialExt {
         tenant_id: String,
         client_id: String,
         certificate_path: String,
+        certificate_pass: String,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let bytes = std::fs::read(certificate_path)?;
         Ok(ClientCertificateCredentialExt::new(
             tenant_id,
             client_id,
             base64::encode(bytes),
-            "".into(),
+            certificate_pass,
         ))
     }
 

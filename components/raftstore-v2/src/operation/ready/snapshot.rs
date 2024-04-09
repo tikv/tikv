@@ -5,7 +5,7 @@
 //! # Snapshot State
 //!
 //! generator and apply snapshot works asynchronously. the snap_sate indicates
-//! the curren snapshot state.
+//! the current snapshot state.
 //!
 //! # Process Overview
 //!
@@ -30,12 +30,12 @@ use std::{
 };
 
 use encryption_export::DataKeyManager;
-use engine_traits::{
-    EncryptionKeyManager, KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry,
-    ALL_CFS,
-};
+use engine_traits::{KvEngine, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, ALL_CFS};
 use fail::fail_point;
-use kvproto::raft_serverpb::{PeerState, RaftSnapshotData};
+use kvproto::{
+    metapb::PeerRole,
+    raft_serverpb::{PeerState, RaftSnapshotData},
+};
 use protobuf::Message;
 use raft::{eraftpb::Snapshot, StateRole};
 use raftstore::{
@@ -47,7 +47,7 @@ use raftstore::{
     },
 };
 use slog::{debug, error, info, warn};
-use tikv_util::{box_err, log::SlogFormat, slog_panic};
+use tikv_util::{box_err, log::SlogFormat, slog_panic, store::find_peer_by_id};
 
 use crate::{
     fsm::ApplyResReporter,
@@ -58,6 +58,10 @@ use crate::{
     Result, StoreContext,
 };
 
+/// Snapshot generating task state.
+/// snapshot send success: Relax --> Generating --> Generated --> Sending -->
+/// Relax snapshot send failed: Relax --> Generating --> Generated --> Sending
+/// snapshot send again: Sending --> Relax
 #[derive(Debug)]
 pub enum SnapState {
     Relax,
@@ -66,14 +70,16 @@ pub enum SnapState {
         index: Arc<AtomicU64>,
     },
     Generated(Box<Snapshot>),
+    Sending(Box<Snapshot>),
 }
 
 impl PartialEq for SnapState {
     fn eq(&self, other: &SnapState) -> bool {
         match (self, other) {
-            (SnapState::Relax, SnapState::Relax)
-            | (SnapState::Generating { .. }, SnapState::Generating { .. }) => true,
+            (SnapState::Relax, SnapState::Relax) => true,
+            (SnapState::Generating { .. }, SnapState::Generating { .. }) => true,
             (SnapState::Generated(snap1), SnapState::Generated(snap2)) => *snap1 == *snap2,
+            (SnapState::Sending(snap1), SnapState::Sending(snap2)) => *snap1 == *snap2,
             _ => false,
         }
     }
@@ -163,7 +169,7 @@ pub fn install_tablet<EK: KvEngine>(
     }
     if let Err(e) = fs::rename(source, &target_path) {
         if let Some(m) = &key_manager {
-            m.delete_file(target_path.to_str().unwrap()).unwrap();
+            m.remove_dir(&target_path, Some(source)).unwrap();
         }
         panic!(
             "failed to rename tablet {} => {}: {:?}",
@@ -173,7 +179,7 @@ pub fn install_tablet<EK: KvEngine>(
         );
     }
     if let Some(m) = &key_manager {
-        m.delete_file(source.to_str().unwrap()).unwrap();
+        m.remove_dir(source, Some(&target_path)).unwrap();
     }
     true
 }
@@ -192,8 +198,31 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
+    pub fn on_snap_gc<T>(&self, ctx: &mut StoreContext<EK, ER, T>, keys: Box<[TabletSnapKey]>) {
+        let mut stale_keys = Vec::from(keys);
+        if self.is_leader() {
+            stale_keys.retain(
+                |key| match self.storage().snap_states.borrow().get(&key.to_peer) {
+                    Some(SnapState::Relax) => true,
+                    _ => !self.has_peer(key.to_peer),
+                },
+            )
+        }
+        if stale_keys.is_empty() {
+            return;
+        }
+        let _ = ctx
+            .schedulers
+            .tablet
+            .schedule(tablet::Task::SnapGc(stale_keys.into()));
+    }
+
     pub fn on_snapshot_generated(&mut self, snapshot: GenSnapRes) {
-        if self.storage_mut().on_snapshot_generated(snapshot) {
+        let commit_index = self.raft_group().raft.raft_log.committed;
+        if self
+            .storage_mut()
+            .on_snapshot_generated(snapshot, commit_index)
+        {
             self.raft_group_mut().ping();
             self.set_has_ready();
         }
@@ -219,6 +248,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "to" => ?to_peer,
             "status" => ?status,
         );
+        self.storage().report_snapshot(to_peer_id, status);
         self.raft_group_mut().report_snapshot(to_peer_id, status);
     }
 
@@ -233,6 +263,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .set_last_applying_index(persisted_index);
         let snapshot_index = self.entry_storage().truncated_index();
         assert!(snapshot_index >= RAFT_INIT_LOG_INDEX, "{:?}", self.logger);
+        self.compact_log_context_mut()
+            .set_last_compacted_idx(snapshot_index + 1 /* first index */);
         // If leader sends a message append to the follower while it's applying
         // snapshot (via split init for example), the persisted_index may be larger
         // than the first index. But as long as first index is not larger, the
@@ -266,8 +298,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
             self.storage_mut().on_applied_snapshot();
             self.raft_group_mut().advance_apply_to(snapshot_index);
-            if self.proposal_control().is_merging() {
+            if self.proposal_control().has_applied_prepare_merge() {
                 // After applying a snapshot, merge is rollbacked implicitly.
+                info!(
+                    self.logger,
+                    "rollback merge after applying snapshot";
+                    "index" => snapshot_index,
+                    "region" => ?self.region(),
+                );
                 self.rollback_merge(ctx);
             }
             let read_tablet = SharedReadTablet::new(tablet.clone());
@@ -302,10 +340,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
             self.schedule_apply_fsm(ctx);
             if self.remove_tombstone_tablets(snapshot_index) {
+                let counter = self.remember_persisted_tablet_index();
                 let _ = ctx
                     .schedulers
                     .tablet
                     .schedule(tablet::Task::destroy(region_id, snapshot_index));
+                counter.store(snapshot_index, Ordering::Relaxed);
+            }
+            if let Some(msg) = self.split_pending_append_mut().take_append_message() {
+                let _ = ctx.router.send_raft_message(msg);
             }
         }
     }
@@ -336,7 +379,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         // Send generate snapshot task to region worker.
         let (last_applied_index, last_applied_term) = self.apply_progress();
         snap_task.index.store(last_applied_index, Ordering::SeqCst);
-        let gen_tablet_sanp_task = ReadTask::GenTabletSnapshot {
+        let gen_tablet_snap_task = ReadTask::GenTabletSnapshot {
             region_id: snap_task.region_id,
             to_peer: snap_task.to_peer,
             tablet: self.tablet().clone(),
@@ -346,7 +389,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             for_balance: snap_task.for_balance,
             canceled: snap_task.canceled.clone(),
         };
-        if let Err(e) = self.read_scheduler().schedule(gen_tablet_sanp_task) {
+        if let Err(e) = self.read_scheduler().schedule(gen_tablet_snap_task) {
             error!(
                 self.logger,
                 "schedule snapshot failed";
@@ -368,10 +411,23 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         false
     }
 
+    fn report_snapshot(&self, peer_id: u64, status: raft::SnapshotStatus) {
+        if status == raft::SnapshotStatus::Finish {
+            self.snap_states.borrow_mut().remove(&peer_id);
+        }
+    }
+
     /// Gets a snapshot. Returns `SnapshotTemporarilyUnavailable` if there is no
     /// unavailable snapshot.
     pub fn snapshot(&self, request_index: u64, to: u64) -> raft::Result<Snapshot> {
         if let Some(state) = self.snap_states.borrow_mut().get_mut(&to) {
+            info!(
+                self.logger(),
+                "requesting snapshot";
+                "request_index" => request_index,
+                "request_peer" => to,
+                "state" => ?state,
+            );
             match state {
                 SnapState::Generating { ref canceled, .. } => {
                     if canceled.load(Ordering::SeqCst) {
@@ -384,10 +440,17 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 }
                 SnapState::Generated(ref s) => {
                     let snap = *s.clone();
-                    *state = SnapState::Relax;
                     if self.validate_snap(&snap, request_index) {
+                        *state = SnapState::Sending(s.clone());
                         return Ok(snap);
                     }
+                    *state = SnapState::Relax;
+                }
+                SnapState::Sending(ref s) => {
+                    if self.validate_snap(s, request_index) {
+                        return Ok(*s.clone());
+                    }
+                    *state = SnapState::Relax;
                 }
                 _ => {}
             };
@@ -405,7 +468,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         } else {
             info!(
                 self.logger(),
-                "requesting snapshot";
+                "requesting new snapshot";
                 "request_index" => request_index,
                 "request_peer" => to,
             );
@@ -504,10 +567,9 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     pub fn cancel_generating_snap_due_to_compacted(&self, compact_to: u64) {
         let mut states = self.snap_states.borrow_mut();
         states.retain(|id, state| {
-            let SnapState::Generating {
-                ref index,
-                ..
-            } = *state else { return true; };
+            let SnapState::Generating { ref index, .. } = *state else {
+                return true;
+            };
             let snap_index = index.load(Ordering::SeqCst);
             if snap_index == 0 || compact_to <= snap_index + 1 {
                 return true;
@@ -527,26 +589,37 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
     /// Try to switch snap state to generated. only `Generating` can switch to
     /// `Generated`.
     ///  TODO: make the snap state more clearer, the snapshot must be consumed.
-    pub fn on_snapshot_generated(&self, res: GenSnapRes) -> bool {
+    pub fn on_snapshot_generated(&self, res: GenSnapRes, commit_index: u64) -> bool {
         if res.is_none() {
             self.cancel_generating_snap(None);
             return false;
         }
-        let (snapshot, to_peer_id) = *res.unwrap();
+        let (mut snapshot, to_peer_id) = *res.unwrap();
         if let Some(state) = self.snap_states.borrow_mut().get_mut(&to_peer_id) {
-            let SnapState::Generating {
-                ref index,
-                ..
-            } = *state else { return false };
+            let SnapState::Generating { ref index, .. } = *state else {
+                return false;
+            };
             if snapshot.get_metadata().get_index() < index.load(Ordering::SeqCst) {
                 warn!(
                     self.logger(),
                     "snapshot is staled, skip";
-                    "snap index" => snapshot.get_metadata().get_index(),
-                    "required index" => index.load(Ordering::SeqCst),
+                    "snap_index" => snapshot.get_metadata().get_index(),
+                    "required_index" => index.load(Ordering::SeqCst),
                     "to_peer_id" => to_peer_id,
                 );
                 return false;
+            }
+            // Set commit index for learner snapshots. It's needed to address
+            // compatibility issues between v1 and v2 snapshots.
+            // See https://github.com/pingcap/tiflash/issues/7568#issuecomment-1576382311
+            if let Some(p) = find_peer_by_id(self.region(), to_peer_id)
+                && p.get_role() == PeerRole::Learner
+            {
+                let mut snapshot_data = RaftSnapshotData::default();
+                if snapshot_data.merge_from_bytes(snapshot.get_data()).is_ok() {
+                    snapshot_data.mut_meta().set_commit_index_hint(commit_index);
+                    snapshot.set_data(snapshot_data.write_to_bytes().unwrap().into());
+                }
             }
             *state = SnapState::Generated(Box::new(snapshot));
         }
@@ -592,7 +665,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
         let old_last_index = self.entry_storage().last_index();
         if self.entry_storage().first_index() <= old_last_index {
             // All states are rewritten in the following blocks. Stale states will be
-            // cleaned up by compact worker. Have to use raft write batch here becaue
+            // cleaned up by compact worker. Have to use raft write batch here because
             // raft log engine expects deletes before writes.
             let raft_engine = self.entry_storage().raft_engine();
             if task.raft_wb.is_none() {
@@ -648,6 +721,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             lb.put_flushed_index(region_id, cf, last_index, last_index)
                 .unwrap();
         }
+        task.flushed_epoch = Some(self.region_state().get_region().get_region_epoch().clone());
 
         let (path, clean_split) = match self.split_init_mut() {
             // If index not match, the peer may accept a newer snapshot after split.

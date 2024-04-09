@@ -2,22 +2,26 @@
 
 use std::{
     sync::{
+        atomic::{AtomicBool, Ordering},
         mpsc::{channel, sync_channel},
-        Arc,
+        Arc, Mutex,
     },
     thread,
     time::Duration,
 };
 
-use futures::executor::block_on;
+use engine_traits::CF_DEFAULT;
+use futures::{executor::block_on, StreamExt};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::{
         self as pb, AssertionLevel, Context, GetRequest, Op, PessimisticLockRequest,
         PrewriteRequest, PrewriteRequestPessimisticAction::*,
     },
+    raft_serverpb::RaftMessage,
     tikvpb::TikvClient,
 };
+use raft::prelude::{ConfChangeType, MessageType};
 use raftstore::store::LocksStatus;
 use storage::{
     mvcc::{
@@ -26,19 +30,31 @@ use storage::{
     },
     txn::{self, commands},
 };
-use test_raftstore::{configure_for_lease_read, new_server_cluster};
-use tikv::storage::{
-    self,
-    kv::SnapshotExt,
-    lock_manager::MockLockManager,
-    txn::tests::{
-        must_acquire_pessimistic_lock, must_commit, must_pessimistic_prewrite_put,
-        must_pessimistic_prewrite_put_err, must_prewrite_put, must_prewrite_put_err,
-    },
-    Snapshot, TestEngineBuilder, TestStorageBuilderApiV1,
+use test_raftstore::{
+    configure_for_lease_read, new_learner_peer, new_server_cluster, try_kv_prewrite,
+    DropMessageFilter,
 };
-use tikv_util::{store::new_peer, HandyRwLock};
-use txn_types::{Key, Mutation, PessimisticLock, TimeStamp};
+use tikv::{
+    server::gc_worker::gc_by_compact,
+    storage::{
+        self,
+        kv::SnapshotExt,
+        lock_manager::MockLockManager,
+        txn::tests::{
+            must_acquire_pessimistic_lock, must_acquire_pessimistic_lock_return_value, must_commit,
+            must_pessimistic_prewrite_put, must_pessimistic_prewrite_put_err, must_prewrite_put,
+            must_prewrite_put_err, must_rollback,
+        },
+        Snapshot, TestEngineBuilder, TestStorageBuilderApiV1,
+    },
+};
+use tikv_kv::{Engine, Modify, WriteData, WriteEvent};
+use tikv_util::{
+    config::ReadableDuration,
+    store::{new_peer, peer::new_incoming_voter},
+    HandyRwLock,
+};
+use txn_types::{Key, LastChange, Mutation, PessimisticLock, TimeStamp};
 
 #[test]
 fn test_txn_failpoints() {
@@ -566,8 +582,8 @@ fn test_concurrent_write_after_transfer_leader_invalidates_locks() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
-        last_change_ts: 5.into(),
-        versions_to_last_change: 3,
+        last_change: LastChange::make_exist(5.into(), 3),
+        is_locked_with_conflict: false,
     };
     txn_ext
         .pessimistic_locks
@@ -677,4 +693,212 @@ fn test_read_index_with_max_ts() {
     assert!(resp.region_error.is_none());
     assert_eq!(resp.error.unwrap().locked.unwrap().lock_version, start_ts);
     fail::remove("on_apply_write_cmd");
+}
+
+// This test mocks the situation described in the PR#14863
+#[test]
+fn test_proposal_concurrent_with_conf_change_and_transfer_leader() {
+    let (mut cluster, _, mut ctx) = test_raftstore_v2::must_new_cluster_mul(4);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    pd_client.add_peer(1, new_learner_peer(4, 4));
+
+    std::thread::sleep(Duration::from_millis(500));
+
+    pd_client.joint_confchange(
+        1,
+        vec![
+            (ConfChangeType::AddNode, new_peer(4, 4)),
+            (ConfChangeType::AddLearnerNode, new_learner_peer(1, 1)),
+        ],
+    );
+
+    std::thread::sleep(Duration::from_millis(500));
+
+    let leader = cluster.leader_of_region(1).unwrap();
+    let epoch = cluster.get_region_epoch(1);
+    ctx.set_region_id(1);
+    ctx.set_peer(leader.clone());
+    ctx.set_region_epoch(epoch);
+
+    let env = Arc::new(Environment::new(1));
+    let ch = ChannelBuilder::new(env)
+        .connect(&cluster.sim.read().unwrap().get_addr(leader.get_store_id()));
+    let client = TikvClient::new(ch);
+
+    cluster.add_send_filter_on_node(
+        1,
+        Box::new(DropMessageFilter::new(Arc::new(move |m| {
+            let msg_type = m.get_message().get_msg_type();
+            let to_store = m.get_to_peer().get_store_id();
+            !(msg_type == MessageType::MsgAppend && (to_store == 2 || to_store == 3))
+        }))),
+    );
+
+    cluster.add_send_filter_on_node(
+        4,
+        Box::new(DropMessageFilter::new(Arc::new(move |m| {
+            let msg_type = m.get_message().get_msg_type();
+            let to_store = m.get_to_peer().get_store_id();
+            !(msg_type == MessageType::MsgAppend && to_store == 1)
+        }))),
+    );
+
+    let (tx, rx) = channel::<()>();
+    let tx = Arc::new(Mutex::new(tx));
+    // ensure the cmd is proposed before transfer leader
+    fail::cfg_callback("after_propose_pending_writes", move || {
+        tx.lock().unwrap().send(()).unwrap();
+    })
+    .unwrap();
+
+    let handle = std::thread::spawn(move || {
+        let mut mutations = vec![];
+        for key in [b"key3".to_vec(), b"key4".to_vec()] {
+            let mut mutation = kvproto::kvrpcpb::Mutation::default();
+            mutation.set_op(Op::Put);
+            mutation.set_key(key);
+            mutations.push(mutation);
+        }
+        let _ = try_kv_prewrite(&client, ctx, mutations, b"key3".to_vec(), 10);
+    });
+
+    rx.recv_timeout(std::time::Duration::from_secs(50)).unwrap();
+    pd_client.transfer_leader(1, new_peer(4, 4), vec![]);
+
+    pd_client.region_leader_must_be(1, new_incoming_voter(4, 4));
+    pd_client.must_leave_joint(1);
+
+    pd_client.must_joint_confchange(
+        1,
+        vec![(ConfChangeType::RemoveNode, new_learner_peer(1, 1))],
+    );
+    pd_client.must_leave_joint(1);
+
+    cluster.clear_send_filter_on_node(1);
+    cluster.clear_send_filter_on_node(4);
+
+    handle.join().unwrap();
+}
+
+#[test]
+fn test_next_last_change_info_called_when_gc() {
+    let mut engine = TestEngineBuilder::new().build().unwrap();
+    let k = b"zk";
+
+    must_prewrite_put(&mut engine, k, b"v", k, 5);
+    must_commit(&mut engine, k, 5, 6);
+
+    must_rollback(&mut engine, k, 10, true);
+
+    fail::cfg("before_get_write_in_next_last_change_info", "pause").unwrap();
+
+    let mut engine2 = engine.clone();
+    let h = thread::spawn(move || {
+        must_acquire_pessimistic_lock_return_value(&mut engine2, k, k, 30, 30, false)
+    });
+    thread::sleep(Duration::from_millis(200));
+    assert!(!h.is_finished());
+
+    gc_by_compact(&mut engine, &[], 20);
+
+    fail::remove("before_get_write_in_next_last_change_info");
+
+    assert_eq!(h.join().unwrap().unwrap().as_slice(), b"v");
+}
+
+fn must_put<E: Engine>(ctx: &Context, engine: &E, key: &[u8], value: &[u8]) {
+    engine.put(ctx, Key::from_raw(key), value.to_vec()).unwrap();
+}
+
+fn must_delete<E: Engine>(ctx: &Context, engine: &E, key: &[u8]) {
+    engine.delete(ctx, Key::from_raw(key)).unwrap();
+}
+
+// Before the fix, a proposal can be proposed twice, which is caused by that
+// write proposal validation and propose are not atomic. So a raft message with
+// higher term between them can make the proposal goes to msg proposal
+// forwarding logic. However, raft proposal forawrd logic is not compatible with
+// the raft store, as the failed proposal makes client retry. The retried
+// proposal coupled with forward proposal makes the propsal applied twice.
+#[test]
+fn test_forbid_forward_propose() {
+    use test_raftstore_v2::*;
+    let count = 3;
+    let mut cluster = new_server_cluster(0, count);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+    cluster.cfg.raft_store.store_batch_system.pool_size = 2;
+    cluster.run();
+
+    let region = cluster.get_region(b"");
+    let peer1 = new_peer(1, 1);
+    let peer2 = new_peer(2, 2);
+    cluster.must_transfer_leader(region.id, peer2.clone());
+    let storage = cluster.sim.rl().storages[&1].clone();
+    let storage2 = cluster.sim.rl().storages[&2].clone();
+
+    let p = Arc::new(AtomicBool::new(false));
+    let p2 = p.clone();
+    let (tx, rx) = channel();
+    let tx = Mutex::new(tx);
+    cluster.add_recv_filter_on_node(
+        2,
+        Box::new(DropMessageFilter::new(Arc::new(move |_| {
+            if p2.load(Ordering::Relaxed) {
+                tx.lock().unwrap().send(()).unwrap();
+                // One msg is enough
+                p2.store(false, Ordering::Relaxed);
+                true
+            } else {
+                false
+            }
+        }))),
+    );
+
+    let k = Key::from_raw(b"k");
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().clone());
+    ctx.set_peer(peer2);
+
+    // block node when collecting message to make async write proposal and a raft
+    // message with higher term occured in a single batch.
+    fail::cfg("on_peer_collect_message_2", "pause").unwrap();
+    let mut res = storage2.async_write(
+        &ctx,
+        WriteData::from_modifies(vec![Modify::Put(CF_DEFAULT, k.clone(), b"val".to_vec())]),
+        WriteEvent::EVENT_PROPOSED,
+        None,
+    );
+
+    // Make node 1 become leader
+    let router = cluster.get_router(1).unwrap();
+    let mut raft_msg = RaftMessage::default();
+    raft_msg.set_region_id(1);
+    raft_msg.set_to_peer(peer1.clone());
+    raft_msg.set_region_epoch(region.get_region_epoch().clone());
+    raft_msg
+        .mut_message()
+        .set_msg_type(MessageType::MsgTimeoutNow);
+    router.send_raft_message(Box::new(raft_msg)).unwrap();
+
+    std::thread::sleep(Duration::from_secs(1));
+
+    ctx.set_peer(peer1);
+    must_put(&ctx, &storage, b"k", b"val");
+    must_delete(&ctx, &storage, b"k");
+
+    p.store(true, Ordering::Release);
+    rx.recv().unwrap();
+    // Ensure the msg is sent by router.
+    std::thread::sleep(Duration::from_millis(100));
+    fail::remove("on_peer_collect_message_2");
+
+    let r = block_on(async { res.next().await }).unwrap();
+    assert!(matches!(r, WriteEvent::Finished(Err { .. })));
+
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(cluster.get(k.as_encoded()), None);
 }

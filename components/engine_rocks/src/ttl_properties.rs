@@ -15,19 +15,30 @@ const PROP_MIN_EXPIRE_TS: &str = "tikv.min_expire_ts";
 pub struct RocksTtlProperties;
 
 impl RocksTtlProperties {
+    pub fn encode_to(ttl_props: &TtlProperties, user_props: &mut UserProperties) {
+        if let Some(max_expire_ts) = ttl_props.max_expire_ts {
+            user_props.encode_u64(PROP_MAX_EXPIRE_TS, max_expire_ts);
+        }
+        if let Some(min_expire_ts) = ttl_props.min_expire_ts {
+            user_props.encode_u64(PROP_MIN_EXPIRE_TS, min_expire_ts);
+        }
+    }
+
     pub fn encode(ttl_props: &TtlProperties) -> UserProperties {
         let mut props = UserProperties::new();
-        props.encode_u64(PROP_MAX_EXPIRE_TS, ttl_props.max_expire_ts);
-        props.encode_u64(PROP_MIN_EXPIRE_TS, ttl_props.min_expire_ts);
+        Self::encode_to(ttl_props, &mut props);
         props
     }
 
-    pub fn decode<T: DecodeProperties>(props: &T) -> Result<TtlProperties> {
-        let res = TtlProperties {
-            max_expire_ts: props.decode_u64(PROP_MAX_EXPIRE_TS)?,
-            min_expire_ts: props.decode_u64(PROP_MIN_EXPIRE_TS)?,
-        };
-        Ok(res)
+    pub fn decode_from<T: DecodeProperties>(ttl_props: &mut TtlProperties, props: &T) {
+        ttl_props.max_expire_ts = props.decode_u64(PROP_MAX_EXPIRE_TS).ok();
+        ttl_props.min_expire_ts = props.decode_u64(PROP_MIN_EXPIRE_TS).ok();
+    }
+
+    pub fn decode<T: DecodeProperties>(props: &T) -> TtlProperties {
+        let mut res = TtlProperties::default();
+        Self::decode_from(&mut res, props);
+        res
     }
 }
 
@@ -46,11 +57,10 @@ impl TtlPropertiesExt for RocksEngine {
 
         let mut res = Vec::new();
         for (file_name, v) in collection.iter() {
-            let prop = match RocksTtlProperties::decode(v.user_collected_properties()) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            res.push((file_name.to_string(), prop));
+            let prop = RocksTtlProperties::decode(v.user_collected_properties());
+            if prop.is_some() {
+                res.push((file_name.to_string(), prop));
+            }
         }
         Ok(res)
     }
@@ -64,6 +74,7 @@ pub struct TtlPropertiesCollector<F: KvFormat> {
 
 impl<F: KvFormat> TablePropertiesCollector for TtlPropertiesCollector<F> {
     fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
+        // DBEntryType::BlobIndex will be skipped because we can't parse the value.
         if entry_type != DBEntryType::Put {
             return;
         }
@@ -81,12 +92,7 @@ impl<F: KvFormat> TablePropertiesCollector for TtlPropertiesCollector<F> {
                 expire_ts: Some(expire_ts),
                 ..
             }) => {
-                self.prop.max_expire_ts = std::cmp::max(self.prop.max_expire_ts, expire_ts);
-                if self.prop.min_expire_ts == 0 {
-                    self.prop.min_expire_ts = expire_ts;
-                } else {
-                    self.prop.min_expire_ts = std::cmp::min(self.prop.min_expire_ts, expire_ts);
-                }
+                self.prop.add(expire_ts);
             }
             Err(err) => {
                 error!(
@@ -101,9 +107,6 @@ impl<F: KvFormat> TablePropertiesCollector for TtlPropertiesCollector<F> {
     }
 
     fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
-        if self.prop.max_expire_ts == 0 && self.prop.min_expire_ts == 0 {
-            return HashMap::default();
-        }
         RocksTtlProperties::encode(&self.prop).0
     }
 }
@@ -138,7 +141,7 @@ mod tests {
     }
 
     fn test_ttl_properties_impl<F: KvFormat>() {
-        let get_properties = |case: &[(&'static str, u64)]| -> Result<TtlProperties> {
+        let get_properties = |case: &[(&'static str, u64)]| -> TtlProperties {
             let mut collector = TtlPropertiesCollector::<F> {
                 prop: Default::default(),
                 _phantom: PhantomData,
@@ -165,6 +168,7 @@ mod tests {
             RocksTtlProperties::decode(&result)
         };
 
+        // NOTE: expire_ts=0 is considered as no TTL in `ApiVersion::V1ttl`
         let case1 = [
             ("zr\0a", 0),
             ("zr\0b", UnixSecs::now().into_inner()),
@@ -172,24 +176,61 @@ mod tests {
             ("zr\0d", u64::MAX),
             ("zr\0e", 0),
         ];
-        let props = get_properties(&case1).unwrap();
-        assert_eq!(props.max_expire_ts, u64::MAX);
+        let props = get_properties(&case1);
+        assert_eq!(props.max_expire_ts, Some(u64::MAX));
         match F::TAG {
             ApiVersion::V1 => unreachable!(),
-            ApiVersion::V1ttl => assert_eq!(props.min_expire_ts, 1),
-            // expire_ts = 0 is no longer a special case in API V2
-            ApiVersion::V2 => assert_eq!(props.min_expire_ts, 0),
+            ApiVersion::V1ttl => assert_eq!(props.min_expire_ts, Some(1)),
+            ApiVersion::V2 => assert_eq!(props.min_expire_ts, Some(0)),
         }
 
         let case2 = [("zr\0a", 0)];
-        get_properties(&case2).unwrap_err();
+        match F::TAG {
+            ApiVersion::V1 => unreachable!(),
+            ApiVersion::V1ttl => assert!(get_properties(&case2).is_none()),
+            ApiVersion::V2 => assert_eq!(props.min_expire_ts, Some(0)),
+        }
 
         let case3 = [];
-        get_properties(&case3).unwrap_err();
+        assert!(get_properties(&case3).is_none());
 
         let case4 = [("zr\0a", 1)];
-        let props = get_properties(&case4).unwrap();
-        assert_eq!(props.max_expire_ts, 1);
-        assert_eq!(props.min_expire_ts, 1);
+        let props = get_properties(&case4);
+        assert_eq!(props.max_expire_ts, Some(1));
+        assert_eq!(props.min_expire_ts, Some(1));
+    }
+
+    #[test]
+    fn test_ttl_properties_codec() {
+        let cases: Vec<(Option<u64>, Option<u64>, Vec<(&[u8], u64)>)> = vec![
+            (
+                Some(0),                                                      // min_expire_ts
+                Some(1),                                                      // max_expire_ts
+                vec![(b"tikv.min_expire_ts", 0), (b"tikv.max_expire_ts", 1)], // UserProperties
+            ),
+            (None, None, vec![]),
+            (Some(0), None, vec![(b"tikv.min_expire_ts", 0)]),
+            (None, Some(0), vec![(b"tikv.max_expire_ts", 0)]),
+        ];
+
+        for (i, (min_expire_ts, max_expire_ts, expect_user_props)) in cases.into_iter().enumerate()
+        {
+            let ttl_props = TtlProperties {
+                min_expire_ts,
+                max_expire_ts,
+            };
+            let user_props = RocksTtlProperties::encode(&ttl_props);
+            let expect_user_props = UserProperties(
+                expect_user_props
+                    .into_iter()
+                    .map(|(name, value)| (name.to_vec(), value.to_be_bytes().to_vec()))
+                    .collect::<HashMap<_, _>>(),
+            );
+            assert_eq!(user_props.0, expect_user_props.0, "case {}", i);
+
+            let decoded = RocksTtlProperties::decode(&user_props);
+            assert_eq!(decoded.max_expire_ts, ttl_props.max_expire_ts, "case {}", i);
+            assert_eq!(decoded.min_expire_ts, ttl_props.min_expire_ts, "case {}", i);
+        }
     }
 }

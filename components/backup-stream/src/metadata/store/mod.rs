@@ -1,13 +1,5 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-cfg_if::cfg_if! {
-    if #[cfg(feature = "metastore-etcd")] {
-        pub mod etcd;
-        pub mod lazy_etcd;
-        pub use etcd::EtcdStore;
-    }
-}
-
 // Note: these mods also used for integration tests,
 //       so we cannot compile them only when `#[cfg(test)]`.
 //       (See https://github.com/rust-lang/rust/issues/84629)

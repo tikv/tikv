@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# This script checks if there is plain (not redacted) log in TiKV.
+set -euo pipefail
+
+function error_msg() {
+    echo "Prefer snake_case for log kv." >&2
+}
+
+if grep -r -n --color=always \
+        -E '"[a-zA-Z0-9_ -]*( |-)[a-zA-Z0-9_ -]*" ?=>[\?% ]*[\*&a-zA-Z0-9:\._\(\["]+[,|\)|\n]?' \
+        --include \*.rs \
+        --exclude-dir target . \
+    | grep -v -E "config\.rs|tikv_util/src/logger|file_system/src/rate_limiter.rs" ; # ignore files contain kebab-case names.
+then
+    error_msg
+    exit 1
+fi
+
+echo "Log style check passed."

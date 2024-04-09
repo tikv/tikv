@@ -23,6 +23,8 @@ impl<F: engine_traits::SstPartitionerFactory> rocksdb::SstPartitionerFactory
             output_level: context.output_level,
             smallest_key: context.smallest_key,
             largest_key: context.largest_key,
+            next_level_boundaries: context.next_level_boundaries.clone(),
+            next_level_sizes: context.next_level_sizes.clone(),
         };
         self.0.create_partitioner(&ctx).map(RocksSstPartitioner)
     }

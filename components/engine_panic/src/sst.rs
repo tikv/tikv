@@ -2,6 +2,7 @@
 
 use std::{marker::PhantomData, path::PathBuf, sync::Arc};
 
+use ::encryption::DataKeyManager;
 use engine_traits::{
     CfName, ExternalSstFileInfo, IterOptions, Iterable, Iterator, RefIterable, Result,
     SstCompressionType, SstExt, SstReader, SstWriter, SstWriterBuilder,
@@ -18,16 +19,13 @@ impl SstExt for PanicEngine {
 pub struct PanicSstReader;
 
 impl SstReader for PanicSstReader {
-    fn open(path: &str) -> Result<Self> {
-        panic!()
-    }
-    fn open_encrypted<E: engine_traits::EncryptionKeyManager>(
-        path: &str,
-        mgr: Arc<E>,
-    ) -> Result<Self> {
+    fn open(path: &str, mgr: Option<Arc<DataKeyManager>>) -> Result<Self> {
         panic!()
     }
     fn verify_checksum(&self) -> Result<()> {
+        panic!()
+    }
+    fn kv_count_and_size(&self) -> (u64, u64) {
         panic!()
     }
 }

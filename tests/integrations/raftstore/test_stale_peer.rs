@@ -4,10 +4,13 @@
 
 use std::{sync::Arc, thread, time::*};
 
+use engine_rocks::RocksEngine;
 use engine_traits::{Peekable, CF_RAFT};
 use kvproto::raft_serverpb::{PeerState, RegionLocalState};
+use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv_util::{config::ReadableDuration, HandyRwLock};
 
 /// A helper function for testing the behaviour of the gc of stale peer
@@ -28,7 +31,7 @@ use tikv_util::{config::ReadableDuration, HandyRwLock};
 /// time, and it would check with pd to confirm whether it's still a member of
 /// the cluster. If not, it should destroy itself as a stale peer which is
 /// removed out already.
-fn test_stale_peer_out_of_region<T: Simulator>(cluster: &mut Cluster<T>) {
+fn test_stale_peer_out_of_region<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer number check.
     pd_client.disable_default_operator();
@@ -111,7 +114,10 @@ fn test_server_stale_peer_out_of_region() {
 /// time, and it's an initialized peer without any data. It would destroy itself
 /// as stale peer directly and should not impact other region data on the
 /// same store.
-fn test_stale_peer_without_data<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {
+fn test_stale_peer_without_data<T: Simulator<RocksEngine>>(
+    cluster: &mut Cluster<RocksEngine, T>,
+    right_derive: bool,
+) {
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
 
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -297,7 +303,7 @@ fn test_stale_learner_with_read_index() {
     );
     request.mut_header().set_peer(new_peer(3, 3));
     request.mut_header().set_replica_read(true);
-    let (cb, _) = make_cb(&request);
+    let (cb, _) = make_cb_rocks(&request);
     cluster
         .sim
         .rl()
@@ -309,4 +315,49 @@ fn test_stale_learner_with_read_index() {
     let state_key = keys::region_state_key(r1);
     let state: RegionLocalState = engine3.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
     assert_eq!(state.get_state(), PeerState::Tombstone);
+}
+
+/// Test if an uninitialized stale peer will be removed after restart.
+#[test_case(test_raftstore::new_node_cluster)]
+// #[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_restart_gc_uninitialized_peer_after_merge() {
+    let mut cluster = new_cluster(0, 4);
+    configure_for_merge(&mut cluster.cfg);
+    ignore_merge_target_integrity(&mut cluster.cfg, &cluster.pd_client);
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 5;
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
+    cluster.cfg.raft_store.max_leader_missing_duration = ReadableDuration::millis(150);
+    cluster.cfg.raft_store.abnormal_leader_missing_duration = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.peer_stale_state_check_interval = ReadableDuration::millis(100);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run_conf_change();
+
+    cluster.must_put(b"k1", b"v1");
+
+    // test if an uninitialized stale peer before conf removal is destroyed
+    // automatically
+    let region = pd_client.get_region(b"k1").unwrap();
+    pd_client.must_add_peer(region.get_id(), new_peer(2, 2));
+    pd_client.must_add_peer(region.get_id(), new_peer(3, 3));
+
+    // Block snapshot messages, so that new peers will never be initialized.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(region.get_id(), 4)
+            .msg_type(MessageType::MsgSnapshot)
+            .direction(Direction::Recv),
+    ));
+    // Add peer (4,4), remove peer (4,4) and then merge regions.
+    // Peer (4,4) will be an an uninitialized stale peer.
+    pd_client.must_add_peer(region.get_id(), new_peer(4, 4));
+    cluster.must_region_exist(region.get_id(), 4);
+    cluster.add_send_filter(IsolationFilterFactory::new(4));
+    pd_client.must_remove_peer(region.get_id(), new_peer(4, 4));
+
+    // An uninitialized stale peer is removed automatically after restart.
+    cluster.stop_node(4);
+    cluster.run_node(4).unwrap();
+    cluster.must_region_not_exist(region.get_id(), 4);
 }

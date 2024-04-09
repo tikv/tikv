@@ -5,12 +5,12 @@ use std::{thread, time::Duration};
 use kvproto::{
     disk_usage::DiskUsage,
     kvrpcpb::{DiskFullOpt, Op},
-    metapb::Region,
     raft_cmdpb::*,
 };
 use raft::eraftpb::MessageType;
 use raftstore::store::msg::*;
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv_util::{config::ReadableDuration, future::block_on_timeout, time::Instant};
 
 fn assert_disk_full(resp: &RaftCmdResponse) {
@@ -34,148 +34,147 @@ fn get_fp(usage: DiskUsage, store_id: u64) -> String {
 }
 
 // check the region new leader is elected.
-fn assert_region_leader_changed<T: Simulator>(
-    cluster: &mut Cluster<T>,
-    region_id: u64,
-    original_leader: u64,
-) {
-    let timer = Instant::now();
-    loop {
-        if timer.saturating_elapsed() > Duration::from_secs(5) {
-            panic!("Leader cannot change when the only disk full node is leader");
+macro_rules! assert_region_leader_changed {
+    ($cluster:expr, $region_id:expr, $original_leader:expr) => {{
+        let timer = Instant::now();
+        loop {
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
+                panic!("Leader cannot change when the only disk full node is leader");
+            }
+            let new_leader = $cluster.query_leader(1, $region_id, Duration::from_secs(1));
+            if new_leader.is_none() {
+                sleep_ms(10);
+                continue;
+            }
+            if new_leader.unwrap().get_id() == $original_leader {
+                sleep_ms(10);
+                continue;
+            } else {
+                break;
+            }
         }
-        let new_leader = cluster.query_leader(1, region_id, Duration::from_secs(1));
-        if new_leader.is_none() {
-            sleep_ms(10);
-            continue;
+    }};
+}
+
+macro_rules! ensure_disk_usage_is_reported {
+    ($cluster:expr, $peer_id:expr, $store_id:expr, $region:expr) => {{
+        let peer = new_peer($store_id, $peer_id);
+        let key = $region.get_start_key();
+        let ch = async_read_on_peer($cluster, peer, $region.clone(), key, true, true);
+        block_on_timeout(ch, Duration::from_secs(1)).unwrap();
+    }};
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_disk_full_leader_behaviors() {
+    for usage in [DiskUsage::AlmostFull, DiskUsage::AlreadyFull] {
+        let mut cluster = new_cluster(0, 3);
+        cluster.cfg.raft_store.gc_peer_check_interval = ReadableDuration::millis(500); // set gc duration for v2
+        cluster.pd_client.disable_default_operator();
+        cluster.run();
+
+        // To ensure all replicas are not pending.
+        cluster.must_put(b"k1", b"v1");
+        must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
+        must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+        must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+        cluster.must_transfer_leader(1, new_peer(1, 1));
+        fail::cfg(get_fp(usage, 1), "return").unwrap();
+
+        // Test new normal proposals won't be allowed when disk is full.
+        let old_last_index = cluster.raft_local_state(1, 1).last_index;
+        let rx = cluster.async_put(b"k2", b"v2").unwrap();
+        assert_disk_full(&block_on_timeout(rx, Duration::from_secs(2)).unwrap());
+        let new_last_index = cluster.raft_local_state(1, 1).last_index;
+        assert_eq!(old_last_index, new_last_index);
+
+        assert_region_leader_changed!(&cluster, 1, 1);
+        fail::remove(get_fp(usage, 1));
+        cluster.must_transfer_leader(1, new_peer(1, 1));
+        fail::cfg(get_fp(usage, 1), "return").unwrap();
+
+        // merge/split is only allowed on disk almost full.
+        if usage != DiskUsage::AlreadyFull {
+            // Test split must be allowed when disk is full.
+            let region = cluster.get_region(b"k1");
+            cluster.must_split(&region, b"k1");
         }
-        if new_leader.unwrap().get_id() == original_leader {
-            sleep_ms(10);
-            continue;
-        } else {
-            break;
-        }
+        // Test transfer leader should be allowed.
+        cluster.must_transfer_leader(1, new_peer(2, 2));
+
+        // Transfer the leadership back to store 1.
+        fail::remove(get_fp(usage, 1));
+        cluster.must_transfer_leader(1, new_peer(1, 1));
+        fail::cfg(get_fp(usage, 1), "return").unwrap();
+
+        // Test remove peer should be allowed.
+        cluster.pd_client.must_remove_peer(1, new_peer(3, 3));
+        // Sleep for a while until the disk usage and peer changes have been synced.
+        thread::sleep(Duration::from_secs(1));
+        must_get_none(&cluster.get_engine(3), b"k1");
+
+        // Test add peer should be allowed. It must be a higher peer-id in v2.
+        cluster.pd_client.must_add_peer(1, new_peer(3, 4));
+        must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+        fail::remove(get_fp(usage, 1));
+        // Sleep for a while before next case to make it clear.
+        thread::sleep(Duration::from_secs(1));
     }
 }
 
-fn ensure_disk_usage_is_reported<T: Simulator>(
-    cluster: &mut Cluster<T>,
-    peer_id: u64,
-    store_id: u64,
-    region: &Region,
-) {
-    let peer = new_peer(store_id, peer_id);
-    let key = region.get_start_key();
-    let ch = async_read_on_peer(cluster, peer, region.clone(), key, true, true);
-    block_on_timeout(ch, Duration::from_secs(1)).unwrap();
-}
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_disk_full_follower_behaviors() {
+    for usage in [DiskUsage::AlmostFull, DiskUsage::AlreadyFull] {
+        let mut cluster = new_cluster(0, 3);
+        cluster.pd_client.disable_default_operator();
+        cluster.run();
 
-fn test_disk_full_leader_behaviors(usage: DiskUsage) {
-    let mut cluster = new_node_cluster(0, 3);
-    cluster.pd_client.disable_default_operator();
-    cluster.run();
+        // To ensure all replicas are not pending.
+        cluster.must_put(b"k1", b"v1");
+        must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
+        must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+        must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 
-    // To ensure all replicas are not pending.
-    cluster.must_put(b"k1", b"v1");
-    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
-    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
-    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+        cluster.must_transfer_leader(1, new_peer(1, 1));
+        fail::cfg(get_fp(usage, 2), "return").unwrap();
 
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-    fail::cfg(get_fp(usage, 1), "return").unwrap();
+        // Test followers will reject pre-transfer-leader command.
+        let epoch = cluster.get_region_epoch(1);
+        let transfer = new_admin_request(1, &epoch, new_transfer_leader_cmd(new_peer(2, 2)));
+        cluster
+            .call_command_on_leader(transfer, Duration::from_secs(3))
+            .unwrap();
+        assert_eq!(cluster.leader_of_region(1).unwrap(), new_peer(1, 1));
+        cluster.must_put(b"k2", b"v2");
 
-    // Test new normal proposals won't be allowed when disk is full.
-    let old_last_index = cluster.raft_local_state(1, 1).last_index;
-    let mut rx = cluster.async_put(b"k2", b"v2").unwrap();
-    assert_disk_full(&rx.recv_timeout(Duration::from_secs(2)).unwrap());
-    let new_last_index = cluster.raft_local_state(1, 1).last_index;
-    assert_eq!(old_last_index, new_last_index);
+        // Test leader shouldn't append entries to disk full followers.
+        let old_last_index = cluster.raft_local_state(1, 2).last_index;
+        cluster.must_put(b"k3", b"v3");
+        let new_last_index = cluster.raft_local_state(1, 2).last_index;
+        assert_eq!(old_last_index, new_last_index);
+        must_get_none(&cluster.get_engine(2), b"k3");
 
-    assert_region_leader_changed(&mut cluster, 1, 1);
-    fail::remove(get_fp(usage, 1));
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-    fail::cfg(get_fp(usage, 1), "return").unwrap();
+        // Test followers will response votes when disk is full.
+        cluster.add_send_filter(CloneFilterFactory(
+            RegionPacketFilter::new(1, 1)
+                .direction(Direction::Send)
+                .msg_type(MessageType::MsgRequestVoteResponse),
+        ));
+        cluster.must_transfer_leader(1, new_peer(3, 3));
 
-    // merge/split is only allowed on disk almost full.
-    if usage != DiskUsage::AlreadyFull {
-        // Test split must be allowed when disk is full.
-        let region = cluster.get_region(b"k1");
-        cluster.must_split(&region, b"k1");
+        fail::remove(get_fp(usage, 2));
     }
-    // Test transfer leader should be allowed.
-    cluster.must_transfer_leader(1, new_peer(2, 2));
-
-    // Transfer the leadership back to store 1.
-    fail::remove(get_fp(usage, 1));
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-    fail::cfg(get_fp(usage, 1), "return").unwrap();
-
-    // Test remove peer should be allowed.
-    cluster.pd_client.must_remove_peer(1, new_peer(3, 3));
-    must_get_none(&cluster.get_engine(3), b"k1");
-
-    // Test add peer should be allowed.
-    cluster.pd_client.must_add_peer(1, new_peer(3, 3));
-    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
-
-    fail::remove(get_fp(usage, 1));
 }
 
-#[test]
-fn test_disk_full_for_region_leader() {
-    test_disk_full_leader_behaviors(DiskUsage::AlmostFull);
-    test_disk_full_leader_behaviors(DiskUsage::AlreadyFull);
-}
-
-fn test_disk_full_follower_behaviors(usage: DiskUsage) {
-    let mut cluster = new_node_cluster(0, 3);
-    cluster.pd_client.disable_default_operator();
-    cluster.run();
-
-    // To ensure all replicas are not pending.
-    cluster.must_put(b"k1", b"v1");
-    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
-    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
-    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
-
-    cluster.must_transfer_leader(1, new_peer(1, 1));
-    fail::cfg(get_fp(usage, 2), "return").unwrap();
-
-    // Test followers will reject pre-transfer-leader command.
-    let epoch = cluster.get_region_epoch(1);
-    let transfer = new_admin_request(1, &epoch, new_transfer_leader_cmd(new_peer(2, 2)));
-    cluster
-        .call_command_on_leader(transfer, Duration::from_secs(3))
-        .unwrap();
-    assert_eq!(cluster.leader_of_region(1).unwrap(), new_peer(1, 1));
-    cluster.must_put(b"k2", b"v2");
-
-    // Test leader shouldn't append entries to disk full followers.
-    let old_last_index = cluster.raft_local_state(1, 2).last_index;
-    cluster.must_put(b"k3", b"v3");
-    let new_last_index = cluster.raft_local_state(1, 2).last_index;
-    assert_eq!(old_last_index, new_last_index);
-    must_get_none(&cluster.get_engine(2), b"k3");
-
-    // Test followers will response votes when disk is full.
-    cluster.add_send_filter(CloneFilterFactory(
-        RegionPacketFilter::new(1, 1)
-            .direction(Direction::Send)
-            .msg_type(MessageType::MsgRequestVoteResponse),
-    ));
-    cluster.must_transfer_leader(1, new_peer(3, 3));
-
-    fail::remove(get_fp(usage, 2));
-}
-
-#[test]
-fn test_disk_full_for_region_follower() {
-    test_disk_full_follower_behaviors(DiskUsage::AlmostFull);
-    test_disk_full_follower_behaviors(DiskUsage::AlreadyFull);
-}
-
-fn test_disk_full_txn_behaviors(usage: DiskUsage) {
-    let mut cluster = new_server_cluster(0, 3);
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_disk_full_txn_behaviors() {
+    let usage = DiskUsage::AlmostFull;
+    let mut cluster = new_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     cluster.run();
 
@@ -199,7 +198,7 @@ fn test_disk_full_txn_behaviors(usage: DiskUsage) {
         DiskFullOpt::NotAllowedOnFull,
     );
     assert!(res.get_region_error().has_disk_full());
-    assert_region_leader_changed(&mut cluster, 1, 1);
+    assert_region_leader_changed!(&cluster, 1, 1);
 
     fail::remove(get_fp(usage, 1));
     cluster.must_transfer_leader(1, new_peer(1, 1));
@@ -262,23 +261,20 @@ fn test_disk_full_txn_behaviors(usage: DiskUsage) {
     let lock_ts = get_tso(&pd_client);
     lead_client.must_kv_pessimistic_lock(b"k8".to_vec(), lock_ts);
 
-    // Test pessmistic rollback is allowed.
+    // Test pessimistic rollback is allowed.
     fail::cfg(get_fp(usage, 1), "return").unwrap();
     lead_client.must_kv_pessimistic_rollback(b"k8".to_vec(), lock_ts);
 
     fail::remove(get_fp(usage, 1));
 }
 
-#[test]
-fn test_disk_full_for_txn_operations() {
-    test_disk_full_txn_behaviors(DiskUsage::AlmostFull);
-}
-
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_majority_disk_full() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     // To ensure the thread has full store disk usage infomation.
     cluster.cfg.raft_store.store_batch_system.pool_size = 1;
+    cluster.cfg.raft_store.gc_peer_check_interval = ReadableDuration::millis(500); // set gc duration for v2
     cluster.pd_client.disable_default_operator();
     cluster.run();
 
@@ -295,12 +291,12 @@ fn test_majority_disk_full() {
     // To ensure followers have reported disk usages to the leader.
     for i in 1..3 {
         fail::cfg(get_fp(DiskUsage::AlmostFull, i + 1), "return").unwrap();
-        ensure_disk_usage_is_reported(&mut cluster, i + 1, i + 1, &region);
+        ensure_disk_usage_is_reported!(&mut cluster, i + 1, i + 1, &region);
     }
 
     // Normal proposals will be rejected because of majority peers' disk full.
-    let mut ch = cluster.async_put(b"k2", b"v2").unwrap();
-    let resp = ch.recv_timeout(Duration::from_secs(1)).unwrap();
+    let ch = cluster.async_put(b"k2", b"v2").unwrap();
+    let resp = block_on_timeout(ch, Duration::from_secs(1)).unwrap();
     assert_eq!(disk_full_stores(&resp), vec![2, 3]);
 
     // Proposals with special `DiskFullOpt`s can be accepted even if all peers are
@@ -310,8 +306,8 @@ fn test_majority_disk_full() {
     let put = new_request(1, epoch.clone(), reqs, false);
     let mut opts = RaftCmdExtraOpts::default();
     opts.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull;
-    let mut ch = cluster.async_request_with_opts(put, opts).unwrap();
-    let resp = ch.recv_timeout(Duration::from_secs(1)).unwrap();
+    let ch = cluster.async_request_with_opts(put, opts).unwrap();
+    let resp = block_on_timeout(ch, Duration::from_secs(1)).unwrap();
     assert!(!resp.get_header().has_error());
 
     // Reset disk full status for peer 2 and 3. 2 follower reads must success
@@ -319,14 +315,14 @@ fn test_majority_disk_full() {
     // new disk usages are reported.
     for i in 1..3 {
         fail::remove(get_fp(DiskUsage::AlmostFull, i + 1));
-        ensure_disk_usage_is_reported(&mut cluster, i + 1, i + 1, &region);
+        ensure_disk_usage_is_reported!(&mut cluster, i + 1, i + 1, &region);
         must_get_equal(&cluster.get_engine(i + 1), b"k3", b"v3");
     }
 
     // To ensure followers have reported disk usages to the leader.
     for i in 1..3 {
         fail::cfg(get_fp(DiskUsage::AlreadyFull, i + 1), "return").unwrap();
-        ensure_disk_usage_is_reported(&mut cluster, i + 1, i + 1, &region);
+        ensure_disk_usage_is_reported!(&mut cluster, i + 1, i + 1, &region);
     }
 
     // Proposals with special `DiskFullOpt`s will still be rejected if majority
@@ -335,17 +331,19 @@ fn test_majority_disk_full() {
     let put = new_request(1, epoch.clone(), reqs, false);
     let mut opts = RaftCmdExtraOpts::default();
     opts.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull;
-    let mut ch = cluster.async_request_with_opts(put, opts).unwrap();
-    let resp = ch.recv_timeout(Duration::from_secs(10)).unwrap();
+    let ch = cluster.async_request_with_opts(put, opts).unwrap();
+    let resp = block_on_timeout(ch, Duration::from_secs(10)).unwrap();
     assert_eq!(disk_full_stores(&resp), vec![2, 3]);
 
     // Peer 2 disk usage changes from already full to almost full.
     fail::remove(get_fp(DiskUsage::AlreadyFull, 2));
     fail::cfg(get_fp(DiskUsage::AlmostFull, 2), "return").unwrap();
-    ensure_disk_usage_is_reported(&mut cluster, 2, 2, &region);
+    ensure_disk_usage_is_reported!(&mut cluster, 2, 2, &region);
 
-    // Configuration change should be alloed.
+    // Configuration change should be allowed.
     cluster.pd_client.must_remove_peer(1, new_peer(2, 2));
+    // Sleep for a while until the disk usage and peer changes have been synced.
+    thread::sleep(Duration::from_secs(1));
 
     // After the last configuration change is applied, the raft group will be like
     // `[(1, DiskUsage::AlmostFull), (3, DiskUsage::AlreadyFull)]`. So no more
@@ -354,8 +352,8 @@ fn test_majority_disk_full() {
     let put = new_request(1, epoch, reqs, false);
     let mut opts = RaftCmdExtraOpts::default();
     opts.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull;
-    let mut ch = cluster.async_request_with_opts(put, opts).unwrap();
-    let resp = ch.recv_timeout(Duration::from_secs(1)).unwrap();
+    let ch = cluster.async_request_with_opts(put, opts).unwrap();
+    let resp = block_on_timeout(ch, Duration::from_secs(1)).unwrap();
     assert_eq!(disk_full_stores(&resp), vec![3]);
 
     for i in 0..3 {
@@ -364,9 +362,10 @@ fn test_majority_disk_full() {
     }
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_disk_full_followers_with_hibernate_regions() {
-    let mut cluster = new_node_cluster(0, 2);
+    let mut cluster = new_cluster(0, 2);
     // To ensure the thread has full store disk usage infomation.
     cluster.cfg.raft_store.store_batch_system.pool_size = 1;
     cluster.pd_client.disable_default_operator();
@@ -391,31 +390,13 @@ fn test_disk_full_followers_with_hibernate_regions() {
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
 }
 
-// check the region new leader is elected.
-fn assert_region_merged<T: Simulator>(
-    cluster: &mut Cluster<T>,
-    left_region_key: &[u8],
-    right_region_key: &[u8],
-) {
-    let timer = Instant::now();
-    loop {
-        if timer.saturating_elapsed() > Duration::from_secs(5) {
-            panic!("region merge failed");
-        }
-        let region_left = cluster.get_region(left_region_key);
-        let region_right = cluster.get_region(right_region_key);
-        if region_left.get_id() != region_right.get_id() {
-            sleep_ms(10);
-            continue;
-        } else {
-            break;
-        }
-    }
-}
-
-#[test]
+// #[test_case(test_raftstore_v2::new_server_cluster)]
+// FIXME: #[test_case(test_raftstore_v2::new_server_cluster)]
+// In v2 `must_try_merge` always return error. Also the last `must_merge`
+// sometimes cannot get an updated min_matched.
+#[test_case(test_raftstore::new_server_cluster)]
 fn test_merge_on_majority_disk_full() {
-    let mut cluster = new_server_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     // To ensure the thread has full store disk usage infomation.
     cluster.cfg.raft_store.store_batch_system.pool_size = 1;
     cluster.pd_client.disable_default_operator();
@@ -448,23 +429,42 @@ fn test_merge_on_majority_disk_full() {
         fail::cfg(get_fp(DiskUsage::AlmostFull, i), "return").unwrap();
     }
     for peer in region1.get_peers().iter() {
-        ensure_disk_usage_is_reported(&mut cluster, peer.get_id(), peer.get_store_id(), &region1);
+        ensure_disk_usage_is_reported!(&mut cluster, peer.get_id(), peer.get_store_id(), &region1);
     }
 
     for peer in region2.get_peers().iter() {
-        ensure_disk_usage_is_reported(&mut cluster, peer.get_id(), peer.get_store_id(), &region2);
+        ensure_disk_usage_is_reported!(&mut cluster, peer.get_id(), peer.get_store_id(), &region2);
     }
     cluster.must_try_merge(region1.get_id(), region2.get_id());
-    assert_region_merged(&mut cluster, b"k1", b"k3");
+
+    // check the region new leader is elected.
+    let assert_region_merged = |left_region_key: &[u8], right_region_key: &[u8]| {
+        let timer = Instant::now();
+        loop {
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
+                panic!("region merge failed");
+            }
+            let region_left = cluster.get_region(left_region_key);
+            let region_right = cluster.get_region(right_region_key);
+            if region_left.get_id() != region_right.get_id() {
+                sleep_ms(10);
+                continue;
+            } else {
+                break;
+            }
+        }
+    };
+    assert_region_merged(b"k1", b"k3");
 
     for i in 1..3 {
         fail::remove(get_fp(DiskUsage::AlmostFull, i));
     }
 }
 
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_almost_and_already_full_behavior() {
-    let mut cluster = new_server_cluster(0, 5);
+    let mut cluster = new_cluster(0, 5);
     // To ensure the thread has full store disk usage infomation.
     cluster.cfg.raft_store.store_batch_system.pool_size = 1;
     cluster.pd_client.disable_default_operator();
@@ -481,7 +481,7 @@ fn test_almost_and_already_full_behavior() {
         fail::cfg(get_fp(DiskUsage::AlreadyFull, i), "return").unwrap();
     }
     for i in 1..5 {
-        ensure_disk_usage_is_reported(&mut cluster, i + 1, i + 1, &region);
+        ensure_disk_usage_is_reported!(&mut cluster, i + 1, i + 1, &region);
     }
 
     let lead_client = PeerClient::new(&cluster, 1, new_peer(1, 1));
@@ -521,29 +521,10 @@ fn test_almost_and_already_full_behavior() {
     }
 }
 
-fn wait_down_peers_reported<T: Simulator>(
-    cluster: &Cluster<T>,
-    total_down_count: u64,
-    target_report_peer: u64,
-) {
-    let mut peers = cluster.get_down_peers();
-    let timer = Instant::now();
-    loop {
-        if timer.saturating_elapsed() > Duration::from_secs(5) {
-            panic!("Leader cannot change when the only disk full node is leader");
-        }
-
-        if peers.len() == total_down_count as usize && peers.contains_key(&target_report_peer) {
-            return;
-        }
-        sleep_ms(10);
-        peers = cluster.get_down_peers();
-    }
-}
-
-#[test]
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_down_node_when_disk_full() {
-    let mut cluster = new_server_cluster(0, 5);
+    let mut cluster = new_cluster(0, 5);
     // To ensure the thread has full store disk usage infomation.
     cluster.cfg.raft_store.store_batch_system.pool_size = 1;
     cluster.cfg.raft_store.max_peer_down_duration = ReadableDuration::secs(1);
@@ -555,7 +536,7 @@ fn test_down_node_when_disk_full() {
     let region = cluster.get_region(b"k1");
     for i in 3..6 {
         fail::cfg(get_fp(DiskUsage::AlmostFull, i), "return").unwrap();
-        ensure_disk_usage_is_reported(&mut cluster, i, i, &region);
+        ensure_disk_usage_is_reported!(&mut cluster, i, i, &region);
     }
 
     let lead_client = PeerClient::new(&cluster, 1, new_peer(1, 1));
@@ -574,7 +555,23 @@ fn test_down_node_when_disk_full() {
     );
 
     cluster.stop_node(2);
-    wait_down_peers_reported(&cluster, 1, 2u64);
+
+    let wait_down_peers_reported = |total_down_count: u64, target_report_peer: u64| {
+        let mut peers = cluster.get_down_peers();
+        let timer = Instant::now();
+        loop {
+            if timer.saturating_elapsed() > Duration::from_secs(5) {
+                panic!("Leader cannot change when the only disk full node is leader");
+            }
+
+            if peers.len() == total_down_count as usize && peers.contains_key(&target_report_peer) {
+                return;
+            }
+            sleep_ms(10);
+            peers = cluster.get_down_peers();
+        }
+    };
+    wait_down_peers_reported(1u64, 2u64);
 
     let prewrite_ts = get_tso(&cluster.pd_client);
     let res = lead_client.try_kv_prewrite(

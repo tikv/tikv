@@ -1,6 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use api_version::{ApiV1, KvFormat};
+use engine_rocks::RocksEngine as RocksDb;
 use kvproto::{
     kvrpcpb::{Context, KeyRange, LockInfo},
     metapb,
@@ -44,11 +45,11 @@ impl<F: KvFormat> AssertionStorage<RocksEngine, F> {
     }
 }
 
-impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
+impl<F: KvFormat> AssertionStorage<SimulateEngine<RocksDb>, F> {
     pub fn new_raft_storage_with_store_count(
         count: usize,
         key: &str,
-    ) -> (Cluster<ServerCluster>, Self) {
+    ) -> (Cluster<RocksDb, ServerCluster<RocksDb>>, Self) {
         let (cluster, store, ctx) = new_raft_storage_with_store_count::<F>(count, key);
         let storage = Self { store, ctx };
         (cluster, storage)
@@ -56,7 +57,7 @@ impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
 
     pub fn update_with_key_byte(
         &mut self,
-        cluster: &mut Cluster<ServerCluster>,
+        cluster: &mut Cluster<RocksDb, ServerCluster<RocksDb>>,
         key: &[u8],
     ) -> metapb::Region {
         // ensure the leader of range which contains current key has been elected
@@ -79,7 +80,7 @@ impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
 
     pub fn delete_ok_for_cluster(
         &mut self,
-        cluster: &mut Cluster<ServerCluster>,
+        cluster: &mut Cluster<RocksDb, ServerCluster<RocksDb>>,
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
@@ -98,7 +99,7 @@ impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
 
     fn get_from_cluster(
         &mut self,
-        cluster: &mut Cluster<ServerCluster>,
+        cluster: &mut Cluster<RocksDb, ServerCluster<RocksDb>>,
         key: &[u8],
         ts: impl Into<TimeStamp>,
     ) -> Option<Value> {
@@ -116,7 +117,7 @@ impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
 
     pub fn get_none_from_cluster(
         &mut self,
-        cluster: &mut Cluster<ServerCluster>,
+        cluster: &mut Cluster<RocksDb, ServerCluster<RocksDb>>,
         key: &[u8],
         ts: impl Into<TimeStamp>,
     ) {
@@ -125,7 +126,7 @@ impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
 
     pub fn put_ok_for_cluster(
         &mut self,
-        cluster: &mut Cluster<ServerCluster>,
+        cluster: &mut Cluster<RocksDb, ServerCluster<RocksDb>>,
         key: &[u8],
         value: &[u8],
         start_ts: impl Into<TimeStamp>,
@@ -138,7 +139,7 @@ impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
 
     pub fn batch_put_ok_for_cluster<'a>(
         &mut self,
-        cluster: &mut Cluster<ServerCluster>,
+        cluster: &mut Cluster<RocksDb, ServerCluster<RocksDb>>,
         keys: &[impl AsRef<[u8]>],
         vals: impl Iterator<Item = &'a [u8]>,
         start_ts: impl Into<TimeStamp>,
@@ -162,7 +163,7 @@ impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
 
     fn two_pc_ok_for_cluster(
         &mut self,
-        cluster: &mut Cluster<ServerCluster>,
+        cluster: &mut Cluster<RocksDb, ServerCluster<RocksDb>>,
         prewrite_mutations: Vec<Mutation>,
         key: &[u8],
         commit_keys: Vec<Key>,
@@ -206,7 +207,7 @@ impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
 
     pub fn gc_ok_for_cluster(
         &mut self,
-        cluster: &mut Cluster<ServerCluster>,
+        cluster: &mut Cluster<RocksDb, ServerCluster<RocksDb>>,
         region_key: &[u8],
         mut region: metapb::Region,
         safe_point: impl Into<TimeStamp>,
@@ -225,7 +226,7 @@ impl<F: KvFormat> AssertionStorage<SimulateEngine, F> {
 
     pub fn test_txn_store_gc3_for_cluster(
         &mut self,
-        cluster: &mut Cluster<ServerCluster>,
+        cluster: &mut Cluster<RocksDb, ServerCluster<RocksDb>>,
         key_prefix: u8,
     ) {
         let key_len = 10_000;

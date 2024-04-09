@@ -72,6 +72,24 @@ where
         }
     };
 
+    fn build_log_drain<I>(
+        drain: I,
+        threshold: u64,
+        filter: impl FilterFn,
+    ) -> impl Drain<Ok = (), Err = slog::Never>
+    where
+        I: Drain<Ok = (), Err = slog::Never>,
+    {
+        let drain = SlowLogFilter {
+            threshold,
+            inner: drain,
+        };
+        let drain = ThreadIDrain(drain);
+        // Let GlobalLevelFilter wrap ThreadIDrain, so that it saves getting
+        // thread id for flittered logs.
+        GlobalLevelFilter::new(drain.filter(filter).fuse())
+    }
+
     let (logger, guard) = if use_async {
         let (async_log, guard) = Async::new(LogAndFuse(drain))
             .chan_size(SLOG_CHANNEL_SIZE)
@@ -79,21 +97,12 @@ where
             .thread_name(thd_name!("slogger"))
             .build_with_guard();
         let drain = async_log.fuse();
-        let drain = SlowLogFilter {
-            threshold: slow_threshold,
-            inner: drain,
-        };
-        let filtered = GlobalLevelFilter::new(drain.filter(filter).fuse());
-
-        (slog::Logger::root(filtered, slog_o!()), Some(guard))
+        let drain = build_log_drain(drain, slow_threshold, filter);
+        (slog::Logger::root(drain, slog_o!()), Some(guard))
     } else {
         let drain = LogAndFuse(Mutex::new(drain));
-        let drain = SlowLogFilter {
-            threshold: slow_threshold,
-            inner: drain,
-        };
-        let filtered = GlobalLevelFilter::new(drain.filter(filter).fuse());
-        (slog::Logger::root(filtered, slog_o!()), None)
+        let drain = build_log_drain(drain, slow_threshold, filter);
+        (slog::Logger::root(drain, slog_o!()), None)
     };
 
     set_global_logger(level, init_stdlog, logger, guard)
@@ -628,6 +637,24 @@ fn write_log_fields(
     Ok(())
 }
 
+struct ThreadIDrain<D: Drain>(pub D);
+
+impl<D> Drain for ThreadIDrain<D>
+where
+    D: Drain,
+{
+    type Ok = D::Ok;
+    type Err = D::Err;
+    fn log(&self, record: &Record<'_>, values: &OwnedKVList) -> Result<Self::Ok, Self::Err> {
+        let values = slog::o!(
+            "thread_id" => std::thread::current().id().as_u64().get(),
+            // OwnedKVList is essentially an Arc, clone is cheap.
+            values.clone(),
+        );
+        self.0.log(record, &OwnedKVList::from(values))
+    }
+}
+
 struct Serializer<'a> {
     decorator: &'a mut dyn RecordDecorator,
 }
@@ -679,7 +706,7 @@ impl<'a> slog::Serializer for Serializer<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, io, io::Write, str::from_utf8};
+    use std::{cell::RefCell, io, io::Write, str::from_utf8, sync::Arc, time::Duration};
 
     use chrono::DateTime;
     use regex::Regex;
@@ -688,25 +715,17 @@ mod tests {
 
     use super::*;
 
-    // Due to the requirements of `Logger::root*` on a writer with a 'static
-    // lifetime we need to make a Thread Local,
-    // and implement a custom writer.
-    thread_local! {
-        static BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
-    }
-    struct TestWriter;
+    struct TestWriter(Arc<Mutex<Vec<u8>>>);
     impl Write for TestWriter {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            BUFFER.with(|buffer| buffer.borrow_mut().write(buf))
+            self.0.lock().unwrap().write(buf)
         }
         fn flush(&mut self) -> io::Result<()> {
-            BUFFER.with(|buffer| buffer.borrow_mut().flush())
+            self.0.lock().unwrap().flush()
         }
     }
 
     fn log_format_cases(logger: slog::Logger) {
-        use std::time::Duration;
-
         // Empty message is not recommend, just for test purpose here.
         slog_info!(logger, "");
         slog_info!(logger, "Welcome");
@@ -761,113 +780,125 @@ mod tests {
 
     #[test]
     fn test_log_format_text() {
-        let decorator = PlainSyncDecorator::new(TestWriter);
+        let buffer: Arc<Mutex<Vec<u8>>> = Arc::default();
+        let decorator = PlainSyncDecorator::new(TestWriter(buffer.clone()));
         let drain = TikvFormat::new(decorator, true).fuse();
+        let drain = ThreadIDrain(drain);
+        let drain = slog::Logger::root_typed(drain, slog_o!("raft_id" => 1)).into_erased();
         let logger = slog::Logger::root_typed(drain, slog_o!()).into_erased();
 
         log_format_cases(logger);
 
-        let expect = r#"[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] []
-[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [Welcome]
-[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:470] ["Welcome TiKV"]
-[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:471] [欢迎]
-[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:472] ["欢迎 TiKV"]
-[2019/01/15 13:40:39.615 +08:00] [INFO] [mod.rs:455] ["failed to fetch URL"] [backoff=3s] [attempt=3] [url=http://example.com]
-[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:460] ["failed to \"fetch\" [URL]: http://example.com"]
-[2019/01/15 13:40:39.619 +08:00] [DEBUG] [mod.rs:463] ["Slow query"] ["process keys"=1500] [duration=123ns] [sql="SELECT * FROM TABLE WHERE ID=\"abc\""]
-[2019/01/15 13:40:39.619 +08:00] [WARN] [mod.rs:473] [Type] [Other=-inf] [Score=inf] [Counter=NaN]
-[2019/01/16 16:56:04.854 +08:00] [INFO] [mod.rs:391] ["more type tests"] [str_array="[\"💖\", \"�\", \"☺☻☹\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"\\\\x80\\\\x80\\\\x80\\\\x80\", \"<car><mirror>XML</mirror></car>\"]"] [u8=34] [is_None=None] [is_false=false] [is_true=true] ["store ids"="[1, 2, 3]"] [url-peers="[\"peer1\", \"peer 2\"]"] [urls="[\"http://xxx.com:2347\", \"http://xxx.com:2432\"]"] [field2="in quote"] [field1=no_quote]
-"#;
+        let thread_id = std::thread::current().id().as_u64();
+        let expect = format!(
+            r#"[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [] [raft_id=1] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:469] [Welcome] [raft_id=1] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:470] ["Welcome TiKV"] [raft_id=1] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:471] [欢迎] [raft_id=1] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:472] ["欢迎 TiKV"] [raft_id=1] [thread_id={0}]
+[2019/01/15 13:40:39.615 +08:00] [INFO] [mod.rs:455] ["failed to fetch URL"] [backoff=3s] [attempt=3] [url=http://example.com] [raft_id=1] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:460] ["failed to \"fetch\" [URL]: http://example.com"] [raft_id=1] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [DEBUG] [mod.rs:463] ["Slow query"] ["process keys"=1500] [duration=123ns] [sql="SELECT * FROM TABLE WHERE ID=\"abc\""] [raft_id=1] [thread_id={0}]
+[2019/01/15 13:40:39.619 +08:00] [WARN] [mod.rs:473] [Type] [Other=-inf] [Score=inf] [Counter=NaN] [raft_id=1] [thread_id={0}]
+[2019/01/16 16:56:04.854 +08:00] [INFO] [mod.rs:391] ["more type tests"] [str_array="[\"💖\", \"�\", \"☺☻☹\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"\\\\x80\\\\x80\\\\x80\\\\x80\", \"<car><mirror>XML</mirror></car>\"]"] [u8=34] [is_None=None] [is_false=false] [is_true=true] ["store ids"="[1, 2, 3]"] [url-peers="[\"peer1\", \"peer 2\"]"] [urls="[\"http://xxx.com:2347\", \"http://xxx.com:2432\"]"] [field2="in quote"] [field1=no_quote] [raft_id=1] [thread_id={0}]
+"#,
+            thread_id
+        );
 
-        BUFFER.with(|buffer| {
-            let mut buffer = buffer.borrow_mut();
-            let output = from_utf8(&buffer).unwrap();
-            assert_eq!(output.lines().count(), expect.lines().count());
+        let buffer = buffer.lock().unwrap();
+        let output = from_utf8(&buffer).unwrap();
+        assert_eq!(
+            output.lines().count(),
+            expect.lines().count(),
+            "{}\n===\n{}",
+            output,
+            expect
+        );
 
-            let re = Regex::new(r"(?P<datetime>\[.*?\])\s(?P<level>\[.*?\])\s(?P<source_file>\[.*?\])\s(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
+        let re = Regex::new(r"(?P<datetime>\[.*?\])\s(?P<level>\[.*?\])\s(?P<source_file>\[.*?\])\s(?P<msg>\[.*?\])\s?(?P<kvs>\[.*\])?").unwrap();
 
-            for (output_line, expect_line) in output.lines().zip(expect.lines()) {
-                let expect_segments = re.captures(expect_line).unwrap();
-                let output_segments = re.captures(output_line).unwrap();
+        for (output_line, expect_line) in output.lines().zip(expect.lines()) {
+            let expect_segments = re.captures(expect_line).unwrap();
+            let output_segments = re.captures(output_line).unwrap();
 
-                validate_log_datetime(peel(&output_segments["datetime"]));
+            validate_log_datetime(peel(&output_segments["datetime"]));
 
-                assert!(validate_log_source_file(
-                    peel(&expect_segments["source_file"]),
-                    peel(&output_segments["source_file"])
-                ));
-                assert_eq!(expect_segments["level"], output_segments["level"]);
-                assert_eq!(expect_segments["msg"], output_segments["msg"]);
-                assert_eq!(
-                    expect_segments.name("kvs").map(|s| s.as_str()),
-                    output_segments.name("kvs").map(|s| s.as_str())
-                );
-            }
-            buffer.clear();
-        });
+            assert!(validate_log_source_file(
+                peel(&expect_segments["source_file"]),
+                peel(&output_segments["source_file"])
+            ));
+            assert_eq!(expect_segments["level"], output_segments["level"]);
+            assert_eq!(expect_segments["msg"], output_segments["msg"]);
+            assert_eq!(
+                expect_segments.name("kvs").map(|s| s.as_str()),
+                output_segments.name("kvs").map(|s| s.as_str())
+            );
+        }
     }
 
     #[test]
     fn test_log_format_json() {
         use serde_json::{from_str, Value};
-        let drain = Mutex::new(json_format(TestWriter, true)).map(slog::Fuse);
+        let buffer: Arc<Mutex<Vec<u8>>> = Arc::default();
+        let drain = Mutex::new(json_format(TestWriter(buffer.clone()), true)).map(slog::Fuse);
+        let drain = ThreadIDrain(drain);
         let logger = slog::Logger::root_typed(drain, slog_o!()).into_erased();
 
         log_format_cases(logger);
 
-        let expect = r#"{"time":"2020/05/16 15:49:52.449 +08:00","level":"INFO","caller":"mod.rs:469","message":""}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:469","message":"Welcome"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:470","message":"Welcome TiKV"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:471","message":"欢迎"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:472","message":"欢迎 TiKV"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:455","message":"failed to fetch URL","backoff":"3s","attempt":3,"url":"http://example.com"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:460","message":"failed to \"fetch\" [URL]: http://example.com"}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"DEBUG","caller":"mod.rs:463","message":"Slow query","process keys":1500,"duration":"123ns","sql":"SELECT * FROM TABLE WHERE ID=\"abc\""}
-{"time":"2020/05/16 15:49:52.450 +08:00","level":"WARN","caller":"mod.rs:473","message":"Type","Other":null,"Score":null,"Counter":null}
-{"time":"2020/05/16 15:49:52.451 +08:00","level":"INFO","caller":"mod.rs:391","message":"more type tests","str_array":"[\"💖\", \"�\", \"☺☻☹\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"\\\\x80\\\\x80\\\\x80\\\\x80\", \"<car><mirror>XML</mirror></car>\"]","u8":34,"is_None":null,"is_false":false,"is_true":true,"store ids":"[1, 2, 3]","url-peers":"[\"peer1\", \"peer 2\"]","urls":"[\"http://xxx.com:2347\", \"http://xxx.com:2432\"]","field2":"in quote","field1":"no_quote"}
-"#;
+        let thread_id = std::thread::current().id().as_u64();
+        let expect = format!(
+            r#"{{"time":"2020/05/16 15:49:52.449 +08:00","level":"INFO","caller":"mod.rs:469","message":"","thread_id":{0}}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:469","message":"Welcome","thread_id":{0}}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:470","message":"Welcome TiKV","thread_id":{0}}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:471","message":"欢迎","thread_id":{0}}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:472","message":"欢迎 TiKV","thread_id":{0}}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:455","message":"failed to fetch URL","backoff":"3s","attempt":3,"url":"http://example.com","thread_id":{0}}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"INFO","caller":"mod.rs:460","message":"failed to \"fetch\" [URL]: http://example.com","thread_id":{0}}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"DEBUG","caller":"mod.rs:463","message":"Slow query","process keys":1500,"duration":"123ns","sql":"SELECT * FROM TABLE WHERE ID=\"abc\"","thread_id":{0}}}
+{{"time":"2020/05/16 15:49:52.450 +08:00","level":"WARN","caller":"mod.rs:473","message":"Type","Other":null,"Score":null,"Counter":null,"thread_id":{0}}}
+{{"time":"2020/05/16 15:49:52.451 +08:00","level":"INFO","caller":"mod.rs:391","message":"more type tests","str_array":"[\"💖\", \"�\", \"☺☻☹\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©日a本b語ç日ð本Ê語þ日¥本¼語i日©\", \"\\\\x80\\\\x80\\\\x80\\\\x80\", \"<car><mirror>XML</mirror></car>\"]","u8":34,"is_None":null,"is_false":false,"is_true":true,"store ids":"[1, 2, 3]","url-peers":"[\"peer1\", \"peer 2\"]","urls":"[\"http://xxx.com:2347\", \"http://xxx.com:2432\"]","field2":"in quote","field1":"no_quote","thread_id":{0}}}
+"#,
+            thread_id
+        );
 
-        BUFFER.with(|buffer| {
-            let mut buffer = buffer.borrow_mut();
-            let output = from_utf8(&buffer).unwrap();
-            assert_eq!(output.lines().count(), expect.lines().count());
+        let buffer = buffer.lock().unwrap();
+        let output = from_utf8(&buffer).unwrap();
+        assert_eq!(output.lines().count(), expect.lines().count());
 
-            for (output_line, expect_line) in output.lines().zip(expect.lines()) {
-                let mut expect_json = from_str::<Value>(expect_line).unwrap();
-                let mut output_json = from_str::<Value>(output_line).unwrap();
+        for (output_line, expect_line) in output.lines().zip(expect.lines()) {
+            let mut expect_json = from_str::<Value>(expect_line).unwrap();
+            let mut output_json = from_str::<Value>(output_line).unwrap();
 
-                validate_log_datetime(output_json["time"].take().as_str().unwrap());
-                // Remove time field to bypass timestamp mismatch.
-                let _ = expect_json["time"].take();
+            validate_log_datetime(output_json["time"].take().as_str().unwrap());
+            // Remove time field to bypass timestamp mismatch.
+            let _ = expect_json["time"].take();
 
-                validate_log_source_file(
-                    output_json["caller"].take().as_str().unwrap(),
-                    expect_json["caller"].take().as_str().unwrap(),
-                );
+            validate_log_source_file(
+                output_json["caller"].take().as_str().unwrap(),
+                expect_json["caller"].take().as_str().unwrap(),
+            );
 
-                assert_eq!(expect_json, output_json);
-            }
-            buffer.clear();
-        });
+            assert_eq!(expect_json, output_json);
+        }
     }
 
     #[test]
     fn test_global_level_filter() {
-        let decorator = PlainSyncDecorator::new(TestWriter);
+        let buffer: Arc<Mutex<Vec<u8>>> = Arc::default();
+        let decorator = PlainSyncDecorator::new(TestWriter(buffer.clone()));
         let drain = TikvFormat::new(decorator, true).fuse();
         let logger =
             slog::Logger::root_typed(GlobalLevelFilter::new(drain), slog_o!()).into_erased();
 
         let expected = "[2019/01/15 13:40:39.619 +08:00] [INFO] [mod.rs:871] [Welcome]\n";
         let check_log = |log: &str| {
-            BUFFER.with(|buffer| {
-                let mut buffer = buffer.borrow_mut();
-                let output = from_utf8(&buffer).unwrap();
-                // only check the log len here as some field like timestamp, location may
-                // change.
-                assert_eq!(output.len(), log.len());
-                buffer.clear();
-            });
+            let mut buffer = buffer.lock().unwrap();
+            let output = from_utf8(&buffer).unwrap();
+            // only check the log len here as some field like timestamp, location may
+            // change.
+            assert_eq!(output.len(), log.len());
+            buffer.clear();
         };
 
         set_log_level(Level::Info);
@@ -978,10 +1009,10 @@ mod tests {
     }
 
     thread_local! {
-        static NORMAL_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
-        static ROCKSDB_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
-        static SLOW_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
-        static RAFTDB_BUFFER: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+        static NORMAL_BUFFER: RefCell<Vec<u8>> = const {RefCell::new(Vec::new())};
+        static ROCKSDB_BUFFER: RefCell<Vec<u8>> = const {RefCell::new(Vec::new())};
+        static SLOW_BUFFER: RefCell<Vec<u8>> = const {RefCell::new(Vec::new())};
+        static RAFTDB_BUFFER: RefCell<Vec<u8>> = const {RefCell::new(Vec::new())};
     }
 
     struct NormalWriter;

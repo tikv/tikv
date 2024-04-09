@@ -2,11 +2,12 @@
 
 use std::io::{Read, Write};
 
+use azure::STORAGE_VENDOR_NAME_AZURE;
 pub use cloud::kms::Config as CloudConfig;
-#[cfg(feature = "cloud-aws")]
-use encryption_export::{create_cloud_backend, KmsConfig};
-use encryption_export::{Backend, Error, Result};
+use encryption::GcpConfig;
+use encryption_export::{create_cloud_backend, AzureConfig, Backend, Error, KmsConfig, Result};
 use file_system::{File, OpenOptions};
+use gcp::STORAGE_VENDOR_NAME_GCP;
 use ini::ini::Ini;
 use kvproto::encryptionpb::EncryptedContent;
 use protobuf::Message;
@@ -45,13 +46,15 @@ pub struct Opt {
 #[derive(StructOpt)]
 #[structopt(rename_all = "kebab-case")]
 enum Command {
-    Kms(KmsCommand),
+    Aws(SubCommandAws),
+    Azure(SubCommandAzure),
+    Gcp(SubCommandGcp),
 }
 
 #[derive(StructOpt)]
 #[structopt(rename_all = "kebab-case")]
 /// KMS backend.
-struct KmsCommand {
+struct SubCommandAws {
     /// KMS key id of backend.
     #[structopt(long)]
     key_id: String,
@@ -63,8 +66,38 @@ struct KmsCommand {
     region: Option<String>,
 }
 
-fn create_kms_backend(
-    cmd: &KmsCommand,
+#[derive(StructOpt)]
+#[structopt(rename_all = "kebab-case")]
+/// Command for KeyVault backend.
+struct SubCommandAzure {
+    /// Tenant id.
+    #[structopt(long)]
+    tenant_id: String,
+    /// Client id.
+    #[structopt(long)]
+    client_id: String,
+    /// KMS key id of Azure backend.
+    #[structopt(long)]
+    key_id: String,
+    /// Remote endpoint of KeyVault
+    #[structopt(long)]
+    url: String,
+    /// Secret to access key.
+    #[structopt(short, long)]
+    secret: Option<String>,
+}
+
+#[derive(StructOpt)]
+#[structopt(rename_all = "kebab-case")]
+/// KMS backend.
+struct SubCommandGcp {
+    /// KMS key id of backend.
+    #[structopt(long)]
+    key_id: String,
+}
+
+fn create_aws_backend(
+    cmd: &SubCommandAws,
     credential_file: Option<&String>,
 ) -> Result<Box<dyn Backend>> {
     let mut config = KmsConfig::default();
@@ -86,6 +119,44 @@ fn create_kms_backend(
     create_cloud_backend(&config)
 }
 
+fn create_azure_backend(
+    cmd: &SubCommandAzure,
+    credential_file: Option<&String>,
+) -> Result<Box<dyn Backend>> {
+    let mut config = KmsConfig::default();
+
+    config.vendor = STORAGE_VENDOR_NAME_AZURE.to_owned();
+    let mut azure_cfg = AzureConfig::default();
+    azure_cfg.tenant_id = cmd.tenant_id.to_owned();
+    azure_cfg.client_id = cmd.client_id.to_owned();
+    config.key_id = cmd.key_id.to_owned();
+    azure_cfg.keyvault_url = cmd.url.to_owned();
+    azure_cfg.client_secret = cmd.secret.to_owned();
+    azure_cfg.client_certificate_path = credential_file.cloned();
+    if let Some(credential_file) = credential_file {
+        let ini = Ini::load_from_file(credential_file)
+            .map_err(|e| Error::Other(box_err!("Failed to parse credential file as ini: {}", e)))?;
+        let _props = ini
+            .section(Some("default"))
+            .ok_or_else(|| Error::Other(box_err!("fail to parse section")))?;
+    }
+    create_cloud_backend(&config)
+}
+
+fn create_gcp_backend(
+    cmd: &SubCommandGcp,
+    credential_file: Option<&String>,
+) -> Result<Box<dyn Backend>> {
+    let mut config = KmsConfig::default();
+    config.gcp = Some(GcpConfig {
+        credential_file_path: credential_file
+            .and_then(|f| if f.is_empty() { None } else { Some(f.clone()) }),
+    });
+    config.key_id = cmd.key_id.to_owned();
+    config.vendor = STORAGE_VENDOR_NAME_GCP.to_owned();
+    create_cloud_backend(&config)
+}
+
 #[allow(irrefutable_let_patterns)]
 fn process() -> Result<()> {
     let opt: Opt = Opt::from_args();
@@ -95,10 +166,10 @@ fn process() -> Result<()> {
     file.read_to_end(&mut content)?;
 
     let credential_file = opt.credential_file.as_ref();
-    let backend = if let Command::Kms(ref cmd) = opt.command {
-        create_kms_backend(cmd, credential_file)?
-    } else {
-        unreachable!()
+    let backend = match &opt.command {
+        Command::Aws(cmd) => create_aws_backend(cmd, credential_file)?,
+        Command::Azure(cmd) => create_azure_backend(cmd, credential_file)?,
+        Command::Gcp(cmd) => create_gcp_backend(cmd, credential_file)?,
     };
 
     let output = match opt.operation {

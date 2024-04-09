@@ -9,7 +9,7 @@ use raftstore::{
         fsm::apply::notify_stale_req,
         metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::{ErrorCallback, ReadCallback},
-        propose_read_index, Config, ReadIndexContext, ReadIndexRequest, Transport,
+        propose_read_index, Config, ReadIndexContext, ReadIndexRequest,
     },
     Error,
 };
@@ -49,7 +49,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     /// read index on follower
     ///
     /// call set_has_ready if it's proposed.
-    pub(crate) fn read_index_follower<T: Transport>(
+    pub(crate) fn read_index_follower<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
@@ -126,6 +126,33 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 let term = self.term();
                 notify_stale_req(term, ch);
             }
+        }
+    }
+
+    pub(crate) fn respond_replica_read_error(
+        &self,
+        read_index_req: &mut ReadIndexRequest<QueryResChannel>,
+        response: RaftCmdResponse,
+    ) {
+        debug!(
+            self.logger,
+            "handle replica reads with a read index failed";
+            "request_id" => ?read_index_req.id,
+            "response" => ?response,
+        );
+        RAFT_READ_INDEX_PENDING_COUNT.sub(read_index_req.cmds().len() as i64);
+        let time = monotonic_raw_now();
+        for (_, ch, _) in read_index_req.take_cmds().drain(..) {
+            ch.read_tracker().map(|tracker| {
+                GLOBAL_TRACKERS.with_tracker(tracker, |t| {
+                    t.metrics.read_index_confirm_wait_nanos = (time - read_index_req.propose_time)
+                        .to_std()
+                        .unwrap()
+                        .as_nanos()
+                        as u64;
+                })
+            });
+            ch.report_error(response.clone());
         }
     }
 }

@@ -3,6 +3,7 @@
 use std::{iter::FromIterator, sync::Arc, time::Duration};
 
 use collections::HashMap;
+use engine_rocks::RocksEngine;
 use futures::executor::block_on;
 use kvproto::{metapb, raft_serverpb::RaftApplyState};
 use pd_client::PdClient;
@@ -16,6 +17,7 @@ fn test_witness_update_region_in_local_reader() {
     cluster.run();
     let nodes = Vec::from_iter(cluster.get_node_ids());
     assert_eq!(nodes.len(), 3);
+    assert_eq!(nodes[2], 3);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
@@ -51,7 +53,7 @@ fn test_witness_update_region_in_local_reader() {
     request.mut_header().set_replica_read(true);
 
     let resp = cluster
-        .read(None, request.clone(), Duration::from_millis(100))
+        .read(None, None, request.clone(), Duration::from_millis(100))
         .unwrap();
     assert_eq!(
         resp.get_header().get_error().get_is_witness(),
@@ -61,6 +63,52 @@ fn test_witness_update_region_in_local_reader() {
         }
     );
 
+    fail::remove("change_peer_after_update_region_store_3");
+}
+
+// This case is almost the same as `test_witness_update_region_in_local_reader`,
+// but this omitted changing the peer to witness, for ensuring `peer_is_witness`
+// won't be returned in a cluster without witnesses.
+#[test]
+fn test_witness_not_reported_while_disabled() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.run();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 3);
+    assert_eq!(nodes[2], 3);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    let peer_on_store1 = find_peer(&region, nodes[0]).unwrap().clone();
+    cluster.must_transfer_leader(region.get_id(), peer_on_store1);
+    let peer_on_store3 = find_peer(&region, nodes[2]).unwrap().clone();
+
+    cluster.must_put(b"k0", b"v0");
+
+    // update region but the peer is not destroyed yet
+    fail::cfg("change_peer_after_update_region_store_3", "pause").unwrap();
+
+    cluster
+        .pd_client
+        .must_remove_peer(region.get_id(), peer_on_store3.clone());
+
+    let region = block_on(pd_client.get_region_by_id(1)).unwrap().unwrap();
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_get_cmd(b"k0")],
+        false,
+    );
+    request.mut_header().set_peer(peer_on_store3);
+    request.mut_header().set_replica_read(true);
+
+    let resp = cluster
+        .read(None, None, request.clone(), Duration::from_millis(100))
+        .unwrap();
+    assert!(resp.get_header().has_error());
+    assert!(!resp.get_header().get_error().has_is_witness());
     fail::remove("change_peer_after_update_region_store_3");
 }
 
@@ -444,7 +492,7 @@ fn test_non_witness_replica_read() {
     request.mut_header().set_replica_read(true);
 
     let resp = cluster
-        .read(None, request, Duration::from_millis(100))
+        .read(None, None, request, Duration::from_millis(100))
         .unwrap();
     assert_eq!(
         resp.get_header().get_error().get_is_witness(),
@@ -469,13 +517,13 @@ fn test_non_witness_replica_read() {
     request.mut_header().set_replica_read(true);
 
     let resp = cluster
-        .read(None, request, Duration::from_millis(100))
+        .read(None, None, request, Duration::from_millis(100))
         .unwrap();
     assert_eq!(resp.get_header().has_error(), false);
 }
 
-fn must_get_error_is_witness<T: Simulator>(
-    cluster: &mut Cluster<T>,
+fn must_get_error_is_witness<T: Simulator<RocksEngine>>(
+    cluster: &mut Cluster<RocksEngine, T>,
     region: &metapb::Region,
     cmd: kvproto::raft_cmdpb::Request,
 ) {

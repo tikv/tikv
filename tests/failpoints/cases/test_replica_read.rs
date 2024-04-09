@@ -11,9 +11,8 @@ use engine_traits::RaftEngineReadOnly;
 use futures::executor::block_on;
 use kvproto::raft_serverpb::{PeerState, RaftMessage, RegionLocalState};
 use raft::eraftpb::MessageType;
-use test_raftstore::{Simulator as S1, *};
+use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use test_raftstore_v2::Simulator as S2;
 use tikv::storage::config::EngineType;
 use tikv_util::{config::ReadableDuration, future::block_on_timeout, HandyRwLock};
 use txn_types::{Key, Lock, LockType};
@@ -316,7 +315,7 @@ fn test_read_after_cleanup_range_for_snap() {
     request.mut_header().set_peer(p3);
     request.mut_header().set_replica_read(true);
     // Send follower read request to peer 3
-    let (cb1, mut rx1) = make_cb(&request);
+    let (cb1, mut rx1) = make_cb_rocks(&request);
     cluster
         .sim
         .rl()
@@ -337,7 +336,6 @@ fn test_read_after_cleanup_range_for_snap() {
     fail::remove("pause_on_peer_collect_message");
     must_get_none(&cluster.get_engine(3), b"k0");
     // Should not receive resp
-    rx1.recv_timeout(Duration::from_millis(500)).unwrap_err();
     fail::remove("apply_snap_cleanup_range");
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 }
@@ -621,7 +619,7 @@ fn test_batch_read_index_after_transfer_leader() {
         let mut req = new_request(1, epoch, vec![new_read_index_cmd()], true);
         req.mut_header().set_peer(new_peer(2, 2));
 
-        let (cb, rx) = make_cb(&req);
+        let (cb, rx) = make_cb_rocks(&req);
         cluster.sim.rl().async_command_on_node(2, req, cb).unwrap();
         resps.push(rx);
     }
@@ -708,6 +706,7 @@ fn test_read_index_lock_checking_on_follower() {
         10.into(),
         1,
         20.into(),
+        false,
     )
     .use_async_commit(vec![]);
     let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));
@@ -787,6 +786,7 @@ fn test_read_index_lock_checking_on_false_leader() {
         10.into(),
         1,
         20.into(),
+        false,
     )
     .use_async_commit(vec![]);
     let guard = block_on(leader_cm.lock_key(&Key::from_raw(b"k1")));

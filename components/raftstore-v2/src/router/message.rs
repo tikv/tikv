@@ -1,18 +1,23 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::sync::Arc;
+use std::sync::{mpsc::SyncSender, Arc};
 
+use collections::HashSet;
+use health_controller::types::LatencyInspector;
 use kvproto::{
     import_sstpb::SstMeta,
     metapb,
     metapb::RegionEpoch,
+    pdpb,
     raft_cmdpb::{RaftCmdRequest, RaftRequestHeader},
     raft_serverpb::RaftMessage,
 };
 use raftstore::store::{
     fsm::ChangeObserver, metrics::RaftEventDurationType, simple_write::SimpleWriteBinary,
-    FetchedLogs, GenSnapRes,
+    FetchedLogs, GenSnapRes, RaftCmdExtraOpts, TabletSnapKey, UnsafeRecoveryExecutePlanSyncer,
+    UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
+    UnsafeRecoveryWaitApplySyncer,
 };
 use resource_control::ResourceMetered;
 use tikv_util::time::Instant;
@@ -130,6 +135,7 @@ pub struct SimpleWrite {
     pub header: Box<RaftRequestHeader>,
     pub data: SimpleWriteBinary,
     pub ch: CmdResChannel,
+    pub extra_opts: RaftCmdExtraOpts,
 }
 
 #[derive(Debug)]
@@ -142,7 +148,7 @@ pub struct UnsafeWrite {
 pub struct CaptureChange {
     pub observer: ChangeObserver,
     pub region_epoch: RegionEpoch,
-    // A callback accpets a snapshot.
+    // A callback accepts a snapshot.
     pub snap_cb: AnyResChannel,
 }
 
@@ -152,7 +158,7 @@ pub enum PeerMsg {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
-    RaftMessage(Box<RaftMessage>),
+    RaftMessage(Box<RaftMessage>, Option<Instant>),
     /// Query won't change any state. A typical query is KV read. In most cases,
     /// it will be processed using lease or read index.
     RaftQuery(RaftRequest<QueryResChannel>),
@@ -192,6 +198,11 @@ pub enum PeerMsg {
     },
     StoreUnreachable {
         to_store_id: u64,
+    },
+    // A store may be tombstone. Use it with caution, it also means store not
+    // found, PD can not distinguish them now, as PD may delete tombstone stores.
+    StoreMaybeTombstone {
+        store_id: u64,
     },
     /// Reports whether the snapshot sending is successful or not.
     SnapshotSent {
@@ -241,6 +252,34 @@ pub enum PeerMsg {
     /// A message that used to check if a flush is happened.
     #[cfg(feature = "testexport")]
     WaitFlush(super::FlushChannel),
+    FlushBeforeClose {
+        tx: SyncSender<()>,
+    },
+    /// A message that used to check if a snapshot gc is happened.
+    SnapGc(Box<[TabletSnapKey]>),
+
+    /// Let a peer enters force leader state during unsafe recovery.
+    EnterForceLeaderState {
+        syncer: UnsafeRecoveryForceLeaderSyncer,
+        failed_stores: HashSet<u64>,
+    },
+    /// Let a peer exits force leader state.
+    ExitForceLeaderState,
+    /// Let a peer campaign directly after exit force leader.
+    ExitForceLeaderStateCampaign,
+    /// Wait for a peer to apply to the latest commit index.
+    UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
+    /// Wait for a peer to fill its status to the report.
+    UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
+    /// Wait for a peer to be initialized.
+    UnsafeRecoveryWaitInitialized(UnsafeRecoveryExecutePlanSyncer),
+    /// Destroy a peer.
+    UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSyncer),
+    // Demote failed voter peers.
+    UnsafeRecoveryDemoteFailedVoters {
+        failed_voters: Vec<metapb::Peer>,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
+    },
 }
 
 impl ResourceMetered for PeerMsg {}
@@ -260,6 +299,14 @@ impl PeerMsg {
         header: Box<RaftRequestHeader>,
         data: SimpleWriteBinary,
     ) -> (Self, CmdResSubscriber) {
+        PeerMsg::simple_write_with_opt(header, data, RaftCmdExtraOpts::default())
+    }
+
+    pub fn simple_write_with_opt(
+        header: Box<RaftRequestHeader>,
+        data: SimpleWriteBinary,
+        extra_opts: RaftCmdExtraOpts,
+    ) -> (Self, CmdResSubscriber) {
         let (ch, sub) = CmdResChannel::pair();
         (
             PeerMsg::SimpleWrite(SimpleWrite {
@@ -267,6 +314,7 @@ impl PeerMsg {
                 header,
                 data,
                 ch,
+                extra_opts,
             }),
             sub,
         )
@@ -283,6 +331,7 @@ impl PeerMsg {
         epoch: metapb::RegionEpoch,
         split_keys: Vec<Vec<u8>>,
         source: String,
+        share_source_region_size: bool,
     ) -> (Self, CmdResSubscriber) {
         let (ch, sub) = CmdResChannel::pair();
         (
@@ -291,6 +340,7 @@ impl PeerMsg {
                     epoch,
                     split_keys,
                     source: source.into(),
+                    share_source_region_size,
                 },
                 ch,
             },
@@ -312,6 +362,7 @@ impl PeerMsg {
                     epoch,
                     split_keys,
                     source: source.into(),
+                    share_source_region_size: false,
                 },
                 ch,
             },
@@ -335,6 +386,18 @@ pub enum StoreMsg {
     WaitFlush {
         region_id: u64,
         ch: super::FlushChannel,
+    },
+    /// Inspect the latency of raftstore.
+    LatencyInspect {
+        send_time: Instant,
+        inspector: LatencyInspector,
+    },
+    /// Send a store report for unsafe recovery.
+    UnsafeRecoveryReport(pdpb::StoreReport),
+    /// Create a peer for unsafe recovery.
+    UnsafeRecoveryCreatePeer {
+        region: metapb::Region,
+        syncer: UnsafeRecoveryExecutePlanSyncer,
     },
 }
 

@@ -6,7 +6,8 @@ edition = "2021"
 publish = false
 
 [features]
-default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
+trace-async-tasks = ["dep:tracing-active-tree", "dep:tracing-subscriber"]
 trace-tablet-lifetime = ["tikv/trace-tablet-lifetime"]
 tcmalloc = ["server/tcmalloc"]
 jemalloc = ["server/jemalloc"]
@@ -14,10 +15,9 @@ mimalloc = ["server/mimalloc"]
 portable = ["server/portable"]
 sse = ["server/sse"]
 mem-profiling = ["server/mem-profiling"]
+memory-engine = ["server/memory-engine"]
 failpoints = ["server/failpoints"]
-cloud-aws = ["server/cloud-aws"]
-cloud-gcp = ["server/cloud-gcp"]
-cloud-azure = ["server/cloud-azure"]
+openssl-vendored = ["tikv/openssl-vendored"]
 test-engine-kv-rocksdb = [
   "server/test-engine-kv-rocksdb"
 ]
@@ -32,12 +32,22 @@ nortcheck = ["server/nortcheck"]
 pprof-fp = ["tikv/pprof-fp"]
 
 [dependencies]
-clap = "2.32"
+clap = { workspace = true }
+crypto = { workspace = true }
+encryption_export = { workspace = true }
+engine_traits = { workspace = true }
+keys = { workspace = true }
+kvproto = { workspace = true }
+raft-engine = { workspace = true }
+regex = "1"
 serde_json = { version = "1.0", features = ["preserve_order"] }
 server = { workspace = true }
 tikv = { workspace = true }
+tikv_util = { workspace = true }
 toml = "0.5"
+tracing-active-tree = { workspace = true, optional = true }
+tracing-subscriber = { version = "0.3.17", default-features = false, features = [ "registry", "smallvec" ], optional = true }
 
 [build-dependencies]
 cc = "1.0"
-time = "0.1"
+time = { workspace = true }

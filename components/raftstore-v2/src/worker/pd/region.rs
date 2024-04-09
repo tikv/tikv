@@ -113,10 +113,7 @@ where
         let approximate_keys = task.approximate_keys.unwrap_or_default();
         let region_id = task.region.get_id();
 
-        let peer_stat = self
-            .region_peers
-            .entry(region_id)
-            .or_insert_with(PeerStat::default);
+        let peer_stat = self.region_peers.entry(region_id).or_default();
         peer_stat.approximate_size = approximate_size;
         peer_stat.approximate_keys = approximate_keys;
 
@@ -288,6 +285,7 @@ where
                                     epoch,
                                     split_keys: split_region.take_keys().into(),
                                     source: "pd".into(),
+                                    share_source_region_size: false,
                                 },
                                 ch,
                             }
@@ -338,9 +336,9 @@ where
         self.is_hb_receiver_scheduled = true;
     }
 
-    pub fn handle_report_region_buckets(&mut self, region_buckets: BucketStat) {
-        let region_id = region_buckets.meta.region_id;
-        self.merge_buckets(region_buckets);
+    pub fn handle_report_region_buckets(&mut self, delta_buckets: BucketStat) {
+        let region_id = delta_buckets.meta.region_id;
+        self.merge_buckets(delta_buckets);
         let report_buckets = self.region_buckets.get_mut(&region_id).unwrap();
         let last_report_ts = if report_buckets.last_report_ts.is_zero() {
             self.start_ts
@@ -372,10 +370,7 @@ where
 
     pub fn handle_update_read_stats(&mut self, mut stats: ReadStats) {
         for (region_id, region_info) in stats.region_infos.iter_mut() {
-            let peer_stat = self
-                .region_peers
-                .entry(*region_id)
-                .or_insert_with(PeerStat::default);
+            let peer_stat = self.region_peers.entry(*region_id).or_default();
             peer_stat.read_bytes += region_info.flow.read_bytes as u64;
             peer_stat.read_keys += region_info.flow.read_keys as u64;
             self.store_stat.engine_total_bytes_read += region_info.flow.read_bytes as u64;
@@ -387,8 +382,8 @@ where
                 .engine_total_query_num
                 .add_query_stats(&region_info.query_stats.0);
         }
-        for (_, region_buckets) in std::mem::take(&mut stats.region_buckets) {
-            self.merge_buckets(region_buckets);
+        for (_, delta_buckets) in std::mem::take(&mut stats.region_buckets) {
+            self.merge_buckets(delta_buckets);
         }
         if !stats.region_infos.is_empty() {
             self.stats_monitor.maybe_send_read_stats(stats);
@@ -397,10 +392,7 @@ where
 
     pub fn handle_update_write_stats(&mut self, mut stats: WriteStats) {
         for (region_id, region_info) in stats.region_infos.iter_mut() {
-            let peer_stat = self
-                .region_peers
-                .entry(*region_id)
-                .or_insert_with(PeerStat::default);
+            let peer_stat = self.region_peers.entry(*region_id).or_default();
             peer_stat.query_stats.add_query_stats(&region_info.0);
             self.store_stat
                 .engine_total_query_num
@@ -423,18 +415,18 @@ where
         }
     }
 
-    fn merge_buckets(&mut self, mut buckets: BucketStat) {
-        let region_id = buckets.meta.region_id;
+    fn merge_buckets(&mut self, mut delta: BucketStat) {
+        let region_id = delta.meta.region_id;
         self.region_buckets
             .entry(region_id)
             .and_modify(|report_bucket| {
                 let current = &mut report_bucket.current_stat;
-                if current.meta < buckets.meta {
-                    std::mem::swap(current, &mut buckets);
+                if current.meta < delta.meta {
+                    std::mem::swap(current, &mut delta);
                 }
-                current.merge(&buckets);
+                current.merge(&delta);
             })
-            .or_insert_with(|| ReportBucket::new(buckets));
+            .or_insert_with(|| ReportBucket::new(delta));
     }
 
     fn calculate_region_cpu_records(

@@ -51,8 +51,7 @@ impl KmsBackend {
             Builder::new_current_thread()
                 .thread_name("kms-runtime")
                 .enable_all()
-                .after_start_wrapper(|| {})
-                .before_stop_wrapper(|| {})
+                .with_sys_hooks()
                 .build()?,
         );
 
@@ -159,7 +158,7 @@ impl KmsBackend {
 
 impl Backend for KmsBackend {
     fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
-        self.encrypt_content(plaintext, Iv::new_gcm())
+        self.encrypt_content(plaintext, Iv::new_gcm()?)
     }
 
     fn decrypt(&self, content: &EncryptedContent) -> Result<Vec<u8>> {

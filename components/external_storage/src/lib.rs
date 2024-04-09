@@ -17,8 +17,7 @@ use std::{
 
 use async_compression::futures::bufread::ZstdDecoder;
 use async_trait::async_trait;
-use encryption::{from_engine_encryption_method, DecrypterReader, Iv};
-use engine_traits::FileEncryptionInfo;
+use encryption::{DecrypterReader, FileEncryptionInfo, Iv};
 use file_system::File;
 use futures::io::BufReader;
 use futures_io::AsyncRead;
@@ -26,6 +25,7 @@ use futures_util::AsyncReadExt;
 use kvproto::brpb::CompressionType;
 use openssl::hash::{Hasher, MessageDigest};
 use tikv_util::{
+    future::RescheduleChecker,
     stream::READ_BUF_SIZE,
     time::{Instant, Limiter},
 };
@@ -39,12 +39,8 @@ mod noop;
 pub use noop::NoopStorage;
 mod metrics;
 use metrics::EXT_STORAGE_CREATE_HISTOGRAM;
-#[cfg(feature = "cloud-storage-dylib")]
-pub mod dylib_client;
-#[cfg(feature = "cloud-storage-grpc")]
-pub mod grpc_client;
-#[cfg(any(feature = "cloud-storage-dylib", feature = "cloud-storage-grpc"))]
-pub mod request;
+mod export;
+pub use export::*;
 
 pub fn record_storage_create(start: Instant, storage: &dyn ExternalStorage) {
     EXT_STORAGE_CREATE_HISTOGRAM
@@ -252,7 +248,7 @@ pub fn encrypt_wrap_reader(
     let input = match file_crypter {
         Some(x) => Box::new(DecrypterReader::new(
             reader,
-            from_engine_encryption_method(x.method),
+            x.method,
             &x.key,
             Iv::from_slice(&x.iv)?,
         )?),
@@ -285,7 +281,8 @@ where
             format!("openssl hasher failed to init: {}", err),
         )
     })?;
-
+    let mut yield_checker =
+        RescheduleChecker::new(tokio::task::yield_now, Duration::from_millis(10));
     loop {
         // separate the speed limiting from actual reading so it won't
         // affect the timeout calculation.
@@ -306,6 +303,7 @@ where
             })?;
         }
         file_length += bytes_read as u64;
+        yield_checker.check().await;
     }
 
     if expected_length != 0 && expected_length != file_length {

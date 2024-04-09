@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    error::Error as StdError,
     fmt::{self, Display, Formatter},
     sync::{Arc, Mutex},
 };
@@ -9,15 +10,27 @@ use collections::HashMap;
 use kvproto::replication_modepb::ReplicationMode;
 use pd_client::{take_peer_address, PdClient};
 use raftstore::store::GlobalReplicationState;
+use thiserror::Error;
 use tikv_kv::RaftExtension;
 use tikv_util::{
+    info,
     time::Instant,
     worker::{Runnable, Scheduler, Worker},
 };
 
-use super::{metrics::*, Result};
+use super::metrics::*;
 
 const STORE_ADDRESS_REFRESH_SECONDS: u64 = 60;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{0:?}")]
+    Other(#[from] Box<dyn StdError + Sync + Send>),
+    #[error("store {0} has been removed")]
+    StoreTombstone(u64),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
 
 pub type Callback = Box<dyn FnOnce(Result<String>) + Send>;
 
@@ -95,9 +108,21 @@ where
             // it explicitly.
             Err(pd_client::Error::StoreTombstone(_)) => {
                 RESOLVE_STORE_COUNTER_STATIC.tombstone.inc();
-                return Err(box_err!("store {} has been removed", store_id));
+                self.router.report_store_maybe_tombstone(store_id);
+                return Err(Error::StoreTombstone(store_id));
             }
-            Err(e) => return Err(box_err!(e)),
+            Err(e) => {
+                // Tombstone store may be removed manually or automatically
+                // after 30 days of deletion. PD returns
+                // "invalid store ID %d, not found" for such store id.
+                // See https://github.com/tikv/pd/blob/v7.3.0/server/grpc_service.go#L777-L780
+                if format!("{:?}", e).contains("not found") {
+                    RESOLVE_STORE_COUNTER_STATIC.not_found.inc();
+                    info!("resolve store not found"; "store_id" => store_id);
+                    self.router.report_store_maybe_tombstone(store_id);
+                }
+                return Err(box_err!(e));
+            }
         };
         let mut group_id = None;
         let mut state = self.state.lock().unwrap();
@@ -178,6 +203,25 @@ impl StoreAddrResolver for PdStoreAddrResolver {
         let task = Task { store_id, cb };
         box_try!(self.sched.schedule(task));
         Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct MockStoreAddrResolver {
+    pub resolve_fn: Arc<dyn Fn(u64, Callback) -> Result<()> + Send + Sync>,
+}
+
+impl StoreAddrResolver for MockStoreAddrResolver {
+    fn resolve(&self, store_id: u64, cb: Callback) -> Result<()> {
+        (self.resolve_fn)(store_id, cb)
+    }
+}
+
+impl Default for MockStoreAddrResolver {
+    fn default() -> MockStoreAddrResolver {
+        MockStoreAddrResolver {
+            resolve_fn: Arc::new(|_, _| unimplemented!()),
+        }
     }
 }
 

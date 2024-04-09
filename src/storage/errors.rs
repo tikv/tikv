@@ -12,7 +12,7 @@ use std::{
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, kvrpcpb, kvrpcpb::ApiVersion};
 use thiserror::Error;
-use tikv_util::deadline::DeadlineError;
+use tikv_util::deadline::{set_deadline_exceeded_busy_error, DeadlineError};
 use txn_types::{KvPair, TimeStamp};
 
 use crate::storage::{
@@ -183,6 +183,7 @@ pub enum ErrorHeaderKind {
     DiskFull,
     RecoveryInProgress,
     FlashbackInProgress,
+    BucketsVersionNotMatch,
     Other,
 }
 
@@ -207,6 +208,7 @@ impl ErrorHeaderKind {
             ErrorHeaderKind::DiskFull => "disk_full",
             ErrorHeaderKind::RecoveryInProgress => "recovery_in_progress",
             ErrorHeaderKind::FlashbackInProgress => "flashback_in_progress",
+            ErrorHeaderKind::BucketsVersionNotMatch => "buckets_version_not_match",
             ErrorHeaderKind::Other => "other",
         }
     }
@@ -220,7 +222,6 @@ impl Display for ErrorHeaderKind {
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
-const DEADLINE_EXCEEDED: &str = "deadline is exceeded";
 
 /// Get the `ErrorHeaderKind` enum that corresponds to the error in the protobuf
 /// message. Returns `ErrorHeaderKind::Other` if no match found.
@@ -255,6 +256,8 @@ pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
         ErrorHeaderKind::RecoveryInProgress
     } else if header.has_flashback_in_progress() {
         ErrorHeaderKind::FlashbackInProgress
+    } else if header.has_bucket_version_not_match() {
+        ErrorHeaderKind::BucketsVersionNotMatch
     } else {
         ErrorHeaderKind::Other
     }
@@ -315,9 +318,8 @@ pub fn extract_region_error_from_error(e: &Error) -> Option<errorpb::Error> {
         }
         Error(box ErrorInner::DeadlineExceeded) => {
             let mut err = errorpb::Error::default();
-            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
-            server_is_busy_err.set_reason(DEADLINE_EXCEEDED.to_owned());
-            err.set_server_is_busy(server_is_busy_err);
+            err.set_message(e.to_string());
+            set_deadline_exceeded_busy_error(&mut err);
             Some(err)
         }
         _ => None,

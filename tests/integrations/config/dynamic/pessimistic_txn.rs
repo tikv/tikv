@@ -9,11 +9,7 @@ use security::SecurityManager;
 use test_pd_client::TestPdClient;
 use tikv::{
     config::*,
-    server::{
-        lock_manager::*,
-        resolve::{Callback, StoreAddrResolver},
-        Error, Result,
-    },
+    server::{lock_manager::*, resolve},
 };
 use tikv_util::config::ReadableDuration;
 
@@ -25,14 +21,6 @@ fn test_config_validate() {
     let mut invalid_cfg = Config::default();
     invalid_cfg.wait_for_lock_timeout = ReadableDuration::millis(0);
     invalid_cfg.validate().unwrap_err();
-}
-
-#[derive(Clone)]
-struct MockResolver;
-impl StoreAddrResolver for MockResolver {
-    fn resolve(&self, _store_id: u64, _cb: Callback) -> Result<()> {
-        Err(Error::Other(box_err!("unimplemented")))
-    }
 }
 
 fn setup(
@@ -50,7 +38,7 @@ fn setup(
         .start(
             1,
             pd_client,
-            MockResolver,
+            resolve::MockStoreAddrResolver::default(),
             security_mgr,
             &cfg.pessimistic_txn,
         )

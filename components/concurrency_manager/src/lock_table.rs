@@ -88,8 +88,8 @@ impl LockTable {
 
     /// Finds the first handle in the given range that `pred` returns `Some`.
     /// The `Some` return value of `pred` will be returned by `find_first`.
-    pub fn find_first<'m, T>(
-        &'m self,
+    pub fn find_first<T>(
+        &self,
         start_key: Option<&Key>,
         end_key: Option<&Key>,
         mut pred: impl FnMut(Arc<KeyHandle>) -> Option<T>,
@@ -111,6 +111,14 @@ impl LockTable {
         for entry in self.0.iter() {
             if let Some(handle) = entry.value().upgrade() {
                 f(handle);
+            }
+        }
+    }
+
+    pub fn for_each_kv(&self, mut f: impl FnMut(&Key, Arc<KeyHandle>)) {
+        for entry in self.0.iter() {
+            if let Some(handle) = entry.value().upgrade() {
+                f(entry.key(), handle);
             }
         }
     }
@@ -183,6 +191,7 @@ mod test {
             10.into(),
             1,
             10.into(),
+            false,
         );
         let guard = lock_table.lock_key(&key_k).await;
         guard.with_lock(|l| {
@@ -212,6 +221,7 @@ mod test {
             20.into(),
             1,
             20.into(),
+            false,
         );
         let guard = lock_table.lock_key(&Key::from_raw(b"k")).await;
         guard.with_lock(|l| {
@@ -227,6 +237,7 @@ mod test {
             10.into(),
             1,
             10.into(),
+            false,
         );
         let guard = lock_table.lock_key(&Key::from_raw(b"l")).await;
         guard.with_lock(|l| {
@@ -284,6 +295,7 @@ mod test {
             20.into(),
             1,
             20.into(),
+            false,
         );
         let guard_a = lock_table.lock_key(&Key::from_raw(b"a")).await;
         guard_a.with_lock(|l| {
@@ -304,6 +316,7 @@ mod test {
             30.into(),
             2,
             30.into(),
+            false,
         )
         .use_async_commit(vec![b"c".to_vec()]);
         let guard_b = lock_table.lock_key(&Key::from_raw(b"b")).await;

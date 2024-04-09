@@ -7,15 +7,17 @@ use grpcio::{ChannelBuilder, Environment};
 use keys::data_key;
 use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv::server::gc_worker::sync_gc;
 use tikv_util::HandyRwLock;
 use txn_types::Key;
 
 // Since v5.0 GC bypasses Raft, which means GC scans/deletes records with
 // `keys::DATA_PREFIX`. This case ensures it's performed correctly.
-#[test]
+#[test_case(test_raftstore::must_new_cluster_mul)]
+#[test_case(test_raftstore_v2::must_new_cluster_mul)]
 fn test_gc_bypass_raft() {
-    let (cluster, leader, ctx) = must_new_cluster_mul(2);
+    let (cluster, leader, ctx) = new_cluster(2);
     cluster.pd_client.disable_default_operator();
 
     let env = Arc::new(Environment::new(1));
@@ -25,7 +27,7 @@ fn test_gc_bypass_raft() {
 
     let pk = b"k1".to_vec();
     let value = vec![b'x'; 300];
-    let engine = cluster.engines.get(&leader_store).unwrap();
+    let engine = cluster.get_engine(leader_store);
 
     for &start_ts in &[10, 20, 30, 40] {
         let commit_ts = start_ts + 5;
@@ -37,11 +39,11 @@ fn test_gc_bypass_raft() {
 
         let key = Key::from_raw(b"k1").append_ts(start_ts.into());
         let key = data_key(key.as_encoded());
-        assert!(engine.kv.get_value(&key).unwrap().is_some());
+        assert!(engine.get_value(&key).unwrap().is_some());
 
         let key = Key::from_raw(b"k1").append_ts(commit_ts.into());
         let key = data_key(key.as_encoded());
-        assert!(engine.kv.get_value_cf(CF_WRITE, &key).unwrap().is_some());
+        assert!(engine.get_value_cf(CF_WRITE, &key).unwrap().is_some());
     }
 
     let node_ids = cluster.get_node_ids();
@@ -53,16 +55,16 @@ fn test_gc_bypass_raft() {
         region.set_end_key(b"k2".to_vec());
         sync_gc(&gc_sched, region, 200.into()).unwrap();
 
-        let engine = cluster.engines.get(&store_id).unwrap();
+        let engine = cluster.get_engine(store_id);
         for &start_ts in &[10, 20, 30] {
             let commit_ts = start_ts + 5;
             let key = Key::from_raw(b"k1").append_ts(start_ts.into());
             let key = data_key(key.as_encoded());
-            assert!(engine.kv.get_value(&key).unwrap().is_none());
+            assert!(engine.get_value(&key).unwrap().is_none());
 
             let key = Key::from_raw(b"k1").append_ts(commit_ts.into());
             let key = data_key(key.as_encoded());
-            assert!(engine.kv.get_value_cf(CF_WRITE, &key).unwrap().is_none());
+            assert!(engine.get_value_cf(CF_WRITE, &key).unwrap().is_none());
         }
     }
 }

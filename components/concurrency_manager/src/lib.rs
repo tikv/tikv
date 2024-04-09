@@ -124,6 +124,23 @@ impl ConcurrencyManager {
         });
         min_lock_ts
     }
+
+    pub fn global_min_lock(&self) -> Option<(TimeStamp, Key)> {
+        let mut min_lock: Option<(TimeStamp, Key)> = None;
+        // TODO: The iteration looks not so efficient. It's better to be optimized.
+        self.lock_table.for_each_kv(|key, handle| {
+            if let Some(curr_ts) = handle.with_lock(|lock| lock.as_ref().map(|l| l.ts)) {
+                if min_lock
+                    .as_ref()
+                    .map(|(ts, _)| ts > &curr_ts)
+                    .unwrap_or(true)
+                {
+                    min_lock = Some((curr_ts, key.clone()));
+                }
+            }
+        });
+        min_lock
+    }
 }
 
 #[cfg(test)]
@@ -161,7 +178,17 @@ mod tests {
 
     fn new_lock(ts: impl Into<TimeStamp>, primary: &[u8], lock_type: LockType) -> Lock {
         let ts = ts.into();
-        Lock::new(lock_type, primary.to_vec(), ts, 0, None, 0.into(), 1, ts)
+        Lock::new(
+            lock_type,
+            primary.to_vec(),
+            ts,
+            0,
+            None,
+            0.into(),
+            1,
+            ts,
+            false,
+        )
     }
 
     #[tokio::test]

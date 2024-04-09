@@ -5,9 +5,10 @@ use std::{
     fmt::{self, Display, Formatter},
 };
 
-use engine_traits::{KvEngine, RangeStats, TabletRegistry, CF_WRITE};
+use engine_traits::{KvEngine, ManualCompactionOptions, TabletRegistry, CF_WRITE};
 use fail::fail_point;
 use keys::{DATA_MAX_KEY, DATA_MIN_KEY};
+use raftstore::store::{need_compact, CompactThreshold};
 use slog::{debug, error, info, warn, Logger};
 use thiserror::Error;
 use tikv_util::{box_try, worker::Runnable};
@@ -19,29 +20,6 @@ pub enum Task {
         region_ids: Vec<u64>,
         compact_threshold: CompactThreshold,
     },
-}
-
-pub struct CompactThreshold {
-    tombstones_num_threshold: u64,
-    tombstones_percent_threshold: u64,
-    redundant_rows_threshold: u64,
-    redundant_rows_percent_threshold: u64,
-}
-
-impl CompactThreshold {
-    pub fn new(
-        tombstones_num_threshold: u64,
-        tombstones_percent_threshold: u64,
-        redundant_rows_threshold: u64,
-        redundant_rows_percent_threshold: u64,
-    ) -> Self {
-        Self {
-            tombstones_num_threshold,
-            tombstones_percent_threshold,
-            redundant_rows_percent_threshold,
-            redundant_rows_threshold,
-        }
-    }
 }
 
 impl Display for Task {
@@ -119,12 +97,19 @@ where
             ) {
                 Ok(mut region_ids) => {
                     for region_id in region_ids.drain(..) {
-                        let Some(mut tablet_cache) = self.tablet_registry.get(region_id) else {continue};
-                        let Some(tablet) = tablet_cache.latest() else {continue};
+                        let Some(mut tablet_cache) = self.tablet_registry.get(region_id) else {
+                            continue;
+                        };
+                        let Some(tablet) = tablet_cache.latest() else {
+                            continue;
+                        };
                         for cf in &cf_names {
-                            if let Err(e) =
-                                tablet.compact_range_cf(cf, None, None, false, 1 /* threads */)
-                            {
+                            if let Err(e) = tablet.compact_range_cf(
+                                cf,
+                                None,
+                                None,
+                                ManualCompactionOptions::new(false, 1, false),
+                            ) {
                                 error!(
                                     self.logger,
                                     "compact range failed";
@@ -151,23 +136,6 @@ where
     }
 }
 
-fn need_compact(range_stats: &RangeStats, compact_threshold: &CompactThreshold) -> bool {
-    if range_stats.num_entries < range_stats.num_versions {
-        return false;
-    }
-
-    // We trigger region compaction when their are to many tombstones as well as
-    // redundant keys, both of which can severly impact scan operation:
-    let estimate_num_del = range_stats.num_entries - range_stats.num_versions;
-    let redundant_keys = range_stats.num_entries - range_stats.num_rows;
-    (redundant_keys >= compact_threshold.redundant_rows_threshold
-        && redundant_keys * 100
-            >= compact_threshold.redundant_rows_percent_threshold * range_stats.num_entries)
-        || (estimate_num_del >= compact_threshold.tombstones_num_threshold
-            && estimate_num_del * 100
-                >= compact_threshold.tombstones_percent_threshold * range_stats.num_entries)
-}
-
 fn collect_regions_to_compact<E: KvEngine>(
     reg: &TabletRegistry<E>,
     region_ids: Vec<u64>,
@@ -182,8 +150,12 @@ fn collect_regions_to_compact<E: KvEngine>(
     );
     let mut regions_to_compact = vec![];
     for id in region_ids {
-        let Some(mut tablet_cache) = reg.get(id) else {continue};
-        let Some(tablet) = tablet_cache.latest() else {continue};
+        let Some(mut tablet_cache) = reg.get(id) else {
+            continue;
+        };
+        let Some(tablet) = tablet_cache.latest() else {
+            continue;
+        };
         if tablet.auto_compactions_is_disabled().expect("cf") {
             info!(
                 logger,

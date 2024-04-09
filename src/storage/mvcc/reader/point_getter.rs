@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{IsolationLevel, WriteConflictReason};
 use tikv_kv::SEEK_BOUND;
-use txn_types::{Key, Lock, LockType, TimeStamp, TsSet, Value, WriteRef, WriteType};
+use txn_types::{Key, LastChange, Lock, LockType, TimeStamp, TsSet, Value, WriteRef, WriteType};
 
 use crate::storage::{
     kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics},
@@ -315,28 +315,33 @@ impl<S: Snapshot> PointGetter<S> {
                     return Ok(None);
                 }
                 WriteType::Lock | WriteType::Rollback => {
-                    if write.versions_to_last_change > 0 && write.last_change_ts.is_zero() {
-                        return Ok(None);
-                    }
-                    if write.versions_to_last_change < SEEK_BOUND {
-                        // Continue iterate next `write`.
-                    } else {
-                        let commit_ts = write.last_change_ts;
-                        let key_with_ts = user_key.clone().append_ts(commit_ts);
-                        match self.snapshot.get_cf(CF_WRITE, &key_with_ts)? {
-                            Some(v) => owned_value = v,
-                            None => return Ok(None),
+                    match write.last_change {
+                        LastChange::NotExist => {
+                            return Ok(None);
                         }
-                        self.statistics.write.get += 1;
-                        write = WriteRef::parse(&owned_value)?;
-                        assert!(
-                            write.write_type == WriteType::Put
-                                || write.write_type == WriteType::Delete,
-                            "Write record pointed by last_change_ts {} should be Put or Delete, but got {:?}",
-                            commit_ts,
-                            write.write_type,
-                        );
-                        continue;
+                        LastChange::Exist {
+                            last_change_ts: commit_ts,
+                            estimated_versions_to_last_change,
+                        } if estimated_versions_to_last_change >= SEEK_BOUND => {
+                            let key_with_ts = user_key.clone().append_ts(commit_ts);
+                            match self.snapshot.get_cf(CF_WRITE, &key_with_ts)? {
+                                Some(v) => owned_value = v,
+                                None => return Ok(None),
+                            }
+                            self.statistics.write.get += 1;
+                            write = WriteRef::parse(&owned_value)?;
+                            assert!(
+                                write.write_type == WriteType::Put
+                                    || write.write_type == WriteType::Delete,
+                                "Write record pointed by last_change_ts {} should be Put or Delete, but got {:?}",
+                                commit_ts,
+                                write.write_type,
+                            );
+                            continue;
+                        }
+                        _ => {
+                            // Continue iterate next `write`.
+                        }
                     }
                 }
             }
@@ -1282,7 +1287,7 @@ mod tests {
         let k = b"k";
 
         // Write enough LOCK recrods
-        for start_ts in (1..30).into_iter().step_by(2) {
+        for start_ts in (1..30).step_by(2) {
             must_prewrite_lock(&mut engine, k, k, start_ts);
             must_commit(&mut engine, k, start_ts, start_ts + 1);
         }
@@ -1291,7 +1296,7 @@ mod tests {
         must_get_none(&mut getter, k);
         let s = getter.take_statistics();
         // We can know the key doesn't exist without skipping all these locks according
-        // to last_change_ts and versions_to_last_change.
+        // to last_change_ts and estimated_versions_to_last_change.
         assert_eq!(s.write.seek, 1);
         assert_eq!(s.write.next, 0);
         assert_eq!(s.write.get, 0);

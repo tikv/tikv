@@ -290,7 +290,7 @@ mod tests {
             RawEncodeSnapshot::from_snapshot(raw_mvcc_snapshot);
 
         // get_cf
-        for &(ref key, ref value, _) in &test_data[6..12] {
+        for (key, value, _) in &test_data[6..12] {
             let res = encode_snapshot.get_cf(CF_DEFAULT, &ApiV2::encode_raw_key(key, None));
             assert_eq!(res.unwrap(), Some(value.to_owned()));
         }

@@ -2,11 +2,10 @@
 
 use std::{io::Result, sync::Arc};
 
-use encryption::{self, DataKeyManager};
-use engine_traits::{EncryptionKeyManager, EncryptionMethod, FileEncryptionInfo};
+use encryption::{DataKeyManager, FileEncryptionInfo};
+use kvproto::encryptionpb::EncryptionMethod;
 use rocksdb::{
-    DBEncryptionMethod, EncryptionKeyManager as DBEncryptionKeyManager,
-    FileEncryptionInfo as DBFileEncryptionInfo,
+    DBEncryptionMethod, EncryptionKeyManager, FileEncryptionInfo as DBFileEncryptionInfo,
 };
 
 use crate::{r2e, raw::Env};
@@ -15,29 +14,29 @@ use crate::{r2e, raw::Env};
 pub(crate) fn get_env(
     base_env: Option<Arc<Env>>,
     key_manager: Option<Arc<DataKeyManager>>,
-) -> engine_traits::Result<Arc<Env>> {
-    let base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
+) -> engine_traits::Result<Option<Arc<Env>>> {
     if let Some(manager) = key_manager {
-        Ok(Arc::new(
+        let base_env = base_env.unwrap_or_else(|| Arc::new(Env::default()));
+        Ok(Some(Arc::new(
             Env::new_key_managed_encrypted_env(base_env, WrappedEncryptionKeyManager { manager })
                 .map_err(r2e)?,
-        ))
+        )))
     } else {
         Ok(base_env)
     }
 }
 
-pub struct WrappedEncryptionKeyManager<T: EncryptionKeyManager> {
-    manager: Arc<T>,
+pub struct WrappedEncryptionKeyManager {
+    manager: Arc<DataKeyManager>,
 }
 
-impl<T: EncryptionKeyManager> WrappedEncryptionKeyManager<T> {
-    pub fn new(manager: Arc<T>) -> Self {
+impl WrappedEncryptionKeyManager {
+    pub fn new(manager: Arc<DataKeyManager>) -> Self {
         Self { manager }
     }
 }
 
-impl<T: EncryptionKeyManager> DBEncryptionKeyManager for WrappedEncryptionKeyManager<T> {
+impl EncryptionKeyManager for WrappedEncryptionKeyManager {
     fn get_file(&self, fname: &str) -> Result<DBFileEncryptionInfo> {
         self.manager
             .get_file(fname)
@@ -48,8 +47,8 @@ impl<T: EncryptionKeyManager> DBEncryptionKeyManager for WrappedEncryptionKeyMan
             .new_file(fname)
             .map(convert_file_encryption_info)
     }
-    fn delete_file(&self, fname: &str) -> Result<()> {
-        self.manager.delete_file(fname)
+    fn delete_file(&self, fname: &str, physical_fname: Option<&str>) -> Result<()> {
+        self.manager.delete_file(fname, physical_fname)
     }
     fn link_file(&self, src_fname: &str, dst_fname: &str) -> Result<()> {
         self.manager.link_file(src_fname, dst_fname)

@@ -40,7 +40,7 @@ pub enum ErrorInner {
     Codec(#[from] tikv_util::codec::Error),
 
     #[error("key is locked (backoff or cleanup) {0:?}")]
-    KeyIsLocked(kvproto::kvrpcpb::LockInfo),
+    KeyIsLocked(kvrpcpb::LockInfo),
 
     #[error("{0}")]
     BadFormat(#[source] txn_types::Error),
@@ -172,7 +172,10 @@ pub enum ErrorInner {
     LockIfExistsFailed { start_ts: TimeStamp, key: Vec<u8> },
 
     #[error("check_txn_status sent to secondary lock, current lock: {0:?}")]
-    PrimaryMismatch(kvproto::kvrpcpb::LockInfo),
+    PrimaryMismatch(kvrpcpb::LockInfo),
+
+    #[error("generation out of order: current = {0}, key={1:?}, lock = {1:?}")]
+    GenerationOutOfOrder(u64, Key, Lock),
 
     #[error("{0:?}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),
@@ -304,6 +307,9 @@ impl ErrorInner {
                 })
             }
             ErrorInner::PrimaryMismatch(l) => Some(ErrorInner::PrimaryMismatch(l.clone())),
+            ErrorInner::GenerationOutOfOrder(gen, key, lock_info) => Some(
+                ErrorInner::GenerationOutOfOrder(*gen, key.clone(), lock_info.clone()),
+            ),
             ErrorInner::Io(_) | ErrorInner::Other(_) => None,
         }
     }
@@ -407,6 +413,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::AssertionFailed { .. } => error_code::storage::ASSERTION_FAILED,
             ErrorInner::LockIfExistsFailed { .. } => error_code::storage::LOCK_IF_EXISTS_FAILED,
             ErrorInner::PrimaryMismatch(_) => error_code::storage::PRIMARY_MISMATCH,
+            ErrorInner::GenerationOutOfOrder(..) => error_code::storage::GENERATION_OUT_OF_ORDER,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
         }
     }
@@ -598,7 +605,7 @@ pub mod tests {
         let mut reader = MvccReader::new(snapshot, None, true);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts.into());
-        assert_ne!(lock.lock_type, LockType::Pessimistic);
+        assert!(!lock.is_pessimistic_lock());
         lock
     }
 
@@ -612,7 +619,7 @@ pub mod tests {
         let mut reader = MvccReader::new(snapshot, None, true);
         let lock = reader.load_lock(&Key::from_raw(key)).unwrap().unwrap();
         assert_eq!(lock.ts, start_ts.into());
-        assert_ne!(lock.lock_type, LockType::Pessimistic);
+        assert!(!lock.is_pessimistic_lock());
         assert_eq!(lock.ttl, ttl);
     }
 
@@ -631,9 +638,9 @@ pub mod tests {
         assert_eq!(lock.ttl, ttl);
         assert_eq!(lock.min_commit_ts, min_commit_ts.into());
         if is_pessimistic {
-            assert_eq!(lock.lock_type, LockType::Pessimistic);
+            assert!(lock.is_pessimistic_lock())
         } else {
-            assert_ne!(lock.lock_type, LockType::Pessimistic);
+            assert!(!lock.is_pessimistic_lock());
         }
     }
 

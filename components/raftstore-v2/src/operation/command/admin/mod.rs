@@ -12,7 +12,8 @@ use compact_log::CompactLogResult;
 use conf_change::{ConfChangeResult, UpdateGcPeersResult};
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
-    metapb::PeerRole,
+    kvrpcpb::DiskFullOpt,
+    metapb::{PeerRole, Region},
     raft_cmdpb::{AdminCmdType, RaftCmdRequest},
     raft_serverpb::{ExtraMessageType, FlushMemtable, RaftMessage},
 };
@@ -29,17 +30,17 @@ use raftstore::{
         cmd_resp,
         fsm::{apply, apply::validate_batch_split},
         msg::ErrorCallback,
-        Transport,
+        ProposalContext, Transport,
     },
     Error,
 };
-use slog::{error, info};
+use slog::{debug, error, info};
 use split::SplitResult;
 pub use split::{
     report_split_init_finish, temp_split_path, RequestHalfSplit, RequestSplit, SplitFlowControl,
-    SplitInit, SPLIT_PREFIX,
+    SplitInit, SplitPendingAppend, SPLIT_PREFIX,
 };
-use tikv_util::{box_err, log::SlogFormat, slog_panic};
+use tikv_util::{box_err, log::SlogFormat, slog_panic, sys::disk::DiskUsage};
 use txn_types::WriteBatchFlags;
 
 use self::flashback::FlashbackResult;
@@ -103,6 +104,19 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let pre_transfer_leader = cmd_type == AdminCmdType::TransferLeader
             && !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
                 .contains(WriteBatchFlags::TRANSFER_LEADER_PROPOSAL);
+        let is_conf_change = apply::is_conf_change_cmd(&req);
+
+        // Check whether the admin request can be proposed when disk full.
+        let can_skip_check = is_transfer_leader || pre_transfer_leader || is_conf_change;
+        if !can_skip_check
+            && let Err(e) =
+                self.check_proposal_with_disk_full_opt(ctx, DiskFullOpt::AllowedOnAlmostFull)
+        {
+            let resp = cmd_resp::new_error(e);
+            ch.report_error(resp);
+            self.post_propose_fail(cmd_type);
+            return;
+        }
 
         // The admin request is rejected because it may need to update epoch checker
         // which introduces an uncertainty and may breaks the correctness of epoch
@@ -122,7 +136,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // Do not check conflict for transfer leader, otherwise we may not
         // transfer leadership out of busy nodes in time.
-        if !is_transfer_leader && let Some(conflict) = self.proposal_control_mut().check_conflict(Some(cmd_type)) {
+        if !is_transfer_leader
+            && let Some(conflict) = self.proposal_control_mut().check_conflict(Some(cmd_type))
+        {
             conflict.delay_channel(ch);
             return;
         }
@@ -134,9 +150,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             ch.report_error(resp);
             return;
         }
+        // Prepare Merge need to be broadcast to as many as followers when disk full.
+        self.on_prepare_merge(cmd_type, ctx);
         // To maintain propose order, we need to make pending proposal first.
         self.propose_pending_writes(ctx);
-        let res = if apply::is_conf_change_cmd(&req) {
+        let res = if is_conf_change {
             self.propose_conf_change(ctx, req)
         } else {
             // propose other admin command.
@@ -164,22 +182,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         if !WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
                             .contains(WriteBatchFlags::PRE_FLUSH_FINISHED)
                         {
-                            if self.tablet_being_flushed() {
-                                return;
-                            }
-
-                            let region_id = self.region().get_id();
-                            self.set_tablet_being_flushed(true);
-                            info!(
-                                self.logger,
-                                "Schedule flush tablet";
-                            );
-
-                            let mailbox = match ctx.router.mailbox(region_id) {
+                            let mailbox = match ctx.router.mailbox(self.region_id()) {
                                 Some(mailbox) => mailbox,
                                 None => {
-                                    // None means the node is shutdown concurrently and thus the
-                                    // mailboxes in router have been cleared
                                     assert!(
                                         ctx.router.is_shutdown(),
                                         "{} router should have been closed",
@@ -188,58 +193,27 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                                     return;
                                 }
                             };
-
+                            req.mut_header()
+                                .set_flags(WriteBatchFlags::PRE_FLUSH_FINISHED.bits());
                             let logger = self.logger.clone();
                             let on_flush_finish = move || {
-                                req.mut_header()
-                                    .set_flags(WriteBatchFlags::PRE_FLUSH_FINISHED.bits());
                                 if let Err(e) = mailbox
                                     .try_send(PeerMsg::AdminCommand(RaftRequest::new(req, ch)))
                                 {
                                     error!(
                                         logger,
-                                        "send split request fail after pre-flush finished";
+                                        "send BatchSplit request failed after pre-flush finished";
                                         "err" => ?e,
                                     );
                                 }
                             };
-
-                            if let Err(e) =
-                                ctx.schedulers.tablet.schedule(crate::TabletTask::Flush {
-                                    region_id,
-                                    cb: Some(Box::new(on_flush_finish)),
-                                })
-                            {
-                                error!(
-                                    self.logger,
-                                    "Fail to schedule flush task";
-                                    "err" => ?e,
-                                )
-                            }
-
-                            // Notify followers to flush their relevant memtables
-                            let peers = self.region().get_peers().to_vec();
-                            for p in peers {
-                                if p == *self.peer()
-                                    || p.get_role() != PeerRole::Voter
-                                    || p.is_witness
-                                {
-                                    continue;
-                                }
-                                let mut msg = RaftMessage::default();
-                                msg.set_region_id(region_id);
-                                msg.set_from_peer(self.peer().clone());
-                                msg.set_to_peer(p.clone());
-                                msg.set_region_epoch(self.region().get_region_epoch().clone());
-                                let extra_msg = msg.mut_extra_msg();
-                                extra_msg.set_type(ExtraMessageType::MsgFlushMemtable);
-                                let mut flush_memtable = FlushMemtable::new();
-                                flush_memtable.set_region_id(region_id);
-                                extra_msg.set_flush_memtable(flush_memtable);
-
-                                self.send_raft_message(ctx, msg);
-                            }
-
+                            self.start_pre_flush(
+                                ctx,
+                                "split",
+                                false,
+                                &self.region().clone(),
+                                Box::new(on_flush_finish),
+                            );
                             return;
                         }
 
@@ -247,7 +221,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                             self.logger,
                             "Propose split";
                         );
-                        self.set_tablet_being_flushed(false);
                         self.propose_split(ctx, req)
                     }
                 }
@@ -270,6 +243,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 AdminCmdType::UpdateGcPeer => {
                     let data = req.write_to_bytes().unwrap();
                     self.propose(ctx, data)
+                }
+                AdminCmdType::RollbackMerge => {
+                    let data = req.write_to_bytes().unwrap();
+                    self.propose_with_ctx(ctx, data, ProposalContext::ROLLBACK_MERGE)
                 }
                 AdminCmdType::PrepareMerge => self.propose_prepare_merge(ctx, req),
                 AdminCmdType::CommitMerge => self.propose_commit_merge(ctx, req),
@@ -301,5 +278,89 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             }
         }
         self.post_propose_command(ctx, res, vec![ch], true);
+    }
+
+    fn on_prepare_merge<T: Transport>(
+        &mut self,
+        cmd_type: AdminCmdType,
+        ctx: &StoreContext<EK, ER, T>,
+    ) {
+        let is_merge_cmd =
+            cmd_type == AdminCmdType::PrepareMerge || cmd_type == AdminCmdType::RollbackMerge;
+        let has_disk_full_peers = self.abnormal_peer_context().disk_full_peers().is_empty();
+        let proposal_index = self.next_proposal_index();
+        if is_merge_cmd
+            && (!matches!(ctx.self_disk_usage, DiskUsage::Normal) || !has_disk_full_peers)
+        {
+            self.has_region_merge_proposal = true;
+            self.region_merge_proposal_index = proposal_index;
+            let mut peers = vec![];
+            self.abnormal_peer_context_mut()
+                .disk_full_peers_mut()
+                .peers_mut()
+                .iter_mut()
+                .for_each(|(k, v)| {
+                    if !matches!(v.0, DiskUsage::AlreadyFull) {
+                        v.1 = true;
+                        peers.push(*k);
+                    }
+                });
+            debug!(
+                self.logger,
+                "adjust max inflight msgs";
+                "cmd_type" => ?cmd_type,
+                "raft_max_inflight_msgs" => ctx.cfg.raft_max_inflight_msgs,
+                "region" => self.region_id()
+            );
+            self.adjust_peers_max_inflight_msgs(&peers, ctx.cfg.raft_max_inflight_msgs);
+        }
+    }
+
+    fn start_pre_flush<T: Transport>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+        reason: &'static str,
+        high_priority: bool,
+        target: &Region,
+        on_local_flushed: Box<dyn FnOnce() + Send>,
+    ) {
+        let target_id = target.get_id();
+        info!(
+            self.logger,
+            "Start pre flush tablet";
+            "target" => target_id,
+            "reason" => reason,
+        );
+        if let Err(e) = ctx.schedulers.tablet.schedule(crate::TabletTask::Flush {
+            region_id: target_id,
+            reason,
+            high_priority,
+            threshold: Some(std::time::Duration::from_secs(10)),
+            cb: Some(on_local_flushed),
+        }) {
+            error!(
+                self.logger,
+                "Fail to schedule flush task";
+                "err" => ?e,
+            )
+        }
+        // Notify followers to flush their relevant memtables
+        for p in target.get_peers() {
+            if p == self.peer() || p.get_role() != PeerRole::Voter || p.is_witness {
+                continue;
+            }
+            let mut msg = RaftMessage::default();
+            msg.set_region_id(target_id);
+            msg.set_from_peer(self.peer().clone());
+            msg.set_to_peer(p.clone());
+            msg.set_region_epoch(target.get_region_epoch().clone());
+            let extra_msg = msg.mut_extra_msg();
+            extra_msg.set_type(ExtraMessageType::MsgFlushMemtable);
+            let mut flush_memtable = FlushMemtable::new();
+            flush_memtable.set_region_id(target_id);
+            extra_msg.set_flush_memtable(flush_memtable);
+
+            self.send_raft_message(ctx, msg);
+        }
     }
 }

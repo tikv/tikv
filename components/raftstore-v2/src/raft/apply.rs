@@ -16,12 +16,12 @@ use raftstore::{
 };
 use slog::Logger;
 use sst_importer::SstImporter;
-use tikv_util::{log::SlogFormat, worker::Scheduler};
+use tikv_util::{log::SlogFormat, worker::Scheduler, yatp_pool::FuturePool};
 
 use crate::{
     operation::{AdminCmdResult, ApplyFlowControl, DataTrace},
-    router::CmdResChannel,
-    worker::checkpoint,
+    router::{CmdResChannel, SstApplyIndex},
+    TabletTask,
 };
 
 pub(crate) struct Observe {
@@ -54,10 +54,17 @@ pub struct Apply<EK: KvEngine, R> {
     // can fetch the wrong apply index from flush_state.
     applied_index: u64,
     /// The largest index that have modified each column family.
+    ///
+    /// Caveats: This field must be consistent with the state of memtable. If
+    /// modified is advanced when memtable is empty, the admin flushed can never
+    /// be advanced. If modified is not advanced when memtable is written, the
+    /// corresponding Raft entry may be deleted before the change is fully
+    /// persisted (flushed).
     modifications: DataTrace,
     admin_cmd_result: Vec<AdminCmdResult>,
     flush_state: Arc<FlushState>,
     sst_apply_state: SstApplyState,
+    sst_applied_index: Vec<SstApplyIndex>,
     /// The flushed indexes of each column family before being restarted.
     ///
     /// If an apply index is less than the flushed index, the log can be
@@ -69,14 +76,12 @@ pub struct Apply<EK: KvEngine, R> {
 
     res_reporter: R,
     read_scheduler: Scheduler<ReadTask<EK>>,
-    sst_importer: Arc<SstImporter>,
+    sst_importer: Arc<SstImporter<EK>>,
     observe: Observe,
     coprocessor_host: CoprocessorHost<EK>,
 
-    checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
-
-    // Whether to use the delete range API instead of deleting one by one.
-    use_delete_range: bool,
+    tablet_scheduler: Scheduler<TabletTask<EK>>,
+    high_priority_pool: FuturePool,
 
     pub(crate) metrics: ApplyMetrics,
     pub(crate) logger: Logger,
@@ -97,9 +102,10 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         log_recovery: Option<Box<DataTrace>>,
         applied_term: u64,
         buckets: Option<BucketStat>,
-        sst_importer: Arc<SstImporter>,
+        sst_importer: Arc<SstImporter<EK>>,
         coprocessor_host: CoprocessorHost<EK>,
-        checkpoint_scheduler: Scheduler<checkpoint::Task<EK>>,
+        tablet_scheduler: Scheduler<TabletTask<EK>>,
+        high_priority_pool: FuturePool,
         logger: Logger,
     ) -> Self {
         let mut remote_tablet = tablet_registry
@@ -110,6 +116,10 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         assert_ne!(applied_index, 0, "{}", SlogFormat(&logger));
         let tablet = remote_tablet.latest().unwrap().clone();
         let perf_context = EK::get_perf_context(cfg.perf_level, PerfContextKind::RaftstoreApply);
+        assert!(
+            !cfg.use_delete_range,
+            "v2 doesn't support RocksDB delete range"
+        );
         Apply {
             peer,
             tablet,
@@ -129,12 +139,13 @@ impl<EK: KvEngine, R> Apply<EK, R> {
             res_reporter,
             flush_state,
             sst_apply_state,
+            sst_applied_index: vec![],
             log_recovery,
             metrics: ApplyMetrics::default(),
             buckets,
             sst_importer,
-            checkpoint_scheduler,
-            use_delete_range: cfg.use_delete_range,
+            tablet_scheduler,
+            high_priority_pool,
             observe: Observe {
                 info: CmdObserveInfo::default(),
                 level: ObserveLevel::None,
@@ -217,6 +228,12 @@ impl<EK: KvEngine, R> Apply<EK, R> {
         self.peer.get_id()
     }
 
+    #[allow(unused)]
+    #[inline]
+    pub fn store_id(&self) -> u64 {
+        self.peer.get_store_id()
+    }
+
     /// The tablet can't be public yet, otherwise content of latest tablet
     /// doesn't matches its epoch in both readers and peer fsm.
     #[inline]
@@ -289,8 +306,18 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     }
 
     #[inline]
-    pub fn set_sst_applied_index(&mut self, uuid: Vec<Vec<u8>>, apply_index: u64) {
-        self.sst_apply_state.registe_ssts(uuid, apply_index);
+    pub fn sst_apply_state(&self) -> &SstApplyState {
+        &self.sst_apply_state
+    }
+
+    #[inline]
+    pub fn push_sst_applied_index(&mut self, sst_index: SstApplyIndex) {
+        self.sst_applied_index.push(sst_index);
+    }
+
+    #[inline]
+    pub fn take_sst_applied_index(&mut self) -> Vec<SstApplyIndex> {
+        mem::take(&mut self.sst_applied_index)
     }
 
     #[inline]
@@ -308,7 +335,7 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     }
 
     #[inline]
-    pub fn sst_importer(&self) -> &SstImporter {
+    pub fn sst_importer(&self) -> &SstImporter<EK> {
         &self.sst_importer
     }
 
@@ -333,12 +360,12 @@ impl<EK: KvEngine, R> Apply<EK, R> {
     }
 
     #[inline]
-    pub fn checkpoint_scheduler(&self) -> &Scheduler<checkpoint::Task<EK>> {
-        &self.checkpoint_scheduler
+    pub fn high_priority_pool(&self) -> &FuturePool {
+        &self.high_priority_pool
     }
 
     #[inline]
-    pub fn use_delete_range(&self) -> bool {
-        self.use_delete_range
+    pub fn tablet_scheduler(&self) -> &Scheduler<TabletTask<EK>> {
+        &self.tablet_scheduler
     }
 }

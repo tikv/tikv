@@ -332,7 +332,7 @@ where
             }
 
             // Split the record into left and right by the middle of time range
-            for (_, r) in self.records.iter().enumerate() {
+            for r in self.records.iter() {
                 let elapsed_secs = r.1.saturating_elapsed_secs();
                 if elapsed_secs > time_span / 2.0 {
                     left += r.0;
@@ -406,7 +406,7 @@ struct CfFlowChecker {
     // When the write flow is about 100MB/s, we observed that the compaction ops
     // is about 2.5, it means there are 750 compaction events in 5 minutes.
     long_term_pending_bytes:
-        Smoother<f64, 1024, SMOOTHER_STALE_RECORD_THRESHOLD, SMOOTHER_TIME_RANGE_THRESHOLD>,
+        Option<Smoother<f64, 1024, SMOOTHER_STALE_RECORD_THRESHOLD, SMOOTHER_TIME_RANGE_THRESHOLD>>,
     pending_bytes_before_unsafe_destroy_range: Option<f64>,
 
     // On start related markers. Because after restart, the memtable, l0 files
@@ -422,6 +422,12 @@ struct CfFlowChecker {
 
 impl Default for CfFlowChecker {
     fn default() -> Self {
+        CfFlowChecker::new(true)
+    }
+}
+
+impl CfFlowChecker {
+    pub fn new(include_pending_bytes: bool) -> Self {
         Self {
             last_num_memtables: Smoother::default(),
             memtable_debt: 0.0,
@@ -433,7 +439,11 @@ impl Default for CfFlowChecker {
             last_l0_bytes: 0,
             last_l0_bytes_time: Instant::now_coarse(),
             short_term_l0_consumption_flow: Smoother::default(),
-            long_term_pending_bytes: Smoother::default(),
+            long_term_pending_bytes: if include_pending_bytes {
+                Some(Smoother::default())
+            } else {
+                None
+            },
             pending_bytes_before_unsafe_destroy_range: None,
             on_start_memtable: true,
             on_start_l0_files: true,
@@ -525,10 +535,11 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         discard_ratio: Arc<AtomicU32>,
         limiter: Arc<Limiter>,
     ) -> Self {
+        let include_pending_bytes = region_id == 0;
         let cf_checkers = engine
             .cf_names(region_id)
             .into_iter()
-            .map(|cf_name| (cf_name, CfFlowChecker::default()))
+            .map(|cf_name| (cf_name, CfFlowChecker::new(include_pending_bytes)))
             .collect();
 
         Self {
@@ -590,9 +601,13 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                 self.wait_for_destroy_range_finish = true;
                 let soft = (self.soft_pending_compaction_bytes_limit as f64).log2();
                 for cf_checker in self.cf_checkers.values_mut() {
-                    let v = cf_checker.long_term_pending_bytes.get_avg();
-                    if v <= soft {
-                        cf_checker.pending_bytes_before_unsafe_destroy_range = Some(v);
+                    if let Some(long_term_pending_bytes) =
+                        cf_checker.long_term_pending_bytes.as_ref()
+                    {
+                        let v = long_term_pending_bytes.get_avg();
+                        if v <= soft {
+                            cf_checker.pending_bytes_before_unsafe_destroy_range = Some(v);
+                        }
                     }
                 }
             }
@@ -632,7 +647,6 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         Builder::new()
             .name(thd_name!("flow-checker"))
             .spawn_wrapper(move || {
-                tikv_alloc::add_thread_memory_accessor();
                 let mut checker = self;
                 let mut deadline = std::time::Instant::now();
                 let mut enabled = true;
@@ -661,7 +675,6 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
                         checker.on_flow_info_msg(enabled, msg);
                     }
                 }
-                tikv_alloc::remove_thread_memory_accessor();
             })
             .unwrap()
     }
@@ -721,74 +734,89 @@ impl<E: FlowControlFactorStore + Send + 'static> FlowChecker<E> {
         (rate, cf_throttle_flags)
     }
 
-    fn on_pending_compaction_bytes_change(&mut self, cf: String) {
+    pub fn on_pending_compaction_bytes_change(&mut self, cf: String) -> u64 {
+        let pending_compaction_bytes = self.engine.pending_compaction_bytes(self.region_id, &cf);
+        self.on_pending_compaction_bytes_change_cf(pending_compaction_bytes, cf);
+        pending_compaction_bytes
+    }
+
+    pub fn on_pending_compaction_bytes_change_cf(
+        &mut self,
+        pending_compaction_bytes: u64,
+        cf: String,
+    ) {
         let hard = (self.hard_pending_compaction_bytes_limit as f64).log2();
         let soft = (self.soft_pending_compaction_bytes_limit as f64).log2();
-
         // Because pending compaction bytes changes dramatically, take the
         // logarithm of pending compaction bytes to make the values fall into
         // a relative small range
-        let mut num = (self.engine.pending_compaction_bytes(self.region_id, &cf) as f64).log2();
+        let mut num = (pending_compaction_bytes as f64).log2();
         if !num.is_finite() {
             // 0.log2() == -inf, which is not expected and may lead to sum always be NaN
             num = 0.0;
         }
         let checker = self.cf_checkers.get_mut(&cf).unwrap();
-        checker.long_term_pending_bytes.observe(num);
-        SCHED_PENDING_COMPACTION_BYTES_GAUGE
-            .with_label_values(&[&cf])
-            .set((checker.long_term_pending_bytes.get_avg() * RATIO_SCALE_FACTOR as f64) as i64);
 
-        // do special check on start, see the comment of the variable definition for
-        // detail.
-        if checker.on_start_pending_bytes {
-            if num < soft || checker.long_term_pending_bytes.trend() == Trend::Increasing {
-                // the write is accumulating, still need to throttle
-                checker.on_start_pending_bytes = false;
+        // only be called by v1
+        if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_mut() {
+            long_term_pending_bytes.observe(num);
+            SCHED_PENDING_COMPACTION_BYTES_GAUGE
+                .with_label_values(&[&cf])
+                .set((long_term_pending_bytes.get_avg() * RATIO_SCALE_FACTOR as f64) as i64);
+
+            // do special check on start, see the comment of the variable definition for
+            // detail.
+            if checker.on_start_pending_bytes {
+                if num < soft || long_term_pending_bytes.trend() == Trend::Increasing {
+                    // the write is accumulating, still need to throttle
+                    checker.on_start_pending_bytes = false;
+                } else {
+                    // still on start, should not throttle now
+                    return;
+                }
+            }
+
+            let pending_compaction_bytes = long_term_pending_bytes.get_avg();
+            let ignore = if let Some(before) = checker.pending_bytes_before_unsafe_destroy_range {
+                if pending_compaction_bytes <= before && !self.wait_for_destroy_range_finish {
+                    checker.pending_bytes_before_unsafe_destroy_range = None;
+                }
+                true
             } else {
-                // still on start, should not throttle now
-                return;
+                false
+            };
+
+            for checker in self.cf_checkers.values() {
+                if let Some(long_term_pending_bytes) = checker.long_term_pending_bytes.as_ref()
+                    && num < long_term_pending_bytes.get_recent()
+                {
+                    return;
+                }
             }
-        }
 
-        let pending_compaction_bytes = checker.long_term_pending_bytes.get_avg();
-        let ignore = if let Some(before) = checker.pending_bytes_before_unsafe_destroy_range {
-            if pending_compaction_bytes <= before && !self.wait_for_destroy_range_finish {
-                checker.pending_bytes_before_unsafe_destroy_range = None;
-            }
-            true
-        } else {
-            false
-        };
-
-        for checker in self.cf_checkers.values() {
-            if num < checker.long_term_pending_bytes.get_recent() {
-                return;
-            }
-        }
-
-        let mut ratio = if pending_compaction_bytes < soft || ignore {
-            0
-        } else {
-            let new_ratio = (pending_compaction_bytes - soft) / (hard - soft);
-            let old_ratio = self.discard_ratio.load(Ordering::Relaxed);
-
-            // Because pending compaction bytes changes up and down, so using
-            // EMA(Exponential Moving Average) to smooth it.
-            (if old_ratio != 0 {
-                EMA_FACTOR * (old_ratio as f64 / RATIO_SCALE_FACTOR as f64)
-                    + (1.0 - EMA_FACTOR) * new_ratio
-            } else if new_ratio > 0.01 {
-                0.01
+            let mut ratio = if pending_compaction_bytes < soft || ignore {
+                0
             } else {
-                new_ratio
-            } * RATIO_SCALE_FACTOR as f64) as u32
-        };
-        SCHED_DISCARD_RATIO_GAUGE.set(ratio as i64);
-        if ratio > RATIO_SCALE_FACTOR {
-            ratio = RATIO_SCALE_FACTOR;
+                let new_ratio = (pending_compaction_bytes - soft) / (hard - soft);
+                let old_ratio = self.discard_ratio.load(Ordering::Relaxed);
+
+                // Because pending compaction bytes changes up and down, so using
+                // EMA(Exponential Moving Average) to smooth it.
+                (if old_ratio != 0 {
+                    EMA_FACTOR * (old_ratio as f64 / RATIO_SCALE_FACTOR as f64)
+                        + (1.0 - EMA_FACTOR) * new_ratio
+                } else if new_ratio > 0.01 {
+                    0.01
+                } else {
+                    new_ratio
+                } * RATIO_SCALE_FACTOR as f64) as u32
+            };
+            SCHED_DISCARD_RATIO_GAUGE.set(ratio as i64);
+            if ratio > RATIO_SCALE_FACTOR {
+                ratio = RATIO_SCALE_FACTOR;
+            }
+            self.discard_ratio.store(ratio, Ordering::Relaxed);
         }
-        self.discard_ratio.store(ratio, Ordering::Relaxed);
     }
 
     fn on_memtable_change(&mut self, cf: &str) {
@@ -1082,7 +1110,7 @@ pub(super) mod tests {
         }
     }
 
-    fn send_flow_info(tx: &mpsc::SyncSender<FlowInfo>, region_id: u64) {
+    pub fn send_flow_info(tx: &mpsc::SyncSender<FlowInfo>, region_id: u64) {
         tx.send(FlowInfo::Flush("default".to_string(), 0, region_id))
             .unwrap();
         tx.send(FlowInfo::Compaction("default".to_string(), region_id))

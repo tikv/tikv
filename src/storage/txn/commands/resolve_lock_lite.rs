@@ -22,7 +22,10 @@ command! {
     /// Resolve locks on `resolve_keys` according to `start_ts` and `commit_ts`.
     ResolveLockLite:
         cmd_ty => (),
-        display => "kv::resolve_lock_lite resolve_keys({:?}) {} {} | {:?}", (resolve_keys, start_ts, commit_ts, ctx),
+        display => {
+            "kv::resolve_lock_lite resolve_keys({:?}) {} {} | {:?}",
+            (resolve_keys, start_ts, commit_ts, ctx),
+        }
         content => {
             /// The transaction timestamp.
             start_ts: TimeStamp,
@@ -30,6 +33,9 @@ command! {
             commit_ts: TimeStamp,
             /// The keys to resolve.
             resolve_keys: Vec<Key>,
+        }
+        in_heap => {
+            resolve_keys,
         }
 }
 
@@ -63,6 +69,11 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
             });
         }
 
+        let known_txn_status = if !self.commit_ts.is_zero() {
+            vec![(self.start_ts, self.commit_ts)]
+        } else {
+            vec![]
+        };
         let new_acquired_locks = txn.take_new_locks();
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         write_data.set_allowed_on_disk_almost_full();
@@ -76,6 +87,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for ResolveLockLite {
             new_acquired_locks,
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status,
         })
     }
 }

@@ -34,7 +34,10 @@ use std::{
 };
 
 pub use file::{File, OpenOptions};
-pub use io_stats::{get_io_type, init as init_io_stats_collector, set_io_type};
+pub use io_stats::{
+    fetch_io_bytes, get_io_type, get_thread_io_bytes_total, init as init_io_stats_collector,
+    set_io_type,
+};
 pub use metrics_manager::{BytesFetcher, MetricsManager};
 use online_config::ConfigValue;
 use openssl::{
@@ -113,10 +116,10 @@ impl Drop for WithIoType {
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub struct IoBytes {
-    read: u64,
-    write: u64,
+    pub read: u64,
+    pub write: u64,
 }
 
 impl std::ops::Sub for IoBytes {
@@ -127,6 +130,13 @@ impl std::ops::Sub for IoBytes {
             read: self.read.saturating_sub(other.read),
             write: self.write.saturating_sub(other.write),
         }
+    }
+}
+
+impl std::ops::AddAssign for IoBytes {
+    fn add_assign(&mut self, rhs: Self) {
+        self.read += rhs.read;
+        self.write += rhs.write;
     }
 }
 

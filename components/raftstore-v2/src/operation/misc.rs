@@ -5,13 +5,23 @@ use std::collections::{
     HashSet,
 };
 
+use collections::HashMap;
+use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine, CF_DEFAULT, CF_WRITE};
+use raftstore::{
+    store::{CompactThreshold, TabletSnapKey},
+    Result,
+};
 use slog::{debug, error, info};
 
 use crate::{
-    fsm::StoreFsmDelegate,
-    router::StoreTick,
-    worker::cleanup::{self, CompactThreshold},
+    batch::StoreContext,
+    fsm::{Store, StoreFsmDelegate},
+    router::{PeerMsg, StoreTick},
+    worker::{
+        cleanup::{self},
+        tablet,
+    },
     CompactTask::CheckAndCompact,
 };
 
@@ -92,7 +102,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                     self.store_ctx.cfg.region_compact_min_tombstones,
                     self.store_ctx.cfg.region_compact_tombstones_percent,
                     self.store_ctx.cfg.region_compact_min_redundant_rows,
-                    self.store_ctx.cfg.region_compact_redundant_rows_percent,
+                    self.store_ctx.cfg.region_compact_redundant_rows_percent(),
                 ),
             }))
         {
@@ -102,5 +112,43 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T> StoreFsmDelegate<'a, EK, ER, T> {
                 "err" => ?e,
             );
         }
+    }
+
+    #[inline]
+    pub fn on_snapshot_gc(&mut self) {
+        if let Err(e) = self.fsm.store.on_snapshot_gc(self.store_ctx) {
+            error!(self.fsm.store.logger(), "cleanup import sst failed"; "error" => ?e);
+        }
+        self.schedule_tick(
+            StoreTick::SnapGc,
+            self.store_ctx.cfg.snap_mgr_gc_tick_interval.0,
+        );
+    }
+}
+
+impl Store {
+    #[inline]
+    fn on_snapshot_gc<EK: KvEngine, ER: RaftEngine, T>(
+        &mut self,
+        ctx: &mut StoreContext<EK, ER, T>,
+    ) -> Result<()> {
+        let paths = ctx.snap_mgr.list_snapshot()?;
+        let mut region_keys: HashMap<u64, Vec<TabletSnapKey>> = HashMap::default();
+        for path in paths {
+            let key = TabletSnapKey::from_path(path)?;
+            region_keys.entry(key.region_id).or_default().push(key);
+        }
+        for (region_id, keys) in region_keys {
+            if let Err(TrySendError::Disconnected(msg)) =
+                ctx.router.send(region_id, PeerMsg::SnapGc(keys.into()))
+                && !ctx.router.is_shutdown()
+            {
+                let PeerMsg::SnapGc(keys) = msg else {
+                    unreachable!()
+                };
+                let _ = ctx.schedulers.tablet.schedule(tablet::Task::SnapGc(keys));
+            }
+        }
+        Ok(())
     }
 }

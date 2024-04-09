@@ -13,6 +13,7 @@ use tikv_util::{
         bytes::BytesEncoder,
         number::{self, NumberEncoder},
     },
+    memory::HeapSize,
 };
 
 use super::timestamp::TimeStamp;
@@ -270,6 +271,12 @@ impl Display for Key {
     }
 }
 
+impl HeapSize for Key {
+    fn approximate_heap_size(&self) -> usize {
+        self.0.approximate_heap_size()
+    }
+}
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum MutationType {
     Put,
@@ -302,6 +309,17 @@ pub enum Mutation {
     ///
     /// Returns `kvrpcpb::KeyError::AlreadyExists` if the key already exists.
     CheckNotExists(Key, Assertion),
+}
+
+impl HeapSize for Mutation {
+    fn approximate_heap_size(&self) -> usize {
+        match self {
+            Mutation::Put(kv, _) | Mutation::Insert(kv, _) => kv.approximate_heap_size(),
+            Mutation::Delete(k, _) | Mutation::CheckNotExists(k, _) | Mutation::Lock(k, _) => {
+                k.approximate_heap_size()
+            }
+        }
+    }
 }
 
 impl Debug for Mutation {
@@ -451,7 +469,7 @@ impl From<kvrpcpb::Mutation> for Mutation {
 
 /// `OldValue` is used by cdc to read the previous value associated with some
 /// key during the prewrite process.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum OldValue {
     /// A real `OldValue`.
     Value { value: Value },
@@ -460,16 +478,11 @@ pub enum OldValue {
     /// `None` means we don't found a previous value.
     None,
     /// The user doesn't care about the previous value.
+    #[default]
     Unspecified,
     /// Not sure whether the old value exists or not. users can seek CF_WRITE to
     /// the give position to take a look.
     SeekWrite(Key),
-}
-
-impl Default for OldValue {
-    fn default() -> Self {
-        OldValue::Unspecified
-    }
 }
 
 impl OldValue {
@@ -583,6 +596,67 @@ impl WriteBatchFlags {
             None => panic!("unrecognized flags: {:b}", bits),
             // zero or more flags
             Some(f) => f,
+        }
+    }
+}
+
+/// The position info of the last actual write (PUT or DELETE) of a LOCK record.
+/// Note that if the last change is a DELETE, its LastChange can be either
+/// Exist(which points to it) or NotExist.
+#[derive(Clone, Eq, PartialEq, Debug, Default)]
+pub enum LastChange {
+    #[default]
+    Unknown,
+    /// The pointer may point to a PUT or a DELETE record.
+    Exist {
+        /// The commit TS of the latest PUT/DELETE record
+        last_change_ts: TimeStamp,
+        /// The estimated number of versions that need skipping from this record
+        /// to find the latest PUT/DELETE record. Note this could be inaccurate.
+        estimated_versions_to_last_change: u64,
+    },
+    /// Either there is no previous write of the key or the last write is a
+    /// DELETE.
+    NotExist,
+}
+
+impl LastChange {
+    pub fn make_exist(last_change_ts: TimeStamp, estimated_versions_to_last_change: u64) -> Self {
+        assert!(!last_change_ts.is_zero());
+        assert!(estimated_versions_to_last_change > 0);
+        LastChange::Exist {
+            last_change_ts,
+            estimated_versions_to_last_change,
+        }
+    }
+
+    // How `LastChange` is stored.
+    // (1) ts == 0 && version == 0 means Unknown.
+    // (2) ts == 0 && version > 0 means NotExist. In current implementation version
+    // is set to 1. In older implementations it can be any positive integer. So
+    // we accept any positive when deserializing.
+    // (3) ts > 0 && version > 0 means Exist.
+
+    pub fn to_parts(&self) -> (TimeStamp, u64) {
+        match self {
+            LastChange::Unknown => (TimeStamp::zero(), 0),
+            LastChange::Exist {
+                last_change_ts,
+                estimated_versions_to_last_change,
+            } => (*last_change_ts, *estimated_versions_to_last_change),
+            LastChange::NotExist => (TimeStamp::zero(), 1),
+        }
+    }
+
+    pub fn from_parts(last_change_ts: TimeStamp, estimated_versions_to_last_change: u64) -> Self {
+        if last_change_ts.is_zero() {
+            if estimated_versions_to_last_change > 0 {
+                LastChange::NotExist
+            } else {
+                LastChange::Unknown
+            }
+        } else {
+            Self::make_exist(last_change_ts, estimated_versions_to_last_change)
         }
     }
 }
@@ -757,6 +831,19 @@ mod tests {
             let mut another_key = key.clone();
             another_key.append_ts_inplace(ts);
             assert_eq!(another_key, key_with_ts);
+        }
+    }
+
+    #[test]
+    fn test_serialize_last_change() {
+        let objs = vec![
+            LastChange::Unknown,
+            LastChange::NotExist,
+            LastChange::make_exist(100.into(), 3),
+        ];
+        for obj in objs {
+            let (ts, versions) = obj.to_parts();
+            assert_eq!(obj, LastChange::from_parts(ts, versions));
         }
     }
 }

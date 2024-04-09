@@ -2712,7 +2712,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(rate(tikv_futurepool_pending_task_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"sched-worker-.*\"}[1m]))",
+          "expr": "sum(avg_over_time(tikv_futurepool_pending_task_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"sched-worker-.*\"}[1m]))",
           "format": "time_series",
           "hide": false,
           "intervalFactor": 1,
@@ -5629,7 +5629,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "histogram_quantile(0.99, sum(rate(tikv_coprocessor_request_wait_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", req=~\"select|index\"}[1m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(tikv_coprocessor_request_wait_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", req=~\"select|index\", type=\"all\"}[1m])) by (le))",
           "format": "time_series",
           "hide": false,
           "intervalFactor": 1,
@@ -5645,14 +5645,14 @@
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.999, sum(rate(tikv_coprocessor_request_wait_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", req=~\"select|index\"}[1m])) by (le))",
+          "expr": "histogram_quantile(0.999, sum(rate(tikv_coprocessor_request_wait_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", req=~\"select|index\", type=\"all\"}[1m])) by (le))",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "duration-999%",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(1, sum(rate(tikv_coprocessor_request_wait_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", req=~\"select|index\"}[1m])) by (le))",
+          "expr": "histogram_quantile(1, sum(rate(tikv_coprocessor_request_wait_seconds_bucket{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", req=~\"select|index\", type=\"all\"}[1m])) by (le))",
           "format": "time_series",
           "hide": true,
           "intervalFactor": 1,
@@ -5763,7 +5763,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(rate(tikv_futurepool_pending_task_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"cop-normal\"}[1m]))",
+          "expr": "sum(avg_over_time(tikv_futurepool_pending_task_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\", name=~\"cop-normal\"}[1m]))",
           "format": "time_series",
           "hide": false,
           "intervalFactor": 1,

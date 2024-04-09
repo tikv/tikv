@@ -137,28 +137,31 @@ impl BatchExecutorsRunner<()> {
                         .map_err(|e| other_err!("BatchProjectionExecutor: {}", e))?;
                 }
                 ExecType::TypeJoin => {
-                    other_err!("Join executor not implemented");
+                    return Err(other_err!("Join executor not implemented"));
                 }
                 ExecType::TypeKill => {
-                    other_err!("Kill executor not implemented");
+                    return Err(other_err!("Kill executor not implemented"));
                 }
                 ExecType::TypeExchangeSender => {
-                    other_err!("ExchangeSender executor not implemented");
+                    return Err(other_err!("ExchangeSender executor not implemented"));
                 }
                 ExecType::TypeExchangeReceiver => {
-                    other_err!("ExchangeReceiver executor not implemented");
+                    return Err(other_err!("ExchangeReceiver executor not implemented"));
                 }
                 ExecType::TypePartitionTableScan => {
-                    other_err!("PartitionTableScan executor not implemented");
+                    return Err(other_err!("PartitionTableScan executor not implemented"));
                 }
                 ExecType::TypeSort => {
-                    other_err!("Sort executor not implemented");
+                    return Err(other_err!("Sort executor not implemented"));
                 }
                 ExecType::TypeWindow => {
-                    other_err!("Window executor not implemented");
+                    return Err(other_err!("Window executor not implemented"));
                 }
                 ExecType::TypeExpand => {
-                    other_err!("Expand executor not implemented");
+                    return Err(other_err!("Expand executor not implemented"));
+                }
+                ExecType::TypeExpand2 => {
+                    return Err(other_err!("Expand2 executor not implemented"));
                 }
             }
         }

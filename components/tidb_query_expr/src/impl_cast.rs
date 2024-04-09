@@ -1038,10 +1038,10 @@ fn cast_bytes_like_as_duration(
     val: &[u8],
     overflow_as_null: bool,
 ) -> Result<Option<Duration>> {
-    let val = std::str::from_utf8(val).map_err(Error::Encoding)?;
+    let val = String::from_utf8_lossy(val);
     let result = Duration::parse_consider_overflow(
         ctx,
-        val,
+        &val,
         extra.ret_field_type.get_decimal() as i8,
         overflow_as_null,
     );
@@ -1385,8 +1385,9 @@ fn cast_string_as_json(
                 let mut vec;
                 if typ.tp() == FieldTypeTp::String {
                     vec = (*val).to_owned();
-                    // the `flen` of string is always greater than zero
-                    vec.resize(typ.flen().try_into().unwrap(), 0);
+                    if typ.flen() > 0 {
+                        vec.resize(typ.flen().try_into().unwrap(), 0);
+                    }
                     buf = &vec;
                 }
 
@@ -1612,7 +1613,7 @@ mod tests {
             mysql::{
                 charset::*,
                 decimal::{max_decimal, max_or_min_dec},
-                Decimal, Duration, Json, RoundMode, Time, TimeType, MAX_FSP, MIN_FSP,
+                Decimal, Duration, Json, RoundMode, Time, TimeType, Tz, MAX_FSP, MIN_FSP,
             },
         },
         expr::{EvalConfig, EvalContext, Flag},
@@ -2933,13 +2934,20 @@ mod tests {
     fn test_cast_duration_as_time() {
         use chrono::Datelike;
 
-        let cases = vec!["11:30:45.123456", "-35:30:46"];
+        let cases = vec!["11:30:45.123456", "-35:30:46", "25:59:59.999999"];
 
         for case in cases {
-            let mut ctx = EvalContext::default();
-
+            let mut cfg = EvalConfig::default();
+            cfg.tz = Tz::from_tz_name("America/New_York").unwrap();
+            let mut ctx = EvalContext::new(Arc::new(cfg));
             let duration = Duration::parse(&mut ctx, case, MAX_FSP).unwrap();
+
+            let mut cfg2 = EvalConfig::default();
+            cfg2.tz = Tz::from_tz_name("Asia/Tokyo").unwrap();
+            let ctx2 = EvalContext::new(Arc::new(cfg2));
+
             let now = RpnFnScalarEvaluator::new()
+                .context(ctx2)
                 .push_param(duration)
                 .return_field_type(
                     FieldTypeBuilder::new()
@@ -6450,6 +6458,7 @@ mod tests {
             b"-17:51:04.78",
             b"17:51:04.78",
             b"-17:51:04.78",
+            b"\x92\x6b",
         ];
 
         test_as_duration_helper(
@@ -6528,7 +6537,7 @@ mod tests {
             "cast_decimal_as_duration",
         );
 
-        let values = vec![
+        let values = [
             Decimal::from_bytes(b"9995959").unwrap().unwrap(),
             Decimal::from_bytes(b"-9995959").unwrap().unwrap(),
         ];
@@ -7007,6 +7016,17 @@ mod tests {
                 FieldTypeBuilder::new()
                     .tp(FieldTypeTp::VarChar)
                     .flen(256)
+                    .charset(CHARSET_BIN)
+                    .collation(Collation::Binary)
+                    .build(),
+                "a".to_string(),
+                Json::from_opaque(FieldTypeTp::String, &[97]).unwrap(),
+                true,
+            ),
+            (
+                FieldTypeBuilder::new()
+                    .tp(FieldTypeTp::VarChar)
+                    .flen(UNSPECIFIED_LENGTH)
                     .charset(CHARSET_BIN)
                     .collation(Collation::Binary)
                     .build(),

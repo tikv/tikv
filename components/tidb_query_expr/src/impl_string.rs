@@ -63,13 +63,13 @@ pub fn oct_string(s: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     if let Some(&c) = trimmed.next() {
         if c == b'-' {
             negative = true;
-        } else if (b'0'..=b'9').contains(&c) {
+        } else if c.is_ascii_digit() {
             r = Some(u64::from(c) - u64::from(b'0'));
         } else if c != b'+' {
             return Ok(writer.write(Some(b"0".to_vec())));
         }
 
-        for c in trimmed.take_while(|&c| (b'0'..=b'9').contains(c)) {
+        for c in trimmed.take_while(|&c| c.is_ascii_digit()) {
             r = r
                 .and_then(|r| r.checked_mul(10))
                 .and_then(|r| r.checked_add(u64::from(*c - b'0')));
@@ -635,15 +635,22 @@ fn field<T: Evaluable + EvaluableRet + PartialEq>(args: &[Option<&T>]) -> Result
 
 #[rpn_fn(nullable, varg, min_args = 1)]
 #[inline]
-fn field_bytes(args: &[Option<BytesRef>]) -> Result<Option<Int>> {
+fn field_bytes<C: Collator>(args: &[Option<BytesRef>]) -> Result<Option<Int>> {
     Ok(Some(match args[0] {
         // As per the MySQL doc, if the first argument is NULL, this function always returns 0.
         None => 0,
-        Some(val) => args
-            .iter()
-            .skip(1)
-            .position(|&i| i == Some(val))
-            .map_or(0, |pos| (pos + 1) as i64),
+        Some(val) => {
+            for (pos, arg) in args.iter().enumerate().skip(1) {
+                if arg.is_none() {
+                    continue;
+                }
+                match C::sort_compare(val, arg.unwrap()) {
+                    Ok(Ordering::Equal) => return Ok(Some(pos as i64)),
+                    _ => continue,
+                }
+            }
+            0
+        }
     }))
 }
 
@@ -879,7 +886,7 @@ impl TrimDirection {
 }
 
 #[inline]
-fn trim<'a, 'b>(string: &'a [u8], pattern: &'b [u8], direction: TrimDirection) -> &'a [u8] {
+fn trim<'a>(string: &'a [u8], pattern: &[u8], direction: TrimDirection) -> &'a [u8] {
     if pattern.is_empty() {
         return string;
     }
@@ -2853,6 +2860,10 @@ mod tests {
                 Some("قاعدة البيانات".as_bytes().to_vec()),
                 Some("قاعدة البيانات".as_bytes().to_vec()),
             ),
+            (
+                Some("ßßåı".as_bytes().to_vec()),
+                Some("ßßÅI".as_bytes().to_vec()),
+            ),
             (None, None),
         ];
 
@@ -2913,11 +2924,32 @@ mod tests {
     #[test]
     fn test_gbk_lower_upper() {
         // Test GBK string case
-        let sig = vec![ScalarFuncSig::Lower, ScalarFuncSig::Upper];
-        for s in sig {
-            let output = RpnFnScalarEvaluator::new()
+        let cases = vec![
+            (
+                ScalarFuncSig::LowerUtf8,
+                "àáèéêìíòóùúüāēěīńňōūǎǐǒǔǖǘǚǜⅪⅫ".as_bytes().to_vec(),
+                "àáèéêìíòóùúüāēěīńňōūǎǐǒǔǖǘǚǜⅪⅫ".as_bytes().to_vec(),
+            ),
+            (
+                ScalarFuncSig::UpperUtf8,
+                "àáèéêìíòóùúüāēěīńňōūǎǐǒǔǖǘǚǜⅪⅫ".as_bytes().to_vec(),
+                "àáèéêìíòóùúüāēěīńňōūǎǐǒǔǖǘǚǜⅪⅫ".as_bytes().to_vec(),
+            ),
+            (
+                ScalarFuncSig::LowerUtf8,
+                "İİIIÅI".as_bytes().to_vec(),
+                "iiiiåi".as_bytes().to_vec(),
+            ),
+            (
+                ScalarFuncSig::UpperUtf8,
+                "ßßåı".as_bytes().to_vec(),
+                "ßßÅI".as_bytes().to_vec(),
+            ),
+        ];
+        for (s, input, output) in cases {
+            let result = RpnFnScalarEvaluator::new()
                 .push_param_with_field_type(
-                    Some("àáèéêìíòóùúüāēěīńňōūǎǐǒǔǖǘǚǜⅪⅫ".as_bytes().to_vec()).clone(),
+                    Some(input).clone(),
                     FieldTypeBuilder::new()
                         .tp(FieldTypeTp::VarString)
                         .charset(CHARSET_GBK)
@@ -2925,52 +2957,12 @@ mod tests {
                 )
                 .evaluate(s)
                 .unwrap();
-            assert_eq!(
-                output,
-                Some("àáèéêìíòóùúüāēěīńňōūǎǐǒǔǖǘǚǜⅪⅫ".as_bytes().to_vec())
-            );
+            assert_eq!(result, Some(output),);
         }
     }
 
     #[test]
     fn test_lower() {
-        // Test non-binary string case
-        let cases = vec![
-            (Some(b"HELLO".to_vec()), Some(b"hello".to_vec())),
-            (Some(b"123".to_vec()), Some(b"123".to_vec())),
-            (
-                Some("CAFÉ".as_bytes().to_vec()),
-                Some("café".as_bytes().to_vec()),
-            ),
-            (
-                Some("数据库".as_bytes().to_vec()),
-                Some("数据库".as_bytes().to_vec()),
-            ),
-            (
-                Some("НОЧЬ НА ОКРАИНЕ МОСКВЫ".as_bytes().to_vec()),
-                Some("ночь на окраине москвы".as_bytes().to_vec()),
-            ),
-            (
-                Some("قاعدة البيانات".as_bytes().to_vec()),
-                Some("قاعدة البيانات".as_bytes().to_vec()),
-            ),
-            (None, None),
-        ];
-
-        for (arg, exp) in cases {
-            let output = RpnFnScalarEvaluator::new()
-                .push_param_with_field_type(
-                    arg.clone(),
-                    FieldTypeBuilder::new()
-                        .tp(FieldTypeTp::VarString)
-                        .charset(CHARSET_UTF8MB4)
-                        .build(),
-                )
-                .evaluate(ScalarFuncSig::Lower)
-                .unwrap();
-            assert_eq!(output, exp);
-        }
-
         // Test binary string case
         let cases = vec![
             (Some(b"hello".to_vec()), Some(b"hello".to_vec())),
@@ -2989,6 +2981,10 @@ mod tests {
             (
                 Some("قاعدة البيانات".as_bytes().to_vec()),
                 Some("قاعدة البيانات".as_bytes().to_vec()),
+            ),
+            (
+                Some("İİIIÅI".as_bytes().to_vec()),
+                Some("İİIIÅI".as_bytes().to_vec()),
             ),
             (None, None),
         ];
@@ -3035,6 +3031,10 @@ mod tests {
             (
                 Some("قاعدة البيانات".as_bytes().to_vec()),
                 Some("قاعدة البيانات".as_bytes().to_vec()),
+            ),
+            (
+                Some("İİIIÅI".as_bytes().to_vec()),
+                Some("iiiiåi".as_bytes().to_vec()),
             ),
             (None, None),
         ];
@@ -3214,6 +3214,7 @@ mod tests {
                     Some(b"baz".to_vec()),
                 ],
                 Some(1),
+                Collation::Utf8Mb4Bin,
             ),
             (
                 vec![
@@ -3223,6 +3224,7 @@ mod tests {
                     Some(b"hello".to_vec()),
                 ],
                 Some(0),
+                Collation::Utf8Mb4Bin,
             ),
             (
                 vec![
@@ -3232,6 +3234,7 @@ mod tests {
                     Some(b"hello".to_vec()),
                 ],
                 Some(3),
+                Collation::Utf8Mb4Bin,
             ),
             (
                 vec![
@@ -3244,6 +3247,7 @@ mod tests {
                     Some(b"Hello".to_vec()),
                 ],
                 Some(6),
+                Collation::Utf8Mb4Bin,
             ),
             (
                 vec![
@@ -3252,14 +3256,37 @@ mod tests {
                     Some(b"Hello World!".to_vec()),
                 ],
                 Some(0),
+                Collation::Utf8Mb4Bin,
             ),
-            (vec![None, None, Some(b"Hello World!".to_vec())], Some(0)),
-            (vec![Some(b"Hello World!".to_vec())], Some(0)),
+            (
+                vec![None, None, Some(b"Hello World!".to_vec())],
+                Some(0),
+                Collation::Utf8Mb4Bin,
+            ),
+            (
+                vec![Some(b"Hello World!".to_vec())],
+                Some(0),
+                Collation::Utf8Mb4Bin,
+            ),
+            (
+                vec![
+                    Some(b"a".to_vec()),
+                    Some(b"A".to_vec()),
+                    Some(b"a".to_vec()),
+                ],
+                Some(1),
+                Collation::Utf8Mb4GeneralCi,
+            ),
         ];
 
-        for (args, expect_output) in test_cases {
+        for (args, expect_output, collation) in test_cases {
             let output = RpnFnScalarEvaluator::new()
                 .push_params(args)
+                .return_field_type(
+                    FieldTypeBuilder::new()
+                        .tp(FieldTypeTp::Long)
+                        .collation(collation),
+                )
                 .evaluate(ScalarFuncSig::FieldString)
                 .unwrap();
             assert_eq!(output, expect_output);

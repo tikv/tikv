@@ -605,7 +605,7 @@ mod tests {
             (b"a9".to_vec(), b"v9".to_vec()),
         ];
 
-        for &(ref k, ref v) in &base_data {
+        for (k, v) in &base_data {
             engine.put(&data_key(k), v).unwrap();
         }
         (r, base_data)

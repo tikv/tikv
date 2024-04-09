@@ -28,7 +28,10 @@ use crate::storage::{
 command! {
     FlashbackToVersion:
         cmd_ty => (),
-        display => "kv::command::flashback_to_version -> {} | {} {} | {:?}", (version, start_ts, commit_ts, ctx),
+        display => {
+            "kv::command::flashback_to_version -> {} | {} {} | {:?}",
+            (version, start_ts, commit_ts, ctx),
+        }
         content => {
             start_ts: TimeStamp,
             commit_ts: TimeStamp,
@@ -36,6 +39,10 @@ command! {
             start_key: Key,
             end_key: Option<Key>,
             state: FlashbackToVersionState,
+        }
+        in_heap => {
+            start_key,
+            end_key,
         }
 }
 
@@ -95,6 +102,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut reader =
             MvccReader::new_with_ctx(snapshot.clone(), Some(ScanMode::Forward), &self.ctx);
+        reader.set_allow_in_flashback(true);
         let mut txn = MvccTxn::new(TimeStamp::zero(), context.concurrency_manager);
         match self.state {
             FlashbackToVersionState::RollbackLock {
@@ -184,6 +192,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
             new_acquired_locks: vec![],
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status: vec![],
         })
     }
 }

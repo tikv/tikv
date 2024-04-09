@@ -11,6 +11,12 @@ lazy_static! {
         exponential_buckets(0.01, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref IMPORT_RPC_COUNT: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_import_rpc_count",
+        "Total number of import rpc",
+        &["type"],
+    )
+    .unwrap();
     pub static ref IMPORT_UPLOAD_CHUNK_BYTES: Histogram = register_histogram!(
         "tikv_import_upload_chunk_bytes",
         "Bucketed histogram of import upload chunk bytes",
