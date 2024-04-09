@@ -1,12 +1,128 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::cmp;
+use core::slice::SlicePattern;
+use std::{
+    cmp::{self, Ordering},
+    sync::Arc,
+};
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{BufMut, Bytes};
 use engine_traits::CacheRange;
-use skiplist_rs::KeyComparator;
-use tikv_util::codec::number::NumberEncoder;
 use txn_types::{Key, TimeStamp};
+
+use crate::{memory_controller::MemoryController, write_batch::MEM_CONTROLLER_OVERHEAD};
+
+/// The internal bytes used in the skiplist. See comments on
+/// `encode_internal_bytes`.
+#[derive(Debug)]
+pub struct InternalBytes {
+    bytes: Bytes,
+    // memory_limiter **must** be set when used as key/values being interted into skiplist as
+    // keys/values.
+    memory_controller: Option<Arc<MemoryController>>,
+}
+
+impl Drop for InternalBytes {
+    fn drop(&mut self) {
+        let size = self.bytes.len() + MEM_CONTROLLER_OVERHEAD;
+        let controller = self.memory_controller.take();
+        if let Some(controller) = controller {
+            // Reclaim the memory though the bytes have not been drop. This time gap should
+            // not matter.
+            controller.release(size);
+        }
+    }
+}
+
+impl InternalBytes {
+    pub fn from_bytes(bytes: Bytes) -> Self {
+        Self {
+            bytes,
+            memory_controller: None,
+        }
+    }
+
+    pub fn from_vec(vec: Vec<u8>) -> Self {
+        Self {
+            bytes: Bytes::from(vec),
+            memory_controller: None,
+        }
+    }
+
+    pub fn memory_controller_set(&self) -> bool {
+        self.memory_controller.is_some()
+    }
+
+    pub fn set_memory_controller(&mut self, controller: Arc<MemoryController>) {
+        self.memory_controller = Some(controller);
+    }
+
+    pub fn clone_bytes(&self) -> Bytes {
+        self.bytes.clone()
+    }
+
+    pub fn as_bytes(&self) -> &Bytes {
+        &self.bytes
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
+
+    pub fn same_user_key_with(&self, other: &InternalBytes) -> bool {
+        let InternalKey { user_key, .. } = decode_key(self.as_slice());
+        let InternalKey {
+            user_key: other_user_key,
+            ..
+        } = decode_key(other.as_slice());
+        user_key == other_user_key
+    }
+}
+
+impl PartialEq for InternalBytes {
+    fn eq(&self, other: &Self) -> bool {
+        self.bytes.eq(&other.bytes)
+    }
+}
+
+impl Eq for InternalBytes {}
+
+impl Ord for InternalBytes {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        let k1 = &self.bytes[..self.bytes.len() - ENC_KEY_SEQ_LENGTH];
+        let k2 = &other.bytes[..other.bytes.len() - ENC_KEY_SEQ_LENGTH];
+        let c = k1.cmp(k2);
+        if c != Ordering::Equal {
+            return c;
+        }
+
+        let n1 = u64::from_be_bytes(
+            self.bytes[(self.bytes.len() - ENC_KEY_SEQ_LENGTH)..]
+                .try_into()
+                .unwrap(),
+        );
+        let n2 = u64::from_be_bytes(
+            other.bytes[(other.bytes.len() - ENC_KEY_SEQ_LENGTH)..]
+                .try_into()
+                .unwrap(),
+        );
+
+        #[allow(clippy::comparison_chain)]
+        if n1 < n2 {
+            Ordering::Greater
+        } else if n1 > n2 {
+            Ordering::Less
+        } else {
+            Ordering::Equal
+        }
+    }
+}
+
+impl PartialOrd for InternalBytes {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ValueType {
@@ -31,7 +147,7 @@ impl TryFrom<u8> for ValueType {
 }
 
 pub struct InternalKey<'a> {
-    // key with mvcc version
+    // key with mvcc version in memory comparable format
     pub user_key: &'a [u8],
     pub v_type: ValueType,
     pub sequence: u64,
@@ -86,95 +202,58 @@ pub fn extract_user_key_and_suffix_u64(encoded_key: &[u8]) -> (&[u8], u64) {
 /// It follows the pattern of RocksDB, where the most 8 significant bits of u64
 /// will not used by sequence number.
 #[inline]
-pub fn encode_key_internal<T: BufMut>(
-    key: &[u8],
-    seq: u64,
-    v_type: ValueType,
-    f: impl FnOnce(usize) -> T,
-) -> T {
+pub fn encode_internal_bytes(key: &[u8], seq: u64, v_type: ValueType) -> InternalBytes {
     assert!(seq == u64::MAX || seq >> ((ENC_KEY_SEQ_LENGTH - 1) * 8) == 0);
-    let mut e = f(key.len() + ENC_KEY_SEQ_LENGTH);
+    let mut e = Vec::with_capacity(key.len() + ENC_KEY_SEQ_LENGTH);
     e.put(key);
     e.put_u64((seq << 8) | v_type as u64);
-    e
+    InternalBytes::from_vec(e)
+}
+
+/// encode mvcc user key with sequence number and value type
+#[inline]
+pub fn encode_key(key: &[u8], seq: u64, v_type: ValueType) -> InternalBytes {
+    encode_internal_bytes(key, seq, v_type)
 }
 
 #[inline]
-pub fn encode_key(key: &[u8], seq: u64, v_type: ValueType) -> Bytes {
-    let e = encode_key_internal::<BytesMut>(key, seq, v_type, BytesMut::with_capacity);
-    e.freeze()
+pub fn encode_seek_key(key: &[u8], seq: u64) -> InternalBytes {
+    encode_internal_bytes(key, seq, VALUE_TYPE_FOR_SEEK)
 }
 
 #[inline]
-pub fn encode_seek_key(key: &[u8], seq: u64, v_type: ValueType) -> Vec<u8> {
-    encode_key_internal::<Vec<_>>(key, seq, v_type, Vec::with_capacity)
+pub fn encode_seek_for_prev_key(key: &[u8], seq: u64) -> InternalBytes {
+    encode_internal_bytes(key, seq, VALUE_TYPE_FOR_SEEK_FOR_PREV)
 }
 
 // range keys deos not contain mvcc version and sequence number
 #[inline]
-pub fn encode_key_for_eviction(range: &CacheRange) -> (Vec<u8>, Vec<u8>) {
+pub fn encode_key_for_eviction(range: &CacheRange) -> (InternalBytes, InternalBytes) {
     // Both encoded_start and encoded_end should be the smallest key in the
     // respective of user key, so that the eviction covers all versions of the range
     // start and covers nothing of range end.
-    let mut encoded_start = Vec::with_capacity(range.start.len() + 16);
-    encoded_start.extend_from_slice(&range.start);
-    encoded_start.encode_u64_desc(u64::MAX).unwrap();
-    encoded_start.put_u64((u64::MAX << 8) | VALUE_TYPE_FOR_SEEK as u64);
 
-    let mut encoded_end = Vec::with_capacity(range.end.len() + 16);
-    encoded_end.extend_from_slice(&range.end);
-    encoded_end.encode_u64_desc(u64::MAX).unwrap();
-    encoded_end.put_u64((u64::MAX << 8) | VALUE_TYPE_FOR_SEEK as u64);
+    // we could avoid one clone, but this code is clearer.
+    let start_mvcc_key = Key::from_encoded(range.start.to_vec())
+        .append_ts(TimeStamp::max())
+        .into_encoded();
+    let encoded_start = encode_key(&start_mvcc_key, u64::MAX, VALUE_TYPE_FOR_SEEK);
+
+    let end_mvcc_key = Key::from_encoded(range.end.to_vec())
+        .append_ts(TimeStamp::max())
+        .into_encoded();
+    let encoded_end = encode_key(&end_mvcc_key, u64::MAX, VALUE_TYPE_FOR_SEEK);
 
     (encoded_start, encoded_end)
 }
 
+// mvcc_prefix is already mem-comparison encodede
 #[inline]
-pub fn encoding_for_filter(mvcc_prefix: &[u8], start_ts: TimeStamp) -> Vec<u8> {
-    let mut default_key = Vec::with_capacity(mvcc_prefix.len() + 2 * ENC_KEY_SEQ_LENGTH);
-    default_key.extend_from_slice(mvcc_prefix);
-    let mut default_key = Key::from_encoded(default_key)
+pub fn encoding_for_filter(mvcc_prefix: &[u8], start_ts: TimeStamp) -> InternalBytes {
+    let default_key = Key::from_encoded_slice(mvcc_prefix)
         .append_ts(start_ts)
         .into_encoded();
-    default_key.put_u64((u64::MAX << 8) | VALUE_TYPE_FOR_SEEK as u64);
-    default_key
-}
-
-#[derive(Default, Debug, Clone, Copy)]
-pub struct InternalKeyComparator {}
-
-impl InternalKeyComparator {
-    fn same_key(lhs: &[u8], rhs: &[u8]) -> bool {
-        let k_1 = decode_key(lhs);
-        let k_2 = decode_key(rhs);
-        k_1.user_key == k_2.user_key
-    }
-}
-
-impl KeyComparator for InternalKeyComparator {
-    fn compare_key(&self, lhs: &[u8], rhs: &[u8]) -> cmp::Ordering {
-        let (k_1, s_1) = extract_user_key_and_suffix_u64(lhs);
-        let (k_2, s_2) = extract_user_key_and_suffix_u64(rhs);
-        let r = k_1.cmp(k_2);
-        if r.is_eq() {
-            match s_1.cmp(&s_2) {
-                cmp::Ordering::Greater => {
-                    return cmp::Ordering::Less;
-                }
-                cmp::Ordering::Less => {
-                    return cmp::Ordering::Greater;
-                }
-                cmp::Ordering::Equal => {
-                    return cmp::Ordering::Equal;
-                }
-            }
-        }
-        r
-    }
-
-    fn same_key(&self, lhs: &[u8], rhs: &[u8]) -> bool {
-        InternalKeyComparator::same_key(lhs, rhs)
-    }
+    encode_key(&default_key, u64::MAX, VALUE_TYPE_FOR_SEEK)
 }
 
 #[cfg(test)]
@@ -200,13 +279,11 @@ pub fn construct_value(i: u64, j: u64) -> String {
 #[cfg(test)]
 mod tests {
     use bytes::BufMut;
-    use skiplist_rs::KeyComparator;
 
-    use super::{InternalKeyComparator, ValueType};
-    use crate::keys::encode_key;
+    use crate::keys::{encode_key, ValueType};
 
     fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {
-        let k = format!("k{:08}", i);
+        let k = format!("zk{:08}", i);
         let mut key = k.as_bytes().to_vec();
         // mvcc version should be make bit-wise reverse so that k-100 is less than k-99
         key.put_u64(!mvcc);
@@ -215,35 +292,34 @@ mod tests {
 
     #[test]
     fn test_compare_key() {
-        let c = InternalKeyComparator::default();
         let k = construct_key(1, 10);
         // key1: k1_10_10_val
         let key1 = encode_key(&k, 10, ValueType::Value);
         // key2: k1_10_10_del
         let key2 = encode_key(&k, 10, ValueType::Deletion);
-        assert!(c.compare_key(&key1, &key2).is_le());
+        assert!(key1.cmp(&key2).is_le());
 
         // key2: k1_10_0_val
         let key2 = encode_key(&k, 0, ValueType::Value);
-        assert!(c.compare_key(&key1, &key2).is_le());
+        assert!(key1.cmp(&key2).is_le());
 
         // key1: k1_10_MAX_val
         let key1 = encode_key(&k, u64::MAX, ValueType::Value);
-        assert!(c.compare_key(&key1, &key2).is_le());
+        assert!(key1.cmp(&key2).is_le());
 
         let k = construct_key(1, 0);
         // key2: k1_0_10_val
         let key2 = encode_key(&k, 10, ValueType::Value);
-        assert!(c.compare_key(&key1, &key2).is_le());
+        assert!(key1.cmp(&key2).is_le());
 
         // key1: k1_MAX_0_val
         let k = construct_key(1, u64::MAX);
         let key1 = encode_key(&k, 0, ValueType::Value);
-        assert!(c.compare_key(&key1, &key2).is_le());
+        assert!(key1.cmp(&key2).is_le());
 
         let k = construct_key(2, u64::MAX);
         // key2: k2_MAX_MAX_val
         let key2 = encode_key(&k, u64::MAX, ValueType::Value);
-        assert!(c.compare_key(&key1, &key2).is_le());
+        assert!(key1.cmp(&key2).is_le());
     }
 }

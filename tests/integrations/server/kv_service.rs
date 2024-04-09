@@ -3082,7 +3082,12 @@ fn test_pessimistic_rollback_with_read_first() {
 #[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_pipelined_dml_flush() {
     let (_cluster, client, ctx) = new_cluster();
-    let (k, v) = (b"key".to_vec(), b"value".to_vec());
+    // k1 is put
+    let (k1, v) = (b"key".to_vec(), b"value".to_vec());
+    // k2 is deletion
+    let k2 = b"key2".to_vec();
+    // k3 is not touched
+    let k3 = b"key3".to_vec();
     let pk = b"primary".to_vec();
     let mut flush_req = FlushRequest::default();
     flush_req.set_mutations(
@@ -3095,8 +3100,14 @@ fn test_pipelined_dml_flush() {
             },
             Mutation {
                 op: Op::Put,
-                key: k.clone(),
+                key: k1.clone(),
                 value: v.clone(),
+                ..Default::default()
+            },
+            Mutation {
+                op: Op::Del,
+                key: k2.clone(),
+                value: vec![],
                 ..Default::default()
             },
         ]
@@ -3112,28 +3123,30 @@ fn test_pipelined_dml_flush() {
 
     let mut batch_get_req = BufferBatchGetRequest::default();
     batch_get_req.set_context(ctx.clone());
-    batch_get_req.set_keys(vec![k.clone()].into());
+    batch_get_req.set_keys(vec![k1.clone(), k2.clone(), k3.clone()].into());
     batch_get_req.set_version(1);
     let batch_get_resp = client.kv_buffer_batch_get(&batch_get_req).unwrap();
     assert!(!batch_get_resp.has_region_error());
     let pairs = batch_get_resp.get_pairs();
-    assert_eq!(pairs.len(), 1);
+    assert_eq!(pairs.len(), 2);
     assert!(!pairs[0].has_error());
-    assert_eq!(pairs[0].get_key(), k.as_slice());
+    assert_eq!(pairs[0].get_key(), k1.as_slice());
     assert_eq!(pairs[0].get_value(), v.as_slice());
+    assert_eq!(pairs[1].get_key(), k2.as_slice());
+    assert!(pairs[1].get_value().is_empty());
 
     let mut commit_req = CommitRequest::default();
     commit_req.set_context(ctx.clone());
     commit_req.set_start_version(1);
     commit_req.set_commit_version(2);
-    commit_req.set_keys(vec![pk.clone(), k.clone()].into());
+    commit_req.set_keys(vec![pk.clone(), k1.clone()].into());
     let commit_resp = client.kv_commit(&commit_req).unwrap();
     assert!(!commit_resp.has_region_error());
     assert!(!commit_resp.has_error(), "{:?}", commit_resp.get_error());
 
     let mut get_req = GetRequest::default();
     get_req.set_context(ctx);
-    get_req.set_key(k);
+    get_req.set_key(k1);
     get_req.set_version(10);
     let get_resp = client.kv_get(&get_req).unwrap();
     assert!(!get_resp.has_region_error());

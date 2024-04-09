@@ -31,7 +31,7 @@ use engine_rocks::{
     raw::{
         BlockBasedOptions, Cache, ChecksumType, CompactionPriority, ConcurrentTaskLimiter,
         DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode, Env,
-        PrepopulateBlockCache, RateLimiter, WriteBufferManager,
+        LRUCacheOptions, PrepopulateBlockCache, RateLimiter, WriteBufferManager,
     },
     util::{
         FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
@@ -131,19 +131,18 @@ fn bloom_filter_ratio(et: EngineType) -> f64 {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct TitanCfConfig {
-    #[online_config(skip)]
     pub min_blob_size: Option<ReadableSize>,
-    #[online_config(skip)]
     pub blob_file_compression: CompressionType,
     #[online_config(skip)]
     pub zstd_dict_size: ReadableSize,
+    #[online_config(skip)]
+    pub shared_blob_cache: bool,
     #[online_config(skip)]
     pub blob_cache_size: ReadableSize,
     #[online_config(skip)]
     pub min_gc_batch_size: ReadableSize,
     #[online_config(skip)]
     pub max_gc_batch_size: ReadableSize,
-    #[online_config(skip)]
     pub discardable_ratio: f64,
     #[online_config(skip)]
     pub merge_small_file_threshold: ReadableSize,
@@ -177,6 +176,7 @@ impl Default for TitanCfConfig {
                                   * The logic is in `optional_default_cfg_adjust_with` */
             blob_file_compression: CompressionType::Zstd,
             zstd_dict_size: ReadableSize::kb(0),
+            shared_blob_cache: true,
             blob_cache_size: ReadableSize::mb(0),
             min_gc_batch_size: ReadableSize::mb(16),
             max_gc_batch_size: ReadableSize::mb(64),
@@ -200,7 +200,7 @@ impl TitanCfConfig {
         }
     }
 
-    fn build_opts(&self) -> RocksTitanDbOptions {
+    fn build_opts(&self, cache: &Cache) -> RocksTitanDbOptions {
         let mut opts = RocksTitanDbOptions::new();
         opts.set_min_blob_size(self.min_blob_size.unwrap_or(DEFAULT_MIN_BLOB_SIZE).0);
         opts.set_blob_file_compression(self.blob_file_compression.into());
@@ -213,7 +213,14 @@ impl TitanCfConfig {
             self.zstd_dict_size.0 as i32,       // zstd dict size
             self.zstd_dict_size.0 as i32 * 100, // zstd sample size
         );
-        opts.set_blob_cache(self.blob_cache_size.0 as usize, -1, false, 0.0);
+        if self.shared_blob_cache {
+            opts.set_blob_cache(cache);
+        } else {
+            let mut cache_opts = LRUCacheOptions::new();
+            cache_opts.set_capacity(self.blob_cache_size.0 as usize);
+            let cache = Cache::new_lru_cache(cache_opts);
+            opts.set_blob_cache(&cache);
+        }
         opts.set_min_gc_batch_size(self.min_gc_batch_size.0);
         opts.set_max_gc_batch_size(self.max_gc_batch_size.0);
         opts.set_discardable_ratio(self.discardable_ratio);
@@ -572,9 +579,6 @@ macro_rules! write_into_metrics {
             .with_label_values(&[$tag, "titan_min_blob_size"])
             .set($cf.titan.min_blob_size.unwrap_or_default().0 as f64);
         $metrics
-            .with_label_values(&[$tag, "titan_blob_cache_size"])
-            .set($cf.titan.blob_cache_size.0 as f64);
-        $metrics
             .with_label_values(&[$tag, "titan_min_gc_batch_size"])
             .set($cf.titan.min_gc_batch_size.0 as f64);
         $metrics
@@ -872,7 +876,7 @@ impl DefaultCfConfig {
                 }
             }
         }
-        cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts(&shared.cache));
         if let Some(write_buffer_manager) = shared.write_buffer_managers.get(CF_DEFAULT) {
             cf_opts.set_write_buffer_manager(write_buffer_manager);
         }
@@ -1000,7 +1004,7 @@ impl WriteCfConfig {
                 )
                 .unwrap();
         }
-        cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts(&shared.cache));
         if let Some(write_buffer_manager) = shared.write_buffer_managers.get(CF_WRITE) {
             cf_opts.set_write_buffer_manager(write_buffer_manager);
         }
@@ -1098,7 +1102,7 @@ impl LockCfConfig {
                 .set_compaction_filter_factory("range_filter_factory", factory.clone())
                 .unwrap();
         }
-        cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts(&shared.cache));
         if let Some(write_buffer_manager) = shared.write_buffer_managers.get(CF_LOCK) {
             cf_opts.set_write_buffer_manager(write_buffer_manager);
         }
@@ -1181,7 +1185,7 @@ impl RaftCfConfig {
             .set_prefix_extractor("NoopSliceTransform", NoopSliceTransform)
             .unwrap();
         cf_opts.set_memtable_prefix_bloom_size_ratio(0.1);
-        cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts(&shared.cache));
         cf_opts
     }
 }
@@ -1774,7 +1778,7 @@ impl RaftDefaultCfConfig {
         cf_opts
             .set_memtable_insert_hint_prefix_extractor("RaftPrefixSliceTransform", f)
             .unwrap();
-        cf_opts.set_titan_cf_options(&self.titan.build_opts());
+        cf_opts.set_titan_cf_options(&self.titan.build_opts(cache));
         cf_opts
     }
 }
@@ -6902,6 +6906,7 @@ mod tests {
         cfg.raftdb.titan.max_background_gc = default_cfg.raftdb.titan.max_background_gc;
         cfg.backup.num_threads = default_cfg.backup.num_threads;
         cfg.log_backup.num_threads = default_cfg.log_backup.num_threads;
+        cfg.raft_store.cmd_batch_concurrent_ready_max_count = 1;
 
         // There is another set of config values that we can't directly compare:
         // When the default values are `None`, but are then resolved to `Some(_)` later

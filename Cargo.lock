@@ -2359,9 +2359,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.3.24"
+version = "0.3.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb2c4422095b67ee78da96fbb51a4cc413b3b25883c7717ff7ca1ab31022c9c9"
+checksum = "81fe527a889e1532da5c525686d96d4c2e74cdd345badf8dfef9f6b39dd5f5e8"
 dependencies = [
  "bytes",
  "fnv",
@@ -2544,6 +2544,9 @@ version = "0.0.1"
 dependencies = [
  "engine_rocks",
  "engine_traits",
+ "lazy_static",
+ "prometheus",
+ "prometheus-static-metric",
  "region_cache_memory_engine",
  "tempfile",
  "tikv_util",
@@ -2909,7 +2912,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#05fc3f80ed50bac9932ca238e9dfbaadb7390965"
+source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -2928,7 +2931,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#05fc3f80ed50bac9932ca238e9dfbaadb7390965"
+source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4138,7 +4141,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#f60fb9e143e5b93f7db8917ea376cda04effcbb4"
+source = "git+https://github.com/tikv/raft-rs?branch=master#a76fb6ef2cbd002ec10d63a2ac68b4a20b20fe3e"
 dependencies = [
  "bytes",
  "fxhash",
@@ -4197,7 +4200,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#f60fb9e143e5b93f7db8917ea376cda04effcbb4"
+source = "git+https://github.com/tikv/raft-rs?branch=master#a76fb6ef2cbd002ec10d63a2ac68b4a20b20fe3e"
 dependencies = [
  "bytes",
  "protobuf",
@@ -4588,15 +4591,30 @@ dependencies = [
  "bytes",
  "collections",
  "crossbeam",
+ "dashmap",
  "engine_rocks",
  "engine_traits",
  "fail",
+ "futures 0.3.15",
+ "hex 0.4.2",
  "keys",
+ "kvproto",
+ "lazy_static",
  "log_wrappers",
+ "parking_lot 0.12.1",
+ "pd_client",
+ "prometheus",
+ "prometheus-static-metric",
+ "security",
+ "serde",
+ "serde_derive",
+ "serde_json",
  "skiplist-rs",
  "slog",
  "slog-global",
  "tempfile",
+ "test_pd",
+ "test_pd_client",
  "tikv_util",
  "txn_types",
  "yatp",
@@ -4785,7 +4803,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#05fc3f80ed50bac9932ca238e9dfbaadb7390965"
+source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
@@ -5383,17 +5401,10 @@ checksum = "fa8f3741c7372e75519bd9346068370c9cdaabcc1f9599cbcf2a2719352286b7"
 [[package]]
 name = "skiplist-rs"
 version = "0.1.0"
-source = "git+https://github.com/tikv/skiplist-rs.git?branch=main#a9d27501ddfc17d6df9afababcaa6280f1af9e77"
+source = "git+https://github.com/tikv/skiplist-rs.git?branch=main#d158a040783715612b80785e03d239ba5deb8960"
 dependencies = [
- "bytes",
  "crossbeam-epoch",
  "crossbeam-utils",
- "fail",
- "rand 0.8.5",
- "scopeguard",
- "slog",
- "tikv-jemalloc-ctl",
- "tikv-jemallocator",
 ]
 
 [[package]]
@@ -6426,7 +6437,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "8.0.0-alpha"
+version = "8.1.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
@@ -7067,7 +7078,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if 0.1.10",
  "static_assertions",
 ]
 

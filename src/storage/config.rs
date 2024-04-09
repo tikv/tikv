@@ -290,6 +290,8 @@ pub struct BlockCacheConfig {
     #[online_config(skip)]
     pub high_pri_pool_ratio: f64,
     #[online_config(skip)]
+    pub low_pri_pool_ratio: f64,
+    #[online_config(skip)]
     pub memory_allocator: Option<String>,
 }
 
@@ -301,6 +303,7 @@ impl Default for BlockCacheConfig {
             num_shard_bits: 6,
             strict_capacity_limit: false,
             high_pri_pool_ratio: 0.8,
+            low_pri_pool_ratio: 0.2,
             memory_allocator: Some(String::from("nodump")),
         }
     }
@@ -326,6 +329,7 @@ impl BlockCacheConfig {
         cache_opts.set_num_shard_bits(self.adjust_shard_bits(capacity) as c_int);
         cache_opts.set_strict_capacity_limit(self.strict_capacity_limit);
         cache_opts.set_high_pri_pool_ratio(self.high_pri_pool_ratio);
+        cache_opts.set_low_pri_pool_ratio(self.low_pri_pool_ratio);
         if let Some(allocator) = self.new_memory_allocator() {
             cache_opts.set_memory_allocator(allocator);
         }

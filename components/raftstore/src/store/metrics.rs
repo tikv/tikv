@@ -489,6 +489,7 @@ lazy_static! {
             exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
         ).unwrap();
 
+
     pub static ref STORE_APPLY_LOG_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_apply_log_duration_seconds",
@@ -553,6 +554,19 @@ lazy_static! {
             "tikv_raftstore_propose_log_size",
             "Bucketed histogram of peer proposing log size.",
             exponential_buckets(8.0, 2.0, 22).unwrap()
+        ).unwrap();
+
+    pub static ref STORE_APPLY_KEY_SIZE_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_key_size",
+            "Bucketed histogram of apply key size.",
+            exponential_buckets(8.0, 2.0, 17).unwrap()
+        ).unwrap();
+    pub static ref STORE_APPLY_VALUE_SIZE_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_value_size",
+            "Bucketed histogram of apply value size.",
+            exponential_buckets(8.0, 2.0, 23).unwrap()
         ).unwrap();
 
     pub static ref REGION_HASH_COUNTER_VEC: IntCounterVec =
@@ -765,6 +779,17 @@ lazy_static! {
         "Histogram of query",
         &["type"],
         exponential_buckets(8.0, 2.0, 24).unwrap()
+    ).unwrap();
+
+    pub static ref RAFT_APPLY_AHEAD_PERSIST_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_raft_apply_ahead_of_persist",
+        "Histogram of the raft log lag between persisted index and applied index",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    ).unwrap();
+
+    pub static ref RAFT_DISABLE_UNPERSISTED_APPLY_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_raft_disable_unpersisted_apply",
+        "The number of regions that disable apply unpersisted raft log."
     ).unwrap();
 
     pub static ref RAFT_ENTRIES_CACHES_GAUGE: IntGauge = register_int_gauge!(

@@ -29,9 +29,9 @@ use batch_system::{
 use collections::{HashMap, HashMapEntry, HashSet};
 use crossbeam::channel::{TryRecvError, TrySendError};
 use engine_traits::{
-    util::SequenceNumber, DeleteStrategy, KvEngine, Mutable, PerfContext, PerfContextKind,
-    RaftEngine, RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo, WriteBatch,
-    WriteOptions, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    util::SequenceNumber, CacheRange, DeleteStrategy, KvEngine, Mutable, PerfContext,
+    PerfContextKind, RaftEngine, RaftEngineReadOnly, Range as EngineRange, Snapshot, SstMetaInfo,
+    WriteBatch, WriteOptions, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
 use fail::fail_point;
 use health_controller::types::LatencyInspector;
@@ -456,6 +456,8 @@ where
     pending_latency_inspect: Vec<LatencyInspector>,
     apply_wait: LocalHistogram,
     apply_time: LocalHistogram,
+    key_size: LocalHistogram,
+    value_size: LocalHistogram,
 
     key_buffer: Vec<u8>,
 
@@ -524,6 +526,8 @@ where
             pending_latency_inspect: vec![],
             apply_wait: APPLY_TASK_WAIT_TIME_HISTOGRAM.local(),
             apply_time: APPLY_TIME_HISTOGRAM.local(),
+            key_size: STORE_APPLY_KEY_SIZE_HISTOGRAM.local(),
+            value_size: STORE_APPLY_VALUE_SIZE_HISTOGRAM.local(),
             key_buffer: Vec::with_capacity(1024),
             disable_wal: false,
             uncommitted_res_count: 0,
@@ -539,6 +543,8 @@ where
     pub fn prepare_for(&mut self, delegate: &mut ApplyDelegate<EK>) {
         self.applied_batch
             .push_batch(&delegate.observe_info, delegate.region.get_id());
+        let range = CacheRange::from_region(&delegate.region);
+        self.kv_wb.prepare_for_range(range);
     }
 
     /// Commits all changes have done for delegate. `persistent` indicates
@@ -651,6 +657,8 @@ where
         }
         self.apply_time.flush();
         self.apply_wait.flush();
+        self.key_size.flush();
+        self.value_size.flush();
         let res_count = self.uncommitted_res_count;
         self.uncommitted_res_count = 0;
         if let Some(seqno) = seqno {
@@ -1821,6 +1829,7 @@ where
     EK: KvEngine,
 {
     fn handle_put(&mut self, ctx: &mut ApplyContext<EK>, req: &Request) -> Result<()> {
+        fail::fail_point!("on_handle_put");
         PEER_WRITE_CMD_COUNTER.put.inc();
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
@@ -1834,6 +1843,8 @@ where
 
         self.metrics.size_diff_hint += key.len() as i64;
         self.metrics.size_diff_hint += value.len() as i64;
+        ctx.key_size.observe(key.len() as f64);
+        ctx.value_size.observe(value.len() as f64);
         if !req.get_put().get_cf().is_empty() {
             let cf = req.get_put().get_cf();
             // TODO: don't allow write preseved cfs.
@@ -3784,6 +3795,9 @@ where
 
 impl<EK: KvEngine> ResourceMetered for Msg<EK> {
     fn consume_resource(&self, resource_ctl: &Arc<ResourceController>) -> Option<String> {
+        if !resource_ctl.is_customized() {
+            return None;
+        }
         match self {
             Msg::Apply { apply, .. } => {
                 let mut dominant_group = "".to_owned();

@@ -723,6 +723,21 @@ def Server() -> RowPanel:
     )
     layout.row(
         [
+            heatmap_panel(
+                title="Written key size",
+                description="The key size for every put of apply worker",
+                metric="tikv_raftstore_apply_key_size_bucket",
+                yaxis=yaxis(format=UNITS.BYTES_IEC),
+            ),
+            heatmap_panel(
+                title="Written value size for every put of apply worker",
+                metric="tikv_raftstore_apply_value_size_bucket",
+                yaxis=yaxis(format=UNITS.BYTES_IEC),
+            ),
+        ]
+    )
+    layout.row(
+        [
             graph_panel(
                 title="Hibernate Peers",
                 description="The number of peers in hibernated state",
@@ -4017,6 +4032,58 @@ def CoprocessorDetail() -> RowPanel:
     return layout.row_panel
 
 
+def RangeCacheMemoryEngine() -> RowPanel:
+    layout = Layout(title="Range Cache Memory Engine")
+    layout.row(
+        [
+            graph_panel(
+                title="Snapshot Type Count",
+                description="Count of each snapshot type",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_snapshot_type_count",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Snapshot Failed Reason",
+                description="Reasons for why rance cache snapshot is not acquired",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_range_cache_snapshot_acquire_failed_reason_count",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="GC Filter",
+                description="Rang cache engine garbage collection information",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_range_cache_memory_engine_gc_filtered",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    return layout.row_panel
+
+
 def Threads() -> RowPanel:
     layout = Layout(title="Threads")
     layout.row(
@@ -5858,15 +5925,21 @@ def Titan() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Live blob size",
+                title="Blob cache size",
+                description="The blob cache size.",
                 yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 targets=[
                     target(
-                        expr=expr_sum(
-                            "tikv_engine_titandb_live_blob_size",
-                            label_selectors=['db="$titan_db"'],
+                        expr=expr_topk(
+                            20,
+                            "%s"
+                            % expr_avg(
+                                "tikv_engine_blob_cache_size_bytes",
+                                label_selectors=['db="$titan_db"'],
+                                by_labels=["cf", "instance"],
+                            ),
                         ),
-                        legend_format="live blob size",
+                        legend_format="{{instance}}-{{cf}}",
                     ),
                 ],
             ),
@@ -5960,25 +6033,6 @@ def Titan() -> RowPanel:
                             by_labels=[],  # override default by instance.
                         ),
                         legend_format="max",
-                    ),
-                ],
-            ),
-            graph_panel(
-                title="Blob cache size",
-                description="The blob cache size.",
-                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
-                targets=[
-                    target(
-                        expr=expr_topk(
-                            20,
-                            "%s"
-                            % expr_avg(
-                                "tikv_engine_blob_cache_size_bytes",
-                                label_selectors=['db="$titan_db"'],
-                                by_labels=["cf", "instance"],
-                            ),
-                        ),
-                        legend_format="{{instance}}-{{cf}}",
                     ),
                 ],
             ),
@@ -8765,6 +8819,7 @@ dashboard = Dashboard(
         RaftEngine(),
         RocksDB(),
         Titan(),
+        RangeCacheMemoryEngine(),
         # Scheduler and Read Pools
         FlowControl(),
         Scheduler(),
