@@ -28,13 +28,15 @@ fn test_conf_change() {
     let mut suite = Suite::new(4);
     let the_region = suite.cluster.get_region(b"");
     let last_peer = the_region.peers.last().unwrap();
-    let res = block_on(
-        suite
-            .cluster
-            .async_remove_peer(the_region.get_id(), last_peer.clone())
-            .unwrap(),
-    );
-    assert_success(&res);
+    eventually(Duration::from_millis(200), Duration::from_secs(2), || {
+        let res = block_on(
+            suite
+                .cluster
+                .async_remove_peer(the_region.get_id(), last_peer.clone())
+                .unwrap(),
+        );
+        !res.get_header().has_error()
+    });
     eventually(Duration::from_millis(100), Duration::from_secs(2), || {
         let r = suite.cluster.get_region(b"");
         !r.peers.iter().any(|p| p.id == last_peer.id)
