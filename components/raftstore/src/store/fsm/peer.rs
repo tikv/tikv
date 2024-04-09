@@ -1658,13 +1658,18 @@ where
             return;
         }
 
-        // apply is ahead of raft, need to force raft commit to applied index.
+        // The applied index is ahead of raft last index, that means some raft logs are
+        // missing. schedule a UnsafeForceCompact task to let ApplyFsm advance
+        // the committed index and compact index to the applied index so raft
+        // and apply state are compatible with each other. This can happen when
+        // feature "apply unpersisted raft log" is enable(by setting config
+        // `raftstore.max-apply-unpersisted-log-limit` > 0).
         if self.fsm.peer.raft_group.raft.r.raft_log.last_index()
             < self.fsm.peer.raft_group.raft.r.raft_log.applied
         {
             self.ctx.apply_router.schedule_task(
                 self.region_id(),
-                ApplyTask::ForceCompact {
+                ApplyTask::UnsafeForceCompact {
                     region_id: self.region_id(),
                     compact_index: self.fsm.peer.raft_group.raft.r.raft_log.applied,
                     term: self.fsm.peer.raft_group.raft.r.term,
@@ -5273,14 +5278,12 @@ where
                         self.register_pull_voter_replicated_index_tick();
                     }
                 }
-                ExecResult::ForceCompact { apply_state } => {
+                ExecResult::UnsafeForceCompact { apply_state } => {
                     let last_index = apply_state.get_truncated_state().index;
                     let first_index = self.fsm.peer.raft_group.raft.r.raft_log.first_index();
 
                     {
                         let peer_store = self.fsm.peer.mut_store();
-                        // self.on_ready_compact_log(first_index,
-                        // apply_state.get_truncated_state().clone());
                         peer_store.set_apply_state(apply_state);
                         peer_store.clear_entry_cache_warmup_state();
                         peer_store.compact_entry_cache(last_index + 1);

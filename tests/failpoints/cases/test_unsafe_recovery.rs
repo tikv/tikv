@@ -553,8 +553,8 @@ fn test_unsafe_recovery_rollback_merge() {
     fail::remove("on_schedule_merge_ret_err");
 }
 
-// test the compatibility between apply before perisist with unsafe recovery.
-// current only raftstore is supported.
+// Test the compatibility between apply unperisisted raft log with unsafe
+// recovery. Currently only raftstore supports this feature.
 #[test]
 fn test_unsafe_recovery_apply_before_persist() {
     let mut cluster = new_node_cluster(0, 5);
@@ -715,6 +715,6 @@ fn test_unsafe_recovery_apply_before_persist() {
     }
     assert_eq!(demoted, true);
 
-    // test after recovery, the store 2 also contains all data.
+    // Test after recovery, the store 2 should also contain all the data.
     must_get_equal(&cluster.get_engine(2), b"k29", b"v3");
 }
