@@ -412,11 +412,10 @@ impl<W: AsyncWrite> AsyncWrite for CrypterWriter<W> {
             }
         };
 
-        // All encrypted content must be written. So we are using a buffered write.
-        // Generally, a write will be "committed" to the buffer firstly if it is ready.
-        // "Commit" here means the content will eventually written, so once it is
-        // "committed", we return `Ok(buf.len())` to the caller, and we will flush the
-        // content to the underlying stream at next call to `poll_write` or `flush`.
+        // All encrypted content must be written. The write uses an internal buffer to
+        // store the encrypted content. For async writing, the write may be
+        // suspended. We need a status to record whether we have already encrypted
+        // something.
         loop {
             match crypter.async_write {
                 AsyncWriteState::Consuming { count } => {
