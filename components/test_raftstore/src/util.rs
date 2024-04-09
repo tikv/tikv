@@ -694,7 +694,7 @@ where
     }
     let factory = builder.build();
     let disk_engine = factory.create_shared_db(dir.path()).unwrap();
-    let kv_engine: EK = KvEngineBuilder::build(disk_engine);
+    let kv_engine: EK = KvEngineBuilder::build(disk_engine, None);
     let engines = Engines::new(kv_engine, raft_engine);
     (
         engines,

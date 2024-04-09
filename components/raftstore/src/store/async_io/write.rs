@@ -289,6 +289,9 @@ where
     ER: RaftEngine,
 {
     fn consume_resource(&self, resource_ctl: &Arc<ResourceController>) -> Option<String> {
+        if !resource_ctl.is_customized() {
+            return None;
+        }
         match self {
             WriteMsg::WriteTask(t) => {
                 let mut dominant_group = "".to_owned();
