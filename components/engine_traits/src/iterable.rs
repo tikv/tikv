@@ -121,6 +121,8 @@ pub trait IterMetricsCollector {
     fn internal_delete_skipped_count(&self) -> usize;
 
     fn internal_key_skipped_count(&self) -> usize;
+
+    // todo: add more metrics related methods when needed.
 }
 
 pub trait MetricsExt {
