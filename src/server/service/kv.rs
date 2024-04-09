@@ -1314,7 +1314,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                        let resp = future_get(storage, req)
                             .map_ok(oneof!(batch_commands_response::response::Cmd::Get))
                             .map_err(|e| {GRPC_MSG_FAIL_COUNTER.kv_get.inc(); e});
-                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get, source,resource_group_priority);
+                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get, source, resource_group_priority);
                     }
                 },
                 Some(batch_commands_request::request::Cmd::RawGet(req)) => {
@@ -1338,7 +1338,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                        let resp = future_raw_get(storage, req)
                             .map_ok(oneof!(batch_commands_response::response::Cmd::RawGet))
                             .map_err(|e| {GRPC_MSG_FAIL_COUNTER.raw_get.inc(); e});
-                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get, source,resource_group_priority);
+                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get, source, resource_group_priority);
                     }
                 },
                 Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
@@ -1359,7 +1359,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                             resp.map(oneof!(batch_commands_response::response::Cmd::Coprocessor))
                         })
                         .map_err(|e| {GRPC_MSG_FAIL_COUNTER.coprocessor.inc(); e});
-                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::coprocessor, source,resource_group_priority);
+                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::coprocessor, source, resource_group_priority);
                 },
                 Some(batch_commands_request::request::Cmd::Empty(req)) => {
                     let begin_instant = Instant::now();
@@ -1395,7 +1395,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     let resp = $future_fn($($arg,)* req)
                         .map_ok(oneof!(batch_commands_response::response::Cmd::$cmd))
                         .map_err(|e| {GRPC_MSG_FAIL_COUNTER.$metric_name.inc(); e});
-                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::$metric_name, source,resource_group_priority);
+                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::$metric_name, source, resource_group_priority);
                 })*
                 Some(batch_commands_request::request::Cmd::Import(_)) => unimplemented!(),
             }
@@ -1431,6 +1431,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
         RawCoprocessor, future_raw_coprocessor(copr_v2, storage), coprocessor;
         PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
         PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
+        RequestHealthFeedback, future_request_health_feedback(), request_health_feedback;
     }
 
     Ok(())
@@ -1503,6 +1504,14 @@ async fn future_handle_empty(
             .await;
     }
     Ok(res)
+}
+
+fn future_request_health_feedback(
+    _req: RequestHealthFeedbackRequest,
+) -> impl Future<Output = ServerResult<RequestHealthFeedbackResponse>> {
+    // This function is simply noop. Attaching health feedback info will be done
+    // when generating the batch response in batch_commands stream.
+    std::future::ready(Ok(RequestHealthFeedbackResponse::default()))
 }
 
 fn future_get<E: Engine, L: LockManager, F: KvFormat>(
@@ -2575,10 +2584,29 @@ impl HealthFeedbackAttacher {
         }
     }
 
+    fn has_request_health_feedback(resp: &BatchCommandsResponse) -> bool {
+        for response in resp.get_responses().iter().map(|r| &r.cmd) {
+            if matches!(
+                response,
+                Some(BatchCommandsResponse_Response_oneof_cmd::RequestHealthFeedback(_))
+            ) {
+                return true;
+            }
+        }
+        false
+    }
+
     fn attach_if_needed(&mut self, resp: &mut BatchCommandsResponse) {
-        let feedback_interval = match self.feedback_interval {
-            Some(i) => i,
-            None => return,
+        // When the health feedback info is explicitly requested, ignore the configured
+        // feedback interval.
+        let is_explicitly_requested = Self::has_request_health_feedback(resp);
+        let feedback_interval = if is_explicitly_requested {
+            Duration::from_millis(0)
+        } else {
+            match self.feedback_interval {
+                Some(i) => i,
+                None => return,
+            }
         };
 
         let now = Instant::now_coarse();
@@ -2688,8 +2716,42 @@ mod tests {
         a.attach_if_needed(&mut resp);
         assert!(resp.has_health_feedback());
         assert_eq!(resp.get_health_feedback().get_store_id(), 1);
-        // Seq no increased.
+        // seq_no increased.
         assert_eq!(resp.get_health_feedback().get_feedback_seq_no(), 2);
+        assert_eq!(resp.get_health_feedback().get_slow_score(), 50);
+
+        // Do not skip if feedback info is explicitly requested, i.e.
+        // `RequestHealthFeedback` request is received from the client.
+        let resp_with_request_health_feedback = || {
+            let mut resp = BatchCommandsResponse::default();
+            let mut resp_item = BatchCommandsResponseResponse::default();
+            resp_item.cmd = Some(
+                BatchCommandsResponse_Response_oneof_cmd::RequestHealthFeedback(
+                    RequestHealthFeedbackResponse::default(),
+                ),
+            );
+            resp.responses.push(resp_item);
+            resp
+        };
+        resp = resp_with_request_health_feedback();
+        a.attach_if_needed(&mut resp);
+        assert!(resp.has_health_feedback());
+        assert_eq!(resp.get_health_feedback().get_store_id(), 1);
+        assert_eq!(resp.get_health_feedback().get_feedback_seq_no(), 3);
+        assert_eq!(resp.get_health_feedback().get_slow_score(), 50);
+
+        // If requested, it attaches the feedback info even `feedback_interval` is not
+        // given, which means never attaching.
+        a.feedback_interval = None;
+        a.last_feedback_time = None;
+        resp = BatchCommandsResponse::default();
+        a.attach_if_needed(&mut resp);
+        assert!(!resp.has_health_feedback());
+        resp = resp_with_request_health_feedback();
+        a.attach_if_needed(&mut resp);
+        assert!(resp.has_health_feedback());
+        assert_eq!(resp.get_health_feedback().get_store_id(), 1);
+        assert_eq!(resp.get_health_feedback().get_feedback_seq_no(), 4);
         assert_eq!(resp.get_health_feedback().get_slow_score(), 50);
     }
 }
