@@ -2220,11 +2220,11 @@ where
         self.check_force_leader();
 
         // If the peer is busy on apply and missing the last leader committed index,
-        // it should propose a read index to check whether it's lag behind the leader.
+        // it should propose a read index to check whether its lag is behind the leader.
         if self.fsm.peer.busy_on_apply.is_some()
             && self.fsm.peer.last_leader_committed_idx.is_none()
         {
-            debug!("propose read index to check whether it's lag behind the leader");
+            debug!("propose read index to check whether its lag is behind the leader");
             self.try_to_fetch_committed_index();
         }
 
@@ -6627,7 +6627,7 @@ where
         // valid.
         if !self.fsm.peer.is_leader() {
             let committed_index = msg.get_extra_msg().get_index();
-            if committed_index <= INVALID_INDEX {
+            if committed_index <= RAFT_INIT_LOG_INDEX {
                 warn!(
                     "invalid committed index";
                     "region_id" => self.region_id(),
