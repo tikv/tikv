@@ -67,7 +67,7 @@ fn test_async_io_apply_without_leader_persist() {
     cluster.must_put(b"k1", b"v1");
 
     let raft_before_save_on_store_1_fp = "raft_before_persist_on_store_1";
-    // skip persist to simulate raft log persist lag but not block node restart.
+    // Skip persisting to simulate raft log persist lag but not block node restart.
     fail::cfg(raft_before_save_on_store_1_fp, "return").unwrap();
 
     for i in 2..10 {
@@ -76,7 +76,7 @@ fn test_async_io_apply_without_leader_persist() {
             .unwrap();
     }
 
-    // all node can apply these entries.
+    // All node can apply these entries.
     for i in 1..=3 {
         must_get_equal(&cluster.get_engine(i), b"k9", b"v1");
     }
@@ -84,7 +84,7 @@ fn test_async_io_apply_without_leader_persist() {
     cluster.stop_node(1);
     fail::remove(raft_before_save_on_store_1_fp);
 
-    // node 1 can recover successfully.
+    // Node 1 can recover successfully.
     cluster.run_node(1).unwrap();
 
     cluster.must_put(b"k1", b"v2");

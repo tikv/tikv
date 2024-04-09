@@ -545,22 +545,20 @@ pub fn init_applied_term<ER: RaftEngine>(
         return Ok(truncated_state.get_term());
     }
 
+    // Applied index > last index means that some committed entries have applied but
+    // not persisted, in this case, the raft term must not be changed, so we use the
+    // term persisted in apply_state.
+    if apply_state.applied_index > raft_state.get_last_index() {
+        return Ok(apply_state.commit_term);
+    }
+
     match raft_engine.get_entry(region.get_id(), apply_state.applied_index)? {
         Some(e) => Ok(e.term),
-        None => {
-            // applied_index > last_index means that some committed entries have applied but
-            // not persisted, in this case, the raft term must not be changed, so we use the
-            // term persisted in apply_state.
-            if apply_state.applied_index > raft_state.get_last_index() {
-                Ok(apply_state.commit_term)
-            } else {
-                Err(box_err!(
-                    "[region {}] entry at apply index {} doesn't exist, may lose data.",
-                    region.get_id(),
-                    apply_state.applied_index
-                ))
-            }
-        }
+        None => Err(box_err!(
+            "[region {}] entry at apply index {} doesn't exist, may lose data.",
+            region.get_id(),
+            apply_state.applied_index
+        )),
     }
 }
 

@@ -794,14 +794,17 @@ where
     /// The index of last scheduled committed raft log.
     pub last_applying_idx: u64,
     pub max_apply_unpersisted_log_limit: u64,
-    // the minimum raft index after which apply unpersisted raft log can be enabled.
-    // we force disable apply unpersisted raft log in following 2 situation:
-    // 1) raft term changes. In this case, the min index is set to the current last index. This is
-    //    to let apply unpersisted log only happen within the same term so it's easier to if any
-    //    applied but not persisted logs has changed in which case we should just panic to avoid
-    //    data inconsistency.
-    // 2) propose PrepareMerge. In this case, the min index is set to that raft log's index. This
-    //    is to make online unsafe recovery easier when region state is PrepareMerge.
+    /// The minimum raft index after which apply unpersisted raft log can be
+    /// enabled. We force disable apply unpersisted raft log in following 2
+    /// situation:
+    /// 1) Raft term changes. In this case, the min index is set to the current
+    ///    last index. This is to let apply unpersisted log only happen within
+    ///    the same term so it's easier to if any applied but not persisted logs
+    ///    has changed in which case we should just panic to avoid data
+    ///    inconsistency.
+    /// 2) Propose PrepareMerge. In this case, the min index is set to that raft
+    ///    log's index. This is to make online unsafe recovery easier when
+    ///    region state is PrepareMerge.
     pub min_safe_index_for_unpersisted_apply: u64,
     /// The index of last compacted raft log. It is used for the next compact
     /// log task.
@@ -2394,6 +2397,8 @@ where
             "peer_id" => self.peer_id(),
         );
 
+        // TODO: Set last_index as the min_index may not be correct on follower,
+        // need to further consider a better solution.
         self.disable_apply_unpersisted_log(self.raft_group.raft.raft_log.last_index());
 
         self.read_progress
@@ -5752,7 +5757,7 @@ where
             if self.max_apply_unpersisted_log_limit == 0 {
                 self.raft_group.raft.set_max_apply_unpersisted_log_limit(0);
             } else if self.is_leader() {
-                // currently only enable unpersisted apply on leader.
+                // Currently only enable unpersisted apply on leader.
                 self.maybe_update_apply_unpersisted_log_state(
                     self.raft_group.raft.raft_log.applied,
                 );

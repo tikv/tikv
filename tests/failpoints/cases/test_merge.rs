@@ -226,13 +226,13 @@ fn test_async_io_apply_before_leader_persist_merge() {
     cluster.must_put(b"k3", b"v3");
 
     let raft_before_save_on_store_1_fp = "raft_before_persist_on_store_1";
-    // skip persist to simulate raft log persist lag but not block node restart.
+    // Skip persisting to simulate raft log persist lag but not block node restart.
     fail::cfg(raft_before_save_on_store_1_fp, "return").unwrap();
 
     let schedule_merge_fp = "on_schedule_merge";
     fail::cfg(schedule_merge_fp, "return()").unwrap();
 
-    // propose merge on leader will fail with timeout due to not persist.
+    // Propose merge on leader will fail with timeout due to not persist.
     let req = cluster.new_prepare_merge(left.get_id(), right.get_id());
     cluster
         .call_command_on_leader(req, Duration::from_secs(1))

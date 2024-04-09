@@ -145,7 +145,7 @@ fn test_persist_delay_block_log_compaction() {
         let v = "v1".as_bytes().to_owned();
         cluster.must_put(&k, &v);
     }
-    // wait log gc.
+    // Wait log gc.
     sleep_ms(100);
 
     let mut before_states = HashMap::default();
@@ -158,13 +158,13 @@ fn test_persist_delay_block_log_compaction() {
             .unwrap_or_default();
         let state = state.take_truncated_state();
         println!("  store id: {}, truncate state: {:?}", id, &state);
-        // should trigger compact.
+        // Should trigger compact.
         assert!(state.get_index() > RAFT_INIT_LOG_INDEX);
         assert!(state.get_term() > RAFT_INIT_LOG_TERM);
         before_states.insert(id, state);
     }
 
-    // skip persist to simulate raft log persist lag but not block node restart.
+    // Skip persisting to simulate raft log persist lag but not block node restart.
     fail::cfg(raft_before_save_on_store_1_fp, "pause").unwrap();
 
     for i in 0..100 {
@@ -177,9 +177,9 @@ fn test_persist_delay_block_log_compaction() {
         must_get_equal(&cluster.engines[&1].kv, &k, "v2".as_bytes());
     }
 
-    // wait log gc.
+    // Wait log gc.
     sleep_ms(100);
-    // log perisist is block, should not trigger log gc.
+    // Log perisist is block, should not trigger log gc.
     for (&id, engines) in &cluster.engines {
         let mut state: RaftApplyState = engines
             .kv
@@ -195,10 +195,10 @@ fn test_persist_delay_block_log_compaction() {
 
     fail::remove(raft_before_save_on_store_1_fp);
 
-    // wait log persist and trigger gc.
+    // Wait log persist and trigger gc.
     sleep_ms(200);
 
-    // log perisist is block, should not trigger log gc.
+    // Log perisist is block, should not trigger log gc.
     for (&id, engines) in &cluster.engines {
         let mut state: RaftApplyState = engines
             .kv

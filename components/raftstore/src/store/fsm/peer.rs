@@ -5785,7 +5785,7 @@ where
         } else {
             replicated_idx
         };
-        // avoid compact unpersisted raft logs when persist is far behind apply.
+        // Avoid compacting unpersisted raft logs when persist is far behind apply.
         if compact_idx > self.fsm.peer.raft_group.raft.raft_log.persisted {
             compact_idx = self.fsm.peer.raft_group.raft.raft_log.persisted;
         }
