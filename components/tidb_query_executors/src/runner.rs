@@ -171,9 +171,8 @@ impl BatchExecutorsRunner<()> {
 }
 
 #[inline]
-fn is_arrow_encodable(schema: &[FieldType]) -> bool {
+fn is_arrow_encodable<'a>(mut schema: impl Iterator<Item = &'a FieldType>) -> bool {
     schema
-        .iter()
         .all(|schema| EvalType::try_from(schema.as_accessor().tp()).is_ok())
 }
 
@@ -462,11 +461,9 @@ impl<SS: 'static> BatchExecutorsRunner<SS> {
         }
 
         // Only check output schema field types
-        let new_schema_vec: Vec<FieldType> = output_offsets
+        let new_schema = output_offsets
             .iter()
-            .filter_map(|&i| out_most_executor.schema().get(i as usize).cloned())
-            .collect();
-        let new_schema: &[FieldType] = &new_schema_vec[..];
+            .map(|&i| &out_most_executor.schema()[i as usize]);
         let encode_type = if !is_arrow_encodable(new_schema) {
             EncodeType::TypeDefault
         } else {
