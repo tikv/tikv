@@ -419,8 +419,6 @@ impl<W: AsyncWrite> AsyncWrite for CrypterWriter<W> {
         loop {
             match crypter.async_write {
                 AsyncWriteState::Consuming { count } => {
-                    // If the last committed write isn't fully written, block the new write until
-                    // buffer is ready.
                     let n = ready!(writer.as_mut().poll_write(cx, &crypter.buffer[..count]))?;
                     crypter.async_write = AsyncWriteState::Idle;
                     if n < count {
