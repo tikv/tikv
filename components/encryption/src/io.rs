@@ -419,8 +419,11 @@ impl<W: AsyncWrite> AsyncWrite for CrypterWriter<W> {
         loop {
             match crypter.async_write {
                 AsyncWriteState::Consuming { count } => {
-                    let n = ready!(writer.as_mut().poll_write(cx, &crypter.buffer[..count]))?;
+                    let res = ready!(writer.as_mut().poll_write(cx, &crypter.buffer[..count]));
                     crypter.async_write = AsyncWriteState::Idle;
+
+                    // We need to reset the status on failed or partial write.
+                    let n = res.unwrap_or(0);
                     if n < count {
                         let missing = count - n;
                         let new_offset = crypter.offset - missing as u64;
