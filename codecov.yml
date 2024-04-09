@@ -27,6 +27,10 @@ flag_management:
       - type: patch
         target: 85%
 
+# Ref: https://docs.codecov.com/docs/ignoring-paths
 ignore:
-  - tests/** # integration test cases or tools.
-  - fuzz/** # fuzz test cases or tools.
+  - tests # integration test cases or tools.
+  - fuzz # fuzz test cases or tools.
+  - components/test_*/**
+  - components/*_tests/**
+  - components/*/tests

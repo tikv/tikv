@@ -1715,7 +1715,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<T>,
     ) -> Result<()> {
         use crate::storage::txn::commands::{
-            AcquirePessimisticLock, AcquirePessimisticLockResumed, Prewrite, PrewritePessimistic,
+            AcquirePessimisticLock, AcquirePessimisticLockResumed, Flush, Prewrite,
+            PrewritePessimistic,
         };
 
         let cmd: Command = cmd.into();
@@ -1741,12 +1742,22 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 )?;
                 check_key_size!(keys, self.max_key_size, callback);
             }
+            Command::Flush(Flush { mutations, .. }) => {
+                let keys = mutations.iter().map(|m| m.key().as_encoded());
+                Self::check_api_version(
+                    self.api_version,
+                    cmd.ctx().api_version,
+                    CommandKind::flush,
+                    keys.clone(),
+                )?;
+                check_key_size!(keys, self.max_key_size, callback);
+            }
             Command::AcquirePessimisticLock(AcquirePessimisticLock { keys, .. }) => {
                 let keys = keys.iter().map(|k| k.0.as_encoded());
                 Self::check_api_version(
                     self.api_version,
                     cmd.ctx().api_version,
-                    CommandKind::prewrite,
+                    CommandKind::acquire_pessimistic_lock,
                     keys.clone(),
                 )?;
                 check_key_size!(keys, self.max_key_size, callback);

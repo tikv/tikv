@@ -1,11 +1,17 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, fmt::Debug};
+use std::{cmp, fmt::Debug, result};
 
 use keys::{enc_end_key, enc_start_key};
 use kvproto::metapb;
 
 use crate::{Iterable, KvEngine, Snapshot, WriteBatchExt};
+
+#[derive(Debug, PartialEq)]
+pub enum FailedReason {
+    NotCached,
+    TooOldRead,
+}
 
 /// RangeCacheEngine works as a range cache caching some ranges (in Memory or
 /// NVME for instance) to improve the read performance.
@@ -18,14 +24,30 @@ pub trait RangeCacheEngine:
     // region or read_ts.
     // Sequence number is shared between RangeCacheEngine and disk KvEnigne to
     // provide atomic write
-    fn snapshot(&self, range: CacheRange, read_ts: u64, seq_num: u64) -> Option<Self::Snapshot>;
+    fn snapshot(
+        &self,
+        range: CacheRange,
+        read_ts: u64,
+        seq_num: u64,
+    ) -> result::Result<Self::Snapshot, FailedReason>;
 
     type DiskEngine: KvEngine;
     fn set_disk_engine(&mut self, disk_engine: Self::DiskEngine);
 
     // return the range containing the key
     fn get_range_for_key(&self, key: &[u8]) -> Option<CacheRange>;
+
+    type RangeHintService: RangeHintService;
+    fn start_hint_service(&self, range_hint_service: Self::RangeHintService);
 }
+
+/// A service that should run in the background to retrieve and apply cache
+/// hints.
+///
+/// TODO (afeinberg): Presently, this is only a marker trait with a single
+/// implementation. Methods and/or associated types will be added to this trait
+/// as it continues to evolve to handle eviction, using stats.
+pub trait RangeHintService: Send + Sync {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CacheRange {
