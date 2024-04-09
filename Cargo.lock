@@ -2359,9 +2359,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.3.24"
+version = "0.3.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb2c4422095b67ee78da96fbb51a4cc413b3b25883c7717ff7ca1ab31022c9c9"
+checksum = "81fe527a889e1532da5c525686d96d4c2e74cdd345badf8dfef9f6b39dd5f5e8"
 dependencies = [
  "bytes",
  "fnv",
@@ -2544,6 +2544,9 @@ version = "0.0.1"
 dependencies = [
  "engine_rocks",
  "engine_traits",
+ "lazy_static",
+ "prometheus",
+ "prometheus-static-metric",
  "region_cache_memory_engine",
  "tempfile",
  "tikv_util",
@@ -2909,7 +2912,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#fd7ed253c48062199cb9def8c981a90e97b4ae53"
+source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -2928,7 +2931,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#fd7ed253c48062199cb9def8c981a90e97b4ae53"
+source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4593,11 +4596,15 @@ dependencies = [
  "engine_traits",
  "fail",
  "futures 0.3.15",
+ "hex 0.4.2",
  "keys",
  "kvproto",
+ "lazy_static",
  "log_wrappers",
  "parking_lot 0.12.1",
  "pd_client",
+ "prometheus",
+ "prometheus-static-metric",
  "security",
  "serde",
  "serde_derive",
@@ -4796,7 +4803,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#fd7ed253c48062199cb9def8c981a90e97b4ae53"
+source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
@@ -6430,7 +6437,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "8.0.0-alpha"
+version = "8.1.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
