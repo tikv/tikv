@@ -318,8 +318,7 @@ pub enum ExecResult<S> {
     // and try to compact pending gc. If false, raftstore does not do any additional
     // processing.
     HasPendingCompactCmd(bool),
-    // The force compact result, succeeded or failed.
-    ForceCompact {
+    UnsafeForceCompact {
         apply_state: RaftApplyState,
     },
 }
@@ -1570,7 +1569,7 @@ where
                 | ExecResult::IngestSst { .. }
                 | ExecResult::TransferLeader { .. }
                 | ExecResult::HasPendingCompactCmd(..)
-                | ExecResult::ForceCompact { .. } => {}
+                | ExecResult::UnsafeForceCompact { .. } => {}
                 ExecResult::SplitRegion { ref derived, .. } => {
                     self.region = derived.clone();
                     self.metrics.size_diff_hint = 0;
@@ -3786,7 +3785,7 @@ where
         voter_replicated_index: u64,
         voter_replicated_term: u64,
     },
-    ForceCompact {
+    UnsafeForceCompact {
         region_id: u64,
         term: u64,
         compact_index: u64,
@@ -3881,7 +3880,7 @@ where
                     region_id, voter_replicated_index, voter_replicated_term
                 )
             }
-            Msg::ForceCompact {
+            Msg::UnsafeForceCompact {
                 region_id,
                 term,
                 compact_index,
@@ -4386,12 +4385,16 @@ where
         }
     }
 
-    fn force_compact(&mut self, ctx: &mut ApplyContext<EK>, term: u64, compact_index: u64) {
+    // Force advance both comitted index and compact index to the current
+    // applied_index. This function should only be used in the online unsafe
+    // recovery scenario to recover the raft state when applied index is larger
+    // than raft last index.
+    fn unsafe_force_compact(&mut self, ctx: &mut ApplyContext<EK>, term: u64, compact_index: u64) {
         assert_eq!(self.delegate.apply_state.applied_index, compact_index);
-        if self.delegate.apply_state.get_truncated_state().index != compact_index {
+        if self.delegate.apply_state.get_truncated_state().index < compact_index {
             assert!(self.delegate.apply_state.get_truncated_state().term <= term);
 
-            info!("force compact"; "apply_state" => ?&self.delegate.apply_state, "term" => term,
+            info!("unsafe force compact"; "apply_state" => ?&self.delegate.apply_state, "term" => term,
                 "compact_index" => compact_index);
 
             let last_term = self.delegate.apply_state.get_truncated_state().term;
@@ -4404,7 +4407,7 @@ where
             ctx.timer = Some(Instant::now_coarse());
         }
         let mut result = VecDeque::with_capacity(1);
-        result.push_back(ExecResult::ForceCompact {
+        result.push_back(ExecResult::UnsafeForceCompact {
             apply_state: self.delegate.apply_state.clone(),
         });
         ctx.finish_for(&mut self.delegate, result);
@@ -4496,12 +4499,12 @@ where
                         voter_replicated_term,
                     );
                 }
-                Msg::ForceCompact {
+                Msg::UnsafeForceCompact {
                     term,
                     compact_index,
                     ..
                 } => {
-                    self.force_compact(apply_ctx, term, compact_index);
+                    self.unsafe_force_compact(apply_ctx, term, compact_index);
                 }
             }
         }
@@ -4928,7 +4931,7 @@ where
                             "region_id" => region_id);
                     return;
                 }
-                Msg::ForceCompact { region_id, .. } => {
+                Msg::UnsafeForceCompact { region_id, .. } => {
                     info!("skip force compact because target region is not found";
                             "region_id" => region_id);
                     return;
@@ -5072,7 +5075,7 @@ mod memtrace {
                 Msg::Validate(..) => 0,
                 Msg::Recover(..) => 0,
                 Msg::CheckCompact { .. } => 0,
-                Msg::ForceCompact { .. } => 0,
+                Msg::UnsafeForceCompact { .. } => 0,
             }
         }
     }
