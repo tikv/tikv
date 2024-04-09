@@ -1983,14 +1983,17 @@ where
             if let Some(instant) = self.peer_heartbeats.get(&p.get_id()) {
                 let elapsed = instant.saturating_elapsed();
                 if elapsed >= max_duration {
-                    warn!("peer is down";
-                    "region_id"=> self.region_id,
-                    "peer_id" => p.get_id(),
-                    "last_heartbeat_at" => ?*instant,
-                    "max_peer_down_duration" => ctx.cfg.max_peer_down_duration.0.as_secs(),
-                    "elapsed" => elapsed.as_secs() ,
-                    "region" =>?self.region(),
-                    );
+                    if !self.down_peer_ids.contains(&p.get_id()) {
+                        warn!("peer is down";
+                        "region_id"=> self.region_id,
+                        "peer_id" => p.get_id(),
+                        "last_heartbeat_at" => ?*instant,
+                        "max_peer_down_duration" => ctx.cfg.max_peer_down_duration.0.as_secs(),
+                        "elapsed" => elapsed.as_secs() ,
+                        "region" =>?self.region(),
+                        );
+                    }
+
                     let mut stats = PeerStats::default();
                     stats.set_peer(p.clone());
                     stats.set_down_seconds(elapsed.as_secs());
