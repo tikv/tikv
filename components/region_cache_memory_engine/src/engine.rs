@@ -322,6 +322,9 @@ impl RangeCacheMemoryEngine {
             .enumerate()
             .find_map(|(idx, r)| {
                 if r.contains_range(range) {
+                    // The `range` may be a proper subset of `r` and we should split it in this case
+                    // and push the rest back to `pending_range` so that each range only schedules
+                    // load task of its own.
                     Some((idx, r.split_off(range)))
                 } else if range.contains_range(r) {
                     // todo(SpadeA): merge occurs
