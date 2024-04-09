@@ -1362,7 +1362,7 @@ impl Default for DbConfig {
             write_buffer_limit: None,
             write_buffer_stall_ratio: 0.0,
             write_buffer_flush_oldest_first: true,
-            track_and_verify_wals_in_manifest: true,
+            track_and_verify_wals_in_manifest: false,
             paranoid_checks: None,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
