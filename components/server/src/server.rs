@@ -100,7 +100,7 @@ use tikv::{
         status_server::StatusServer,
         tablet_snap::NoSnapshotCache,
         ttl::TtlChecker,
-        KvEngineFactoryBuilder, RaftKv, RaftServer, Server, CPU_CORES_QUOTA_GAUGE,
+        KvEngineFactoryBuilder, RaftKv, MultiRaftServer, Server, CPU_CORES_QUOTA_GAUGE,
         GRPC_THREAD_PREFIX, MEMORY_LIMIT_GAUGE,
     },
     storage::{
@@ -307,7 +307,7 @@ struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
 struct Servers<EK: KvEngine, ER: RaftEngine, F: KvFormat> {
     lock_mgr: LockManager,
     server: LocalServer<EK, ER>,
-    raft_server: RaftServer<RpcClient, EK, ER>,
+    raft_server: MultiRaftServer<RpcClient, EK, ER>,
     importer: Arc<SstImporter<EK>>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
     cdc_memory_quota: Arc<MemoryQuota>,
@@ -833,7 +833,7 @@ where
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(self.core.config.raft_store.clone()));
         let health_controller = HealthController::new();
-        let mut raft_server = RaftServer::new(
+        let mut raft_server = MultiRaftServer::new(
             self.system.take().unwrap(),
             &server_config.value().clone(),
             raft_store.clone(),
@@ -1002,7 +1002,7 @@ where
             unified_read_pool_scale_receiver,
         );
 
-        // `ConsistencyCheckObserver` must be registered before `RaftServer::start`.
+        // `ConsistencyCheckObserver` must be registered before `MultiRaftServer::start`.
         let safe_point = Arc::new(AtomicU64::new(0));
         let observer = match self.core.config.coprocessor.consistency_check_method {
             ConsistencyCheckMethod::Mvcc => BoxConsistencyCheckObserver::new(
@@ -1037,9 +1037,9 @@ where
             )
             .unwrap_or_else(|e| fatal!("failed to start raft_server: {}", e));
 
-        // Start auto gc. Must after `RaftServer::start` because `raft_server_id` is
+        // Start auto gc. Must after `MultiRaftServer::start` because `raft_server_id` is
         // initialized there.
-        assert!(raft_server.id() > 0); // RaftServer id should never be 0.
+        assert!(raft_server.id() > 0); // MultiRaftServer id should never be 0.
         let auto_gc_config = AutoGcConfig::new(
             self.pd_client.clone(),
             self.region_info_accessor.clone(),

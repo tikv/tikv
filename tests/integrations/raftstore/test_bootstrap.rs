@@ -23,7 +23,7 @@ use service::service_manager::GrpcServiceManager;
 use tempfile::Builder;
 use test_pd_client::{bootstrap_with_first_region, TestPdClient};
 use test_raftstore::*;
-use tikv::{import::SstImporter, server::RaftServer};
+use tikv::{import::SstImporter, server::MultiRaftServer};
 use tikv_util::{
     config::VersionTrack,
     worker::{dummy_scheduler, Builder as WorkerBuilder, LazyWorker},
@@ -62,7 +62,7 @@ fn test_node_bootstrap_with_prepared_data() {
     let engines = Engines::new(engine.clone(), raft_engine);
     let tmp_mgr = Builder::new().prefix("test_cluster").tempdir().unwrap();
     let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
-    let mut node = RaftServer::new(
+    let mut node = MultiRaftServer::new(
         system,
         &cfg.server,
         Arc::new(VersionTrack::new(cfg.raft_store.clone())),
