@@ -2151,6 +2151,7 @@ pub mod tests {
         engines.raft.consume(&mut lb, false).unwrap();
         let mut apply_state = RaftApplyState::default();
         apply_state.set_applied_index(13);
+        apply_state.mut_truncated_state().set_index(13);
         apply_state.set_commit_index(14);
         apply_state.set_commit_term(RAFT_INIT_LOG_TERM);
         let apply_state_key = keys::apply_state_key(1);
