@@ -630,14 +630,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                         .contains(&p.get_id())
                     {
                         warn!(
-                        self.logger,
-                        "peer is down";
-                        "region_id"=> self.region_id(),
-                        "peer_id" => p.get_id(),
-                        "last_heartbeat_at" => ?*instant,
-                        "max_peer_down_duration" => ctx.cfg.max_peer_down_duration.0.as_secs(),
-                        "elapsed" => ?elapsed.as_secs() ,
-                        "region" =>?self.region(),
+                            self.logger,
+                            "peer is down";
+                            "region_id" => self.region_id(),
+                            "peer_id" => p.get_id(),
+                            "last_heartbeat_at" => ?*instant,
+                            "max_peer_down_duration" => ctx.cfg.max_peer_down_duration.0.as_secs(),
+                            "elapsed" => ?elapsed.as_secs() ,
+                            "region" => ?self.region(),
                         );
                     }
                     let mut stats = pdpb::PeerStats::default();
