@@ -100,7 +100,7 @@ use tikv::{
         status_server::StatusServer,
         tablet_snap::NoSnapshotCache,
         ttl::TtlChecker,
-        KvEngineFactoryBuilder, RaftKv, MultiRaftServer, Server, CPU_CORES_QUOTA_GAUGE,
+        KvEngineFactoryBuilder, MultiRaftServer, RaftKv, Server, CPU_CORES_QUOTA_GAUGE,
         GRPC_THREAD_PREFIX, MEMORY_LIMIT_GAUGE,
     },
     storage::{
@@ -1002,7 +1002,8 @@ where
             unified_read_pool_scale_receiver,
         );
 
-        // `ConsistencyCheckObserver` must be registered before `MultiRaftServer::start`.
+        // `ConsistencyCheckObserver` must be registered before
+        // `MultiRaftServer::start`.
         let safe_point = Arc::new(AtomicU64::new(0));
         let observer = match self.core.config.coprocessor.consistency_check_method {
             ConsistencyCheckMethod::Mvcc => BoxConsistencyCheckObserver::new(
@@ -1037,8 +1038,8 @@ where
             )
             .unwrap_or_else(|e| fatal!("failed to start raft_server: {}", e));
 
-        // Start auto gc. Must after `MultiRaftServer::start` because `raft_server_id` is
-        // initialized there.
+        // Start auto gc. Must after `MultiRaftServer::start` because `raft_server_id`
+        // is initialized there.
         assert!(raft_server.id() > 0); // MultiRaftServer id should never be 0.
         let auto_gc_config = AutoGcConfig::new(
             self.pd_client.clone(),

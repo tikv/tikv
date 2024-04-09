@@ -62,7 +62,7 @@ use tikv::{
         resolve::{self, StoreAddrResolver},
         service::DebugService,
         tablet_snap::NoSnapshotCache,
-        ConnectionBuilder, Error, PdStoreAddrResolver, RaftClient, RaftKv, MultiRaftServer,
+        ConnectionBuilder, Error, MultiRaftServer, PdStoreAddrResolver, RaftClient, RaftKv,
         Result as ServerResult, Server, ServerTransport,
     },
     storage::{

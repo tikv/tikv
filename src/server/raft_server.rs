@@ -155,9 +155,9 @@ where
         Ok(())
     }
 
-    /// Starts the MultiRaftServer. It tries to bootstrap cluster if the cluster is
-    /// not bootstrapped yet. Then it spawns a thread to run the raftstore
-    /// in background.
+    /// Starts the MultiRaftServer. It tries to bootstrap cluster if the cluster
+    /// is not bootstrapped yet. Then it spawns a thread to run the
+    /// raftstore in background.
     #[allow(clippy::too_many_arguments)]
     pub fn start<T>(
         &mut self,
