@@ -548,7 +548,7 @@ pub fn init_applied_term<ER: RaftEngine>(
     match raft_engine.get_entry(region.get_id(), apply_state.applied_index)? {
         Some(e) => Ok(e.term),
         None => {
-            // if applied_index > last_index, that some committed entries have applied but
+            // applied_index > last_index means that some committed entries have applied but
             // not persisted, in this case, the raft term must not be changed, so we use the
             // term persisted in apply_state.
             if apply_state.applied_index > raft_state.get_last_index() {
