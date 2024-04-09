@@ -405,6 +405,9 @@ where
             None
         };
 
+        resource_control::start_periodic_gc_tasks(pd_client.clone(),
+                                                  &background_worker);
+
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store, &resource_manager);
 

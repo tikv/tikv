@@ -187,6 +187,7 @@ pub enum Source {
     LogBackup = 0,
     ResourceControl = 1,
     RegionLabel = 2,
+    KeysapceLevelGC = 3,
 }
 
 impl std::fmt::Display for Source {
@@ -195,6 +196,7 @@ impl std::fmt::Display for Source {
             Source::LogBackup => f.write_str("log_backup"),
             Source::ResourceControl => f.write_str("resource_control"),
             Source::RegionLabel => f.write_str("region_label"),
+            Source::KeysapceLevelGC =>f.write_str("keyspace_level_gc")
         }
     }
 }

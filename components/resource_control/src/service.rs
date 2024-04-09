@@ -304,6 +304,147 @@ impl ResourceManagerService {
     }
 }
 
+#[derive(Clone)]
+pub struct KeyspaceLevelGCWatchService {
+    pd_client: Arc<RpcClient>,
+    // wrap for etcd client.
+    meta_client: Checked<Sourced<Arc<RpcClient>>>,
+    // record watch revision.
+    revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct KeyspaceLevelGC {
+    keyspace_id: u32,
+    safe_point: u64,
+}
+
+impl KeyspaceLevelGCWatchService {
+    /// Constructs a new `Service` with `ResourceGroupManager` and a
+    /// `RpcClient`.
+    pub fn new(
+        pd_client: Arc<RpcClient>,
+    ) -> KeyspaceLevelGCWatchService {
+        KeyspaceLevelGCWatchService {
+            revision: 0,
+            meta_client: Checked::new(Sourced::new(
+                Arc::clone(&pd_client.clone()),
+                pd_client::meta_storage::Source::KeysapceLevelGC,
+            )),
+            pd_client,
+        }
+    }
+
+    pub async fn watch_keyspace_gc(&mut self) {
+        info!("[test-yjy]watch_keyspace_gc");
+        // Firstly, load all resource groups as of now.
+        self.reload_all_keyspace_level_gc().await;
+        let keyspace_level_gc_prefix=self.get_keyspcace_level_gc_prefix();
+
+        'outer: loop {
+            // Secondly, start watcher at loading revision.
+            let (mut stream, cancel) = stream::abortable(
+                self.meta_client.watch(
+                    Watch::of(keyspace_level_gc_prefix.as_str())
+                        .prefixed()
+                        .from_rev(self.revision)
+                        .with_prev_kv(),
+                ),
+            );
+            info!("pd meta client creating watch stream."; "path" => RESOURCE_CONTROL_CONFIG_PATH, "rev" => %self.revision);
+            while let Some(grpc_response) = stream.next().await {
+                match grpc_response {
+                    Ok(resp) => {
+                        self.revision = resp.get_header().get_revision();
+                        let events = resp.get_events();
+                        events.iter().for_each(|event| match event.get_type() {
+                            EventEventType::Put => {
+                                info!("[test-yjy]EventEventType::Put01");
+                                let val=event.get_kv().get_value();
+                                match serde_json::from_slice::<KeyspaceLevelGC>(
+                                    event.get_kv().get_value(),
+                                ) {
+                                    Ok(keyspace_level_gc) => info!("[test-yjy]EventEventType::Put02-01 {},{}",keyspace_level_gc.keyspace_id,keyspace_level_gc.safe_point),
+                                    Err(e) => error!("parse put keyspace level gc event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
+                                }
+                            }
+                            EventEventType::Delete => {
+                                info!("[test-yjy]EventEventType::Delete01");
+                                match serde_json::from_slice::<KeyspaceLevelGC>(
+                                    event.get_kv().get_value(),
+                                ) {
+                                    Ok(keyspace_level_gc) => info!("[test-yjy]EventEventType::Put02-01"),
+                                    Err(e) => error!("parse delete keyspace level gc event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
+                                }
+                            }});
+                    }
+                    Err(PdError::DataCompacted(msg)) => {
+                        error!("required revision has been compacted"; "err" => ?msg);
+                        //self.reload_all_resource_groups().await;
+                        info!("[test-yjy] PdError::DataCompacted");
+                        self.reload_all_keyspace_level_gc();
+                        cancel.abort();
+                        continue 'outer;
+                    }
+                    Err(err) => {
+                        error!("failed to watch resource groups"; "err" => ?err);
+                        let _ = GLOBAL_TIMER_HANDLE
+                            .delay(std::time::Instant::now() + RETRY_INTERVAL)
+                            .compat()
+                            .await;
+                        cancel.abort();
+                        continue 'outer;
+                    }
+                }
+            }
+        }
+    }
+
+    fn get_keyspcace_level_gc_prefix(&self) -> String {
+        let cluster_id = self.pd_client
+            .get_cluster_id()
+            .unwrap();
+        let keyspace_level_gc_prefix=format!("/pd/{}/keyspaces/gc_safe_point", cluster_id);
+        return keyspace_level_gc_prefix;
+    }
+
+    async fn reload_all_keyspace_level_gc(&mut self) {
+        let keyspace_level_gc_prefix=self.get_keyspcace_level_gc_prefix();
+        loop {
+            match self
+                .meta_client
+                .get(Get::of(keyspace_level_gc_prefix.as_str()).prefixed())
+                .await
+            {
+                Ok(mut resp) => {
+                    let kvs = resp.take_kvs().into_iter().collect::<Vec<_>>();
+                    kvs.iter().for_each(|g| {
+                        match serde_json::from_slice::<KeyspaceLevelGC>(
+                            g.get_value(),
+                        ) {
+                            Ok(keyspace_level_gc) => info!("[test-yjy]EventEventType::Put02-01 {},{}",keyspace_level_gc.keyspace_id,keyspace_level_gc.safe_point),
+                            Err(e) => error!("parse put keyspace level gc event failed"; "name" => ?g.get_key(), "err" => ?e),
+                        }
+                    });
+
+                    self.revision = resp.get_header().get_revision();
+                    return;
+                }
+                Err(err) => {
+                    error!("failed to get meta storage's keyspace level gc"; "err" => ?err);
+                    let _ = GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + RETRY_INTERVAL)
+                        .compat()
+                        .await;
+                }
+            }
+        }
+    }
+
+
+
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct RequestUnitConfig {

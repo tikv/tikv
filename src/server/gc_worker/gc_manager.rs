@@ -9,6 +9,8 @@ use std::{
     thread::{self, Builder as ThreadBuilder, JoinHandle},
     time::Duration,
 };
+use std::sync::atomic::AtomicI64;
+use dashmap::DashMap;
 
 use engine_traits::KvEngine;
 use kvproto::metapb::Region;
@@ -247,6 +249,9 @@ pub(super) struct GcManager<S: GcSafePointProvider, R: RegionInfoProvider, E: Kv
     feature_gate: FeatureGate,
 
     max_concurrent_tasks: usize,
+
+    ks_safepoint_v2: Arc<DashMap<u32, u64>>,
+
 }
 
 impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcManager<S, R, E> {
@@ -267,6 +272,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
             cfg_tracker,
             feature_gate,
             max_concurrent_tasks: concurrent_tasks,
+            ks_safepoint_v2:Arc::new(DashMap::default()),
         }
     }
 

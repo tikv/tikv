@@ -1,14 +1,11 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    fmt,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
-    time::Duration,
-    u64,
-};
+use std::{fmt, sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+}, task, time::Duration, u64};
+use std::sync::atomic::AtomicI64;
+use dashmap::DashMap;
 
 use futures::{
     channel::mpsc,
@@ -19,7 +16,7 @@ use futures::{
     stream::{ErrInto, StreamExt},
     TryStreamExt,
 };
-use grpcio::{EnvBuilder, Environment, WriteFlags};
+use grpcio::{ClientSStreamReceiver, EnvBuilder, Environment, WriteFlags};
 use kvproto::{
     meta_storagepb::{
         self as mpb, DeleteRequest, GetRequest, PutRequest, WatchRequest, WatchResponse,
@@ -49,11 +46,15 @@ pub const CQ_COUNT: usize = 1;
 pub const CLIENT_PREFIX: &str = "pd";
 const DEFAULT_REGION_PER_BATCH: i32 = 128;
 
+const RETRY_INTERVAL: Duration = Duration::from_secs(1); // to consistent with pd_client
+
 #[derive(Clone)]
 pub struct RpcClient {
     cluster_id: u64,
     pd_client: Arc<Client>,
     monitor: Arc<ThreadPool<TaskCell>>,
+    ks_safepoint_v2: Arc<DashMap<u32, u64>>,
+    ks_gc_sp_revision: Arc<AtomicI64>,
 }
 
 impl RpcClient {
@@ -107,6 +108,8 @@ impl RpcClient {
                             cfg.retry_interval.0,
                         )),
                         monitor: monitor.clone(),
+                        ks_safepoint_v2: Arc::new(Default::default()),
+                        ks_gc_sp_revision: Arc::new(Default::default()),
                     };
 
                     // spawn a background future to update PD information periodically

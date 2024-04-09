@@ -23,6 +23,7 @@ use futures::{
     stream,
     stream::StreamExt,
 };
+use grpcio::ClientSStreamReceiver;
 use keys::{self, data_key, enc_end_key, enc_start_key};
 use kvproto::{
     metapb::{self, PeerRole},
@@ -35,6 +36,7 @@ use kvproto::{
         StoreDrAutoSyncStatus,
     },
 };
+use kvproto::pdpb::WatchGcSafePointV2Response;
 use pd_client::{
     BucketStat, Error, FeatureGate, Key, PdClient, PdFuture, RegionInfo, RegionStat, Result,
 };

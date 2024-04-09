@@ -484,7 +484,7 @@ dependencies = [
  "concurrency_manager",
  "crossbeam",
  "crossbeam-channel",
- "dashmap",
+ "dashmap 5.2.0",
  "engine_panic",
  "engine_rocks",
  "engine_test",
@@ -559,7 +559,7 @@ dependencies = [
  "collections",
  "criterion",
  "crossbeam",
- "dashmap",
+ "dashmap 5.2.0",
  "derive_more",
  "fail",
  "file_system",
@@ -1355,6 +1355,16 @@ dependencies = [
  "darling_core",
  "quote",
  "syn 1.0.103",
+]
+
+[[package]]
+name = "dashmap"
+version = "4.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e77a43b28d0668df09411cb0bc9a8c2adc40f9a048afe863e05fd43251e8e39c"
+dependencies = [
+ "cfg-if 1.0.0",
+ "num_cpus",
 ]
 
 [[package]]
@@ -3683,6 +3693,7 @@ name = "pd_client"
 version = "0.1.0"
 dependencies = [
  "collections",
+ "dashmap 4.0.2",
  "error_code",
  "fail",
  "futures 0.3.15",
@@ -4591,7 +4602,7 @@ dependencies = [
  "bytes",
  "collections",
  "crossbeam",
- "dashmap",
+ "dashmap 5.2.0",
  "engine_rocks",
  "engine_traits",
  "fail",
@@ -4708,7 +4719,7 @@ dependencies = [
  "collections",
  "crossbeam",
  "crossbeam-skiplist",
- "dashmap",
+ "dashmap 5.2.0",
  "fail",
  "file_system",
  "futures 0.3.15",
@@ -5574,7 +5585,7 @@ dependencies = [
  "api_version",
  "collections",
  "crc32fast",
- "dashmap",
+ "dashmap 5.2.0",
  "encryption",
  "engine_rocks",
  "engine_test",
@@ -6456,7 +6467,7 @@ dependencies = [
  "crc64fast",
  "crossbeam",
  "crypto",
- "dashmap",
+ "dashmap 5.2.0",
  "encryption_export",
  "engine_panic",
  "engine_rocks",
@@ -7001,7 +7012,7 @@ version = "0.1.0"
 source = "git+https://github.com/tikv/tracing-active-tree.git?rev=a71f8f8148f88ab759deb6d3e1d62d07ab218347#a71f8f8148f88ab759deb6d3e1d62d07ab218347"
 dependencies = [
  "coarsetime",
- "dashmap",
+ "dashmap 5.2.0",
  "indextree",
  "lazy_static",
  "smallvec",
@@ -7706,7 +7717,7 @@ dependencies = [
  "crossbeam-deque",
  "crossbeam-skiplist",
  "crossbeam-utils",
- "dashmap",
+ "dashmap 5.2.0",
  "fail",
  "lazy_static",
  "num_cpus",
