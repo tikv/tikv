@@ -176,6 +176,14 @@ impl RangeManager {
         self.ranges_in_gc.iter().any(|r| r.overlaps(range))
     }
 
+    fn overlap_with_pending_range(&self, range: &CacheRange) -> bool {
+        self.pending_ranges.iter().any(|r| r.overlaps(range))
+            || self
+                .pending_ranges_loading_data
+                .iter()
+                .any(|(r, ..)| r.overlaps(range))
+    }
+
     // Acquire a snapshot of the `range` with `read_ts`. If the range is not
     // accessable, None will be returned. Otherwise, the range id will be returned.
     pub(crate) fn range_snapshot(
@@ -311,6 +319,9 @@ impl RangeManager {
         if self.overlap_with_range(&cache_range) {
             return Err(LoadFailedReason::Overlapped);
         };
+        if self.overlap_with_pending_range(&cache_range) {
+            return Err(LoadFailedReason::PendingRange);
+        }
         if self.overlap_with_range_in_gc(&cache_range) {
             return Err(LoadFailedReason::InGc);
         }
@@ -325,6 +336,7 @@ impl RangeManager {
 #[derive(Debug, PartialEq)]
 pub enum LoadFailedReason {
     Overlapped,
+    PendingRange,
     InGc,
     Evicting,
 }
@@ -426,12 +438,15 @@ mod tests {
         let mut range_mgr = RangeManager::default();
         let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
         let r2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
+        let r3 = CacheRange::new(b"k40".to_vec(), b"k50".to_vec());
         range_mgr.new_range(r1.clone());
         range_mgr.evict_range(&r1);
 
         let mut gced = BTreeSet::default();
         gced.insert(r2);
         range_mgr.set_ranges_in_gc(gced);
+
+        range_mgr.load_range(r3).unwrap();
 
         let r = CacheRange::new(b"".to_vec(), b"k05".to_vec());
         assert_eq!(
@@ -448,5 +463,16 @@ mod tests {
         assert_eq!(range_mgr.load_range(r).unwrap_err(), LoadFailedReason::InGc);
         let r = CacheRange::new(b"k25".to_vec(), b"k35".to_vec());
         assert_eq!(range_mgr.load_range(r).unwrap_err(), LoadFailedReason::InGc);
+
+        let r = CacheRange::new(b"k35".to_vec(), b"k45".to_vec());
+        assert_eq!(
+            range_mgr.load_range(r).unwrap_err(),
+            LoadFailedReason::PendingRange
+        );
+        let r = CacheRange::new(b"k45".to_vec(), b"k55".to_vec());
+        assert_eq!(
+            range_mgr.load_range(r).unwrap_err(),
+            LoadFailedReason::PendingRange
+        );
     }
 }
