@@ -747,7 +747,7 @@ mod tests {
     fn test_write_batch_with_memory_controller() {
         let mut config = RangeCacheEngineConfig::default();
         config.soft_limit_threshold = Some(ReadableSize(500));
-        config.hard_limit_threshold = Some(ReadableSize(100));
+        config.hard_limit_threshold = Some(ReadableSize(1000));
         let engine = RangeCacheMemoryEngine::new(&config);
         let r1 = CacheRange::new(b"kk00".to_vec(), b"kk10".to_vec());
         let r2 = CacheRange::new(b"kk10".to_vec(), b"kk20".to_vec());
