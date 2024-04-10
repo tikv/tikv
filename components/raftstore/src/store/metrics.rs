@@ -966,4 +966,11 @@ lazy_static! {
             "Total number of regions busy on apply or complete apply.",
             &["type"]
         ).unwrap();
+
+    pub static ref STORE_PROCESS_BUSY_GAUGE_VEC: IntGaugeVec =
+        register_int_gauge_vec!(
+            "tikv_raftstore_process_busy",
+            "Is raft process busy or not",
+            &["type"]
+        ).unwrap();
 }
