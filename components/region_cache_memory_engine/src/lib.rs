@@ -30,7 +30,7 @@ pub enum Error {
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct RangeCacheEngineConfig {
-    pub enable: bool,
+    pub enabled: bool,
     pub gc_interval: Duration,
     soft_limit_threshold: Option<ReadableSize>,
     hard_limit_threshold: Option<ReadableSize>,
@@ -39,7 +39,7 @@ pub struct RangeCacheEngineConfig {
 impl Default for RangeCacheEngineConfig {
     fn default() -> Self {
         Self {
-            enable: false,
+            enabled: false,
             gc_interval: Duration::from_secs(180),
             soft_limit_threshold: None,
             hard_limit_threshold: None,
@@ -49,7 +49,7 @@ impl Default for RangeCacheEngineConfig {
 
 impl RangeCacheEngineConfig {
     pub fn validate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        if !self.enable {
+        if !self.enabled {
             return Ok(());
         }
 
@@ -58,9 +58,9 @@ impl RangeCacheEngineConfig {
 
     pub fn sanitize(&mut self) -> Result<(), Error> {
         if self.soft_limit_threshold.is_none() || self.hard_limit_threshold.is_none() {
-            return Err(Error::InvalidArgument(format!(
-                "soft-limit-threshold or hard-limit-threshold not set"
-            )));
+            return Err(Error::InvalidArgument(
+                "soft-limit-threshold or hard-limit-threshold not set".to_string(),
+            ));
         }
 
         if self.soft_limit_threshold.as_ref().unwrap()
@@ -86,7 +86,7 @@ impl RangeCacheEngineConfig {
 
     pub fn config_for_test() -> RangeCacheEngineConfig {
         RangeCacheEngineConfig {
-            enable: true,
+            enabled: true,
             gc_interval: Duration::from_secs(180),
             soft_limit_threshold: Some(ReadableSize::gb(1)),
             hard_limit_threshold: Some(ReadableSize::gb(2)),

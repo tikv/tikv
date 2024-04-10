@@ -229,7 +229,7 @@ mod tests {
             &[CF_DEFAULT, CF_LOCK, CF_WRITE],
         )
         .unwrap();
-        let memory_engine = RangeCacheMemoryEngine::new(RangeCacheEngineConfig::config_for_test());
+        let memory_engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
         let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
         memory_engine.new_range(range.clone());
         {
