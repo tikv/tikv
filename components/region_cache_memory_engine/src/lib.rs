@@ -3,21 +3,24 @@
 #![feature(let_chains)]
 #![feature(slice_pattern)]
 
+use std::time::Duration;
+
+use tikv_util::config::ReadableSize;
+
 mod background;
 mod engine;
 pub mod keys;
-use std::time::Duration;
-
-pub mod region_label;
-pub use engine::RangeCacheMemoryEngine;
-pub mod range_manager;
-mod write_batch;
-use tikv_util::config::ReadableSize;
-pub use write_batch::RangeCacheWriteBatch;
 mod memory_controller;
-pub use background::{BackgroundRunner, GcTask};
 mod metrics;
 pub mod perf_context;
+pub mod range_manager;
+mod read;
+pub mod region_label;
+mod write_batch;
+
+pub use background::{BackgroundRunner, GcTask};
+pub use engine::RangeCacheMemoryEngine;
+pub use write_batch::RangeCacheWriteBatch;
 
 pub struct EngineConfig {
     gc_interval: Duration,
