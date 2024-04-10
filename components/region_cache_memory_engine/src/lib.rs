@@ -8,6 +8,8 @@ mod engine;
 pub mod keys;
 use std::time::Duration;
 
+use serde_derive::{Deserialize, Serialize};
+
 pub mod region_label;
 pub use engine::RangeCacheMemoryEngine;
 pub mod range_manager;
@@ -17,41 +19,77 @@ pub use write_batch::RangeCacheWriteBatch;
 mod memory_controller;
 pub use background::{BackgroundRunner, GcTask};
 mod metrics;
+use thiserror::Error;
 
-pub struct EngineConfig {
-    gc_interval: Duration,
-    soft_limit_threshold: usize,
-    hard_limit_threshold: usize,
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("Invalid Argument: {0}")]
+    InvalidArgument(String),
 }
 
-impl Default for EngineConfig {
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct RangeCacheEngineConfig {
+    pub enable: bool,
+    pub gc_interval: Duration,
+    soft_limit_threshold: Option<ReadableSize>,
+    hard_limit_threshold: Option<ReadableSize>,
+}
+
+impl Default for RangeCacheEngineConfig {
     fn default() -> Self {
         Self {
+            enable: false,
             gc_interval: Duration::from_secs(180),
-            soft_limit_threshold: ReadableSize::gb(10).0 as usize,
-            hard_limit_threshold: ReadableSize::gb(15).0 as usize,
+            soft_limit_threshold: None,
+            hard_limit_threshold: None,
         }
     }
 }
 
-impl EngineConfig {
-    pub fn new(
-        gc_interval: Duration,
-        soft_limit_threshold: usize,
-        hard_limit_threshold: usize,
-    ) -> Self {
-        Self {
-            gc_interval,
-            soft_limit_threshold,
-            hard_limit_threshold,
+impl RangeCacheEngineConfig {
+    pub fn validate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if !self.enable {
+            return Ok(());
         }
+
+        Ok(self.sanitize()?)
     }
 
-    pub fn config_for_test() -> EngineConfig {
-        EngineConfig::new(
-            Duration::from_secs(600),
-            ReadableSize::gb(1).0 as usize,
-            ReadableSize::gb(2).0 as usize,
-        )
+    pub fn sanitize(&mut self) -> Result<(), Error> {
+        if self.soft_limit_threshold.is_none() || self.hard_limit_threshold.is_none() {
+            return Err(Error::InvalidArgument(format!(
+                "soft-limit-threshold or hard-limit-threshold not set"
+            )));
+        }
+
+        if self.soft_limit_threshold.as_ref().unwrap()
+            >= self.hard_limit_threshold.as_ref().unwrap()
+        {
+            return Err(Error::InvalidArgument(format!(
+                "soft-limit-threshold {:?} is larger or equal to hard-limit-threshold {:?}",
+                self.soft_limit_threshold.as_ref().unwrap(),
+                self.hard_limit_threshold.as_ref().unwrap()
+            )));
+        }
+
+        Ok(())
+    }
+
+    pub fn soft_limit_threshold(&self) -> usize {
+        self.soft_limit_threshold.map_or(0, |r| r.0 as usize)
+    }
+
+    pub fn hard_limit_threshold(&self) -> usize {
+        self.hard_limit_threshold.map_or(0, |r| r.0 as usize)
+    }
+
+    pub fn config_for_test() -> RangeCacheEngineConfig {
+        RangeCacheEngineConfig {
+            enable: true,
+            gc_interval: Duration::from_secs(180),
+            soft_limit_threshold: Some(ReadableSize::gb(1)),
+            hard_limit_threshold: Some(ReadableSize::gb(2)),
+        }
     }
 }

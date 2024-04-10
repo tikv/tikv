@@ -1296,7 +1296,7 @@ mod tests {
     use hybrid_engine::{HybridEngine, HybridEngineSnapshot};
     use keys::DATA_PREFIX;
     use kvproto::{metapb::RegionEpoch, raft_cmdpb::*};
-    use region_cache_memory_engine::{EngineConfig, RangeCacheMemoryEngine};
+    use region_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheMemoryEngine};
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
     use time::Duration;
@@ -2470,7 +2470,7 @@ mod tests {
         path: &str,
         store_id: u64,
         store_meta: Arc<Mutex<StoreMeta>>,
-        engine_config: EngineConfig,
+        engine_config: RangeCacheEngineConfig,
     ) -> (
         TempDir,
         LocalReader<HybridTestEnigne, HybridEngineMockRouter>,
@@ -2520,7 +2520,7 @@ mod tests {
             "test-local-hybrid-engine-reader",
             store_id,
             store_meta.clone(),
-            EngineConfig::config_for_test(),
+            RangeCacheEngineConfig::config_for_test(),
         );
 
         // set up region so we can acquire snapshot from local reader

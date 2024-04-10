@@ -223,9 +223,7 @@ pub fn run_tikv(
 
     dispatch_api_version!(config.storage.api_version(), {
         if !config.raft_engine.enable {
-            if cfg!(feature = "memory-engine")
-                && config.region_cache_memory_limit != ReadableSize(0)
-            {
+            if cfg!(feature = "memory-engine") && config.range_cache_engine.enable {
                 run_impl::<HybridEngine<RocksEngine, RangeCacheMemoryEngine>, RocksEngine, API>(
                     config,
                     service_event_tx,
@@ -239,9 +237,7 @@ pub fn run_tikv(
                 )
             }
         } else {
-            if cfg!(feature = "memory-engine")
-                && config.region_cache_memory_limit != ReadableSize(0)
-            {
+            if cfg!(feature = "memory-engine") && config.range_cache_engine.enable {
                 run_impl::<HybridEngine<RocksEngine, RangeCacheMemoryEngine>, RaftLogEngine, API>(
                     config,
                     service_event_tx,
@@ -1664,8 +1660,11 @@ where
         let disk_engine = factory
             .create_shared_db(&self.core.store_path)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
-        let kv_engine: EK =
-            KvEngineBuilder::build(disk_engine.clone(), Some(self.pd_client.clone()));
+        let kv_engine: EK = KvEngineBuilder::build(
+            &self.core.config.range_cache_engine,
+            disk_engine.clone(),
+            Some(self.pd_client.clone()),
+        );
         self.kv_statistics = Some(factory.rocks_statistics());
         let engines = Engines::new(kv_engine, raft_engine);
 

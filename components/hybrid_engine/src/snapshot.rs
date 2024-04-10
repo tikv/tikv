@@ -132,7 +132,7 @@ mod tests {
         CacheRange, IterOptions, Iterable, Iterator, KvEngine, Mutable, SnapshotContext,
         WriteBatch, WriteBatchExt, CF_DEFAULT,
     };
-    use region_cache_memory_engine::{range_manager::RangeCacheStatus, EngineConfig};
+    use region_cache_memory_engine::{range_manager::RangeCacheStatus, RangeCacheEngineConfig};
 
     use crate::util::hybrid_engine_for_tests;
 
@@ -146,7 +146,7 @@ mod tests {
         let range_clone = range.clone();
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
             "temp",
-            EngineConfig::config_for_test(),
+            RangeCacheEngineConfig::config_for_test(),
             move |memory_engine| {
                 memory_engine.new_range(range_clone.clone());
                 {

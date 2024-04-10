@@ -8,6 +8,7 @@ use std::{
 
 use engine_rocks::RocksSnapshot;
 use engine_traits::{CacheRange, FailedReason};
+use tikv_util::info;
 
 use crate::engine::{RagneCacheSnapshotMeta, SnapshotList};
 
@@ -246,12 +247,19 @@ impl RangeManager {
 
     // return whether the range can be already removed
     pub(crate) fn evict_range(&mut self, evict_range: &CacheRange) -> bool {
-        let range_key = self
+        let Some(range_key) = self
             .ranges
             .keys()
             .find(|&r| r.contains_range(evict_range))
-            .unwrap_or_else(|| panic!("evict a range that does not contain: {:?}", evict_range))
-            .clone();
+            .cloned()
+        else {
+            info!(
+                "evict a range that is not cached";
+                "range" => ?evict_range,
+            );
+            return false;
+        };
+
         let meta = self.ranges.remove(&range_key).unwrap();
         let (left_range, right_range) = range_key.split_off(evict_range);
         assert!((left_range.is_some() || right_range.is_some()) || &range_key == evict_range);

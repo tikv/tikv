@@ -765,7 +765,7 @@ pub mod tests {
             region_label_meta_client,
             tests::{add_region_label_rule, new_region_label_rule, new_test_server_and_client},
         },
-        EngineConfig, RangeCacheMemoryEngine,
+        RangeCacheEngineConfig, RangeCacheMemoryEngine,
     };
 
     fn put_data(
@@ -1024,7 +1024,7 @@ pub mod tests {
 
     #[test]
     fn test_gc() {
-        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineConfig::config_for_test());
         let memory_controller = engine.memory_controller();
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
@@ -1109,7 +1109,7 @@ pub mod tests {
 
     #[test]
     fn test_snapshot_block_gc() {
-        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineConfig::config_for_test());
         let memory_controller = engine.memory_controller();
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
@@ -1218,7 +1218,7 @@ pub mod tests {
 
     #[test]
     fn test_gc_worker() {
-        let mut config = EngineConfig::config_for_test();
+        let mut config = RangeCacheEngineConfig::config_for_test();
         config.gc_interval = Duration::from_secs(1);
         let engine = RangeCacheMemoryEngine::new(config);
         let memory_controller = engine.memory_controller();
@@ -1309,7 +1309,7 @@ pub mod tests {
 
     #[test]
     fn test_background_worker_load() {
-        let mut engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineConfig::config_for_test());
         let path = Builder::new().prefix("test_load").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
         let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
@@ -1388,7 +1388,7 @@ pub mod tests {
 
     #[test]
     fn test_ranges_for_gc() {
-        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineConfig::config_for_test());
         let memory_controller = engine.memory_controller();
         let r1 = CacheRange::new(b"a".to_vec(), b"b".to_vec());
         let r2 = CacheRange::new(b"b".to_vec(), b"c".to_vec());
@@ -1415,7 +1415,7 @@ pub mod tests {
     // 4. Verify that only the labeled key range has been loaded.
     #[test]
     fn test_load_from_pd_hint_service() {
-        let mut engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineConfig::config_for_test());
         let path = Builder::new()
             .prefix("test_load_from_pd_hint_service")
             .tempdir()
