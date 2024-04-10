@@ -9,7 +9,7 @@ use std::{
 use engine_rocks::RocksSnapshot;
 use engine_traits::{CacheRange, FailedReason};
 
-use crate::read::RagneCacheSnapshotMeta;
+use crate::read::RangeCacheSnapshotMeta;
 
 // read_ts -> ref_count
 #[derive(Default, Debug)]
@@ -232,7 +232,7 @@ impl RangeManager {
     // removed.
     pub(crate) fn remove_range_snapshot(
         &mut self,
-        snapshot_meta: &RagneCacheSnapshotMeta,
+        snapshot_meta: &RangeCacheSnapshotMeta,
     ) -> Vec<CacheRange> {
         if let Some(range_key) = self
             .historical_ranges

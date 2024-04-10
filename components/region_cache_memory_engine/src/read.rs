@@ -32,7 +32,7 @@ enum Direction {
 }
 
 #[derive(Clone, Debug)]
-pub struct RagneCacheSnapshotMeta {
+pub struct RangeCacheSnapshotMeta {
     pub(crate) range_id: u64,
     pub(crate) range: CacheRange,
     pub(crate) snapshot_ts: u64,
@@ -41,7 +41,7 @@ pub struct RagneCacheSnapshotMeta {
     pub(crate) sequence_number: u64,
 }
 
-impl RagneCacheSnapshotMeta {
+impl RangeCacheSnapshotMeta {
     fn new(range_id: u64, range: CacheRange, snapshot_ts: u64, sequence_number: u64) -> Self {
         Self {
             range_id,
@@ -54,7 +54,7 @@ impl RagneCacheSnapshotMeta {
 
 #[derive(Clone, Debug)]
 pub struct RangeCacheSnapshot {
-    snapshot_meta: RagneCacheSnapshotMeta,
+    snapshot_meta: RangeCacheSnapshotMeta,
     skiplist_engine: SkiplistEngine,
     engine: RangeCacheMemoryEngine,
 }
@@ -69,7 +69,7 @@ impl RangeCacheSnapshot {
         let mut core = engine.core.write();
         let range_id = core.range_manager.range_snapshot(&range, read_ts)?;
         Ok(RangeCacheSnapshot {
-            snapshot_meta: RagneCacheSnapshotMeta::new(range_id, range, read_ts, seq_num),
+            snapshot_meta: RangeCacheSnapshotMeta::new(range_id, range, read_ts, seq_num),
             skiplist_engine: core.engine.clone(),
             engine: engine.clone(),
         })
