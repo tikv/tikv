@@ -4385,10 +4385,9 @@ where
         }
     }
 
-    // Force advance both comitted index and compact index to the current
-    // applied_index. This function should only be used in the online unsafe
-    // recovery scenario to recover the raft state when applied index is larger
-    // than raft last index.
+    // Force advance compact index to the current applied_index. This function
+    // should only be used in the online unsafe recovery scenario to recover the
+    // raft state when applied index is larger than raft last index.
     fn unsafe_force_compact(&mut self, ctx: &mut ApplyContext<EK>, term: u64, compact_index: u64) {
         assert_eq!(self.delegate.apply_state.applied_index, compact_index);
         if self.delegate.apply_state.get_truncated_state().index < compact_index {
@@ -4397,10 +4396,7 @@ where
             info!("unsafe force compact"; "apply_state" => ?&self.delegate.apply_state, "term" => term,
                 "compact_index" => compact_index);
 
-            let last_term = self.delegate.apply_state.get_truncated_state().term;
             self.delegate.apply_state.mut_truncated_state().index = compact_index;
-            self.delegate.apply_state.set_commit_index(compact_index);
-            self.delegate.apply_state.set_commit_term(last_term);
         }
 
         if ctx.timer.is_none() {

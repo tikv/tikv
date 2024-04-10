@@ -1067,6 +1067,7 @@ where
         region_local_state.set_region(self.region().clone());
         self_report.set_region_state(region_local_state);
         self_report.set_is_force_leader(self.fsm.peer.force_leader.is_some());
+        self_report.set_applied_index(self.fsm.peer.get_store().applied_index());
         match self.fsm.peer.get_store().entries(
             self.fsm.peer.raft_group.store().commit_index() + 1,
             self.fsm.peer.get_store().last_index() + 1,
@@ -5282,15 +5283,6 @@ where
                     let last_index = apply_state.get_truncated_state().index;
                     let first_index = self.fsm.peer.raft_group.raft.r.raft_log.first_index();
 
-                    {
-                        let peer_store = self.fsm.peer.mut_store();
-                        peer_store.set_apply_state(apply_state);
-                        peer_store.clear_entry_cache_warmup_state();
-                        peer_store.compact_entry_cache(last_index + 1);
-                        peer_store.raft_state_mut().mut_hard_state().commit = last_index;
-                        peer_store.raft_state_mut().last_index = last_index;
-                    }
-
                     let raft_engine = self.fsm.peer.get_store().raft_engine();
                     let mut batch = raft_engine.log_batch(2);
                     raft_engine
@@ -5299,10 +5291,20 @@ where
                     batch
                         .put_raft_state(self.region_id(), self.fsm.peer.get_store().raft_state())
                         .unwrap();
+                    // FIXME: generally, we should avoiding do io tasks on the raft thread, but make
+                    // it async make the overall procss more complex.
+                    // Considering unsafe recovery happens very rarely, thus the potential
+                    // performance impact is acceptable in this scenario.
                     raft_engine.consume(&mut batch, true).unwrap();
 
-                    self.fsm.peer.raft_group.raft.raft_log.committed = last_index;
-                    self.fsm.peer.raft_group.raft.raft_log.persisted = last_index;
+                    {
+                        let peer_store = self.fsm.peer.mut_store();
+                        peer_store.set_apply_state(apply_state);
+                        peer_store.clear_entry_cache_warmup_state();
+                        peer_store.compact_entry_cache(last_index + 1);
+                        peer_store.raft_state_mut().mut_hard_state().commit = last_index;
+                        peer_store.raft_state_mut().last_index = last_index;
+                    }
                     assert!(
                         self.fsm
                             .peer
@@ -5314,6 +5316,8 @@ where
                             .is_empty()
                     );
                     self.fsm.peer.raft_group.raft.raft_log.unstable.offset = last_index + 1;
+                    self.fsm.peer.raft_group.raft.raft_log.committed = last_index;
+                    self.fsm.peer.raft_group.raft.raft_log.persisted = last_index;
 
                     if let Some(ForceLeaderState::WaitForceCompact {
                         syncer,
