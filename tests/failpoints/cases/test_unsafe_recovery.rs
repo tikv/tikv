@@ -553,8 +553,8 @@ fn test_unsafe_recovery_rollback_merge() {
     fail::remove("on_schedule_merge_ret_err");
 }
 
-// Test the compatibility between apply unperisisted raft log with unsafe
-// recovery. Currently only raftstore supports this feature.
+// Test the compatibility between apply before persist with unsafe recovery.
+// Currently only raftstore supports this feature.
 #[test]
 fn test_unsafe_recovery_apply_before_persist() {
     let mut cluster = new_node_cluster(0, 5);
