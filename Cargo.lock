@@ -5292,6 +5292,7 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crossbeam",
+ "dashmap 5.2.0",
  "encryption",
  "encryption_export",
  "engine_rocks",

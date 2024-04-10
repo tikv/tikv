@@ -11,6 +11,7 @@ use std::{
     },
     vec::IntoIter,
 };
+use dashmap::DashMap;
 
 use api_version::{ApiV2, KvFormat};
 use collections::HashMap;
@@ -1238,7 +1239,8 @@ impl<E: Engine> GcWorker<E> {
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
         &self,
         cfg: AutoGcConfig<S, R>,
-        safe_point: Arc<AtomicU64>, // Store safe point here.
+        safe_point: Arc<AtomicU64>,
+        keyspace_level_gc_cache: Arc<DashMap<u32, u64>>,
     ) -> Result<()> {
         assert!(
             cfg.self_store_id > 0,
@@ -1253,6 +1255,7 @@ impl<E: Engine> GcWorker<E> {
             self.feature_gate.clone(),
             self.scheduler(),
             Arc::new(cfg.region_info_provider.clone()),
+            keyspace_level_gc_cache,
         );
 
         let mut handle = self.gc_manager_handle.lock().unwrap();
@@ -1904,7 +1907,7 @@ mod tests {
 
         let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
         let safe_point = Arc::new(AtomicU64::new(0));
-        gc_worker.start_auto_gc(auto_gc_cfg, safe_point).unwrap();
+        gc_worker.start_auto_gc(auto_gc_cfg, safe_point, Arc::new(Default::default())).unwrap();
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
         host.on_region_changed(&r2, RegionChangeEvent::Create, StateRole::Leader);
         host.on_region_changed(&r3, RegionChangeEvent::Create, StateRole::Leader);

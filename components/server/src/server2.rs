@@ -120,6 +120,7 @@ use tikv_util::{
     Either,
 };
 use tokio::runtime::Builder;
+use tikv::server::gc_worker;
 
 use crate::{
     common::{ConfiguredRaftEngine, EngineMetricsManager, EnginesResourceInfo, TikvServerCore},
@@ -887,6 +888,9 @@ where
             )),
         );
 
+        let keyspace_level_gc_cache=Arc::new(Default::default());
+        gc_worker::start_periodic_gc_tasks(self.pd_client.clone(),&self.core.background_worker,Arc::clone(&keyspace_level_gc_cache));
+
         // Start auto gc. Must after `Node::start` because `node_id` is initialized
         // there.
         let store_id = self.node.as_ref().unwrap().id();
@@ -898,7 +902,7 @@ where
         gc_worker
             .start(store_id)
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
-        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point) {
+        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point, Arc::clone(&keyspace_level_gc_cache)) {
             fatal!("failed to start auto_gc on storage, error: {}", e);
         }
 

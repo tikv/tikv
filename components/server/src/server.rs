@@ -30,6 +30,7 @@ use backup_stream::{
 use causal_ts::CausalTsProviderImpl;
 use cdc::CdcConfigManager;
 use concurrency_manager::ConcurrencyManager;
+use dashmap::DashMap;
 use engine_rocks::{
     from_rocks_compression_type, RocksCompactedEvent, RocksEngine, RocksStatistics,
 };
@@ -407,8 +408,8 @@ where
             None
         };
 
-        let keyspace_level_gc_cache=Arc::new(Default::default());
-        gc_worker::start_periodic_gc_tasks(pd_client.clone(),&background_worker,keyspace_level_gc_cache);
+        // let keyspace_level_gc_cache=Arc::new(Default::default());
+        // gc_worker::start_periodic_gc_tasks(pd_client.clone(),&background_worker,keyspace_level_gc_cache);
 
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store, &resource_manager);
@@ -1048,10 +1049,14 @@ where
             self.region_info_accessor.clone(),
             node.id(),
         );
+
+        let keyspace_level_gc_cache: Arc<DashMap<u32, u64>>=Arc::new(Default::default());
+        gc_worker::start_periodic_gc_tasks(self.pd_client.clone(),&self.core.background_worker,Arc::clone(&keyspace_level_gc_cache));
+
         gc_worker
             .start(node.id())
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
-        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point) {
+        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point,Arc::clone(&keyspace_level_gc_cache)) {
             fatal!("failed to start auto_gc on storage, error: {}", e);
         }
 

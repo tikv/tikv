@@ -11,6 +11,7 @@ use std::{
     },
     time::Duration,
 };
+use dashmap::DashMap;
 
 use engine_rocks::{
     raw::{
@@ -58,6 +59,8 @@ pub struct GcContext {
     pub(crate) region_info_provider: Arc<dyn RegionInfoProvider + 'static>,
     #[cfg(any(test, feature = "failpoints"))]
     callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
+
+    pub(crate) keyspace_level_gc_cache: Arc<DashMap<u32, u64>>,
 }
 
 // Give all orphan versions an ID to log them.
@@ -149,6 +152,7 @@ where
         feature_gate: FeatureGate,
         gc_scheduler: Scheduler<GcTask<EK>>,
         region_info_provider: Arc<dyn RegionInfoProvider>,
+        keyspace_level_gc_cache: Arc<DashMap<u32, u64>>,
     );
 }
 
@@ -164,6 +168,7 @@ where
         _feature_gate: FeatureGate,
         _gc_scheduler: Scheduler<GcTask<EK>>,
         _region_info_provider: Arc<dyn RegionInfoProvider>,
+        _keyspace_level_gc_cache: Arc<DashMap<u32, u64>>,
     ) {
         info!("Compaction filter is not supported for this engine.");
     }
@@ -178,6 +183,7 @@ impl CompactionFilterInitializer<RocksEngine> for Option<RocksEngine> {
         feature_gate: FeatureGate,
         gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         region_info_provider: Arc<dyn RegionInfoProvider>,
+        keyspace_level_gc_cache: Arc<DashMap<u32, u64>>,
     ) {
         info!("initialize GC context for compaction filter");
         let mut gc_context = GC_CONTEXT.lock().unwrap();
@@ -191,6 +197,7 @@ impl CompactionFilterInitializer<RocksEngine> for Option<RocksEngine> {
             region_info_provider,
             #[cfg(any(test, feature = "failpoints"))]
             callbacks_on_drop: vec![],
+            keyspace_level_gc_cache,
         });
     }
 }
@@ -249,6 +256,8 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             debug!("skip gc in compaction filter because it's not allowed");
             return None;
         }
+
+        let keyspace_level_gc_cache= gc_context.keyspace_level_gc_cache.clone();
         drop(gc_context_option);
         GC_COMPACTION_FILTER_PERFORM
             .with_label_values(&[STAT_TXN_KEYMODE])
@@ -274,6 +283,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             context,
             gc_scheduler,
             (store_id, region_info_provider),
+            keyspace_level_gc_cache,
         );
         let name = CString::new("write_compaction_filter").unwrap();
         Some((name, filter))
@@ -358,6 +368,8 @@ pub struct WriteCompactionFilter {
 
     #[cfg(any(test, feature = "failpoints"))]
     callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
+
+    keyspace_level_gc_cache: Arc<DashMap<u32, u64>>,
 }
 
 impl WriteCompactionFilter {
@@ -367,6 +379,7 @@ impl WriteCompactionFilter {
         context: &CompactionFilterContext,
         gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         regions_provider: (u64, Arc<dyn RegionInfoProvider>),
+        keyspace_level_gc_cache: Arc<DashMap<u32, u64>>,
     ) -> Self {
         // Safe point must have been initialized.
         assert!(safe_point > 0);
@@ -401,6 +414,7 @@ impl WriteCompactionFilter {
                 let ctx = GC_CONTEXT.lock().unwrap();
                 ctx.as_ref().unwrap().callbacks_on_drop.clone()
             },
+            keyspace_level_gc_cache,
         }
     }
 

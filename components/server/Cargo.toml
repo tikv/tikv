@@ -41,6 +41,7 @@ clap = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crossbeam = "0.8"
+dashmap = "5"
 encryption = { workspace = true }
 encryption_export = { workspace = true }
 engine_rocks = { workspace = true }
