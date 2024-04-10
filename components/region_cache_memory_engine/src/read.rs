@@ -1,7 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use core::slice::SlicePattern;
-use std::{ fmt::Debug, ops::Deref, result, sync::Arc};
+use std::{fmt::Debug, ops::Deref, result, sync::Arc};
 
 use bytes::Bytes;
 use crossbeam::epoch::{self};
