@@ -9,7 +9,7 @@ use std::{
 use engine_rocks::RocksSnapshot;
 use engine_traits::{CacheRange, FailedReason};
 
-use crate::engine::{RagneCacheSnapshotMeta, SnapshotList};
+use crate::read::{RagneCacheSnapshotMeta, SnapshotList};
 
 #[derive(Debug, Default)]
 pub struct RangeMeta {
