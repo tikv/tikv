@@ -1,7 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use core::slice::SlicePattern;
-use std::{collections::BTreeMap, fmt::Debug, ops::Deref, result, sync::Arc};
+use std::{ fmt::Debug, ops::Deref, result, sync::Arc};
 
 use bytes::Bytes;
 use crossbeam::epoch::{self};
@@ -29,37 +29,6 @@ enum Direction {
     Uninit,
     Forward,
     Backward,
-}
-
-// read_ts -> ref_count
-#[derive(Default, Debug)]
-pub(crate) struct SnapshotList(BTreeMap<u64, u64>);
-
-impl SnapshotList {
-    pub(crate) fn new_snapshot(&mut self, read_ts: u64) {
-        // snapshot with this ts may be granted before
-        let count = self.0.get(&read_ts).unwrap_or(&0) + 1;
-        self.0.insert(read_ts, count);
-    }
-
-    pub(crate) fn remove_snapshot(&mut self, read_ts: u64) {
-        let count = self.0.get_mut(&read_ts).unwrap();
-        assert!(*count >= 1);
-        if *count == 1 {
-            self.0.remove(&read_ts).unwrap();
-        } else {
-            *count -= 1;
-        }
-    }
-
-    // returns the min snapshot_ts (read_ts) if there's any
-    pub fn min_snapshot_ts(&self) -> Option<u64> {
-        self.0.first_key_value().map(|(ts, _)| *ts)
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
 }
 
 #[derive(Clone, Debug)]

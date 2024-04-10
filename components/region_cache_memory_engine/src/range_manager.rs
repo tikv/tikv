@@ -9,10 +9,43 @@ use std::{
 use engine_rocks::RocksSnapshot;
 use engine_traits::{CacheRange, FailedReason};
 
-use crate::read::{RagneCacheSnapshotMeta, SnapshotList};
+use crate::read::RagneCacheSnapshotMeta;
+
+// read_ts -> ref_count
+#[derive(Default, Debug)]
+pub(crate) struct SnapshotList(pub(crate) BTreeMap<u64, u64>);
+
+impl SnapshotList {
+    pub(crate) fn new_snapshot(&mut self, read_ts: u64) {
+        // snapshot with this ts may be granted before
+        let count = self.0.get(&read_ts).unwrap_or(&0) + 1;
+        self.0.insert(read_ts, count);
+    }
+
+    pub(crate) fn remove_snapshot(&mut self, read_ts: u64) {
+        let count = self.0.get_mut(&read_ts).unwrap();
+        assert!(*count >= 1);
+        if *count == 1 {
+            self.0.remove(&read_ts).unwrap();
+        } else {
+            *count -= 1;
+        }
+    }
+
+    // returns the min snapshot_ts (read_ts) if there's any
+    pub fn min_snapshot_ts(&self) -> Option<u64> {
+        self.0.first_key_value().map(|(ts, _)| *ts)
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct RangeMeta {
+    // start_key and end_key cannot uniquely identify a range as range can split and merge, so we
+    // need a range id.
     id: u64,
     range_snapshot_list: SnapshotList,
     safe_point: u64,
@@ -61,7 +94,7 @@ impl IdAllocator {
 
 // RangeManger manges the ranges for RangeCacheMemoryEngine. Every new ranges
 // (whether created by new_range or by splitted due to eviction) has an unique
-// id so that range + id can exactly locate the position.
+// id so that range + id can exactly identify which range it is.
 // When an eviction occured, say we now have k1-k10 in self.ranges and the
 // eviction range is k3-k5. k1-k10 will be splitted to three ranges: k1-k3,
 // k3-k5, and k5-k10.
@@ -195,8 +228,8 @@ impl RangeManager {
     // If the snapshot is the last one in the snapshot list of one cache range in
     // historical_ranges, it means one or some evicted_ranges may be ready to be
     // removed physically.
-    // So, here, we return a vector of ranges to denote the ranges that are ready to
-    // be removed.
+    // So, we return a vector of ranges to denote the ranges that are ready to be
+    // removed.
     pub(crate) fn remove_range_snapshot(
         &mut self,
         snapshot_meta: &RagneCacheSnapshotMeta,
