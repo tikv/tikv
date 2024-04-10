@@ -4,6 +4,7 @@ panic-when-unexpected-key-or-data = true
 abort-on-panic = true
 memory-usage-limit = "10GB"
 memory-usage-high-water = 0.65
+allow-dynamic-security-config = false
 
 [log]
 level = "fatal"
