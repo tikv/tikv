@@ -142,7 +142,7 @@ mod tests {
     use engine_traits::{
         CacheRange, KvEngine, Mutable, Peekable, SnapshotContext, WriteBatch, WriteBatchExt,
     };
-    use region_cache_memory_engine::{range_manager::RangeCacheStatus, RangeCacheEngineConfig};
+    use region_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheStatus};
 
     use crate::util::hybrid_engine_for_tests;
 

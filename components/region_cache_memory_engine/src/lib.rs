@@ -11,16 +11,17 @@ use tikv_util::config::ReadableSize;
 
 mod background;
 mod engine;
-pub mod keys;
+mod keys;
 mod memory_controller;
 mod metrics;
-pub mod range_manager;
+mod range_manager;
 mod read;
-pub mod region_label;
+mod region_label;
 mod write_batch;
 
 pub use background::{BackgroundRunner, GcTask};
 pub use engine::RangeCacheMemoryEngine;
+pub use range_manager::RangeCacheStatus;
 pub use write_batch::RangeCacheWriteBatch;
 
 #[derive(Debug, Error)]

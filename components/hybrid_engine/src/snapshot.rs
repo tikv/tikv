@@ -132,7 +132,7 @@ mod tests {
         CacheRange, IterOptions, Iterable, Iterator, KvEngine, Mutable, SnapshotContext,
         WriteBatch, WriteBatchExt, CF_DEFAULT,
     };
-    use region_cache_memory_engine::{range_manager::RangeCacheStatus, RangeCacheEngineConfig};
+    use region_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheStatus};
 
     use crate::util::hybrid_engine_for_tests;
 
