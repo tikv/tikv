@@ -53,8 +53,6 @@ pub struct RpcClient {
     cluster_id: u64,
     pd_client: Arc<Client>,
     monitor: Arc<ThreadPool<TaskCell>>,
-    ks_safepoint_v2: Arc<DashMap<u32, u64>>,
-    ks_gc_sp_revision: Arc<AtomicI64>,
 }
 
 impl RpcClient {
@@ -108,8 +106,6 @@ impl RpcClient {
                             cfg.retry_interval.0,
                         )),
                         monitor: monitor.clone(),
-                        ks_safepoint_v2: Arc::new(Default::default()),
-                        ks_gc_sp_revision: Arc::new(Default::default()),
                     };
 
                     // spawn a background future to update PD information periodically

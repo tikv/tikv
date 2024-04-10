@@ -128,6 +128,8 @@ use tikv_util::{
     Either,
 };
 use tokio::runtime::Builder;
+use tikv::server::gc_worker;
+use tikv::server::gc_worker::KeyspaceLevelGCWatchService;
 
 use crate::{
     common::{
@@ -405,8 +407,8 @@ where
             None
         };
 
-        resource_control::start_periodic_gc_tasks(pd_client.clone(),
-                                                  &background_worker);
+        let keyspace_level_gc_cache=Arc::new(Default::default());
+        gc_worker::start_periodic_gc_tasks(pd_client.clone(),&background_worker,keyspace_level_gc_cache);
 
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store, &resource_manager);
