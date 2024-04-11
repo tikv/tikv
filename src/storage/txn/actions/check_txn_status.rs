@@ -184,27 +184,8 @@ pub fn rollback_lock(
         txn.delete_value(key.clone(), lock.ts);
     }
 
-<<<<<<< HEAD
-    // Only the primary key of a pessimistic transaction needs to be protected.
-    let protected: bool = is_pessimistic_txn && key.is_encoded_from(&lock.primary);
-=======
-    // (1) The primary key of any transaction needs to be protected.
-    //
-    // (2) If the lock belongs to a pipelined-DML transaction, it must be protected.
-    //
-    // This is for avoiding false positive of assertion failures.
-    // Consider the sequence of events happening on a same key:
-    // 1. T0 commits at commit_ts=10
-    // 2. T1(pipelined-DML) with start_ts=10 flushes, and assert exist. The
-    //    assertion passes.
-    // 3. T2 rolls back T1. The lock is removed, if this is not protected, there's
-    //    no clue left that indicates T1 is rolled back.
-    // 4. T1 flushes again, and assert not exist. It observes T0's commit and
-    //    assertion failed.
-    // If the lock is protected, the second flush will detect the conflict and
-    // return a write conflict error.
-    let protected: bool = key.is_encoded_from(&lock.primary) || (lock.generation > 0);
->>>>>>> 156100119a (txn: Fix the issue that CheckTxnStatus didn't make rollback on optimistic transaction's primary protected, which may break transaction atomicity (#16621))
+    // The primary key of a transaction needs to be protected.
+    let protected: bool = key.is_encoded_from(&lock.primary);
     if let Some(write) = make_rollback(reader.start_ts, protected, overlapped_write) {
         txn.put_write(key.clone(), reader.start_ts, write.as_ref().to_bytes());
     }
