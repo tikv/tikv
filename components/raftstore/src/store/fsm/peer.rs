@@ -2221,6 +2221,8 @@ where
 
         // If the peer is busy on apply and missing the last leader committed index,
         // it should propose a read index to check whether its lag is behind the leader.
+        // It won't generate flooding fetching messages. This proposal will only be sent
+        // out before it gets response and updates the `last_leader_committed_index`.
         if self.fsm.peer.busy_on_apply.is_some()
             && self.fsm.peer.last_leader_committed_idx.is_none()
         {
@@ -6595,6 +6597,8 @@ where
         self.schedule_tick(PeerTick::ReportBuckets)
     }
 
+    /// Check whether the peer should send a request to fetch the committed
+    /// index from the leader.
     fn try_to_fetch_committed_index(&mut self) {
         // Already completed, skip.
         if self.fsm.peer.busy_on_apply.is_none()
@@ -6609,7 +6613,7 @@ where
         if let Some(leader) = leader {
             let mut msg = ExtraMessage::default();
             msg.set_type(ExtraMessageType::MsgAckCommittedIndex);
-            msg.set_index(INVALID_INDEX);
+            msg.set_index(RAFT_INIT_LOG_INDEX);
             self.fsm
                 .peer
                 .send_extra_message(msg, &mut self.ctx.trans, &leader);
@@ -6621,6 +6625,12 @@ where
         }
     }
 
+    /// Handle the response of the committed index from the peer.
+    ///
+    /// If the peer is leader, it should response the committed index to the
+    /// follower.
+    /// If the peer is follower, it should update its local
+    /// `last_leader_committed_idx` if the committed index is valid.
     fn on_fetch_committed_index(&mut self, msg: RaftMessage) {
         // Peer is not leader, it should extract the committed index from the leader
         // and update its local `last_leader_committed_idx` if the committed index is

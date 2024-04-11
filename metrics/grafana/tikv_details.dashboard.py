@@ -490,6 +490,13 @@ Full""",
                         ),
                         legend_format=r"store-write-channelfull-{{instance}}",
                     ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_process_busy",
+                            by_labels=["instance", "type"],
+                        ),
+                        legend_format=r"{{instance}}-{{type}}",
+                    ),
                 ],
             ),
             graph_panel(
