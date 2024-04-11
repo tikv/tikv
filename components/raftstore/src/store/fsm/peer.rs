@@ -2995,8 +2995,11 @@ where
                     self.on_gc_peer_request(msg);
                 }
             }
-            ExtraMessageType::MsgAckCommittedIndex => {
-                self.on_fetch_committed_index(msg);
+            ExtraMessageType::MsgAckCommittedIndexRequest => {
+                self.on_ack_committed_index_request(msg);
+            }
+            ExtraMessageType::MsgAckCommittedIndexResponse => {
+                self.on_ack_committed_index_response(msg);
             }
             // It's v2 only message and ignore does no harm.
             ExtraMessageType::MsgGcPeerResponse | ExtraMessageType::MsgFlushMemtable => (),
@@ -6705,7 +6708,7 @@ where
         let leader = self.fsm.peer.get_peer_from_cache(leader_id);
         if let Some(leader) = leader {
             let mut msg = ExtraMessage::default();
-            msg.set_type(ExtraMessageType::MsgAckCommittedIndex);
+            msg.set_type(ExtraMessageType::MsgAckCommittedIndexRequest);
             msg.set_index(RAFT_INIT_LOG_INDEX);
             self.fsm
                 .peer
@@ -6718,44 +6721,14 @@ where
         }
     }
 
-    /// Handle the response of the committed index from the peer.
+    /// Handle the request of the committed index from the peer.
     ///
-    /// If the peer is leader, it should response the committed index to the
-    /// follower.
-    /// If the peer is follower, it should update its local
-    /// `last_leader_committed_idx` if the committed index is valid.
-    fn on_fetch_committed_index(&mut self, msg: RaftMessage) {
-        // Peer is not leader, it should extract the committed index from the leader
-        // and update its local `last_leader_committed_idx` if the committed index is
-        // valid.
-        if !self.fsm.peer.is_leader() {
-            let committed_index = msg.get_extra_msg().get_index();
-            if committed_index <= RAFT_INIT_LOG_INDEX {
-                warn!(
-                    "invalid committed index";
-                    "region_id" => self.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                    "committed_index" => committed_index
-                );
-            } else {
-                // Get the last committed index of the leader to calculate the gap
-                // of unapplied raft logs on this peer.
-                self.fsm.peer.last_leader_committed_idx = Some(committed_index);
-                debug!(
-                    "update last committed index from leader";
-                    "msg_type" => ?msg.get_extra_msg().get_type(),
-                    "region_id" => self.region_id(), "peer_id" => self.fsm.peer_id(),
-                    "last_committed_index" => committed_index,
-                    "last_index" => self.fsm.peer.get_store().last_index(),
-                );
-            }
-            return;
-        }
-        // Leader should response the committed index to the follower.
+    /// Normally, the handler should be follower / learner of this region.
+    fn on_ack_committed_index_request(&mut self, msg: RaftMessage) {
         let from = msg.get_from_peer();
         let committed_index = self.fsm.peer.get_store().commit_index();
         let mut resp = ExtraMessage::default();
-        resp.set_type(ExtraMessageType::MsgAckCommittedIndex);
+        resp.set_type(ExtraMessageType::MsgAckCommittedIndexResponse);
         resp.set_index(committed_index);
         self.fsm
             .peer
@@ -6767,6 +6740,36 @@ where
             "peer_id" => self.fsm.peer.peer.get_id(),
             "committed_index" => committed_index,
         );
+    }
+
+    /// Handle the response of the committed index from the peer.
+    ///
+    /// Normally, the handler should be the leader of this region.
+    fn on_ack_committed_index_response(&mut self, msg: RaftMessage) {
+        // Peer is not leader, it should extract the committed index from the leader
+        // and update its local `last_leader_committed_idx` if the committed index is
+        // valid.
+        let committed_index = msg.get_extra_msg().get_index();
+        if committed_index <= RAFT_INIT_LOG_INDEX {
+            warn!(
+                "invalid committed index";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "committed_index" => committed_index
+            );
+        } else {
+            // Get the last committed index of the leader to calculate the gap
+            // of unapplied raft logs on this peer.
+            self.fsm.peer.last_leader_committed_idx = Some(committed_index);
+            debug!(
+                "update last committed index from peer";
+                "region_id" => self.region_id(),
+                "from" => msg.get_from_peer().get_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "last_committed_index" => committed_index,
+                "last_index" => self.fsm.peer.get_store().last_index(),
+            );
+        }
     }
 
     /// Check whether the peer is pending on applying raft logs.

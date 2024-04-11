@@ -2841,7 +2841,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/LykxSassinator/kvproto?branch=ack_committed_idx#feea7f79589e34a5cb01d15188fb3c65940fe574"
+source = "git+https://github.com/LykxSassinator/kvproto?branch=ack_committed_idx#3505369008c03c2661c81294c923fc28d4cb005f"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -7078,7 +7078,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "static_assertions",
 ]
 
