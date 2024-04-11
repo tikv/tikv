@@ -2996,7 +2996,7 @@ where
                 }
             }
             ExtraMessageType::MsgAckCommittedIndexRequest => {
-                self.on_ack_committed_index_request(msg);
+                self.on_ack_committed_index_request(msg.get_from_peer());
             }
             ExtraMessageType::MsgAckCommittedIndexResponse => {
                 self.on_ack_committed_index_response(msg);
@@ -6724,8 +6724,7 @@ where
     /// Handle the request of the committed index from the peer.
     ///
     /// Normally, the handler should be follower / learner of this region.
-    fn on_ack_committed_index_request(&mut self, msg: RaftMessage) {
-        let from = msg.get_from_peer();
+    fn on_ack_committed_index_request(&mut self, from: &metapb::Peer) {
         let committed_index = self.fsm.peer.get_store().commit_index();
         let mut resp = ExtraMessage::default();
         resp.set_type(ExtraMessageType::MsgAckCommittedIndexResponse);
