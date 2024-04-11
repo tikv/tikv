@@ -689,12 +689,7 @@ where
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
                 PeerMsg::Destroy(peer_id) => {
                     if self.fsm.peer.peer_id() == peer_id {
-                        match self.fsm.peer.maybe_destroy(self.ctx) {
-                            None => self.ctx.raft_metrics.message_dropped.applying_snap.inc(),
-                            Some(job) => {
-                                self.handle_destroy_peer(job);
-                            }
-                        }
+                        self.maybe_destroy();
                     }
                 }
             }
@@ -1197,6 +1192,9 @@ where
             }
             CasualMessage::SnapshotApplied => {
                 self.fsm.has_ready = true;
+                if self.fsm.peer.should_destroy_after_apply_snapshot() {
+                    self.maybe_destroy();
+                }
             }
             CasualMessage::Campaign => {
                 let _ = self.fsm.peer.raft_group.campaign();
@@ -3568,6 +3566,15 @@ where
         } else {
             // Destroy the peer fsm directly
             self.destroy_peer(false)
+        }
+    }
+
+    fn maybe_destroy(&mut self) {
+        match self.fsm.peer.maybe_destroy(self.ctx) {
+            None => self.ctx.raft_metrics.message_dropped.applying_snap.inc(),
+            Some(job) => {
+                self.handle_destroy_peer(job);
+            }
         }
     }
 
