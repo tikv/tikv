@@ -83,7 +83,7 @@ use raftstore::{
     RaftRouterCompactedEventSender,
 };
 use resolved_ts::Task;
-use security::SecurityManager;
+use security::{SecurityConfigManager, SecurityManager};
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use snap_recovery::RecoveryService;
 use tikv::{
@@ -730,6 +730,12 @@ where
         );
 
         cfg_controller.register(tikv::config::Module::Log, Box::new(LogConfigManager));
+
+        // Register security config manager
+        cfg_controller.register(
+            tikv::config::Module::Security,
+            Box::new(SecurityConfigManager),
+        );
 
         // Create cdc.
         let mut cdc_worker = Box::new(LazyWorker::new("cdc"));

@@ -5103,9 +5103,13 @@ dependencies = [
  "collections",
  "encryption",
  "grpcio",
+ "log_wrappers",
+ "online_config",
  "serde",
  "serde_derive",
  "serde_json",
+ "slog",
+ "slog-global",
  "tempfile",
  "tikv_util",
 ]
