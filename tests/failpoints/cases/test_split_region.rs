@@ -707,7 +707,8 @@ fn test_split_not_to_split_existing_different_uninitialied_peer() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 
-    fail::cfg("on_raft_gc_log_tick", "return()").unwrap();
+    let raft_gc_tick_fp = "on_raft_gc_log_tick";
+    fail::cfg(raft_gc_tick_fp, "return()").unwrap();
     let r1 = cluster.run_conf_change();
     assert_eq!(r1, 1);
 
@@ -755,6 +756,7 @@ fn test_split_not_to_split_existing_different_uninitialied_peer() {
 
     fail::remove(before_check_snapshot_1000_2_fp);
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    fail::remove(raft_gc_tick_fp);
 }
 
 /// A filter that collects all snapshots.
@@ -916,6 +918,8 @@ fn test_split_duplicated_batch() {
     // Exit on_split hook.
     rx2.recv_timeout(Duration::from_secs(3)).unwrap();
     must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
+    fail::remove("on_split");
+    fail::remove("after_split");
 }
 
 /// We depend on split-check task to update approximate size of region even if
