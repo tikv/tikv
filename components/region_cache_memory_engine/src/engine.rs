@@ -217,7 +217,7 @@ impl RangeCacheMemoryEngine {
 
         let bg_work_manager = Arc::new(BgWorkManager::new(
             core.clone(),
-            config.gc_interval,
+            config.gc_interval.0,
             memory_controller.clone(),
         ));
 

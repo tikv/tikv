@@ -4601,6 +4601,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
+ "online_config",
  "parking_lot 0.12.1",
  "pd_client",
  "prometheus",

@@ -3491,7 +3491,7 @@ pub struct TikvConfig {
     #[online_config(submodule)]
     pub resource_control: ResourceControlConfig,
 
-    #[online_config(skip)]
+    #[online_config(submodule)]
     pub range_cache_engine: RangeCacheEngineConfig,
 }
 

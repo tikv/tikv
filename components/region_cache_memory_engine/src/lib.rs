@@ -5,9 +5,10 @@
 
 use std::time::Duration;
 
+use online_config::OnlineConfig;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tikv_util::config::ReadableSize;
+use tikv_util::config::{ReadableDuration, ReadableSize};
 
 mod background;
 mod engine;
@@ -31,11 +32,11 @@ pub enum Error {
     InvalidArgument(String),
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, OnlineConfig)]
 #[serde(default, rename_all = "kebab-case")]
 pub struct RangeCacheEngineConfig {
     pub enabled: bool,
-    pub gc_interval: Duration,
+    pub gc_interval: ReadableDuration,
     soft_limit_threshold: Option<ReadableSize>,
     hard_limit_threshold: Option<ReadableSize>,
 }
@@ -44,7 +45,7 @@ impl Default for RangeCacheEngineConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            gc_interval: Duration::from_secs(180),
+            gc_interval: ReadableDuration(Duration::from_secs(180)),
             soft_limit_threshold: None,
             hard_limit_threshold: None,
         }
@@ -91,7 +92,7 @@ impl RangeCacheEngineConfig {
     pub fn config_for_test() -> RangeCacheEngineConfig {
         RangeCacheEngineConfig {
             enabled: true,
-            gc_interval: Duration::from_secs(180),
+            gc_interval: ReadableDuration(Duration::from_secs(180)),
             soft_limit_threshold: Some(ReadableSize::gb(1)),
             hard_limit_threshold: Some(ReadableSize::gb(2)),
         }
