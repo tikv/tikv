@@ -12,6 +12,7 @@ mod engine;
 pub mod keys;
 mod memory_controller;
 mod metrics;
+pub mod perf_context;
 pub mod range_manager;
 mod read;
 pub mod region_label;
