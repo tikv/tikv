@@ -1219,7 +1219,7 @@ pub mod tests {
     #[test]
     fn test_gc_worker() {
         let mut config = RangeCacheEngineConfig::config_for_test();
-        config.gc_interval = Duration::from_secs(1);
+        config.gc_interval = ReadableDuration(Duration::from_secs(1));
         let engine = RangeCacheMemoryEngine::new(&config);
         let memory_controller = engine.memory_controller();
         let (write, default) = {
