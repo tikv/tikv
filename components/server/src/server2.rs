@@ -888,8 +888,11 @@ where
             )),
         );
 
+        let keyspace_id_meta_map=Arc::new(Default::default());
+        keyspace_meta::start_periodic_keyspace_meta_watcher(self.pd_client.clone(), &self.core.background_worker, Arc::clone(&keyspace_id_meta_map));
+
         let keyspace_level_gc_cache=Arc::new(Default::default());
-        gc_worker::start_periodic_gc_tasks(self.pd_client.clone(),&self.core.background_worker,Arc::clone(&keyspace_level_gc_cache));
+        keyspace_meta::start_periodic_keyspace_level_gc_watcher(self.pd_client.clone(), &self.core.background_worker, Arc::clone(&keyspace_level_gc_cache));
 
         // Start auto gc. Must after `Node::start` because `node_id` is initialized
         // there.
@@ -902,7 +905,7 @@ where
         gc_worker
             .start(store_id)
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
-        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point, Arc::clone(&keyspace_level_gc_cache)) {
+        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point, Arc::clone(&keyspace_level_gc_cache),Arc::clone(&keyspace_id_meta_map)) {
             fatal!("failed to start auto_gc on storage, error: {}", e);
         }
 

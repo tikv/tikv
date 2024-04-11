@@ -22,7 +22,7 @@ use std::{
     u64,
 };
 
-use api_version::{dispatch_api_version, KvFormat};
+use api_version::{dispatch_api_version, keyspace, KvFormat};
 use backup_stream::{
     config::BackupStreamConfigManager, metadata::store::PdStore, observer::BackupStreamObserver,
     BackupStreamResolver,
@@ -77,6 +77,7 @@ use raftstore::{
 use region_cache_memory_engine::RangeCacheMemoryEngine;
 use resolved_ts::{LeadershipResolver, Task};
 use resource_control::ResourceGroupManager;
+use keyspace_meta::metrics::KEYSPACE_GC;
 use security::SecurityManager;
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
 use snap_recovery::RecoveryService;
@@ -130,7 +131,6 @@ use tikv_util::{
 };
 use tokio::runtime::Builder;
 use tikv::server::gc_worker;
-use tikv::server::gc_worker::KeyspaceLevelGCWatchService;
 
 use crate::{
     common::{
@@ -407,9 +407,6 @@ where
         } else {
             None
         };
-
-        // let keyspace_level_gc_cache=Arc::new(Default::default());
-        // gc_worker::start_periodic_gc_tasks(pd_client.clone(),&background_worker,keyspace_level_gc_cache);
 
         // Initialize raftstore channels.
         let (router, system) = fsm::create_raft_batch_system(&config.raft_store, &resource_manager);
@@ -1050,13 +1047,15 @@ where
             node.id(),
         );
 
-        let keyspace_level_gc_cache: Arc<DashMap<u32, u64>>=Arc::new(Default::default());
-        gc_worker::start_periodic_gc_tasks(self.pd_client.clone(),&self.core.background_worker,Arc::clone(&keyspace_level_gc_cache));
+        let keyspace_id_meta_map=Arc::new(Default::default());
+        keyspace_meta::start_periodic_keyspace_meta_watcher(self.pd_client.clone(), &self.core.background_worker, Arc::clone(&keyspace_id_meta_map));
 
+        let keyspace_level_gc_cache: Arc<DashMap<u32, u64>>=Arc::new(Default::default());
+        keyspace_meta::start_periodic_keyspace_level_gc_watcher(self.pd_client.clone(), &self.core.background_worker, Arc::clone(&keyspace_level_gc_cache));
         gc_worker
             .start(node.id())
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
-        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point,Arc::clone(&keyspace_level_gc_cache)) {
+        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point, Arc::clone(&keyspace_level_gc_cache), Arc::clone(&keyspace_id_meta_map)) {
             fatal!("failed to start auto_gc on storage, error: {}", e);
         }
 

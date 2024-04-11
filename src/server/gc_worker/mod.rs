@@ -12,7 +12,7 @@ pub use compaction_filter::test_utils::{gc_by_compact, TestGcRunner};
 pub use compaction_filter::WriteCompactionFilterFactory;
 pub use config::{GcConfig, GcWorkerConfigManager, DEFAULT_GC_BATCH_KEYS};
 use engine_traits::MvccProperties;
-pub use gc_manager::{AutoGcConfig,KeyspaceLevelGCWatchService,start_periodic_gc_tasks};
+pub use gc_manager::{AutoGcConfig};
 #[cfg(any(test, feature = "testexport"))]
 pub use gc_worker::test_gc_worker::{MockSafePointProvider, PrefixedEngine};
 pub use gc_worker::{

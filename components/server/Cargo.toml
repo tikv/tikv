@@ -58,6 +58,7 @@ health_controller = { workspace = true }
 hex = "0.4"
 hybrid_engine = { workspace = true }
 keys = { workspace = true }
+keyspace_meta = {workspace=true}
 kvproto = { workspace = true }
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }

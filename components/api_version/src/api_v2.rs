@@ -8,6 +8,7 @@ use tikv_util::codec::{
     Error,
 };
 use txn_types::{Key, TimeStamp};
+use std::convert::TryInto;
 
 use super::*;
 
@@ -18,6 +19,8 @@ pub const TIDB_META_KEY_PREFIX: u8 = b'm';
 pub const TIDB_TABLE_KEY_PREFIX: u8 = b't';
 pub const DEFAULT_KEY_SPACE_ID: [u8; 3] = [0, 0, 0]; // reserve 3 bytes for key space id.
 pub const DEFAULT_KEY_SPACE_ID_END: [u8; 3] = [0, 0, 1];
+pub const KEYSPACE_PREFIX_LEN: usize = KEYSPACE_ID_LEN + 1;
+pub const KEYSPACE_ID_LEN: usize = DEFAULT_KEY_SPACE_ID.len();
 
 pub const TIDB_RANGES: &[(&[u8], &[u8])] = &[
     (&[TIDB_META_KEY_PREFIX], &[TIDB_META_KEY_PREFIX + 1]),
@@ -245,6 +248,25 @@ impl ApiV2 {
         apiv2_key
     }
 
+    pub fn get_keyspace_id(key: &[u8]) -> [u8; KEYSPACE_ID_LEN] {
+        assert!(key.len() >= KEYSPACE_PREFIX_LEN);
+        [key[1], key[2], key[3]]
+    }
+
+    pub fn get_u32_keyspace_id(keyspace_id: [u8; KEYSPACE_ID_LEN]) -> u32 {
+        return u32::from_be_bytes([0, keyspace_id[0], keyspace_id[1], keyspace_id[2]]);
+    }
+
+    /// Return `None` when the key is not an API V2 key.
+    pub fn get_u32_keyspace_id_by_key(key: &[u8]) -> Option<u32> {
+        let key_mode = Self::parse_key_mode(key);
+        if key_mode == KeyMode::Raw || key_mode == KeyMode::Txn {
+            Some(Self::get_u32_keyspace_id(Self::get_keyspace_id(key)))
+        } else {
+            None
+        }
+    }
+
     pub const ENCODED_LOGICAL_DELETE: [u8; 1] = [ValueMeta::DELETE_FLAG.bits];
 }
 
@@ -429,6 +451,20 @@ mod tests {
             assert_eq!(key, decoded_key, "case {}", idx);
             assert_eq!(ts, decoded_ts1.unwrap(), "case {}", idx);
             assert_eq!(ts, decoded_ts2, "case {}", idx);
+        }
+    }
+
+    #[test]
+    fn test_get_u32_keyspace_id() {
+        let cases = vec![
+            (vec![], None),
+            (vec![b'x', 0], None),
+            (vec![b'x', 0, 0, 1], Some(1)),
+            (vec![b'x', 1, 2, 3, 4, 5], Some(0x10203)),
+        ];
+
+        for (key, expected) in cases.into_iter() {
+            assert_eq!(ApiV2::get_u32_keyspace_id_by_key(&key), expected);
         }
     }
 }

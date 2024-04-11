@@ -284,6 +284,7 @@ members = [
   "components/health_controller",
   "components/into_other",
   "components/keys",
+  "components/keyspace_meta",
   "components/log_wrappers",
   "components/online_config",
   "components/panic_hook",
@@ -372,6 +373,7 @@ gcp = { path = "components/cloud/gcp" }
 health_controller = { path = "components/health_controller" }
 into_other = { path = "components/into_other" }
 keys = { path = "components/keys" }
+keyspace_meta = { path = "components/keyspace_meta" }
 log_wrappers = { path = "components/log_wrappers" }
 memory_trace_macros = { path = "components/memory_trace_macros" }
 online_config = { path = "components/online_config" }
