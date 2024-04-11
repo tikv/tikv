@@ -408,6 +408,10 @@ mod profiling {
         2_u64.pow(rate as u32)
     }
 
+    pub fn get_arena_count() -> u32 {
+        tikv_jemalloc_ctl::arenas::narenas::read().unwrap()
+    }
+
     pub fn activate_prof() -> ProfResult<()> {
         unsafe {
             if let Err(e) = tikv_jemalloc_ctl::raw::update(PROF_ACTIVE, true) {
@@ -552,6 +556,9 @@ mod profiling {
     }
     pub fn set_prof_sample(_rate: u64) -> ProfResult<()> {
         Err(ProfError::MemProfilingNotEnabled)
+    }
+    pub fn get_arena_count() -> u32 {
+        0
     }
     pub fn is_profiling_active() -> bool {
         false

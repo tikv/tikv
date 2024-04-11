@@ -29,6 +29,10 @@ pub fn set_prof_sample(_rate: u64) -> ProfResult<()> {
     Err(ProfError::MemProfilingNotEnabled)
 }
 
+pub fn get_arena_count() -> u32 {
+    0
+}
+
 pub fn is_profiling_active() -> bool {
     false
 }
