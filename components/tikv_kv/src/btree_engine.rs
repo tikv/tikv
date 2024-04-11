@@ -13,7 +13,10 @@ use std::{
 
 use collections::HashMap;
 use engine_panic::PanicEngine;
-use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use engine_traits::{
+    CfName, IterMetricsCollector, IterOptions, MetricsExt, ReadOptions, CF_DEFAULT, CF_LOCK,
+    CF_WRITE,
+};
 use futures::{future, stream, Future, Stream};
 use kvproto::kvrpcpb::Context;
 use txn_types::{Key, Value};
@@ -224,6 +227,25 @@ impl Iterator for BTreeEngineIterator {
     fn value(&self) -> &[u8] {
         assert!(self.valid().unwrap());
         self.cur_value.as_ref().unwrap().as_slice()
+    }
+}
+
+pub struct BTreeEngineIterMetricsCollector;
+
+impl IterMetricsCollector for BTreeEngineIterMetricsCollector {
+    fn internal_delete_skipped_count(&self) -> usize {
+        0
+    }
+
+    fn internal_key_skipped_count(&self) -> usize {
+        0
+    }
+}
+
+impl MetricsExt for BTreeEngineIterator {
+    type Collector = BTreeEngineIterMetricsCollector;
+    fn metrics_collector(&self) -> Self::Collector {
+        BTreeEngineIterMetricsCollector {}
     }
 }
 

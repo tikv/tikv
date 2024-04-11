@@ -14,6 +14,7 @@ mod engine;
 mod keys;
 mod memory_controller;
 mod metrics;
+mod perf_context;
 mod range_manager;
 mod read;
 mod region_label;
