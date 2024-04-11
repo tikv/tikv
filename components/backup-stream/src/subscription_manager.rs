@@ -32,13 +32,11 @@ use crate::{
     router::{Router, TaskSelector},
     subscription_track::{CheckpointType, ResolveResult, SubscriptionTracer},
     try_send,
-    utils::{self, CallbackWaitGroup, Work},
+    utils::{self, FutureWaitGroup, Work},
     Task,
 };
 
 type ScanPool = tokio::runtime::Runtime;
-
-const INITIAL_SCAN_FAILURE_MAX_RETRY_TIME: usize = 10;
 
 // The retry parameters for failed to get last checkpoint ts.
 // When PD is temporarily disconnected, we may need this retry.
@@ -196,11 +194,14 @@ impl ScanCmd {
 
     /// execute the command, when meeting error, retrying.
     async fn exec_by_with_retry(self, init: impl InitialScan) {
-        let mut retry_time = INITIAL_SCAN_FAILURE_MAX_RETRY_TIME;
+        let mut retry_time = TRY_START_OBSERVE_MAX_RETRY_TIME;
         loop {
             match self.exec_by(init.clone()).await {
                 Err(err) if should_retry(&err) && retry_time > 0 => {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    tokio::time::sleep(backoff_for_start_observe(
+                        TRY_START_OBSERVE_MAX_RETRY_TIME - retry_time,
+                    ))
+                    .await;
                     warn!("meet retryable error"; "err" => %err, "retry_time" => retry_time);
                     retry_time -= 1;
                     continue;
@@ -295,7 +296,7 @@ pub struct RegionSubscriptionManager<S, R, PDC> {
 
     messenger: Sender<ObserveOp>,
     scan_pool_handle: Arc<ScanPoolHandle>,
-    scans: Arc<CallbackWaitGroup>,
+    scans: Arc<FutureWaitGroup>,
 }
 
 impl<S, R, PDC> Clone for RegionSubscriptionManager<S, R, PDC>
@@ -316,7 +317,7 @@ where
             subs: self.subs.clone(),
             messenger: self.messenger.clone(),
             scan_pool_handle: self.scan_pool_handle.clone(),
-            scans: CallbackWaitGroup::new(),
+            scans: FutureWaitGroup::new(),
         }
     }
 }
@@ -372,7 +373,7 @@ where
             subs: initial_loader.tracing,
             messenger: tx,
             scan_pool_handle: Arc::new(scan_pool_handle),
-            scans: CallbackWaitGroup::new(),
+            scans: FutureWaitGroup::new(),
         };
         let fut = op.clone().region_operator_loop(rx, leader_checker);
         (op, fut)
@@ -389,8 +390,10 @@ where
     }
 
     /// wait initial scanning get finished.
-    pub fn wait(&self, timeout: Duration) -> future![bool] {
-        tokio::time::timeout(timeout, self.scans.wait()).map(|result| result.is_err())
+    pub async fn wait(&self, timeout: Duration) -> bool {
+        tokio::time::timeout(timeout, self.scans.wait())
+            .map(move |result| result.is_err())
+            .await
     }
 
     /// the handler loop.
@@ -753,7 +756,7 @@ mod test {
         use std::time::Duration;
 
         use super::ScanCmd;
-        use crate::{subscription_manager::spawn_executors, utils::CallbackWaitGroup};
+        use crate::{subscription_manager::spawn_executors, utils::FutureWaitGroup};
 
         fn should_finish_in(f: impl FnOnce() + Send + 'static, d: std::time::Duration) {
             let (tx, rx) = futures::channel::oneshot::channel();
@@ -770,7 +773,7 @@ mod test {
         }
 
         let pool = spawn_executors(NoopInitialScan, 1);
-        let wg = CallbackWaitGroup::new();
+        let wg = FutureWaitGroup::new();
         fail::cfg("execute_scan_command_sleep_100", "return").unwrap();
         for _ in 0..100 {
             let wg = wg.clone();

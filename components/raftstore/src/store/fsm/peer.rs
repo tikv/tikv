@@ -22,6 +22,7 @@ use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt, C
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use futures::channel::mpsc::UnboundedSender;
+use itertools::Itertools;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::{
     brpb::CheckAdminResponse,
@@ -49,13 +50,15 @@ use raft::{
     GetEntriesContext, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
 };
 use smallvec::SmallVec;
+use strum::{EnumCount, VariantNames};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err, debug, defer, error, escape, info, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
+    slow_log,
     store::{find_peer, is_learner, region_on_same_stores},
     sys::{disk::DiskUsage, memory_usage_reaches_high_water},
-    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
+    time::{monotonic_raw_now, Instant as TiInstant, SlowTimer},
     trace, warn,
     worker::{ScheduleError, Scheduler},
     Either,
@@ -613,9 +616,12 @@ where
     }
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
-        let timer = TiInstant::now_coarse();
+        let timer = SlowTimer::from_millis(100);
         let count = msgs.len();
+        #[allow(const_evaluatable_unchecked)]
+        let mut distribution = [0; PeerMsg::<EK>::COUNT];
         for m in msgs.drain(..) {
+            distribution[m.discriminant()] += 1;
             match m {
                 PeerMsg::RaftMessage(msg) => {
                     if let Err(e) = self.on_raft_message(msg) {
@@ -686,23 +692,25 @@ where
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
                 PeerMsg::Destroy(peer_id) => {
                     if self.fsm.peer.peer_id() == peer_id {
-                        match self.fsm.peer.maybe_destroy(self.ctx) {
-                            None => self.ctx.raft_metrics.message_dropped.applying_snap.inc(),
-                            Some(job) => {
-                                self.handle_destroy_peer(job);
-                            }
-                        }
+                        self.maybe_destroy();
                     }
                 }
             }
         }
         self.on_loop_finished();
+        slow_log!(
+            T timer,
+            "{} handle {} peer messages {:?}",
+            self.fsm.peer.tag,
+            count,
+            PeerMsg::<EK>::VARIANTS.iter().zip(distribution).filter(|(_, c)| *c > 0).format(", "),
+        );
         self.ctx.raft_metrics.peer_msg_len.observe(count as f64);
         self.ctx
             .raft_metrics
             .event_time
             .peer_msg
-            .observe(duration_to_sec(timer.saturating_elapsed()));
+            .observe(timer.saturating_elapsed().as_secs_f64());
     }
 
     #[inline]
@@ -1224,6 +1232,9 @@ where
             }
             CasualMessage::SnapshotApplied => {
                 self.fsm.has_ready = true;
+                if self.fsm.peer.should_destroy_after_apply_snapshot() {
+                    self.maybe_destroy();
+                }
             }
             CasualMessage::Campaign => {
                 let _ = self.fsm.peer.raft_group.campaign();
@@ -3064,7 +3075,7 @@ where
             // No need to get snapshot for witness, as witness's empty snapshot bypass
             // snapshot manager.
             let key = SnapKey::from_region_snap(region_id, snap);
-            self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
+            self.ctx.snap_mgr.meta_file_exist(&key)?;
             Some(key)
         } else {
             None
@@ -3488,6 +3499,15 @@ where
         } else {
             // Destroy the peer fsm directly
             self.destroy_peer(false)
+        }
+    }
+
+    fn maybe_destroy(&mut self) {
+        match self.fsm.peer.maybe_destroy(self.ctx) {
+            None => self.ctx.raft_metrics.message_dropped.applying_snap.inc(),
+            Some(job) => {
+                self.handle_destroy_peer(job);
+            }
         }
     }
 

@@ -2826,7 +2826,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#915404ebbb3523be07eba95f7cad22c2310d4e88"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#1f4880c800b923e088883159ebf6e8457003d4ad"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2845,7 +2845,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#915404ebbb3523be07eba95f7cad22c2310d4e88"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#1f4880c800b923e088883159ebf6e8457003d4ad"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4248,6 +4248,8 @@ dependencies = [
  "slog-global",
  "smallvec",
  "sst_importer",
+ "strum 0.20.0",
+ "strum_macros 0.24.3",
  "tempfile",
  "test_sst_importer",
  "thiserror",
@@ -4678,7 +4680,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#915404ebbb3523be07eba95f7cad22c2310d4e88"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#1f4880c800b923e088883159ebf6e8457003d4ad"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",
@@ -5543,7 +5545,20 @@ dependencies = [
 
 [[package]]
 name = "strum_macros"
-version = "0.24.2"
+version = "0.24.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e385be0d24f186b4ce2f9982191e7101bb737312ad61c1f2f984f34bcf85d59"
+dependencies = [
+ "heck 0.4.1",
+ "proc-macro2",
+ "quote",
+ "rustversion",
+ "syn 1.0.103",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4faebde00e8ff94316c01800f9054fd2ba77d30d9e922541913051d1d978918b"
 dependencies = [
@@ -6178,7 +6193,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.5.8"
+version = "6.5.9"
 dependencies = [
  "anyhow",
  "api_version",
