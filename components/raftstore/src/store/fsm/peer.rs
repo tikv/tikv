@@ -2995,11 +2995,11 @@ where
                     self.on_gc_peer_request(msg);
                 }
             }
-            ExtraMessageType::MsgAckCommittedIndexRequest => {
-                self.on_ack_committed_index_request(msg.get_from_peer());
+            ExtraMessageType::MsgFetchCommittedIndexRequest => {
+                self.on_fetch_committed_index_request(msg.get_from_peer());
             }
-            ExtraMessageType::MsgAckCommittedIndexResponse => {
-                self.on_ack_committed_index_response(msg);
+            ExtraMessageType::MsgFetchCommittedIndexResponse => {
+                self.on_fetch_committed_index_response(msg);
             }
             // It's v2 only message and ignore does no harm.
             ExtraMessageType::MsgGcPeerResponse | ExtraMessageType::MsgFlushMemtable => (),
@@ -6708,7 +6708,7 @@ where
         let leader = self.fsm.peer.get_peer_from_cache(leader_id);
         if let Some(leader) = leader {
             let mut msg = ExtraMessage::default();
-            msg.set_type(ExtraMessageType::MsgAckCommittedIndexRequest);
+            msg.set_type(ExtraMessageType::MsgFetchCommittedIndexRequest);
             msg.set_index(RAFT_INIT_LOG_INDEX);
             self.fsm
                 .peer
@@ -6724,10 +6724,10 @@ where
     /// Handle the request of the committed index from the peer.
     ///
     /// Normally, the handler should be follower / learner of this region.
-    fn on_ack_committed_index_request(&mut self, from: &metapb::Peer) {
+    fn on_fetch_committed_index_request(&mut self, from: &metapb::Peer) {
         let committed_index = self.fsm.peer.get_store().commit_index();
         let mut resp = ExtraMessage::default();
-        resp.set_type(ExtraMessageType::MsgAckCommittedIndexResponse);
+        resp.set_type(ExtraMessageType::MsgFetchCommittedIndexResponse);
         resp.set_index(committed_index);
         self.fsm
             .peer
@@ -6744,7 +6744,7 @@ where
     /// Handle the response of the committed index from the peer.
     ///
     /// Normally, the handler should be the leader of this region.
-    fn on_ack_committed_index_response(&mut self, msg: RaftMessage) {
+    fn on_fetch_committed_index_response(&mut self, msg: RaftMessage) {
         // Peer is not leader, it should extract the committed index from the leader
         // and update its local `last_leader_committed_idx` if the committed index is
         // valid.
