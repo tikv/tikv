@@ -1460,6 +1460,34 @@ where
         );
     }
 
+    pub fn wait_peer_role(&self, region_id: u64, store_id: u64, peer_id: u64, role: PeerRole) {
+        for _ in 0..100 {
+            if let Some(state) = self
+                .get_engine(store_id)
+                .get_msg_cf::<RegionLocalState>(
+                    engine_traits::CF_RAFT,
+                    &keys::region_state_key(region_id),
+                )
+                .unwrap()
+            {
+                let peer = state
+                    .get_region()
+                    .get_peers()
+                    .iter()
+                    .find(|p| p.get_id() == peer_id)
+                    .unwrap();
+                if peer.role == role {
+                    return;
+                }
+            }
+            sleep_ms(10);
+        }
+        panic!(
+            "[region {}] peer state still not reach {:?}",
+            region_id, role
+        );
+    }
+
     pub fn wait_last_index(
         &mut self,
         region_id: u64,
@@ -1837,7 +1865,7 @@ where
         }
     }
 
-    fn new_prepare_merge(&self, source: u64, target: u64) -> RaftCmdRequest {
+    pub fn new_prepare_merge(&self, source: u64, target: u64) -> RaftCmdRequest {
         let region = block_on(self.pd_client.get_region_by_id(target))
             .unwrap()
             .unwrap();
