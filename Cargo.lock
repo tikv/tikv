@@ -2841,11 +2841,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-<<<<<<< HEAD
 source = "git+https://github.com/LykxSassinator/kvproto?branch=ack_committed_idx#feea7f79589e34a5cb01d15188fb3c65940fe574"
-=======
-source = "git+https://github.com/pingcap/kvproto.git#c699538f7aa18394ae5e09cd1291209079b391d6"
->>>>>>> master
 dependencies = [
  "futures 0.3.15",
  "grpcio",
