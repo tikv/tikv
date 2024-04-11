@@ -502,12 +502,9 @@ impl WriteCompactionFilter {
                 }
             }
         }
-
-
-
     }
 
-    fn get_ks_gc_sp_from_cache(&mut self, key: &[u8]) -> u64 {
+    fn get_keyspace_gc_safe_point(&mut self, key: &[u8]) -> u64 {
         let keyspace_id_opt=ApiV2::get_u32_keyspace_id_by_key(key);
         match keyspace_id_opt {
             Some(value) => {
@@ -516,7 +513,6 @@ impl WriteCompactionFilter {
                 let ks_gc_sp=self.keyspace_level_gc_cache.get(&keyspace_id);
                 match ks_gc_sp {
                     None => {
-
                         // Don't find in keyspace level gc cache
                         let is_keyspace_use_global_gc_safe_point = self.is_keyspace_use_global_gc_safe_point(keyspace_id);
                         if is_keyspace_use_global_gc_safe_point {
@@ -552,7 +548,7 @@ impl WriteCompactionFilter {
     ) -> Result<CompactionFilterDecision, String> {
         let (mvcc_key_prefix, commit_ts) = split_ts(key)?;
 
-        self.safe_point=self.get_ks_gc_sp_from_cache(key);
+        self.safe_point=self.get_keyspace_gc_safe_point(key);
 
         if commit_ts > self.safe_point || value_type != CompactionFilterValueType::Value {
             return Ok(CompactionFilterDecision::Keep);
