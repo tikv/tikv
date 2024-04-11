@@ -2,12 +2,17 @@
 
 use std::{iter::FromIterator, sync::Arc, time::Duration};
 
+use engine_traits::{RaftEngineReadOnly, CF_RAFT};
 use futures::executor::block_on;
-use kvproto::{metapb, pdpb};
+use kvproto::{
+    metapb, pdpb,
+    raft_serverpb::{RaftApplyState, RaftLocalState},
+};
 use pd_client::PdClient;
+use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use tikv_util::{config::ReadableDuration, mpsc, store::find_peer};
+use tikv_util::{config::ReadableDuration, mpsc, store::find_peer, HandyRwLock};
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
@@ -546,4 +551,170 @@ fn test_unsafe_recovery_rollback_merge() {
     assert_eq!(demoted, true);
 
     fail::remove("on_schedule_merge_ret_err");
+}
+
+// Test the compatibility between apply before persist with unsafe recovery.
+// Currently only raftstore supports this feature.
+#[test]
+fn test_unsafe_recovery_apply_before_persist() {
+    let mut cluster = new_node_cluster(0, 5);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
+    cluster.cfg.raft_store.cmd_batch_concurrent_ready_max_count = 0;
+    cluster.cfg.raft_store.store_io_pool_size = 1;
+    cluster.cfg.raft_store.max_apply_unpersisted_log_limit = 10000;
+    cluster.run();
+    assert_eq!(cluster.get_node_ids().len(), 5);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    let peer_1 = find_peer(&region, 1).cloned().unwrap();
+
+    cluster.must_transfer_leader(region.get_id(), peer_1);
+
+    for i in 0..10 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v1");
+    }
+
+    let raft_before_save_on_store_1_fp = "raft_before_persist_on_store_1";
+    // skip persist to simulate raft log persist lag but not block node restart.
+    fail::cfg(raft_before_save_on_store_1_fp, "return").unwrap();
+
+    for i in 10..20 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v2");
+    }
+
+    fn get_applied_index<EK: KvEngineWithRocks, T: Simulator<EK>>(
+        cluster: &Cluster<EK, T>,
+        store_id: u64,
+    ) -> u64 {
+        let state: RaftApplyState = cluster.engines[&store_id]
+            .kv
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
+            .unwrap()
+            .unwrap_or_default();
+        state.applied_index
+    }
+
+    let mut catch_up = false;
+    for _i in 0..20 {
+        let applied1 = get_applied_index(&cluster, 1);
+        let applied2 = get_applied_index(&cluster, 2);
+        if applied1 == applied2 {
+            catch_up = true;
+            break;
+        }
+        sleep_ms(50);
+    }
+    assert!(catch_up);
+
+    let send_filter = Box::new(
+        RegionPacketFilter::new(region.get_id(), 2)
+            .direction(Direction::Recv)
+            .msg_type(MessageType::MsgAppend),
+    );
+    cluster.sim.wl().add_recv_filter(2, send_filter);
+
+    for i in 20..30 {
+        cluster.must_put(format!("k{}", i).as_bytes(), b"v3");
+    }
+    must_get_none(&cluster.get_engine(2), "k20".as_bytes());
+    let mut catch_up = false;
+    for _i in 0..20 {
+        let applied1 = get_applied_index(&cluster, 1);
+        let applied3 = get_applied_index(&cluster, 3);
+        if applied1 == applied3 {
+            catch_up = true;
+            break;
+        }
+        sleep_ms(50);
+    }
+    assert!(catch_up);
+
+    let apply1 = get_applied_index(&cluster, 1);
+    let apply2 = get_applied_index(&cluster, 2);
+    let apply3 = get_applied_index(&cluster, 3);
+    assert_eq!(apply1, apply3);
+    assert_eq!(apply1, apply2 + 10);
+
+    let get_committed_idx = |store_id: u64| {
+        let state: RaftLocalState = cluster.engines[&store_id]
+            .raft
+            .get_raft_state(region.get_id())
+            .unwrap()
+            .unwrap();
+        state.get_hard_state().commit
+    };
+    let commit1 = get_committed_idx(1);
+    let commit2 = get_committed_idx(2);
+    let commit3 = get_committed_idx(3);
+    assert!(commit3 >= commit1 + 20);
+    assert_eq!(commit3, commit2 + 10);
+    assert_eq!(commit3, apply1);
+
+    for i in [1, 3, 4, 5] {
+        cluster.stop_node(i);
+    }
+    cluster.run_node(1).unwrap();
+
+    cluster.sim.wl().clear_recv_filters(2);
+    fail::remove(raft_before_save_on_store_1_fp);
+
+    // Triggers the unsafe recovery store reporting process.
+    let plan = pdpb::RecoveryPlan::default();
+    for i in [1, 2] {
+        pd_client.must_set_unsafe_recovery_plan(i, plan.clone());
+        cluster.must_send_store_heartbeat(i);
+    }
+    // Store reports are sent once the entries are applied.
+    let mut store_report = None;
+    for _ in 0..20 {
+        store_report = pd_client.must_get_store_report(1);
+        if store_report.is_some() {
+            break;
+        }
+        sleep_ms(20);
+    }
+    assert_ne!(store_report, None);
+
+    cluster.must_enter_force_leader(region.get_id(), 1, vec![3, 4, 5]);
+    // Allow rollback merge to finish.
+    sleep_ms(100);
+
+    // Construct recovery plan.
+    let mut plan = pdpb::RecoveryPlan::default();
+
+    let to_be_removed: Vec<metapb::Peer> = region
+        .get_peers()
+        .iter()
+        .filter(|&peer| [3, 4, 5].contains(&peer.get_store_id()))
+        .cloned()
+        .collect();
+    let mut demote = pdpb::DemoteFailedVoters::default();
+    demote.set_region_id(region.get_id());
+    demote.set_failed_voters(to_be_removed.into());
+    plan.mut_demotes().push(demote);
+
+    // Send the plan again.
+    pd_client.must_set_unsafe_recovery_plan(1, plan);
+    cluster.must_send_store_heartbeat(1);
+
+    let mut demoted = false;
+    for _ in 0..50 {
+        let region_in_pd = block_on(pd_client.get_region_by_id(region.get_id()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(region_in_pd.get_peers().len(), 5);
+        demoted = region_in_pd
+            .get_peers()
+            .iter()
+            .filter(|peer| [3, 4, 5].contains(&peer.get_store_id()))
+            .all(|peer| peer.get_role() == metapb::PeerRole::Learner);
+        sleep_ms(100);
+    }
+    assert_eq!(demoted, true);
+
+    // Test after recovery, the store 2 should also contain all the data.
+    must_get_equal(&cluster.get_engine(2), b"k29", b"v3");
 }
