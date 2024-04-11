@@ -49,6 +49,10 @@ pub const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
 // other replicas by Raft.
 const COMPACTION_FILTER_GC_FEATURE: Feature = Feature::require(5, 0, 0);
 
+const KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE: &str="gc_management_type";
+const GC_MGMT_TYPE_KEYSPACE_LEVEL_GC: &str="keyspace_level_gc";
+
+
 // Global context to create a compaction filter for write CF. It's necessary as
 // these fields are not available when constructing
 // `WriteCompactionFilterFactory`.
@@ -475,24 +479,25 @@ impl WriteCompactionFilter {
         }
     }
 
-    fn is_enable_keyspace_level_gc(&self,keyspace_id: u32)->bool{
+    fn is_keyspace_use_global_gc_safe_point(&self, keyspace_id: u32) ->bool{
         let keyspace_meta_opt=self.keyspace_meta_cache.get(&keyspace_id);
         match keyspace_meta_opt {
             None => {
-                // todo(ystaticy) met error, should not call here.
+                // Haven't got the keyspace meta yet.May be fetching by KeyspaceMetaWatchService.
                 return false;
             }
             Some(keyspace_meta) => {
-                let ks_gc_management_type =keyspace_meta.config.get("gc_management_type");
+                let ks_gc_management_type =keyspace_meta.config.get(KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE);
                 match ks_gc_management_type {
                     None => {
-                        return false
+                        // keyspace config don't set 'keyspace_level_gc'
+                        return true
                     }
                     Some(gc_management_type) => {
-                        if gc_management_type=="a"{
-                            return true
+                        if gc_management_type==GC_MGMT_TYPE_KEYSPACE_LEVEL_GC{
+                            return false
                         }
-                        return false
+                        return true
                     }
                 }
             }
@@ -513,15 +518,15 @@ impl WriteCompactionFilter {
                     None => {
 
                         // Don't find in keyspace level gc cache
-                        let is_enable_keyspace_level_gc = self.is_enable_keyspace_level_gc(keyspace_id);
-                        if is_enable_keyspace_level_gc {
-                            // keyspace meta enable keyspace level gc,
-                            // but can not get keyspace level gc safe point here,
-                            // may be gc safe point of this keyspace hasn't been calculated yet.
-                            return 0;
-                        } else {
+                        let is_keyspace_use_global_gc_safe_point = self.is_keyspace_use_global_gc_safe_point(keyspace_id);
+                        if is_keyspace_use_global_gc_safe_point {
                             // keyspace don't enable keyspace level gc.
                             return self.safe_point;
+                        } else {
+                            // keyspace meta enable keyspace level gc,
+                            // but can not get keyspace meta, or can not get keyspace level gc safe point here,
+                            // may be gc safe point of this keyspace hasn't been calculated yet.
+                            return 0;
                         }
                     }
                     Some(ks2sp) => {
