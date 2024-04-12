@@ -14,12 +14,10 @@ use tikv_util::worker::Worker;
 #[cfg(test)]
 extern crate test;
 
-
 pub mod service;
 pub use service::KeyspaceMetaService;
 pub use service::KeyspaceLevelGCWatchService;
 use crate::service::KeyspaceMetaWatchService;
-
 
 pub fn start_periodic_keyspace_level_gc_watcher(
     pd_client: Arc<RpcClient>,

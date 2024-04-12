@@ -897,7 +897,6 @@ where
             )),
         );
 
-
         // Start auto gc. Must after `Node::start` because `node_id` is initialized
         // there.
         let store_id = self.node.as_ref().unwrap().id();
