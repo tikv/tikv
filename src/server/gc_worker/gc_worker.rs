@@ -1242,7 +1242,7 @@ impl<E: Engine> GcWorker<E> {
         &self,
         cfg: AutoGcConfig<S, R>,
         safe_point: Arc<AtomicU64>,
-        keyspace_meta_service: Arc<KeyspaceMetaService>,
+        keyspace_meta_service: Option<Arc<KeyspaceMetaService>>,
     ) -> Result<()> {
         assert!(
             cfg.self_store_id > 0,
@@ -1909,7 +1909,7 @@ mod tests {
 
         let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
         let safe_point = Arc::new(AtomicU64::new(0));
-        gc_worker.start_auto_gc(auto_gc_cfg, safe_point, Arc::new(Default::default()), ).unwrap();
+        gc_worker.start_auto_gc(auto_gc_cfg, safe_point, None).unwrap();
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
         host.on_region_changed(&r2, RegionChangeEvent::Create, StateRole::Leader);
         host.on_region_changed(&r3, RegionChangeEvent::Create, StateRole::Leader);

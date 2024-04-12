@@ -135,7 +135,7 @@ impl KeyspaceLevelGCWatchService {
             .get_cluster_id()
             .unwrap();
         let keyspace_level_gc_prefix=format!("/pd/{}/keyspaces/gc_safe_point", cluster_id);
-        return keyspace_level_gc_prefix;
+        keyspace_level_gc_prefix
     }
 
     async fn reload_all_keyspace_level_gc(&mut self) {
@@ -180,13 +180,13 @@ pub struct KeyspaceMetaWatchService {
     // record watch revision.
     revision: i64,
 
-    keyspace_id_meta_map: Arc<DashMap<u32, keyspacepb::KeyspaceMeta>>,
+    keyspace_id_meta_map: Arc<DashMap<u32, KeyspaceMeta>>,
 }
 
 impl KeyspaceMetaWatchService {
     pub fn new(
         pd_client: Arc<RpcClient>,
-        keyspace_id_meta_map: Arc<DashMap<u32, keyspacepb::KeyspaceMeta>>,
+        keyspace_id_meta_map: Arc<DashMap<u32, KeyspaceMeta>>,
     ) -> KeyspaceMetaWatchService {
         KeyspaceMetaWatchService {
             revision: 0,
@@ -272,7 +272,7 @@ impl KeyspaceMetaWatchService {
             .get_cluster_id()
             .unwrap();
         let keyspace_meta_prefix=format!("/pd/{}/keyspaces/meta", cluster_id);
-        return keyspace_meta_prefix;
+        keyspace_meta_prefix
     }
 
     async fn reload_all_keyspace_meta(&mut self) {
@@ -321,6 +321,13 @@ pub struct KeyspaceMetaService {
     keyspace_id_meta_map: Arc<DashMap<u32, keyspacepb::KeyspaceMeta>>,
 }
 
+impl Default for KeyspaceMetaService {
+    fn default() -> Self {
+        todo!()
+    }
+    
+}
+
 impl KeyspaceMetaService {
     pub fn new(
         pd_client: Arc<RpcClient>,
@@ -346,7 +353,7 @@ impl KeyspaceMetaService {
         match keyspace_meta_opt {
             None => {
                 // Haven't got the keyspace meta yet.May be fetching by KeyspaceMetaWatchService.
-                return false;
+                false
             }
             Some(keyspace_meta) => {
                 let ks_gc_management_type =keyspace_meta.config.get(KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE);
@@ -367,7 +374,7 @@ impl KeyspaceMetaService {
     }
 
     pub fn get_gc_sp_by_sp(&self, key: &[u8]) -> u64 {
-        return self.get_keyspace_gc_safe_point(self.safe_point.load(Ordering::Relaxed),key);
+        self.get_keyspace_gc_safe_point(self.safe_point.load(Ordering::Relaxed),key)
     }
     pub fn get_keyspace_gc_safe_point(&self,safe_point:u64, key: &[u8]) -> u64 {
         let keyspace_id_opt=ApiV2::get_u32_keyspace_id_by_key(key);
@@ -382,23 +389,23 @@ impl KeyspaceMetaService {
                         let is_keyspace_use_global_gc_safe_point = self.is_keyspace_use_global_gc_safe_point(keyspace_id);
                         if is_keyspace_use_global_gc_safe_point {
                             // keyspace don't enable keyspace level gc.
-                            return safe_point;
+                            safe_point
                         } else {
                             // keyspace meta enable keyspace level gc,
                             // but can not get keyspace meta, or can not get keyspace level gc safe point here,
                             // may be gc safe point of this keyspace hasn't been calculated yet.
-                            return 0;
+                            0
                         }
                     }
                     Some(ks2sp) => {
                         let ks_gc_sp = *ks2sp.value();
-                        return ks_gc_sp;
+                        ks_gc_sp
                     }
                 }
             },
             None => {
                 // Api V1
-                return safe_point;
+                safe_point
             },
         }
     }

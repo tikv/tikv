@@ -10,10 +10,6 @@ use pd_client::RpcClient;
 use serde::{Deserialize, Serialize};
 use tikv_util::worker::Worker;
 
-
-#[cfg(test)]
-extern crate test;
-
 pub mod service;
 pub use service::KeyspaceMetaService;
 pub use service::KeyspaceLevelGCWatchService;

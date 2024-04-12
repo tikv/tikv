@@ -908,7 +908,7 @@ where
         gc_worker
             .start(store_id)
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
-        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point, Arc::clone(&keyspace_meta_service)) {
+        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point, Some(Arc::clone(&keyspace_meta_service))) {
             fatal!("failed to start auto_gc on storage, error: {}", e);
         }
 

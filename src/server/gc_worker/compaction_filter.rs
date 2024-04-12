@@ -64,7 +64,7 @@ pub struct GcContext {
     #[cfg(any(test, feature = "failpoints"))]
     callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
 
-    pub(crate) keyspace_meta_service: Arc<KeyspaceMetaService>,
+    pub(crate) keyspace_meta_service: Option<Arc<KeyspaceMetaService>>,
 }
 
 // Give all orphan versions an ID to log them.
@@ -156,7 +156,7 @@ where
         feature_gate: FeatureGate,
         gc_scheduler: Scheduler<GcTask<EK>>,
         region_info_provider: Arc<dyn RegionInfoProvider>,
-        keyspace_meta_service: Arc<KeyspaceMetaService>,
+        keyspace_meta_service: Option<Arc<KeyspaceMetaService>>,
     );
 }
 
@@ -172,7 +172,7 @@ where
         _feature_gate: FeatureGate,
         _gc_scheduler: Scheduler<GcTask<EK>>,
         _region_info_provider: Arc<dyn RegionInfoProvider>,
-        _keyspace_meta_service: Arc<KeyspaceMetaService>,
+        _keyspace_meta_service: Option<Arc<KeyspaceMetaService>>,
     ) {
         info!("Compaction filter is not supported for this engine.");
     }
@@ -187,7 +187,7 @@ impl CompactionFilterInitializer<RocksEngine> for Option<RocksEngine> {
         feature_gate: FeatureGate,
         gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         region_info_provider: Arc<dyn RegionInfoProvider>,
-        keyspace_meta_service: Arc<KeyspaceMetaService>,
+        keyspace_meta_service: Option<Arc<KeyspaceMetaService>>,
     ) {
         info!("initialize GC context for compaction filter");
         let mut gc_context = GC_CONTEXT.lock().unwrap();
@@ -373,7 +373,7 @@ pub struct WriteCompactionFilter {
     #[cfg(any(test, feature = "failpoints"))]
     callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
 
-    keyspace_meta_service: Arc<KeyspaceMetaService>,
+    keyspace_meta_service: Option<Arc<KeyspaceMetaService>>,
 }
 
 impl WriteCompactionFilter {
@@ -383,7 +383,7 @@ impl WriteCompactionFilter {
         context: &CompactionFilterContext,
         gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         regions_provider: (u64, Arc<dyn RegionInfoProvider>),
-        keyspace_meta_service: Arc<KeyspaceMetaService>,
+        keyspace_meta_service: Option<Arc<KeyspaceMetaService>>,
     ) -> Self {
         // Safe point must have been initialized.
         assert!(safe_point > 0);
@@ -476,7 +476,12 @@ impl WriteCompactionFilter {
     ) -> Result<CompactionFilterDecision, String> {
         let (mvcc_key_prefix, commit_ts) = split_ts(key)?;
 
-        self.safe_point=self.keyspace_meta_service.get_keyspace_gc_safe_point(self.safe_point,key);
+        match &self.keyspace_meta_service {
+            None => {}
+            Some(keyspace_meta_service) => {
+                self.safe_point=keyspace_meta_service.get_keyspace_gc_safe_point(self.safe_point,key);
+            }
+        }
 
         if commit_ts > self.safe_point || value_type != CompactionFilterValueType::Value {
             return Ok(CompactionFilterDecision::Keep);
@@ -927,7 +932,7 @@ pub mod test_utils {
                 gc_scheduler: self.gc_scheduler.clone(),
                 region_info_provider: Arc::new(MockRegionInfoProvider::new(vec![])),
                 callbacks_on_drop: self.callbacks_on_drop.clone(),
-                keyspace_meta_service:Arc::new(Default::default()),
+                keyspace_meta_service:None,
             });
         }
 

@@ -248,20 +248,20 @@ impl ApiV2 {
         apiv2_key
     }
 
-    pub fn get_keyspace_id(key: &[u8]) -> [u8; KEYSPACE_ID_LEN] {
+    pub fn get_keyspace_prefix_by_key(key: &[u8]) -> [u8; KEYSPACE_ID_LEN] {
         assert!(key.len() >= KEYSPACE_PREFIX_LEN);
         [key[1], key[2], key[3]]
     }
 
-    pub fn get_u32_keyspace_id(keyspace_id: [u8; KEYSPACE_ID_LEN]) -> u32 {
-        return u32::from_be_bytes([0, keyspace_id[0], keyspace_id[1], keyspace_id[2]]);
+    pub fn get_u32_keyspace_id_by_key_prefix(keyspace_id: [u8; KEYSPACE_ID_LEN]) -> u32 {
+        u32::from_be_bytes([0, keyspace_id[0], keyspace_id[1], keyspace_id[2]])
     }
 
-    /// Return `None` when the key is not an API V2 key.
+    // Return `None` when the key is not an API V2 key.
     pub fn get_u32_keyspace_id_by_key(key: &[u8]) -> Option<u32> {
         let key_mode = Self::parse_key_mode(key);
         if key_mode == KeyMode::Raw || key_mode == KeyMode::Txn {
-            Some(Self::get_u32_keyspace_id(Self::get_keyspace_id(key)))
+            Some(Self::get_u32_keyspace_id_by_key_prefix(Self::get_keyspace_prefix_by_key(key)))
         } else {
             None
         }

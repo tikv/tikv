@@ -137,7 +137,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         cfg: AutoGcConfig<S, R>,
     ) {
         self.gc_worker
-            .start_auto_gc(cfg, Arc::new(AtomicU64::new(0)), Arc::new(Default::default()))
+            .start_auto_gc(cfg, Arc::new(AtomicU64::new(0)), None)
             .unwrap();
     }
 
