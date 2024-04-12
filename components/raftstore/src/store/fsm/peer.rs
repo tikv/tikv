@@ -2238,6 +2238,11 @@ where
             |_| {}
         );
 
+        if self.fsm.peer.pending_remove {
+            self.fsm.peer.mut_store().flush_entry_cache_metrics();
+            return;
+        }
+
         // If the peer is busy on apply and missing the last leader committed index,
         // it should propose a read index to check whether its lag is behind the leader.
         // It won't generate flooding fetching messages. This proposal will only be sent
@@ -2249,10 +2254,6 @@ where
             self.try_to_fetch_committed_index();
         }
 
-        if self.fsm.peer.pending_remove {
-            self.fsm.peer.mut_store().flush_entry_cache_metrics();
-            return;
-        }
         // When having pending snapshot, if election timeout is met, it can't pass
         // the pending conf change check because first index has been updated to
         // a value that is larger than last index.
