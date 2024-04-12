@@ -11,7 +11,7 @@ mod all {
 
     use std::{
         sync::{
-            atomic::{AtomicBool, AtomicUsize, Ordering},
+            atomic::{AtomicBool, Ordering},
             Arc,
         },
         time::Duration,
@@ -30,6 +30,7 @@ mod all {
         config::{ReadableDuration, ReadableSize},
         defer,
     };
+    use txn_types::Key;
 
     use super::{
         make_record_key, make_split_key_at_record, mutation, run_async_test, SuiteBuilder,
@@ -318,10 +319,12 @@ mod all {
 
     #[test]
     fn resolve_during_flushing() {
-        test_util::init_log_for_test();
         let mut suite = SuiteBuilder::new_named("resolve_during_flushing")
-            .cfg(|cfg| cfg.min_ts_interval = ReadableDuration::days(1))
-            .nodes(1)
+            .cfg(|cfg| {
+                cfg.min_ts_interval = ReadableDuration::days(1);
+                cfg.initial_scan_concurrency = 1;
+            })
+            .nodes(2)
             .build();
         suite.must_register_task(1, "resolve_during_flushing");
         let key = make_record_key(1, 1);
@@ -339,11 +342,22 @@ mod all {
         fail::cfg("after_moving_to_flushing_files", "pause").unwrap();
         suite.force_flush_files("resolve_during_flushing");
         let commit_ts = suite.tso();
-        suite.just_commit_a_key(key, start_ts, commit_ts);
+        suite.just_commit_a_key(key.clone(), start_ts, commit_ts);
         suite.run(|| Task::RegionCheckpointsOp(RegionCheckpointOperation::PrepareMinTsForResolve));
+        // Wait until the resolve done. Sadly for now we don't have good solutions :(
         std::thread::sleep(Duration::from_secs(2));
         fail::remove("after_moving_to_flushing_files");
         suite.wait_for_flush();
         assert_eq!(suite.global_checkpoint(), start_ts.into_inner());
+        // transfer the leader, make sure everything has been flushed.
+        suite.must_shuffle_leader(1);
+        suite.wait_with(|cfg| cfg.initial_scan_semaphore.available_permits() > 0);
+        suite.force_flush_files("resolve_during_flushing");
+        suite.wait_for_flush();
+        let enc_key = Key::from_raw(&key).append_ts(commit_ts);
+        suite.check_for_write_records(
+            suite.flushed_files.path(),
+            std::iter::once(enc_key.as_encoded().as_slice()),
+        );
     }
 }

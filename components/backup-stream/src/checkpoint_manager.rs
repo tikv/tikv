@@ -14,7 +14,7 @@ use kvproto::{
     metapb::Region,
 };
 use pd_client::PdClient;
-use tikv_util::{box_err, defer, info, time::Instant, warn, worker::Scheduler};
+use tikv_util::{box_err, defer, info, warn, worker::Scheduler};
 use tracing::instrument;
 use txn_types::TimeStamp;
 use uuid::Uuid;
@@ -26,7 +26,7 @@ use crate::{
     metadata::{store::MetaStore, Checkpoint, CheckpointProvider, MetadataClient},
     metrics,
     subscription_track::ResolveResult,
-    try_send, utils, RegionCheckpointOperation, Task,
+    try_send, RegionCheckpointOperation, Task,
 };
 
 /// A manager for maintaining the last flush ts.
@@ -188,15 +188,24 @@ impl CheckpointManager {
         sub.main_loop()
     }
 
+    /// update the "dynamic" part, which is `resolved_ts`.
+    /// We call it "dynamic" because the data corresponding to the incoming data
+    /// part (in contrast of the flushing data part which is about to be write
+    /// to external storage and cannot be appended.)
     pub fn resolve_regions(&mut self, region_and_checkpoint: Vec<ResolveResult>) {
         for res in region_and_checkpoint {
             self.do_update(res.region, res.checkpoint);
         }
     }
 
-    pub fn flush(&mut self) {
-        info!("log backup checkpoint manager flushing."; "resolved_ts_len" => %self.resolved_ts.len(), "resolved_ts" => ?self.get_resolved_ts());
-        self.checkpoint_ts = std::mem::take(&mut self.resolved_ts);
+    /// notify the subscribers, with a possible final update to the checkpoint
+    /// ts.
+    /// The final update is somehow needed because when calling `freeze`, we may
+    /// not get the latest checkpoint.
+    pub fn update_and_notify(&mut self, rrs: Vec<ResolveResult>) {
+        for rr in rrs {
+            Self::update_ts(&mut self.checkpoint_ts, rr.region, rr.checkpoint);
+        }
         // Clippy doesn't know this iterator borrows `self.checkpoint_ts` :(
         #[allow(clippy::needless_collect)]
         let items = self
@@ -206,6 +215,34 @@ impl CheckpointManager {
             .map(|x| (x.region, x.checkpoint))
             .collect::<Vec<_>>();
         self.notify(items.into_iter());
+    }
+
+    /// "freeze" the current resolved ts to the checkpoint ts.
+    /// This is usually called before we are going to flush and after freezing
+    /// the current batch of mutations.
+    ///
+    /// When a flush of the data collector triggered:
+    ///
+    /// ```text
+    /// ----------------------|----------------->
+    ///                      ^^^
+    ///        Flushing data-+|+- Incoming data.
+    ///                       |
+    ///              Flush Freeze Tempfiles
+    /// ```
+    ///
+    /// Resolving over incoming data shouldn't advance the checkpoint of the
+    /// flushing data. So the current progress should be "freezed" when we are
+    /// about to flush.
+    pub fn freeze(&mut self) {
+        info!("log backup checkpoint manager freezing."; "resolved_ts_len" => %self.resolved_ts.len(), "resolved_ts" => ?self.get_resolved_ts());
+        self.checkpoint_ts = std::mem::take(&mut self.resolved_ts);
+    }
+
+    #[cfg(test)]
+    fn freeze_and_flush(&mut self) {
+        self.freeze();
+        self.update_and_notify(vec![]);
     }
 
     /// update a region checkpoint in need.
@@ -486,7 +523,6 @@ pub struct CheckpointV3FlushObserver<S, O> {
 
     checkpoints: Vec<ResolveResult>,
     global_checkpoint_cache: HashMap<String, Checkpoint>,
-    start_time: Instant,
 }
 
 impl<S, O> CheckpointV3FlushObserver<S, O> {
@@ -498,7 +534,6 @@ impl<S, O> CheckpointV3FlushObserver<S, O> {
             // We almost always have only one entry.
             global_checkpoint_cache: HashMap::with_capacity(1),
             baseline,
-            start_time: Instant::now(),
         }
     }
 }
@@ -533,12 +568,9 @@ where
     }
 
     async fn after(&mut self, task: &str, _rts: u64) -> Result<()> {
-        let resolve_task = Task::RegionCheckpointsOp(RegionCheckpointOperation::Resolved {
-            checkpoints: std::mem::take(&mut self.checkpoints),
-            start_time: self.start_time,
-        });
-        let flush_task = Task::RegionCheckpointsOp(RegionCheckpointOperation::Flush);
-        try_send!(self.sched, resolve_task);
+        let flush_task = Task::RegionCheckpointsOp(RegionCheckpointOperation::FlushWith(
+            std::mem::take(&mut self.checkpoints),
+        ));
         try_send!(self.sched, flush_task);
 
         let global_checkpoint = self.get_checkpoint(task).await?;
@@ -698,7 +730,7 @@ pub mod tests {
             .unwrap();
 
         mgr.resolve_regions(vec![simple_resolve_result()]);
-        mgr.flush();
+        mgr.freeze_and_flush();
         mgr.sync_with_subs_mgr(|_| {});
         assert_eq!(trivial_sink.0.lock().unwrap().items.len(), 1);
     }
@@ -716,7 +748,7 @@ pub mod tests {
         rt.block_on(mgr.add_subscriber(error_sink.clone())).unwrap();
 
         mgr.resolve_regions(vec![simple_resolve_result()]);
-        mgr.flush();
+        mgr.freeze_and_flush();
         assert_eq!(mgr.sync_with_subs_mgr(|item| { item.subscribers.len() }), 0);
         let sink = error_sink.0.lock().unwrap();
         assert_eq!(sink.items.len(), 0);
@@ -734,12 +766,12 @@ pub mod tests {
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
         assert_matches::assert_matches!(r, GetCheckpointResult::NotFound { .. });
 
-        mgr.flush();
+        mgr.freeze_and_flush();
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
         assert_matches::assert_matches!(r, GetCheckpointResult::Ok { checkpoint , .. } if checkpoint.into_inner() == 8);
         let r = mgr.get_from_region(RegionIdWithVersion::new(2, 35));
         assert_matches::assert_matches!(r, GetCheckpointResult::Ok { checkpoint , .. } if checkpoint.into_inner() == 16);
-        mgr.flush();
+        mgr.freeze_and_flush();
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
         assert_matches::assert_matches!(r, GetCheckpointResult::NotFound { .. });
     }
@@ -769,6 +801,36 @@ pub mod tests {
         mgr.update_region_checkpoint(&region(1, 33, 8), TimeStamp::new(24));
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 33));
         assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 24);
+    }
+
+    #[test]
+    fn test_mgr_freeze() {
+        let mut mgr = super::CheckpointManager::default();
+        mgr.resolve_regions(vec![
+            ResolveResult {
+                region: region(1, 32, 8),
+                checkpoint: TimeStamp::new(8),
+                checkpoint_type: CheckpointType::MinTs,
+            },
+            ResolveResult {
+                region: region(2, 34, 8),
+                checkpoint: TimeStamp::new(15),
+                checkpoint_type: CheckpointType::MinTs,
+            },
+        ]);
+
+        mgr.freeze();
+        let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
+        assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 8);
+        let r = mgr.get_from_region(RegionIdWithVersion::new(2, 34));
+        assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 15);
+        mgr.resolve_regions(vec![ResolveResult {
+            region: region(1, 32, 8),
+            checkpoint: TimeStamp::new(16),
+            checkpoint_type: CheckpointType::MinTs,
+        }]);
+        let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
+        assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 8);
     }
 
     pub struct MockPdClient {

@@ -869,7 +869,8 @@ where
         })
     }
 
-    fn on_flush_with_min_ts(&self, task: String, min_ts: TimeStamp) {
+    fn on_flush_with_min_ts(&mut self, task: String, min_ts: TimeStamp) {
+        self.checkpoint_mgr.freeze();
         self.pool
             .spawn(root!("flush"; self.do_flush(task, min_ts).map(|r| {
                 if let Err(err) = r {
@@ -1049,8 +1050,8 @@ where
                 self.checkpoint_mgr.resolve_regions(checkpoints);
                 metrics::MIN_TS_RESOLVE_DURATION.observe(start_time.saturating_elapsed_secs());
             }
-            RegionCheckpointOperation::Flush => {
-                self.checkpoint_mgr.flush();
+            RegionCheckpointOperation::FlushWith(checkpoints) => {
+                self.checkpoint_mgr.update_and_notify(checkpoints);
             }
             RegionCheckpointOperation::Get(g, cb) => {
                 let _guard = self.pool.handle().enter();
@@ -1181,7 +1182,7 @@ pub enum RegionSet {
 }
 
 pub enum RegionCheckpointOperation {
-    Flush,
+    FlushWith(Vec<ResolveResult>),
     PrepareMinTsForResolve,
     Resolve {
         min_ts: TimeStamp,
@@ -1198,7 +1199,7 @@ pub enum RegionCheckpointOperation {
 impl fmt::Debug for RegionCheckpointOperation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Flush => f.debug_tuple("Flush").finish(),
+            Self::FlushWith(checkpoints) => f.debug_tuple("FlushWith").field(checkpoints).finish(),
             Self::Get(arg0, _) => f.debug_tuple("Get").field(arg0).finish(),
 
             Self::Subscribe(_) => f.debug_tuple("Subscription").finish(),
