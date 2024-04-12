@@ -543,12 +543,12 @@ mod tests {
             construct_key, construct_user_key, construct_value, decode_key, encode_key,
             encode_seek_key, InternalBytes, ValueType,
         },
-        EngineConfig, RangeCacheMemoryEngine,
+        RangeCacheEngineConfig, RangeCacheMemoryEngine,
     };
 
     #[test]
     fn test_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
         let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
         engine.new_range(range.clone());
 
@@ -736,7 +736,7 @@ mod tests {
 
     #[test]
     fn test_get_value() {
-        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
 
@@ -814,7 +814,7 @@ mod tests {
 
     #[test]
     fn test_iterator_forawrd() {
-        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let step: i32 = 2;
@@ -999,7 +999,7 @@ mod tests {
 
     #[test]
     fn test_iterator_backward() {
-        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
         let step: i32 = 2;
@@ -1101,7 +1101,7 @@ mod tests {
 
     #[test]
     fn test_seq_visibility() {
-        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
 
@@ -1222,7 +1222,7 @@ mod tests {
 
     #[test]
     fn test_seq_visibility_backward() {
-        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
 
@@ -1323,7 +1323,7 @@ mod tests {
 
         // backward, all put
         {
-            let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+            let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
@@ -1359,7 +1359,7 @@ mod tests {
 
         // backward, all deletes
         {
-            let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+            let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
@@ -1388,7 +1388,7 @@ mod tests {
 
         // backward, all deletes except for last put, last put's seq
         {
-            let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+            let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
@@ -1419,7 +1419,7 @@ mod tests {
 
         // all deletes except for last put, deletions' seq
         {
-            let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+            let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
@@ -1449,7 +1449,7 @@ mod tests {
 
     #[test]
     fn test_prefix_seek() {
-        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
         let range = CacheRange::new(b"k000".to_vec(), b"k100".to_vec());
         engine.new_range(range.clone());
 
@@ -1572,7 +1572,7 @@ mod tests {
 
     #[test]
     fn test_evict_range_without_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
         let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
         let evict_range = CacheRange::new(construct_user_key(10), construct_user_key(20));
         engine.new_range(range.clone());
@@ -1629,7 +1629,7 @@ mod tests {
 
     #[test]
     fn test_evict_range_with_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
         let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
         let evict_range = CacheRange::new(construct_user_key(10), construct_user_key(20));
         engine.new_range(range.clone());
@@ -1699,7 +1699,7 @@ mod tests {
 
     #[test]
     fn test_tombstone_count_when_iterating() {
-        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
 
