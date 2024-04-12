@@ -1043,7 +1043,6 @@ where
             safe_point.clone(),
         )
         .unwrap_or_else(|e| fatal!("failed to start node: {}", e));
-
         // Start auto gc. Must after `Node::start` because `node_id` is initialized
         // there.
         assert!(node.id() > 0); // Node id should never be 0.

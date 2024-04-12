@@ -16,7 +16,6 @@ use engine_traits::{
     CF_RAFT, CF_WRITE,
 };
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
-use keyspace_meta::KeyspaceMetaService;
 use raftstore::{
     coprocessor::{ConsistencyCheckMethod, ConsistencyCheckObserver, Coprocessor},
     Result,
@@ -92,7 +91,7 @@ impl<E: KvEngine> ConsistencyCheckObserver<E> for Mvcc<E> {
             return Ok(None);
         }
         assert_eq!(context[0], ConsistencyCheckMethod::Mvcc as u8);
-        let mut safe_point = u64::from_le_bytes(context[1..9].try_into().unwrap());
+        let safe_point = u64::from_le_bytes(context[1..9].try_into().unwrap());
         *context = &context[9..];
 
         let local_safe_point = self.local_safe_point.load(AtomicOrdering::Acquire);
