@@ -97,7 +97,7 @@ impl<EK: KvEngine> WriteBatch for HybridEngineWriteBatch<EK> {
         self.cache_write_batch.merge(other.cache_write_batch)
     }
 
-    fn prepare_for_range(&mut self, range: &CacheRange) {
+    fn prepare_for_range(&mut self, range: CacheRange) {
         self.cache_write_batch.prepare_for_range(range);
     }
 }
@@ -138,12 +138,11 @@ impl<EK: KvEngine> Mutable for HybridEngineWriteBatch<EK> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
 
     use engine_traits::{
         CacheRange, KvEngine, Mutable, Peekable, SnapshotContext, WriteBatch, WriteBatchExt,
     };
-    use region_cache_memory_engine::range_manager::RangeCacheStatus;
+    use region_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheStatus};
 
     use crate::util::hybrid_engine_for_tests;
 
@@ -151,15 +150,18 @@ mod tests {
     fn test_write_to_both_engines() {
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         let range_clone = range.clone();
-        let (_path, hybrid_engine) =
-            hybrid_engine_for_tests("temp", Duration::from_secs(1000), move |memory_engine| {
+        let (_path, hybrid_engine) = hybrid_engine_for_tests(
+            "temp",
+            RangeCacheEngineConfig::config_for_test(),
+            move |memory_engine| {
                 memory_engine.new_range(range_clone.clone());
                 {
                     let mut core = memory_engine.core().write();
                     core.mut_range_manager().set_safe_point(&range_clone, 5);
                 }
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         let mut write_batch = hybrid_engine.write_batch();
         write_batch
             .cache_write_batch
@@ -189,16 +191,19 @@ mod tests {
 
     #[test]
     fn test_range_cache_memory_engine() {
-        let (_path, hybrid_engine) =
-            hybrid_engine_for_tests("temp", Duration::from_secs(1000), |memory_engine| {
+        let (_path, hybrid_engine) = hybrid_engine_for_tests(
+            "temp",
+            RangeCacheEngineConfig::config_for_test(),
+            |memory_engine| {
                 let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
                 memory_engine.new_range(range.clone());
                 {
                     let mut core = memory_engine.core().write();
                     core.mut_range_manager().set_safe_point(&range, 10);
                 }
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
 
         let mut write_batch = hybrid_engine.write_batch();
         write_batch
