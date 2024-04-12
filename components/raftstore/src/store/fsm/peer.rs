@@ -2238,6 +2238,17 @@ where
             |_| {}
         );
 
+        // If the peer is busy on apply and missing the last leader committed index,
+        // it should propose a read index to check whether its lag is behind the leader.
+        // It won't generate flooding fetching messages. This proposal will only be sent
+        // out before it gets response and updates the `last_leader_committed_index`.
+        if self.fsm.peer.busy_on_apply.is_some()
+            && self.fsm.peer.last_leader_committed_idx.is_none()
+        {
+            debug!("propose read index to check whether its lag is behind the leader");
+            self.try_to_fetch_committed_index();
+        }
+
         if self.fsm.peer.pending_remove {
             self.fsm.peer.mut_store().flush_entry_cache_metrics();
             return;
@@ -2256,17 +2267,6 @@ where
         self.fsm.peer.retry_pending_reads(&self.ctx.cfg);
 
         self.check_force_leader();
-
-        // If the peer is busy on apply and missing the last leader committed index,
-        // it should propose a read index to check whether its lag is behind the leader.
-        // It won't generate flooding fetching messages. This proposal will only be sent
-        // out before it gets response and updates the `last_leader_committed_index`.
-        if self.fsm.peer.busy_on_apply.is_some()
-            && self.fsm.peer.last_leader_committed_idx.is_none()
-        {
-            debug!("propose read index to check whether its lag is behind the leader");
-            self.try_to_fetch_committed_index();
-        }
 
         let mut res = None;
         if self.ctx.cfg.hibernate_regions {
