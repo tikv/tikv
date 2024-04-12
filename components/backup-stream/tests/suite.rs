@@ -351,7 +351,6 @@ impl Suite {
         let (_, port) = server.bind_addrs().next().unwrap();
         let addr = format!("127.0.0.1:{}", port);
         let channel = ChannelBuilder::new(self.env.clone()).connect(&addr);
-        println!("connecting channel to {} for store {}", addr, id);
         let client = LogBackupClient::new(channel);
         self.servers.push(server);
         client
@@ -540,7 +539,6 @@ impl Suite {
         let mut res = LogFiles::default();
         for entry in WalkDir::new(path.join("v1/backupmeta")) {
             let entry = entry?;
-            println!("reading {}", entry.path().display());
             if entry.file_name().to_str().unwrap().ends_with(".meta") {
                 let content = std::fs::read(entry.path())?;
                 let meta = protobuf::parse_from_bytes::<Metadata>(&content)?;
