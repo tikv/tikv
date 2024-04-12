@@ -54,6 +54,7 @@ use region_cache_memory_engine::RangeCacheMemoryEngine;
 use server::common::{ConfiguredRaftEngine, KvEngineBuilder};
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
+use test_util::eventually;
 use tikv::{
     config::*,
     server::KvEngineFactoryBuilder,
@@ -100,6 +101,23 @@ pub fn must_get<EK: KvEngine>(
         log_wrappers::hex_encode_upper(key),
         res
     )
+}
+
+pub fn eventually_get_equal<EK: KvEngine>(engine: &impl RawEngine<EK>, key: &[u8], value: &[u8]) {
+    eventually(
+        Duration::from_millis(100),
+        Duration::from_millis(2000),
+        || {
+            let res = engine
+                .get_value_cf("default", &keys::data_key(key))
+                .unwrap();
+            if let Some(res) = res.as_ref() {
+                value == &res[..]
+            } else {
+                false
+            }
+        },
+    );
 }
 
 pub fn must_get_equal<EK: KvEngine>(engine: &impl RawEngine<EK>, key: &[u8], value: &[u8]) {
