@@ -91,7 +91,6 @@ pub(crate) fn init_store(store: Option<metapb::Store>, cfg: &ServerConfig) -> me
 }
 
 /// A wrapper for the raftstore which runs Multi-Raft.
-// TODO: we will rename another better name like RaftStore later.
 pub struct MultiRaftServer<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
     cluster_id: u64,
     store: metapb::Store,
