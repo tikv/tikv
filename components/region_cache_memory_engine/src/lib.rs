@@ -3,55 +3,98 @@
 #![feature(let_chains)]
 #![feature(slice_pattern)]
 
-mod background;
-mod engine;
-pub mod keys;
 use std::time::Duration;
 
-pub mod region_label;
-pub use engine::RangeCacheMemoryEngine;
-pub mod range_manager;
-mod write_batch;
-use tikv_util::config::ReadableSize;
-pub use write_batch::RangeCacheWriteBatch;
-mod memory_controller;
-pub use background::{BackgroundRunner, GcTask};
-mod metrics;
+use online_config::OnlineConfig;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+use tikv_util::config::{ReadableDuration, ReadableSize};
 
-pub struct EngineConfig {
-    gc_interval: Duration,
-    soft_limit_threshold: usize,
-    hard_limit_threshold: usize,
+mod background;
+mod engine;
+mod keys;
+mod memory_controller;
+mod metrics;
+mod perf_context;
+mod range_manager;
+mod read;
+mod region_label;
+mod write_batch;
+
+pub use background::{BackgroundRunner, GcTask};
+pub use engine::RangeCacheMemoryEngine;
+pub use range_manager::RangeCacheStatus;
+pub use write_batch::RangeCacheWriteBatch;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("Invalid Argument: {0}")]
+    InvalidArgument(String),
 }
 
-impl Default for EngineConfig {
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, OnlineConfig)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct RangeCacheEngineConfig {
+    pub enabled: bool,
+    pub gc_interval: ReadableDuration,
+    soft_limit_threshold: Option<ReadableSize>,
+    hard_limit_threshold: Option<ReadableSize>,
+}
+
+impl Default for RangeCacheEngineConfig {
     fn default() -> Self {
         Self {
-            gc_interval: Duration::from_secs(180),
-            soft_limit_threshold: ReadableSize::gb(10).0 as usize,
-            hard_limit_threshold: ReadableSize::gb(15).0 as usize,
+            enabled: false,
+            gc_interval: ReadableDuration(Duration::from_secs(180)),
+            soft_limit_threshold: None,
+            hard_limit_threshold: None,
         }
     }
 }
 
-impl EngineConfig {
-    pub fn new(
-        gc_interval: Duration,
-        soft_limit_threshold: usize,
-        hard_limit_threshold: usize,
-    ) -> Self {
-        Self {
-            gc_interval,
-            soft_limit_threshold,
-            hard_limit_threshold,
+impl RangeCacheEngineConfig {
+    pub fn validate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if !self.enabled {
+            return Ok(());
         }
+
+        Ok(self.sanitize()?)
     }
 
-    pub fn config_for_test() -> EngineConfig {
-        EngineConfig::new(
-            Duration::from_secs(600),
-            ReadableSize::gb(1).0 as usize,
-            ReadableSize::gb(2).0 as usize,
-        )
+    pub fn sanitize(&mut self) -> Result<(), Error> {
+        if self.soft_limit_threshold.is_none() || self.hard_limit_threshold.is_none() {
+            return Err(Error::InvalidArgument(
+                "soft-limit-threshold or hard-limit-threshold not set".to_string(),
+            ));
+        }
+
+        if self.soft_limit_threshold.as_ref().unwrap()
+            >= self.hard_limit_threshold.as_ref().unwrap()
+        {
+            return Err(Error::InvalidArgument(format!(
+                "soft-limit-threshold {:?} is larger or equal to hard-limit-threshold {:?}",
+                self.soft_limit_threshold.as_ref().unwrap(),
+                self.hard_limit_threshold.as_ref().unwrap()
+            )));
+        }
+
+        Ok(())
+    }
+
+    pub fn soft_limit_threshold(&self) -> usize {
+        self.soft_limit_threshold.map_or(0, |r| r.0 as usize)
+    }
+
+    pub fn hard_limit_threshold(&self) -> usize {
+        self.hard_limit_threshold.map_or(0, |r| r.0 as usize)
+    }
+
+    pub fn config_for_test() -> RangeCacheEngineConfig {
+        RangeCacheEngineConfig {
+            enabled: true,
+            gc_interval: ReadableDuration(Duration::from_secs(180)),
+            soft_limit_threshold: Some(ReadableSize::gb(1)),
+            hard_limit_threshold: Some(ReadableSize::gb(2)),
+        }
     }
 }

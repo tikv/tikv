@@ -120,7 +120,8 @@ impl Flush {
             kind: TransactionKind::Optimistic(false),
             commit_kind: CommitKind::TwoPc,
             primary: &self.primary,
-            txn_size: 0, // txn_size is unknown
+            // txn_size is unknown, set it to max to avoid unexpected resolve_lock_lite
+            txn_size: u64::MAX,
             lock_ttl: self.lock_ttl,
             min_commit_ts: TimeStamp::zero(),
             need_old_value: extra_op == ExtraOp::ReadOldValue, // FIXME?

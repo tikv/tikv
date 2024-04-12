@@ -42,6 +42,7 @@ use raftstore::{
     },
     Result,
 };
+use region_cache_memory_engine::RangeCacheEngineConfig;
 use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
@@ -73,7 +74,7 @@ use tikv::{
     },
 };
 use tikv_util::{
-    config::{ReadableSize, VersionTrack},
+    config::VersionTrack,
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
     time::ThreadReadId,
@@ -296,7 +297,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
 
         // Create coprocessor.
         let enable_region_stats_mgr_cb: Arc<dyn Fn() -> bool + Send + Sync> =
-            if cfg.region_cache_memory_limit != ReadableSize(0) {
+            if cfg.range_cache_engine.enabled {
                 Arc::new(|| true)
             } else {
                 Arc::new(|| false)
@@ -890,6 +891,7 @@ pub fn new_server_cluster_with_hybrid_engine(
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
     let mut cluster = Cluster::new(id, count, sim, pd_client, ApiVersion::V1);
     cluster.range_cache_engine_enabled_with_whole_range(true);
+    cluster.cfg.tikv.range_cache_engine = RangeCacheEngineConfig::config_for_test();
     cluster
 }
 

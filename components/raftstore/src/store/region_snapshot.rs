@@ -11,7 +11,7 @@ use std::{
 
 use engine_traits::{
     util::check_key_in_range, Error as EngineError, IterOptions, Iterable, Iterator, KvEngine,
-    Peekable, RaftEngine, ReadOptions, Result as EngineResult, Snapshot, CF_RAFT,
+    MetricsExt, Peekable, RaftEngine, ReadOptions, Result as EngineResult, Snapshot, CF_RAFT,
 };
 use fail::fail_point;
 use keys::DATA_PREFIX_KEY;
@@ -278,6 +278,13 @@ where
 pub struct RegionIterator<S: Snapshot> {
     iter: <S as Iterable>::Iterator,
     region: Arc<Region>,
+}
+
+impl<S: Snapshot> MetricsExt for RegionIterator<S> {
+    type Collector = <<S as Iterable>::Iterator as MetricsExt>::Collector;
+    fn metrics_collector(&self) -> Self::Collector {
+        self.iter.metrics_collector()
+    }
 }
 
 fn update_lower_bound(iter_opt: &mut IterOptions, region: &Region) {
