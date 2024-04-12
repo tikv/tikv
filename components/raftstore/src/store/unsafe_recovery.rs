@@ -2,7 +2,7 @@
 
 use std::{
     fmt, mem,
-    sync::{mpsc::SyncSender, Arc, Mutex},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -165,6 +165,10 @@ pub enum ForceLeaderState {
         failed_stores: HashSet<u64>,
         ticks: usize,
     },
+    WaitForceCompact {
+        syncer: UnsafeRecoveryForceLeaderSyncer,
+        failed_stores: HashSet<u64>,
+    },
     PreForceLeader {
         syncer: UnsafeRecoveryForceLeaderSyncer,
         failed_stores: HashSet<u64>,
@@ -278,40 +282,6 @@ impl UnsafeRecoveryExecutePlanSyncer {
         *self.abort.lock().unwrap() = true;
     }
 }
-// Syncer only send to leader in 2nd BR restore
-#[derive(Clone, Debug)]
-pub struct SnapshotRecoveryWaitApplySyncer {
-    _closure: Arc<InvokeClosureOnDrop>,
-    abort: Arc<Mutex<bool>>,
-}
-
-impl SnapshotRecoveryWaitApplySyncer {
-    pub fn new(region_id: u64, sender: SyncSender<u64>) -> Self {
-        let thread_safe_router = Mutex::new(sender);
-        let abort = Arc::new(Mutex::new(false));
-        let abort_clone = abort.clone();
-        let closure = InvokeClosureOnDrop(Some(Box::new(move || {
-            info!("region {} wait apply finished", region_id);
-            if *abort_clone.lock().unwrap() {
-                warn!("wait apply aborted");
-                return;
-            }
-            let router_ptr = thread_safe_router.lock().unwrap();
-
-            _ = router_ptr.send(region_id).map_err(|_| {
-                warn!("reply waitapply states failure.");
-            });
-        })));
-        SnapshotRecoveryWaitApplySyncer {
-            _closure: Arc::new(closure),
-            abort,
-        }
-    }
-
-    pub fn abort(&self) {
-        *self.abort.lock().unwrap() = true;
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct UnsafeRecoveryWaitApplySyncer {
@@ -384,19 +354,6 @@ impl UnsafeRecoveryFillOutReportSyncer {
         let mut reports_ptr = self.reports.lock().unwrap();
         (*reports_ptr).push(report);
     }
-}
-
-#[derive(Debug)]
-pub enum SnapshotRecoveryState {
-    // This state is set by the leader peer fsm. Once set, it sync and check leader commit index
-    // and force forward to last index once follower appended and then it also is checked
-    // every time this peer applies a the last index, if the last index is met, this state is
-    // reset / droppeds. The syncer is droped and send the response to the invoker, triggers
-    // the next step of recovery process.
-    WaitLogApplyToLast {
-        target_index: u64,
-        syncer: SnapshotRecoveryWaitApplySyncer,
-    },
 }
 
 #[derive(Debug)]

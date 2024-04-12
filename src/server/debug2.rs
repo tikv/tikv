@@ -9,7 +9,6 @@ use engine_traits::{
     CachedTablet, Iterable, MiscExt, Peekable, RaftEngine, RaftLogBatch, TabletContext,
     TabletRegistry, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
-use futures::future::Future;
 use keys::{data_key, enc_end_key, enc_start_key, DATA_MAX_KEY, DATA_PREFIX_KEY};
 use kvproto::{
     debugpb::Db as DbType,
@@ -721,7 +720,7 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
         start: &[u8],
         end: &[u8],
         limit: u64,
-    ) -> Result<impl Iterator<Item = raftstore::Result<(Vec<u8>, MvccInfo)>> + Send> {
+    ) -> Result<impl Iterator<Item = raftstore::Result<(Vec<u8>, MvccInfo)>> + Send + 'static> {
         if end.is_empty() && limit == 0 {
             return Err(Error::InvalidArgument("no limit and to_key".to_owned()));
         }
@@ -813,7 +812,9 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
             }
             true
         });
-        if let Some(s) = self.kv_statistics.as_ref() && let Some(s) = s.to_string() {
+        if let Some(s) = self.kv_statistics.as_ref()
+            && let Some(s) = s.to_string()
+        {
             kv_str.push_str(&s);
         }
         Ok(kv_str)
@@ -821,7 +822,9 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
 
     fn dump_raft_stats(&self) -> Result<String> {
         let mut raft_str = box_try!(RaftEngine::dump_stats(&self.raft_engine));
-        if let Some(s) = self.raft_statistics.as_ref() && let Some(s) = s.to_string() {
+        if let Some(s) = self.raft_statistics.as_ref()
+            && let Some(s) = s.to_string()
+        {
             raft_str.push_str(&s);
         }
         Ok(raft_str)
@@ -905,7 +908,7 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
         self.raft_statistics = s;
     }
 
-    fn key_range_flashback_to_version(
+    async fn key_range_flashback_to_version(
         &self,
         _version: u64,
         _region_id: u64,
@@ -913,8 +916,8 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
         _end_key: &[u8],
         _start_ts: u64,
         _commit_ts: u64,
-    ) -> impl Future<Output = Result<()>> + Send {
-        async move { unimplemented!() }
+    ) -> Result<()> {
+        unimplemented!()
     }
 
     fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
@@ -1113,7 +1116,7 @@ fn get_tablet_cache(
                     "tablet load failed, region_state {:?}",
                     region_state.get_state()
                 );
-                return Err(box_err!(e));
+                Err(box_err!(e))
             }
         }
     }

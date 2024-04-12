@@ -324,3 +324,27 @@ groups:
       description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
       value: '{{ $value }}'
       summary: TiKV server has been restarted
+
+  - alert: TiKV_cpu_quota
+    expr:  irate(process_cpu_seconds_total{job="tikv"}[30s]) / tikv_server_cpu_cores_quota > 0.8
+    for: 45s
+    labels:
+      env: ENV_LABELS_ENV
+      level: warning
+      expr: irate(process_cpu_seconds_total{job="tikv"}[30s]) / tikv_server_cpu_cores_quota > 0.8
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV CPU usage is over 80% of CPU quota
+
+  - alert: TiKV_memory_quota
+    expr:  process_resident_memory_bytes{job="tikv"} / tikv_server_memory_quota_bytes > 0.8
+    for: 15s
+    labels:
+      env: ENV_LABELS_ENV
+      level: warning
+      expr: process_resident_memory_bytes{job="tikv"} / tikv_server_memory_quota_bytes > 0.8
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV memory usage is over 80% of memory quota

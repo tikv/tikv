@@ -114,12 +114,6 @@ else
 # Caller is responsible for setting up test engine features
 endif
 
-ifneq ($(NO_CLOUD),1)
-ENABLE_FEATURES += cloud-aws
-ENABLE_FEATURES += cloud-gcp
-ENABLE_FEATURES += cloud-azure
-endif
-
 ifneq ($(NO_ASYNC_BACKTRACE),1)
 ENABLE_FEATURES += trace-async-tasks
 endif
@@ -367,6 +361,7 @@ clippy: pre-clippy
 	@./scripts/check-dashboards
 	@./scripts/check-docker-build
 	@./scripts/check-license
+	@./scripts/deny
 	@./scripts/clippy-all
 
 pre-audit:

@@ -84,6 +84,7 @@ background-thread-count = 999
 end-point-slow-log-threshold = "1s"
 forward-max-connections-per-address = 5
 reject-messages-on-memory-ratio = 0.8
+health-feedback-interval = "2s"
 
 [server.labels]
 a = "b"
@@ -102,6 +103,7 @@ reserve-raft-space = "2GB"
 enable-ttl = true
 ttl-check-poll-interval = "0s"
 txn-status-cache-capacity = 1000
+memory-quota = "123KB"
 
 [storage.block-cache]
 capacity = "40GB"
@@ -341,6 +343,7 @@ periodic-compaction-seconds = "10d"
 min-blob-size = "2018B"
 blob-file-compression = "lz4"
 zstd-dict-size = "16KB"
+shared-blob-cache = false
 blob-cache-size = "12GB"
 min-gc-batch-size = "12KB"
 max-gc-batch-size = "12MB"
@@ -570,6 +573,7 @@ max-compactions = 3
 min-blob-size = "2018B"
 blob-file-compression = "lz4"
 zstd-dict-size = "16KB"
+shared-blob-cache = false
 blob-cache-size = "12GB"
 min-gc-batch-size = "12KB"
 max-gc-batch-size = "12MB"

@@ -248,7 +248,7 @@ macro_rules! impl_evaluable_type {
             }
 
             #[inline]
-            fn borrow_scalar_value_ref<'a>(v: ScalarValueRef<'a>) -> Option<&'a Self> {
+            fn borrow_scalar_value_ref(v: ScalarValueRef<'_>) -> Option<&Self> {
                 match v {
                     ScalarValueRef::$ty(x) => x,
                     other => panic!(

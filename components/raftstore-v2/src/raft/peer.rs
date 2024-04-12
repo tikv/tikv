@@ -507,7 +507,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     // we may have skipped scheduling raft tick when start due to noticable gap
     // between commit index and apply index. We should scheduling it when raft log
     // apply catches up.
-    pub fn try_compelete_recovery(&mut self) {
+    pub fn try_complete_recovery(&mut self) {
         if self.pause_for_replay()
             && self.storage().entry_storage().commit_index()
                 <= self.storage().entry_storage().applied_index()
@@ -588,6 +588,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn remove_peer_heartbeat(&mut self, peer_id: u64) {
         self.peer_heartbeats.remove(&peer_id);
+    }
+
+    #[inline]
+    pub fn get_peer_heartbeats(&self) -> &HashMap<u64, Instant> {
+        &self.peer_heartbeats
     }
 
     #[inline]
@@ -791,7 +796,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             self.read_progress().clone(),
             self.region_buckets_info()
                 .bucket_stat()
-                .as_ref()
                 .map(|b| b.meta.clone()),
         )
     }

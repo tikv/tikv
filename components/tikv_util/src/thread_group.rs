@@ -28,7 +28,7 @@ impl GroupProperties {
 }
 
 thread_local! {
-    static PROPERTIES: RefCell<Option<GroupProperties>> = RefCell::new(None);
+    static PROPERTIES: RefCell<Option<GroupProperties>> = const { RefCell::new(None) };
 }
 
 pub fn current_properties() -> Option<GroupProperties> {

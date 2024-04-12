@@ -450,7 +450,7 @@ fn test_leader_demoted_when_hibernated() {
         ));
     }
     // Leave joint.
-    cluster.async_exit_joint(r).unwrap();
+    let _ = cluster.async_exit_joint(r).unwrap();
     // Ensure peer 3 can campaign.
     cluster.wait_last_index(r, 3, 11, Duration::from_secs(5));
     cluster.add_send_filter(CloneFilterFactory(

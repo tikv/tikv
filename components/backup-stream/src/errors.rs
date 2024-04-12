@@ -1,7 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    error::Error as StdError, fmt::Display, io::Error as IoError, result::Result as StdResult,
+    error::Error as StdError, fmt::Display, io::Error as IoError, panic::Location,
+    result::Result as StdResult,
 };
 
 use error_code::ErrorCodeExt;
@@ -18,16 +19,19 @@ use crate::{endpoint::Task, metrics};
 
 #[derive(ThisError, Debug)]
 pub enum Error {
-    #[error("gRPC meet error {0}")]
-    Grpc(#[from] GrpcError),
-    #[error("Protobuf meet error {0}")]
-    Protobuf(#[from] ProtobufError),
     #[error("No such task {task_name:?}")]
     NoSuchTask { task_name: String },
     #[error("Observe have already canceled for region {0} (version = {1:?})")]
     ObserveCanceled(u64, RegionEpoch),
     #[error("Malformed metadata {0}")]
     MalformedMetadata(String),
+    #[error("Out of quota for region {region_id}")]
+    OutOfQuota { region_id: u64 },
+
+    #[error("gRPC meet error {0}")]
+    Grpc(#[from] GrpcError),
+    #[error("Protobuf meet error {0}")]
+    Protobuf(#[from] ProtobufError),
     #[error("I/O Error: {0}")]
     Io(#[from] IoError),
     #[error("Txn error: {0}")]
@@ -40,6 +44,7 @@ pub enum Error {
     RaftRequest(StoreError),
     #[error("Error from raftstore: {0}")]
     RaftStore(#[from] RaftStoreError),
+
     #[error("{context}: {inner_error}")]
     Contextual {
         context: String,
@@ -65,6 +70,7 @@ impl ErrorCodeExt for Error {
             Error::Other(_) => OTHER,
             Error::RaftStore(_) => RAFTSTORE,
             Error::ObserveCanceled(..) => OBSERVE_CANCELED,
+            Error::OutOfQuota { .. } => OUT_OF_QUOTA,
             Error::Grpc(_) => GRPC,
         }
     }
@@ -124,6 +130,7 @@ where
     Error: From<E>,
 {
     #[inline(always)]
+    #[track_caller]
     fn report_if_err(self, context: impl ToString) {
         if let Err(err) = self {
             Error::from(err).report(context.to_string())
@@ -133,7 +140,7 @@ where
 
 /// Like `errors.Annotate` in Go.
 /// Wrap an unknown error with [`Error::Other`].
-#[macro_export(crate)]
+#[macro_export]
 macro_rules! annotate {
     ($inner: expr, $message: expr) => {
         {
@@ -147,8 +154,11 @@ macro_rules! annotate {
 }
 
 impl Error {
+    #[track_caller]
     pub fn report(&self, context: impl Display) {
-        warn!("backup stream meet error"; "context" => %context, "err" => %self, "verbose_err" => ?self);
+        warn!("backup stream meet error"; "context" => %context, "err" => %self, 
+            "verbose_err" => ?self,
+            "position" => ?Location::caller());
         metrics::STREAM_ERROR
             .with_label_values(&[self.kind()])
             .inc()
@@ -278,6 +288,7 @@ mod test {
         })
     }
 
+    #[allow(clippy::unnecessary_literal_unwrap)]
     #[bench]
     // 773 ns/iter (+/- 8)
     fn baseline(b: &mut test::Bencher) {

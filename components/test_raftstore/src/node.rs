@@ -11,6 +11,7 @@ use encryption_export::DataKeyManager;
 use engine_rocks::RocksEngine;
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, KvEngine, SnapshotContext};
+use health_controller::HealthController;
 use kvproto::{
     kvrpcpb::ApiVersion,
     metapb,
@@ -30,6 +31,7 @@ use raftstore::{
     },
     Result,
 };
+use region_cache_memory_engine::RangeCacheEngineConfig;
 use resource_control::ResourceGroupManager;
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
@@ -245,15 +247,16 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             )
             .unwrap();
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
+        let store_config = Arc::new(VersionTrack::new(raft_store));
         let mut node = Node::new(
             system,
             &cfg.server,
-            Arc::new(VersionTrack::new(raft_store)),
+            store_config.clone(),
             cfg.storage.api_version(),
             Arc::clone(&self.pd_client),
             Arc::default(),
             bg_worker.clone(),
-            None,
+            HealthController::new(),
             None,
         );
 
@@ -278,7 +281,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             (snap_mgr, Some(tmp))
         } else {
             let trans = self.trans.core.lock().unwrap();
-            let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
+            let (snap_mgr, _) = &trans.snap_paths[&node_id];
             (snap_mgr.clone(), None)
         };
 
@@ -352,25 +355,11 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
                 .map(|p| p.path().to_str().unwrap().to_owned())
         );
 
-        let region_split_size = cfg.coprocessor.region_split_size();
-        let enable_region_bucket = cfg.coprocessor.enable_region_bucket();
-        let region_bucket_size = cfg.coprocessor.region_bucket_size;
-        let mut raftstore_cfg = cfg.tikv.raft_store;
-        raftstore_cfg.optimize_for(false);
-        raftstore_cfg
-            .validate(
-                region_split_size,
-                enable_region_bucket,
-                region_bucket_size,
-                false,
-            )
-            .unwrap();
-        let raft_store = Arc::new(VersionTrack::new(raftstore_cfg));
         cfg_controller.register(
             Module::Raftstore,
             Box::new(RaftstoreConfigManager::new(
                 node.refresh_config_scheduler(),
-                raft_store,
+                store_config,
             )),
         );
 
@@ -526,14 +515,28 @@ pub fn new_node_cluster(id: u64, count: usize) -> Cluster<RocksEngine, NodeClust
 }
 
 // the hybrid engine with disk engine "RocksEngine" and region cache engine
-// "RegionCacheMemoryEngine" is used in the node cluster.
+// "RangeCacheMemoryEngine" is used in the node cluster.
 pub fn new_node_cluster_with_hybrid_engine(
     id: u64,
     count: usize,
 ) -> Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
+    let mut cluster = Cluster::new(id, count, sim, pd_client, ApiVersion::V1);
+    cluster.range_cache_engine_enabled_with_whole_range(true);
+    cluster.cfg.tikv.range_cache_engine = RangeCacheEngineConfig::config_for_test();
+    cluster
+}
+
+pub fn new_node_cluster_with_hybrid_engine_with_no_range_cache(
+    id: u64,
+    count: usize,
+) -> Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>> {
+    let pd_client = Arc::new(TestPdClient::new(id, false));
+    let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
+    let mut cluster = Cluster::new(id, count, sim, pd_client, ApiVersion::V1);
+    cluster.cfg.tikv.range_cache_engine = RangeCacheEngineConfig::config_for_test();
+    cluster
 }
 
 // This cluster does not support batch split, we expect it to transfer the

@@ -1,0 +1,109 @@
+# To comply with FIPS 140-2, we should not use crypto algorithms implemented in
+# rust, instead we should delegate these operation to OpenSSL, including
+# symmetric encryption, asymmetric encryption, hash functions,
+# key establishment, digital signatures and random number generators.
+[bans]
+deny = [
+    # Hash functions
+    # We allow md5 for AWS S3 object lock feature which requires
+    # computting object's md5.
+    { name = "md5", wrappers = ["aws"] },
+    { name = "md-5" },
+    { name = "sha1" },
+    { name = "sha-1" },
+    # We allow sha2 for oauth2 crate, because it does use sha2 in TiKV use case.
+    { name = "sha2", wrappers = ["oauth2"] },
+    { name = "sha3" },
+    # Symmetric encryption
+    { name = "aes" },
+    { name = "aes-gcm" },
+    { name = "aes-gcm-siv" },
+    { name = "chacha20poly1305" },
+    # Asymmetric encryption
+    { name = "elliptic-curves" },
+    { name = "rsa" },
+    # Digital signatures
+    { name = "dsa" },
+    { name = "ecdsa" },
+    { name = "ed25519" },
+    # Message authentication codes
+    { name = "hamc" },
+    # We prefer the system native TLS or OpenSSL.
+    { name = "rustls" },
+    { name = "ring" },
+    # Ban trait crates from RustCrypto.
+    { name = "aead" },
+    { name = "cipher" },
+    { name = "digest", wrappers = ["sha2"] },
+    { name = "password-hash" },
+    { name = "signature" },
+]
+multiple-versions = "allow"
+
+[advisories]
+vulnerability = "deny"
+unmaintained = "allow" # FIXME: Deny it.
+unsound = "deny"
+yanked = "deny"
+notice = "warn"
+ignore = [
+    # Ignore time 0.1 RUSTSEC-2020-0071 as 1) we have taken measures (see
+    # clippy.toml) to mitigate the issue and 2) time 0.1 has no fix availble.
+    #
+    # NB: Upgrading to time 0.3 do fix the issue but it's an imcompatible
+    # versoin which removes some necessary APIs (`time::precise_time_ns`) that
+    # are required by TiKV.
+    # See https://github.com/time-rs/time/blob/8067540c/CHANGELOG.md#L703
+    "RUSTSEC-2020-0071",
+    # Ignore RUSTSEC-2023-0072 as we bans the unsound `X509StoreRef::objects`.
+    #
+    # NB: Upgrading rust-openssl the latest version do fix the issue but it
+    # also upgrade the OpenSSL to v3.x which causes performance degradation.
+    # See https://github.com/openssl/openssl/issues/17064
+    "RUSTSEC-2023-0072",
+    # Ignore RUSTSEC-2023-0072 (unsound issue of "atty" crate) as it only
+    # affects Windows plaform which is not supported offically by TiKV, and 2)
+    # we have disabled the clap feature "color" so that the "atty" crate is not
+    # included in production code.
+    #
+    # TODO: Upgrade clap to v4.x.
+    "RUSTSEC-2021-0145",
+    # Ignore RUSTSEC-2024-0006 as it only included by "rusoto_credential" crate.
+    #
+    # TODO: Upgrade shlex@0.1.1 to v1.3.x.
+    "RUSTSEC-2024-0006",
+]
+
+# TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
+# TiKV can include licenses in Category A, and include licenses in Category B
+# under certain conditions.
+# See https://www.apache.org/legal/resolved.html.
+[licenses]
+unlicensed = "deny"
+copyleft = "deny"
+private = { ignore = false }
+# Allow licenses in Category A
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "Zlib",
+]
+exceptions = [
+    # unicode-ident includes data generated from Unicode Character Database
+    # which is licensed under Unicode-DFS-2016.
+    # See https://github.com/dtolnay/unicode-ident/pull/4
+    { name = "unicode-ident", allow = ["Unicode-DFS-2016"] },
+    # Allow licenses in Category B explicitly, make their usage more prominent.
+    { name = "slog-json", allow = ["MPL-2.0"] },
+    { name = "smartstring", allow = ["MPL-2.0"] },
+    { name = "inferno", allow = ["CDDL-1.0"] },
+]
+
+[sources]
+unknown-git = "deny"
+unknown-registry = "deny"
+allow-org = { github = ["tikv", "pingcap", "rust-lang"] }

@@ -24,7 +24,7 @@ use futures_util::{
     stream::StreamExt,
     TryStreamExt,
 };
-pub use kvproto::brpb::{AzureBlobStorage as InputConfig, AzureCustomerKey, Bucket as InputBucket};
+pub use kvproto::brpb::{AzureBlobStorage as InputConfig, AzureCustomerKey};
 use oauth2::{ClientId, ClientSecret};
 use tikv_util::{
     debug,
@@ -317,7 +317,7 @@ impl AzureUploader {
     /// This should be used only when the data is known to be short, and thus
     /// relatively cheap to retry the entire upload.
     async fn upload(&self, data: &[u8]) -> Result<(), RequestError> {
-        match timeout(Self::get_timeout(), async {
+        let res = timeout(Self::get_timeout(), async {
             let builder = self
                 .client_builder
                 .get_client()
@@ -331,8 +331,8 @@ impl AzureUploader {
             builder.await?;
             Ok(())
         })
-        .await
-        {
+        .await;
+        match res {
             Ok(res) => match res {
                 Ok(_) => Ok(()),
                 Err(err) => Err(RequestError::InvalidInput(

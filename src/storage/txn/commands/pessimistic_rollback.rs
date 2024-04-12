@@ -11,8 +11,8 @@ use crate::storage::{
     mvcc::{MvccTxn, Result as MvccResult, SnapshotReader},
     txn::{
         commands::{
-            Command, CommandExt, ReaderWithStats, ReleasedLocks, ResponsePolicy, TypedCommand,
-            WriteCommand, WriteContext, WriteResult,
+            Command, CommandExt, PessimisticRollbackReadPhase, ReaderWithStats, ReleasedLocks,
+            ResponsePolicy, TypedCommand, WriteCommand, WriteContext, WriteResult,
         },
         Result,
     },
@@ -25,13 +25,22 @@ command! {
     /// This can roll back an [`AcquirePessimisticLock`](Command::AcquirePessimisticLock) command.
     PessimisticRollback:
         cmd_ty => Vec<StorageResult<()>>,
-        display => "kv::command::pessimistic_rollback keys({:?}) @ {} {} | {:?}", (keys, start_ts, for_update_ts, ctx),
+        display => {
+            "kv::command::pessimistic_rollback keys({:?}) @ {} {} | {:?}",
+            (keys, start_ts, for_update_ts, ctx),
+        }
         content => {
             /// The keys to be rolled back.
             keys: Vec<Key>,
             /// The transaction timestamp.
             start_ts: TimeStamp,
             for_update_ts: TimeStamp,
+            /// The next key to scan using pessimistic rollback read phase.
+            scan_key: Option<Key>,
+        }
+        in_heap => {
+            keys,
+            scan_key,
         }
 }
 
@@ -83,6 +92,21 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
             released_locks.push(released_lock?);
         }
 
+        let pr = if self.scan_key.is_none() {
+            ProcessResult::MultiRes { results: vec![] }
+        } else {
+            let next_cmd = PessimisticRollbackReadPhase {
+                ctx: ctx.clone(),
+                deadline: self.deadline,
+                start_ts: self.start_ts,
+                for_update_ts: self.for_update_ts,
+                scan_key: self.scan_key.take(),
+            };
+            ProcessResult::NextCommand {
+                cmd: Command::PessimisticRollbackReadPhase(next_cmd),
+            }
+        };
+
         let new_acquired_locks = txn.take_new_locks();
         let mut write_data = WriteData::from_modifies(txn.into_modifies());
         write_data.set_allowed_on_disk_almost_full();
@@ -90,7 +114,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for PessimisticRollback {
             ctx,
             to_be_write: write_data,
             rows,
-            pr: ProcessResult::MultiRes { results: vec![] },
+            pr,
             lock_info: vec![],
             released_locks,
             new_acquired_locks,
@@ -139,6 +163,7 @@ pub mod tests {
             start_ts,
             for_update_ts,
             deadline: Deadline::from_now(DEFAULT_EXECUTION_DURATION_LIMIT),
+            scan_key: None,
         };
         let lock_mgr = MockLockManager::new();
         let write_context = WriteContext {

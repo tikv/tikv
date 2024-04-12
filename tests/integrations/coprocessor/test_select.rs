@@ -172,7 +172,7 @@ fn test_stream_batch_row_limit() {
 
     let resps = handle_streaming_select(&endpoint, req, check_range);
     assert_eq!(resps.len(), 3);
-    let expected_output_counts = vec![vec![2_i64], vec![2_i64], vec![1_i64]];
+    let expected_output_counts = [vec![2_i64], vec![2_i64], vec![1_i64]];
     for (i, resp) in resps.into_iter().enumerate() {
         let mut chunk = Chunk::default();
         chunk.merge_from_bytes(resp.get_data()).unwrap();
@@ -2087,11 +2087,16 @@ fn test_select_v2_format_with_checksum() {
     for extra_checksum in [None, Some(132423)] {
         // The row value encoded with checksum bytes should have no impact on cop task
         // processing and related result chunk filling.
-        let (_, endpoint) =
+        let (mut store, endpoint) =
             init_data_with_commit_v2_checksum(&product, &data, true, extra_checksum);
+        store.insert_all_null_row(&product, Context::default(), true, extra_checksum);
         let req = DagSelect::from(&product).build();
         let mut resp = handle_select(&endpoint, req);
-        let spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
+        let mut spliter = DagChunkSpliter::new(resp.take_chunks().into(), 3);
+        let first_row = spliter.next().unwrap();
+        assert_eq!(first_row[0], Datum::I64(0));
+        assert_eq!(first_row[1], Datum::Null);
+        assert_eq!(first_row[2], Datum::Null);
         for (row, (id, name, cnt)) in spliter.zip(data.clone()) {
             let name_datum = name.map(|s| s.as_bytes()).into();
             let expected_encoded = datum::encode_value(
@@ -2212,7 +2217,7 @@ fn test_batch_request() {
     let prepare_req = |cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>,
                        ranges: &Vec<HandleRange>|
      -> Request {
-        let original_range = ranges.get(0).unwrap();
+        let original_range = ranges.first().unwrap();
         let key_range = product.get_record_range(original_range.start, original_range.end);
         let region_key = Key::from_raw(&key_range.start);
         let mut req = DagSelect::from(&product)

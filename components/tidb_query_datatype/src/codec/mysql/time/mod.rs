@@ -2701,7 +2701,7 @@ mod tests {
 
     #[test]
     fn test_no_zero_in_date() -> Result<()> {
-        let cases = vec!["2019-01-00", "2019-00-01"];
+        let cases = ["2019-01-00", "2019-00-01"];
 
         for &case in cases.iter() {
             // Enable NO_ZERO_IN_DATE only. If zero-date is encountered, a warning is

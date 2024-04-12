@@ -4,6 +4,7 @@ version = "0.0.1"
 edition = "2021"
 publish = false
 description = "A vector query engine to run TiDB pushed down executors"
+license = "Apache-2.0"
 
 [dependencies]
 api_version = { workspace = true }

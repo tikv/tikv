@@ -32,6 +32,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 *self.force_leader_mut() = None;
             }
             None => {}
+            Some(ForceLeaderState::WaitForceCompact { .. }) => unreachable!(),
         }
 
         if !self.storage().is_initialized() {
@@ -190,11 +191,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
-        if let Some(UnsafeRecoveryState::Failed) = self.unsafe_recovery_state() && !force {
-            // Skip force leader if the plan failed, so wait for the next retry of plan with force leader state holding
-            info!(
-                self.logger, "skip exiting force leader state"
-            );
+        if let Some(UnsafeRecoveryState::Failed) = self.unsafe_recovery_state()
+            && !force
+        {
+            // Skip force leader if the plan failed, so wait for the next retry of plan with
+            // force leader state holding
+            info!(self.logger, "skip exiting force leader state");
             return;
         }
 
@@ -266,7 +268,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 return;
             }
             Some(ForceLeaderState::PreForceLeader { failed_stores, .. }) => failed_stores,
-            Some(ForceLeaderState::WaitTicks { .. }) => unreachable!(),
+            Some(ForceLeaderState::WaitTicks { .. })
+            | Some(ForceLeaderState::WaitForceCompact { .. }) => unreachable!(),
         };
 
         if self.raft_group().raft.election_elapsed + 1 < ctx.cfg.raft_election_timeout_ticks {

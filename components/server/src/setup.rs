@@ -11,7 +11,7 @@ use chrono::Local;
 use clap::ArgMatches;
 use collections::HashMap;
 use fail;
-use tikv::config::{check_critical_config, persist_config, MetricConfig, TikvConfig};
+use tikv::config::{MetricConfig, TikvConfig};
 use tikv_util::{self, config, logger};
 
 // A workaround for checking if log is initialized.
@@ -303,21 +303,9 @@ pub fn overwrite_config_with_cmd_args(config: &mut TikvConfig, matches: &ArgMatc
     }
 }
 
-#[allow(dead_code)]
 pub fn validate_and_persist_config(config: &mut TikvConfig, persist: bool) {
-    config.compatible_adjust();
-    if let Err(e) = config.validate() {
-        fatal!("invalid configuration: {}", e);
-    }
-
-    if let Err(e) = check_critical_config(config) {
-        fatal!("critical config check failed: {}", e);
-    }
-
-    if persist {
-        if let Err(e) = persist_config(config) {
-            fatal!("persist critical config failed: {}", e);
-        }
+    if let Err(e) = tikv::config::validate_and_persist_config(config, persist) {
+        fatal!("failed to validate config: {}", e);
     }
 }
 

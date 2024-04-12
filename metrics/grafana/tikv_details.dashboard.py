@@ -250,6 +250,13 @@ def Cluster() -> RowPanel:
                             label_selectors=['job=~".*tikv"'],
                         ),
                     ),
+                    target(
+                        expr=expr_simple(
+                            "tikv_server_cpu_cores_quota",
+                            label_selectors=['job=~".*tikv"'],
+                        ),
+                        legend_format=r"quota-{{instance}}",
+                    ),
                 ],
             ),
             graph_panel(
@@ -262,6 +269,13 @@ def Cluster() -> RowPanel:
                             "process_resident_memory_bytes",
                             label_selectors=['job=~".*tikv"'],
                         ),
+                    ),
+                    target(
+                        expr=expr_simple(
+                            "tikv_server_memory_quota_bytes",
+                            label_selectors=['job=~".*tikv"'],
+                        ),
+                        legend_format=r"quota-{{instance}}",
                     ),
                 ],
             ),
@@ -704,6 +718,21 @@ def Server() -> RowPanel:
                         legend_format="{{instance}}",
                     ),
                 ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Written key size",
+                description="The key size for every put of apply worker",
+                metric="tikv_raftstore_apply_key_size_bucket",
+                yaxis=yaxis(format=UNITS.BYTES_IEC),
+            ),
+            heatmap_panel(
+                title="Written value size for every put of apply worker",
+                metric="tikv_raftstore_apply_value_size_bucket",
+                yaxis=yaxis(format=UNITS.BYTES_IEC),
             ),
         ]
     )
@@ -1153,39 +1182,6 @@ def ThreadCPU() -> RowPanel:
                 thresholds=[GraphThreshold(value=3.6)],
             ),
             graph_panel(
-                title="Storage ReadPool CPU",
-                description="The CPU utilization of readpool",
-                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
-                targets=[
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_thread_cpu_seconds_total",
-                            label_selectors=['name=~"store_read_norm.*"'],
-                        ),
-                        legend_format="{{instance}}-normal",
-                    ),
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_thread_cpu_seconds_total",
-                            label_selectors=['name=~"store_read_high.*"'],
-                        ),
-                        legend_format="{{instance}}-high",
-                    ),
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_thread_cpu_seconds_total",
-                            label_selectors=['name=~"store_read_low.*"'],
-                        ),
-                        legend_format="{{instance}}-low",
-                    ),
-                ],
-                thresholds=[GraphThreshold(value=3.6)],
-            ),
-        ]
-    )
-    layout.row(
-        [
-            graph_panel(
                 title="Unified read pool CPU",
                 description="The CPU utilization of the unified read pool",
                 yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
@@ -1199,6 +1195,10 @@ def ThreadCPU() -> RowPanel:
                 ],
                 thresholds=[GraphThreshold(value=7.2)],
             ),
+        ]
+    )
+    layout.row(
+        [
             graph_panel(
                 title="RocksDB CPU",
                 description="The CPU utilization of RocksDB",
@@ -1211,39 +1211,6 @@ def ThreadCPU() -> RowPanel:
                         ),
                     ),
                 ],
-            ),
-        ]
-    )
-    layout.row(
-        [
-            graph_panel(
-                title="Coprocessor CPU",
-                description="The CPU utilization of coprocessor",
-                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
-                targets=[
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_thread_cpu_seconds_total",
-                            label_selectors=['name=~"cop_normal.*"'],
-                        ),
-                        legend_format="{{instance}}-normal",
-                    ),
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_thread_cpu_seconds_total",
-                            label_selectors=['name=~"cop_high.*"'],
-                        ),
-                        legend_format="{{instance}}-high",
-                    ),
-                    target(
-                        expr=expr_sum_rate(
-                            "tikv_thread_cpu_seconds_total",
-                            label_selectors=['name=~"cop_low.*"'],
-                        ),
-                        legend_format="{{instance}}-low",
-                    ),
-                ],
-                thresholds=[GraphThreshold(value=7.2)],
             ),
             graph_panel(
                 title="GC worker CPU",
@@ -1262,7 +1229,35 @@ def ThreadCPU() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Background Worker CPU",
+                title="Region worker CPU",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"region_worker.*"'],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Snap generator CPU",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"snap_generator.*"'],
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Background worker CPU",
                 yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
                 targets=[
                     target(
@@ -1274,7 +1269,7 @@ def ThreadCPU() -> RowPanel:
                 ],
             ),
             graph_panel(
-                title="Raftlog fetch Worker CPU",
+                title="Raftlog fetch worker CPU",
                 yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
                 targets=[
                     target(
@@ -1347,7 +1342,7 @@ def ThreadCPU() -> RowPanel:
                 ],
             ),
             graph_panel(
-                title="TSO Worker CPU",
+                title="TSO worker CPU",
                 description="The CPU utilization of raftstore thread",
                 yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
                 targets=[
@@ -1358,6 +1353,68 @@ def ThreadCPU() -> RowPanel:
                         ),
                     ),
                 ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Storage read pool CPU",
+                description="The CPU utilization of storage read pool",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"store_read_norm.*"'],
+                        ),
+                        legend_format="{{instance}}-normal",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"store_read_high.*"'],
+                        ),
+                        legend_format="{{instance}}-high",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"store_read_low.*"'],
+                        ),
+                        legend_format="{{instance}}-low",
+                    ),
+                ],
+                thresholds=[GraphThreshold(value=3.6)],
+            ),
+            graph_panel(
+                title="Coprocessor read pool CPU",
+                description="The CPU utilization of coprocessor read pool",
+                yaxes=yaxes(left_format=UNITS.PERCENT_UNIT),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"cop_normal.*"'],
+                        ),
+                        legend_format="{{instance}}-normal",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"cop_high.*"'],
+                        ),
+                        legend_format="{{instance}}-high",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_thread_cpu_seconds_total",
+                            label_selectors=['name=~"cop_low.*"'],
+                        ),
+                        legend_format="{{instance}}-low",
+                    ),
+                ],
+                thresholds=[GraphThreshold(value=7.2)],
             ),
         ]
     )
@@ -1565,36 +1622,6 @@ def PD() -> RowPanel:
                     ),
                 ],
             ),
-            graph_panel(
-                title="Store Slow Score",
-                description="The slow score of stores",
-                targets=[
-                    target(
-                        expr=expr_sum(
-                            "tikv_raftstore_slow_score",
-                        ),
-                    ),
-                ],
-            ),
-        ]
-    )
-    layout.row(
-        [
-            graph_panel(
-                title="Inspected duration per server",
-                description="The duration that recorded by inspecting messages.",
-                yaxes=yaxes(left_format=UNITS.SECONDS),
-                targets=[
-                    target(
-                        expr=expr_histogram_quantile(
-                            0.99,
-                            "tikv_raftstore_inspect_duration_seconds",
-                            by_labels=["instance", "type"],
-                        ),
-                        legend_format="{{instance}}-{{type}}",
-                    ),
-                ],
-            )
         ]
     )
     return layout.row_panel
@@ -1835,8 +1862,8 @@ def RaftIO() -> RowPanel:
         heatmap_panel_graph_panel_histogram_quantile_pairs(
             heatmap_title="Append log duration",
             heatmap_description="The time consumed when Raft appends log",
-            graph_title="99% Commit log duration per server",
-            graph_description="The time consumed when Raft commits log on each TiKV instance",
+            graph_title="99% Append log duration per server",
+            graph_description="The time consumed when Raft appends log on each TiKV instance",
             graph_by_labels=["instance"],
             graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
@@ -2537,7 +2564,7 @@ def LocalReader() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Raft log async fetch task duration",
+                title="Local reader requests",
                 targets=[
                     target(
                         expr=expr_sum_rate(
@@ -3161,22 +3188,6 @@ def Scheduler() -> RowPanel:
                 ],
             ),
             graph_panel(
-                title="Scheduler writing bytes",
-                description="The total writing bytes of commands on each stage",
-                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
-                targets=[
-                    target(
-                        expr=expr_sum(
-                            "tikv_scheduler_writing_bytes",
-                        ),
-                    ),
-                ],
-            ),
-        ]
-    )
-    layout.row(
-        [
-            graph_panel(
                 title="Scheduler priority commands",
                 description="The count of different priority commands",
                 yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
@@ -3189,15 +3200,67 @@ def Scheduler() -> RowPanel:
                     ),
                 ],
             ),
+        ]
+    )
+    layout.row(
+        [
             graph_panel(
                 title="Scheduler pending commands",
                 description="The count of pending commands per TiKV instance",
-                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
                 targets=[
                     target(
                         expr=expr_sum(
                             "tikv_scheduler_contex_total",
                         ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Scheduler running commands",
+                description="The count of running commands per TiKV instance",
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_running_commands",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Scheduler writing bytes",
+                description="The total writing bytes of commands on each stage",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_writing_bytes",
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Scheduler memory quota",
+                description="The number of bytes used by scheduler",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_memory_quota_size",
+                            label_selectors=['type="in_use"'],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_scheduler_memory_quota_size",
+                            label_selectors=['type="capacity"'],
+                        ),
+                        hide=True,
                     ),
                 ],
             ),
@@ -3965,6 +4028,58 @@ def CoprocessorDetail() -> RowPanel:
             yaxis_format=UNITS.SECONDS,
             metric="tikv_coprocessor_mem_lock_check_duration_seconds",
         ),
+    )
+    return layout.row_panel
+
+
+def RangeCacheMemoryEngine() -> RowPanel:
+    layout = Layout(title="Range Cache Memory Engine")
+    layout.row(
+        [
+            graph_panel(
+                title="Snapshot Type Count",
+                description="Count of each snapshot type",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_snapshot_type_count",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Snapshot Failed Reason",
+                description="Reasons for why rance cache snapshot is not acquired",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_range_cache_snapshot_acquire_failed_reason_count",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="GC Filter",
+                description="Rang cache engine garbage collection information",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_range_cache_memory_engine_gc_filtered",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}",
+                    ),
+                ],
+            ),
+        ]
     )
     return layout.row_panel
 
@@ -5810,15 +5925,21 @@ def Titan() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Live blob size",
+                title="Blob cache size",
+                description="The blob cache size.",
                 yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 targets=[
                     target(
-                        expr=expr_sum(
-                            "tikv_engine_titandb_live_blob_size",
-                            label_selectors=['db="$titan_db"'],
+                        expr=expr_topk(
+                            20,
+                            "%s"
+                            % expr_avg(
+                                "tikv_engine_blob_cache_size_bytes",
+                                label_selectors=['db="$titan_db"'],
+                                by_labels=["cf", "instance"],
+                            ),
                         ),
-                        legend_format="live blob size",
+                        legend_format="{{instance}}-{{cf}}",
                     ),
                 ],
             ),
@@ -5912,25 +6033,6 @@ def Titan() -> RowPanel:
                             by_labels=[],  # override default by instance.
                         ),
                         legend_format="max",
-                    ),
-                ],
-            ),
-            graph_panel(
-                title="Blob cache size",
-                description="The blob cache size.",
-                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
-                targets=[
-                    target(
-                        expr=expr_topk(
-                            20,
-                            "%s"
-                            % expr_avg(
-                                "tikv_engine_blob_cache_size_bytes",
-                                label_selectors=['db="$titan_db"'],
-                                by_labels=["cf", "instance"],
-                            ),
-                        ),
-                        legend_format="{{instance}}-{{cf}}",
                     ),
                 ],
             ),
@@ -6971,6 +7073,20 @@ def PointInTimeRestore() -> RowPanel:
                 ],
             ),
             graph_panel(
+                title="Import RPC Count",
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_import_rpc_count",
+                            label_selectors=[
+                                'type="apply"',
+                            ],
+                        ),
+                        legend_format="{{type}}-{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
                 title="Cache Events",
                 description=None,
                 yaxes=yaxes(left_format=UNITS.COUNTS_PER_SEC),
@@ -7211,13 +7327,12 @@ def ResolvedTS() -> RowPanel:
                 ],
             ),
             graph_panel(
-                title="Max gap of follower safe-ts",
-                description="The gap between now() and the minimal (non-zero) safe ts for followers",
-                yaxes=yaxes(left_format=UNITS.MILLI_SECONDS),
+                title="Min Resolved TS Region",
+                description="The region that has minimal resolved ts",
                 targets=[
                     target(
                         expr=expr_sum(
-                            "tikv_resolved_ts_min_follower_safe_ts_gap_millis",
+                            "tikv_resolved_ts_min_resolved_ts_region",
                         ),
                     )
                 ],
@@ -7227,12 +7342,13 @@ def ResolvedTS() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Min Resolved TS Region",
-                description="The region that has minimal resolved ts",
+                title="Max gap of follower safe-ts",
+                description="The gap between now() and the minimal (non-zero) safe ts for followers",
+                yaxes=yaxes(left_format=UNITS.MILLI_SECONDS),
                 targets=[
                     target(
                         expr=expr_sum(
-                            "tikv_resolved_ts_min_resolved_ts_region",
+                            "tikv_resolved_ts_min_follower_safe_ts_gap_millis",
                         ),
                     )
                 ],
@@ -7252,12 +7368,6 @@ def ResolvedTS() -> RowPanel:
     )
     layout.row(
         [
-            heatmap_panel(
-                title="Check leader duration",
-                description="The time consumed when handle a check leader request",
-                yaxis=yaxis(format=UNITS.SECONDS),
-                metric="tikv_resolved_ts_check_leader_duration_seconds_bucket",
-            ),
             graph_panel(
                 title="Max gap of resolved-ts in region leaders",
                 description="The gap between resolved ts of leaders and current time",
@@ -7266,46 +7376,6 @@ def ResolvedTS() -> RowPanel:
                     target(
                         expr=expr_sum(
                             "tikv_resolved_ts_min_leader_resolved_ts_gap_millis",
-                        ),
-                    )
-                ],
-            ),
-        ]
-    )
-    layout.row(
-        [
-            graph_panel(
-                title="99% CheckLeader request region count",
-                description="Bucketed histogram of region count in a check leader request",
-                targets=[
-                    target(
-                        expr=expr_histogram_quantile(
-                            0.99,
-                            "tikv_check_leader_request_item_count",
-                            by_labels=["instance"],
-                        ),
-                        legend_format="{{instance}}",
-                    )
-                ],
-            ),
-            heatmap_panel(
-                title="Initial scan backoff duration",
-                description="The backoff duration before starting initial scan",
-                yaxis=yaxis(format=UNITS.SECONDS),
-                metric="tikv_resolved_ts_initial_scan_backoff_duration_seconds_bucket",
-            ),
-        ]
-    )
-    layout.row(
-        [
-            graph_panel(
-                title="Lock heap size",
-                description="Total bytes in memory of resolved-ts observe regions's lock heap",
-                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
-                targets=[
-                    target(
-                        expr=expr_avg(
-                            "tikv_resolved_ts_lock_heap_bytes",
                         ),
                     )
                 ],
@@ -7325,35 +7395,24 @@ def ResolvedTS() -> RowPanel:
     )
     layout.row(
         [
-            graph_panel(
-                title="Observe region status",
-                description="The status of resolved-ts observe regions",
-                targets=[
-                    target(
-                        expr=expr_sum(
-                            "tikv_resolved_ts_region_resolve_status",
-                            by_labels=["type"],
-                        ),
-                    )
-                ],
+            heatmap_panel(
+                title="Check leader duration",
+                description="The time consumed when handle a check leader request",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_resolved_ts_check_leader_duration_seconds_bucket",
             ),
             graph_panel(
-                title="Fail advance ts count",
-                description="The count of fail to advance resolved-ts",
+                title="99% CheckLeader request region count",
+                description="Bucketed histogram of region count in a check leader request",
                 targets=[
                     target(
-                        expr=expr_sum_delta(
-                            "tikv_resolved_ts_fail_advance_count",
-                            by_labels=["instance", "reason"],
-                        ),
-                    ),
-                    target(
-                        expr=expr_sum_delta(
-                            "tikv_raftstore_check_stale_peer",
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_check_leader_request_item_count",
                             by_labels=["instance"],
                         ),
-                        legend_format="{{instance}}-stale-peer",
-                    ),
+                        legend_format="{{instance}}",
+                    )
                 ],
             ),
         ]
@@ -7381,6 +7440,63 @@ def ResolvedTS() -> RowPanel:
                         ),
                         legend_format="{{instance}}-check-num",
                     ),
+                ],
+            ),
+            graph_panel(
+                title="Fail advance ts count",
+                description="The count of fail to advance resolved-ts",
+                targets=[
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_resolved_ts_fail_advance_count",
+                            by_labels=["instance", "reason"],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum_delta(
+                            "tikv_raftstore_check_stale_peer",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}-stale-peer",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Lock heap size",
+                description="Total bytes in memory of resolved-ts observe regions's lock heap",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_resolved_ts_lock_heap_bytes",
+                        ),
+                    )
+                ],
+            ),
+            heatmap_panel(
+                title="Initial scan backoff duration",
+                description="The backoff duration before starting initial scan",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_resolved_ts_initial_scan_backoff_duration_seconds_bucket",
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Observe region status",
+                description="The status of resolved-ts observe regions",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_resolved_ts_region_resolve_status",
+                            by_labels=["type"],
+                        ),
+                    )
                 ],
             ),
             graph_panel(
@@ -7749,6 +7865,17 @@ def BackupImport() -> RowPanel:
                             label_selectors=['request!="switch_mode"'],
                             by_labels=["request"],
                         ),
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Import RPC Count",
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_import_rpc_count",
+                        ),
+                        legend_format="{{type}}-{{instance}}",
                     ),
                 ],
             ),
@@ -8541,6 +8668,36 @@ def SlowTrendStatistics() -> RowPanel:
     layout.row(
         [
             graph_panel(
+                title="Inspected duration per server",
+                description="The duration that recorded by inspecting messages.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_raftstore_inspect_duration_seconds",
+                            by_labels=["instance", "type"],
+                        ),
+                        legend_format="{{instance}}-{{type}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Store Slow Score",
+                description="The slow score of stores",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_raftstore_slow_score",
+                        ),
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
                 title="Slow Trend",
                 description="The changing trend of the slowness on I/O operations. 'value > 0' means the related store might have a slow trend.",
                 targets=[
@@ -8638,15 +8795,19 @@ dashboard = Dashboard(
     editable=True,
     templating=Templates(),
     panels=[
+        # Overview
         Duration(),
         Cluster(),
         Errors(),
         Server(),
+        # Entrance of Write and Read
         gRPC(),
+        Storage(),
+        LocalReader(),
+        # CPU and IO
         ThreadCPU(),
-        TTL(),
-        PD(),
         IOBreakdown(),
+        # Raftstore
         RaftWaterfall(),
         RaftIO(),
         RaftPropose(),
@@ -8654,30 +8815,38 @@ dashboard = Dashboard(
         RaftMessage(),
         RaftAdmin(),
         RaftLog(),
-        LocalReader(),
-        UnifiedReadPool(),
-        Storage(),
+        # Engine
+        RaftEngine(),
+        RocksDB(),
+        Titan(),
+        RangeCacheMemoryEngine(),
+        # Scheduler and Read Pools
         FlowControl(),
-        SchedulerCommands(),
         Scheduler(),
-        GC(),
-        Snapshot(),
-        Task(),
+        SchedulerCommands(),
         CoprocessorOverview(),
         CoprocessorDetail(),
-        Threads(),
-        RocksDB(),
-        RaftEngine(),
-        Titan(),
+        UnifiedReadPool(),
+        # Transaction
+        GC(),
         PessimisticLocking(),
-        PointInTimeRestore(),
-        ResolvedTS(),
-        Memory(),
-        BackupImport(),
-        Encryption(),
-        BackupLog(),
+        # Background Tasks
+        Task(),
+        PD(),
         SlowTrendStatistics(),
+        Snapshot(),
+        # Tools
+        ResolvedTS(),
+        PointInTimeRestore(),
+        BackupImport(),
+        BackupLog(),
+        # Advanced Debugging for CPU and Memory
+        Threads(),
+        Memory(),
+        # Infrequently Used
         StatusServer(),
+        Encryption(),
+        TTL(),
     ],
     # Set 14 or larger to support shared crosshair or shared tooltip.
     # See https://github.com/grafana/grafana/blob/v10.2.2/public/app/features/dashboard/state/DashboardMigrator.ts#L443-L445

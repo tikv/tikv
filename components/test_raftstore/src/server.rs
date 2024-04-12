@@ -18,7 +18,7 @@ use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, KvEngine, SnapshotContext};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
-use grpcio_health::HealthService;
+use health_controller::HealthController;
 use kvproto::{
     deadlock::create_deadlock,
     debugpb::{create_debug, DebugClient},
@@ -42,6 +42,7 @@ use raftstore::{
     },
     Result,
 };
+use region_cache_memory_engine::RangeCacheEngineConfig;
 use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
@@ -77,7 +78,7 @@ use tikv_util::{
     quota_limiter::QuotaLimiter,
     sys::thread::ThreadBuildWrapper,
     time::ThreadReadId,
-    worker::{Builder as WorkerBuilder, LazyWorker},
+    worker::{Builder as WorkerBuilder, LazyWorker, Scheduler},
     HandyRwLock,
 };
 use tokio::runtime::Builder as TokioBuilder;
@@ -150,7 +151,7 @@ pub struct ServerCluster<EK: KvEngine> {
     pub importers: HashMap<u64, Arc<SstImporter<EK>>>,
     pub pending_services: HashMap<u64, PendingServices>,
     pub coprocessor_hooks: HashMap<u64, CopHooks<EK>>,
-    pub health_services: HashMap<u64, HealthService>,
+    pub health_controllers: HashMap<u64, HealthController>,
     pub security_mgr: Arc<SecurityManager>,
     pub txn_extra_schedulers: HashMap<u64, Arc<dyn TxnExtraScheduler>>,
     snap_paths: HashMap<u64, TempDir>,
@@ -197,7 +198,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
             snap_mgrs: HashMap::default(),
             pending_services: HashMap::default(),
             coprocessor_hooks: HashMap::default(),
-            health_services: HashMap::default(),
+            health_controllers: HashMap::default(),
             raft_clients: HashMap::default(),
             conn_builder,
             concurrency_managers: HashMap::default(),
@@ -295,8 +296,15 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
         );
 
         // Create coprocessor.
+        let enable_region_stats_mgr_cb: Arc<dyn Fn() -> bool + Send + Sync> =
+            if cfg.range_cache_engine.enabled {
+                Arc::new(|| true)
+            } else {
+                Arc::new(|| false)
+            };
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
-        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
+        let region_info_accessor =
+            RegionInfoAccessor::new(&mut coprocessor_host, enable_region_stats_mgr_cb);
 
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
@@ -518,7 +526,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
                 false,
             )
             .unwrap();
-        let health_service = HealthService::default();
+        let health_controller = HealthController::new();
         let mut node = Node::new(
             system,
             &server_cfg.value().clone(),
@@ -527,7 +535,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
             Arc::clone(&self.pd_client),
             state,
             bg_worker.clone(),
-            Some(health_service.clone()),
+            health_controller.clone(),
             None,
         );
         node.try_bootstrap_store(engines.clone())?;
@@ -548,7 +556,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
                 self.env.clone(),
                 None,
                 debug_thread_pool.clone(),
-                health_service.clone(),
+                health_controller.clone(),
                 resource_manager.clone(),
             )
             .unwrap();
@@ -625,7 +633,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
         self.region_info_accessors
             .insert(node_id, region_info_accessor);
         self.importers.insert(node_id, importer);
-        self.health_services.insert(node_id, health_service);
+        self.health_controllers.insert(node_id, health_controller);
 
         lock_mgr
             .start(
@@ -662,6 +670,12 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
         let client = RaftClient::new(node_id, self.conn_builder.clone());
         self.raft_clients.insert(node_id, client);
         Ok(node_id)
+    }
+
+    pub fn get_resolved_ts_scheduler(&self, store_id: u64) -> Option<Scheduler<resolved_ts::Task>> {
+        let meta = self.metas.get(&store_id)?;
+        let w = meta.rts_worker.as_ref()?;
+        Some(w.scheduler())
     }
 }
 
@@ -868,14 +882,17 @@ pub fn new_server_cluster(
 }
 
 // the hybrid engine with disk engine "RocksEngine" and region cache engine
-// "RegionCacheMemoryEngine" is used in the server cluster.
+// "RangeCacheMemoryEngine" is used in the server cluster.
 pub fn new_server_cluster_with_hybrid_engine(
     id: u64,
     count: usize,
 ) -> Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
+    let mut cluster = Cluster::new(id, count, sim, pd_client, ApiVersion::V1);
+    cluster.range_cache_engine_enabled_with_whole_range(true);
+    cluster.cfg.tikv.range_cache_engine = RangeCacheEngineConfig::config_for_test();
+    cluster
 }
 
 pub fn new_server_cluster_with_api_ver(
@@ -954,8 +971,18 @@ pub fn must_new_cluster_and_kv_client_mul(
     TikvClient,
     Context,
 ) {
-    let (cluster, leader, ctx) = must_new_cluster_mul(count);
+    must_new_cluster_with_cfg_and_kv_client_mul(count, |_| {})
+}
 
+pub fn must_new_cluster_with_cfg_and_kv_client_mul(
+    count: usize,
+    configure: impl FnMut(&mut Cluster<RocksEngine, ServerCluster<RocksEngine>>),
+) -> (
+    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    TikvClient,
+    Context,
+) {
+    let (cluster, leader, ctx) = must_new_and_configure_cluster_mul(count, configure);
     let env = Arc::new(Environment::new(1));
     let channel =
         ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));

@@ -12,7 +12,7 @@ use std::{
 };
 
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
-use engine_traits::{KvEngine, Peekable, RaftEngine, SnapshotContext};
+use engine_traits::{CacheRange, KvEngine, Peekable, RaftEngine, SnapshotContext};
 use fail::fail_point;
 use kvproto::{
     errorpb,
@@ -455,7 +455,6 @@ impl ReadDelegate {
             bucket_meta: peer
                 .region_buckets_info()
                 .bucket_stat()
-                .as_ref()
                 .map(|b| b.meta.clone()),
             track_ver: TrackVer::new(),
         }
@@ -1058,13 +1057,17 @@ where
 
     pub fn propose_raft_command(
         &mut self,
-        snap_ctx: Option<SnapshotContext>,
+        mut snap_ctx: Option<SnapshotContext>,
         read_id: Option<ThreadReadId>,
         mut req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) {
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => {
+                if let Some(ref mut ctx) = snap_ctx {
+                    ctx.set_range(CacheRange::from_region(&delegate.region))
+                }
+
                 let mut snap_updated = false;
                 let last_valid_ts = delegate.last_valid_ts;
                 let mut response = match policy {
@@ -1289,10 +1292,11 @@ mod tests {
 
     use crossbeam::channel::TrySendError;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::{MiscExt, Peekable, SyncMutable, ALL_CFS};
+    use engine_traits::{CacheRange, MiscExt, Peekable, SyncMutable, ALL_CFS};
     use hybrid_engine::{HybridEngine, HybridEngineSnapshot};
+    use keys::DATA_PREFIX;
     use kvproto::{metapb::RegionEpoch, raft_cmdpb::*};
-    use region_cache_memory_engine::RegionCacheMemoryEngine;
+    use region_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheMemoryEngine};
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
     use time::Duration;
@@ -2418,8 +2422,8 @@ mod tests {
         );
     }
 
-    type HybridTestEnigne = HybridEngine<KvTestEngine, RegionCacheMemoryEngine>;
-    type HybridEngineTestSnapshot = HybridEngineSnapshot<KvTestEngine, RegionCacheMemoryEngine>;
+    type HybridTestEnigne = HybridEngine<KvTestEngine, RangeCacheMemoryEngine>;
+    type HybridEngineTestSnapshot = HybridEngineSnapshot<KvTestEngine, RangeCacheMemoryEngine>;
 
     struct HybridEngineMockRouter {
         p_router: SyncSender<RaftCommand<HybridEngineTestSnapshot>>,
@@ -2466,17 +2470,18 @@ mod tests {
         path: &str,
         store_id: u64,
         store_meta: Arc<Mutex<StoreMeta>>,
+        engine_config: RangeCacheEngineConfig,
     ) -> (
         TempDir,
         LocalReader<HybridTestEnigne, HybridEngineMockRouter>,
         Receiver<RaftCommand<HybridEngineTestSnapshot>>,
-        RegionCacheMemoryEngine,
+        RangeCacheMemoryEngine,
     ) {
         let path = Builder::new().prefix(path).tempdir().unwrap();
         let disk_engine =
             engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
         let (ch, rx, _) = HybridEngineMockRouter::new();
-        let memory_engine = RegionCacheMemoryEngine::default();
+        let memory_engine = RangeCacheMemoryEngine::new(&engine_config);
         let engine = HybridEngine::new(disk_engine, memory_engine.clone());
         let mut reader = LocalReader::new(
             engine.clone(),
@@ -2515,6 +2520,7 @@ mod tests {
             "test-local-hybrid-engine-reader",
             store_id,
             store_meta.clone(),
+            RangeCacheEngineConfig::config_for_test(),
         );
 
         // set up region so we can acquire snapshot from local reader
@@ -2530,6 +2536,14 @@ mod tests {
         };
         let leader2 = prs[0].clone();
         region1.set_region_epoch(epoch13.clone());
+        let range = CacheRange::from_region(&region1);
+        memory_engine.new_range(range.clone());
+        {
+            let mut core = memory_engine.core().write();
+            core.mut_range_manager().set_safe_point(&range, 1);
+        }
+        let kv = (&[DATA_PREFIX, b'a'], b"b");
+        reader.kv_engine.put(kv.0, kv.1).unwrap();
         let term6 = 6;
         let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250)); // 1s is long enough.
         let read_progress = Arc::new(RegionReadProgress::new(&region1, 1, 1, 1));
@@ -2571,33 +2585,18 @@ mod tests {
         let s = get_snapshot(None, &mut reader, cmd.clone(), &rx);
         assert!(!s.region_cache_snapshot_available());
 
-        memory_engine.new_region(1);
         {
-            let mut core = memory_engine.core().lock().unwrap();
-            core.mut_region_meta(1).unwrap().set_can_read(true);
-            core.mut_region_meta(1).unwrap().set_safe_ts(10);
+            let mut core = memory_engine.core().write();
+            core.mut_range_manager().set_safe_point(&range, 10);
         }
 
-        let mut snap_ctx = SnapshotContext {
+        let snap_ctx = SnapshotContext {
             read_ts: 15,
-            region_id: 1,
+            range: None,
         };
 
         let s = get_snapshot(Some(snap_ctx.clone()), &mut reader, cmd.clone(), &rx);
         assert!(s.region_cache_snapshot_available());
-
-        {
-            let mut core = memory_engine.core().lock().unwrap();
-            core.mut_region_meta(1).unwrap().set_can_read(false);
-        }
-        let s = get_snapshot(Some(snap_ctx.clone()), &mut reader, cmd.clone(), &rx);
-        assert!(!s.region_cache_snapshot_available());
-
-        {
-            let mut core = memory_engine.core().lock().unwrap();
-            core.mut_region_meta(1).unwrap().set_can_read(true);
-        }
-        snap_ctx.read_ts = 5;
-        assert!(!s.region_cache_snapshot_available());
+        assert_eq!(s.get_value(kv.0).unwrap().unwrap(), kv.1);
     }
 }

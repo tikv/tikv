@@ -11,7 +11,7 @@ use std::{
 
 use engine_traits::{
     util::check_key_in_range, Error as EngineError, IterOptions, Iterable, Iterator, KvEngine,
-    Peekable, RaftEngine, ReadOptions, Result as EngineResult, Snapshot, CF_RAFT,
+    MetricsExt, Peekable, RaftEngine, ReadOptions, Result as EngineResult, Snapshot, CF_RAFT,
 };
 use fail::fail_point;
 use keys::DATA_PREFIX_KEY;
@@ -280,6 +280,13 @@ pub struct RegionIterator<S: Snapshot> {
     region: Arc<Region>,
 }
 
+impl<S: Snapshot> MetricsExt for RegionIterator<S> {
+    type Collector = <<S as Iterable>::Iterator as MetricsExt>::Collector;
+    fn metrics_collector(&self) -> Self::Collector {
+        self.iter.metrics_collector()
+    }
+}
+
 fn update_lower_bound(iter_opt: &mut IterOptions, region: &Region) {
     let region_start_key = keys::enc_start_key(region);
     if iter_opt.lower_bound().is_some() && !iter_opt.lower_bound().as_ref().unwrap().is_empty() {
@@ -443,7 +450,7 @@ mod tests {
             (b"a9".to_vec(), b"v9".to_vec()),
         ];
 
-        for &(ref k, ref v) in &base_data {
+        for (k, v) in &base_data {
             engines.kv.put(&data_key(k), v).unwrap();
         }
         let store = new_peer_storage(engines, &r);

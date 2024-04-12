@@ -15,7 +15,7 @@ use error_code::ErrorCodeExt;
 use futures::{stream::AbortHandle, FutureExt, TryFutureExt};
 use kvproto::{
     brpb::{StreamBackupError, StreamBackupTaskInfo},
-    metapb::Region,
+    metapb::{Region, RegionEpoch},
 };
 use pd_client::PdClient;
 use raft::StateRole;
@@ -39,7 +39,7 @@ use tikv_util::{
 use tokio::{
     io::Result as TokioResult,
     runtime::{Handle, Runtime},
-    sync::{oneshot, Semaphore},
+    sync::{mpsc::Sender, oneshot, Semaphore},
 };
 use tokio_stream::StreamExt;
 use tracing::instrument;
@@ -53,7 +53,7 @@ use crate::{
         BasicFlushObserver, CheckpointManager, CheckpointV3FlushObserver, FlushObserver,
         GetCheckpointResult, RegionIdWithVersion, Subscription,
     },
-    errors::{Error, Result},
+    errors::{Error, ReportableResult, Result},
     event_loader::InitialDataLoader,
     future,
     metadata::{store::MetaStore, MetadataClient, MetadataEvent, StreamTask},
@@ -63,7 +63,7 @@ use crate::{
     subscription_manager::{RegionSubscriptionManager, ResolvedRegions},
     subscription_track::{Ref, RefMut, ResolveResult, SubscriptionTracer},
     try_send,
-    utils::{self, CallbackWaitGroup, StopWatch, Work},
+    utils::{self, FutureWaitGroup, StopWatch, Work},
 };
 
 const SLOW_EVENT_THRESHOLD: f64 = 120.0;
@@ -88,7 +88,7 @@ pub struct Endpoint<S, R, E: KvEngine, PDC> {
     pub range_router: Router,
     observer: BackupStreamObserver,
     pool: Runtime,
-    region_operator: RegionSubscriptionManager<S, R, PDC>,
+    region_operator: Sender<ObserveOp>,
     failover_time: Option<Instant>,
     // We holds the config before, even it is useless for now,
     // however probably it would be useful in the future.
@@ -169,9 +169,7 @@ where
                 Arc::clone(&initial_scan_semaphore),
             ),
             accessor.clone(),
-            observer.clone(),
             meta_client.clone(),
-            pd_client.clone(),
             ((config.num_threads + 1) / 2).max(1),
             resolver,
         );
@@ -446,13 +444,15 @@ where
 
     /// Convert a batch of events to the cmd batch, and update the resolver
     /// status.
-    fn record_batch(subs: SubscriptionTracer, batch: CmdBatch) -> Option<ApplyEvents> {
+    fn record_batch(subs: SubscriptionTracer, batch: CmdBatch) -> Result<ApplyEvents> {
         let region_id = batch.region_id;
         let mut resolver = match subs.get_subscription_of(region_id) {
             Some(rts) => rts,
             None => {
                 debug!("the region isn't registered (no resolver found) but sent to backup_batch, maybe stale."; "region_id" => %region_id);
-                return None;
+                // Sadly, we know nothing about the epoch in this context. Thankfully this is a
+                // local error and won't be sent to outside.
+                return Err(Error::ObserveCanceled(region_id, RegionEpoch::new()));
             }
         };
         // Stale data is acceptable, while stale locks may block the checkpoint
@@ -469,11 +469,11 @@ where
         // ```
         if batch.pitr_id != resolver.value().handle.id {
             debug!("stale command"; "region_id" => %region_id, "now" => ?resolver.value().handle.id, "remote" => ?batch.pitr_id);
-            return None;
+            return Err(Error::ObserveCanceled(region_id, RegionEpoch::new()));
         }
 
-        let kvs = ApplyEvents::from_cmd_batch(batch, resolver.value_mut().resolver());
-        Some(kvs)
+        let kvs = ApplyEvents::from_cmd_batch(batch, resolver.value_mut().resolver())?;
+        Ok(kvs)
     }
 
     fn backup_batch(&self, batch: CmdBatch, work: Work) {
@@ -482,6 +482,7 @@ where
         let router = self.range_router.clone();
         let sched = self.scheduler.clone();
         let subs = self.subs.clone();
+        let region_op = self.region_operator.clone();
         let region = batch.region_id;
         let from_idx = batch.cmds.first().map(|c| c.index).unwrap_or(0);
         let (to_idx, term) = batch
@@ -492,10 +493,27 @@ where
         self.pool.spawn(root!("backup_batch"; async move {
             let region_id = batch.region_id;
             let kvs = Self::record_batch(subs, batch);
-            if kvs.as_ref().map(|x| x.is_empty()).unwrap_or(true) {
-                return;
-            }
-            let kvs = kvs.unwrap();
+            let kvs = match kvs {
+                Err(Error::OutOfQuota { region_id }) => {
+                    region_op.send(ObserveOp::HighMemUsageWarning { region_id }).await
+                        .map_err(|err| Error::Other(box_err!("failed to send, are we shutting down? {}", err)))
+                        .report_if_err("");
+                    return
+                }
+                Err(Error::ObserveCanceled(..)) => {
+                    return;
+                }
+                Err(err) => {
+                    err.report(format_args!("unexpected error during handing region event for {}.", region_id));
+                    return;
+                }
+                Ok(batch) => {
+                    if batch.is_empty() {
+                        return
+                    }
+                    batch
+                }
+            };
 
             HANDLE_EVENT_DURATION_HISTOGRAM
                 .with_label_values(&["to_stream_event"])
@@ -595,6 +613,7 @@ where
                         .try_for_each(|r| {
                             tx.blocking_send(ObserveOp::Start {
                                 region: r.region.clone(),
+                                handle: ObserveHandle::new(),
                             })
                         });
                 }),
@@ -609,9 +628,24 @@ where
         // Don't reschedule this command: or once the endpoint's mailbox gets
         // full, the system might deadlock.
         while let Some(cmd) = rx.recv().await {
-            self.region_operator.request(cmd).await;
+            self.region_op(cmd).await;
         }
         Ok(())
+    }
+
+    /// send an operation request to the manager.
+    /// the returned future would be resolved after send is success.
+    /// the operation would be executed asynchronously.
+    async fn region_op(&self, cmd: ObserveOp) {
+        self.region_operator
+            .send(cmd)
+            .await
+            .map_err(|err| {
+                Error::Other(
+                    format!("cannot send to region operator, are we shutting down? ({err})").into(),
+                )
+            })
+            .report_if_err("send region cmd")
     }
 
     // register task ranges
@@ -779,7 +813,10 @@ where
                 }),
                 min_ts,
             };
-            op.request(req).await;
+            if let Err(err) = op.send(req).await {
+                annotate!(err, "BUG: region operator channel closed.")
+                    .report("when executing region op");
+            }
             rx.await
                 .map_err(|err| annotate!(err, "failed to send request for resolve regions"))
         }
@@ -915,7 +952,7 @@ where
              "config" => ?cfg,
              "concurrency_diff" => concurrency_diff,
         );
-        self.range_router.udpate_config(&cfg);
+        self.range_router.update_config(&cfg);
         self.update_semaphore_capacity(&self.initial_scan_semaphore, concurrency_diff);
 
         self.config = cfg;
@@ -924,7 +961,15 @@ where
     /// Modify observe over some region.
     /// This would register the region to the RaftStore.
     pub fn on_modify_observe(&self, op: ObserveOp) {
-        self.pool.block_on(self.region_operator.request(op));
+        self.pool
+            .block_on(self.region_operator.send(op))
+            .map_err(|err| {
+                Error::Other(box_err!(
+                    "cannot send to region operator, are we shutting down? ({})",
+                    err
+                ))
+            })
+            .report_if_err("during on_modify_observe");
     }
 
     fn update_semaphore_capacity(&self, sema: &Arc<Semaphore>, diff: isize) {
@@ -1051,6 +1096,7 @@ where
                     })
                 );
             }
+            #[allow(clippy::blocks_in_conditions)]
             RegionCheckpointOperation::Resolve { min_ts, start_time } => {
                 let sched = self.scheduler.clone();
                 try_send!(
@@ -1072,7 +1118,7 @@ where
     }
 
     pub fn do_backup(&self, events: Vec<CmdBatch>) {
-        let wg = CallbackWaitGroup::new();
+        let wg = FutureWaitGroup::new();
         for batch in events {
             self.backup_batch(batch, wg.clone().work());
         }
@@ -1103,6 +1149,9 @@ pub enum BackupStreamResolver<RT, EK> {
     V1(LeadershipResolver),
     // for raftstore-v2, it has less regions. we use CDCHandler to check leadership of a region.
     V2(RT, PhantomData<EK>),
+    #[cfg(test)]
+    // for some test cases, it is OK to don't check leader.
+    Nop,
 }
 
 impl<RT, EK> BackupStreamResolver<RT, EK>
@@ -1117,6 +1166,8 @@ where
                 let x = x.clone();
                 resolve_by_raft(regions, min_ts, x).await
             }
+            #[cfg(test)]
+            BackupStreamResolver::Nop => regions,
         }
     }
 }
@@ -1215,6 +1266,7 @@ type ResolveRegionsCallback = Box<dyn FnOnce(ResolvedRegions) + 'static + Send>;
 pub enum ObserveOp {
     Start {
         region: Region,
+        handle: ObserveHandle,
     },
     Stop {
         region: Region,
@@ -1229,24 +1281,27 @@ pub enum ObserveOp {
     RefreshResolver {
         region: Region,
     },
-    NotifyFailToStartObserve {
+    NotifyStartObserveResult {
         region: Region,
         handle: ObserveHandle,
-        err: Box<Error>,
-        has_failed_for: u8,
+        err: Option<Box<Error>>,
     },
     ResolveRegions {
         callback: ResolveRegionsCallback,
         min_ts: TimeStamp,
+    },
+    HighMemUsageWarning {
+        region_id: u64,
     },
 }
 
 impl std::fmt::Debug for ObserveOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Start { region } => f
+            Self::Start { region, handle } => f
                 .debug_struct("Start")
                 .field("region", &utils::debug_region(region))
+                .field("handle", &handle)
                 .finish(),
             Self::Stop { region } => f
                 .debug_struct("Stop")
@@ -1260,22 +1315,26 @@ impl std::fmt::Debug for ObserveOp {
                 .debug_struct("RefreshResolver")
                 .field("region", &utils::debug_region(region))
                 .finish(),
-            Self::NotifyFailToStartObserve {
+            Self::NotifyStartObserveResult {
                 region,
                 handle,
                 err,
-                has_failed_for,
             } => f
-                .debug_struct("NotifyFailToStartObserve")
+                .debug_struct("NotifyStartObserveResult")
                 .field("region", &utils::debug_region(region))
                 .field("handle", handle)
                 .field("err", err)
-                .field("has_failed_for", has_failed_for)
                 .finish(),
             Self::ResolveRegions { min_ts, .. } => f
                 .debug_struct("ResolveRegions")
                 .field("min_ts", min_ts)
                 .field("callback", &format_args!("fn {{ .. }}"))
+                .finish(),
+            Self::HighMemUsageWarning {
+                region_id: inconsistent_region_id,
+            } => f
+                .debug_struct("HighMemUsageWarning")
+                .field("inconsistent_region", &inconsistent_region_id)
                 .finish(),
         }
     }
@@ -1337,8 +1396,9 @@ impl Task {
                 ObserveOp::Stop { .. } => "modify_observe.stop",
                 ObserveOp::Destroy { .. } => "modify_observe.destroy",
                 ObserveOp::RefreshResolver { .. } => "modify_observe.refresh_resolver",
-                ObserveOp::NotifyFailToStartObserve { .. } => "modify_observe.retry",
+                ObserveOp::NotifyStartObserveResult { .. } => "modify_observe.retry",
                 ObserveOp::ResolveRegions { .. } => "modify_observe.resolve",
+                ObserveOp::HighMemUsageWarning { .. } => "modify_observe.high_mem",
             },
             Task::ForceFlush(..) => "force_flush",
             Task::FatalError(..) => "fatal_error",

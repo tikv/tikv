@@ -275,7 +275,7 @@ fn get_keys_in_region(keys: &mut Peekable<IntoIter<Key>>, region: &Region) -> Ve
     let mut keys_in_region = Vec::new();
 
     loop {
-        let Some(key) = keys.peek() else {break};
+        let Some(key) = keys.peek() else { break };
         let key = key.as_encoded().as_slice();
 
         if key < region.get_start_key() {
@@ -690,10 +690,7 @@ impl<E: Engine> GcRunnerCore<E> {
     }
 
     pub fn mut_stats(&mut self, key_mode: GcKeyMode) -> &mut Statistics {
-        let stats = self
-            .stats_map
-            .entry(key_mode)
-            .or_insert_with(Default::default);
+        let stats = self.stats_map.entry(key_mode).or_default();
         stats
     }
 
@@ -1870,7 +1867,7 @@ mod tests {
 
         let sp_provider = MockSafePointProvider(200);
         let mut host = CoprocessorHost::<RocksEngine>::default();
-        let ri_provider = RegionInfoAccessor::new(&mut host);
+        let ri_provider = RegionInfoAccessor::new(&mut host, Arc::new(|| false));
 
         let mut gc_config = GcConfig::default();
         gc_config.num_threads = 2;
@@ -1985,7 +1982,7 @@ mod tests {
         r1.mut_peers()[0].set_store_id(store_id);
 
         let mut host = CoprocessorHost::<RocksEngine>::default();
-        let ri_provider = RegionInfoAccessor::new(&mut host);
+        let ri_provider = RegionInfoAccessor::new(&mut host, Arc::new(|| false));
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
         let db = engine.kv_engine().unwrap().as_inner().clone();
@@ -2049,7 +2046,7 @@ mod tests {
         r1.mut_peers()[0].set_store_id(store_id);
 
         let mut host = CoprocessorHost::<RocksEngine>::default();
-        let ri_provider = Arc::new(RegionInfoAccessor::new(&mut host));
+        let ri_provider = Arc::new(RegionInfoAccessor::new(&mut host, Arc::new(|| false)));
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
         // Init env end...
 
@@ -2150,7 +2147,7 @@ mod tests {
         r1.mut_peers()[0].set_store_id(1);
 
         let mut host = CoprocessorHost::<RocksEngine>::default();
-        let ri_provider = Arc::new(RegionInfoAccessor::new(&mut host));
+        let ri_provider = Arc::new(RegionInfoAccessor::new(&mut host, Arc::new(|| false)));
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
         let db = engine.kv_engine().unwrap().as_inner().clone();
@@ -2335,7 +2332,6 @@ mod tests {
 
         fn generate_keys(start: u64, end: u64) -> Vec<Key> {
             (start..end)
-                .into_iter()
                 .map(|i| {
                     let key = format!("k{:02}", i);
                     Key::from_raw(key.as_bytes())
