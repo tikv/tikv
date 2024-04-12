@@ -116,7 +116,7 @@ use tikv::{
 use tikv_alloc::{add_thread_memory_accessor, remove_thread_memory_accessor};
 use tikv_util::{
     check_environment_variables,
-    config::{ReadableSize, VersionTrack},
+    config::VersionTrack,
     memory::MemoryQuota,
     mpsc as TikvMpsc,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
@@ -223,9 +223,7 @@ pub fn run_tikv(
 
     dispatch_api_version!(config.storage.api_version(), {
         if !config.raft_engine.enable {
-            if cfg!(feature = "memory-engine")
-                && config.region_cache_memory_limit != ReadableSize(0)
-            {
+            if cfg!(feature = "memory-engine") && config.range_cache_engine.enabled {
                 run_impl::<HybridEngine<RocksEngine, RangeCacheMemoryEngine>, RocksEngine, API>(
                     config,
                     service_event_tx,
@@ -239,9 +237,7 @@ pub fn run_tikv(
                 )
             }
         } else {
-            if cfg!(feature = "memory-engine")
-                && config.region_cache_memory_limit != ReadableSize(0)
-            {
+            if cfg!(feature = "memory-engine") && config.range_cache_engine.enabled {
                 run_impl::<HybridEngine<RocksEngine, RangeCacheMemoryEngine>, RaftLogEngine, API>(
                     config,
                     service_event_tx,
@@ -419,7 +415,10 @@ where
             if cfg!(feature = "memory-engine") {
                 let cfg_controller_clone = cfg_controller.clone();
                 Arc::new(move || {
-                    cfg_controller_clone.get_current().region_cache_memory_limit != ReadableSize(0)
+                    cfg_controller_clone
+                        .get_current()
+                        .range_cache_engine
+                        .enabled
                 })
             } else {
                 Arc::new(|| false)
@@ -1665,7 +1664,11 @@ where
         let disk_engine = factory
             .create_shared_db(&self.core.store_path)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
-        let kv_engine: EK = KvEngineBuilder::build(disk_engine.clone());
+        let kv_engine: EK = KvEngineBuilder::build(
+            &self.core.config.range_cache_engine,
+            disk_engine.clone(),
+            Some(self.pd_client.clone()),
+        );
         self.kv_statistics = Some(factory.rocks_statistics());
         let engines = Engines::new(kv_engine, raft_engine);
 
