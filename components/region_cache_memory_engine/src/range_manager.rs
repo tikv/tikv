@@ -113,7 +113,8 @@ pub struct RangeManager {
     // evicted range deleting the relevant data.
     historical_ranges: BTreeMap<CacheRange, RangeMeta>,
     // `ranges_being_deleted` contains two types of ranges: 1. the range is evicted and not finish
-    // the delete, 2. the range is loading data but memory acquirement is rejected.
+    // the delete(or even not start to delete due to ongoing snapshot), 2. the range is loading
+    // data but memory acquirement is rejected.
     pub(crate) ranges_being_deleted: BTreeSet<CacheRange>,
     // ranges that are cached now
     ranges: BTreeMap<CacheRange, RangeMeta>,
@@ -197,8 +198,24 @@ impl RangeManager {
             .any(|(r, ..)| r.contains_range(range))
     }
 
-    pub(crate) fn overlap_with_range(&self, range: &CacheRange) -> bool {
+    fn overlap_with_range(&self, range: &CacheRange) -> bool {
         self.ranges.keys().any(|r| r.overlaps(range))
+    }
+
+    fn overlap_with_evicting_range(&self, range: &CacheRange) -> bool {
+        self.ranges_being_deleted.iter().any(|r| r.overlaps(range))
+    }
+
+    fn overlap_with_range_in_gc(&self, range: &CacheRange) -> bool {
+        self.ranges_in_gc.iter().any(|r| r.overlaps(range))
+    }
+
+    fn overlap_with_pending_range(&self, range: &CacheRange) -> bool {
+        self.pending_ranges.iter().any(|r| r.overlaps(range))
+            || self
+                .pending_ranges_loading_data
+                .iter()
+                .any(|(r, ..)| r.overlaps(range))
     }
 
     // Acquire a snapshot of the `range` with `read_ts`. If the range is not
@@ -343,11 +360,14 @@ impl RangeManager {
         if self.overlap_with_range(&cache_range) {
             return Err(LoadFailedReason::Overlapped);
         };
-        if self.ranges_in_gc.contains(&cache_range) {
+        if self.overlap_with_pending_range(&cache_range) {
+            return Err(LoadFailedReason::PendingRange);
+        }
+        if self.overlap_with_range_in_gc(&cache_range) {
             return Err(LoadFailedReason::InGc);
         }
-        if self.ranges_being_deleted.contains(&cache_range) {
-            return Err(LoadFailedReason::Evicted);
+        if self.overlap_with_evicting_range(&cache_range) {
+            return Err(LoadFailedReason::Evicting);
         }
         self.pending_ranges.push(cache_range);
         Ok(())
@@ -357,8 +377,9 @@ impl RangeManager {
 #[derive(Debug, PartialEq)]
 pub enum LoadFailedReason {
     Overlapped,
+    PendingRange,
     InGc,
-    Evicted,
+    Evicting,
 }
 
 pub enum RangeCacheStatus {
@@ -439,7 +460,7 @@ mod tests {
 
         assert_eq!(
             range_mgr.load_range(r1).unwrap_err(),
-            LoadFailedReason::Evicted
+            LoadFailedReason::Evicting
         );
 
         assert_eq!(
@@ -450,6 +471,49 @@ mod tests {
         assert_eq!(
             range_mgr.load_range(r4).unwrap_err(),
             LoadFailedReason::Overlapped
+        );
+    }
+
+    #[test]
+    fn test_range_load_overlapped() {
+        let mut range_mgr = RangeManager::default();
+        let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+        let r2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
+        let r3 = CacheRange::new(b"k40".to_vec(), b"k50".to_vec());
+        range_mgr.new_range(r1.clone());
+        range_mgr.evict_range(&r1);
+
+        let mut gced = BTreeSet::default();
+        gced.insert(r2);
+        range_mgr.set_ranges_in_gc(gced);
+
+        range_mgr.load_range(r3).unwrap();
+
+        let r = CacheRange::new(b"".to_vec(), b"k05".to_vec());
+        assert_eq!(
+            range_mgr.load_range(r).unwrap_err(),
+            LoadFailedReason::Evicting
+        );
+        let r = CacheRange::new(b"k05".to_vec(), b"k15".to_vec());
+        assert_eq!(
+            range_mgr.load_range(r).unwrap_err(),
+            LoadFailedReason::Evicting
+        );
+
+        let r = CacheRange::new(b"k15".to_vec(), b"k25".to_vec());
+        assert_eq!(range_mgr.load_range(r).unwrap_err(), LoadFailedReason::InGc);
+        let r = CacheRange::new(b"k25".to_vec(), b"k35".to_vec());
+        assert_eq!(range_mgr.load_range(r).unwrap_err(), LoadFailedReason::InGc);
+
+        let r = CacheRange::new(b"k35".to_vec(), b"k45".to_vec());
+        assert_eq!(
+            range_mgr.load_range(r).unwrap_err(),
+            LoadFailedReason::PendingRange
+        );
+        let r = CacheRange::new(b"k45".to_vec(), b"k55".to_vec());
+        assert_eq!(
+            range_mgr.load_range(r).unwrap_err(),
+            LoadFailedReason::PendingRange
         );
     }
 }
