@@ -9,20 +9,12 @@ use std::{
     thread::{self, Builder as ThreadBuilder, JoinHandle},
     time::Duration,
 };
-use std::sync::atomic::AtomicI64;
-use futures::{compat::Future01CompatExt, stream, StreamExt};
-use dashmap::DashMap;
-use kvproto::meta_storagepb::EventEventType;
 
 use engine_traits::KvEngine;
 use kvproto::metapb::Region;
-use pd_client::{FeatureGate, RpcClient};
-use pd_client::{PdClient,Error as PdError};
-use pd_client::meta_storage::{MetaStorageClient,Checked, Get, Sourced, Watch};
+use pd_client::FeatureGate;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::{store::find_peer, time::Instant, worker::Scheduler};
-use tikv_util::timer::GLOBAL_TIMER_HANDLE;
-use tikv_util::worker::Worker;
 use txn_types::{Key, TimeStamp};
 
 use super::{
@@ -39,7 +31,6 @@ const BEGIN_KEY: &[u8] = b"";
 
 const PROCESS_TYPE_GC: &str = "gc";
 const PROCESS_TYPE_SCAN: &str = "scan";
-
 
 /// The configurations of automatic GC.
 pub struct AutoGcConfig<S: GcSafePointProvider, R: RegionInfoProvider> {
@@ -256,8 +247,6 @@ pub(super) struct GcManager<S: GcSafePointProvider, R: RegionInfoProvider, E: Kv
     feature_gate: FeatureGate,
 
     max_concurrent_tasks: usize,
-
-
 }
 
 impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcManager<S, R, E> {

@@ -304,7 +304,6 @@ impl ResourceManagerService {
     }
 }
 
-
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct RequestUnitConfig {

@@ -853,7 +853,7 @@ where
 
         let observer = match self.core.config.coprocessor.consistency_check_method {
             ConsistencyCheckMethod::Mvcc => BoxConsistencyCheckObserver::new(
-                MvccConsistencyCheckObserver::new(safe_point.clone(), Arc::clone(&keyspace_meta_service)),
+                MvccConsistencyCheckObserver::new(safe_point.clone()),
             ),
             ConsistencyCheckMethod::Raw => {
                 BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default())
