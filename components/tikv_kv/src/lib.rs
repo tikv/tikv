@@ -146,7 +146,7 @@ impl From<Modify> for raft_cmdpb::Request {
             Modify::Put(cf, k, v) => {
                 let mut put = raft_cmdpb::PutRequest::default();
                 put.set_key(k.into_encoded());
-                put.set_value(v);
+                put.set_value(v.clone());
                 // Simulate put contains old value, estimate the performance impact.
                 put.set_old_value(v);
                 if cf != CF_DEFAULT {
