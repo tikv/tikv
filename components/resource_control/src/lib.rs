@@ -80,17 +80,3 @@ pub fn start_periodic_tasks(
         resource_mgr_service.report_ru_metrics().await;
     });
 }
-//
-//
-// pub fn start_periodic_gc_tasks(
-//     pd_client: Arc<RpcClient>,
-//     bg_worker: &Worker,
-// ) {
-//     let resource_mgr_service = KeyspaceLevelGCWatchService::new(pd_client);
-//
-//     let mut resource_mgr_service_clone = resource_mgr_service.clone();
-//     // spawn a task to watch all resource groups update.
-//     bg_worker.spawn_async_task(async move {
-//         resource_mgr_service_clone.watch_keyspace_gc().await;
-//     });
-// }

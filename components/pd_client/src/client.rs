@@ -1,11 +1,14 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt, sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc,
-}, task, time::Duration, u64};
-use std::sync::atomic::AtomicI64;
-use dashmap::DashMap;
+use std::{
+    fmt,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+    u64,
+};
 
 use futures::{
     channel::mpsc,
@@ -16,7 +19,7 @@ use futures::{
     stream::{ErrInto, StreamExt},
     TryStreamExt,
 };
-use grpcio::{ClientSStreamReceiver, EnvBuilder, Environment, WriteFlags};
+use grpcio::{EnvBuilder, Environment, WriteFlags};
 use kvproto::{
     meta_storagepb::{
         self as mpb, DeleteRequest, GetRequest, PutRequest, WatchRequest, WatchResponse,
@@ -45,8 +48,6 @@ use super::{
 pub const CQ_COUNT: usize = 1;
 pub const CLIENT_PREFIX: &str = "pd";
 const DEFAULT_REGION_PER_BATCH: i32 = 128;
-
-const RETRY_INTERVAL: Duration = Duration::from_secs(1); // to consistent with pd_client
 
 #[derive(Clone)]
 pub struct RpcClient {
