@@ -27,6 +27,7 @@ use file_system::{IoType, WithIoType};
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
 use api_version::ApiV2;
+use keyspace_meta::KeyspaceMetaService;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::{
     time::Instant,
@@ -49,8 +50,6 @@ pub const DEFAULT_DELETE_BATCH_COUNT: usize = 128;
 // other replicas by Raft.
 const COMPACTION_FILTER_GC_FEATURE: Feature = Feature::require(5, 0, 0);
 
-const KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE: &str="gc_management_type";
-const GC_MGMT_TYPE_KEYSPACE_LEVEL_GC: &str="keyspace_level_gc";
 
 
 // Global context to create a compaction filter for write CF. It's necessary as
@@ -67,8 +66,7 @@ pub struct GcContext {
     #[cfg(any(test, feature = "failpoints"))]
     callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
 
-    pub(crate) keyspace_level_gc_cache: Arc<DashMap<u32, u64>>,
-    pub(crate) keyspace_meta_cache: Arc<DashMap<u32, KeyspaceMeta>>,
+    pub(crate) keyspace_meta_service: Arc<KeyspaceMetaService>,
 }
 
 // Give all orphan versions an ID to log them.
@@ -160,8 +158,7 @@ where
         feature_gate: FeatureGate,
         gc_scheduler: Scheduler<GcTask<EK>>,
         region_info_provider: Arc<dyn RegionInfoProvider>,
-        keyspace_level_gc_cache: Arc<DashMap<u32, u64>>,
-        keyspace_meta_cache: Arc<DashMap<u32, KeyspaceMeta>>,
+        keyspace_meta_service: Arc<KeyspaceMetaService>,
     );
 }
 
@@ -177,8 +174,7 @@ where
         _feature_gate: FeatureGate,
         _gc_scheduler: Scheduler<GcTask<EK>>,
         _region_info_provider: Arc<dyn RegionInfoProvider>,
-        _keyspace_level_gc_cache: Arc<DashMap<u32, u64>>,
-        _keyspace_meta_cache: Arc<DashMap<u32, KeyspaceMeta>>,
+        _keyspace_meta_service: Arc<KeyspaceMetaService>,
     ) {
         info!("Compaction filter is not supported for this engine.");
     }
@@ -193,8 +189,7 @@ impl CompactionFilterInitializer<RocksEngine> for Option<RocksEngine> {
         feature_gate: FeatureGate,
         gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         region_info_provider: Arc<dyn RegionInfoProvider>,
-        keyspace_level_gc_cache: Arc<DashMap<u32, u64>>,
-        keyspace_meta_cache: Arc<DashMap<u32, KeyspaceMeta>>,
+        keyspace_meta_service: Arc<KeyspaceMetaService>,
     ) {
         info!("initialize GC context for compaction filter");
         let mut gc_context = GC_CONTEXT.lock().unwrap();
@@ -208,8 +203,7 @@ impl CompactionFilterInitializer<RocksEngine> for Option<RocksEngine> {
             region_info_provider,
             #[cfg(any(test, feature = "failpoints"))]
             callbacks_on_drop: vec![],
-            keyspace_level_gc_cache,
-            keyspace_meta_cache
+            keyspace_meta_service,
         });
     }
 }
@@ -269,8 +263,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             return None;
         }
 
-        let keyspace_level_gc_cache= gc_context.keyspace_level_gc_cache.clone();
-        let keyspace_meta_cache= gc_context.keyspace_meta_cache.clone();
+        let keyspace_meta_service=gc_context.keyspace_meta_service.clone();
         drop(gc_context_option);
         GC_COMPACTION_FILTER_PERFORM
             .with_label_values(&[STAT_TXN_KEYMODE])
@@ -296,8 +289,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             context,
             gc_scheduler,
             (store_id, region_info_provider),
-            keyspace_level_gc_cache,
-            keyspace_meta_cache,
+            keyspace_meta_service,
         );
         let name = CString::new("write_compaction_filter").unwrap();
         Some((name, filter))
@@ -383,8 +375,7 @@ pub struct WriteCompactionFilter {
     #[cfg(any(test, feature = "failpoints"))]
     callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
 
-    keyspace_level_gc_cache: Arc<DashMap<u32, u64>>,
-    keyspace_meta_cache: Arc<DashMap<u32, KeyspaceMeta>>,
+    keyspace_meta_service: Arc<KeyspaceMetaService>,
 }
 
 impl WriteCompactionFilter {
@@ -394,8 +385,7 @@ impl WriteCompactionFilter {
         context: &CompactionFilterContext,
         gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         regions_provider: (u64, Arc<dyn RegionInfoProvider>),
-        keyspace_level_gc_cache: Arc<DashMap<u32, u64>>,
-        keyspace_meta_cache: Arc<DashMap<u32, KeyspaceMeta>>,
+        keyspace_meta_service: Arc<KeyspaceMetaService>,
     ) -> Self {
         // Safe point must have been initialized.
         assert!(safe_point > 0);
@@ -430,8 +420,7 @@ impl WriteCompactionFilter {
                 let ctx = GC_CONTEXT.lock().unwrap();
                 ctx.as_ref().unwrap().callbacks_on_drop.clone()
             },
-            keyspace_level_gc_cache,
-            keyspace_meta_cache,
+            keyspace_meta_service,
         }
     }
 
@@ -479,65 +468,6 @@ impl WriteCompactionFilter {
         }
     }
 
-    fn is_keyspace_use_global_gc_safe_point(&self, keyspace_id: u32) ->bool{
-        let keyspace_meta_opt=self.keyspace_meta_cache.get(&keyspace_id);
-        match keyspace_meta_opt {
-            None => {
-                // Haven't got the keyspace meta yet.May be fetching by KeyspaceMetaWatchService.
-                return false;
-            }
-            Some(keyspace_meta) => {
-                let ks_gc_management_type =keyspace_meta.config.get(KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE);
-                match ks_gc_management_type {
-                    None => {
-                        // keyspace config don't set 'keyspace_level_gc'
-                        return true
-                    }
-                    Some(gc_management_type) => {
-                        if gc_management_type==GC_MGMT_TYPE_KEYSPACE_LEVEL_GC{
-                            return false
-                        }
-                        return true
-                    }
-                }
-            }
-        }
-    }
-
-    fn get_keyspace_gc_safe_point(&mut self, key: &[u8]) -> u64 {
-        let keyspace_id_opt=ApiV2::get_u32_keyspace_id_by_key(key);
-        match keyspace_id_opt {
-            Some(value) => {
-                let keyspace_id=keyspace_id_opt.unwrap();
-                // API V2 with keyspace.
-                let ks_gc_sp=self.keyspace_level_gc_cache.get(&keyspace_id);
-                match ks_gc_sp {
-                    None => {
-                        // Don't find in keyspace level gc cache
-                        let is_keyspace_use_global_gc_safe_point = self.is_keyspace_use_global_gc_safe_point(keyspace_id);
-                        if is_keyspace_use_global_gc_safe_point {
-                            // keyspace don't enable keyspace level gc.
-                            return self.safe_point;
-                        } else {
-                            // keyspace meta enable keyspace level gc,
-                            // but can not get keyspace meta, or can not get keyspace level gc safe point here,
-                            // may be gc safe point of this keyspace hasn't been calculated yet.
-                            return 0;
-                        }
-                    }
-                    Some(ks2sp) => {
-                        let ks_gc_sp = *ks2sp.value();
-                        return ks_gc_sp;
-                    }
-                }
-            },
-            None => {
-                // Api V1
-                return self.safe_point
-            },
-        }
-    }
-
     fn do_filter(
         &mut self,
         _start_level: usize,
@@ -548,7 +478,7 @@ impl WriteCompactionFilter {
     ) -> Result<CompactionFilterDecision, String> {
         let (mvcc_key_prefix, commit_ts) = split_ts(key)?;
 
-        self.safe_point=self.get_keyspace_gc_safe_point(key);
+        self.safe_point=self.keyspace_meta_service.get_keyspace_gc_safe_point(self.safe_point,key);
 
         if commit_ts > self.safe_point || value_type != CompactionFilterValueType::Value {
             return Ok(CompactionFilterDecision::Keep);
@@ -999,8 +929,7 @@ pub mod test_utils {
                 gc_scheduler: self.gc_scheduler.clone(),
                 region_info_provider: Arc::new(MockRegionInfoProvider::new(vec![])),
                 callbacks_on_drop: self.callbacks_on_drop.clone(),
-                keyspace_level_gc_cache:Arc::new(Default::default()),
-                keyspace_meta_cache:Arc::new(Default::default()),
+                keyspace_meta_service:Arc::new(Default::default()),
             });
         }
 

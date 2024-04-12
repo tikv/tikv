@@ -130,6 +130,7 @@ use tikv_util::{
     Either,
 };
 use tokio::runtime::Builder;
+use keyspace_meta::service::KeyspaceMetaService;
 use tikv::server::gc_worker;
 
 use crate::{
@@ -1006,9 +1007,16 @@ where
 
         // `ConsistencyCheckObserver` must be registered before `Node::start`.
         let safe_point = Arc::new(AtomicU64::new(0));
+
+        let keyspace_id_meta_map=Arc::new(Default::default());
+        keyspace_meta::start_periodic_keyspace_meta_watcher(self.pd_client.clone(), &self.core.background_worker, Arc::clone(&keyspace_id_meta_map));
+        let keyspace_level_gc_cache: Arc<DashMap<u32, u64>>=Arc::new(Default::default());
+        keyspace_meta::start_periodic_keyspace_level_gc_watcher(self.pd_client.clone(), &self.core.background_worker, Arc::clone(&keyspace_level_gc_cache));
+        let keyspace_meta_service = Arc::new(KeyspaceMetaService::new(self.pd_client.clone(),Arc::clone(&safe_point),Arc::clone(&keyspace_level_gc_cache),Arc::clone(&keyspace_id_meta_map)));
+
         let observer = match self.core.config.coprocessor.consistency_check_method {
             ConsistencyCheckMethod::Mvcc => BoxConsistencyCheckObserver::new(
-                MvccConsistencyCheckObserver::new(safe_point.clone()),
+                MvccConsistencyCheckObserver::new(safe_point.clone(),Arc::clone(&keyspace_meta_service)),
             ),
             ConsistencyCheckMethod::Raw => {
                 BoxConsistencyCheckObserver::new(RawConsistencyCheckObserver::default())
@@ -1047,15 +1055,11 @@ where
             node.id(),
         );
 
-        let keyspace_id_meta_map=Arc::new(Default::default());
-        keyspace_meta::start_periodic_keyspace_meta_watcher(self.pd_client.clone(), &self.core.background_worker, Arc::clone(&keyspace_id_meta_map));
 
-        let keyspace_level_gc_cache: Arc<DashMap<u32, u64>>=Arc::new(Default::default());
-        keyspace_meta::start_periodic_keyspace_level_gc_watcher(self.pd_client.clone(), &self.core.background_worker, Arc::clone(&keyspace_level_gc_cache));
         gc_worker
             .start(node.id())
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
-        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point, Arc::clone(&keyspace_level_gc_cache), Arc::clone(&keyspace_id_meta_map)) {
+        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point, Arc::clone(&keyspace_meta_service)) {
             fatal!("failed to start auto_gc on storage, error: {}", e);
         }
 

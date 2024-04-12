@@ -2852,6 +2852,7 @@ dependencies = [
 name = "keyspace_meta"
 version = "0.0.1"
 dependencies = [
+ "api_version",
  "byteorder",
  "collections",
  "crossbeam",
@@ -6533,6 +6534,7 @@ dependencies = [
  "itertools",
  "keyed_priority_queue",
  "keys",
+ "keyspace_meta",
  "kvproto",
  "lazy_static",
  "libc 0.2.151",

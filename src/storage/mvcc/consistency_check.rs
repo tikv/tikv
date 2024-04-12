@@ -16,6 +16,7 @@ use engine_traits::{
     CF_RAFT, CF_WRITE,
 };
 use kvproto::kvrpcpb::{MvccInfo, MvccLock, MvccValue, MvccWrite, Op};
+use keyspace_meta::KeyspaceMetaService;
 use raftstore::{
     coprocessor::{ConsistencyCheckMethod, ConsistencyCheckObserver, Coprocessor},
     Result,
@@ -48,15 +49,17 @@ const fn zero_safe_point_for_check() -> u64 {
 pub struct Mvcc<E: KvEngine> {
     _engine: PhantomData<E>,
     local_safe_point: Arc<AtomicU64>,
+    keyspace_meta_service: Arc<KeyspaceMetaService>,
 }
 
 impl<E: KvEngine> Coprocessor for Mvcc<E> {}
 
 impl<E: KvEngine> Mvcc<E> {
-    pub fn new(safe_point: Arc<AtomicU64>) -> Self {
+    pub fn new(safe_point: Arc<AtomicU64>, keyspace_meta_service: Arc<KeyspaceMetaService>) -> Self {
         Mvcc {
             _engine: Default::default(),
             local_safe_point: safe_point,
+            keyspace_meta_service: keyspace_meta_service,
         }
     }
 }
@@ -68,6 +71,7 @@ impl<E: KvEngine> ConsistencyCheckObserver<E> for Mvcc<E> {
         let len = context.len();
 
         let mut safe_point = self.local_safe_point.load(AtomicOrdering::Acquire);
+
         safe_point = get_safe_point_for_check(safe_point);
         unsafe {
             context.set_len(len + 8);
@@ -91,10 +95,12 @@ impl<E: KvEngine> ConsistencyCheckObserver<E> for Mvcc<E> {
             return Ok(None);
         }
         assert_eq!(context[0], ConsistencyCheckMethod::Mvcc as u8);
-        let safe_point = u64::from_le_bytes(context[1..9].try_into().unwrap());
+        let mut safe_point = u64::from_le_bytes(context[1..9].try_into().unwrap());
         *context = &context[9..];
 
         let local_safe_point = self.local_safe_point.load(AtomicOrdering::Acquire);
+        safe_point=self.keyspace_meta_service.get_keyspace_gc_safe_point(self.local_safe_point.load(std::sync::atomic::Ordering::Relaxed),region.get_start_key());
+
         if safe_point < local_safe_point || safe_point <= zero_safe_point_for_check() {
             warn!(
                 "skip consistency check"; "region_id" => region.get_id(),
@@ -436,7 +442,7 @@ mod tests {
     #[test]
     fn test_update_context() {
         let safe_point = Arc::new(AtomicU64::new((123 << PHYSICAL_SHIFT_BITS) * 1000));
-        let observer = Mvcc::<KvTestEngine>::new(safe_point);
+        let observer = Mvcc::<KvTestEngine>::new(safe_point, Arc::new(Default::default()));
 
         let mut context = Vec::new();
         assert!(observer.update_context(&mut context));

@@ -23,6 +23,7 @@ use engine_traits::{
 };
 use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
+use keyspace_meta::KeyspaceMetaService;
 use kvproto::{kvrpcpb::Context, metapb::Region};
 use kvproto::keyspacepb::KeyspaceMeta;
 use pd_client::{FeatureGate, PdClient};
@@ -1241,8 +1242,7 @@ impl<E: Engine> GcWorker<E> {
         &self,
         cfg: AutoGcConfig<S, R>,
         safe_point: Arc<AtomicU64>,
-        keyspace_level_gc_cache: Arc<DashMap<u32, u64>>,
-        keyspace_meta_cache: Arc<DashMap<u32, KeyspaceMeta>>,
+        keyspace_meta_service: Arc<KeyspaceMetaService>,
     ) -> Result<()> {
         assert!(
             cfg.self_store_id > 0,
@@ -1257,8 +1257,7 @@ impl<E: Engine> GcWorker<E> {
             self.feature_gate.clone(),
             self.scheduler(),
             Arc::new(cfg.region_info_provider.clone()),
-            keyspace_level_gc_cache,
-            keyspace_meta_cache,
+            keyspace_meta_service,
         );
 
         let mut handle = self.gc_manager_handle.lock().unwrap();

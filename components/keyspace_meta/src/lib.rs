@@ -17,6 +17,7 @@ extern crate test;
 
 pub mod metrics;
 pub mod service;
+pub use service::KeyspaceMetaService;
 pub use service::KeyspaceLevelGCWatchService;
 use crate::service::KeyspaceMetaWatchService;
 

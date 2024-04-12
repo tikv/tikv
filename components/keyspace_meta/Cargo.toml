@@ -9,6 +9,7 @@ license = "Apache-2.0"
 failpoints = ["fail/failpoints"]
 
 [dependencies]
+api_version = { workspace = true }
 byteorder = "1.2"
 collections = { workspace = true }
 crossbeam = "0.8"

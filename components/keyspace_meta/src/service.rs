@@ -5,8 +5,10 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+use std::sync::atomic::{AtomicU64, Ordering};
 use dashmap::DashMap;
 
+use api_version::{ApiV2, KvFormat, RawValue};
 use futures::{compat::Future01CompatExt, stream, StreamExt};
 use kvproto::{keyspacepb, meta_storagepb::EventEventType, resource_manager::{ResourceGroup, TokenBucketRequest, TokenBucketsRequest}};
 use kvproto::keyspacepb::KeyspaceMeta;
@@ -19,6 +21,8 @@ use serde::{Deserialize, Serialize};
 use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE};
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(1); // to consistent with pd_client
+const KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE: &str="gc_management_type";
+const GC_MGMT_TYPE_KEYSPACE_LEVEL_GC: &str="keyspace_level_gc";
 
 #[derive(Clone)]
 pub struct KeyspaceLevelGCWatchService {
@@ -302,6 +306,100 @@ impl KeyspaceMetaWatchService {
                         .await;
                 }
             }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct KeyspaceMetaService {
+    pd_client: Arc<RpcClient>,
+    // wrap for etcd client.
+    meta_client: Checked<Sourced<Arc<RpcClient>>>,
+
+    safe_point: Arc<AtomicU64>,
+    keyspace_level_gc_map: Arc<DashMap<u32, u64>>,
+    keyspace_id_meta_map: Arc<DashMap<u32, keyspacepb::KeyspaceMeta>>,
+}
+
+impl KeyspaceMetaService {
+    pub fn new(
+        pd_client: Arc<RpcClient>,
+        safe_point: Arc<AtomicU64>,
+        keyspace_level_gc_map: Arc<DashMap<u32, u64>>,
+        keyspace_id_meta_map: Arc<DashMap<u32, keyspacepb::KeyspaceMeta>>,
+    ) -> KeyspaceMetaService {
+        KeyspaceMetaService {
+            meta_client: Checked::new(Sourced::new(
+                Arc::clone(&pd_client.clone()),
+                pd_client::meta_storage::Source::KeysapceMeta,
+            )),
+            pd_client,
+            safe_point,
+            keyspace_level_gc_map,
+            keyspace_id_meta_map,
+        }
+    }
+
+
+    fn is_keyspace_use_global_gc_safe_point(&self, keyspace_id: u32) ->bool{
+        let keyspace_meta_opt=self.keyspace_id_meta_map.get(&keyspace_id);
+        match keyspace_meta_opt {
+            None => {
+                // Haven't got the keyspace meta yet.May be fetching by KeyspaceMetaWatchService.
+                return false;
+            }
+            Some(keyspace_meta) => {
+                let ks_gc_management_type =keyspace_meta.config.get(KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE);
+                match ks_gc_management_type {
+                    None => {
+                        // keyspace config don't set 'keyspace_level_gc'
+                        return true
+                    }
+                    Some(gc_management_type) => {
+                        if gc_management_type==GC_MGMT_TYPE_KEYSPACE_LEVEL_GC{
+                            return false
+                        }
+                        return true
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn get_gc_sp_by_sp(&self, key: &[u8]) -> u64 {
+        return self.get_keyspace_gc_safe_point(self.safe_point.load(Ordering::Relaxed),key);
+    }
+    pub fn get_keyspace_gc_safe_point(&self,safe_point:u64, key: &[u8]) -> u64 {
+        let keyspace_id_opt=ApiV2::get_u32_keyspace_id_by_key(key);
+        match keyspace_id_opt {
+            Some(value) => {
+                let keyspace_id=keyspace_id_opt.unwrap();
+                // API V2 with keyspace.
+                let ks_gc_sp=self.keyspace_level_gc_map.get(&keyspace_id);
+                match ks_gc_sp {
+                    None => {
+                        // Don't find in keyspace level gc cache
+                        let is_keyspace_use_global_gc_safe_point = self.is_keyspace_use_global_gc_safe_point(keyspace_id);
+                        if is_keyspace_use_global_gc_safe_point {
+                            // keyspace don't enable keyspace level gc.
+                            return safe_point;
+                        } else {
+                            // keyspace meta enable keyspace level gc,
+                            // but can not get keyspace meta, or can not get keyspace level gc safe point here,
+                            // may be gc safe point of this keyspace hasn't been calculated yet.
+                            return 0;
+                        }
+                    }
+                    Some(ks2sp) => {
+                        let ks_gc_sp = *ks2sp.value();
+                        return ks_gc_sp;
+                    }
+                }
+            },
+            None => {
+                // Api V1
+                return safe_point;
+            },
         }
     }
 }
