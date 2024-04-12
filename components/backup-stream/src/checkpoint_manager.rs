@@ -26,7 +26,7 @@ use crate::{
     metadata::{store::MetaStore, Checkpoint, CheckpointProvider, MetadataClient},
     metrics,
     subscription_track::ResolveResult,
-    try_send, RegionCheckpointOperation, Task,
+    try_send, utils, RegionCheckpointOperation, Task,
 };
 
 /// A manager for maintaining the last flush ts.
@@ -227,6 +227,15 @@ impl CheckpointManager {
         e.and_modify(|old_cp| {
             let old_ver = old_cp.region.get_region_epoch().get_version();
             let checkpoint_is_newer = old_cp.checkpoint < checkpoint;
+            if !checkpoint_is_newer {
+                warn!("recevied older checkpoint, maybe region merge.";
+                    "region_id" => old_cp.region.get_id(),
+                    "old_ver" => old_ver,
+                    "new_ver" => ver,
+                    "old_checkpoint" => old_cp.checkpoint.into_inner(),
+                    "new_checkpoint" => checkpoint.into_inner()
+                );
+            }
             if old_ver < ver || (old_ver == ver && checkpoint_is_newer) {
                 *old_cp = LastFlushTsOfRegion {
                     checkpoint,

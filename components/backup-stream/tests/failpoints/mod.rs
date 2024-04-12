@@ -11,7 +11,7 @@ mod all {
 
     use std::{
         sync::{
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
             Arc,
         },
         time::Duration,
@@ -26,12 +26,15 @@ mod all {
     };
     use futures::executor::block_on;
     use raftstore::coprocessor::ObserveHandle;
-    use tikv_util::{config::ReadableSize, defer};
+    use tikv_util::{
+        config::{ReadableDuration, ReadableSize},
+        defer,
+    };
 
     use super::{
         make_record_key, make_split_key_at_record, mutation, run_async_test, SuiteBuilder,
     };
-    use crate::make_table_key;
+    use crate::{make_table_key, Suite};
 
     #[test]
     fn failed_register_task() {
@@ -311,5 +314,36 @@ mod all {
             keys.iter().map(|v| v.as_slice()),
         );
         assert!(!failed.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn resolve_during_flushing() {
+        test_util::init_log_for_test();
+        let mut suite = SuiteBuilder::new_named("resolve_during_flushing")
+            .cfg(|cfg| cfg.min_ts_interval = ReadableDuration::days(1))
+            .nodes(1)
+            .build();
+        suite.must_register_task(1, "resolve_during_flushing");
+        let key = make_record_key(1, 1);
+
+        let start_ts = suite.tso();
+        suite.must_kv_prewrite(
+            1,
+            vec![mutation(
+                key.clone(),
+                Suite::PROMISED_SHORT_VALUE.to_owned(),
+            )],
+            key.clone(),
+            start_ts,
+        );
+        fail::cfg("after_moving_to_flushing_files", "pause").unwrap();
+        suite.force_flush_files("resolve_during_flushing");
+        let commit_ts = suite.tso();
+        suite.just_commit_a_key(key, start_ts, commit_ts);
+        suite.run(|| Task::RegionCheckpointsOp(RegionCheckpointOperation::PrepareMinTsForResolve));
+        std::thread::sleep(Duration::from_secs(2));
+        fail::remove("after_moving_to_flushing_files");
+        suite.wait_for_flush();
+        assert_eq!(suite.global_checkpoint(), start_ts.into_inner());
     }
 }
