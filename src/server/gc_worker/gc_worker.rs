@@ -11,7 +11,6 @@ use std::{
     },
     vec::IntoIter,
 };
-use dashmap::DashMap;
 
 use api_version::{ApiV2, KvFormat};
 use collections::HashMap;
@@ -25,7 +24,6 @@ use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
 use keyspace_meta::KeyspaceMetaService;
 use kvproto::{kvrpcpb::Context, metapb::Region};
-use kvproto::keyspacepb::KeyspaceMeta;
 use pd_client::{FeatureGate, PdClient};
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_kv::{CfStatistics, CursorBuilder, Modify, SnapContext};

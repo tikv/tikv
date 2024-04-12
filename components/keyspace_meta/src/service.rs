@@ -1,21 +1,19 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{HashMap, HashSet},
     sync::Arc,
     time::Duration,
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use dashmap::DashMap;
 
-use api_version::{ApiV2, KvFormat, RawValue};
+use api_version::ApiV2;
 use futures::{compat::Future01CompatExt, stream, StreamExt};
-use kvproto::{keyspacepb, meta_storagepb::EventEventType, resource_manager::{ResourceGroup, TokenBucketRequest, TokenBucketsRequest}};
+use kvproto::{keyspacepb, meta_storagepb::EventEventType};
 use kvproto::keyspacepb::KeyspaceMeta;
 use pd_client::{
     meta_storage::{Checked, Get, MetaStorageClient, Sourced, Watch},
-    Error as PdError, PdClient, RpcClient, RESOURCE_CONTROL_CONFIG_PATH,
-    RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH,
+    Error as PdError, PdClient, RpcClient
 };
 use serde::{Deserialize, Serialize};
 use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE};
@@ -84,7 +82,6 @@ impl KeyspaceLevelGCWatchService {
                         events.iter().for_each(|event| match event.get_type() {
                             EventEventType::Put => {
                                 info!("[test-yjy]EventEventType::Put01");
-                                let val=event.get_kv().get_value();
                                 match serde_json::from_slice::<KeyspaceLevelGC>(
                                     event.get_kv().get_value(),
                                 ) {
@@ -195,7 +192,7 @@ impl KeyspaceMetaWatchService {
                 pd_client::meta_storage::Source::KeysapceMeta,
             )),
             pd_client,
-            keyspace_id_meta_map:keyspace_id_meta_map,
+            keyspace_id_meta_map,
         }
     }
 
@@ -224,7 +221,6 @@ impl KeyspaceMetaWatchService {
                         events.iter().for_each(|event| match event.get_type() {
                             EventEventType::Put => {
                                 info!("[test-yjy]EventEventType::Put01");
-                                let val=event.get_kv().get_value();
                                 match protobuf::parse_from_bytes::<KeyspaceMeta>(event.get_kv().get_value()) {
                                     Ok(keyspace_meta) => {
                                         self.keyspace_id_meta_map.insert(keyspace_meta.id, keyspace_meta.clone());
@@ -312,35 +308,18 @@ impl KeyspaceMetaWatchService {
 
 #[derive(Clone)]
 pub struct KeyspaceMetaService {
-    pd_client: Arc<RpcClient>,
-    // wrap for etcd client.
-    meta_client: Checked<Sourced<Arc<RpcClient>>>,
-
     safe_point: Arc<AtomicU64>,
     keyspace_level_gc_map: Arc<DashMap<u32, u64>>,
     keyspace_id_meta_map: Arc<DashMap<u32, keyspacepb::KeyspaceMeta>>,
 }
 
-impl Default for KeyspaceMetaService {
-    fn default() -> Self {
-        todo!()
-    }
-    
-}
-
 impl KeyspaceMetaService {
     pub fn new(
-        pd_client: Arc<RpcClient>,
         safe_point: Arc<AtomicU64>,
         keyspace_level_gc_map: Arc<DashMap<u32, u64>>,
         keyspace_id_meta_map: Arc<DashMap<u32, keyspacepb::KeyspaceMeta>>,
     ) -> KeyspaceMetaService {
         KeyspaceMetaService {
-            meta_client: Checked::new(Sourced::new(
-                Arc::clone(&pd_client.clone()),
-                pd_client::meta_storage::Source::KeysapceMeta,
-            )),
-            pd_client,
             safe_point,
             keyspace_level_gc_map,
             keyspace_id_meta_map,
@@ -360,13 +339,13 @@ impl KeyspaceMetaService {
                 match ks_gc_management_type {
                     None => {
                         // keyspace config don't set 'keyspace_level_gc'
-                        return true
+                        true
                     }
                     Some(gc_management_type) => {
                         if gc_management_type==GC_MGMT_TYPE_KEYSPACE_LEVEL_GC{
                             return false
                         }
-                        return true
+                        true
                     }
                 }
             }
@@ -379,8 +358,7 @@ impl KeyspaceMetaService {
     pub fn get_keyspace_gc_safe_point(&self,safe_point:u64, key: &[u8]) -> u64 {
         let keyspace_id_opt=ApiV2::get_u32_keyspace_id_by_key(key);
         match keyspace_id_opt {
-            Some(value) => {
-                let keyspace_id=keyspace_id_opt.unwrap();
+            Some(keyspace_id) => {
                 // API V2 with keyspace.
                 let ks_gc_sp=self.keyspace_level_gc_map.get(&keyspace_id);
                 match ks_gc_sp {

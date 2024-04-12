@@ -8,7 +8,6 @@ use tikv_util::codec::{
     Error,
 };
 use txn_types::{Key, TimeStamp};
-use std::convert::TryInto;
 
 use super::*;
 

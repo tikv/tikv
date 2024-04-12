@@ -5,9 +5,7 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use kvproto::keyspacepb;
 
-use online_config::OnlineConfig;
 use pd_client::RpcClient;
-use serde::{Deserialize, Serialize};
 use tikv_util::worker::Worker;
 
 pub mod service;

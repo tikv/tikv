@@ -11,9 +11,6 @@ use std::{
     },
     time::Duration,
 };
-use dashmap::DashMap;
-use dashmap::mapref::one::Ref;
-use kvproto::keyspacepb::KeyspaceMeta;
 
 use engine_rocks::{
     raw::{
@@ -26,7 +23,6 @@ use engine_traits::{KvEngine, MiscExt, MvccProperties, WriteBatch, WriteOptions}
 use file_system::{IoType, WithIoType};
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
-use api_version::ApiV2;
 use keyspace_meta::KeyspaceMetaService;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::{

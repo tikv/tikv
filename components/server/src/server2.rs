@@ -121,7 +121,6 @@ use tikv_util::{
 };
 use tokio::runtime::Builder;
 use keyspace_meta::KeyspaceMetaService;
-use tikv::server::gc_worker;
 
 use crate::{
     common::{ConfiguredRaftEngine, EngineMetricsManager, EnginesResourceInfo, TikvServerCore},
@@ -849,7 +848,7 @@ where
         let keyspace_level_gc_cache=Arc::new(Default::default());
         keyspace_meta::start_periodic_keyspace_level_gc_watcher(self.pd_client.clone(), &self.core.background_worker, Arc::clone(&keyspace_level_gc_cache));
 
-        let keyspace_meta_service = Arc::new(KeyspaceMetaService::new(self.pd_client.clone(),Arc::clone(&safe_point),Arc::clone(&keyspace_level_gc_cache),Arc::clone(&keyspace_id_meta_map)));
+        let keyspace_meta_service = Arc::new(KeyspaceMetaService::new(Arc::clone(&safe_point),Arc::clone(&keyspace_level_gc_cache),Arc::clone(&keyspace_id_meta_map)));
 
         let observer = match self.core.config.coprocessor.consistency_check_method {
             ConsistencyCheckMethod::Mvcc => BoxConsistencyCheckObserver::new(
