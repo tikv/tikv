@@ -93,7 +93,7 @@ pub struct Endpoint<S, R, E: KvEngine, PDC> {
     // We holds the config before, even it is useless for now,
     // however probably it would be useful in the future.
     config: BackupStreamConfig,
-    checkpoint_mgr: CheckpointManager,
+    pub checkpoint_mgr: CheckpointManager,
 
     // Runtime status:
     /// The handle to abort last save storage safe point.
