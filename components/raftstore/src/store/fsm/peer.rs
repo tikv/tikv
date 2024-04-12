@@ -2987,6 +2987,15 @@ where
             // It's v2 only message and ignore does no harm.
             ExtraMessageType::MsgGcPeerResponse | ExtraMessageType::MsgFlushMemtable => (),
             ExtraMessageType::MsgRefreshBuckets => self.on_msg_refresh_buckets(msg),
+            _ => {
+                error!(
+                    "unsupported extra message";
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.fsm.peer_id(),
+                    "msg" => ?msg,
+                );
+                unimplemented!("unsupported extra message");
+            }
         }
     }
 
