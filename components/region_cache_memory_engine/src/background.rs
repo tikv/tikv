@@ -15,6 +15,7 @@ use parking_lot::RwLock;
 use pd_client::RpcClient;
 use slog_global::{error, info, warn};
 use tikv_util::{
+    config::ReadableSize,
     keybuilder::KeyBuilder,
     worker::{Builder, Runnable, RunnableWithTimer, ScheduleError, Scheduler, Worker},
 };
@@ -592,7 +593,7 @@ impl Runnable for BackgroundRunner {
 impl RunnableWithTimer for BackgroundRunner {
     fn on_timeout(&mut self) {
         let mem_usage = self.core.memory_controller.mem_usage();
-        RANGE_CACHE_MEMORY_USAGE.set(mem_usage);
+        RANGE_CACHE_MEMORY_USAGE.set(mem_usage as i64);
     }
 
     fn get_interval(&self) -> Duration {

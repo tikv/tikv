@@ -5,7 +5,7 @@ use crossbeam::epoch;
 use engine_traits::{
     CacheRange, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
-use tikv_util::{box_err, config::ReadableSize, debug, error, info, warn};
+use tikv_util::{box_err, config::ReadableSize, error, info, warn};
 
 use crate::{
     background::BackgroundTask,
@@ -234,7 +234,7 @@ impl RangeCacheWriteBatch {
                 self.schedule_memory_check();
                 return false;
             }
-            MemoryUsage::SoftLimitReached(n) => {
+            MemoryUsage::SoftLimitReached(_) => {
                 self.schedule_memory_check();
             }
             _ => {}
