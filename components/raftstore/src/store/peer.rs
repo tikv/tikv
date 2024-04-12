@@ -1190,7 +1190,7 @@ where
                     .max_apply_unpersisted_log_limit
                     == 0
             {
-                RAFT_DISABLE_UNPERSISTED_APPLY_GAUGE.dec();
+                RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE.inc();
             }
             self.raft_group
                 .raft
@@ -1211,7 +1211,7 @@ where
             > 0
         {
             self.raft_group.raft.set_max_apply_unpersisted_log_limit(0);
-            RAFT_DISABLE_UNPERSISTED_APPLY_GAUGE.inc();
+            RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE.dec();
         }
     }
 
