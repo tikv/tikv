@@ -491,7 +491,7 @@ Full""",
                         legend_format=r"store-write-channelfull-{{instance}}",
                     ),
                     target(
-                        expr=expr_sum_rate(
+                        expr=expr_sum(
                             "tikv_raftstore_process_busy",
                             by_labels=["instance", "type"],
                         ),
