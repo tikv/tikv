@@ -2250,8 +2250,8 @@ where
         if self.fsm.peer.busy_on_apply.is_some()
             && self.fsm.peer.last_leader_committed_idx.is_none()
         {
-            debug!("propose read index to check whether its lag is behind the leader");
             self.try_to_fetch_committed_index();
+            debug!("propose read index to check whether its lag is behind the leader");
         }
 
         // When having pending snapshot, if election timeout is met, it can't pass
