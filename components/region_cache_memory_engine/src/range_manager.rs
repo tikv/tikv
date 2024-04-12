@@ -8,6 +8,7 @@ use std::{
 
 use engine_rocks::RocksSnapshot;
 use engine_traits::{CacheRange, FailedReason};
+use tikv_util::info;
 
 use crate::read::RangeCacheSnapshotMeta;
 
@@ -285,6 +286,12 @@ impl RangeManager {
             .find(|&r| r.contains_range(evict_range))
             .unwrap_or_else(|| panic!("evict a range that does not contain: {:?}", evict_range))
             .clone();
+        info!(
+            "evict range in cache range engine";
+            "range_start" => log_wrappers::Value(&evict_range.start),
+            "range_end" => log_wrappers::Value(&evict_range.end),
+        );
+
         let meta = self.ranges.remove(&range_key).unwrap();
         let (left_range, right_range) = range_key.split_off(evict_range);
         assert!((left_range.is_some() || right_range.is_some()) || &range_key == evict_range);

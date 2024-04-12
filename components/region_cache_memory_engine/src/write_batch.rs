@@ -5,7 +5,7 @@ use crossbeam::epoch;
 use engine_traits::{
     CacheRange, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
-use tikv_util::{box_err, config::ReadableSize, error, warn};
+use tikv_util::{box_err, config::ReadableSize, debug, error, info, warn};
 
 use crate::{
     background::BackgroundTask,
@@ -181,8 +181,13 @@ impl RangeCacheWriteBatch {
 
         let memory_expect = entry_size();
         if !self.memory_acquire(memory_expect) {
-            self.ranges_to_evict
-                .insert(self.current_range.clone().unwrap());
+            let range = self.current_range.clone().unwrap();
+            info!(
+                "memory acquire failed due to reaching hard limit";
+                "range_start" => log_wrappers::Value(&range.start),
+                "range_end" => log_wrappers::Value(&range.end),
+            );
+            self.ranges_to_evict.insert(range);
             return;
         }
 
@@ -230,11 +235,6 @@ impl RangeCacheWriteBatch {
                 return false;
             }
             MemoryUsage::SoftLimitReached(n) => {
-                warn!(
-                    "the memory usage of in-memory engine reaches to soft limit";
-                    "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
-                    "memory_acquire(MB)" => ReadableSize(mem_required as u64).as_mb_f64(),
-                );
                 self.schedule_memory_check();
             }
             _ => {}

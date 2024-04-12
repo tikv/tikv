@@ -16,7 +16,7 @@ use pd_client::RpcClient;
 use slog_global::{error, info, warn};
 use tikv_util::{
     keybuilder::KeyBuilder,
-    worker::{Builder, Runnable, ScheduleError, Scheduler, Worker},
+    worker::{Builder, Runnable, RunnableWithTimer, ScheduleError, Scheduler, Worker},
 };
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 use yatp::Remote;
@@ -25,7 +25,7 @@ use crate::{
     engine::{RangeCacheMemoryEngineCore, SkiplistHandle},
     keys::{decode_key, encode_key, encoding_for_filter, InternalBytes, InternalKey, ValueType},
     memory_controller::MemoryController,
-    metrics::GC_FILTERED_STATIC,
+    metrics::{GC_FILTERED_STATIC, RANGE_CACHE_MEMORY_USAGE},
     range_manager::LoadFailedReason,
     region_label::{
         LabelRule, RegionLabelAddedCb, RegionLabelRulesManager, RegionLabelServiceBuilder,
@@ -187,7 +187,7 @@ impl BgWorkManager {
     ) -> Self {
         let worker = Worker::new("range-cache-background-worker");
         let runner = BackgroundRunner::new(core.clone(), memory_controller);
-        let scheduler = worker.start("range-cache-engine-background", runner);
+        let scheduler = worker.start_with_timer("range-cache-engine-background", runner);
 
         let scheduler_clone = scheduler.clone();
 
@@ -571,6 +571,10 @@ impl Runnable for BackgroundRunner {
             }
             BackgroundTask::MemoryCheckAndEvict => {
                 let mem_usage = self.core.memory_controller.mem_usage();
+                info!(
+                    "start memory usage check and evict";
+                    "mem_usage(MB)" => ReadableSize(mem_usage as u64).as_mb()
+                );
                 if mem_usage > self.core.memory_controller.soft_limit_threshold() {
                     // todo: select ranges to evict
                 }
@@ -582,6 +586,17 @@ impl Runnable for BackgroundRunner {
                 self.delete_range_remote.spawn(f);
             }
         }
+    }
+}
+
+impl RunnableWithTimer for BackgroundRunner {
+    fn on_timeout(&mut self) {
+        let mem_usage = self.core.memory_controller.mem_usage();
+        RANGE_CACHE_MEMORY_USAGE.set(mem_usage);
+    }
+
+    fn get_interval(&self) -> Duration {
+        Duration::from_secs(10)
     }
 }
 

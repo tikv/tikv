@@ -16,6 +16,7 @@ use engine_traits::{
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
 use skiplist_rs::{base::OwnedIter, SkipList};
 use slog_global::error;
+use tikv_util::info;
 
 use crate::{
     background::{BackgroundTask, BgWorkManager, PdRangeHintService},
@@ -206,6 +207,7 @@ pub struct RangeCacheMemoryEngine {
 
 impl RangeCacheMemoryEngine {
     pub fn new(config: EngineConfig) -> Self {
+        info!("init range cache memory engine";);
         let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
         let skiplist_engine = { core.read().engine().clone() };
 
