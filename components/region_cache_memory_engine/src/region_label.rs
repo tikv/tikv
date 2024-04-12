@@ -83,6 +83,7 @@ impl RegionLabelRulesManager {
         }
     }
 
+    #[allow(dead_code)]
     pub fn region_labels(&self) -> Vec<LabelRule> {
         self.region_labels
             .iter()
@@ -94,6 +95,7 @@ impl RegionLabelRulesManager {
         let _ = self.region_labels.remove(label_rule_id);
     }
 
+    #[allow(dead_code)]
     pub fn get_region_label(&self, label_rule_id: &str) -> Option<LabelRule> {
         self.region_labels
             .get(label_rule_id)
@@ -144,6 +146,7 @@ impl RegionLabelServiceBuilder {
         }
     }
 
+    #[allow(dead_code)]
     pub fn path_suffix(mut self, suffix: String) -> Self {
         self.path_suffix = Some(suffix);
         self
