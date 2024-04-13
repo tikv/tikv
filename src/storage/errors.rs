@@ -279,11 +279,12 @@ pub fn extract_region_error_from_error(e: &Error) -> Option<errorpb::Error> {
         | Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
             box MvccErrorInner::Kv(KvError(box KvErrorInner::Request(ref e))),
         ))))) => Some(e.to_owned()),
-        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::MaxTimestampNotSynced {
-            ..
-        }))) => {
+        Error(box ErrorInner::Txn(
+            e @ TxnError(box TxnErrorInner::MaxTimestampNotSynced { .. }),
+        )) => {
             let mut err = errorpb::Error::default();
             err.set_max_timestamp_not_synced(Default::default());
+            err.set_message(format!("Max timestamp not synced: {}", e));
             Some(err)
         }
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::FlashbackNotPrepared(
