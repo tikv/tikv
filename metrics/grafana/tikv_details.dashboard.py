@@ -4105,7 +4105,7 @@ def RangeCacheMemoryEngine() -> RowPanel:
             heatmap_panel(
                 title="Range gc duration",
                 description="The handle duration of range gc",
-                yaxis=yaxis(format=UNITS.BYTES_IEC),
+                yaxis=yaxis(format=UNITS.SECONDS),
                 metric="tikv_range_gc_duration_secs_bucket",
             ),
         ]

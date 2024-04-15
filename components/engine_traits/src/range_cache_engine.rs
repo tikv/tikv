@@ -53,7 +53,7 @@ pub trait RangeCacheEngine:
 /// as it continues to evolve to handle eviction, using stats.
 pub trait RangeHintService: Send + Sync {}
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CacheRange {
     pub start: Vec<u8>,
     pub end: Vec<u8>,

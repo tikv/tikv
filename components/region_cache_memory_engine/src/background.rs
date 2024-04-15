@@ -576,7 +576,7 @@ impl Runnable for BackgroundRunner {
                                 }
                             }
                         }
-                        if core.on_snapshot_load_finished(range) {
+                        if core.on_snapshot_load_finished(range.clone()) {
                             let duration = start.saturating_elapsed();
                             RANGE_LOAD_TIME_HISTOGRAM.observe(duration.as_secs_f64());
                             info!(
