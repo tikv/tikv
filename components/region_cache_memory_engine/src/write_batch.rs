@@ -5,12 +5,15 @@ use crossbeam::epoch;
 use engine_traits::{
     CacheRange, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
-use tikv_util::{box_err, config::ReadableSize, error, info, warn};
+use tikv_util::{box_err, config::ReadableSize, debug, error, info, warn};
 
 use crate::{
     background::BackgroundTask,
-    engine::{cf_to_id, SkiplistEngine},
-    keys::{encode_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
+    engine::{cf_to_id, id_to_cf, SkiplistEngine},
+    keys::{
+        encode_key, encode_seek_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH,
+        VALUE_TYPE_FOR_SEEK,
+    },
     memory_controller::{MemoryController, MemoryUsage},
     range_manager::{RangeCacheStatus, RangeManager},
     RangeCacheMemoryEngine,
@@ -319,11 +322,47 @@ impl RangeCacheWriteBatchEntry {
         memory_controller: Arc<MemoryController>,
         guard: &epoch::Guard,
     ) -> Result<()> {
-        let handle = &skiplist_engine.data[self.cf];
-        let (mut key, mut value) = self.encode(seq);
-        key.set_memory_controller(memory_controller.clone());
-        value.set_memory_controller(memory_controller);
-        handle.insert(key, value, guard).release(guard);
+        let handle = skiplist_engine.cf_handle(id_to_cf(self.cf));
+        if self.cf == 1 && matches!(self.inner, WriteBatchEntryInternal::Deletion) {
+            let seek_key = encode_seek_key(&self.key, seq);
+            let Some(entry) = handle.get(&seek_key, guard) else {
+                debug!(
+                    "write to memory failed for lock cf, not get";
+                    "key" => log_wrappers::Value::key(self.key.as_slice()),
+                    "encoded_key" => log_wrappers::Value::key(&seek_key),
+                );
+                return Ok(());
+            };
+
+            let mut iter = handle.iterator();
+            iter.seek(entry.key(), guard);
+            assert_eq!(entry.key(), iter.key());
+            while iter.valid() {
+                iter.next(guard);
+                if iter.valid() && entry.key().cmp(iter.key()).is_eq() {
+                    assert!(handle.remove(iter.key(), guard));
+                } else {
+                    break;
+                }
+            }
+            assert!(handle.remove(entry.key(), guard));
+            if let Some(entry) = handle.get(&seek_key, guard) {
+                error!(
+                    "get after delete";
+                    "key" => log_wrappers::Value::key(self.key.as_slice()),
+                    "seek_key" => log_wrappers::Value::key(&seek_key),
+                    "entry_key" => log_wrappers::Value::key(entry.key()),
+                    "entry_value" => log_wrappers::Value::key(entry.value()),
+                );
+                unreachable!()
+            }
+        } else {
+            let (mut key, mut value) = self.encode(seq);
+            key.set_memory_controller(memory_controller.clone());
+            value.set_memory_controller(memory_controller);
+            handle.insert(key, value, guard);
+        }
+
         Ok(())
     }
 }
