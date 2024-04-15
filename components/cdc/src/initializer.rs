@@ -274,7 +274,8 @@ impl<E: KvEngine> Initializer<E> {
             let mut locks = BTreeMap::<Key, MiniLock>::new();
             for (key, lock) in key_locks {
                 if matches!(lock.lock_type, LockType::Put | LockType::Delete) {
-                    locks.insert(key, MiniLock::new(lock.ts, lock.txn_source));
+                    let mini_lock = MiniLock::new(lock.ts, lock.txn_source, lock.generation);
+                    locks.insert(key, mini_lock);
                 }
             }
             self.finish_scan_locks(region, locks);
