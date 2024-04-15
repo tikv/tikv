@@ -198,19 +198,54 @@ pub fn json_merge(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
     Ok(Some(Json::merge(jsons)?))
 }
 
+// `json_merge_patch` is the implementation for JSON_MERGE_PATCH in mysql
+// <https://dev.mysql.com/doc/refman/8.3/en/json-modification-functions.html#function_json-merge-patch>
+//
+// The json_merge_patch rules are listed as following:
+// 1. If the first argument is not an object, the result of the merge is the
+//    same as if an empty object had been merged with the second argument.
+// 2. If the second argument is not an object, the result of the merge is the
+//    second argument.
+// 3. If both arguments are objects, the result of the merge is an object with
+//    the following members: 3.1. All members of the first object which do not
+//    have a corresponding member with the same key in the second object. 3.2.
+//    All members of the second object which do not have a corresponding key in
+//    the first object, and whose value is not the JSON null literal. 3.3. All
+//    members with a key that exists in both the first and the second object,
+//    and whose value in the second object is not the JSON null literal. The
+//    values of these members are the results of recursively merging the value
+//    in the first object with the value in the second object.
+// See `MergePatchBinaryJSON()` in TiDB
+// `pkg/types/json_binary_functions.go`
 // arguments of json_merge_patch should not be less than 2.
 #[rpn_fn(nullable, varg, min_args = 2)]
 #[inline]
 pub fn json_merge_patch(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
-    let mut jsons: Vec<JsonRef> = vec![];
-    let json_none = Json::none()?;
-    for arg in args {
-        match arg {
-            None => jsons.push(json_none.as_ref()),
-            Some(j) => jsons.push(*j),
+    let mut jsons: Vec<Option<JsonRef>> = vec![];
+    let mut index = 0;
+    // according to the implements of RFC7396
+    // when the last item is not object
+    // we can return the last item directly
+    for i in (0..=args.len() - 1).rev() {
+        if args[i].is_none() || args[i].unwrap().get_type() != JsonType::Object {
+            index = i;
+            break;
         }
     }
-    Ok(Some(Json::merge_patch(jsons)?))
+
+    if args[index].is_none() {
+        return Ok(None);
+    }
+
+    jsons.extend(&args[index..]);
+    let mut target = jsons[0].unwrap().to_owned();
+
+    if jsons.len() > 1 {
+        for i in 1..jsons.len() {
+            target = Json::merge_patch(target.as_ref(), jsons[i].unwrap())?;
+        }
+    }
+    return Ok(Some(target.to_owned()));
 }
 
 #[rpn_fn(writer)]
@@ -1575,44 +1610,297 @@ mod tests {
     #[test]
     fn test_json_merge_patch() {
         let cases = vec![
+            // RFC 7396 document: https://datatracker.ietf.org/doc/html/rfc7396
+            // RFC 7396 Example Test Cases
             (
-                vec![Some(r#"{"a": 1}"#), Some(r#"{"b": 2}"#)],
-                Some(r#"{"a": 1, "b": 2}"#),
+                vec![Some(r#"{"a":"b"}"#), Some(r#"{"a":"c"}"#)],
+                Some(r#"{"a": "c"}"#),
             ),
             (
-                vec![Some(r#"[1, 2]"#), Some(r#"[true, false]"#)],
-                Some(r#"[true, false]"#),
+                vec![Some(r#"{"a":"b"}"#), Some(r#"{"b":"c"}"#)],
+                Some(r#"{"a": "b","b": "c"}"#),
             ),
             (
-                vec![Some(r#"{"name": "x"}"#), Some(r#"{"id": 47}"#)],
-                Some(r#"{"id": 47, "name": "x"}"#),
+                vec![Some(r#"{"a":"b"}"#), Some(r#"{"a":null}"#)],
+                Some(r#"{}"#),
             ),
-            (vec![Some(r#"1"#), Some(r#"true"#)], Some(r#"true"#)),
-            (vec![Some(r#"1"#), Some(r#"null"#)], Some(r#"null"#)),
             (
-                vec![Some(r#"{"a": 1}"#), Some(r#"{"b": 2}"#), Some(r#"null"#)],
+                vec![Some(r#"{"a":"b", "b":"c"}"#), Some(r#"{"a":null}"#)],
+                Some(r#"{"b": "c"}"#),
+            ),
+            (
+                vec![Some(r#"{"a":["b"]}"#), Some(r#"{"a":"c"}"#)],
+                Some(r#"{"a": "c"}"#),
+            ),
+            (
+                vec![Some(r#"{"a":"c"}"#), Some(r#"{"a":["b"]}"#)],
+                Some(r#"{"a": ["b"]}"#),
+            ),
+            (
+                vec![
+                    Some(r#"{"a":{"b":"c"}}"#),
+                    Some(r#"{"a":{"b":"d","c":null}}"#),
+                ],
+                Some(r#"{"a": {"b": "d"}}"#),
+            ),
+            (
+                vec![Some(r#"{"a":[{"b":"c"}]}"#), Some(r#"{"a": [1]}"#)],
+                Some(r#"{"a": [1]}"#),
+            ),
+            (
+                vec![Some(r#"["a","b"]"#), Some(r#"["c","d"]"#)],
+                Some(r#"["c", "d"]"#),
+            ),
+            (
+                vec![Some(r#"{"a":"b"}"#), Some(r#"["c"]"#)],
+                Some(r#"["c"]"#),
+            ),
+            (
+                vec![Some(r#"{"a":"foo"}"#), Some(r#"null"#)],
                 Some(r#"null"#),
             ),
             (
-                vec![Some(r#"{"a":1, "b":2}"#), Some(r#"{"b":null}"#)],
+                vec![Some(r#"{"a":"foo"}"#), Some(r#""bar""#)],
+                Some(r#""bar""#),
+            ),
+            (
+                vec![Some(r#"{"e":null}"#), Some(r#"{"a":1}"#)],
+                Some(r#"{"e": null,"a": 1}"#),
+            ),
+            (
+                vec![Some(r#"[1,2]"#), Some(r#"{"a":"b","c":null}"#)],
+                Some(r#"{"a":"b"}"#),
+            ),
+            (
+                vec![Some(r#"{}"#), Some(r#"{"a":{"bb":{"ccc":null}}}"#)],
+                Some(r#"{"a":{"bb": {}}}"#),
+            ),
+            // RFC 7396 Example Document
+            (
+                vec![
+                    Some(
+                        r#"{"title":"Goodbye!","author":{"givenName":"John","familyName":"Doe"},"tags":["example","sample"],"content":"This will be unchanged"}"#,
+                    ),
+                    Some(
+                        r#"{"title":"Hello!","phoneNumber":"+01-123-456-7890","author":{"familyName":null},"tags":["example"]}"#,
+                    ),
+                ],
+                Some(
+                    r#"{"title":"Hello!","author":{"givenName":"John"},"tags":["example"],"content":"This will be unchanged","phoneNumber":"+01-123-456-7890"}"#,
+                ),
+            ),
+            // From mysql Example Test Cases
+            (
+                vec![
+                    None,
+                    Some(r#"null"#),
+                    Some(r#"[1,2,3]"#),
+                    Some(r#"{"a":1}"#),
+                ],
                 Some(r#"{"a": 1}"#),
             ),
             (
                 vec![
-                    Some(r#"{"a": 1, "b": {"c": 3, "d": 4}, "e": [5, 6]}"#),
-                    Some(r#"{"c": 7, "b": {"a": 8, "c": 9}, "f": [1, 2]}"#),
-                    Some(r#"{"d": 9, "b": {"b": 10, "c": 11}, "e": 8}"#),
+                    Some(r#"null"#),
+                    None,
+                    Some(r#"[1,2,3]"#),
+                    Some(r#"{"a":1}"#),
                 ],
-                Some(
-                    r#"{
-                    "a": 1,
-                    "b": {"a": 8, "b": 10, "c": 11, "d": 4},
-                    "c": 7,
-                    "d": 9,
-                    "e": 8,
-                    "f": [1, 2]
-                }"#,
-                ),
+                Some(r#"{"a": 1}"#),
+            ),
+            (
+                vec![
+                    Some(r#"null"#),
+                    Some(r#"[1,2,3]"#),
+                    None,
+                    Some(r#"{"a":1}"#),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(r#"null"#),
+                    Some(r#"[1,2,3]"#),
+                    Some(r#"{"a":1}"#),
+                    None,
+                ],
+                None,
+            ),
+            (
+                vec![
+                    None,
+                    Some(r#"null"#),
+                    Some(r#"{"a":1}"#),
+                    Some(r#"[1,2,3]"#),
+                ],
+                Some(r#"[1,2,3]"#),
+            ),
+            (
+                vec![
+                    Some(r#"null"#),
+                    None,
+                    Some(r#"{"a":1}"#),
+                    Some(r#"[1,2,3]"#),
+                ],
+                Some(r#"[1,2,3]"#),
+            ),
+            (
+                vec![
+                    Some(r#"null"#),
+                    Some(r#"{"a":1}"#),
+                    None,
+                    Some(r#"[1,2,3]"#),
+                ],
+                Some(r#"[1,2,3]"#),
+            ),
+            (
+                vec![
+                    Some(r#"null"#),
+                    Some(r#"{"a":1}"#),
+                    Some(r#"[1,2,3]"#),
+                    None,
+                ],
+                None,
+            ),
+            (
+                vec![None, Some(r#"null"#), Some(r#"{"a":1}"#), Some(r#"true"#)],
+                Some(r#"true"#),
+            ),
+            (
+                vec![Some(r#"null"#), None, Some(r#"{"a":1}"#), Some(r#"true"#)],
+                Some(r#"true"#),
+            ),
+            (
+                vec![Some(r#"null"#), Some(r#"{"a":1}"#), None, Some(r#"true"#)],
+                Some(r#"true"#),
+            ),
+            (
+                vec![Some(r#"null"#), Some(r#"{"a":1}"#), Some(r#"true"#), None],
+                None,
+            ),
+            // non-object last item
+            (
+                vec![
+                    Some("true"),
+                    Some("false"),
+                    Some("[]"),
+                    Some("{}"),
+                    Some("null"),
+                ],
+                Some("null"),
+            ),
+            (
+                vec![
+                    Some("false"),
+                    Some("[]"),
+                    Some("{}"),
+                    Some("null"),
+                    Some("true"),
+                ],
+                Some("true"),
+            ),
+            (
+                vec![
+                    Some("true"),
+                    Some("[]"),
+                    Some("{}"),
+                    Some("null"),
+                    Some("false"),
+                ],
+                Some("false"),
+            ),
+            (
+                vec![
+                    Some("true"),
+                    Some("false"),
+                    Some("{}"),
+                    Some("null"),
+                    Some("[]"),
+                ],
+                Some("[]"),
+            ),
+            (
+                vec![
+                    Some("true"),
+                    Some("false"),
+                    Some("{}"),
+                    Some("null"),
+                    Some("1"),
+                ],
+                Some("1"),
+            ),
+            (
+                vec![
+                    Some("true"),
+                    Some("false"),
+                    Some("{}"),
+                    Some("null"),
+                    Some("1.8"),
+                ],
+                Some("1.8"),
+            ),
+            (
+                vec![
+                    Some("true"),
+                    Some("false"),
+                    Some("{}"),
+                    Some("null"),
+                    Some("112"),
+                ],
+                Some("112"),
+            ),
+            (vec![Some(r#"{"a":"foo"}"#), None], None),
+            (vec![None, Some(r#"{"a":"foo"}"#)], None),
+            (
+                vec![Some(r#"{"a":"foo"}"#), Some(r#"false"#)],
+                Some(r#"false"#),
+            ),
+            (vec![Some(r#"{"a":"foo"}"#), Some(r#"123"#)], Some(r#"123"#)),
+            (
+                vec![Some(r#"{"a":"foo"}"#), Some(r#"123.1"#)],
+                Some(r#"123.1"#),
+            ),
+            (
+                vec![Some(r#"{"a":"foo"}"#), Some(r#"[1,2,3]"#)],
+                Some(r#"[1,2,3]"#),
+            ),
+            (
+                vec![Some(r#"null"#), Some(r#"{"a":1}"#)],
+                Some(r#"{"a":1}"#),
+            ),
+            (vec![Some(r#"{"a":1}"#), Some(r#"null"#)], Some(r#"null"#)),
+            (
+                vec![
+                    Some(r#"{"a":"foo"}"#),
+                    Some(r#"{"a":null}"#),
+                    Some(r#"{"b":"123"}"#),
+                    Some(r#"{"c":1}"#),
+                ],
+                Some(r#"{"b":"123","c":1}"#),
+            ),
+            (
+                vec![
+                    Some(r#"{"a":"foo"}"#),
+                    Some(r#"{"a":null}"#),
+                    Some(r#"{"c":1}"#),
+                ],
+                Some(r#"{"c":1}"#),
+            ),
+            (
+                vec![
+                    Some(r#"{"a":"foo"}"#),
+                    Some(r#"{"a":null}"#),
+                    Some(r#"true"#),
+                ],
+                Some(r#"true"#),
+            ),
+            (
+                vec![
+                    Some(r#"{"a":"foo"}"#),
+                    Some(r#"{"d":1}"#),
+                    Some(r#"{"a":{"bb":{"ccc":null}}}"#),
+                ],
+                Some(r#"{"a":{"bb":{}},"d":1}"#),
             ),
         ];
 

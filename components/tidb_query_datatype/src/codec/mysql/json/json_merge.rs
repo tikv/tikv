@@ -45,61 +45,47 @@ impl Json {
         merge_binary_array(&result)
     }
 
-    /// `merge_patch` is the implementation for JSON_MERGE_PATCH in mysql
-    /// <https://dev.mysql.com/doc/refman/8.3/en/json-modification-functions.html#function_json-merge-patch>
-    ///
-    /// The merge_patch rules are listed as following:
-    /// 1. If the first argument is not an object, the result of the merge is
-    ///    the same as if an empty object had been merged with the second
-    ///    argument.
-    /// 2. If the second argument is not an object, the result of the merge is
-    ///    the second argument.
-    /// 3. If both arguments are objects, the result of the merge is an object
-    ///    with the following members: 3.1. All members of the first object
-    ///    which do not have a corresponding member with the same key in the
-    ///    second object. 3.2. All members of the second object which do not
-    ///    have a corresponding key in the first object, and whose value is not
-    ///    the JSON null literal. 3.3. All members with a key that exists in
-    ///    both the first and the second object, and whose value in the second
-    ///    object is not the JSON null literal. The values of these members are
-    ///    the results of recursively merging the value in the first object with
-    ///    the value in the second object.
-    /// See `MergePatchBinaryJSON()` in TiDB
-    /// `pkg/types/json_binary_functions.go`
     #[allow(clippy::comparison_chain)]
-    pub fn merge_patch(bjs: Vec<JsonRef<'_>>) -> Result<Json> {
-        let mut objects: Vec<JsonRef<'_>> = vec![];
-        let mut index = 0;
-
-        // according to the implements of RFC7396
-        // when the last item is not object
-        // we can return the last item directly
-        for (i, element) in bjs.iter().rev().enumerate() {
-            // check element type or if it is null
-            if element.get_type() != JsonType::Object {
-                index = i;
-                break;
+    // See `mergePatchBinaryJSON()` in TiDB `pkg/types/json_binary_functions.go`
+    pub fn merge_patch(target: JsonRef<'_>, patch: JsonRef<'_>) -> Result<Json> {
+        if patch.get_type() != JsonType::Object {
+            return Ok(patch.to_owned());
+        } else {
+            let mut key_val_map: BTreeMap<String, Json> = BTreeMap::new();
+            if target.get_type() == JsonType::Object {
+                let elem_count = target.get_elem_count();
+                for i in 0..elem_count {
+                    let key = target.object_get_key(i);
+                    let val = target.object_get_val(i)?;
+                    let key = String::from_utf8(key.to_owned()).map_err(Error::from)?;
+                    key_val_map.insert(key, val.to_owned());
+                }
             }
-        }
 
-        for i in (0..=bjs.len() - 1).rev() {
-            if bjs[i].get_type() != JsonType::Object {
-                index = i;
-                break;
+            let mut tmp: Json;
+            let elem_count = patch.get_elem_count();
+            for i in 0..elem_count {
+                let key = patch.object_get_key(i);
+                let val = patch.object_get_val(i)?;
+                let k = String::from_utf8(key.to_owned()).map_err(Error::from)?;
+
+                if val.get_type() == JsonType::Literal && val.get_literal().is_none() {
+                    if key_val_map.contains_key(&k) {
+                        key_val_map.remove(&k);
+                    }
+                } else {
+                    let target_kv = key_val_map.get(&k);
+                    if let Some(target_kv) = target_kv {
+                        tmp = Self::merge_patch(target_kv.as_ref(), val)?;
+                        key_val_map.insert(k, tmp);
+                    } else {
+                        tmp = Self::merge_patch(Json::from_bool(false).unwrap().as_ref(), val)?;
+                        key_val_map.insert(k, tmp);
+                    }
+                }
             }
+            return Json::from_object(key_val_map);
         }
-
-        // assign sub array from index to bjs.len() from bjs to objects
-        objects.extend(&bjs[index..]);
-        let mut target = objects[0].to_owned();
-
-        // if the lenth of objects is 1, return the target directly
-        if objects.len() > 1 {
-            for i in 1..objects.len() {
-                target = merge_patch_binary_object(target.as_ref(), objects[i])?;
-            }
-        }
-        Ok(target)
     }
 }
 
@@ -158,51 +144,6 @@ fn merge_binary_object(objects: &mut Vec<JsonRef<'_>>) -> Result<Json> {
         }
     }
     Json::from_object(kv_map)
-}
-
-// See `mergePatchBinaryJSON()` in TiDB `pkg/types/json_binary_functions.go`
-fn merge_patch_binary_object(target: JsonRef<'_>, patch: JsonRef<'_>) -> Result<Json> {
-    // translate the function from go to rust
-    if patch.get_type() != JsonType::Object {
-        return Ok(patch.to_owned());
-    }
-
-    if target.get_type() != JsonType::Object {
-        return Ok(patch.to_owned());
-    }
-
-    let mut key_val_map: BTreeMap<String, Json> = BTreeMap::new();
-    let elem_count = target.get_elem_count();
-    for i in 0..elem_count {
-        let key = target.object_get_key(i);
-        let val = target.object_get_val(i)?;
-        let key = String::from_utf8(key.to_owned()).map_err(Error::from)?;
-        key_val_map.insert(key, val.to_owned());
-    }
-
-    let mut tmp: Json;
-    let elem_count = patch.get_elem_count();
-    for i in 0..elem_count {
-        let key = patch.object_get_key(i);
-        let val = patch.object_get_val(i)?;
-        let k = String::from_utf8(key.to_owned()).map_err(Error::from)?;
-
-        if val.get_type() == JsonType::Literal && val.get_literal().is_none() {
-            if key_val_map.contains_key(&k) {
-                key_val_map.remove(&k);
-            }
-        } else {
-            let target_kv = key_val_map.get(&k);
-            if let Some(target_kv) = target_kv {
-                tmp = merge_patch_binary_object(target_kv.as_ref(), val)?;
-                key_val_map.insert(k, tmp);
-            } else {
-                key_val_map.insert(k, val.to_owned());
-            }
-        }
-    }
-
-    Json::from_object(key_val_map)
 }
 
 #[cfg(test)]
@@ -267,76 +208,6 @@ mod tests {
                 .collect::<Vec<Json>>();
             let refs = jsons.iter().map(|j| j.as_ref()).collect::<Vec<_>>();
             let res = Json::merge(refs).unwrap();
-            let expect: Json = expect[0].parse().unwrap();
-            assert_eq!(res, expect);
-        }
-    }
-
-    #[test]
-    fn test_merge_patch() {
-        let test_cases = vec![
-            vec![r#"[1, 2]"#, r#"[true, false]"#, r#"[true, false]"#],
-            vec![
-                r#"{"name": "x"}"#,
-                r#"{"id": 47}"#,
-                r#"{"id": 47, "name": "x"}"#,
-            ],
-            vec![r#"1"#, r#"true"#, r#"true"#],
-            vec![r#"1"#, r#"null"#, r#"null"#],
-            vec![r#"{"a": 1}"#, r#"{"b": 2}"#, r#"null"#, r#"null"#],
-            vec![r#"[1, 2]"#, r#"{"id": 47}"#, r#"{"id": 47}"#],
-            vec![r#"{"a":1, "b":2}"#, r#"{"b":null}"#, r#"{"a": 1}"#],
-            vec![r#"{"a": 1}"#, r#"{"b": 2}"#, r#"{"a": 1, "b": 2}"#],
-            vec![r#"{"a": 1}"#, r#"{"a": 2}"#, r#"{"a": 2}"#],
-            vec![r#"{"a": 1}"#, r#"{"a": [2, 3]}"#, r#"{"a": [2, 3]}"#],
-            vec![
-                r#"{"a": 1}"#,
-                r#"{"a": {"b": [2, 3]}}"#,
-                r#"{"a": {"b": [2, 3]}}"#,
-            ],
-            vec![r#"{"a": {"b": [2, 3]}}"#, r#"{"a": 1}"#, r#"{"a": 1}"#],
-            vec![
-                r#"{"a": [1, 2]}"#,
-                r#"{"a": {"b": [3, 4]}}"#,
-                r#"{"a": {"b": [3, 4]}}"#,
-            ],
-            vec![
-                r#"{"b": {"c": 2}}"#,
-                r#"{"a": 1, "b": {"d": 1}}"#,
-                r#"{"a": 1, "b": {"c": 2, "d": 1}}"#,
-            ],
-            vec![r#"[1]"#, r#"[2]"#, r#"[2]"#],
-            vec![r#"{"a": 1}"#, r#"[1]"#, r#"[1]"#],
-            vec![r#"[1]"#, r#"{"a": 1}"#, r#"{"a": 1}"#],
-            vec![r#"{"a": 1}"#, r#"4"#, r#"4"#],
-            vec![r#"[1]"#, r#"4"#, r#"4"#],
-            vec![r#"4"#, r#"{"a": 1}"#, r#"{"a": 1}"#],
-            vec![r#"1"#, r#"[4]"#, r#"[4]"#],
-            vec![r#"4"#, r#"1"#, r#"1"#],
-            vec!["1", "2", "3", "3"],
-            vec!["[1, 2]", "3", "[4, 5, 6]", "[4, 5, 6]"],
-            vec![
-                r#"{"a": 1, "b": {"c": 3, "d": 4}, "e": [5, 6]}"#,
-                r#"{"c": 7, "b": {"a": 8, "c": 9}, "f": [1, 2]}"#,
-                r#"{"d": 9, "b": {"b": 10, "c": 11}, "e": 8}"#,
-                r#"{
-                    "a": 1,
-                    "b": {"a": 8, "b": 10, "c": 11, "d": 4},
-                    "c": 7,
-                    "d": 9,
-                    "e": 8,
-                    "f": [1, 2]
-                }"#,
-            ],
-        ];
-        for case in test_cases {
-            let (to_be_merged, expect) = case.split_at(case.len() - 1);
-            let jsons = to_be_merged
-                .iter()
-                .map(|s| s.parse::<Json>().unwrap())
-                .collect::<Vec<Json>>();
-            let refs = jsons.iter().map(|j| j.as_ref()).collect::<Vec<_>>();
-            let res = Json::merge_patch(refs).unwrap();
             let expect: Json = expect[0].parse().unwrap();
             assert_eq!(res, expect);
         }
