@@ -4094,6 +4094,22 @@ def RangeCacheMemoryEngine() -> RowPanel:
             ),
         ]
     )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Range load duration",
+                description="The handle duration of range load",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_range_load_duration_secs_bucket",
+            ),
+            heatmap_panel(
+                title="Range gc duration",
+                description="The handle duration of range gc",
+                yaxis=yaxis(format=UNITS.BYTES_IEC),
+                metric="tikv_range_gc_duration_secs_bucket",
+            ),
+        ]
+    )
     return layout.row_panel
 
 
