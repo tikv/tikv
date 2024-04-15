@@ -2247,9 +2247,7 @@ where
         // it should propose a read index to check whether its lag is behind the leader.
         // It won't generate flooding fetching messages. This proposal will only be sent
         // out before it gets response and updates the `last_leader_committed_index`.
-        if self.fsm.peer.busy_on_apply.is_some()
-            && self.fsm.peer.last_leader_committed_idx.is_none()
-        {
+        if self.fsm.peer.needs_update_last_leader_committed_idx() {
             self.try_to_fetch_committed_index();
             debug!("propose read index to check whether its lag is behind the leader");
         }
@@ -2673,6 +2671,13 @@ where
             return Ok(());
         }
 
+        // If this peer is restarting, it may lose some logs, so it should update
+        // the `last_leader_committed_idx` with the commited index of the first `MsgAppend``
+        // message it received from leader.
+        if self.fsm.peer.needs_update_last_leader_committed_idx() && MessageType::MsgAppend == msg_type {
+            self.fsm.peer.update_last_leader_committed_idx(msg.get_message().get_commit());
+        }
+
         if msg.has_extra_msg() {
             self.on_extra_message(msg);
             return Ok(());
@@ -3000,7 +3005,7 @@ where
                 self.on_fetch_committed_index_request(msg.get_from_peer());
             }
             ExtraMessageType::MsgFetchCommittedIndexResponse => {
-                self.on_fetch_committed_index_response(msg);
+                self.on_fetch_committed_index_response(msg.get_extra_msg().get_index());
             }
             // It's v2 only message and ignore does no harm.
             ExtraMessageType::MsgGcPeerResponse | ExtraMessageType::MsgFlushMemtable => (),
@@ -6698,9 +6703,7 @@ where
     /// index from the leader.
     fn try_to_fetch_committed_index(&mut self) {
         // Already completed, skip.
-        if self.fsm.peer.busy_on_apply.is_none()
-            || self.fsm.peer.last_leader_committed_idx.is_some()
-        {
+        if !self.fsm.peer.needs_update_last_leader_committed_idx() {
             return;
         }
         // As the leader of the region will have the accurate and latest commit index,
@@ -6745,36 +6748,12 @@ where
     }
 
     /// Handle the response of the committed index from the peer.
-
-    fn on_fetch_committed_index_response(&mut self, msg: RaftMessage) {
+    fn on_fetch_committed_index_response(&mut self, committed_index: u64) {
         if self.fsm.peer.is_leader() {
             // Ingore. Normally, the leader should not receive this message.
             return;
         }
-        // Peer is not leader, it should extract the committed index from the leader
-        // and update its local `last_leader_committed_idx` if the committed index is
-        // valid.
-        let committed_index = msg.get_extra_msg().get_index();
-        if committed_index <= self.fsm.peer.get_store().commit_index() {
-            warn!(
-                "stale committed index";
-                "region_id" => self.region_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "committed_index" => committed_index
-            );
-        } else {
-            // Get the last committed index of the leader to calculate the gap
-            // of unapplied raft logs on this peer.
-            self.fsm.peer.last_leader_committed_idx = Some(committed_index);
-            debug!(
-                "update last committed index from leader";
-                "region_id" => self.region_id(),
-                "from" => msg.get_from_peer().get_id(),
-                "peer_id" => self.fsm.peer_id(),
-                "last_committed_index" => committed_index,
-                "last_index" => self.fsm.peer.get_store().last_index(),
-            );
-        }
+        self.fsm.peer.update_last_leader_committed_idx(committed_index);
     }
 
     /// Check whether the peer is pending on applying raft logs.
