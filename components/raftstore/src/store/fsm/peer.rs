@@ -6728,7 +6728,7 @@ where
     /// Handle the request of the committed index from the peer.
     fn on_fetch_committed_index_request(&mut self, from: &metapb::Peer) {
         if !self.fsm.peer.is_leader() {
-            // Ingore. Normally, the learner should not receive this message.
+            // Ingore. Normally, the follower should not receive this message.
             return;
         }
         let committed_index = self.fsm.peer.get_store().commit_index();
