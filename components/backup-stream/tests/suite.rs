@@ -650,7 +650,7 @@ impl Suite {
                     }
 
                     let value = iter.value();
-                    assert_eq!(value, Self::PROMISED_SHORT_VALUE);
+                    assert_eq!(value, Self::PROMISED_LONG_VALUE);
                 }
             }
         }
