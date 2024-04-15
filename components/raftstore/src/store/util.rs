@@ -33,7 +33,7 @@ use raft_proto::ConfChangeI;
 use tikv_util::{
     box_err,
     codec::number::{decode_u64, NumberEncoder},
-    debug, info,
+    info,
     store::{find_peer_by_id, region},
     time::{monotonic_raw_now, Instant},
     Either,
