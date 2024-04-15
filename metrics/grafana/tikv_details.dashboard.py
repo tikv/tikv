@@ -4074,6 +4074,19 @@ def RangeCacheMemoryEngine() -> RowPanel:
     layout.row(
         [
             graph_panel(
+                title="Memory Usage",
+                description="The memory usage of the range cache memory engine",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_range_cache_memory_usage_bytes",
+                            by_labels=["instance"],
+                        ),
+                    ),
+                ],
+            ),
+            graph_panel(
                 title="GC Filter",
                 description="Rang cache engine garbage collection information",
                 targets=[
