@@ -23,7 +23,7 @@ use kvproto::{
 use pd_client::BucketMeta;
 use tikv_util::{
     codec::number::decode_u64,
-    debug, error,
+    debug, error, info,
     lru::LruCache,
     store::find_peer_by_id,
     time::{monotonic_raw_now, ThreadReadId},
@@ -892,6 +892,18 @@ where
                 _ => unreachable!("{:?}", e),
             };
             return Err(e);
+        }
+        let (_, meta_reader) = { self.store_meta.get_executor_and_len(region_id) };
+        if let Some(meta_reader) = meta_reader {
+            let region_epoch_cache = delegate.region.get_region_epoch();
+            let region_epoch_real = meta_reader.region.get_region_epoch();
+            if region_epoch_cache.get_version() != region_epoch_real.get_version()
+                || region_epoch_cache.get_conf_ver() != region_epoch_real.get_conf_ver()
+            {
+                info!("region delegate is outdate";
+                "cache" => ?region_epoch_cache,
+                "real" => ?region_epoch_real);
+            }
         }
 
         Ok(Some(delegate))
