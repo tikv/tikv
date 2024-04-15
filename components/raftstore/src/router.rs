@@ -257,6 +257,8 @@ impl<EK: KvEngine, ER: RaftEngine> LocalReadRouter<EK> for ServerRaftStoreRouter
         req: RaftCmdRequest,
         cb: Callback<EK::Snapshot>,
     ) -> RaftStoreResult<()> {
+        // snap_ctx is introduced in d9b70f7f3a3332aa4ad9946325d1877fa4f33da2 recently,
+        // which means it's not a mandatory thing of the core of raftstore.
         self.local_reader.read(snap_ctx, read_id, req, cb);
         Ok(())
     }

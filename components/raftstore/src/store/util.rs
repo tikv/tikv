@@ -256,6 +256,7 @@ pub fn admin_cmd_epoch_lookup(admin_cmp_type: AdminCmdType) -> AdminCmdEpochStat
 /// WARNING: `NORMAL_REQ_CHECK_VER` and `NORMAL_REQ_CHECK_CONF_VER` **MUST NOT**
 /// be changed. The reason is the same as `admin_cmd_epoch_lookup`.
 pub static NORMAL_REQ_CHECK_VER: bool = true;
+// Why? Unrelated to the problem though.
 pub static NORMAL_REQ_CHECK_CONF_VER: bool = false;
 
 pub fn check_req_region_epoch(
@@ -326,7 +327,7 @@ pub fn compare_region_epoch(
     if (check_conf_ver && from_epoch.get_conf_ver() != current_epoch.get_conf_ver())
         || (check_ver && from_epoch.get_version() != current_epoch.get_version())
     {
-        debug!(
+        info!(
             "epoch not match";
             "region_id" => region.get_id(),
             "from_epoch" => ?from_epoch,

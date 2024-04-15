@@ -25,6 +25,7 @@ use engine_traits::{
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use getset::{Getters, MutGetters};
+use itertools::Itertools;
 use keys::{enc_end_key, enc_start_key};
 use kvproto::{
     errorpb,
@@ -3322,11 +3323,13 @@ where
         ctx: &mut PollContext<EK, ER, T>,
         replica_read: bool,
     ) {
-        debug!(
+        info!(
             "handle reads with a read index";
             "request_id" => ?read.id,
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
+            "replica_read" => replica_read,
+            "req" => ?read.cmds().iter().map(|(r, _, i)| (r, i)).collect_vec(),
         );
         RAFT_READ_INDEX_PENDING_COUNT.sub(read.cmds().len() as i64);
         let time = monotonic_raw_now();
@@ -4909,9 +4912,12 @@ where
         read_index: Option<u64>,
     ) -> ReadResponse<EK::Snapshot> {
         let region = self.region().clone();
+        let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
+        info!("Peer::handle_read called"; "region_id" => region.get_id(), "req_epoch" => ?req.get_header().get_region_epoch(), "region_epoch" => ?region.get_region_epoch(), "check_epoch" => check_epoch, "read_index" => read_index,
+            "start_key" => log_wrappers::Value::key(region.get_start_key()), "end_key" => log_wrappers::Value::key(region.get_end_key()), "flags" => ?flags);
         if check_epoch {
             if let Err(e) = check_req_region_epoch(&req, &region, true) {
-                debug!("epoch not match"; "region_id" => region.get_id(), "err" => ?e);
+                info!("epoch not match"; "region_id" => region.get_id(), "err" => ?e);
                 let mut response = cmd_resp::new_error(e);
                 cmd_resp::bind_term(&mut response, self.term());
                 return ReadResponse {
@@ -4921,7 +4927,6 @@ where
                 };
             }
         }
-        let flags = WriteBatchFlags::from_bits_check(req.get_header().get_flags());
         if flags.contains(WriteBatchFlags::STALE_READ) {
             let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
             let safe_ts = self.read_progress.safe_ts();

@@ -23,7 +23,7 @@ use kvproto::{
 use pd_client::BucketMeta;
 use tikv_util::{
     codec::number::decode_u64,
-    debug, error,
+    debug, error, info,
     lru::LruCache,
     store::find_peer_by_id,
     time::{monotonic_raw_now, ThreadReadId},
@@ -138,10 +138,9 @@ pub trait ReadExecutor {
                     }
                 }
                 CmdType::Snap => {
-                    let snapshot = RegionSnapshot::from_snapshot(
-                        self.get_snapshot(snap_ctx.clone(), &local_read_ctx),
-                        region.clone(),
-                    );
+                    // Note the snap_ctx is also new.
+                    let snap_inner = self.get_snapshot(snap_ctx.clone(), &local_read_ctx);
+                    let snapshot = RegionSnapshot::from_snapshot(snap_inner, region.clone());
                     response.snapshot = Some(snapshot);
                     Response::default()
                 }
@@ -254,6 +253,8 @@ where
             }
 
             self.snap_cache.cached_read_id = self.read_id.clone();
+            // Changed from None to snap_ctx in d9b70f7f3a3332aa4ad9946325d1877fa4f33da2.
+            // What?
             self.snap_cache.snapshot = Some(Arc::new(engine.snapshot(snap_ctx)));
 
             // Ensures the snapshot is acquired before getting the time
@@ -811,6 +812,8 @@ where
             }
         };
 
+        info!("local reader: got delegate from local reader"; "region_id" => region_id, "req_epoch" => ?req.get_header().get_region_epoch(), "delegate_epoch" => ?delegate.region.get_region_epoch());
+
         fail_point!("localreader_on_find_delegate");
 
         // Check peer id.
@@ -821,7 +824,7 @@ where
 
         // Check term.
         if let Err(e) = util::check_term(req.get_header(), delegate.term) {
-            debug!(
+            info!(
                 "check term";
                 "delegate_term" => delegate.term,
                 "header_term" => req.get_header().get_term(),
@@ -835,7 +838,7 @@ where
         if util::check_req_region_epoch(req, &delegate.region, false).is_err() {
             TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.epoch.inc());
             // Stale epoch, redirect it to raftstore to get the latest region.
-            debug!("rejected by epoch not match"; "tag" => &delegate.tag);
+            info!("rejected by epoch not match"; "tag" => &delegate.tag);
             return Ok(None);
         }
 
@@ -958,7 +961,7 @@ where
     }
 
     fn redirect(&mut self, mut cmd: RaftCommand<E::Snapshot>) {
-        debug!("localreader redirects command"; "command" => ?cmd);
+        info!("localreader redirects command"; "command" => ?cmd);
         let region_id = cmd.request.get_header().get_region_id();
         let mut err = errorpb::Error::default();
         match ProposalRouter::send(&self.router, cmd) {
@@ -1000,7 +1003,7 @@ where
         snap_updated: &mut bool,
         last_valid_ts: Timespec,
     ) -> Option<ReadResponse<E::Snapshot>> {
-        let mut local_read_ctx = LocalReadContext::new(&mut self.snap_cache, read_id);
+        let mut local_read_ctx = LocalReadContext::new(&mut self.snap_cache, read_id.clone());
 
         (*snap_updated) = local_read_ctx.maybe_update_snapshot(
             delegate.get_tablet(),
@@ -1017,9 +1020,23 @@ where
         let mut response = delegate.execute(req, &region, None, snap_ctx, Some(local_read_ctx));
         if let Some(snap) = response.snapshot.as_mut() {
             snap.bucket_meta = delegate.bucket_meta.clone();
+            assert_eq!(
+                snap.get_region().get_id(),
+                req.get_header().get_region_id(),
+                "{:?}",
+                req
+            );
+            assert_eq!(
+                snap.get_region().get_region_epoch(),
+                req.get_header().get_region_epoch(),
+                "{:?}",
+                req
+            );
         }
         // Try renew lease in advance
         delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
+        info!("try_local_leader_read success"; "region_id" => region.get_id(), "req_epoch" => ?req.get_header().get_region_epoch(), "response.snapshot.is_some" => response.snapshot.is_some(),
+            "read_id" => ?read_id, "snap_updated" => *snap_updated, "snap_cache" => ?self.snap_cache.snapshot, "engine_type" => std::any::type_name::<E>());
         Some(response)
     }
 
