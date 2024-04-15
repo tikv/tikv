@@ -188,7 +188,7 @@ impl KeyOp {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct RowChange {
     write: Option<KeyOp>,
     lock: Option<KeyOp>,
@@ -221,6 +221,9 @@ fn group_row_changes(requests: Vec<Request>) -> (HashMap<Key, RowChange>, bool) 
                     }
                     CF_LOCK => {
                         let row = changes.entry(key).or_default();
+                        if let Some(lock) = &row.lock {
+                            error!("there is already lock={:?} on row={:?}", lock, row);
+                        }
                         assert!(row.lock.is_none());
                         row.lock = Some(KeyOp::Put(None, value));
                     }
