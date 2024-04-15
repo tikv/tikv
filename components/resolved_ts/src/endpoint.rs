@@ -745,10 +745,13 @@ where
                 ..
             } = observe_region;
 
+            let region_epoch = observe_region.meta.get_region_epoch();
             info!(
                 "deregister observe region";
                 "store_id" => ?self.get_or_init_store_id(),
                 "region_id" => region_id,
+                "region_version" => region_epoch.get_version(),
+                "region_conf_ver" => region_epoch.get_conf_ver(),
                 "observe_id" => ?handle.id
             );
             // Stop observing data
