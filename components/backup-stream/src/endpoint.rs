@@ -822,7 +822,8 @@ where
                 .await
                 .map_err(|err| annotate!(err, "failed to send request for resolve regions"))?;
             let (tx, rx) = tokio::sync::oneshot::channel();
-            // We need to make sure all writes used for resolve regions have been recorded.
+            // Because the resolve call is asynchonrous, we need to make sure new writes
+            // used for resolve regions have been recorded.
             try_send!(sched, Task::FlushSync(tx));
             rx.await
                 .map_err(|err| annotate!(err, "failed to sync the current writings"))?;
