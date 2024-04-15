@@ -2858,11 +2858,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             busy_apply_peers_count,
             completed_apply_peers_count,
         );
-        if busy_on_apply {
-            STORE_PROCESS_BUSY_GAUGE_VEC
-                .with_label_values(&["busy_on_apply"])
-                .set(busy_on_apply as i64);
-        }
         // If the store already pass the check, it should clear the
         // `completed_apply_peers_count` to skip the check next time.
         if !busy_on_apply && completed_apply_peers_count.is_some() {
@@ -2876,12 +2871,13 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .stat
             .is_busy
             .swap(false, Ordering::Relaxed);
-        if store_is_busy {
-            STORE_PROCESS_BUSY_GAUGE_VEC
-                .with_label_values(&["raftstore_busy"])
-                .set(store_is_busy as i64);
-        }
         stats.set_is_busy(store_is_busy || busy_on_apply);
+        STORE_PROCESS_BUSY_GAUGE_VEC
+            .with_label_values(&["busy_on_apply"])
+            .set(busy_on_apply as i64);
+        STORE_PROCESS_BUSY_GAUGE_VEC
+            .with_label_values(&["raftstore_busy"])
+            .set(store_is_busy as i64);
 
         let mut query_stats = QueryStats::default();
         query_stats.set_put(
