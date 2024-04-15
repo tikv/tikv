@@ -310,6 +310,12 @@ impl RangeManager {
             return false;
         };
 
+        info!(
+            "evict range in cache range engine";
+            "range_start" => log_wrappers::Value(&evict_range.start),
+            "range_end" => log_wrappers::Value(&evict_range.end),
+        );
+
         let meta = self.ranges.remove(&range_key).unwrap();
         let (left_range, right_range) = range_key.split_off(evict_range);
         assert!((left_range.is_some() || right_range.is_some()) || &range_key == evict_range);
