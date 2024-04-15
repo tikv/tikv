@@ -6723,9 +6723,11 @@ where
     }
 
     /// Handle the request of the committed index from the peer.
-    ///
-    /// Normally, the handler should be follower / learner of this region.
     fn on_fetch_committed_index_request(&mut self, from: &metapb::Peer) {
+        if !self.fsm.peer.is_leader() {
+            // Ingore. Normally, the learner should not receive this message.
+            return;
+        }
         let committed_index = self.fsm.peer.get_store().commit_index();
         let mut resp = ExtraMessage::default();
         resp.set_type(ExtraMessageType::MsgFetchCommittedIndexResponse);
@@ -6743,16 +6745,19 @@ where
     }
 
     /// Handle the response of the committed index from the peer.
-    ///
-    /// Normally, the handler should be the leader of this region.
+
     fn on_fetch_committed_index_response(&mut self, msg: RaftMessage) {
+        if self.fsm.peer.is_leader() {
+            // Ingore. Normally, the leader should not receive this message.
+            return;
+        }
         // Peer is not leader, it should extract the committed index from the leader
         // and update its local `last_leader_committed_idx` if the committed index is
         // valid.
         let committed_index = msg.get_extra_msg().get_index();
-        if committed_index <= RAFT_INIT_LOG_INDEX {
+        if committed_index <= self.fsm.peer.get_store().commit_index() {
             warn!(
-                "invalid committed index";
+                "stale committed index";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
                 "committed_index" => committed_index
@@ -6762,7 +6767,7 @@ where
             // of unapplied raft logs on this peer.
             self.fsm.peer.last_leader_committed_idx = Some(committed_index);
             debug!(
-                "update last committed index from peer";
+                "update last committed index from leader";
                 "region_id" => self.region_id(),
                 "from" => msg.get_from_peer().get_id(),
                 "peer_id" => self.fsm.peer_id(),
