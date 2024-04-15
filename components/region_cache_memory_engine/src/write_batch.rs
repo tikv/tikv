@@ -5,7 +5,7 @@ use crossbeam::epoch;
 use engine_traits::{
     CacheRange, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
-use tikv_util::{box_err, config::ReadableSize, error, warn};
+use tikv_util::{box_err, config::ReadableSize, error, info, warn};
 
 use crate::{
     background::BackgroundTask,
@@ -181,8 +181,13 @@ impl RangeCacheWriteBatch {
 
         let memory_expect = entry_size();
         if !self.memory_acquire(memory_expect) {
-            self.ranges_to_evict
-                .insert(self.current_range.clone().unwrap());
+            let range = self.current_range.clone().unwrap();
+            info!(
+                "memory acquire failed due to reaching hard limit";
+                "range_start" => log_wrappers::Value(&range.start),
+                "range_end" => log_wrappers::Value(&range.end),
+            );
+            self.ranges_to_evict.insert(range);
             return;
         }
 
@@ -229,12 +234,7 @@ impl RangeCacheWriteBatch {
                 self.schedule_memory_check();
                 return false;
             }
-            MemoryUsage::SoftLimitReached(n) => {
-                warn!(
-                    "the memory usage of in-memory engine reaches to soft limit";
-                    "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
-                    "memory_acquire(MB)" => ReadableSize(mem_required as u64).as_mb_f64(),
-                );
+            MemoryUsage::SoftLimitReached(_) => {
                 self.schedule_memory_check();
             }
             _ => {}
@@ -518,7 +518,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use crate::EngineConfig;
+    use crate::RangeCacheEngineConfig;
 
     // We should not use skiplist.get directly as we only cares keys without
     // sequence number suffix
@@ -537,7 +537,7 @@ mod tests {
 
     #[test]
     fn test_write_to_skiplist() {
-        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
@@ -557,7 +557,7 @@ mod tests {
 
     #[test]
     fn test_savepoints() {
-        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
@@ -582,7 +582,7 @@ mod tests {
 
     #[test]
     fn test_put_write_clear_delete_put_write() {
-        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
@@ -616,7 +616,7 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
         let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
-        let engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
         let r1 = CacheRange::new(b"k01".to_vec(), b"k05".to_vec());
         let r2 = CacheRange::new(b"k05".to_vec(), b"k10".to_vec());
         let r3 = CacheRange::new(b"k10".to_vec(), b"k15".to_vec());
@@ -745,8 +745,10 @@ mod tests {
 
     #[test]
     fn test_write_batch_with_memory_controller() {
-        let config = EngineConfig::new(Duration::from_secs(600), 500, 1000);
-        let engine = RangeCacheMemoryEngine::new(config);
+        let mut config = RangeCacheEngineConfig::default();
+        config.soft_limit_threshold = Some(ReadableSize(500));
+        config.hard_limit_threshold = Some(ReadableSize(1000));
+        let engine = RangeCacheMemoryEngine::new(&config);
         let r1 = CacheRange::new(b"kk00".to_vec(), b"kk10".to_vec());
         let r2 = CacheRange::new(b"kk10".to_vec(), b"kk20".to_vec());
         let r3 = CacheRange::new(b"kk20".to_vec(), b"kk30".to_vec());

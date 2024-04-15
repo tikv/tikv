@@ -15,7 +15,8 @@ use engine_traits::{
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
 use skiplist_rs::{base::OwnedIter, SkipList};
-use slog_global::{error, info};
+use slog_global::error;
+use tikv_util::info;
 
 use crate::{
     background::{BackgroundTask, BgWorkManager, PdRangeHintService},
@@ -24,7 +25,7 @@ use crate::{
     range_manager::{LoadFailedReason, RangeCacheStatus, RangeManager},
     read::{RangeCacheIterator, RangeCacheSnapshot},
     write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
-    EngineConfig,
+    RangeCacheEngineConfig,
 };
 
 pub(crate) fn cf_to_id(cf: &str) -> usize {
@@ -205,19 +206,20 @@ pub struct RangeCacheMemoryEngine {
 }
 
 impl RangeCacheMemoryEngine {
-    pub fn new(config: EngineConfig) -> Self {
+    pub fn new(config: &RangeCacheEngineConfig) -> Self {
+        info!("init range cache memory engine";);
         let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
         let skiplist_engine = { core.read().engine().clone() };
 
         let memory_controller = Arc::new(MemoryController::new(
-            config.soft_limit_threshold,
-            config.hard_limit_threshold,
+            config.soft_limit_threshold(),
+            config.hard_limit_threshold(),
             skiplist_engine,
         ));
 
         let bg_work_manager = Arc::new(BgWorkManager::new(
             core.clone(),
-            config.gc_interval,
+            config.gc_interval.0,
             memory_controller.clone(),
         ));
 
