@@ -765,7 +765,7 @@ where
             // The local `ReadDelegate` is up to date
             Some(d) if !d.track_ver.any_new() => Some(d.clone()),
             _ => {
-                debug!("update local read delegate"; "region_id" => region_id);
+                info!("update local read delegate"; "region_id" => region_id);
                 TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.cache_miss.inc());
 
                 let (meta_len, meta_reader) = { self.store_meta.get_executor_and_len(region_id) };
@@ -775,7 +775,13 @@ where
                 self.delegates.resize(meta_len);
                 match meta_reader {
                     Some(reader) => {
+                        let region_epoch = reader.region.get_region_epoch();
                         self.delegates.insert(region_id, reader.clone());
+                        info!("insert local read delegate";
+                            "region_id" => region_id,
+                            "region_ver" => region_epoch.get_version(),
+                            "region_conf_ver" => region_epoch.get_conf_ver(),
+                        );
                         Some(reader)
                     }
                     None => None,
@@ -893,7 +899,7 @@ where
             };
             return Err(e);
         }
-        let (_, meta_reader) = { self.store_meta.get_executor_and_len(region_id) };
+        let (_, meta_reader) = self.store_meta.get_executor_and_len(region_id);
         if let Some(meta_reader) = meta_reader {
             let region_epoch_cache = delegate.region.get_region_epoch();
             let region_epoch_real = meta_reader.region.get_region_epoch();
