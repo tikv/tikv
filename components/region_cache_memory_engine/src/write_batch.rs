@@ -1,3 +1,4 @@
+use core::slice::SlicePattern;
 use std::{collections::BTreeSet, sync::Arc};
 
 use bytes::Bytes;
@@ -325,11 +326,11 @@ impl RangeCacheWriteBatchEntry {
         let handle = skiplist_engine.cf_handle(id_to_cf(self.cf));
         if self.cf == 1 && matches!(self.inner, WriteBatchEntryInternal::Deletion) {
             let seek_key = encode_seek_key(&self.key, seq);
-            let Some(entry) = handle.get(&seek_key, guard) else {
+            let Some(entry) = handle.get_with_user_key(&seek_key, guard) else {
                 debug!(
                     "write to memory failed for lock cf, not get";
                     "key" => log_wrappers::Value::key(self.key.as_slice()),
-                    "encoded_key" => log_wrappers::Value::key(&seek_key),
+                    "encoded_key" => log_wrappers::Value::key(seek_key.as_bytes()),
                 );
                 return Ok(());
             };
@@ -339,20 +340,20 @@ impl RangeCacheWriteBatchEntry {
             assert_eq!(entry.key(), iter.key());
             while iter.valid() {
                 iter.next(guard);
-                if iter.valid() && entry.key().cmp(iter.key()).is_eq() {
-                    assert!(handle.remove(iter.key(), guard));
+                if iter.valid() && entry.key().same_user_key_with(iter.key()) {
+                    handle.remove(iter.key(), guard);
                 } else {
                     break;
                 }
             }
-            assert!(handle.remove(entry.key(), guard));
-            if let Some(entry) = handle.get(&seek_key, guard) {
+            handle.remove(entry.key(), guard);
+            if let Some(entry) = handle.get_with_user_key(&seek_key, guard) {
                 error!(
                     "get after delete";
                     "key" => log_wrappers::Value::key(self.key.as_slice()),
-                    "seek_key" => log_wrappers::Value::key(&seek_key),
-                    "entry_key" => log_wrappers::Value::key(entry.key()),
-                    "entry_value" => log_wrappers::Value::key(entry.value()),
+                    "seek_key" => log_wrappers::Value::key(seek_key.as_bytes()),
+                    "entry_key" => log_wrappers::Value::key(entry.key().as_bytes()),
+                    "entry_value" => log_wrappers::Value::key(entry.value().as_bytes()),
                 );
                 unreachable!()
             }
