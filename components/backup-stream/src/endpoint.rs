@@ -806,6 +806,7 @@ where
     fn get_resolved_regions(&self, min_ts: TimeStamp) -> future![Result<ResolvedRegions>] {
         let (tx, rx) = oneshot::channel();
         let op = self.region_operator.clone();
+        let sched = self.scheduler.clone();
         async move {
             let req = ObserveOp::ResolveRegions {
                 callback: Box::new(move |rs| {
@@ -817,8 +818,15 @@ where
                 annotate!(err, "BUG: region operator channel closed.")
                     .report("when executing region op");
             }
+            let resolved = rx
+                .await
+                .map_err(|err| annotate!(err, "failed to send request for resolve regions"))?;
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            // We need to make sure all writes used for resolve regions have been recorded.
+            try_send!(sched, Task::FlushSync(tx));
             rx.await
-                .map_err(|err| annotate!(err, "failed to send request for resolve regions"))
+                .map_err(|err| annotate!(err, "failed to sync the current writings"))?;
+            Ok(resolved)
         }
     }
 
@@ -1024,6 +1032,9 @@ where
             Task::FlushWithMinTs(task, min_ts) => self.on_flush_with_min_ts(task, min_ts),
             Task::RegionCheckpointsOp(s) => self.handle_region_checkpoints_op(s),
             Task::UpdateGlobalCheckpoint(task) => self.on_update_global_checkpoint(task),
+            Task::FlushSync(tx) => {
+                let _ = tx.send(());
+            }
         }
     }
 
@@ -1247,6 +1258,8 @@ pub enum Task {
     /// Execute the flush with the calculated `min_ts`.
     /// This is an internal command only issued by the `Flush` task.
     FlushWithMinTs(String, TimeStamp),
+    /// After flush getting the progress, the final sync.
+    FlushSync(tokio::sync::oneshot::Sender<()>),
     /// The command for getting region checkpoints.
     RegionCheckpointsOp(RegionCheckpointOperation),
     /// update global-checkpoint-ts to storage.
@@ -1370,6 +1383,7 @@ impl fmt::Debug for Task {
             Self::UpdateGlobalCheckpoint(task) => {
                 f.debug_tuple("UpdateGlobalCheckpoint").field(task).finish()
             }
+            Self::FlushSync(_) => f.debug_tuple("FlushSync").finish(),
         }
     }
 }
@@ -1408,6 +1422,7 @@ impl Task {
             Task::FlushWithMinTs(..) => "flush_with_min_ts",
             Task::RegionCheckpointsOp(..) => "get_checkpoints",
             Task::UpdateGlobalCheckpoint(..) => "update_global_checkpoint",
+            Task::FlushSync(_) => "flush_sync",
         }
     }
 }
