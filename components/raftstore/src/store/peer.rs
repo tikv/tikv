@@ -5333,7 +5333,7 @@ where
         }
 
         let local_committed_index = self.get_store().commit_index();
-        if committed_index <= local_committed_index {
+        if committed_index < local_committed_index {
             warn!(
                 "stale committed index";
                 "region_id" => self.region().get_id(),
