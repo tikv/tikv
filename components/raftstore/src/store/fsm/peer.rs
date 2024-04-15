@@ -6772,13 +6772,21 @@ where
         if self.fsm.peer.busy_on_apply.is_none() {
             return;
         }
+
+        let peer_id = self.fsm.peer.peer_id();
         // No need to check the applying state if the peer is leader.
         if self.fsm.peer.is_leader() {
             self.fsm.peer.busy_on_apply = None;
+            // Clear it from recoding list and update the counter, to avoid
+            // missing it when the peer is changed to leader.
+            let mut meta = self.ctx.store_meta.lock().unwrap();
+            meta.busy_apply_peers.remove(&peer_id);
+            if let Some(count) = meta.completed_apply_peers_count.as_mut() {
+                *count += 1;
+            }
             return;
         }
 
-        let peer_id = self.fsm.peer.peer_id();
         let applied_idx = self.fsm.peer.get_store().applied_index();
         let mut last_idx = self.fsm.peer.get_store().last_index();
         // If the peer is newly added or created, no need to check the apply status.
