@@ -58,6 +58,7 @@ use raftstore::{
     coprocessor::{Config as CopConfig, RegionInfoAccessor},
     store::{CompactionGuardGeneratorFactory, Config as RaftstoreConfig, SplitConfig},
 };
+use region_cache_memory_engine::RangeCacheEngineConfig;
 use resource_control::Config as ResourceControlConfig;
 use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
@@ -3409,9 +3410,6 @@ pub struct TikvConfig {
     #[online_config(skip)]
     pub memory_usage_high_water: f64,
 
-    // Memory quota used for in-memory engine. 0 means not enable it.
-    pub region_cache_memory_limit: ReadableSize,
-
     #[online_config(submodule)]
     pub log: LogConfig,
 
@@ -3492,6 +3490,9 @@ pub struct TikvConfig {
 
     #[online_config(submodule)]
     pub resource_control: ResourceControlConfig,
+
+    #[online_config(submodule)]
+    pub range_cache_engine: RangeCacheEngineConfig,
 }
 
 impl Default for TikvConfig {
@@ -3511,7 +3512,6 @@ impl Default for TikvConfig {
             abort_on_panic: false,
             memory_usage_limit: None,
             memory_usage_high_water: 0.9,
-            region_cache_memory_limit: ReadableSize::mb(0),
             log: LogConfig::default(),
             memory: MemoryConfig::default(),
             quota: QuotaConfig::default(),
@@ -3538,6 +3538,7 @@ impl Default for TikvConfig {
             log_backup: BackupStreamConfig::default(),
             causal_ts: CausalTsConfig::default(),
             resource_control: ResourceControlConfig::default(),
+            range_cache_engine: RangeCacheEngineConfig::default(),
         }
     }
 }
@@ -3904,6 +3905,7 @@ impl TikvConfig {
         self.resource_metering.validate()?;
         self.quota.validate()?;
         self.causal_ts.validate()?;
+        self.range_cache_engine.validate()?;
 
         // Validate feature TTL with Titan configuration.
         if matches!(self.rocksdb.titan.enabled, Some(true)) && self.storage.enable_ttl {
@@ -6906,6 +6908,7 @@ mod tests {
         cfg.raftdb.titan.max_background_gc = default_cfg.raftdb.titan.max_background_gc;
         cfg.backup.num_threads = default_cfg.backup.num_threads;
         cfg.log_backup.num_threads = default_cfg.log_backup.num_threads;
+        cfg.raft_store.cmd_batch_concurrent_ready_max_count = 1;
 
         // There is another set of config values that we can't directly compare:
         // When the default values are `None`, but are then resolved to `Some(_)` later

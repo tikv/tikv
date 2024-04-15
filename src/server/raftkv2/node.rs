@@ -26,7 +26,7 @@ use tikv_util::{
     worker::{LazyWorker, Scheduler, Worker},
 };
 
-use crate::server::{node::init_store, Result};
+use crate::server::{raft_server::init_store, Result};
 
 // TODO: we will rename another better name like RaftStore later.
 pub struct NodeV2<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {

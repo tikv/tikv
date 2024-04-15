@@ -179,19 +179,6 @@ pub fn decode_key(encoded_key: &[u8]) -> InternalKey<'_> {
     }
 }
 
-#[inline]
-pub fn extract_user_key_and_suffix_u64(encoded_key: &[u8]) -> (&[u8], u64) {
-    assert!(encoded_key.len() >= ENC_KEY_SEQ_LENGTH);
-    let seq_offset = encoded_key.len() - ENC_KEY_SEQ_LENGTH;
-    let num = u64::from_be_bytes(
-        encoded_key[seq_offset..seq_offset + ENC_KEY_SEQ_LENGTH]
-            .try_into()
-            .unwrap(),
-    );
-
-    (&encoded_key[..seq_offset], num)
-}
-
 /// Format for an internal key (used by the skip list.)
 /// ```
 /// contents:      key of size n     | value type | sequence number shifted by 8 bits
