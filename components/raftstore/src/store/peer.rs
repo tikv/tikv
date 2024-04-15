@@ -5354,8 +5354,7 @@ where
     }
 
     pub fn needs_update_last_leader_committed_idx(&self) -> bool {
-        self.busy_on_apply.is_some()
-            && self.last_leader_committed_idx.is_none()
+        self.busy_on_apply.is_some() && self.last_leader_committed_idx.is_none()
     }
 }
 

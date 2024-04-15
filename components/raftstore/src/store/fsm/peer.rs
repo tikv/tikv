@@ -2672,10 +2672,14 @@ where
         }
 
         // If this peer is restarting, it may lose some logs, so it should update
-        // the `last_leader_committed_idx` with the commited index of the first `MsgAppend``
-        // message it received from leader.
-        if self.fsm.peer.needs_update_last_leader_committed_idx() && MessageType::MsgAppend == msg_type {
-            self.fsm.peer.update_last_leader_committed_idx(msg.get_message().get_commit());
+        // the `last_leader_committed_idx` with the commited index of the first
+        // `MsgAppend`` message it received from leader.
+        if self.fsm.peer.needs_update_last_leader_committed_idx()
+            && MessageType::MsgAppend == msg_type
+        {
+            self.fsm
+                .peer
+                .update_last_leader_committed_idx(msg.get_message().get_commit());
         }
 
         if msg.has_extra_msg() {
@@ -6753,7 +6757,9 @@ where
             // Ingore. Normally, the leader should not receive this message.
             return;
         }
-        self.fsm.peer.update_last_leader_committed_idx(committed_index);
+        self.fsm
+            .peer
+            .update_last_leader_committed_idx(committed_index);
     }
 
     /// Check whether the peer is pending on applying raft logs.
