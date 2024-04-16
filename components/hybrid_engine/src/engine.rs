@@ -75,13 +75,15 @@ where
     fn snapshot(&self, ctx: Option<SnapshotContext>) -> Self::Snapshot {
         let disk_snap = self.disk_engine.snapshot(ctx.clone());
         let region_cache_snap = if let Some(ctx) = ctx {
-            SNAPSHOT_TYPE_COUNT_STATIC.range_cache_engine.inc();
             match self.region_cache_engine.snapshot(
                 ctx.range.unwrap(),
                 ctx.read_ts,
                 disk_snap.sequence_number(),
             ) {
-                Ok(snap) => Some(snap),
+                Ok(snap) => {
+                    SNAPSHOT_TYPE_COUNT_STATIC.range_cache_engine.inc();
+                    Some(snap)
+                }
                 Err(FailedReason::TooOldRead) => {
                     RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
                         .too_old_read
