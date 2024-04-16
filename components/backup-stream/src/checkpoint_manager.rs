@@ -203,6 +203,7 @@ impl CheckpointManager {
     /// The final update is somehow needed because when calling `freeze`, we may
     /// not get the latest checkpoint.
     pub fn update_and_notify(&mut self, rrs: Vec<ResolveResult>) {
+        info!("Notifying the flush result."; "length" => rrs.len());
         for rr in rrs {
             Self::update_ts(&mut self.checkpoint_ts, rr.region, rr.checkpoint);
         }
@@ -235,7 +236,11 @@ impl CheckpointManager {
     /// flushing data. So the current progress should be "freezed" when we are
     /// about to flush.
     pub fn freeze(&mut self) {
-        info!("log backup checkpoint manager freezing."; "resolved_ts_len" => %self.resolved_ts.len(), "resolved_ts" => ?self.get_resolved_ts());
+        info!("log backup checkpoint manager freezing.";
+            "resolved_ts_len" => %self.resolved_ts.len(),
+            "resolved_ts" => ?self.get_resolved_ts(),
+            "frozen" => self.checkpoint_ts.len(),
+        );
         self.checkpoint_ts = std::mem::take(&mut self.resolved_ts);
     }
 
