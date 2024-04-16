@@ -5,13 +5,14 @@ use crossbeam::epoch;
 use engine_traits::{
     CacheRange, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
-use tikv_util::{box_err, config::ReadableSize, error, info, warn};
+use tikv_util::{box_err, config::ReadableSize, error, info, time::Instant, warn};
 
 use crate::{
     background::BackgroundTask,
     engine::{cf_to_id, SkiplistEngine},
     keys::{encode_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
     memory_controller::{MemoryController, MemoryUsage},
+    metrics::WRITE_DURATION_HISTOGRAM,
     range_manager::{RangeCacheStatus, RangeManager},
     RangeCacheMemoryEngine,
 };
@@ -109,6 +110,7 @@ impl RangeCacheWriteBatch {
             std::mem::take(&mut self.pending_range_in_loading_buffer),
         );
         let guard = &epoch::pin();
+        let start = Instant::now();
         // Some entries whose ranges may be marked as evicted above, but it does not
         // matter, they will be deleted later.
         let res = entries_to_write
@@ -117,6 +119,8 @@ impl RangeCacheWriteBatch {
             .try_for_each(|e| {
                 e.write_to_memory(seq, &engine, self.memory_controller.clone(), guard)
             });
+        let duration = start.saturating_elapsed_secs();
+        WRITE_DURATION_HISTOGRAM.observe(duration);
 
         if !ranges_to_delete.is_empty() {
             if let Err(e) = self
@@ -149,12 +153,11 @@ impl RangeCacheWriteBatch {
                 continue;
             }
 
-            if let Some((range, _, canceled)) = range_manager
+            if let Some((.., canceled)) = range_manager
                 .pending_ranges_loading_data
                 .iter_mut()
                 .find(|(range, ..)| range.contains_range(&r))
             {
-                range_manager.ranges_being_deleted.insert(range.clone());
                 *canceled = true;
             }
         }
@@ -228,8 +231,8 @@ impl RangeCacheWriteBatch {
                 self.memory_usage_reach_hard_limit = true;
                 warn!(
                     "the memory usage of in-memory engine reaches to hard limit";
+                    "range" => ?self.current_range.as_ref().unwrap(),
                     "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
-                    "memory_acquire(MB)" => ReadableSize(mem_required as u64).as_mb_f64(),
                 );
                 self.schedule_memory_check();
                 return false;
@@ -518,7 +521,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use crate::RangeCacheEngineConfig;
+    use crate::{background::flush_epoch, RangeCacheEngineConfig};
 
     // We should not use skiplist.get directly as we only cares keys without
     // sequence number suffix
@@ -712,17 +715,6 @@ mod tests {
                 .iter()
                 .for_each(|e| assert!(range.contains_key(&e.key)))
         });
-    }
-
-    // use to make cleanup opeartion in epoch-based memory management be performed
-    fn flush_epoch() {
-        {
-            let guard = &epoch::pin();
-            guard.flush();
-        }
-        for _ in 0..258 {
-            let _ = &epoch::pin();
-        }
     }
 
     fn wait_evict_done(engine: &RangeCacheMemoryEngine) {
