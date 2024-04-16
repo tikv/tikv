@@ -39,7 +39,7 @@ use tikv_util::{
 use tokio::{
     io::Result as TokioResult,
     runtime::{Handle, Runtime},
-    sync::{mpsc::Sender, oneshot, Semaphore},
+    sync::{mpsc::Sender, Semaphore},
 };
 use tokio_stream::StreamExt;
 use tracing::instrument;
@@ -808,41 +808,11 @@ where
         }
     }
 
-    fn get_resolved_regions(&self, min_ts: TimeStamp) -> future![Result<ResolvedRegions>] {
-        let (tx, rx) = oneshot::channel();
-        let op = self.region_operator.clone();
-        let sched = self.scheduler.clone();
-        async move {
-            let req = ObserveOp::ResolveRegions {
-                callback: Box::new(move |rs| {
-                    let _ = tx.send(rs);
-                }),
-                min_ts,
-            };
-            if let Err(err) = op.send(req).await {
-                annotate!(err, "BUG: region operator channel closed.")
-                    .report("when executing region op");
-            }
-            let resolved = rx
-                .await
-                .map_err(|err| annotate!(err, "failed to send request for resolve regions"))?;
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            // Because the resolve call is asynchonrous, we need to make sure new writes
-            // used for resolve regions have been recorded.
-            try_send!(sched, Task::FlushSync(tx));
-            rx.await
-                .map_err(|err| annotate!(err, "failed to sync the current writings"))?;
-            Ok(resolved)
-        }
-    }
-
-    fn do_flush(&self, task: String, min_ts: TimeStamp) -> future![Result<()>] {
-        let get_rts = self.get_resolved_regions(min_ts);
+    fn do_flush(&self, task: String, mut resolved: ResolvedRegions) -> future![Result<()>] {
         let router = self.range_router.clone();
         let store_id = self.store_id;
         let mut flush_ob = self.flush_observer();
         async move {
-            let mut resolved = get_rts.await?;
             let mut new_rts = resolved.global_checkpoint();
             fail::fail_point!("delay_on_flush");
             flush_ob.before(resolved.take_resolve_result()).await;
@@ -871,26 +841,40 @@ where
             // This should only happen in testing, it would be to unwrap...
             let _ = info.unwrap().set_flushing_status_cas(false, true);
             let mts = self.prepare_min_ts().await;
-            try_send!(self.scheduler, Task::FlushWithMinTs(task, mts));
+            let sched = self.scheduler.clone();
+            self.region_op(ObserveOp::ResolveRegions {
+                callback: Box::new(move |res| {
+                    try_send!(sched, Task::ExecFlush(task, res));
+                }),
+                min_ts: mts,
+            })
+            .await;
         });
     }
 
     pub fn on_flush(&self, task: String) {
         self.pool.block_on(async move {
             let mts = self.prepare_min_ts().await;
+            let sched = self.scheduler.clone();
             info!("min_ts prepared for flushing"; "min_ts" => %mts);
-            try_send!(self.scheduler, Task::FlushWithMinTs(task, mts));
+            self.region_op(ObserveOp::ResolveRegions {
+                callback: Box::new(move |res| {
+                    try_send!(sched, Task::ExecFlush(task, res));
+                }),
+                min_ts: mts,
+            })
+            .await
         })
     }
 
-    fn on_flush_with_min_ts(&mut self, task: String, min_ts: TimeStamp) {
+    fn on_exec_flush(&mut self, task: String, resolved: ResolvedRegions) {
         self.checkpoint_mgr.freeze();
         self.pool
-            .spawn(root!("flush"; self.do_flush(task, min_ts).map(|r| {
+            .spawn(root!("flush"; self.do_flush(task, resolved).map(|r| {
                 if let Err(err) = r {
                     err.report("during updating flush status")
                 }
-            }); min_ts = min_ts.into_inner()));
+            })));
     }
 
     fn update_global_checkpoint(&self, task: String) -> future![()] {
@@ -1035,12 +1019,9 @@ where
                 }
             }
             Task::MarkFailover(t) => self.failover_time = Some(t),
-            Task::FlushWithMinTs(task, min_ts) => self.on_flush_with_min_ts(task, min_ts),
+            Task::ExecFlush(task, min_ts) => self.on_exec_flush(task, min_ts),
             Task::RegionCheckpointsOp(s) => self.handle_region_checkpoints_op(s),
             Task::UpdateGlobalCheckpoint(task) => self.on_update_global_checkpoint(task),
-            Task::FlushSync(tx) => {
-                let _ = tx.send(());
-            }
         }
     }
 
@@ -1261,11 +1242,9 @@ pub enum Task {
     MarkFailover(Instant),
     /// Flush the task with name.
     Flush(String),
-    /// Execute the flush with the calculated `min_ts`.
+    /// Execute the flush with the calculated resolved result.
     /// This is an internal command only issued by the `Flush` task.
-    FlushWithMinTs(String, TimeStamp),
-    /// After flush getting the progress, the final sync.
-    FlushSync(tokio::sync::oneshot::Sender<()>),
+    ExecFlush(String, ResolvedRegions),
     /// The command for getting region checkpoints.
     RegionCheckpointsOp(RegionCheckpointOperation),
     /// update global-checkpoint-ts to storage.
@@ -1380,16 +1359,15 @@ impl fmt::Debug for Task {
                 .debug_tuple("MarkFailover")
                 .field(&format_args!("{:?} ago", t.saturating_elapsed()))
                 .finish(),
-            Self::FlushWithMinTs(arg0, arg1) => f
-                .debug_tuple("FlushWithMinTs")
+            Self::ExecFlush(arg0, arg1) => f
+                .debug_tuple("ExecFlush")
                 .field(arg0)
-                .field(arg1)
+                .field(&arg1.global_checkpoint())
                 .finish(),
             Self::RegionCheckpointsOp(s) => f.debug_tuple("GetRegionCheckpoints").field(s).finish(),
             Self::UpdateGlobalCheckpoint(task) => {
                 f.debug_tuple("UpdateGlobalCheckpoint").field(task).finish()
             }
-            Self::FlushSync(_) => f.debug_tuple("FlushSync").finish(),
         }
     }
 }
@@ -1425,10 +1403,9 @@ impl Task {
             Task::FatalError(..) => "fatal_error",
             Task::Sync(..) => "sync",
             Task::MarkFailover(_) => "mark_failover",
-            Task::FlushWithMinTs(..) => "flush_with_min_ts",
+            Task::ExecFlush(..) => "flush_with_min_ts",
             Task::RegionCheckpointsOp(..) => "get_checkpoints",
             Task::UpdateGlobalCheckpoint(..) => "update_global_checkpoint",
-            Task::FlushSync(_) => "flush_sync",
         }
     }
 }
