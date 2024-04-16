@@ -2010,9 +2010,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
                     if !snapshot.ext().is_max_ts_synced() {
                         return Err(Error::from(txn::Error::from(
+<<<<<<< HEAD
                             TxnError::MaxTimestampNotSynced {
+=======
+                            TxnErrorInner::RawKvMaxTimestampNotSynced {
+>>>>>>> 2332f9f8c6 (tests,storage: Fix flaky test_rawkv::test_leader_transfer (#16827))
                                 region_id: ctx.get_region_id(),
-                                start_ts: TimeStamp::zero(),
                             },
                         )));
                     }
