@@ -3,6 +3,7 @@
 use std::{
     collections::BTreeMap,
     fmt::{self, Debug},
+    ops::Bound,
     result,
     sync::Arc,
 };
@@ -60,6 +61,19 @@ impl SkiplistHandle {
         guard: &'g Guard,
     ) -> Option<Entry<'a, 'g, InternalBytes, InternalBytes>> {
         self.0.get(key, guard)
+    }
+
+    pub fn get_with_user_key<'a: 'g, 'g>(
+        &'a self,
+        key: &InternalBytes,
+        guard: &'g Guard,
+    ) -> Option<Entry<'a, 'g, InternalBytes, InternalBytes>> {
+        let n = self.0.lower_bound(Bound::Included(key), guard)?;
+        if n.key().same_user_key_with(key) {
+            Some(n)
+        } else {
+            None
+        }
     }
 
     pub fn insert(&self, key: InternalBytes, value: InternalBytes, guard: &Guard) {
