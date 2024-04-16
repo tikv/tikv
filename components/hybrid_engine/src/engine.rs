@@ -75,13 +75,15 @@ where
     fn snapshot(&self, ctx: Option<SnapshotContext>) -> Self::Snapshot {
         let disk_snap = self.disk_engine.snapshot(ctx.clone());
         let region_cache_snap = if let Some(ctx) = ctx {
-            SNAPSHOT_TYPE_COUNT_STATIC.range_cache_engine.inc();
             match self.region_cache_engine.snapshot(
                 ctx.range.unwrap(),
                 ctx.read_ts,
                 disk_snap.sequence_number(),
             ) {
-                Ok(snap) => Some(snap),
+                Ok(snap) => {
+                    SNAPSHOT_TYPE_COUNT_STATIC.range_cache_engine.inc();
+                    Some(snap)
+                }
                 Err(FailedReason::TooOldRead) => {
                     RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
                         .too_old_read
@@ -153,7 +155,7 @@ where
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
         if let Some(range) = self.region_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(&range);
+            batch.prepare_for_range(range);
         }
         batch.put(key, value)?;
         let _ = batch.write()?;
@@ -163,7 +165,7 @@ where
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
         if let Some(range) = self.region_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(&range);
+            batch.prepare_for_range(range);
         }
         batch.put_cf(cf, key, value)?;
         let _ = batch.write()?;
@@ -173,7 +175,7 @@ where
     fn delete(&self, key: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
         if let Some(range) = self.region_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(&range);
+            batch.prepare_for_range(range);
         }
         batch.delete(key)?;
         let _ = batch.write()?;
@@ -183,7 +185,7 @@ where
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
         if let Some(range) = self.region_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(&range);
+            batch.prepare_for_range(range);
         }
         batch.delete_cf(cf, key)?;
         let _ = batch.write()?;
@@ -193,7 +195,7 @@ where
     fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
         if let Some(range) = self.region_cache_engine.get_range_for_key(begin_key) {
-            batch.prepare_for_range(&range);
+            batch.prepare_for_range(range);
         }
         batch.delete_range(begin_key, end_key)?;
         let _ = batch.write()?;
@@ -203,7 +205,7 @@ where
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
         if let Some(range) = self.region_cache_engine.get_range_for_key(begin_key) {
-            batch.prepare_for_range(&range);
+            batch.prepare_for_range(range);
         }
         batch.delete_range_cf(cf, begin_key, end_key)?;
         let _ = batch.write()?;
@@ -213,11 +215,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
 
     use engine_rocks::util::new_engine;
     use engine_traits::{CacheRange, KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
-    use region_cache_memory_engine::RangeCacheMemoryEngine;
+    use region_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheMemoryEngine};
     use tempfile::Builder;
 
     use crate::HybridEngine;
@@ -230,7 +231,7 @@ mod tests {
             &[CF_DEFAULT, CF_LOCK, CF_WRITE],
         )
         .unwrap();
-        let memory_engine = RangeCacheMemoryEngine::new(Duration::from_secs(100));
+        let memory_engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
         let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
         memory_engine.new_range(range.clone());
         {
