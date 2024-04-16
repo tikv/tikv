@@ -18,7 +18,9 @@ use std::{
 
 use batch_system::{BasicMailbox, Fsm};
 use collections::{HashMap, HashSet};
-use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT};
+use engine_traits::{
+    Engines, KvEngine, RaftEngine, RaftLogBatch, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT,
+};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use futures::channel::mpsc::UnboundedSender;
@@ -729,9 +731,15 @@ where
     #[inline]
     fn on_loop_finished(&mut self) {
         let ready_concurrency = self.ctx.cfg.cmd_batch_concurrent_ready_max_count;
+        // Allow to propose pending commands iff all ongoing commands are persisted or
+        // committed. this is trying to batch proposes as many as possible to
+        // minimize the cpu overhead.
         let should_propose = self.ctx.sync_write_worker.is_some()
             || ready_concurrency == 0
-            || self.fsm.peer.unpersisted_ready_len() < ready_concurrency;
+            || self.fsm.peer.unpersisted_ready_len() < ready_concurrency
+            // Allow to propose if all ongoing proposals are committed to avoiding io jitter block
+            // new commands.
+            || !self.fsm.peer.has_uncommitted_log();
         let force_delay_fp = || {
             fail_point!(
                 "force_delay_propose_batch_raft_command",
@@ -1059,6 +1067,7 @@ where
         region_local_state.set_region(self.region().clone());
         self_report.set_region_state(region_local_state);
         self_report.set_is_force_leader(self.fsm.peer.force_leader.is_some());
+        self_report.set_applied_index(self.fsm.peer.get_store().applied_index());
         match self.fsm.peer.get_store().entries(
             self.fsm.peer.raft_group.store().commit_index() + 1,
             self.fsm.peer.get_store().last_index() + 1,
@@ -1573,6 +1582,9 @@ where
             Some(ForceLeaderState::WaitTicks { .. }) => {
                 self.fsm.peer.force_leader = None;
             }
+            Some(ForceLeaderState::WaitForceCompact { .. }) => {
+                self.fsm.peer.force_leader = None;
+            }
             None => {}
         }
 
@@ -1644,6 +1656,31 @@ where
                 GroupState::Chaos
             });
             self.fsm.has_ready = true;
+            return;
+        }
+
+        // The applied index is ahead of raft last index, that means some raft logs are
+        // missing. schedule a UnsafeForceCompact task to let ApplyFsm advance
+        // the committed index and compact index to the applied index so raft
+        // and apply state are compatible with each other. This can happen when
+        // feature "apply unpersisted raft log" is enable(by setting config
+        // `raftstore.max-apply-unpersisted-log-limit` > 0).
+        if self.fsm.peer.raft_group.raft.r.raft_log.last_index()
+            < self.fsm.peer.raft_group.raft.r.raft_log.applied
+        {
+            self.ctx.apply_router.schedule_task(
+                self.region_id(),
+                ApplyTask::UnsafeForceCompact {
+                    region_id: self.region_id(),
+                    compact_index: self.fsm.peer.raft_group.raft.r.raft_log.applied,
+                    term: self.fsm.peer.raft_group.raft.r.term,
+                },
+            );
+
+            self.fsm.peer.force_leader = Some(ForceLeaderState::WaitForceCompact {
+                syncer,
+                failed_stores,
+            });
             return;
         }
 
@@ -1864,6 +1901,7 @@ where
                 return;
             }
             Some(ForceLeaderState::PreForceLeader { failed_stores, .. }) => failed_stores,
+            Some(ForceLeaderState::WaitForceCompact { .. }) => return,
             Some(ForceLeaderState::WaitTicks { .. }) => unreachable!(),
         };
 
@@ -2402,6 +2440,9 @@ where
                     self.register_pd_heartbeat_tick();
                     self.register_split_region_check_tick();
                     self.retry_pending_prepare_merge(applied_index);
+                    self.fsm
+                        .peer
+                        .maybe_update_apply_unpersisted_log_state(applied_index);
                 }
             }
             ApplyTaskRes::Destroy {
@@ -3749,6 +3790,9 @@ where
         fail_point!("destroy_peer");
         // Mark itself as pending_remove
         self.fsm.peer.pending_remove = true;
+
+        // try to decrease the RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE count.
+        self.fsm.peer.disable_apply_unpersisted_log(0);
 
         fail_point!("destroy_peer_after_pending_move", |_| { true });
 
@@ -5238,6 +5282,54 @@ where
                         self.register_pull_voter_replicated_index_tick();
                     }
                 }
+                ExecResult::UnsafeForceCompact { apply_state } => {
+                    let last_index = apply_state.get_truncated_state().index;
+                    let first_index = self.fsm.peer.raft_group.raft.r.raft_log.first_index();
+
+                    let raft_engine = self.fsm.peer.get_store().raft_engine();
+                    let mut batch = raft_engine.log_batch(2);
+                    raft_engine
+                        .gc(self.region_id(), first_index, last_index, &mut batch)
+                        .unwrap();
+                    batch
+                        .put_raft_state(self.region_id(), self.fsm.peer.get_store().raft_state())
+                        .unwrap();
+                    // FIXME: generally, we should avoiding do io tasks on the raft thread, but make
+                    // it async make the overall procss more complex.
+                    // Considering unsafe recovery happens very rarely, thus the potential
+                    // performance impact is acceptable in this scenario.
+                    raft_engine.consume(&mut batch, true).unwrap();
+
+                    {
+                        let peer_store = self.fsm.peer.mut_store();
+                        peer_store.set_apply_state(apply_state);
+                        peer_store.clear_entry_cache_warmup_state();
+                        peer_store.compact_entry_cache(last_index + 1);
+                        peer_store.raft_state_mut().mut_hard_state().commit = last_index;
+                        peer_store.raft_state_mut().last_index = last_index;
+                    }
+                    assert!(
+                        self.fsm
+                            .peer
+                            .raft_group
+                            .raft
+                            .raft_log
+                            .unstable
+                            .entries
+                            .is_empty()
+                    );
+                    self.fsm.peer.raft_group.raft.raft_log.unstable.offset = last_index + 1;
+                    self.fsm.peer.raft_group.raft.raft_log.committed = last_index;
+                    self.fsm.peer.raft_group.raft.raft_log.persisted = last_index;
+
+                    if let Some(ForceLeaderState::WaitForceCompact {
+                        syncer,
+                        failed_stores,
+                    }) = &self.fsm.peer.force_leader
+                    {
+                        self.on_enter_pre_force_leader(syncer.clone(), failed_stores.clone());
+                    }
+                }
             }
         }
 
@@ -5776,6 +5868,10 @@ where
         } else {
             replicated_idx
         };
+        // Avoid compacting unpersisted raft logs when persist is far behind apply.
+        if compact_idx > self.fsm.peer.raft_group.raft.raft_log.persisted {
+            compact_idx = self.fsm.peer.raft_group.raft.raft_log.persisted;
+        }
         assert!(compact_idx >= first_idx);
         // Have no idea why subtract 1 here, but original code did this by magic.
         compact_idx -= 1;

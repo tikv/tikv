@@ -75,13 +75,15 @@ where
     fn snapshot(&self, ctx: Option<SnapshotContext>) -> Self::Snapshot {
         let disk_snap = self.disk_engine.snapshot(ctx.clone());
         let region_cache_snap = if let Some(ctx) = ctx {
-            SNAPSHOT_TYPE_COUNT_STATIC.range_cache_engine.inc();
             match self.region_cache_engine.snapshot(
                 ctx.range.unwrap(),
                 ctx.read_ts,
                 disk_snap.sequence_number(),
             ) {
-                Ok(snap) => Some(snap),
+                Ok(snap) => {
+                    SNAPSHOT_TYPE_COUNT_STATIC.range_cache_engine.inc();
+                    Some(snap)
+                }
                 Err(FailedReason::TooOldRead) => {
                     RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
                         .too_old_read
@@ -216,7 +218,7 @@ mod tests {
 
     use engine_rocks::util::new_engine;
     use engine_traits::{CacheRange, KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
-    use region_cache_memory_engine::{EngineConfig, RangeCacheMemoryEngine};
+    use region_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheMemoryEngine};
     use tempfile::Builder;
 
     use crate::HybridEngine;
@@ -229,7 +231,7 @@ mod tests {
             &[CF_DEFAULT, CF_LOCK, CF_WRITE],
         )
         .unwrap();
-        let memory_engine = RangeCacheMemoryEngine::new(EngineConfig::config_for_test());
+        let memory_engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
         let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
         memory_engine.new_range(range.clone());
         {

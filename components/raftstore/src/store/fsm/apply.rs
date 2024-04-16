@@ -318,6 +318,9 @@ pub enum ExecResult<S> {
     // and try to compact pending gc. If false, raftstore does not do any additional
     // processing.
     HasPendingCompactCmd(bool),
+    UnsafeForceCompact {
+        apply_state: RaftApplyState,
+    },
 }
 
 /// The possible returned value when applying logs.
@@ -1565,7 +1568,8 @@ where
                 | ExecResult::DeleteRange { .. }
                 | ExecResult::IngestSst { .. }
                 | ExecResult::TransferLeader { .. }
-                | ExecResult::HasPendingCompactCmd(..) => {}
+                | ExecResult::HasPendingCompactCmd(..)
+                | ExecResult::UnsafeForceCompact { .. } => {}
                 ExecResult::SplitRegion { ref derived, .. } => {
                     self.region = derived.clone();
                     self.metrics.size_diff_hint = 0;
@@ -1824,6 +1828,7 @@ where
     EK: KvEngine,
 {
     fn handle_put(&mut self, ctx: &mut ApplyContext<EK>, req: &Request) -> Result<()> {
+        fail::fail_point!("on_handle_put");
         PEER_WRITE_CMD_COUNTER.put.inc();
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
         // region key range has no data prefix, so we must use origin key to check.
@@ -3780,10 +3785,18 @@ where
         voter_replicated_index: u64,
         voter_replicated_term: u64,
     },
+    UnsafeForceCompact {
+        region_id: u64,
+        term: u64,
+        compact_index: u64,
+    },
 }
 
 impl<EK: KvEngine> ResourceMetered for Msg<EK> {
     fn consume_resource(&self, resource_ctl: &Arc<ResourceController>) -> Option<String> {
+        if !resource_ctl.is_customized() {
+            return None;
+        }
         match self {
             Msg::Apply { apply, .. } => {
                 let mut dominant_group = "".to_owned();
@@ -3865,6 +3878,17 @@ where
                     f,
                     "[region {}] check compact, voter_replicated_index: {}, voter_replicated_term: {}",
                     region_id, voter_replicated_index, voter_replicated_term
+                )
+            }
+            Msg::UnsafeForceCompact {
+                region_id,
+                term,
+                compact_index,
+            } => {
+                write!(
+                    f,
+                    "[region {}] force compact, term: {} compact_index: {}",
+                    region_id, term, compact_index
                 )
             }
         }
@@ -4361,6 +4385,30 @@ where
         }
     }
 
+    // Force advance compact index to the current applied_index. This function
+    // should only be used in the online unsafe recovery scenario to recover the
+    // raft state when applied index is larger than raft last index.
+    fn unsafe_force_compact(&mut self, ctx: &mut ApplyContext<EK>, term: u64, compact_index: u64) {
+        assert_eq!(self.delegate.apply_state.applied_index, compact_index);
+        if self.delegate.apply_state.get_truncated_state().index < compact_index {
+            assert!(self.delegate.apply_state.get_truncated_state().term <= term);
+
+            info!("unsafe force compact"; "apply_state" => ?&self.delegate.apply_state, "term" => term,
+                "compact_index" => compact_index);
+
+            self.delegate.apply_state.mut_truncated_state().index = compact_index;
+        }
+
+        if ctx.timer.is_none() {
+            ctx.timer = Some(Instant::now_coarse());
+        }
+        let mut result = VecDeque::with_capacity(1);
+        result.push_back(ExecResult::UnsafeForceCompact {
+            apply_state: self.delegate.apply_state.clone(),
+        });
+        ctx.finish_for(&mut self.delegate, result);
+    }
+
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext<EK>, msgs: &mut Vec<Msg<EK>>) {
         let mut drainer = msgs.drain(..);
         let mut batch_apply = None;
@@ -4446,6 +4494,13 @@ where
                         voter_replicated_index,
                         voter_replicated_term,
                     );
+                }
+                Msg::UnsafeForceCompact {
+                    term,
+                    compact_index,
+                    ..
+                } => {
+                    self.unsafe_force_compact(apply_ctx, term, compact_index);
                 }
             }
         }
@@ -4872,6 +4927,11 @@ where
                             "region_id" => region_id);
                     return;
                 }
+                Msg::UnsafeForceCompact { region_id, .. } => {
+                    info!("skip force compact because target region is not found";
+                            "region_id" => region_id);
+                    return;
+                }
             },
             Either::Left(Err(TrySendError::Full(_))) => unreachable!(),
         };
@@ -5011,6 +5071,7 @@ mod memtrace {
                 Msg::Validate(..) => 0,
                 Msg::Recover(..) => 0,
                 Msg::CheckCompact { .. } => 0,
+                Msg::UnsafeForceCompact { .. } => 0,
             }
         }
     }
