@@ -630,6 +630,7 @@ impl Runnable for BackgroundRunner {
 
                         let start = Instant::now();
                         if !snapshot_load() {
+                            // snapshot load failed, we should clear the dirty data
                             core.delete_ranges(&[range.clone()]);
                             core.on_snapshot_load_canceled(range);
                             continue;
@@ -896,7 +897,7 @@ pub mod tests {
         let guard = &epoch::pin();
         let _ = mem_controller.acquire(RangeCacheWriteBatchEntry::calc_put_entry_size(
             &raw_write_k,
-            &val.as_bytes(),
+            val.as_bytes(),
         ));
         write_cf.insert(write_k, val, guard);
 
@@ -910,7 +911,7 @@ pub mod tests {
             val.set_memory_controller(mem_controller.clone());
             let _ = mem_controller.acquire(RangeCacheWriteBatchEntry::calc_put_entry_size(
                 &raw_default_k,
-                &val.as_bytes(),
+                val.as_bytes(),
             ));
             default_cf.insert(default_k, val, guard);
         }
@@ -934,7 +935,7 @@ pub mod tests {
         let guard = &epoch::pin();
         let _ = mem_controller.acquire(RangeCacheWriteBatchEntry::calc_put_entry_size(
             &raw_write_k,
-            &val.as_bytes(),
+            val.as_bytes(),
         ));
         write_cf.insert(write_k, val, guard);
     }
@@ -957,7 +958,7 @@ pub mod tests {
         let guard = &epoch::pin();
         let _ = mem_controller.acquire(RangeCacheWriteBatchEntry::calc_put_entry_size(
             &raw_write_k,
-            &val.as_bytes(),
+            val.as_bytes(),
         ));
         write_cf.insert(write_k, val, guard);
     }
