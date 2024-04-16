@@ -360,4 +360,43 @@ mod all {
             std::iter::once(enc_key.as_encoded().as_slice()),
         );
     }
+
+    #[test]
+    fn commit_during_flushing() {
+        let mut suite = SuiteBuilder::new_named("commit_during_flushing")
+            .nodes(1)
+            .build();
+        suite.must_register_task(1, "commit_during_flushing");
+        let key = make_record_key(1, 1);
+        let start_ts = suite.tso();
+        suite.must_kv_prewrite(
+            1,
+            vec![mutation(
+                key.clone(),
+                Suite::PROMISED_SHORT_VALUE.to_owned(),
+            )],
+            key.clone(),
+            start_ts,
+        );
+        fail::cfg("subscription_manager_resolve_regions", "pause").unwrap();
+        let commit_ts = suite.tso();
+        suite.force_flush_files("commit_during_flushing");
+        suite.sync();
+        suite.sync();
+        fail::cfg("log_backup_batch_delay", "return(2000)").unwrap();
+        suite.just_commit_a_key(key.clone(), start_ts, commit_ts);
+        fail::remove("subscription_manager_resolve_regions");
+        suite.wait_for_flush();
+        let enc_key = Key::from_raw(&key).append_ts(commit_ts);
+        assert!(
+            suite.global_checkpoint() > commit_ts.into_inner(),
+            "{} {:?}",
+            suite.global_checkpoint(),
+            commit_ts
+        );
+        suite.check_for_write_records(
+            suite.flushed_files.path(),
+            std::iter::once(enc_key.as_encoded().as_slice()),
+        )
+    }
 }

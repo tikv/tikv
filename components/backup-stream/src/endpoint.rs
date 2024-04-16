@@ -522,6 +522,11 @@ where
             let total_size = kvs.size();
             metrics::HEAP_MEMORY
                 .add(total_size as _);
+            #[cfg(feature = "failpoints")]
+            tokio::time::sleep(Duration::from_millis((|| {
+                fail::fail_point!("log_backup_batch_delay", |val| val.and_then( |x| x.parse::<u64>().ok()).unwrap_or(0));
+                0
+            })())).await;
             utils::handle_on_event_result(&sched, router.on_events(kvs).await);
             metrics::HEAP_MEMORY
                 .sub(total_size as _);
