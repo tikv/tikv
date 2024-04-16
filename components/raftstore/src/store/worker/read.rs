@@ -1296,7 +1296,7 @@ mod tests {
     use hybrid_engine::{HybridEngine, HybridEngineSnapshot};
     use keys::DATA_PREFIX;
     use kvproto::{metapb::RegionEpoch, raft_cmdpb::*};
-    use region_cache_memory_engine::RangeCacheMemoryEngine;
+    use region_cache_memory_engine::{EngineConfig, RangeCacheMemoryEngine};
     use tempfile::{Builder, TempDir};
     use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
     use time::Duration;
@@ -2470,7 +2470,7 @@ mod tests {
         path: &str,
         store_id: u64,
         store_meta: Arc<Mutex<StoreMeta>>,
-        gc_interval: std::time::Duration,
+        engine_config: EngineConfig,
     ) -> (
         TempDir,
         LocalReader<HybridTestEnigne, HybridEngineMockRouter>,
@@ -2481,7 +2481,7 @@ mod tests {
         let disk_engine =
             engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
         let (ch, rx, _) = HybridEngineMockRouter::new();
-        let memory_engine = RangeCacheMemoryEngine::new(gc_interval);
+        let memory_engine = RangeCacheMemoryEngine::new(engine_config);
         let engine = HybridEngine::new(disk_engine, memory_engine.clone());
         let mut reader = LocalReader::new(
             engine.clone(),
@@ -2520,7 +2520,7 @@ mod tests {
             "test-local-hybrid-engine-reader",
             store_id,
             store_meta.clone(),
-            std::time::Duration::from_secs(1000),
+            EngineConfig::config_for_test(),
         );
 
         // set up region so we can acquire snapshot from local reader
@@ -2540,7 +2540,6 @@ mod tests {
         memory_engine.new_range(range.clone());
         {
             let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_range_readable(&range, true);
             core.mut_range_manager().set_safe_point(&range, 1);
         }
         let kv = (&[DATA_PREFIX, b'a'], b"b");
@@ -2588,11 +2587,10 @@ mod tests {
 
         {
             let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_range_readable(&range, true);
             core.mut_range_manager().set_safe_point(&range, 10);
         }
 
-        let mut snap_ctx = SnapshotContext {
+        let snap_ctx = SnapshotContext {
             read_ts: 15,
             range: None,
         };
@@ -2600,19 +2598,5 @@ mod tests {
         let s = get_snapshot(Some(snap_ctx.clone()), &mut reader, cmd.clone(), &rx);
         assert!(s.region_cache_snapshot_available());
         assert_eq!(s.get_value(kv.0).unwrap().unwrap(), kv.1);
-
-        {
-            let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_range_readable(&range, false);
-        }
-        let s = get_snapshot(Some(snap_ctx.clone()), &mut reader, cmd.clone(), &rx);
-        assert!(!s.region_cache_snapshot_available());
-
-        {
-            let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_range_readable(&range, true);
-        }
-        snap_ctx.read_ts = 5;
-        assert!(!s.region_cache_snapshot_available());
     }
 }

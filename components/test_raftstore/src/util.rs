@@ -4,7 +4,10 @@ use std::{
     fmt::Write,
     path::Path,
     str::FromStr,
-    sync::{mpsc, Arc, Mutex},
+    sync::{
+        mpsc::{self},
+        Arc, Mutex,
+    },
     thread,
     time::Duration,
 };

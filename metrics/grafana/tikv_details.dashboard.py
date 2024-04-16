@@ -4032,6 +4032,58 @@ def CoprocessorDetail() -> RowPanel:
     return layout.row_panel
 
 
+def RangeCacheMemoryEngine() -> RowPanel:
+    layout = Layout(title="Range Cache Memory Engine")
+    layout.row(
+        [
+            graph_panel(
+                title="Snapshot Type Count",
+                description="Count of each snapshot type",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_snapshot_type_count",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Snapshot Failed Reason",
+                description="Reasons for why rance cache snapshot is not acquired",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_range_cache_snapshot_acquire_failed_reason_count",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="GC Filter",
+                description="Rang cache engine garbage collection information",
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_range_cache_memory_engine_gc_filtered",
+                            by_labels=["type"],
+                        ),
+                        legend_format="{{type}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    return layout.row_panel
+
+
 def Threads() -> RowPanel:
     layout = Layout(title="Threads")
     layout.row(
@@ -8779,6 +8831,7 @@ dashboard = Dashboard(
         RaftEngine(),
         RocksDB(),
         Titan(),
+        RangeCacheMemoryEngine(),
         # Scheduler and Read Pools
         FlowControl(),
         Scheduler(),

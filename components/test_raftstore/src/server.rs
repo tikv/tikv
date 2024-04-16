@@ -888,7 +888,9 @@ pub fn new_server_cluster_with_hybrid_engine(
 ) -> Cluster<HybridEngineImpl, ServerCluster<HybridEngineImpl>> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(ServerCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
+    let mut cluster = Cluster::new(id, count, sim, pd_client, ApiVersion::V1);
+    cluster.range_cache_engine_enabled_with_whole_range(true);
+    cluster
 }
 
 pub fn new_server_cluster_with_api_ver(
