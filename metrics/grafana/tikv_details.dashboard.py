@@ -2166,6 +2166,46 @@ def RaftProcess() -> RowPanel:
             ),
         ]
     )
+    layout.row(
+        [
+            graph_panel(
+                title="Enable apply unpersisted log regoin count",
+                description="The number of regions that enable apply unpersisted raft log",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_raft_enable_unpersisted_apply_regions",
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Apply ahead of persistence raft log count",
+                description="The number of raft logs between apply and persisted index",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_raft_apply_ahead_of_persist",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}-99%",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            1,
+                            "tikv_raft_apply_ahead_of_persist",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}-max",
+                    ),
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
