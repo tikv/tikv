@@ -3819,6 +3819,9 @@ where
         // Mark itself as pending_remove
         self.fsm.peer.pending_remove = true;
 
+        // try to decrease the RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE count.
+        self.fsm.peer.disable_apply_unpersisted_log(0);
+
         fail_point!("destroy_peer_after_pending_move", |_| { true });
 
         if let Some(reason) = self.maybe_delay_destroy() {

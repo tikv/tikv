@@ -787,8 +787,8 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 20).unwrap()
     ).unwrap();
 
-    pub static ref RAFT_DISABLE_UNPERSISTED_APPLY_GAUGE: IntGauge = register_int_gauge!(
-        "tikv_raft_disable_unpersisted_apply",
+    pub static ref RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_raft_enable_unpersisted_apply_regions",
         "The number of regions that disable apply unpersisted raft log."
     ).unwrap();
 

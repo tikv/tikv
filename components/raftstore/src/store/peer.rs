@@ -970,7 +970,9 @@ where
             pre_vote: cfg.prevote,
             max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
             priority: if peer.is_witness { -1 } else { 0 },
-            max_apply_unpersisted_log_limit: cfg.max_apply_unpersisted_log_limit,
+            // always disable applying unpersisted log at initialization,
+            // will enable it after applying to the current last_index.
+            max_apply_unpersisted_log_limit: 0,
             ..Default::default()
         };
 
@@ -1195,7 +1197,7 @@ where
                     .max_apply_unpersisted_log_limit
                     == 0
             {
-                RAFT_DISABLE_UNPERSISTED_APPLY_GAUGE.dec();
+                RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE.inc();
             }
             self.raft_group
                 .raft
@@ -1205,7 +1207,7 @@ where
     }
 
     #[inline]
-    fn disable_apply_unpersisted_log(&mut self, min_enable_index: u64) {
+    pub fn disable_apply_unpersisted_log(&mut self, min_enable_index: u64) {
         self.min_safe_index_for_unpersisted_apply =
             std::cmp::max(self.min_safe_index_for_unpersisted_apply, min_enable_index);
         if self
@@ -1216,7 +1218,7 @@ where
             > 0
         {
             self.raft_group.raft.set_max_apply_unpersisted_log_limit(0);
-            RAFT_DISABLE_UNPERSISTED_APPLY_GAUGE.inc();
+            RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE.dec();
         }
     }
 
@@ -5791,7 +5793,7 @@ where
             != self.max_apply_unpersisted_log_limit
         {
             if self.max_apply_unpersisted_log_limit == 0 {
-                self.raft_group.raft.set_max_apply_unpersisted_log_limit(0);
+                self.disable_apply_unpersisted_log(0);
             } else if self.is_leader() {
                 // Currently only enable unpersisted apply on leader.
                 self.maybe_update_apply_unpersisted_log_state(
