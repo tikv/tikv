@@ -5,13 +5,14 @@ use crossbeam::epoch;
 use engine_traits::{
     CacheRange, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
-use tikv_util::{box_err, config::ReadableSize, error, info, warn};
+use tikv_util::{box_err, config::ReadableSize, error, info, time::Instant, warn};
 
 use crate::{
     background::BackgroundTask,
     engine::{cf_to_id, SkiplistEngine},
     keys::{encode_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
     memory_controller::{MemoryController, MemoryUsage},
+    metrics::WRITE_DURATION_HISTOGRAM,
     range_manager::{RangeCacheStatus, RangeManager},
     RangeCacheMemoryEngine,
 };
@@ -109,6 +110,7 @@ impl RangeCacheWriteBatch {
             std::mem::take(&mut self.pending_range_in_loading_buffer),
         );
         let guard = &epoch::pin();
+        let start = Instant::now();
         // Some entries whose ranges may be marked as evicted above, but it does not
         // matter, they will be deleted later.
         let res = entries_to_write
@@ -117,6 +119,8 @@ impl RangeCacheWriteBatch {
             .try_for_each(|e| {
                 e.write_to_memory(seq, &engine, self.memory_controller.clone(), guard)
             });
+        let duration = start.saturating_elapsed_secs();
+        WRITE_DURATION_HISTOGRAM.observe(duration);
 
         if !ranges_to_delete.is_empty() {
             if let Err(e) = self
