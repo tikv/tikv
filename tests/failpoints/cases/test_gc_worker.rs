@@ -114,7 +114,7 @@ fn test_orphan_versions_from_compaction_filter() {
             .start_auto_gc(
                 AutoGcConfig::new(MockSafePointProvider, MockRegionInfoProvider, 1),
                 Arc::new(AtomicU64::new(0)),
-                None,
+                Arc::new(None),
             )
             .unwrap();
     }

@@ -848,7 +848,7 @@ where
         let keyspace_level_gc_cache=Arc::new(Default::default());
         keyspace_meta::start_periodic_keyspace_level_gc_watcher(self.pd_client.clone(), &self.core.background_worker, Arc::clone(&keyspace_level_gc_cache));
 
-        let keyspace_meta_service = Arc::new(KeyspaceMetaService::new(Arc::clone(&safe_point),Arc::clone(&keyspace_level_gc_cache),Arc::clone(&keyspace_id_meta_map)));
+        let keyspace_meta_service = Arc::new(Some(KeyspaceMetaService::new(Arc::clone(&keyspace_level_gc_cache),Arc::clone(&keyspace_id_meta_map))));
 
         let observer = match self.core.config.coprocessor.consistency_check_method {
             ConsistencyCheckMethod::Mvcc => BoxConsistencyCheckObserver::new(
@@ -907,7 +907,7 @@ where
         gc_worker
             .start(store_id)
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
-        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point, Some(Arc::clone(&keyspace_meta_service))) {
+        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point, Arc::clone(&keyspace_meta_service)) {
             fatal!("failed to start auto_gc on storage, error: {}", e);
         }
 
