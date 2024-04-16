@@ -5,13 +5,14 @@ use crossbeam::epoch;
 use engine_traits::{
     CacheRange, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
-use tikv_util::{box_err, config::ReadableSize, error, warn};
+use tikv_util::{box_err, config::ReadableSize, error, info, time::Instant, warn};
 
 use crate::{
     background::BackgroundTask,
     engine::{cf_to_id, SkiplistEngine},
     keys::{encode_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
     memory_controller::{MemoryController, MemoryUsage},
+    metrics::WRITE_DURATION_HISTOGRAM,
     range_manager::{RangeCacheStatus, RangeManager},
     RangeCacheMemoryEngine,
 };
@@ -109,6 +110,7 @@ impl RangeCacheWriteBatch {
             std::mem::take(&mut self.pending_range_in_loading_buffer),
         );
         let guard = &epoch::pin();
+        let start = Instant::now();
         // Some entries whose ranges may be marked as evicted above, but it does not
         // matter, they will be deleted later.
         let res = entries_to_write
@@ -117,6 +119,8 @@ impl RangeCacheWriteBatch {
             .try_for_each(|e| {
                 e.write_to_memory(seq, &engine, self.memory_controller.clone(), guard)
             });
+        let duration = start.saturating_elapsed_secs();
+        WRITE_DURATION_HISTOGRAM.observe(duration);
 
         if !ranges_to_delete.is_empty() {
             if let Err(e) = self
@@ -181,8 +185,13 @@ impl RangeCacheWriteBatch {
 
         let memory_expect = entry_size();
         if !self.memory_acquire(memory_expect) {
-            self.ranges_to_evict
-                .insert(self.current_range.clone().unwrap());
+            let range = self.current_range.clone().unwrap();
+            info!(
+                "memory acquire failed due to reaching hard limit";
+                "range_start" => log_wrappers::Value(&range.start),
+                "range_end" => log_wrappers::Value(&range.end),
+            );
+            self.ranges_to_evict.insert(range);
             return;
         }
 
@@ -229,12 +238,7 @@ impl RangeCacheWriteBatch {
                 self.schedule_memory_check();
                 return false;
             }
-            MemoryUsage::SoftLimitReached(n) => {
-                warn!(
-                    "the memory usage of in-memory engine reaches to soft limit";
-                    "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
-                    "memory_acquire(MB)" => ReadableSize(mem_required as u64).as_mb_f64(),
-                );
+            MemoryUsage::SoftLimitReached(_) => {
                 self.schedule_memory_check();
             }
             _ => {}

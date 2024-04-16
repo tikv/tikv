@@ -15,8 +15,10 @@ use parking_lot::RwLock;
 use pd_client::RpcClient;
 use slog_global::{error, info, warn};
 use tikv_util::{
+    config::ReadableSize,
     keybuilder::KeyBuilder,
-    worker::{Builder, Runnable, ScheduleError, Scheduler, Worker},
+    time::Instant,
+    worker::{Builder, Runnable, RunnableWithTimer, ScheduleError, Scheduler, Worker},
 };
 use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 use yatp::Remote;
@@ -25,7 +27,10 @@ use crate::{
     engine::{RangeCacheMemoryEngineCore, SkiplistHandle},
     keys::{decode_key, encode_key, encoding_for_filter, InternalBytes, InternalKey, ValueType},
     memory_controller::MemoryController,
-    metrics::GC_FILTERED_STATIC,
+    metrics::{
+        GC_FILTERED_STATIC, RANGE_CACHE_MEMORY_USAGE, RANGE_GC_TIME_HISTOGRAM,
+        RANGE_LOAD_TIME_HISTOGRAM,
+    },
     range_manager::LoadFailedReason,
     region_label::{
         LabelRule, RegionLabelAddedCb, RegionLabelRulesManager, RegionLabelServiceBuilder,
@@ -187,7 +192,7 @@ impl BgWorkManager {
     ) -> Self {
         let worker = Worker::new("range-cache-background-worker");
         let runner = BackgroundRunner::new(core.clone(), memory_controller);
-        let scheduler = worker.start("range-cache-engine-background", runner);
+        let scheduler = worker.start_with_timer("range-cache-engine-background", runner);
 
         let scheduler_clone = scheduler.clone();
 
@@ -314,6 +319,7 @@ impl BackgroundRunnerCore {
             (core.engine(), safe_point)
         };
 
+        let start = Instant::now();
         let write_cf_handle = skiplist_engine.cf_handle(CF_WRITE);
         let default_cf_handle = skiplist_engine.cf_handle(CF_DEFAULT);
         let mut filter = Filter::new(safe_ts, default_cf_handle, write_cf_handle.clone());
@@ -333,9 +339,12 @@ impl BackgroundRunnerCore {
             iter.next(guard);
         }
 
+        let duration = start.saturating_elapsed();
+        RANGE_GC_TIME_HISTOGRAM.observe(duration.as_secs_f64());
         info!(
             "range gc complete";
             "range" => ?range,
+            "gc_duration" => ?duration,
             "total_version" => filter.metrics.total,
             "filtered_version" => filter.metrics.filtered,
             "below_safe_point_unique_keys" => filter.metrics.unique_key,
@@ -364,7 +373,8 @@ impl BackgroundRunnerCore {
             .cloned()
     }
 
-    fn on_snapshot_load_finished(&mut self, range: CacheRange) {
+    // if `false` is returned, the load is canceled
+    fn on_snapshot_load_finished(&mut self, range: CacheRange) -> bool {
         fail::fail_point!("on_snapshot_load_finished");
         loop {
             // Consume the cached write batch after the snapshot is acquired.
@@ -386,7 +396,7 @@ impl BackgroundRunnerCore {
                 drop(core);
                 // Clear the range directly here to quickly free the memory.
                 self.delete_ranges(&[r]);
-                return;
+                return false;
             }
 
             if core.has_cached_write_batch(&range) {
@@ -414,6 +424,7 @@ impl BackgroundRunnerCore {
                 break;
             }
         }
+        true
     }
 
     fn on_snapshot_load_canceled(&mut self, range: CacheRange) {
@@ -539,6 +550,7 @@ impl Runnable for BackgroundRunner {
                             core.on_snapshot_load_canceled(range);
                             continue;
                         }
+                        let start = Instant::now();
                         for &cf in DATA_CFS {
                             let guard = &epoch::pin();
                             let handle = skiplist_engine.cf_handle(cf);
@@ -564,13 +576,27 @@ impl Runnable for BackgroundRunner {
                                 }
                             }
                         }
-                        core.on_snapshot_load_finished(range);
+                        if core.on_snapshot_load_finished(range.clone()) {
+                            let duration = start.saturating_elapsed();
+                            RANGE_LOAD_TIME_HISTOGRAM.observe(duration.as_secs_f64());
+                            info!(
+                                "Loading range finished";
+                                "range" => ?range,
+                                "duration(sec)" => ?duration,
+                            );
+                        } else {
+                            info!("Loading range canceled";"range" => ?range);
+                        }
                     }
                 };
                 self.range_load_remote.spawn(f);
             }
             BackgroundTask::MemoryCheckAndEvict => {
                 let mem_usage = self.core.memory_controller.mem_usage();
+                info!(
+                    "start memory usage check and evict";
+                    "mem_usage(MB)" => ReadableSize(mem_usage as u64).as_mb()
+                );
                 if mem_usage > self.core.memory_controller.soft_limit_threshold() {
                     // todo: select ranges to evict
                 }
@@ -582,6 +608,17 @@ impl Runnable for BackgroundRunner {
                 self.delete_range_remote.spawn(f);
             }
         }
+    }
+}
+
+impl RunnableWithTimer for BackgroundRunner {
+    fn on_timeout(&mut self) {
+        let mem_usage = self.core.memory_controller.mem_usage();
+        RANGE_CACHE_MEMORY_USAGE.set(mem_usage as i64);
+    }
+
+    fn get_interval(&self) -> Duration {
+        Duration::from_secs(10)
     }
 }
 
