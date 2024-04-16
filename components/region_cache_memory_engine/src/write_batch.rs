@@ -153,12 +153,11 @@ impl RangeCacheWriteBatch {
                 continue;
             }
 
-            if let Some((range, _, canceled)) = range_manager
+            if let Some((.., canceled)) = range_manager
                 .pending_ranges_loading_data
                 .iter_mut()
                 .find(|(range, ..)| range.contains_range(&r))
             {
-                range_manager.ranges_being_deleted.insert(range.clone());
                 *canceled = true;
             }
         }
@@ -232,8 +231,8 @@ impl RangeCacheWriteBatch {
                 self.memory_usage_reach_hard_limit = true;
                 warn!(
                     "the memory usage of in-memory engine reaches to hard limit";
+                    "range" => ?self.current_range.as_ref().unwrap(),
                     "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
-                    "memory_acquire(MB)" => ReadableSize(mem_required as u64).as_mb_f64(),
                 );
                 self.schedule_memory_check();
                 return false;
@@ -522,7 +521,7 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
-    use crate::RangeCacheEngineConfig;
+    use crate::{background::flush_epoch, RangeCacheEngineConfig};
 
     // We should not use skiplist.get directly as we only cares keys without
     // sequence number suffix
@@ -716,17 +715,6 @@ mod tests {
                 .iter()
                 .for_each(|e| assert!(range.contains_key(&e.key)))
         });
-    }
-
-    // use to make cleanup opeartion in epoch-based memory management be performed
-    fn flush_epoch() {
-        {
-            let guard = &epoch::pin();
-            guard.flush();
-        }
-        for _ in 0..258 {
-            let _ = &epoch::pin();
-        }
     }
 
     fn wait_evict_done(engine: &RangeCacheMemoryEngine) {
