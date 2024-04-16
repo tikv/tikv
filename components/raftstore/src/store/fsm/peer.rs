@@ -768,9 +768,6 @@ where
             }
             self.fsm.batch_req_builder.request = Some(cmd);
         }
-        // Update the state whether the peer is pending on applying raft
-        // logs if necesssary.
-        self.on_check_peer_complete_apply_logs();
     }
 
     /// Flushes all pending raft commands for immediate execution.
@@ -2242,6 +2239,10 @@ where
             self.fsm.peer.mut_store().flush_entry_cache_metrics();
             return;
         }
+
+        // Update the state whether the peer is pending on applying raft
+        // logs if necesssary.
+        self.on_check_peer_complete_apply_logs();
 
         // If the peer is busy on apply and missing the last leader committed index,
         // it should propose a read index to check whether its lag is behind the leader.
@@ -3901,6 +3902,9 @@ where
 
         // Ensure this peer is removed in the pending apply list.
         meta.busy_apply_peers.remove(&self.fsm.peer_id());
+        if let Some(count) = meta.completed_apply_peers_count.as_mut() {
+            *count += 1;
+        }
 
         if meta.atomic_snap_regions.contains_key(&self.region_id()) {
             drop(meta);
