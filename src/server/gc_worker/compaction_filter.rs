@@ -391,7 +391,11 @@ impl WriteCompactionFilter {
         keyspace_meta_service: Arc<Option<KeyspaceMetaService>>,
     ) -> Self {
         // Safe point must have been initialized.
-        assert!(safe_point > 0);
+        let mut is_all_ks_not_init_gc_sp = true;
+        if let Some(ref ks_meta_service) = *keyspace_meta_service {
+            is_all_ks_not_init_gc_sp = ks_meta_service.is_all_keyspace_level_gc_have_not_inited()
+        }
+        assert!(safe_point > 0 || !is_all_ks_not_init_gc_sp);
         debug!("gc in compaction filter"; "safe_point" => safe_point);
 
         let write_batch = DeleteBatch::new(&engine);
@@ -481,11 +485,11 @@ impl WriteCompactionFilter {
     ) -> Result<CompactionFilterDecision, String> {
         let (mvcc_key_prefix, commit_ts) = split_ts(key)?;
 
-        info!("[test-yjy]do_filter key:{:?},self.safe_point:{}", key, self.safe_point);
+        info!("[test-yjy]do_filter key:{:?},self.safe_point:{}", keys::origin_key(key), self.safe_point);
         // `keyspace_meta_service` will be None when run Api V1 ut.
         if let Some(keyspace_meta_service)= self.keyspace_meta_service.as_ref() {
-            self.safe_point=keyspace_meta_service.get_gc_safe_point_by_key(self.safe_point, key);
-            info!("[test-yjy]get_gc_safe_point_by_key key:{:?},self.safe_point:{}", key, self.safe_point);
+            self.safe_point=keyspace_meta_service.get_gc_safe_point_by_key(self.safe_point, keys::origin_key(key));
+            info!("[test-yjy]get_gc_safe_point_by_key key:{:?},self.safe_point:{}", keys::origin_key(key), self.safe_point);
         }
 
         if commit_ts > self.safe_point || value_type != CompactionFilterValueType::Value {

@@ -359,10 +359,12 @@ impl KeyspaceMetaService {
         let keyspace_id_opt=ApiV2::get_u32_keyspace_id_by_key(key);
         match keyspace_id_opt {
             Some(keyspace_id) => {
+                info!("[test-yjy]get_gc_safe_point_by_key keyspace_id:{}",keyspace_id);
                 // API V2 with keyspace.
                 let keyspace_gc_safe_point_opt=self.keyspace_level_gc_map.get(&keyspace_id);
                 match keyspace_gc_safe_point_opt {
                     Some(keyspace_id_2_safe_point) => {
+                        info!("[test-yjy]get_gc_safe_point_by_key can get gc safepoint:{}",*keyspace_id_2_safe_point.value());
                         // If we can get the keyspace level GC safe point of this keyspace id,
                         // return this keyspace level GC safe point directly.
                         *keyspace_id_2_safe_point.value()
@@ -372,11 +374,13 @@ impl KeyspaceMetaService {
                         let is_keyspace_use_global_gc_safe_point = self.is_keyspace_use_global_gc_safe_point(keyspace_id);
                         if is_keyspace_use_global_gc_safe_point {
                             // keyspace don't enable keyspace level gc.
+                            info!("[test-yjy]get_gc_safe_point_by_key none 01");
                             safe_point
                         } else {
                             // If keyspace meta enable keyspace level gc,
                             // but can not get keyspace meta, or can not get keyspace level gc safe point here,
                             // may be gc safe point of this keyspace hasn't been calculated yet.
+                            info!("[test-yjy]get_gc_safe_point_by_key none 02");
                             0
                         }
                     }
@@ -384,6 +388,7 @@ impl KeyspaceMetaService {
             },
             None => {
                 // Api V1
+                info!("[test-yjy]get_gc_safe_point_by_key none 03");
                 safe_point
             },
         }
@@ -391,10 +396,12 @@ impl KeyspaceMetaService {
 
     pub fn is_all_keyspace_level_gc_have_not_inited(&self) -> bool {
         for kv in self.keyspace_level_gc_map.iter() {
-            if *kv.value() != 0 {
+            if *kv.value() > 0 {
+                info!("[test-yjy]is_all_keyspace_level_gc_have_not_inited return false");
                 return false;
             }
         }
+        info!("[test-yjy]is_all_keyspace_level_gc_have_not_inited return true");
         true
     }
 
@@ -406,6 +413,7 @@ impl KeyspaceMetaService {
                 max_ks_gc_sp=ks_gc;
             }
         }
+        info!("[test-yjy]get_max_ts_of_all_ks_gc_safe_point return :{}",max_ks_gc_sp);
         max_ks_gc_sp
     }
 }
