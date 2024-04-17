@@ -774,7 +774,7 @@ mod test {
         }
 
         let pool = spawn_executors(NoopInitialScan, 1);
-        let wg = CallbackWaitGroup::new();
+        let wg = FutureWaitGroup::new();
         fail::cfg("execute_scan_command_sleep_100", "return").unwrap();
         for _ in 0..100 {
             let wg = wg.clone();
