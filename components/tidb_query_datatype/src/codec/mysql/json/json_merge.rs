@@ -49,7 +49,7 @@ impl Json {
     // See `mergePatchBinaryJSON()` in TiDB `pkg/types/json_binary_functions.go`
     pub fn merge_patch(target: JsonRef<'_>, patch: JsonRef<'_>) -> Result<Json> {
         if patch.get_type() != JsonType::Object {
-            return Ok(patch.to_owned());
+            Ok(patch.to_owned())
         } else {
             let mut key_val_map: BTreeMap<String, Json> = BTreeMap::new();
             if target.get_type() == JsonType::Object {
@@ -84,7 +84,7 @@ impl Json {
                     }
                 }
             }
-            return Json::from_object(key_val_map);
+            Json::from_object(key_val_map)
         }
     }
 }
