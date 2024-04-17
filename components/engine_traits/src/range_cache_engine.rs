@@ -1,6 +1,10 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, fmt::Debug, result};
+use std::{
+    cmp,
+    fmt::{self, Debug},
+    result,
+};
 
 use keys::{enc_end_key, enc_start_key};
 use kvproto::metapb;
@@ -49,10 +53,19 @@ pub trait RangeCacheEngine:
 /// as it continues to evolve to handle eviction, using stats.
 pub trait RangeHintService: Send + Sync {}
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CacheRange {
     pub start: Vec<u8>,
     pub end: Vec<u8>,
+}
+
+impl Debug for CacheRange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CacheRange")
+            .field("range_start", &log_wrappers::Value(&self.start))
+            .field("value", &log_wrappers::Value(&self.end))
+            .finish()
+    }
 }
 
 impl CacheRange {
