@@ -44,6 +44,49 @@ impl Json {
         }
         merge_binary_array(&result)
     }
+
+    #[allow(clippy::comparison_chain)]
+    // See `mergePatchBinaryJSON()` in TiDB `pkg/types/json_binary_functions.go`
+    pub fn merge_patch(target: JsonRef<'_>, patch: JsonRef<'_>) -> Result<Json> {
+        if patch.get_type() != JsonType::Object {
+            Ok(patch.to_owned())
+        } else {
+            let mut key_val_map: BTreeMap<String, Json> = BTreeMap::new();
+            if target.get_type() == JsonType::Object {
+                let elem_count = target.get_elem_count();
+                for i in 0..elem_count {
+                    let key = target.object_get_key(i);
+                    let val = target.object_get_val(i)?;
+                    let key = String::from_utf8(key.to_owned()).map_err(Error::from)?;
+                    key_val_map.insert(key, val.to_owned());
+                }
+            }
+
+            let mut tmp: Json;
+            let elem_count = patch.get_elem_count();
+            for i in 0..elem_count {
+                let key = patch.object_get_key(i);
+                let val = patch.object_get_val(i)?;
+                let k = String::from_utf8(key.to_owned()).map_err(Error::from)?;
+
+                if val.get_type() == JsonType::Literal && val.get_literal().is_none() {
+                    if key_val_map.contains_key(&k) {
+                        key_val_map.remove(&k);
+                    }
+                } else {
+                    let target_kv = key_val_map.get(&k);
+                    if let Some(target_kv) = target_kv {
+                        tmp = Self::merge_patch(target_kv.as_ref(), val)?;
+                        key_val_map.insert(k, tmp);
+                    } else {
+                        tmp = Self::merge_patch(Json::from_bool(false).unwrap().as_ref(), val)?;
+                        key_val_map.insert(k, tmp);
+                    }
+                }
+            }
+            Json::from_object(key_val_map)
+        }
+    }
 }
 
 enum MergeUnit<'a> {
