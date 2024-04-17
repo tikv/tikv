@@ -2987,6 +2987,8 @@ where
             // It's v2 only message and ignore does no harm.
             ExtraMessageType::MsgGcPeerResponse | ExtraMessageType::MsgFlushMemtable => (),
             ExtraMessageType::MsgRefreshBuckets => self.on_msg_refresh_buckets(msg),
+            ExtraMessageType::MsgFetchCommittedIndexRequest
+            | ExtraMessageType::MsgFetchCommittedIndexResponse => unreachable!(),
         }
     }
 
