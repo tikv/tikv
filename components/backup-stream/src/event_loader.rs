@@ -34,6 +34,10 @@ use crate::{
 };
 
 const MAX_GET_SNAPSHOT_RETRY: usize = 5;
+/// The threshold of slowing down initial scanning.
+/// While the memory usage reaches this ratio, we will consume the result of
+/// initial scanning more frequently.
+const SLOW_DOWN_INITIAL_SCAN_RATIO: f64 = 0.7;
 
 struct ScanResult {
     more: bool,
@@ -45,6 +49,7 @@ struct ScanResult {
 pub struct EventLoader<S: Snapshot> {
     scanner: DeltaScanner<S>,
     // pooling the memory.
+    region: Region,
     entry_batch: Vec<TxnEntry>,
 }
 
@@ -74,6 +79,7 @@ impl<S: Snapshot> EventLoader<S> {
 
         Ok(Self {
             scanner,
+            region: region.clone(),
             entry_batch: Vec::with_capacity(ENTRY_BATCH_SIZE),
         })
     }
@@ -108,7 +114,9 @@ impl<S: Snapshot> EventLoader<S> {
                 Some(entry) => {
                     let size = entry.size();
                     batch.push(entry);
-                    if memory_quota.alloc(size).is_err() {
+                    if memory_quota.alloc(size).is_err()
+                        || memory_quota.source().used_ratio() > SLOW_DOWN_INITIAL_SCAN_RATIO
+                    {
                         return Ok(self.out_of_memory());
                     }
                 }
@@ -149,7 +157,11 @@ impl<S: Snapshot> EventLoader<S> {
                     })?;
                     debug!("meet lock during initial scanning."; "key" => %utils::redact(&lock_at), "ts" => %lock.ts);
                     if utils::should_track_lock(&lock) {
-                        resolver.track_phase_one_lock(lock.ts, lock_at);
+                        resolver
+                            .track_phase_one_lock(lock.ts, lock_at)
+                            .map_err(|_| Error::OutOfQuota {
+                                region_id: self.region.id,
+                            })?;
                     }
                 }
                 TxnEntry::Commit { default, write, .. } => {
@@ -438,9 +450,12 @@ where
         start_ts: TimeStamp,
         snap: impl Snapshot,
     ) -> Result<Statistics> {
+<<<<<<< HEAD
         let tr = self.tracing.clone();
         let region_id = region.get_id();
 
+=======
+>>>>>>> 66301257e4 (log_backup: stop task while memory out of quota (#16008))
         let mut join_handles = Vec::with_capacity(8);
 
         let permit = self
@@ -459,6 +474,7 @@ where
             .await
             .map_err(|err| annotate!(err, "tokio runtime failed to join consuming threads"))?;
 
+<<<<<<< HEAD
         Self::with_resolver_by(&tr, region, &handle, |r| {
             r.phase_one_done();
             Ok(())
@@ -468,6 +484,8 @@ where
             region_id
         ))?;
 
+=======
+>>>>>>> 66301257e4 (log_backup: stop task while memory out of quota (#16008))
         Ok(stats)
     }
 }
