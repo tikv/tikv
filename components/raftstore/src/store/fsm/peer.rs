@@ -107,8 +107,9 @@ use crate::{
             ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
         },
         CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
-        ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback, ReadTask,
-        SignificantMsg, SnapKey, StoreMsg, WriteCallback, RAFT_INIT_LOG_INDEX,
+        ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback,
+        ReadIndexContext, ReadTask, SignificantMsg, SnapKey, StoreMsg, WriteCallback,
+        RAFT_INIT_LOG_INDEX,
     },
     Error, Result,
 };
@@ -2674,13 +2675,18 @@ where
 
         // If this peer is restarting, it may lose some logs, so it should update
         // the `last_leader_committed_idx` with the commited index of the first
-        // `MsgAppend`` message it received from leader.
+        // `MsgAppend`` message or the committed index in `MsgReadIndexResp` it received
+        // from leader.
         if self.fsm.peer.needs_update_last_leader_committed_idx()
-            && MessageType::MsgAppend == msg_type
+            && (MessageType::MsgAppend == msg_type || MessageType::MsgReadIndexResp == msg_type)
         {
+            let committed_index = cmp::max(
+                msg.get_message().get_commit(), // from MsgAppend
+                msg.get_message().get_index(),  // from MsgReadIndexResp
+            );
             self.fsm
                 .peer
-                .update_last_leader_committed_idx(msg.get_message().get_commit());
+                .update_last_leader_committed_idx(committed_index);
         }
 
         if msg.has_extra_msg() {
@@ -2724,7 +2730,7 @@ where
         } else {
             // This can be a message that sent when it's still a follower. Nevertheleast,
             // it's meaningless to continue to handle the request as callbacks are cleared.
-            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
+            if msg_type == MessageType::MsgReadIndex
                 && self.fsm.peer.is_leader()
                 && (msg.get_message().get_from() == raft::INVALID_ID
                     || msg.get_message().get_from() == self.fsm.peer_id())
@@ -3006,12 +3012,9 @@ where
                     self.on_gc_peer_request(msg);
                 }
             }
-            ExtraMessageType::MsgFetchCommittedIndexRequest => {
-                self.on_fetch_committed_index_request(msg.get_from_peer());
-            }
-            ExtraMessageType::MsgFetchCommittedIndexResponse => {
-                self.on_fetch_committed_index_response(msg.get_extra_msg().get_index());
-            }
+            // TODO: the following messages will be reverted when https://github.com/pingcap/kvproto/pull/1243 is merged.
+            ExtraMessageType::MsgFetchCommittedIndexRequest
+            | ExtraMessageType::MsgFetchCommittedIndexResponse => todo!(),
             // It's v2 only message and ignore does no harm.
             ExtraMessageType::MsgGcPeerResponse | ExtraMessageType::MsgFlushMemtable => (),
             ExtraMessageType::MsgRefreshBuckets => self.on_msg_refresh_buckets(msg),
@@ -6717,56 +6720,32 @@ where
         if !self.fsm.peer.needs_update_last_leader_committed_idx() {
             return;
         }
-        // As the leader of the region will have the accurate and latest commit index,
-        // we can sync it to the peer who wanna it.
+        // Construct a MsgReadIndex message and send it to the leader to
+        // fetch the latest committed index of this raft group.
         let leader_id = self.fsm.peer.leader_id();
-        let leader = self.fsm.peer.get_peer_from_cache(leader_id);
-        if let Some(leader) = leader {
-            let mut msg = ExtraMessage::default();
-            msg.set_type(ExtraMessageType::MsgFetchCommittedIndexRequest);
-            msg.set_index(RAFT_INIT_LOG_INDEX);
-            self.fsm
-                .peer
-                .send_extra_message(msg, &mut self.ctx.trans, &leader);
-            debug!(
-                "try to fetch committed index from leader";
-                "region_id" => self.region_id(),
-                "peer_id" => self.fsm.peer_id()
-            );
-        }
-    }
-
-    /// Handle the request of the committed index from the peer.
-    fn on_fetch_committed_index_request(&mut self, from: &metapb::Peer) {
-        if !self.fsm.peer.is_leader() {
-            // Ingore. Normally, the follower should not receive this message.
+        if leader_id == raft::INVALID_ID {
+            // The leader is unknown, so we can't fetch the committed index.
             return;
         }
-        let committed_index = self.fsm.peer.get_store().commit_index();
-        let mut resp = ExtraMessage::default();
-        resp.set_type(ExtraMessageType::MsgFetchCommittedIndexResponse);
-        resp.set_index(committed_index);
-        self.fsm
-            .peer
-            .send_extra_message(resp, &mut self.ctx.trans, from);
+        let mut msg = raft::eraftpb::Message::new();
+        msg.set_msg_type(MessageType::MsgReadIndex);
+        let rctx = ReadIndexContext {
+            id: uuid::Uuid::new_v4(),
+            request: None,
+            locked: None,
+        };
+        let mut e = raft::eraftpb::Entry::default();
+        e.set_data(rctx.to_bytes().into());
+        msg.mut_entries().push(e);
+        msg.from = self.fsm.peer_id();
+        msg.to = leader_id;
+        let raft_msg = self.fsm.peer.build_raft_messages(self.ctx, vec![msg]);
+        self.fsm.peer.send_raft_messages(self.ctx, raft_msg);
         debug!(
-            "responses committed to peer";
-            "region_id" => self.region().get_id(),
-            "from" => from.id,
-            "peer_id" => self.fsm.peer.peer.get_id(),
-            "committed_index" => committed_index,
+            "try to fetch committed index from leader";
+            "region_id" => self.region_id(),
+            "peer_id" => self.fsm.peer_id()
         );
-    }
-
-    /// Handle the response of the committed index from the peer.
-    fn on_fetch_committed_index_response(&mut self, committed_index: u64) {
-        if self.fsm.peer.is_leader() {
-            // Ingore. Normally, the leader should not receive this message.
-            return;
-        }
-        self.fsm
-            .peer
-            .update_last_leader_committed_idx(committed_index);
     }
 
     /// Check whether the peer is pending on applying raft logs.

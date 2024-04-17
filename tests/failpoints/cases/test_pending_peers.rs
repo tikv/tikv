@@ -177,10 +177,11 @@ fn test_on_check_busy_on_apply_peers() {
     fail::remove("on_handle_apply_1003");
     sleep_ms(100);
     must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
-    cluster.must_send_store_heartbeat(3);
     sleep_ms(100);
     let after_apply_stat = cluster.apply_state(r1, 3);
     assert!(after_apply_stat.applied_index > before_apply_stat.applied_index);
+    cluster.must_send_store_heartbeat(3);
+    sleep_ms(100);
     let stats = cluster.pd_client.get_store_stats(3).unwrap();
     assert!(!stats.is_busy);
 }
