@@ -245,7 +245,7 @@ pub fn json_merge_patch(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
             target = Json::merge_patch(target.as_ref(), jsons[i].unwrap())?;
         }
     }
-    return Ok(Some(target.to_owned()));
+    Ok(Some(target.to_owned()))
 }
 
 #[rpn_fn(writer)]
