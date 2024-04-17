@@ -456,9 +456,6 @@ impl BackgroundRunnerCore {
 // flush epoch and pin enough times to make the delayed operations be executed
 #[cfg(test)]
 pub(crate) fn flush_epoch() {
-    // Epoch is global unique, so sleep a while to mitigate the influence of unpined
-    // guard in other concurrent test cases.
-    std::thread::sleep(Duration::from_secs(2));
     {
         let guard = &epoch::pin();
         guard.flush();
