@@ -9,7 +9,8 @@ use crossbeam::{
 };
 use engine_rocks::RocksSnapshot;
 use engine_traits::{
-    CacheRange, IterOptions, Iterable, Iterator, RangeHintService, CF_DEFAULT, CF_WRITE, DATA_CFS,
+    CacheRange, IterOptions, Iterable, Iterator, RangeHintService, SnapshotMiscExt, CF_DEFAULT,
+    CF_WRITE, DATA_CFS,
 };
 use parking_lot::RwLock;
 use pd_client::RpcClient;
@@ -462,6 +463,7 @@ pub(crate) fn flush_epoch() {
         let guard = &epoch::pin();
         guard.flush();
     }
+    // local epoch tries to advance the global epoch every 128 pins.
     for _ in 0..128 {
         let _ = &epoch::pin();
     }
@@ -580,6 +582,7 @@ impl Runnable for BackgroundRunner {
                         let snapshot_load = || -> bool {
                             for &cf in DATA_CFS {
                                 let handle = skiplist_engine.cf_handle(cf);
+                                let seq = snap.sequence_number();
                                 let guard = &epoch::pin();
                                 match snap.iterator_opt(cf, iter_opt.clone()) {
                                     Ok(mut iter) => {
@@ -588,7 +591,7 @@ impl Runnable for BackgroundRunner {
                                             // use 0 sequence number here as the kv is clearly
                                             // visible
                                             let mut encoded_key =
-                                                encode_key(iter.key(), 0, ValueType::Value);
+                                                encode_key(iter.key(), seq, ValueType::Value);
                                             let mut val =
                                                 InternalBytes::from_vec(iter.value().to_vec());
 
@@ -598,6 +601,8 @@ impl Runnable for BackgroundRunner {
                                                     val.as_bytes(),
                                                 );
 
+                                            // todo(SpadeA): we can batch acquire the memory size
+                                            // here.
                                             if let MemoryUsage::HardLimitReached(n) =
                                                 core.memory_controller.acquire(mem_size)
                                             {
