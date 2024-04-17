@@ -41,7 +41,7 @@ pub(crate) fn cf_to_id(cf: &str) -> usize {
     }
 }
 
-pub(crate) fn id_to_cf(id: usize) -> &str {
+pub(crate) fn id_to_cf(id: usize) -> &'static str {
     match id {
         0 => CF_DEFAULT,
         1 => CF_LOCK,
