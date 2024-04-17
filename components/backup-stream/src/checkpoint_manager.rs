@@ -36,6 +36,7 @@ use crate::{
 #[derive(Default)]
 pub struct CheckpointManager {
     checkpoint_ts: HashMap<u64, LastFlushTsOfRegion>,
+    frozen_resolved_ts: HashMap<u64, LastFlushTsOfRegion>,
     resolved_ts: HashMap<u64, LastFlushTsOfRegion>,
     manager_handle: Option<Sender<SubscriptionOp>>,
 }
@@ -200,13 +201,17 @@ impl CheckpointManager {
 
     /// notify the subscribers, with a possible final update to the checkpoint
     /// ts.
-    /// The final update is somehow needed because when calling `freeze`, we may
-    /// not get the latest checkpoint.
-    pub fn update_and_notify(&mut self, rrs: Vec<ResolveResult>) {
-        info!("Notifying the flush result."; "length" => rrs.len());
-        for rr in rrs {
-            Self::update_ts(&mut self.checkpoint_ts, rr.region, rr.checkpoint);
+    /// You may provide some extra resolve result from the `last_dive` argument.
+    /// They will be applied directly to the final checkpoint ts. It is the
+    /// caller's duty to make sure the resolve result is safe (i.e. All events
+    /// are surely flushed.)
+    pub fn update_and_notify(&mut self, last_dive: Vec<ResolveResult>) {
+        info!("Notifying the flush result."; "last_dive_len" => last_dive.len());
+        for rr in last_dive {
+            Self::update_ts(&mut self.frozen_resolved_ts, rr.region, rr.checkpoint);
         }
+        // Replace the storage directly with the content of this run.
+        self.checkpoint_ts = std::mem::take(&mut self.frozen_resolved_ts);
         // Clippy doesn't know this iterator borrows `self.checkpoint_ts` :(
         #[allow(clippy::needless_collect)]
         let items = self
@@ -241,7 +246,7 @@ impl CheckpointManager {
             "resolved_ts" => ?self.get_resolved_ts(),
             "frozen" => self.checkpoint_ts.len(),
         );
-        self.checkpoint_ts = std::mem::take(&mut self.resolved_ts);
+        self.frozen_resolved_ts = std::mem::take(&mut self.resolved_ts);
     }
 
     #[cfg(test)]
@@ -270,7 +275,7 @@ impl CheckpointManager {
             let old_ver = old_cp.region.get_region_epoch().get_version();
             let checkpoint_is_newer = old_cp.checkpoint < checkpoint;
             if !checkpoint_is_newer {
-                warn!("recevied older checkpoint, maybe region merge.";
+                warn!("received older checkpoint, maybe region merge.";
                     "region_id" => old_cp.region.get_id(),
                     "old_ver" => old_ver,
                     "new_ver" => ver,
@@ -824,18 +829,30 @@ pub mod tests {
             },
         ]);
 
+        // Freezed
         mgr.freeze();
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
-        assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 8);
+        assert_matches::assert_matches!(r, GetCheckpointResult::NotFound { .. });
         let r = mgr.get_from_region(RegionIdWithVersion::new(2, 34));
-        assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 15);
+        assert_matches::assert_matches!(r, GetCheckpointResult::NotFound { .. });
+        // Shouldn't be recorded to resolved ts.
         mgr.resolve_regions(vec![ResolveResult {
             region: region(1, 32, 8),
             checkpoint: TimeStamp::new(16),
             checkpoint_type: CheckpointType::MinTs,
         }]);
+
+        // Flush done, should be able to be queried.
+        mgr.update_and_notify(vec![ResolveResult {
+            region: region(2, 34, 8),
+            checkpoint: TimeStamp::new(17),
+            checkpoint_type: CheckpointType::MinTs,
+        }]);
+
         let r = mgr.get_from_region(RegionIdWithVersion::new(1, 32));
         assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 8);
+        let r = mgr.get_from_region(RegionIdWithVersion::new(2, 34));
+        assert_matches::assert_matches!(r, GetCheckpointResult::Ok{checkpoint, ..} if checkpoint.into_inner() == 17);
     }
 
     pub struct MockPdClient {
