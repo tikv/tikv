@@ -4,7 +4,10 @@ use std::{
     fmt::Write,
     path::Path,
     str::FromStr,
-    sync::{mpsc, Arc, Mutex},
+    sync::{
+        mpsc::{self},
+        Arc, Mutex,
+    },
     thread,
     time::Duration,
 };
@@ -61,7 +64,12 @@ use tikv::{
 };
 pub use tikv_util::store::{find_peer, new_learner_peer, new_peer};
 use tikv_util::{
-    config::*, escape, mpsc::future, time::ThreadReadId, worker::LazyWorker, HandyRwLock,
+    config::*,
+    escape,
+    mpsc::future,
+    time::{Instant, ThreadReadId},
+    worker::LazyWorker,
+    HandyRwLock,
 };
 use txn_types::Key;
 
@@ -691,7 +699,7 @@ where
     }
     let factory = builder.build();
     let disk_engine = factory.create_shared_db(dir.path()).unwrap();
-    let kv_engine: EK = KvEngineBuilder::build(disk_engine);
+    let kv_engine: EK = KvEngineBuilder::build(&cfg.tikv.range_cache_engine, disk_engine, None);
     let engines = Engines::new(kv_engine, raft_engine);
     (
         engines,
@@ -1508,17 +1516,33 @@ pub fn must_raw_put(client: &TikvClient, ctx: Context, key: Vec<u8>, value: Vec<
     put_req.set_context(ctx);
     put_req.key = key;
     put_req.value = value;
-    let put_resp = client.raw_put(&put_req).unwrap();
-    assert!(
-        !put_resp.has_region_error(),
-        "{:?}",
-        put_resp.get_region_error()
-    );
-    assert!(
-        put_resp.get_error().is_empty(),
-        "{:?}",
-        put_resp.get_error()
-    );
+
+    let retryable = |err: &kvproto::errorpb::Error| -> bool { err.has_max_timestamp_not_synced() };
+    let start = Instant::now_coarse();
+    loop {
+        let put_resp = client.raw_put(&put_req).unwrap();
+        if put_resp.has_region_error() {
+            let err = put_resp.get_region_error();
+            if retryable(err) && start.saturating_elapsed() < Duration::from_secs(5) {
+                debug!("must_raw_put meet region error"; "err" => ?err);
+                sleep_ms(100);
+                continue;
+            }
+            panic!(
+                "must_raw_put meet region error: {:?}, ctx: {:?}, key: {}, value {}",
+                err,
+                put_req.get_context(),
+                tikv_util::escape(&put_req.key),
+                tikv_util::escape(&put_req.value),
+            );
+        }
+        assert!(
+            put_resp.get_error().is_empty(),
+            "must_raw_put meet error: {:?}",
+            put_resp.get_error()
+        );
+        return;
+    }
 }
 
 pub fn must_raw_get(client: &TikvClient, ctx: Context, key: Vec<u8>) -> Option<Vec<u8>> {

@@ -1,6 +1,10 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{cmp, fmt::Debug, result};
+use std::{
+    cmp,
+    fmt::{self, Debug},
+    result,
+};
 
 use keys::{enc_end_key, enc_start_key};
 use kvproto::metapb;
@@ -36,12 +40,32 @@ pub trait RangeCacheEngine:
 
     // return the range containing the key
     fn get_range_for_key(&self, key: &[u8]) -> Option<CacheRange>;
+
+    type RangeHintService: RangeHintService;
+    fn start_hint_service(&self, range_hint_service: Self::RangeHintService);
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A service that should run in the background to retrieve and apply cache
+/// hints.
+///
+/// TODO (afeinberg): Presently, this is only a marker trait with a single
+/// implementation. Methods and/or associated types will be added to this trait
+/// as it continues to evolve to handle eviction, using stats.
+pub trait RangeHintService: Send + Sync {}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct CacheRange {
     pub start: Vec<u8>,
     pub end: Vec<u8>,
+}
+
+impl Debug for CacheRange {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CacheRange")
+            .field("range_start", &log_wrappers::Value(&self.start))
+            .field("value", &log_wrappers::Value(&self.end))
+            .finish()
+    }
 }
 
 impl CacheRange {
