@@ -1049,7 +1049,7 @@ where
                 metrics::MIN_TS_RESOLVE_DURATION.observe(start_time.saturating_elapsed_secs());
             }
             RegionCheckpointOperation::FlushWith(checkpoints) => {
-                self.checkpoint_mgr.update_and_notify(checkpoints);
+                self.checkpoint_mgr.flush_and_notify(checkpoints);
             }
             RegionCheckpointOperation::Get(g, cb) => {
                 let _guard = self.pool.handle().enter();

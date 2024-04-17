@@ -199,13 +199,13 @@ impl CheckpointManager {
         }
     }
 
-    /// notify the subscribers, with a possible final update to the checkpoint
-    /// ts.
+    /// flush the `frozen_resolved_ts` to `checkpoint_ts`, and notify the
+    /// subscribers, with a possible final update to the checkpoint ts.
     /// You may provide some extra resolve result from the `last_dive` argument.
     /// They will be applied directly to the final checkpoint ts. It is the
     /// caller's duty to make sure the resolve result is safe (i.e. All events
     /// are surely flushed.)
-    pub fn update_and_notify(&mut self, last_dive: Vec<ResolveResult>) {
+    pub fn flush_and_notify(&mut self, last_dive: Vec<ResolveResult>) {
         info!("Notifying the flush result."; "last_dive_len" => last_dive.len());
         for rr in last_dive {
             Self::update_ts(&mut self.frozen_resolved_ts, rr.region, rr.checkpoint);
@@ -252,7 +252,7 @@ impl CheckpointManager {
     #[cfg(test)]
     fn freeze_and_flush(&mut self) {
         self.freeze();
-        self.update_and_notify(vec![]);
+        self.flush_and_notify(vec![]);
     }
 
     /// update a region checkpoint in need.
@@ -843,7 +843,7 @@ pub mod tests {
         }]);
 
         // Flush done, should be able to be queried.
-        mgr.update_and_notify(vec![ResolveResult {
+        mgr.flush_and_notify(vec![ResolveResult {
             region: region(2, 34, 8),
             checkpoint: TimeStamp::new(17),
             checkpoint_type: CheckpointType::MinTs,
