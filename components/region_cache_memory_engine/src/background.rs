@@ -1695,7 +1695,7 @@ pub mod tests {
 
         let verify = |range: CacheRange, exist, expect_count| {
             if exist {
-                let snap = engine.snapshot(range.clone(), 10, 10).unwrap();
+                let snap = engine.snapshot(range.clone(), 10, u64::MAX).unwrap();
                 let mut count = 0;
                 for cf in DATA_CFS {
                     let mut iter = IterOptions::default();
