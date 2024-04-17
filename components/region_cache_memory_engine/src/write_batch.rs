@@ -343,7 +343,7 @@ impl RangeCacheWriteBatchEntry {
     // engine.
     fn delete_in_lock_cf(&self, seq: u64, handle: &SkiplistHandle, guard: &epoch::Guard) {
         let seek_key = encode_seek_key(&self.key, seq);
-        let Some(entry) = handle.get_with_user_key(&seek_key, guard) else {
+        let Some(mut entry) = handle.get_with_user_key(&seek_key, guard) else {
             debug!(
                 "write to memory failed for lock cf, not get";
                 "key" => log_wrappers::Value::key(self.key.as_slice()),
@@ -352,29 +352,16 @@ impl RangeCacheWriteBatchEntry {
             return;
         };
 
-        let mut iter = handle.iterator();
-        iter.seek(entry.key(), guard);
-        assert_eq!(entry.key(), iter.key());
-        while iter.valid() {
-            iter.next(guard);
-            if iter.valid() && entry.key().same_user_key_with(iter.key()) {
-                handle.remove(iter.key(), guard);
+        let last_to_remove = InternalBytes::from_bytes(entry.key().as_bytes().clone());
+        while let Some(e) = entry.next() {
+            if e.key().same_user_key_with(&last_to_remove) {
+                handle.remove(e.key(), guard);
+                entry.move_next();
             } else {
                 break;
             }
         }
-        handle.remove(entry.key(), guard);
-        if let Some(entry) = handle.get_with_user_key(&seek_key, guard) {
-            error!(
-                "get after delete";
-                "key" => log_wrappers::Value::key(self.key.as_slice()),
-                "seek_key" => log_wrappers::Value::key(seek_key.as_bytes()),
-                "entry_key" => log_wrappers::Value::key(entry.key().as_bytes()),
-                "entry_value" => log_wrappers::Value::key(entry.value().as_bytes()),
-            );
-            // todo(SpadeA): is it possible to reach here?
-            unreachable!()
-        }
+        handle.remove(&last_to_remove, guard);
     }
 }
 
