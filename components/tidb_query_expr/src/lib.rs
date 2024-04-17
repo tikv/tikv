@@ -628,6 +628,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::JsonValidOthersSig => json_valid_fn_meta(),
         ScalarFuncSig::JsonMemberOfSig => member_of_fn_meta(),
         ScalarFuncSig::JsonArrayAppendSig => json_array_append_fn_meta(),
+        ScalarFuncSig::JsonMergePatchSig => json_merge_patch_fn_meta(),
         // impl_like
         ScalarFuncSig::LikeSig => map_like_sig(ft, children)?,
         // impl_regexp
