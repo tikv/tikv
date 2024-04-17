@@ -3012,9 +3012,6 @@ where
                     self.on_gc_peer_request(msg);
                 }
             }
-            // TODO: the following messages will be reverted when https://github.com/pingcap/kvproto/pull/1243 is merged.
-            ExtraMessageType::MsgFetchCommittedIndexRequest
-            | ExtraMessageType::MsgFetchCommittedIndexResponse => todo!(),
             // It's v2 only message and ignore does no harm.
             ExtraMessageType::MsgGcPeerResponse | ExtraMessageType::MsgFlushMemtable => (),
             ExtraMessageType::MsgRefreshBuckets => self.on_msg_refresh_buckets(msg),
