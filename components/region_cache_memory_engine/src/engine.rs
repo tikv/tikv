@@ -3,6 +3,7 @@
 use std::{
     collections::BTreeMap,
     fmt::{self, Debug},
+    ops::Bound,
     result,
     sync::Arc,
 };
@@ -14,7 +15,10 @@ use engine_traits::{
     CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
-use skiplist_rs::{base::OwnedIter, SkipList};
+use skiplist_rs::{
+    base::{Entry, OwnedIter},
+    SkipList,
+};
 use slog_global::error;
 use tikv_util::info;
 
@@ -37,11 +41,41 @@ pub(crate) fn cf_to_id(cf: &str) -> usize {
     }
 }
 
+pub(crate) fn id_to_cf(id: usize) -> &'static str {
+    match id {
+        0 => CF_DEFAULT,
+        1 => CF_LOCK,
+        2 => CF_WRITE,
+        _ => panic!("unrecognized id {}", id),
+    }
+}
+
 // A wrapper for skiplist to provide some check and clean up worker
 #[derive(Clone)]
 pub struct SkiplistHandle(Arc<SkipList<InternalBytes, InternalBytes>>);
 
 impl SkiplistHandle {
+    pub fn get<'a: 'g, 'g>(
+        &'a self,
+        key: &InternalBytes,
+        guard: &'g Guard,
+    ) -> Option<Entry<'a, 'g, InternalBytes, InternalBytes>> {
+        self.0.get(key, guard)
+    }
+
+    pub fn get_with_user_key<'a: 'g, 'g>(
+        &'a self,
+        key: &InternalBytes,
+        guard: &'g Guard,
+    ) -> Option<Entry<'a, 'g, InternalBytes, InternalBytes>> {
+        let n = self.0.lower_bound(Bound::Included(key), guard)?;
+        if n.key().same_user_key_with(key) {
+            Some(n)
+        } else {
+            None
+        }
+    }
+
     pub fn insert(&self, key: InternalBytes, value: InternalBytes, guard: &Guard) {
         assert!(key.memory_controller_set() && value.memory_controller_set());
         self.0.insert(key, value, guard).release(guard);
