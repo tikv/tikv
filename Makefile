@@ -341,7 +341,7 @@ unset-override:
 
 pre-format: unset-override
 	@rustup component add rustfmt
-	@which cargo-sort &> /dev/null || cargo +nightly install -q cargo-sort
+	@which cargo-sort &> /dev/null || cargo +nightly install -q cargo-sort@1.0.9
 
 format: pre-format
 	@cargo fmt
@@ -376,7 +376,7 @@ audit: pre-audit
 	cargo audit
 
 check-udeps:
-	which cargo-udeps &>/dev/null || cargo install cargo-udeps && cargo udeps
+	which cargo-udeps &>/dev/null || cargo install cargo-udeps@0.1.47 && cargo udeps
 
 FUZZER ?= Honggfuzz
 
