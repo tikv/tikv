@@ -245,7 +245,7 @@ where
         // before and the `cached_read_id` of it is None because only a consecutive
         // requests will have the same cache and the cache will be cleared after the
         // last request of the batch.
-        // When `snap_ctx` is some, if means we want to acquire the range cache engine
+        // When `snap_ctx` is some, it means we want to acquire the range cache engine
         // snapshot which cannot be used across different region. So we don't use cache.
         if self.read_id.is_some() && snap_ctx.is_none() {
             if self.snap_cache.cached_read_id == self.read_id
