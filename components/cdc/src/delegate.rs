@@ -305,6 +305,7 @@ impl MiniLock {
         MiniLock {
             ts: TimeStamp::from(ts),
             txn_source: 0,
+            generation: 0,
         }
     }
 }
