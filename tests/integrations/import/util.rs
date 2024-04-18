@@ -45,31 +45,6 @@ pub fn new_cluster(cfg: TikvConfig) -> (Cluster<ServerCluster>, Context) {
     (cluster, ctx)
 }
 
-<<<<<<< HEAD
-=======
-pub fn new_cluster_v2(
-    cfg: TikvConfig,
-) -> (
-    ClusterV2<ServerClusterV2<RocksEngine>, RocksEngine>,
-    Context,
-) {
-    let count = 1;
-    let mut cluster = test_raftstore_v2::new_server_cluster(0, count);
-    cluster.set_cfg(cfg);
-    cluster.run();
-
-    let region_id = 1;
-    let leader = cluster.leader_of_region(region_id).unwrap();
-    let epoch = cluster.get_region_epoch(region_id);
-    let mut ctx = Context::default();
-    ctx.set_region_id(region_id);
-    ctx.set_peer(leader);
-    ctx.set_region_epoch(epoch);
-
-    (cluster, ctx)
-}
-
->>>>>>> b6a029e3c0 (test: use a temp dir to store the test cluster configuration (#16874))
 pub fn open_cluster_and_tikv_import_client(
     cfg: Option<TikvConfig>,
 ) -> (Cluster<ServerCluster>, Context, TikvClient, ImportSstClient) {
