@@ -326,6 +326,7 @@ fn test_serde_custom_tikv_config() {
         write_buffer_limit: Some(ReadableSize::gb(1)),
         write_buffer_stall_ratio: 0.0,
         write_buffer_flush_oldest_first: false,
+        track_and_verify_wals_in_manifest: false,
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
