@@ -312,6 +312,7 @@ impl RangeCacheMemoryEngine {
             return RangeCacheStatus::Cached;
         }
 
+        let mut overlapped = false;
         // check whether the range is in pending_range and we can schedule load task if
         // it is
         if let Some((idx, (left_range, right_range))) = range_manager
@@ -326,13 +327,23 @@ impl RangeCacheMemoryEngine {
                     Some((idx, r.split_off(range)))
                 } else if range.contains_range(r) {
                     // todo(SpadeA): merge occurs
-                    unimplemented!()
+                    info!("range contains r which is unexpected";
+                        "range" => ?range,
+                        "pending_range" => ?r,
+                    );
+                    overlapped = true;
+                    Some((idx, (None, None)))
                 } else {
                     None
                 }
             })
         {
             let mut core = RwLockUpgradableReadGuard::upgrade(core);
+
+            if overlapped {
+                core.mut_range_manager().pending_ranges.swap_remove(idx);
+                return RangeCacheStatus::NotInCache;
+            }
 
             let range_manager = core.mut_range_manager();
             if let Some(left_range) = left_range {
