@@ -3,6 +3,7 @@
 use std::{
     collections::BTreeMap,
     fmt::{self, Debug},
+    ops::Bound,
     result,
     sync::Arc,
 };
@@ -14,7 +15,10 @@ use engine_traits::{
     CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
-use skiplist_rs::{base::OwnedIter, SkipList};
+use skiplist_rs::{
+    base::{Entry, OwnedIter},
+    SkipList,
+};
 use slog_global::error;
 use tikv_util::info;
 
@@ -28,13 +32,31 @@ use crate::{
     RangeCacheEngineConfig,
 };
 
+pub(crate) const CF_DEFAULT_USIZE: usize = 0;
+pub(crate) const CF_LOCK_USIZE: usize = 1;
+pub(crate) const CF_WRITE_USIZE: usize = 2;
+
 pub(crate) fn cf_to_id(cf: &str) -> usize {
     match cf {
-        CF_DEFAULT => 0,
-        CF_LOCK => 1,
-        CF_WRITE => 2,
+        CF_DEFAULT => CF_DEFAULT_USIZE,
+        CF_LOCK => CF_LOCK_USIZE,
+        CF_WRITE => CF_WRITE_USIZE,
         _ => panic!("unrecognized cf {}", cf),
     }
+}
+
+pub(crate) fn id_to_cf(id: usize) -> &'static str {
+    match id {
+        CF_DEFAULT_USIZE => CF_DEFAULT,
+        CF_LOCK_USIZE => CF_LOCK,
+        CF_WRITE_USIZE => CF_WRITE,
+        _ => panic!("unrecognized id {}", id),
+    }
+}
+
+#[inline]
+pub(crate) fn is_lock_cf(cf: usize) -> bool {
+    cf == CF_LOCK_USIZE
 }
 
 // A wrapper for skiplist to provide some check and clean up worker
@@ -42,6 +64,27 @@ pub(crate) fn cf_to_id(cf: &str) -> usize {
 pub struct SkiplistHandle(Arc<SkipList<InternalBytes, InternalBytes>>);
 
 impl SkiplistHandle {
+    pub fn get<'a: 'g, 'g>(
+        &'a self,
+        key: &InternalBytes,
+        guard: &'g Guard,
+    ) -> Option<Entry<'a, 'g, InternalBytes, InternalBytes>> {
+        self.0.get(key, guard)
+    }
+
+    pub fn get_with_user_key<'a: 'g, 'g>(
+        &'a self,
+        key: &InternalBytes,
+        guard: &'g Guard,
+    ) -> Option<Entry<'a, 'g, InternalBytes, InternalBytes>> {
+        let n = self.0.lower_bound(Bound::Included(key), guard)?;
+        if n.key().same_user_key_with(key) {
+            Some(n)
+        } else {
+            None
+        }
+    }
+
     pub fn insert(&self, key: InternalBytes, value: InternalBytes, guard: &Guard) {
         assert!(key.memory_controller_set() && value.memory_controller_set());
         self.0.insert(key, value, guard).release(guard);

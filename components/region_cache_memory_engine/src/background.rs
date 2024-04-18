@@ -9,7 +9,8 @@ use crossbeam::{
 };
 use engine_rocks::RocksSnapshot;
 use engine_traits::{
-    CacheRange, IterOptions, Iterable, Iterator, RangeHintService, CF_DEFAULT, CF_WRITE, DATA_CFS,
+    CacheRange, IterOptions, Iterable, Iterator, RangeHintService, SnapshotMiscExt, CF_DEFAULT,
+    CF_WRITE, DATA_CFS,
 };
 use parking_lot::RwLock;
 use pd_client::RpcClient;
@@ -452,16 +453,16 @@ impl BackgroundRunnerCore {
     }
 }
 
-// flush epoch and pin enough times to make the delayed operations be executed
+// Flush epoch and pin enough times to make the delayed operations be executed
 #[cfg(test)]
 pub(crate) fn flush_epoch() {
-    // Epoch is global unique, so sleep a while to mitigate the influence of unpined
-    // guard in other concurrent test cases.
-    std::thread::sleep(Duration::from_secs(2));
     {
         let guard = &epoch::pin();
         guard.flush();
     }
+    // Local epoch tries to advance the global epoch every 128 pins. When global
+    // epoch advances, the operations(here, means delete) in the older epoch can be
+    // executed.
     for _ in 0..128 {
         let _ = &epoch::pin();
     }
@@ -580,15 +581,16 @@ impl Runnable for BackgroundRunner {
                         let snapshot_load = || -> bool {
                             for &cf in DATA_CFS {
                                 let handle = skiplist_engine.cf_handle(cf);
+                                let seq = snap.sequence_number();
                                 let guard = &epoch::pin();
                                 match snap.iterator_opt(cf, iter_opt.clone()) {
                                     Ok(mut iter) => {
                                         iter.seek_to_first().unwrap();
                                         while iter.valid().unwrap() {
-                                            // use 0 sequence number here as the kv is clearly
-                                            // visible
+                                            // use the sequence number from RocksDB snapshot here as
+                                            // the kv is clearly visible
                                             let mut encoded_key =
-                                                encode_key(iter.key(), 0, ValueType::Value);
+                                                encode_key(iter.key(), seq, ValueType::Value);
                                             let mut val =
                                                 InternalBytes::from_vec(iter.value().to_vec());
 
@@ -598,6 +600,8 @@ impl Runnable for BackgroundRunner {
                                                     val.as_bytes(),
                                                 );
 
+                                            // todo(SpadeA): we can batch acquire the memory size
+                                            // here.
                                             if let MemoryUsage::HardLimitReached(n) =
                                                 core.memory_controller.acquire(mem_size)
                                             {
@@ -1688,7 +1692,7 @@ pub mod tests {
 
         let verify = |range: CacheRange, exist, expect_count| {
             if exist {
-                let snap = engine.snapshot(range.clone(), 10, 10).unwrap();
+                let snap = engine.snapshot(range.clone(), 10, u64::MAX).unwrap();
                 let mut count = 0;
                 for cf in DATA_CFS {
                     let mut iter = IterOptions::default();
