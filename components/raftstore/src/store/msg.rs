@@ -744,11 +744,7 @@ pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
     /// peer doesn't exist.
-<<<<<<< HEAD
     RaftMessage(InspectedRaftMessage),
-=======
-    RaftMessage(InspectedRaftMessage, Option<Instant>) = 0,
->>>>>>> 8ab73504d8 (raftstore: Add slow log for peer and store msg (#16605))
     /// Raft command is the command that is expected to be proposed by the
     /// leader of the target raft group. If it's failed to be sent, callback
     /// usually needs to be called before dropping in case of resource leak.
@@ -951,6 +947,7 @@ impl<EK: KvEngine> StoreMsg<EK> {
             StoreMsg::UnsafeRecoveryCreatePeer { .. } => 10,
             StoreMsg::GcSnapshotFinish => 11,
             StoreMsg::AwakenRegions { .. } => 12,
+            StoreMsg::ValidateSstResult { .. } => 13,
         }
     }
 }
