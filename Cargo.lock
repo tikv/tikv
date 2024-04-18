@@ -4242,6 +4242,8 @@ dependencies = [
  "slog-global",
  "smallvec",
  "sst_importer",
+ "strum 0.20.0",
+ "strum_macros 0.24.3",
  "tempfile",
  "test_sst_importer",
  "thiserror",
@@ -5560,7 +5562,7 @@ version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "063e6045c0e62079840579a7e47a355ae92f60eb74daaf156fb1e84ba164e63f"
 dependencies = [
- "strum_macros 0.24.2",
+ "strum_macros 0.24.3",
 ]
 
 [[package]]
@@ -5577,9 +5579,9 @@ dependencies = [
 
 [[package]]
 name = "strum_macros"
-version = "0.24.2"
+version = "0.24.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4faebde00e8ff94316c01800f9054fd2ba77d30d9e922541913051d1d978918b"
+checksum = "1e385be0d24f186b4ce2f9982191e7101bb737312ad61c1f2f984f34bcf85d59"
 dependencies = [
  "heck 0.4.0",
  "proc-macro2",

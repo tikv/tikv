@@ -34,6 +34,7 @@ use fail::fail_point;
 use file_system::{IoType, WithIoType};
 use futures::{compat::Future01CompatExt, FutureExt};
 use grpcio_health::HealthService;
+use itertools::Itertools;
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use kvproto::{
     import_sstpb::{SstMeta, SwitchMode},
@@ -49,6 +50,7 @@ use raft::StateRole;
 use resource_control::{channel::unbounded, ResourceGroupManager};
 use resource_metering::CollectorRegHandle;
 use sst_importer::SstImporter;
+use strum::{EnumCount, VariantNames};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_try,
@@ -61,7 +63,7 @@ use tikv_util::{
     store::{find_peer, region_on_stores},
     sys as sys_util,
     sys::disk::{get_disk_status, DiskUsage},
-    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
+    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, SlowTimer},
     timer::SteadyTimer,
     warn,
     worker::{LazyWorker, Scheduler, Worker},
@@ -778,15 +780,19 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
             .observe(duration_to_sec(elapsed));
         slow_log!(
             elapsed,
-            "[store {}] handle timeout {:?}",
+            "[store {}] handle tick {:?}",
             self.fsm.store.id,
             tick
         );
     }
 
     fn handle_msgs(&mut self, msgs: &mut Vec<StoreMsg<EK>>) {
-        let timer = TiInstant::now_coarse();
+        let timer = SlowTimer::from_millis(100);
+        let count = msgs.len();
+        #[allow(const_evaluatable_unchecked)]
+        let mut distribution = [0; StoreMsg::<EK>::COUNT];
         for m in msgs.drain(..) {
+            distribution[m.discriminant()] += 1;
             match m {
                 StoreMsg::Tick(tick) => self.on_tick(tick),
                 StoreMsg::RaftMessage(msg) => {
@@ -842,11 +848,18 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
                 }
             }
         }
+        slow_log!(
+            T timer,
+            "[store {}] handle {} store messages {:?}",
+            self.fsm.store.id,
+            count,
+            StoreMsg::<EK>::VARIANTS.iter().zip(distribution).filter(|(_, c)| *c > 0).format(", "),
+        );
         self.ctx
             .raft_metrics
             .event_time
             .store_msg
-            .observe(timer.saturating_elapsed_secs());
+            .observe(timer.saturating_elapsed().as_secs_f64());
     }
 
     fn start(&mut self, store: metapb::Store) {
