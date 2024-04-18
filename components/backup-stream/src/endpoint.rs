@@ -62,7 +62,7 @@ use crate::{
     subscription_manager::{RegionSubscriptionManager, ResolvedRegions},
     subscription_track::{Ref, RefMut, ResolveResult, SubscriptionTracer},
     try_send,
-    utils::{self, CallbackWaitGroup, StopWatch, Work},
+    utils::{self, FutureWaitGroup, StopWatch, Work},
 };
 
 const SLOW_EVENT_THRESHOLD: f64 = 120.0;
@@ -1070,7 +1070,7 @@ where
     }
 
     pub fn do_backup(&self, events: Vec<CmdBatch>) {
-        let wg = CallbackWaitGroup::new();
+        let wg = FutureWaitGroup::new();
         for batch in events {
             self.backup_batch(batch, wg.clone().work());
         }
