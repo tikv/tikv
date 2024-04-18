@@ -97,10 +97,7 @@ pub fn open_cluster_and_tikv_import_client_v2(
         config.server.grpc_concurrency = 1;
         config
     });
-    cluster.cfg = Config {
-        tikv: cfg.clone(),
-        prefer_mem: true,
-    };
+    cluster.cfg = Config::new(cfg.clone(), true);
     cluster.run();
 
     let region_id = 1;
