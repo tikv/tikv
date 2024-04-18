@@ -8,7 +8,7 @@ pub struct Config {
     // temp dir to store the persisted configuration.
     // We use a temp dir to ensure the original `common-test.toml` won't be
     // changed by online config.
-    _cfg_dir: Option<tempfile::TempDir>,
+    pub cfg_dir: Option<tempfile::TempDir>,
     pub tikv: TikvConfig,
     pub prefer_mem: bool,
 }
@@ -18,7 +18,7 @@ impl Config {
         let cfg_dir = test_util::temp_dir("test-cfg", prefer_mem);
         tikv.cfg_path = cfg_dir.path().join("tikv.toml").display().to_string();
         Self {
-            _cfg_dir: Some(cfg_dir),
+            cfg_dir: Some(cfg_dir),
             tikv,
             prefer_mem,
         }
@@ -28,7 +28,7 @@ impl Config {
 impl Clone for Config {
     fn clone(&self) -> Self {
         Self {
-            _cfg_dir: None,
+            cfg_dir: None,
             tikv: self.tikv.clone(),
             prefer_mem: self.prefer_mem,
         }
