@@ -1,15 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-<<<<<<< HEAD
 use std::{fmt::Write, sync::Arc, thread, time::Duration};
-=======
-use std::{
-    fmt::Write,
-    sync::Arc,
-    thread,
-    time::{Duration, Instant},
-};
->>>>>>> b6a029e3c0 (test: use a temp dir to store the test cluster configuration (#16874))
 
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{RocksEngine, RocksStatistics};
@@ -140,18 +131,6 @@ pub fn put_cf_till_size<T: Simulator<EK>, EK: KvEngine>(
     key.into_bytes()
 }
 
-<<<<<<< HEAD
-=======
-pub fn configure_for_encryption(config: &mut Config) {
-    let master_key = test_util::new_test_file_master_key(config.cfg_dir.as_ref().unwrap().path());
-
-    let cfg = &mut config.security.encryption;
-    cfg.data_encryption_method = EncryptionMethod::Aes128Ctr;
-    cfg.data_key_rotation_period = ReadableDuration(Duration::from_millis(100));
-    cfg.master_key = master_key;
-}
-
->>>>>>> b6a029e3c0 (test: use a temp dir to store the test cluster configuration (#16874))
 pub fn configure_for_snapshot(config: &mut Config) {
     // Truncate the log quickly so that we can force sending snapshot.
     config.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
