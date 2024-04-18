@@ -10,7 +10,7 @@ use tikv_util::{box_err, config::ReadableSize, debug, error, info, time::Instant
 
 use crate::{
     background::BackgroundTask,
-    engine::{cf_to_id, id_to_cf, SkiplistEngine, SkiplistHandle},
+    engine::{cf_to_id, id_to_cf, is_lock_cf, SkiplistEngine, SkiplistHandle},
     keys::{encode_key, encode_seek_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
     memory_controller::{MemoryController, MemoryUsage},
     metrics::WRITE_DURATION_HISTOGRAM,
@@ -325,7 +325,7 @@ impl RangeCacheWriteBatchEntry {
         guard: &epoch::Guard,
     ) -> Result<()> {
         let handle = skiplist_engine.cf_handle(id_to_cf(self.cf));
-        if self.cf == 1 && matches!(self.inner, WriteBatchEntryInternal::Deletion) {
+        if is_lock_cf(self.cf) && matches!(self.inner, WriteBatchEntryInternal::Deletion) {
             self.delete_in_lock_cf(seq, &handle, guard);
         } else {
             let (mut key, mut value) = self.encode(seq);

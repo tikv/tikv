@@ -32,22 +32,31 @@ use crate::{
     RangeCacheEngineConfig,
 };
 
+pub(crate) const CF_DEFAULT_USIZE: usize = 0;
+pub(crate) const CF_LOCK_USIZE: usize = 1;
+pub(crate) const CF_WRITE_USIZE: usize = 2;
+
 pub(crate) fn cf_to_id(cf: &str) -> usize {
     match cf {
-        CF_DEFAULT => 0,
-        CF_LOCK => 1,
-        CF_WRITE => 2,
+        CF_DEFAULT => CF_DEFAULT_USIZE,
+        CF_LOCK => CF_LOCK_USIZE,
+        CF_WRITE => CF_WRITE_USIZE,
         _ => panic!("unrecognized cf {}", cf),
     }
 }
 
 pub(crate) fn id_to_cf(id: usize) -> &'static str {
     match id {
-        0 => CF_DEFAULT,
-        1 => CF_LOCK,
-        2 => CF_WRITE,
+        CF_DEFAULT_USIZE => CF_DEFAULT,
+        CF_LOCK_USIZE => CF_LOCK,
+        CF_WRITE_USIZE => CF_WRITE,
         _ => panic!("unrecognized id {}", id),
     }
+}
+
+#[inline]
+pub(crate) fn is_lock_cf(cf: usize) -> bool {
+    cf == CF_LOCK_USIZE
 }
 
 // A wrapper for skiplist to provide some check and clean up worker
