@@ -983,7 +983,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     pub fn buffer_batch_get(
         &self,
         ctx: Context,
-        keys: Vec<Key>,
+        mut keys: Vec<Key>,
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, KvGetStatistics)>> {
         let stage_begin_ts = Instant::now();
@@ -999,6 +999,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             )
         });
         let priority_tag = get_priority_tag(priority);
+        keys.sort();
+        let mut i = 1;
+        while i < keys.len() {
+            if keys[i] == keys[i - 1] {
+                keys.remove(i);
+            } else {
+                i += 1;
+            }
+        }
         let key_ranges = keys
             .iter()
             .map(|k| (k.as_encoded().to_vec(), k.as_encoded().to_vec()))
