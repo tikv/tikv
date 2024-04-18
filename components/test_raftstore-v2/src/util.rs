@@ -2,7 +2,6 @@
 
 use std::{
     fmt::Write,
-    path::Path,
     sync::Arc,
     thread,
     time::{Duration, Instant},
@@ -141,12 +140,12 @@ pub fn put_cf_till_size<T: Simulator<EK>, EK: KvEngine>(
 }
 
 pub fn configure_for_encryption(config: &mut Config) {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let master_key = test_util::new_test_file_master_key(config.cfg_dir.as_ref().unwrap().path());
 
     let cfg = &mut config.security.encryption;
     cfg.data_encryption_method = EncryptionMethod::Aes128Ctr;
     cfg.data_key_rotation_period = ReadableDuration(Duration::from_millis(100));
-    cfg.master_key = test_util::new_test_file_master_key(manifest_dir);
+    cfg.master_key = master_key;
 }
 
 pub fn configure_for_snapshot(config: &mut Config) {
