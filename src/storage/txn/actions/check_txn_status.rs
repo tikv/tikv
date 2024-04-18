@@ -184,8 +184,8 @@ pub fn rollback_lock(
         txn.delete_value(key.clone(), lock.ts);
     }
 
-    // Only the primary key of a pessimistic transaction needs to be protected.
-    let protected: bool = is_pessimistic_txn && key.is_encoded_from(&lock.primary);
+    // The primary key of a transaction needs to be protected.
+    let protected: bool = key.is_encoded_from(&lock.primary);
     if let Some(write) = make_rollback(reader.start_ts, protected, overlapped_write) {
         txn.put_write(key.clone(), reader.start_ts, write.as_ref().to_bytes());
     }
