@@ -246,7 +246,8 @@ where
         // requests will have the same cache and the cache will be cleared after the
         // last request of the batch.
         if self.read_id.is_some() {
-            if self.snap_cache.cached_read_id == self.read_id
+            if snap_ctx.is_none()
+                && self.snap_cache.cached_read_id == self.read_id
                 && self.read_id.as_ref().unwrap().create_time >= delegate_last_valid_ts
             {
                 // Cache hit

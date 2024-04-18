@@ -701,7 +701,7 @@ where
     /// The ID of the Region which this Peer belongs to.
     region_id: u64,
     // TODO: remove it once panic!() support slog fields.
-    /// Peer_tag, "[region <region_id>] <peer_id>"
+    /// Peer_tag, "[region<region_id>] <peer_id>"
     pub tag: String,
     /// The Peer meta information.
     pub peer: metapb::Peer,

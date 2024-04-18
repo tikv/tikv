@@ -125,11 +125,10 @@ impl Iterable for RangeCacheSnapshot {
             || upper_bound > self.snapshot_meta.range.end
         {
             return Err(Error::Other(box_err!(
-                "the bounderies required [{}, {}] exceeds the range of the snapshot [{}, {}]",
+                "the bounderies required [{}, {}] exceeds the range of the snapshot, range: {:?}",
                 log_wrappers::Value(&lower_bound),
                 log_wrappers::Value(&upper_bound),
-                log_wrappers::Value(&self.snapshot_meta.range.start),
-                log_wrappers::Value(&self.snapshot_meta.range.end)
+                self.snapshot_meta.range
             )));
         }
 

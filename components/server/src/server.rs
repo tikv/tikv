@@ -223,7 +223,7 @@ pub fn run_tikv(
 
     dispatch_api_version!(config.storage.api_version(), {
         if !config.raft_engine.enable {
-            if cfg!(feature = "memory-engine") && config.range_cache_engine.enabled {
+            if config.range_cache_engine.enabled {
                 run_impl::<HybridEngine<RocksEngine, RangeCacheMemoryEngine>, RocksEngine, API>(
                     config,
                     service_event_tx,
@@ -237,7 +237,7 @@ pub fn run_tikv(
                 )
             }
         } else {
-            if cfg!(feature = "memory-engine") && config.range_cache_engine.enabled {
+            if config.range_cache_engine.enabled {
                 run_impl::<HybridEngine<RocksEngine, RangeCacheMemoryEngine>, RaftLogEngine, API>(
                     config,
                     service_event_tx,
@@ -409,19 +409,15 @@ where
             config.coprocessor.clone(),
         ));
 
+        let cfg_controller_clone = cfg_controller.clone();
         // Region stats manager collects region heartbeat for use by in-memory engine.
         let region_stats_manager_enabled_cb: Arc<dyn Fn() -> bool + Send + Sync> =
-            if cfg!(feature = "memory-engine") {
-                let cfg_controller_clone = cfg_controller.clone();
-                Arc::new(move || {
-                    cfg_controller_clone
-                        .get_current()
-                        .range_cache_engine
-                        .enabled
-                })
-            } else {
-                Arc::new(|| false)
-            };
+            Arc::new(move || {
+                cfg_controller_clone
+                    .get_current()
+                    .range_cache_engine
+                    .enabled
+            });
 
         let region_info_accessor = RegionInfoAccessor::new(
             coprocessor_host.as_mut().unwrap(),
