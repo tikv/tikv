@@ -46,7 +46,7 @@ use raftstore::{
     Error, Result,
 };
 use tempfile::TempDir;
-use tikv::server::Result as ServerResult;
+use tikv::{config::TiKvConfig, server::Result as ServerResult};
 use tikv_util::{
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
@@ -182,10 +182,7 @@ impl<T: Simulator> Cluster<T> {
     ) -> Cluster<T> {
         // TODO: In the future, maybe it's better to test both case where `use_delete_range` is true and false
         Cluster {
-            cfg: Config {
-                tikv: new_tikv_config_with_api_ver(id, api_version),
-                prefer_mem: true,
-            },
+            cfg: Config::new(new_tikv_config_with_api_ver(id, api_version), true),
             leaders: HashMap::default(),
             count,
             paths: vec![],
@@ -202,6 +199,11 @@ impl<T: Simulator> Cluster<T> {
             sst_workers: vec![],
             sst_workers_map: HashMap::default(),
         }
+    }
+
+    pub fn set_cfg(&mut self, mut cfg: TiKvConfig) {
+        cfg.cfg_path = self.cfg.tikv.cfg_path.clone();
+        self.cfg.tikv = cfg;
     }
 
     // To destroy temp dir later.
