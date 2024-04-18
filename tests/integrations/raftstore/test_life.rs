@@ -12,12 +12,8 @@ use kvproto::{
 use raft::{eraftpb::ConfChangeType, prelude::MessageType};
 use raftstore::errors::Result;
 use test_raftstore::{
-<<<<<<< HEAD
-    new_learner_peer, new_peer, sleep_ms, Filter, FilterFactory, Simulator as S1,
-=======
     new_admin_request, new_change_peer_request, new_learner_peer, new_peer, Direction, Filter,
     FilterFactory, RegionPacketFilter, Simulator as S1,
->>>>>>> 6ec0b703e7 (*: fix issue of stale peer block resolve-ts cause by ignore gc message (#16505))
 };
 use test_raftstore_v2::Simulator as S2;
 use tikv_util::{time::Instant, HandyRwLock};
