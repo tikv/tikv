@@ -1,3 +1,4 @@
+use core::slice::SlicePattern;
 use std::{collections::BTreeSet, sync::Arc};
 
 use bytes::Bytes;
@@ -5,12 +6,12 @@ use crossbeam::epoch;
 use engine_traits::{
     CacheRange, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
 };
-use tikv_util::{box_err, config::ReadableSize, error, info, time::Instant, warn};
+use tikv_util::{box_err, config::ReadableSize, debug, error, info, time::Instant, warn};
 
 use crate::{
     background::BackgroundTask,
-    engine::{cf_to_id, SkiplistEngine},
-    keys::{encode_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
+    engine::{cf_to_id, id_to_cf, is_lock_cf, SkiplistEngine, SkiplistHandle},
+    keys::{encode_key, encode_seek_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
     memory_controller::{MemoryController, MemoryUsage},
     metrics::WRITE_DURATION_HISTOGRAM,
     range_manager::{RangeCacheStatus, RangeManager},
@@ -322,12 +323,44 @@ impl RangeCacheWriteBatchEntry {
         memory_controller: Arc<MemoryController>,
         guard: &epoch::Guard,
     ) -> Result<()> {
-        let handle = &skiplist_engine.data[self.cf];
-        let (mut key, mut value) = self.encode(seq);
-        key.set_memory_controller(memory_controller.clone());
-        value.set_memory_controller(memory_controller);
-        handle.insert(key, value, guard).release(guard);
+        let handle = skiplist_engine.cf_handle(id_to_cf(self.cf));
+        if is_lock_cf(self.cf) && matches!(self.inner, WriteBatchEntryInternal::Deletion) {
+            self.delete_in_lock_cf(seq, &handle, guard);
+        } else {
+            let (mut key, mut value) = self.encode(seq);
+            key.set_memory_controller(memory_controller.clone());
+            value.set_memory_controller(memory_controller);
+            handle.insert(key, value, guard);
+        }
+
         Ok(())
+    }
+
+    // For lock cf, we delete directly rather than writing tombstone for performance
+    // purpose.
+    // todo(SpadeA): we need to verify the corretness of it before GA range cache
+    // engine.
+    fn delete_in_lock_cf(&self, seq: u64, handle: &SkiplistHandle, guard: &epoch::Guard) {
+        let seek_key = encode_seek_key(&self.key, seq);
+        let Some(mut entry) = handle.get_with_user_key(&seek_key, guard) else {
+            debug!(
+                "write to memory failed for lock cf, not get";
+                "key" => log_wrappers::Value::key(self.key.as_slice()),
+                "encoded_key" => log_wrappers::Value::key(seek_key.as_bytes()),
+            );
+            return;
+        };
+
+        let last_to_remove = InternalBytes::from_bytes(entry.key().as_bytes().clone());
+        while let Some(e) = entry.next() {
+            if e.key().same_user_key_with(&last_to_remove) {
+                handle.remove(e.key(), guard);
+                entry.move_next();
+            } else {
+                break;
+            }
+        }
+        handle.remove(&last_to_remove, guard);
     }
 }
 
@@ -514,8 +547,8 @@ mod tests {
 
     use engine_rocks::util::new_engine;
     use engine_traits::{
-        CacheRange, FailedReason, KvEngine, Peekable, RangeCacheEngine, WriteBatch, CF_WRITE,
-        DATA_CFS,
+        CacheRange, FailedReason, KvEngine, Peekable, RangeCacheEngine, WriteBatch, CF_LOCK,
+        CF_WRITE, DATA_CFS,
     };
     use skiplist_rs::SkipList;
     use tempfile::Builder;
@@ -820,5 +853,57 @@ mod tests {
         flush_epoch();
         wait_evict_done(&engine);
         assert_eq!(548, memory_controller.mem_usage());
+    }
+
+    #[test]
+    fn test_delete_lock_cf() {
+        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
+        let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(r.clone());
+        {
+            let mut core = engine.core.write();
+            core.mut_range_manager().set_safe_point(&r, 10);
+        }
+        let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.prepare_for_range(r.clone());
+        wb.put_cf(CF_LOCK, b"aaa", b"bbb").unwrap();
+        wb.set_sequence_number(1).unwrap();
+        assert_eq!(wb.write().unwrap(), 1);
+        let lock_handle = engine.core.read().engine().cf_handle(CF_LOCK);
+
+        let guard = &epoch::pin();
+        let entry = lock_handle
+            .get_with_user_key(&encode_key(b"aaa", 1, ValueType::Value), guard)
+            .unwrap();
+        assert_eq!(&b"bbb"[..], entry.value().as_bytes());
+
+        let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.prepare_for_range(r.clone());
+        wb.put_cf(CF_LOCK, b"aaa", b"ccc").unwrap();
+        wb.set_sequence_number(2).unwrap();
+        assert_eq!(wb.write().unwrap(), 2);
+
+        {
+            let mut iter = engine.core.read().engine.cf_handle(CF_LOCK).iterator();
+            let seek_key = encode_seek_key(b"aaa", 2);
+            iter.seek(&seek_key, guard);
+            assert_eq!(iter.value().as_bytes().as_slice(), b"ccc");
+            iter.next(guard);
+            assert_eq!(iter.value().as_bytes().as_slice(), b"bbb");
+        }
+
+        let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.prepare_for_range(r.clone());
+        wb.delete_cf(CF_LOCK, b"aaa").unwrap();
+        wb.set_sequence_number(10).unwrap();
+        assert_eq!(wb.write().unwrap(), 10);
+
+        {
+            let mut iter = engine.core.read().engine.cf_handle(CF_LOCK).iterator();
+            let seek_key = encode_seek_key(b"aaa", 2);
+            iter.seek(&seek_key, guard);
+            // We cannot get any sequence version of it
+            assert!(!iter.valid());
+        }
     }
 }
