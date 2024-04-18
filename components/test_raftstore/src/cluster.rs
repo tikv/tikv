@@ -46,12 +46,7 @@ use raftstore::{
     Error, Result,
 };
 use tempfile::TempDir;
-<<<<<<< HEAD
-use tikv::server::Result as ServerResult;
-=======
-use test_pd_client::TestPdClient;
-use tikv::{config::TikvConfig, server::Result as ServerResult};
->>>>>>> b6a029e3c0 (test: use a temp dir to store the test cluster configuration (#16874))
+use tikv::{config::TiKvConfig, server::Result as ServerResult};
 use tikv_util::{
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
@@ -206,7 +201,7 @@ impl<T: Simulator> Cluster<T> {
         }
     }
 
-    pub fn set_cfg(&mut self, mut cfg: TikvConfig) {
+    pub fn set_cfg(&mut self, mut cfg: TiKvConfig) {
         cfg.cfg_path = self.cfg.tikv.cfg_path.clone();
         self.cfg.tikv = cfg;
     }
