@@ -12,8 +12,8 @@ use kvproto::{
 use raft::{eraftpb::ConfChangeType, prelude::MessageType};
 use raftstore::errors::Result;
 use test_raftstore::{
-    new_admin_request, new_change_peer_request, new_learner_peer, new_peer, Direction, Filter,
-    FilterFactory, RegionPacketFilter, Simulator as S1,
+    new_admin_request, new_change_peer_request, new_learner_peer, new_peer, sleep_ms, Direction,
+    Filter, FilterFactory, RegionPacketFilter, Simulator as S1,
 };
 use test_raftstore_v2::Simulator as S2;
 use tikv_util::{time::Instant, HandyRwLock};
