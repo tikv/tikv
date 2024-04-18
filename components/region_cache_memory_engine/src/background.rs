@@ -587,8 +587,8 @@ impl Runnable for BackgroundRunner {
                                     Ok(mut iter) => {
                                         iter.seek_to_first().unwrap();
                                         while iter.valid().unwrap() {
-                                            // use 0 sequence number here as the kv is clearly
-                                            // visible
+                                            // use the sequence number from RocksDB snapshot here as
+                                            // the kv is clearly visible
                                             let mut encoded_key =
                                                 encode_key(iter.key(), seq, ValueType::Value);
                                             let mut val =
