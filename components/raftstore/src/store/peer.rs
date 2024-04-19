@@ -1894,7 +1894,10 @@ where
                     resp.set_entries(m.take_entries());
 
                     self.raft_group.raft.msgs.push(resp);
+                    info!("!!!! read index {}", index; "self.region_id" => self.region_id);
                     return Ok(());
+                } else {
+                    info!("!!!! read index no lease"; "self.region_id" => self.region_id);
                 }
                 self.should_wake_up = state == LeaseState::Expired;
             }

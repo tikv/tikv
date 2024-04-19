@@ -808,6 +808,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
             let begin_instant = Instant::now();
 
             let start_ts = request.get_start_ts().into();
+            info!("!!!! advance max_ts to {}", start_ts.clone().into_inner(); "msg" => ?msg);
             self.concurrency_manager.update_max_ts(start_ts);
             for range in request.mut_key_ranges().iter_mut() {
                 let key_bound = |key: Vec<u8>| {
@@ -836,6 +837,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                     },
                 );
                 if let Err(txn_types::Error(box txn_types::ErrorInner::KeyIsLocked(lock))) = res {
+                    info!("!!!! observe lock {:?}", lock; "msg" => ?msg);
                     rctx.locked = Some(lock);
                     REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC_STATIC
                         .locked
@@ -847,6 +849,8 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                 }
             }
             msg.mut_entries()[0].set_data(rctx.to_bytes().into());
+        } else {
+            info!("!!!! no request"; "msg" => ?msg);
         }
     }
 }
