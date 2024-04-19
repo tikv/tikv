@@ -1970,7 +1970,12 @@ impl Default for RaftEngineConfig {
     fn default() -> Self {
         Self {
             enable: true,
-            config: RawRaftEngineConfig::default(),
+            config: RawRaftEngineConfig {
+                // As the async-io is enabled by default, testing records shows that using 4kb as
+                // the default value can achieve better performance and reduce the IO overhead.
+                batch_compression_threshold: raft_log_engine::ReadableSize::kb(4),
+                ..Default::default()
+            },
         }
     }
 }
