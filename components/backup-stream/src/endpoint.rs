@@ -211,6 +211,53 @@ where
         self.meta_client.clone()
     }
 
+    fn on_fatal_error_of_task(&self, task: &str, err: &Error) -> future![()] {
+        metrics::update_task_status(TaskStatus::Error, task);
+        let meta_cli = self.get_meta_client();
+        let pdc = self.pd_client.clone();
+        let store_id = self.store_id;
+        let sched = self.scheduler.clone();
+        let safepoint_name = self.pause_guard_id_for_task(task);
+        let safepoint_ttl = self.pause_guard_duration();
+        let code = err.error_code().code.to_owned();
+        let msg = err.to_string();
+        let task = task.to_owned();
+        async move {
+            let err_fut = async {
+                let safepoint = meta_cli.global_progress_of_task(&task).await?;
+                pdc.update_service_safe_point(
+                    safepoint_name,
+                    TimeStamp::new(safepoint.saturating_sub(1)),
+                    safepoint_ttl,
+                )
+                .await?;
+                meta_cli.pause(&task).await?;
+                let mut last_error = StreamBackupError::new();
+                last_error.set_error_code(code);
+                last_error.set_error_message(msg.clone());
+                last_error.set_store_id(store_id);
+                last_error.set_happen_at(TimeStamp::physical_now());
+                meta_cli.report_last_error(&task, last_error).await?;
+                Result::Ok(())
+            };
+            if let Err(err_report) = err_fut.await {
+                err_report.report(format_args!("failed to upload error {}", err_report));
+                let name = task.to_owned();
+                // Let's retry reporting after 5s.
+                tokio::task::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    try_send!(
+                        sched,
+                        Task::FatalError(
+                            TaskSelector::ByName(name),
+                            Box::new(annotate!(err_report, "origin error: {}", msg))
+                        )
+                    );
+                });
+            }
+        }
+    }
+
     fn on_fatal_error(&self, select: TaskSelector, err: Box<Error>) {
         err.report_fatal();
         let tasks = self
@@ -220,49 +267,7 @@ where
         for task in tasks {
             // Let's pause the task first.
             self.unload_task(&task);
-            metrics::update_task_status(TaskStatus::Error, &task);
-
-            let meta_cli = self.get_meta_client();
-            let pdc = self.pd_client.clone();
-            let store_id = self.store_id;
-            let sched = self.scheduler.clone();
-            let safepoint_name = self.pause_guard_id_for_task(&task);
-            let safepoint_ttl = self.pause_guard_duration();
-            let code = err.error_code().code.to_owned();
-            let msg = err.to_string();
-            self.pool.block_on(async move {
-                let err_fut = async {
-                    let safepoint = meta_cli.global_progress_of_task(&task).await?;
-                    pdc.update_service_safe_point(
-                        safepoint_name,
-                        TimeStamp::new(safepoint.saturating_sub(1)),
-                        safepoint_ttl,
-                    )
-                    .await?;
-                    meta_cli.pause(&task).await?;
-                    let mut last_error = StreamBackupError::new();
-                    last_error.set_error_code(code);
-                    last_error.set_error_message(msg.clone());
-                    last_error.set_store_id(store_id);
-                    last_error.set_happen_at(TimeStamp::physical_now());
-                    meta_cli.report_last_error(&task, last_error).await?;
-                    Result::Ok(())
-                };
-                if let Err(err_report) = err_fut.await {
-                    err_report.report(format_args!("failed to upload error {}", err_report));
-                    // Let's retry reporting after 5s.
-                    tokio::task::spawn(async move {
-                        tokio::time::sleep(Duration::from_secs(5)).await;
-                        try_send!(
-                            sched,
-                            Task::FatalError(
-                                TaskSelector::ByName(task.to_owned()),
-                                Box::new(annotate!(err_report, "origin error: {}", msg))
-                            )
-                        );
-                    });
-                }
-            });
+            self.pool.block_on(self.on_fatal_error_of_task(&task, &err));
         }
     }
 
@@ -637,6 +642,9 @@ where
             let run = async move {
                 let task_name = task.info.get_name();
                 let ranges = cli.ranges_of_task(task_name).await?;
+                fail::fail_point!("load_task::error_when_fetching_ranges", |_| {
+                    Err(Error::Other("what range? no such thing, go away.".into()))
+                });
                 info!(
                     "register backup stream ranges";
                     "task" => ?task,
@@ -664,10 +672,8 @@ where
                 Result::Ok(())
             };
             if let Err(e) = run.await {
-                e.report(format!(
-                    "failed to register backup stream task {} to router: ranges not found",
-                    task_clone.info.get_name()
-                ));
+                self.on_fatal_error_of_task(&task_clone.info.name, &Box::new(e))
+                    .await;
             }
         });
         metrics::update_task_status(TaskStatus::Running, &task_name);

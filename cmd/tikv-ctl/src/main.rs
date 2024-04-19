@@ -776,12 +776,18 @@ fn compact_whole_cluster(
     threads: u32,
     bottommost: BottommostLevelCompaction,
 ) {
-    let stores = pd_client
+    let all_stores = pd_client
         .get_all_stores(true) // Exclude tombstone stores.
         .unwrap_or_else(|e| perror_and_exit("Get all cluster stores from PD failed", e));
 
+    let tikv_stores = all_stores.iter().filter(|s| {
+        !s.get_labels()
+            .iter()
+            .any(|l| l.get_key() == "engine" && l.get_value() == "tiflash")
+    });
+
     let mut handles = Vec::new();
-    for s in stores {
+    for s in tikv_stores {
         let cfg = cfg.clone();
         let mgr = Arc::clone(&mgr);
         let addr = s.address.clone();
@@ -906,7 +912,7 @@ fn flashback_whole_cluster(
             .await
             {
                 Ok(res) => {
-                    if let Err(key_range) = res {
+                    if let Err((key_range, _)) = res {
                         // Retry specific key range to prepare flashback.
                         let stale_key_range = (key_range.start_key.clone(), key_range.end_key.clone());
                         let mut key_range_to_prepare = key_range_to_prepare.write().unwrap();
@@ -986,7 +992,21 @@ fn flashback_whole_cluster(
             {
                 Ok(res) => match res {
                     Ok(_) => break,
-                    Err(_) => {
+                    Err((key_range, err)) => {
+                        // Retry `NotLeader` or `RegionNotFound`.
+                        if err.to_string().contains("not leader") || err.to_string().contains("not found") {
+                            // When finished `PrepareFlashback`, the region may change leader in the `flashback in progress`
+                            // Neet to retry specific key range to finish flashback.
+                            let stale_key_range = (key_range.start_key.clone(), key_range.end_key.clone());
+                            let mut key_range_to_finish = key_range_to_finish.write().unwrap();
+                            // Remove stale key range.
+                            key_range_to_finish.remove(&stale_key_range);
+                            load_key_range(&pd_client, stale_key_range.0.clone(), stale_key_range.1.clone())
+                                .into_iter().for_each(|(key_range, region_info)| {
+                                // Need to update `key_range_to_finish` to replace stale key range.
+                                key_range_to_finish.insert(key_range, region_info);
+                            });
+                        }
                         thread::sleep(Duration::from_micros(WAIT_APPLY_FLASHBACK_STATE));
                         continue;
                     }

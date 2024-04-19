@@ -376,6 +376,7 @@ fn test_delete_files_in_range_for_titan() {
         b"{",
         u64::MAX,
         &limiter,
+        None,
     )
     .unwrap();
     let mut cf_file_write = CfFile::new(
@@ -392,6 +393,7 @@ fn test_delete_files_in_range_for_titan() {
         b"{",
         u64::MAX,
         &limiter,
+        None,
     )
     .unwrap();
 

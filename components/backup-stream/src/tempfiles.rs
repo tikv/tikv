@@ -259,6 +259,11 @@ impl TempFilePool {
         &self.cfg
     }
 
+    #[cfg(test)]
+    pub fn mem_used(&self) -> usize {
+        self.current.load(Ordering::Acquire)
+    }
+
     /// Create a file for writting.
     /// This function is synchronous so we can call it easier in the polling
     /// context. (Anyway, it is really hard to call an async function in the

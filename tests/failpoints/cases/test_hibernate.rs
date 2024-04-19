@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use kvproto::raft_serverpb::RaftMessage;
+use kvproto::raft_serverpb::{ExtraMessage, ExtraMessageType, RaftMessage};
 use raft::eraftpb::MessageType;
 use raftstore::store::{PeerMsg, PeerTick};
 use test_raftstore::*;
@@ -177,4 +177,59 @@ fn test_check_long_uncommitted_proposals_while_hibernate() {
     cluster.must_put(b"k1", b"v1");
     rx.recv_timeout(2 * cluster.cfg.raft_store.long_uncommitted_base_threshold.0)
         .unwrap();
+}
+
+#[test]
+fn test_forcely_awaken_hibenrate_regions() {
+    let mut cluster = new_node_cluster(0, 3);
+    let base_tick_ms = 50;
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(base_tick_ms);
+    cluster.cfg.raft_store.raft_heartbeat_ticks = 2;
+    cluster.cfg.raft_store.raft_election_timeout_ticks = 10;
+    // So the random election timeout will always be 10, which makes the case more
+    // stable.
+    cluster.cfg.raft_store.raft_min_election_timeout_ticks = 10;
+    cluster.cfg.raft_store.raft_max_election_timeout_ticks = 11;
+    configure_for_hibernate(&mut cluster.cfg);
+    cluster.pd_client.disable_default_operator();
+    let r = cluster.run_conf_change();
+    cluster.pd_client.must_add_peer(r, new_peer(2, 2));
+    cluster.pd_client.must_add_peer(r, new_peer(3, 3));
+
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+    // Wait until all peers of region 1 hibernate.
+    thread::sleep(Duration::from_millis(base_tick_ms * 30));
+
+    // Firstly, send `CheckPeerStaleState` message to trigger the check.
+    let router = cluster.sim.rl().get_router(3).unwrap();
+    router
+        .send(1, PeerMsg::Tick(PeerTick::CheckPeerStaleState))
+        .unwrap();
+
+    // Secondly, forcely send `MsgRegionWakeUp` message for awakening hibernated
+    // regions.
+    let (tx, rx) = mpsc::sync_channel(128);
+    fail::cfg_callback("on_raft_base_tick_chaos", move || {
+        tx.send(base_tick_ms).unwrap()
+    })
+    .unwrap();
+    let mut message = RaftMessage::default();
+    message.region_id = 1;
+    message.set_from_peer(new_peer(3, 3));
+    message.set_to_peer(new_peer(3, 3));
+    message.mut_region_epoch().version = 1;
+    message.mut_region_epoch().conf_ver = 3;
+    let mut msg = ExtraMessage::default();
+    msg.set_type(ExtraMessageType::MsgRegionWakeUp);
+    msg.forcely_awaken = true;
+    message.set_extra_msg(msg);
+    router.send_raft_message(message).unwrap();
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+        base_tick_ms
+    );
+    fail::remove("on_raft_base_tick_chaos");
 }

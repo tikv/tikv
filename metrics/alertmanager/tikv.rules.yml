@@ -1,6 +1,18 @@
 groups:
 - name: alert.rules
   rules:
+  - alert: TiKV_critical_error
+    expr: sum(rate(tikv_critical_error_total[1m])) BY (type, instance) > 0
+    # without the for clause will become active on the first evaluation.
+    labels:
+      env: ENV_LABELS_ENV
+      level: critical
+      expr: sum(rate(tikv_critical_error_total[1m])) BY (type, instance) > 0
+    annotations:
+      description: 'cluster: ENV_LABELS_ENV, instance: {{ $labels.instance }}, values:{{ $value }}'
+      value: '{{ $value }}'
+      summary: TiKV encounters critical error
+
   - alert: TiKV_memory_used_too_fast
     expr: process_resident_memory_bytes{job=~"tikv",instance=~".*"} - (process_resident_memory_bytes{job=~"tikv",instance=~".*"} offset 5m) > 5*1024*1024*1024
     for: 5m

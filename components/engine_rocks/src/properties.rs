@@ -414,7 +414,10 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
         // TsFilter filters sst based on max_ts and min_ts during iterating.
         // To prevent seeing outdated (GC) records, we should consider
         // RocksDB delete entry type.
-        if entry_type != DBEntryType::Put && entry_type != DBEntryType::Delete {
+        if entry_type != DBEntryType::Put
+            && entry_type != DBEntryType::Delete
+            && entry_type != DBEntryType::BlobIndex
+        {
             return;
         }
 
@@ -452,37 +455,43 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
             self.props.max_row_versions = self.row_versions;
         }
 
-        if self.key_mode == KeyMode::Raw {
-            let decode_raw_value = ApiV2::decode_raw_value(value);
-            match decode_raw_value {
-                Ok(raw_value) => {
-                    if raw_value.is_valid(self.current_ts) {
-                        self.props.num_puts += 1;
-                    } else {
-                        self.props.num_deletes += 1;
+        if entry_type != DBEntryType::BlobIndex {
+            if self.key_mode == KeyMode::Raw {
+                let decode_raw_value = ApiV2::decode_raw_value(value);
+                match decode_raw_value {
+                    Ok(raw_value) => {
+                        if raw_value.is_valid(self.current_ts) {
+                            self.props.num_puts += 1;
+                        } else {
+                            self.props.num_deletes += 1;
+                        }
+                        if let Some(expire_ts) = raw_value.expire_ts {
+                            self.props.ttl.add(expire_ts);
+                        }
                     }
-                    if let Some(expire_ts) = raw_value.expire_ts {
-                        self.props.ttl.add(expire_ts);
+                    Err(_) => {
+                        self.num_errors += 1;
                     }
                 }
-                Err(_) => {
-                    self.num_errors += 1;
+            } else {
+                let write_type = match Write::parse_type(value) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        self.num_errors += 1;
+                        return;
+                    }
+                };
+
+                match write_type {
+                    WriteType::Put => self.props.num_puts += 1,
+                    WriteType::Delete => self.props.num_deletes += 1,
+                    _ => {}
                 }
             }
         } else {
-            let write_type = match Write::parse_type(value) {
-                Ok(v) => v,
-                Err(_) => {
-                    self.num_errors += 1;
-                    return;
-                }
-            };
-
-            match write_type {
-                WriteType::Put => self.props.num_puts += 1,
-                WriteType::Delete => self.props.num_deletes += 1,
-                _ => {}
-            }
+            // NOTE: if titan is enabled, the entry will always be treated as PUT.
+            // Be careful if you try to enable Titan on CF_WRITE.
+            self.props.num_puts += 1;
         }
 
         // Add new row.

@@ -27,6 +27,7 @@ use std::{
 };
 
 use api_version::{dispatch_api_version, KvFormat};
+use backup::disk_snap::Env;
 use backup_stream::{
     config::BackupStreamConfigManager, metadata::store::PdStore, observer::BackupStreamObserver,
     BackupStreamResolver,
@@ -63,7 +64,7 @@ use raftstore::{
     RegionInfoAccessor,
 };
 use raftstore_v2::{
-    router::{PeerMsg, RaftRouter},
+    router::{DiskSnapBackupHandle, PeerMsg, RaftRouter},
     StateStorage,
 };
 use resolved_ts::Task;
@@ -286,11 +287,14 @@ where
             SecurityManager::new(&config.security)
                 .unwrap_or_else(|e| fatal!("failed to create security manager: {}", e)),
         );
+        let props = tikv_util::thread_group::current_properties();
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(config.server.grpc_concurrency)
                 .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
-                .after_start(|| {
+                .after_start(move || {
+                    tikv_util::thread_group::set_properties(props.clone());
+
                     // SAFETY: we will call `remove_thread_memory_accessor` at before_stop.
                     unsafe { add_thread_memory_accessor() };
                 })
@@ -923,7 +927,10 @@ where
         // Backup service.
         let mut backup_worker = Box::new(self.core.background_worker.lazy_build("backup-endpoint"));
         let backup_scheduler = backup_worker.scheduler();
-        let backup_service = backup::Service::<RocksEngine, ER>::new(backup_scheduler);
+        let backup_service = backup::Service::new(
+            backup_scheduler,
+            Env::new(DiskSnapBackupHandle, Default::default(), None),
+        );
         if servers
             .server
             .register_service(create_backup(backup_service))

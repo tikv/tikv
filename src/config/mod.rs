@@ -31,7 +31,7 @@ use engine_rocks::{
     raw::{
         BlockBasedOptions, Cache, ChecksumType, CompactionPriority, ConcurrentTaskLimiter,
         DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode, Env,
-        PrepopulateBlockCache, RateLimiter, WriteBufferManager,
+        LRUCacheOptions, PrepopulateBlockCache, RateLimiter, WriteBufferManager,
     },
     util::{
         FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
@@ -190,7 +190,10 @@ impl TitanCfConfig {
         let mut opts = RocksTitanDbOptions::new();
         opts.set_min_blob_size(self.min_blob_size.0);
         opts.set_blob_file_compression(self.blob_file_compression.into());
-        opts.set_blob_cache(self.blob_cache_size.0 as usize, -1, false, 0.0);
+        let mut cache_opts = LRUCacheOptions::new();
+        cache_opts.set_capacity(self.blob_cache_size.0 as usize);
+        let cache = Cache::new_lru_cache(cache_opts);
+        opts.set_blob_cache(&cache);
         opts.set_min_gc_batch_size(self.min_gc_batch_size.0);
         opts.set_max_gc_batch_size(self.max_gc_batch_size.0);
         opts.set_discardable_ratio(self.discardable_ratio);
@@ -3855,6 +3858,11 @@ impl TikvConfig {
         self.quota.validate()?;
         self.causal_ts.validate()?;
 
+        // Validate feature TTL with Titan configuration.
+        if self.rocksdb.titan.enabled && self.storage.enable_ttl {
+            return Err("Titan is unavailable for feature TTL".to_string().into());
+        }
+
         Ok(())
     }
 
@@ -4813,6 +4821,7 @@ mod tests {
 
         // Check api version.
         {
+            tikv_cfg.rocksdb.titan.enabled = false;
             let cases = [
                 (ApiVersion::V1, ApiVersion::V1, true),
                 (ApiVersion::V1, ApiVersion::V1ttl, false),
@@ -5960,6 +5969,21 @@ mod tests {
         cfg.validate().unwrap_err();
         cfg.rocksdb.writecf.format_version = Some(5);
         cfg.validate().unwrap();
+
+        let mut valid_cfg = TikvConfig::default();
+        valid_cfg.storage.api_version = 2;
+        valid_cfg.storage.enable_ttl = true;
+        valid_cfg.rocksdb.titan.enabled = false;
+        valid_cfg.validate().unwrap();
+
+        let mut invalid_cfg = TikvConfig::default();
+        invalid_cfg.storage.api_version = 2;
+        invalid_cfg.storage.enable_ttl = true;
+        invalid_cfg.rocksdb.titan.enabled = true;
+        assert_eq!(
+            invalid_cfg.validate().unwrap_err().to_string(),
+            "Titan is unavailable for feature TTL"
+        );
     }
 
     #[test]

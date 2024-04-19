@@ -972,9 +972,9 @@ dependencies = [
 
 [[package]]
 name = "chrono-tz"
-version = "0.5.1"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e0e430fad0384e4defc3dc6b1223d1b886087a8bf9b7080e5ae027f73851ea15"
+checksum = "2554a3155fec064362507487171dcc4edc3df60cb10f3a1fb10ed8094822b120"
 dependencies = [
  "chrono",
  "parse-zoneinfo",
@@ -2933,7 +2933,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#87bebcc0d071a18cbbd94a4fc02de9c4988af815"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-7.5#c4a09794a10c8564d8b4645f45b4092b8ff0b29c"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2998,7 +2998,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c4b7047314a9b27926a1b7b25d2e6d1a37a48d2b"
+source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -3017,7 +3017,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c4b7047314a9b27926a1b7b25d2e6d1a37a48d2b"
+source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -3177,9 +3177,9 @@ dependencies = [
 
 [[package]]
 name = "memmap2"
-version = "0.7.0"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "180d4b35be83d33392d1d1bfbd2ae1eca7ff5de1a94d3fc87faaa99a069e7cbd"
+checksum = "45fd3a57831bf88bc63f8cebc0cf956116276e97fef3966103e96416209f7c92"
 dependencies = [
  "libc 0.2.146",
 ]
@@ -3791,9 +3791,9 @@ dependencies = [
 
 [[package]]
 name = "parse-zoneinfo"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "089a398ccdcdd77b8c38909d5a1e4b67da1bc4c9dbfe6d5b536c828eddb779e5"
+checksum = "c705f256449c60da65e11ff6626e0c16a0a0b96aaa348de61376b249bc340f41"
 dependencies = [
  "regex",
 ]
@@ -4331,7 +4331,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.4.1"
-source = "git+https://github.com/tikv/raft-engine.git#fa56f891fdf0b1cb5b7849b7bee3c5dadbb96103"
+source = "git+https://github.com/tikv/raft-engine.git#e505d631c8c6d63f7fc63d83ea6e8fb88cf970a5"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4345,7 +4345,7 @@ dependencies = [
  "libc 0.2.146",
  "log",
  "lz4-sys",
- "memmap2 0.7.0",
+ "memmap2 0.9.3",
  "nix 0.26.2",
  "num-derive 0.4.0",
  "num-traits",
@@ -4365,7 +4365,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.4.1"
-source = "git+https://github.com/tikv/raft-engine.git#fa56f891fdf0b1cb5b7849b7bee3c5dadbb96103"
+source = "git+https://github.com/tikv/raft-engine.git#e505d631c8c6d63f7fc63d83ea6e8fb88cf970a5"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
@@ -4936,7 +4936,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c4b7047314a9b27926a1b7b25d2e6d1a37a48d2b"
+source = "git+https://github.com/tikv/rust-rocksdb.git#224bed6ffa29ba3bbe9a91ef6bda7186200c59a8"
 dependencies = [
  "libc 0.2.146",
  "librocksdb_sys",
@@ -5635,7 +5635,7 @@ dependencies = [
 [[package]]
 name = "snappy-sys"
 version = "0.1.0"
-source = "git+https://github.com/busyjay/rust-snappy.git?branch=static-link#8c12738bad811397600455d6982aff754ea2ac44"
+source = "git+https://github.com/tikv/rust-snappy.git?branch=static-link#8c12738bad811397600455d6982aff754ea2ac44"
 dependencies = [
  "cmake",
  "libc 0.2.146",
@@ -6003,6 +6003,7 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crc64fast",
+ "engine_rocks",
  "engine_traits",
  "external_storage_export",
  "file_system",
@@ -6012,6 +6013,7 @@ dependencies = [
  "grpcio",
  "kvproto",
  "protobuf",
+ "raftstore",
  "rand 0.8.5",
  "tempfile",
  "test_raftstore",
@@ -6526,7 +6528,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "7.5.0"
+version = "7.5.2"
 dependencies = [
  "anyhow",
  "api_version",

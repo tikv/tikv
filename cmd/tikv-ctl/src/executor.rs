@@ -715,7 +715,7 @@ pub trait DebugExecutor {
         _key_range: KeyRange,
         _start_ts: u64,
         _commit_ts: u64,
-    ) -> Result<(), KeyRange>;
+    ) -> Result<(), (KeyRange, grpcio::Error)>;
 
     fn get_region_read_progress(&self, region_id: u64, log: bool, min_start_ts: u64);
 }
@@ -948,7 +948,7 @@ impl DebugExecutor for DebugClient {
         key_range: KeyRange,
         start_ts: u64,
         commit_ts: u64,
-    ) -> Result<(), KeyRange> {
+    ) -> Result<(), (KeyRange, grpcio::Error)> {
         let mut req = FlashbackToVersionRequest::default();
         req.set_version(version);
         req.set_region_id(region_id);
@@ -963,7 +963,7 @@ impl DebugExecutor for DebugClient {
                     "flashback key_range {:?} with start_ts {:?}, commit_ts {:?} need to retry, err is {:?}",
                     key_range, start_ts, commit_ts, err
                 );
-                Err(key_range)
+                Err((key_range, err))
             }
         }
     }
@@ -1293,7 +1293,7 @@ where
         _key_range: KeyRange,
         _start_ts: u64,
         _commit_ts: u64,
-    ) -> Result<(), KeyRange> {
+    ) -> Result<(), (KeyRange, grpcio::Error)> {
         unimplemented!("only available for remote mode");
     }
 
@@ -1515,7 +1515,7 @@ impl<ER: RaftEngine> DebugExecutor for DebuggerImplV2<ER> {
         _key_range: KeyRange,
         _start_ts: u64,
         _commit_ts: u64,
-    ) -> Result<(), KeyRange> {
+    ) -> Result<(), (KeyRange, grpcio::Error)> {
         unimplemented!("only available for remote mode");
     }
 

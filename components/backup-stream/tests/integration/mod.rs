@@ -160,7 +160,7 @@ mod all {
         let err = run_async_test(
             suite
                 .get_meta_cli()
-                .get_last_error("test_fatal_error", *victim),
+                .get_last_error_of("test_fatal_error", *victim),
         )
         .unwrap()
         .unwrap();

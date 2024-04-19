@@ -1111,9 +1111,11 @@ async fn async_key_range_flashback_to_version<E: Engine, L: LockManager, F: KvFo
             .unwrap();
         if !resp.get_error().is_empty() || resp.has_region_error() {
             error!("exec prepare flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
-            return Err(Error::FlashbackFailed(
-                "exec prepare flashback failed.".into(),
-            ));
+            return Err(Error::FlashbackFailed(format!(
+                "exec prepare flashback failed: resp err is: {:?}, region err is: {:?}",
+                resp.get_error(),
+                resp.get_region_error()
+            )));
         }
     } else {
         let mut req = kvrpcpb::FlashbackToVersionRequest::new();
@@ -1127,9 +1129,11 @@ async fn async_key_range_flashback_to_version<E: Engine, L: LockManager, F: KvFo
         let resp = future_flashback_to_version(storage, req).await.unwrap();
         if !resp.get_error().is_empty() || resp.has_region_error() {
             error!("exec finish flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
-            return Err(Error::FlashbackFailed(
-                "exec finish flashback failed.".into(),
-            ));
+            return Err(Error::FlashbackFailed(format!(
+                "exec finish flashback failed: resp err is: {:?}, region err is: {:?}",
+                resp.get_error(),
+                resp.get_region_error()
+            )));
         }
     }
     Ok(())

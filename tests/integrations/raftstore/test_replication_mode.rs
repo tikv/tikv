@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, thread, time::Duration};
+use std::{iter::FromIterator, sync::Arc, thread, time::Duration};
 
 use kvproto::replication_modepb::*;
 use pd_client::PdClient;
@@ -97,6 +97,67 @@ fn test_dr_auto_sync() {
     let state = cluster.pd_client.region_replication_status(region.get_id());
     assert_eq!(state.state_id, 1);
     assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
+}
+
+// When in sync recover state, and the region is in joint state. The leave joint
+// state should be committed successfully.
+#[test]
+fn test_sync_recover_joint_state() {
+    let mut cluster = new_server_cluster(0, 5);
+    cluster.pd_client.disable_default_operator();
+    cluster.pd_client.configure_dr_auto_sync("zone");
+    cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 1;
+    cluster.add_label(1, "zone", "ES");
+    cluster.add_label(2, "zone", "ES");
+    cluster.add_label(3, "zone", "ES");
+    cluster.add_label(4, "zone", "WS"); // old dr
+    cluster.add_label(5, "zone", "WS"); // new dr
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    let region_id = cluster.run_conf_change();
+    let nodes = Vec::from_iter(cluster.get_node_ids());
+    assert_eq!(nodes.len(), 5);
+    cluster.must_put(b"k1", b"v1");
+
+    cluster
+        .pd_client
+        .switch_replication_mode(Some(DrAutoSyncState::Async), vec![]);
+
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    pd_client.must_add_peer(region_id, new_peer(4, 4));
+    pd_client.must_add_peer(region_id, new_learner_peer(5, 5));
+
+    // Make one node down
+    cluster.stop_node(4);
+
+    // Switch to sync recover
+    cluster
+        .pd_client
+        .switch_replication_mode(Some(DrAutoSyncState::SyncRecover), vec![]);
+
+    cluster.must_put(b"k2", b"v2");
+    assert_eq!(cluster.must_get(b"k2").unwrap(), b"v2");
+
+    // Enter joint, now we have C_old(1, 2, 3, 4) and C_new(1, 2, 3, 5)
+    pd_client.must_joint_confchange(
+        region_id,
+        vec![
+            (ConfChangeType::AddLearnerNode, new_learner_peer(4, 4)),
+            (ConfChangeType::AddNode, new_peer(5, 5)),
+        ],
+    );
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+    assert_ne!(left.get_id(), right.get_id());
+
+    // Leave joint
+    pd_client.must_leave_joint(left.get_id());
+    pd_client.must_leave_joint(right.get_id());
 }
 
 #[test]
@@ -501,7 +562,7 @@ fn test_migrate_majority_to_drautosync() {
     assert_eq!(state.state_id, 1);
     assert_eq!(state.state, RegionReplicationState::IntegrityOverLabel);
 
-    // 2. swith to marjority mode.
+    // 2. switch to majority mode.
     cluster.pd_client.switch_replication_mode(None, vec![]);
     thread::sleep(Duration::from_millis(150));
 
@@ -514,9 +575,11 @@ fn test_migrate_majority_to_drautosync() {
     let region_m = cluster.get_region(b"n4");
     let region_k = cluster.get_region(b"k1");
 
-    // 4. switch to dy-auto-sync mode, the new region generated at marjority mode
+    // 4. switch to dy-auto-sync mode, the new region generated at majority mode
     // becomes IntegrityOverLabel again.
-    cluster.pd_client.switch_to_drautosync_mode();
+    cluster
+        .pd_client
+        .switch_replication_mode(Some(DrAutoSyncState::SyncRecover), vec![]);
     thread::sleep(Duration::from_millis(100));
     let state_m = cluster
         .pd_client

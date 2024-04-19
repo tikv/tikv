@@ -641,6 +641,7 @@ batch-keys = 256
 max-write-bytes-per-sec = "10MB"
 enable-compaction-filter = false
 compaction-filter-skip-version-check = true
+num-threads = 2
 
 [pessimistic-txn]
 enabled = false                # test backward compatibility

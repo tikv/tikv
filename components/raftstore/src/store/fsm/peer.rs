@@ -89,15 +89,14 @@ use crate::{
             TRANSFER_LEADER_COMMAND_REPLY_CTX,
         },
         region_meta::RegionMeta,
+        snapshot_backup::{AbortReason, SnapshotBrState, SnapshotBrWaitApplyRequest},
         transport::Transport,
         unsafe_recovery::{
-            exit_joint_request, ForceLeaderState, SnapshotRecoveryState,
-            SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
+            exit_joint_request, ForceLeaderState, UnsafeRecoveryExecutePlanSyncer,
             UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
             UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
         },
-        util,
-        util::{KeysInfoFormatter, LeaseState},
+        util::{self, compare_region_epoch, KeysInfoFormatter, LeaseState},
         worker::{
             Bucket, BucketRange, CleanupTask, ConsistencyCheckTask, GcSnapshotTask, RaftlogGcTask,
             ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
@@ -700,12 +699,7 @@ where
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
                 PeerMsg::Destroy(peer_id) => {
                     if self.fsm.peer.peer_id() == peer_id {
-                        match self.fsm.peer.maybe_destroy(self.ctx) {
-                            None => self.ctx.raft_metrics.message_dropped.applying_snap.inc(),
-                            Some(job) => {
-                                self.handle_destroy_peer(job);
-                            }
-                        }
+                        self.maybe_destroy();
                     }
                 }
             }
@@ -949,7 +943,7 @@ where
     // func be invoked firstly after assigned leader by BR, wait all leader apply to
     // last log index func be invoked secondly wait follower apply to last
     // index, however the second call is broadcast, it may improve in future
-    fn on_snapshot_recovery_wait_apply(&mut self, syncer: SnapshotRecoveryWaitApplySyncer) {
+    fn on_snapshot_br_wait_apply(&mut self, req: SnapshotBrWaitApplyRequest) {
         if let Some(state) = &self.fsm.peer.snapshot_recovery_state {
             warn!(
                 "can't wait apply, another recovery in progress";
@@ -957,20 +951,47 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "state" => ?state,
             );
-            syncer.abort();
+            req.syncer.abort(AbortReason::Duplicated);
             return;
         }
 
         let target_index = self.fsm.peer.raft_group.raft.raft_log.last_index();
+        let applied_index = self.fsm.peer.raft_group.raft.raft_log.applied;
+        let term = self.fsm.peer.raft_group.raft.term;
+        if let Some(e) = &req.expected_epoch {
+            if let Err(err) = compare_region_epoch(e, self.region(), true, true, true) {
+                warn!("epoch not match for wait apply, aborting."; "err" => %err, 
+                    "peer" => self.fsm.peer.peer_id(), 
+                    "region" => self.fsm.peer.region().get_id());
+                let mut pberr = errorpb::Error::from(err);
+                req.syncer
+                    .abort(AbortReason::EpochNotMatch(pberr.take_epoch_not_match()));
+                return;
+            }
+        }
+
+        // trivial case: no need to wait apply -- already the latest.
+        // Return directly for avoiding to print tons of logs.
+        if target_index == applied_index {
+            debug!(
+                "skip trivial case of waiting apply.";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "target_index" => target_index,
+                "applied_index" => applied_index,
+            );
+            SNAP_BR_WAIT_APPLY_EVENT.trivial.inc();
+            return;
+        }
 
         // during the snapshot recovery, broadcast waitapply, some peer may stale
         if !self.fsm.peer.is_leader() {
             info!(
-                "snapshot follower recovery started";
+                "snapshot follower wait apply started";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
                 "target_index" => target_index,
-                "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
+                "applied_index" => applied_index,
                 "pending_remove" => self.fsm.peer.pending_remove,
                 "voter" => self.fsm.peer.raft_group.raft.vote,
             );
@@ -980,7 +1001,8 @@ where
             // case#2 if peer is suppose to remove
             if self.fsm.peer.raft_group.raft.vote == 0 || self.fsm.peer.pending_remove {
                 info!(
-                    "this peer is never vote before or pending remove, it should be skip to wait apply"
+                    "this peer is never vote before or pending remove, it should be skip to wait apply";
+                    "region" => %self.region_id(),
                 );
                 return;
             }
@@ -990,13 +1012,15 @@ where
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
                 "target_index" => target_index,
-                "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
+                "applied_index" => applied_index,
             );
         }
+        SNAP_BR_WAIT_APPLY_EVENT.accepted.inc();
 
-        self.fsm.peer.snapshot_recovery_state = Some(SnapshotRecoveryState::WaitLogApplyToLast {
+        self.fsm.peer.snapshot_recovery_state = Some(SnapshotBrState::WaitLogApplyToLast {
             target_index,
-            syncer,
+            valid_for_term: req.abort_when_term_change.then_some(term),
+            syncer: req.syncer,
         });
         self.fsm
             .peer
@@ -1208,6 +1232,9 @@ where
             }
             CasualMessage::SnapshotApplied => {
                 self.fsm.has_ready = true;
+                if self.fsm.peer.should_destroy_after_apply_snapshot() {
+                    self.maybe_destroy();
+                }
             }
             CasualMessage::Campaign => {
                 let _ = self.fsm.peer.raft_group.campaign();
@@ -1503,9 +1530,7 @@ where
                 self.on_unsafe_recovery_fill_out_report(syncer)
             }
             // for snapshot recovery (safe recovery)
-            SignificantMsg::SnapshotRecoveryWaitApply(syncer) => {
-                self.on_snapshot_recovery_wait_apply(syncer)
-            }
+            SignificantMsg::SnapshotBrWaitApply(syncer) => self.on_snapshot_br_wait_apply(syncer),
             SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),
         }
     }
@@ -2142,6 +2167,11 @@ where
         fail_point!(
             "on_raft_base_tick_idle",
             self.fsm.hibernate_state.group_state() == GroupState::Idle,
+            |_| {}
+        );
+        fail_point!(
+            "on_raft_base_tick_chaos",
+            self.fsm.hibernate_state.group_state() == GroupState::Chaos,
             |_| {}
         );
 
@@ -2828,18 +2858,19 @@ where
     fn on_extra_message(&mut self, mut msg: RaftMessage) {
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
-                if self.fsm.hibernate_state.group_state() == GroupState::Idle {
-                    if msg.get_extra_msg().forcely_awaken {
-                        // Forcely awaken this region by manually setting this GroupState
-                        // into Chaos to trigger a new voting in this RaftGroup.
-                        self.reset_raft_tick(if !self.fsm.peer.is_leader() {
-                            GroupState::Chaos
-                        } else {
-                            GroupState::Ordered
-                        });
+                if msg.get_extra_msg().forcely_awaken {
+                    // Forcely awaken this region by manually setting the GroupState
+                    // into `Chaos` to trigger a new voting in the Raft Group.
+                    // Meanwhile, it avoids the peer entering the `PreChaos` state,
+                    // which would wait for another long tick to enter the `Chaos` state.
+                    self.reset_raft_tick(if !self.fsm.peer.is_leader() {
+                        GroupState::Chaos
                     } else {
-                        self.reset_raft_tick(GroupState::Ordered);
-                    }
+                        GroupState::Ordered
+                    });
+                }
+                if self.fsm.hibernate_state.group_state() == GroupState::Idle {
+                    self.reset_raft_tick(GroupState::Ordered);
                 }
                 if msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
                     && self.fsm.peer.is_leader()
@@ -3592,6 +3623,15 @@ where
         }
     }
 
+    fn maybe_destroy(&mut self) {
+        match self.fsm.peer.maybe_destroy(self.ctx) {
+            None => self.ctx.raft_metrics.message_dropped.applying_snap.inc(),
+            Some(job) => {
+                self.handle_destroy_peer(job);
+            }
+        }
+    }
+
     /// Check if destroy can be executed immediately. If it can't, the reason is
     /// returned.
     fn maybe_delay_destroy(&mut self) -> Option<DelayReason> {
@@ -3842,14 +3882,19 @@ where
                     self.fsm.peer.tag
                 );
             } else {
+                // Remove itself from atomic_snap_regions as it has cleaned both
+                // data and metadata.
                 let target_region_id = *meta.targets_map.get(&region_id).unwrap();
-                let is_ready = meta
-                    .atomic_snap_regions
+                meta.atomic_snap_regions
                     .get_mut(&target_region_id)
                     .unwrap()
-                    .get_mut(&region_id)
-                    .unwrap();
-                *is_ready = true;
+                    .remove(&region_id);
+                meta.destroyed_region_for_snap.remove(&region_id);
+                info!("peer has destroyed, clean up for incoming overlapped snapshot";
+                    "region_id" => region_id,
+                    "peer_id" => self.fsm.peer_id(),
+                    "target_region_id" => target_region_id,
+                );
             }
         }
 
@@ -4984,6 +5029,7 @@ where
             "region_id" => self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),
             "region" => ?region,
+            "destroy_regions" => ?persist_res.destroy_regions,
         );
 
         let mut state = self.ctx.global_replication_state.lock().unwrap();
@@ -6396,19 +6442,26 @@ where
         fail_point!("peer_check_stale_state", state != StaleState::Valid, |_| {});
         match state {
             StaleState::Valid => (),
-            StaleState::LeaderMissing => {
-                warn!(
-                    "leader missing longer than abnormal_leader_missing_duration";
-                    "region_id" => self.fsm.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                    "expect" => %self.ctx.cfg.abnormal_leader_missing_duration,
-                );
-                self.ctx
-                    .raft_metrics
-                    .leader_missing
-                    .lock()
-                    .unwrap()
-                    .insert(self.region_id());
+            StaleState::LeaderMissing | StaleState::MaybeLeaderMissing => {
+                if state == StaleState::LeaderMissing {
+                    warn!(
+                        "leader missing longer than abnormal_leader_missing_duration";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "expect" => %self.ctx.cfg.abnormal_leader_missing_duration,
+                    );
+                    self.ctx
+                        .raft_metrics
+                        .leader_missing
+                        .lock()
+                        .unwrap()
+                        .insert(self.region_id());
+                }
+
+                // It's very likely that this is a stale peer. To prevent
+                // resolved ts from being blocked for too long, we check stale
+                // peer eagerly.
+                self.fsm.peer.bcast_check_stale_peer_message(self.ctx);
             }
             StaleState::ToValidate => {
                 // for peer B in case 1 above
