@@ -1000,14 +1000,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         });
         let priority_tag = get_priority_tag(priority);
         keys.sort();
-        let mut i = 1;
-        while i < keys.len() {
-            if keys[i] == keys[i - 1] {
-                keys.remove(i);
-            } else {
-                i += 1;
-            }
-        }
+        keys.dedup();
         let key_ranges = keys
             .iter()
             .map(|k| (k.as_encoded().to_vec(), k.as_encoded().to_vec()))
