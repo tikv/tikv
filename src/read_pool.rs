@@ -474,8 +474,12 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
         pool,
         running_tasks: UNIFIED_READ_POOL_RUNNING_TASKS
             .with_label_values(&[&unified_read_pool_name]),
-        running_threads: UNIFIED_READ_POOL_RUNNING_THREADS
-            .with_label_values(&[&unified_read_pool_name]),
+        running_threads: {
+            let running_threads =
+                UNIFIED_READ_POOL_RUNNING_THREADS.with_label_values(&[&unified_read_pool_name]);
+            running_threads.set(config.max_thread_count as _);
+            running_threads
+        },
         max_tasks: config
             .max_tasks_per_worker
             .saturating_mul(config.max_thread_count),
