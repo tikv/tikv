@@ -335,6 +335,10 @@ impl RangeCacheMemoryEngine {
                     Some((idx, r.split_off(range)))
                 } else if range.contains_range(r) {
                     // todo(SpadeA): merge occurs
+                    info!("range contains r which is unexpected";
+                         "RangeTag"=> &range.tag,
+                         "PendingRangeTag" => &r.tag,
+                    );
                     unimplemented!()
                 } else {
                     None
@@ -360,6 +364,12 @@ impl RangeCacheMemoryEngine {
             range_manager
                 .pending_ranges_loading_data
                 .push_back((range.clone(), rocks_snap, false));
+            info!(
+                "Range to load";
+                "Tag" => &range.tag,
+                "Cached" => range_manager.ranges().len(),
+                "Pending" => range_manager.pending_ranges_loading_data.len(),
+            );
             if let Err(e) = self
                 .bg_worker_manager()
                 .schedule_task(BackgroundTask::LoadRange)
@@ -367,6 +377,7 @@ impl RangeCacheMemoryEngine {
                 error!(
                     "schedule range load failed";
                     "err" => ?e,
+                    "tag" => &range.tag,
                 );
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
