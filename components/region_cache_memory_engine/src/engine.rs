@@ -321,6 +321,7 @@ impl RangeCacheMemoryEngine {
             return RangeCacheStatus::Cached;
         }
 
+        let mut overlapped = false;
         // check whether the range is in pending_range and we can schedule load task if
         // it is
         if let Some((idx, (left_range, right_range))) = range_manager
@@ -333,15 +334,27 @@ impl RangeCacheMemoryEngine {
                     // and push the rest back to `pending_range` so that each range only schedules
                     // load task of its own.
                     Some((idx, r.split_off(range)))
-                } else if range.contains_range(r) {
-                    // todo(SpadeA): merge occurs
-                    unimplemented!()
+                } else if range.overlaps(r) {
+                    // Pending range `range` does not contains the applying range `r` but overlap
+                    // with it, which means the pending range is out dated, we remove it directly.
+                    info!(
+                        "out of date pending ranges";
+                        "applying_range" => ?range,
+                        "pending_range" => ?r,
+                    );
+                    overlapped = true;
+                    Some((idx, (None, None)))
                 } else {
                     None
                 }
             })
         {
             let mut core = RwLockUpgradableReadGuard::upgrade(core);
+
+            if overlapped {
+                core.mut_range_manager().pending_ranges.swap_remove(idx);
+                return RangeCacheStatus::NotInCache;
+            }
 
             let range_manager = core.mut_range_manager();
             if let Some(left_range) = left_range {
@@ -360,6 +373,12 @@ impl RangeCacheMemoryEngine {
             range_manager
                 .pending_ranges_loading_data
                 .push_back((range.clone(), rocks_snap, false));
+            info!(
+                "Range to load";
+                "Tag" => &range.tag,
+                "Cached" => range_manager.ranges().len(),
+                "Pending" => range_manager.pending_ranges_loading_data.len(),
+            );
             if let Err(e) = self
                 .bg_worker_manager()
                 .schedule_task(BackgroundTask::LoadRange)
@@ -367,6 +386,7 @@ impl RangeCacheMemoryEngine {
                 error!(
                     "schedule range load failed";
                     "err" => ?e,
+                    "tag" => &range.tag,
                 );
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
@@ -466,5 +486,46 @@ impl Iterable for RangeCacheMemoryEngine {
     fn iterator_opt(&self, _: &str, _: IterOptions) -> Result<Self::Iterator> {
         // This engine does not support creating iterators directly by the engine.
         panic!("iterator_opt is not supported on creating by RangeCacheMemoryEngine directly")
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use engine_traits::CacheRange;
+
+    use crate::{RangeCacheEngineConfig, RangeCacheMemoryEngine};
+
+    #[test]
+    fn test_overlap_with_pending() {
+        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
+        let range1 = CacheRange::new(b"k1".to_vec(), b"k3".to_vec());
+        engine.load_range(range1).unwrap();
+
+        let range2 = CacheRange::new(b"k1".to_vec(), b"k5".to_vec());
+        engine.prepare_for_apply(&range2);
+        assert!(
+            engine.core.read().range_manager().pending_ranges.is_empty()
+                && engine
+                    .core
+                    .read()
+                    .range_manager()
+                    .pending_ranges_loading_data
+                    .is_empty()
+        );
+
+        let range1 = CacheRange::new(b"k1".to_vec(), b"k3".to_vec());
+        engine.load_range(range1).unwrap();
+
+        let range2 = CacheRange::new(b"k2".to_vec(), b"k5".to_vec());
+        engine.prepare_for_apply(&range2);
+        assert!(
+            engine.core.read().range_manager().pending_ranges.is_empty()
+                && engine
+                    .core
+                    .read()
+                    .range_manager()
+                    .pending_ranges_loading_data
+                    .is_empty()
+        );
     }
 }
