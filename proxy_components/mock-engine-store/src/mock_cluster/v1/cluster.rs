@@ -447,6 +447,10 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         }
     }
 
+    pub fn get_router(&self, node_id: u64) -> Option<RaftRouter<TiFlashEngine, ProxyRaftEngine>> {
+        self.sim.rl().get_router(node_id)
+    }
+
     fn valid_leader_id(&self, region_id: u64, leader_id: u64) -> bool {
         let store_ids = match self.voter_store_ids_of_region(region_id) {
             None => return false,

@@ -82,7 +82,7 @@ fn into_read_index_response<S: engine_traits::Snapshot>(
     resp
 }
 
-fn gen_read_index_raft_cmd_req(req: &mut ReadIndexRequest) -> RaftCmdRequest {
+pub fn gen_read_index_raft_cmd_req(req: &mut ReadIndexRequest) -> RaftCmdRequest {
     let region_id = req.get_context().get_region_id();
     let mut cmd = RaftCmdRequest::default();
     {

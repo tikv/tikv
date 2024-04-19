@@ -359,6 +359,7 @@ unsafe extern "C" fn ffi_release_pre_handled_snapshot(
 pub fn gen_engine_store_server_helper(
     wrap: Pin<&EngineStoreServerWrap>,
 ) -> EngineStoreServerHelper {
+    info!("mock gen_engine_store_server_helper");
     EngineStoreServerHelper {
         magic_number: interfaces_ffi::RAFT_STORE_PROXY_MAGIC_NUMBER,
         version: interfaces_ffi::RAFT_STORE_PROXY_VERSION,
