@@ -63,7 +63,7 @@ pub struct CacheRange {
 impl Debug for CacheRange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CacheRange")
-            .field("tag", &log_wrappers::Value(&self.tag))
+            .field("tag", &self.tag)
             .field("range_start", &log_wrappers::Value(&self.start))
             .field("range_end", &log_wrappers::Value(&self.end))
             .finish()
