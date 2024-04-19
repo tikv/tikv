@@ -569,6 +569,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.peer_heartbeats.remove(&peer_id);
     }
 
+    #[inline]
+    pub fn get_peer_heartbeats(&self) -> &HashMap<u64, Instant> {
+        &self.peer_heartbeats
+    }
+
     /// Returns whether or not the peer sent heartbeat after the provided
     /// deadline time.
     #[inline]

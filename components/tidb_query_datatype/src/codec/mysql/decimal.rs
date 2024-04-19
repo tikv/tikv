@@ -806,6 +806,9 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
         i32::from(word_cnt!(rhs.int_cnt)),
         i32::from(word_cnt!(rhs.frac_cnt)),
     );
+
+    let old_r_int_word_cnt = r_int_word_cnt;
+
     let (int_word_to, frac_word_to) = (
         word_cnt!(lhs.int_cnt + rhs.int_cnt) as usize,
         l_frac_word_cnt + r_frac_word_cnt,
@@ -831,7 +834,7 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
             l_frac_word_cnt = 0;
             r_frac_word_cnt = 0;
         } else {
-            old_frac_word_to -= int_word_to as i32;
+            old_frac_word_to -= frac_word_to as i32;
             old_int_word_to = old_frac_word_to / 2;
             if l_frac_word_cnt <= r_frac_word_cnt {
                 l_frac_word_cnt -= old_int_word_to;
@@ -843,41 +846,43 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
         }
     }
 
-    let mut start_to = int_word_to + frac_word_to;
-    let (offset_min, offset_max) = (0, i32::from(WORD_BUF_LEN));
-    let r_start = num::clamp(r_int_word_cnt + r_frac_word_cnt, offset_min, offset_max) as usize;
-    let left_stop = num::clamp(l_int_word_cnt + l_frac_word_cnt, offset_min, offset_max) as usize;
-    for l_idx in (0..left_stop).rev() {
-        if start_to < r_start {
-            break;
-        }
+    let mut start_to = (int_word_to + frac_word_to - 1) as isize;
+    let r_start = old_r_int_word_cnt + r_frac_word_cnt - 1;
+    let r_stop = old_r_int_word_cnt - r_int_word_cnt;
+    let mut l_idx = l_int_word_cnt + l_frac_word_cnt - 1;
+
+    while l_idx >= 0 {
         let (mut carry, mut idx_to) = (0, start_to);
-        start_to -= 1;
-        for r_idx in (0..r_start).rev() {
-            idx_to -= 1;
-            let p = u64::from(lhs.word_buf[l_idx]) * u64::from(rhs.word_buf[r_idx]);
+        let mut r_idx = r_start;
+        while r_idx >= r_stop {
+            let p =
+                u64::from(lhs.word_buf[l_idx as usize]) * u64::from(rhs.word_buf[r_idx as usize]);
             let hi = p / u64::from(WORD_BASE);
             let lo = p - hi * u64::from(WORD_BASE);
             add(
-                dec.word_buf[idx_to],
+                dec.word_buf[idx_to as usize],
                 lo as u32,
                 &mut carry,
-                &mut dec.word_buf[idx_to],
+                &mut dec.word_buf[idx_to as usize],
             );
             carry += hi as u32;
+            r_idx -= 1;
+            idx_to -= 1;
         }
         while carry > 0 {
-            if idx_to == 0 {
+            if idx_to < 0 {
                 return Res::Overflow(dec);
             }
-            idx_to -= 1;
             add(
-                dec.word_buf[idx_to],
+                dec.word_buf[idx_to as usize],
                 0,
                 &mut carry,
-                &mut dec.word_buf[idx_to],
+                &mut dec.word_buf[idx_to as usize],
             );
+            idx_to -= 1;
         }
+        l_idx -= 1;
+        start_to -= 1;
     }
 
     // Now we have to check for -0.000 case
@@ -3351,6 +3356,32 @@ mod tests {
             let res = (&lhs * &rhs).map(|d| d.to_string());
             assert_eq!(res, exp);
 
+            let res = (&rhs * &lhs).map(|d| d.to_string());
+            assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_mul_truncated() {
+        let cases = vec![(
+            "999999999999999999999999999999999.9999",
+            "766507373740683764182618847769240.9770",
+            Res::Truncated(
+                "766507373740683764182618847769239999923349262625931623581738115223.07600000",
+            ),
+            Res::Truncated(
+                "766507373740683764182618847769240210492626259316235817381152230759.02300000",
+            ),
+        )];
+
+        for (lhs_str, rhs_str, exp_str, rev_exp_str) in cases {
+            let lhs: Decimal = lhs_str.parse().unwrap();
+            let rhs: Decimal = rhs_str.parse().unwrap();
+            let exp = exp_str.map(|s| s.to_owned());
+            let res = (&lhs * &rhs).map(|d| d.to_string());
+            assert_eq!(res, exp);
+
+            let exp = rev_exp_str.map(|s| s.to_owned());
             let res = (&rhs * &lhs).map(|d| d.to_string());
             assert_eq!(res, exp);
         }

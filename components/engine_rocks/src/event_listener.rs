@@ -130,6 +130,7 @@ impl rocksdb::EventListener for RocksEventListener {
                     if let Some(path) = resolve_sst_filename_from_err(&err) {
                         warn!(
                             "detected rocksdb background error";
+                            "reason" => r,
                             "sst" => &path,
                             "err" => &err
                         );
