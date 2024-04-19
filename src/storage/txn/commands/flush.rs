@@ -122,7 +122,8 @@ impl Flush {
             primary: &self.primary,
             txn_size: 0, // txn_size is unknown
             lock_ttl: self.lock_ttl,
-            min_commit_ts: TimeStamp::zero(),
+            // min_commit_ts == 0 will disallow readers pushing it
+            min_commit_ts: self.start_ts.next(),
             need_old_value: extra_op == ExtraOp::ReadOldValue, // FIXME?
             is_retry_request: self.ctx.is_retry_request,
             assertion_level: self.assertion_level,
