@@ -15,7 +15,7 @@ use futures::{
     task::{self, ArcWake, Context, Poll},
 };
 
-use crate::callback::must_call;
+use crate::{callback::must_call, timer::GLOBAL_TIMER_HANDLE};
 
 /// Generates a paired future and callback so that when callback is being
 /// called, its result is automatically passed as a future result.
@@ -50,6 +50,28 @@ where
         arg_on_drop,
     );
     (callback, future)
+}
+
+// Run a future with a timeout on the current thread. Returns Err if times out.
+#[allow(clippy::result_unit_err)]
+pub fn block_on_timeout<F>(fut: F, dur: std::time::Duration) -> Result<F::Output, ()>
+where
+    F: std::future::Future,
+{
+    use futures_util::compat::Future01CompatExt;
+
+    let mut timeout = GLOBAL_TIMER_HANDLE
+        .delay(std::time::Instant::now() + dur)
+        .compat()
+        .fuse();
+    futures::pin_mut!(fut);
+    let mut f = fut.fuse();
+    futures::executor::block_on(async {
+        futures::select! {
+            _ = timeout => Err(()),
+            item = f => Ok(item),
+        }
+    })
 }
 
 /// Create a stream proxy with buffer representing the remote stream. The

@@ -53,17 +53,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ahash"
-version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c99f64d1e06488f620f932677e24bc6e2897582980441ae90a671415bd7ec2f"
-dependencies = [
- "cfg-if 1.0.0",
- "once_cell",
- "version_check 0.9.4",
-]
-
-[[package]]
 name = "aho-corasick"
 version = "0.7.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2380,11 +2369,11 @@ checksum = "d7afe4a420e3fe79967a00898cc1f4db7c8a49a9333a29f8a4bd76a253d5cd04"
 
 [[package]]
 name = "hashbrown"
-version = "0.13.2"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43a3c133739dddd0d2990f9a4bdf8eb4b21ef50e4851ca85ab661199821d510e"
+checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 dependencies = [
- "ahash 0.8.3",
+ "ahash",
 ]
 
 [[package]]
@@ -2602,7 +2591,7 @@ version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "16d4bde3a7105e59c66a4104cfe9606453af1c7a0eac78cb7d5bc263eb762a70"
 dependencies = [
- "ahash 0.7.4",
+ "ahash",
  "atty",
  "indexmap",
  "itoa 1.0.1",
@@ -2774,7 +2763,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git?branch=release-6.5#1bdcc25ed63c42d5271edb7126292a3c5184fe45"
+source = "git+https://github.com/pingcap/kvproto.git?branch=release-6.5#a0e3fbb1eeee6b8e04e2bec6d1ca65dcd9172662"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -2839,7 +2828,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#ef9b4fcf7489584d469723ba894644714b406c0d"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#1f4880c800b923e088883159ebf6e8457003d4ad"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2858,7 +2847,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#ef9b4fcf7489584d469723ba894644714b406c0d"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#1f4880c800b923e088883159ebf6e8457003d4ad"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4131,14 +4120,14 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#39f4db451295dbd8b30db4f94f220182c2c65be9"
+source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-6.5#895ca932caee427a731ee02e898daf9f2a89d348"
 dependencies = [
  "byteorder",
  "crc32fast",
  "crossbeam",
  "fail",
  "fs2",
- "hashbrown 0.13.2",
+ "hashbrown 0.12.3",
  "hex 0.4.2",
  "if_chain",
  "lazy_static",
@@ -4165,7 +4154,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.3.0"
-source = "git+https://github.com/tikv/raft-engine.git#39f4db451295dbd8b30db4f94f220182c2c65be9"
+source = "git+https://github.com/tikv/raft-engine.git?branch=tikv-6.5#895ca932caee427a731ee02e898daf9f2a89d348"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
@@ -4261,6 +4250,8 @@ dependencies = [
  "slog-global",
  "smallvec",
  "sst_importer",
+ "strum 0.20.0",
+ "strum_macros 0.24.3",
  "tempfile",
  "test_sst_importer",
  "thiserror",
@@ -4653,7 +4644,7 @@ version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f06953bb8b9e4307cb7ccc0d9d018e2ddd25a30d32831f631ce4fe8f17671f7"
 dependencies = [
- "ahash 0.7.4",
+ "ahash",
  "bitflags",
  "instant",
  "num-traits",
@@ -4691,7 +4682,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#ef9b4fcf7489584d469723ba894644714b406c0d"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#1f4880c800b923e088883159ebf6e8457003d4ad"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",
@@ -5539,7 +5530,7 @@ version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "063e6045c0e62079840579a7e47a355ae92f60eb74daaf156fb1e84ba164e63f"
 dependencies = [
- "strum_macros 0.24.2",
+ "strum_macros 0.24.3",
 ]
 
 [[package]]
@@ -5556,9 +5547,9 @@ dependencies = [
 
 [[package]]
 name = "strum_macros"
-version = "0.24.2"
+version = "0.24.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4faebde00e8ff94316c01800f9054fd2ba77d30d9e922541913051d1d978918b"
+checksum = "1e385be0d24f186b4ce2f9982191e7101bb737312ad61c1f2f984f34bcf85d59"
 dependencies = [
  "heck 0.4.0",
  "proc-macro2",
@@ -5748,6 +5739,7 @@ dependencies = [
  "grpcio",
  "kvproto",
  "protobuf",
+ "raftstore",
  "rand 0.8.5",
  "tempfile",
  "test_raftstore",
@@ -6190,7 +6182,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "6.5.6"
+version = "6.5.9"
 dependencies = [
  "anyhow",
  "api_version",
