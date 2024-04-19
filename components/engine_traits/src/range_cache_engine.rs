@@ -57,26 +57,33 @@ pub trait RangeHintService: Send + Sync {}
 pub struct CacheRange {
     pub start: Vec<u8>,
     pub end: Vec<u8>,
+    pub tag: String,
 }
 
 impl Debug for CacheRange {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CacheRange")
+            .field("tag", &self.tag)
             .field("range_start", &log_wrappers::Value(&self.start))
-            .field("value", &log_wrappers::Value(&self.end))
+            .field("range_end", &log_wrappers::Value(&self.end))
             .finish()
     }
 }
 
 impl CacheRange {
     pub fn new(start: Vec<u8>, end: Vec<u8>) -> Self {
-        Self { start, end }
+        Self {
+            start,
+            end,
+            tag: "".to_owned(),
+        }
     }
 
     pub fn from_region(region: &metapb::Region) -> Self {
         Self {
             start: enc_start_key(region),
             end: enc_end_key(region),
+            tag: format!("[region_id={}]", region.get_id()),
         }
     }
 }
@@ -129,6 +136,7 @@ impl CacheRange {
             Some(CacheRange {
                 start: self.start.clone(),
                 end: range.start.clone(),
+                tag: "".to_owned(),
             })
         } else {
             None
@@ -137,6 +145,7 @@ impl CacheRange {
             Some(CacheRange {
                 start: range.end.clone(),
                 end: self.end.clone(),
+                tag: "".to_owned(),
             })
         } else {
             None
