@@ -808,8 +808,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
             let begin_instant = Instant::now();
 
             let start_ts = request.get_start_ts().into();
-            let start_ts_u = start_ts.clone().into_inner();
-            info!("!!!! advance max_ts to {}", start_ts_u; "msg" => ?msg);
+            info!("!!!! advance max_ts to {}", start_ts; "msg" => ?msg);
             self.concurrency_manager.update_max_ts(start_ts);
             for range in request.mut_key_ranges().iter_mut() {
                 let key_bound = |key: Vec<u8>| {
