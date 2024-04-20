@@ -53,7 +53,6 @@ use smallvec::{smallvec, SmallVec};
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE};
 use tracker::{get_tls_tracker_token, set_tls_tracker_token, TrackerToken, GLOBAL_TRACKERS};
-use txn_types::TimeStamp;
 
 use crate::{
     server::lock_manager::waiter_manager,
