@@ -54,7 +54,6 @@ use tikv_util::{
     deadline::Deadline, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
 };
 use tracker::{get_tls_tracker_token, set_tls_tracker_token, TrackerToken};
-use txn_types::TimeStamp;
 
 use crate::{
     server::lock_manager::waiter_manager,

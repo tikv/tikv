@@ -48,18 +48,7 @@ use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{config::*, server::KvEngineFactoryBuilder, storage::point_key_range};
 pub use tikv_util::store::{find_peer, new_learner_peer, new_peer};
-<<<<<<< HEAD
 use tikv_util::{config::*, escape, time::ThreadReadId, worker::LazyWorker, HandyRwLock};
-=======
-use tikv_util::{
-    config::*,
-    escape,
-    mpsc::future,
-    time::{Instant, ThreadReadId},
-    worker::LazyWorker,
-    HandyRwLock,
-};
->>>>>>> 2332f9f8c6 (tests,storage: Fix flaky test_rawkv::test_leader_transfer (#16827))
 use txn_types::Key;
 
 use crate::{Cluster, Config, ServerCluster, Simulator};
@@ -1222,7 +1211,7 @@ pub fn must_raw_put(client: &TikvClient, ctx: Context, key: Vec<u8>, value: Vec<
     put_req.value = value;
 
     let retryable = |err: &kvproto::errorpb::Error| -> bool { err.has_max_timestamp_not_synced() };
-    let start = Instant::now_coarse();
+    let start = tikv_util::time::Instant::now_coarse();
     loop {
         let put_resp = client.raw_put(&put_req).unwrap();
         if put_resp.has_region_error() {
