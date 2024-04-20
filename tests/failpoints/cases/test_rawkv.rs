@@ -276,7 +276,7 @@ fn test_region_merge() {
     suite.stop();
 }
 
-// Verify the raw key guard correctness in apiv2
+// Verify the raw key guard correctness in APIv2.
 #[test]
 fn test_raw_put_key_guard() {
     let mut suite = TestSuite::new(3, ApiVersion::V2);
@@ -297,14 +297,10 @@ fn test_raw_put_key_guard() {
 
     let copy_test_key = test_key.clone();
     let copy_test_value = test_value.clone();
-    let apply_wait_timeout = 2000; // ms, assume send request and apply can be finished in 2s.
     fail::cfg(pause_write_fp, "pause").unwrap();
     let handle = thread::spawn(move || {
         must_raw_put(&client, ctx, copy_test_key, copy_test_value);
     });
-<<<<<<< HEAD
-    thread::sleep(Duration::from_millis(apply_wait_timeout));
-=======
 
     // Wait for global_min_lock_ts.
     sleep_ms(500);
@@ -315,7 +311,6 @@ fn test_raw_put_key_guard() {
         }
         sleep_ms(200);
     }
->>>>>>> cb281b5127 (tests: Fix flaky test_raw_put_key_guard (#16826))
 
     // Before raw_put finish, min_ts should be the ts of "key guard" of the raw_put
     // request.
