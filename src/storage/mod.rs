@@ -1068,7 +1068,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         let _guard = sample.observe_cpu();
                         let mut reader = MvccReader::new(
                             snapshot,
-                            Some(ScanMode::Forward),
+                            // TODO: compare the performance of Forward scan and multi get operations.
+                            None,
                             !ctx.get_not_fill_cache(),
                         );
                         // TODO: metrics
