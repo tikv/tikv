@@ -176,6 +176,12 @@ pub fn check_txn_status_lock_exists(
         }
         assert!(check_result.0.is_none() && check_result.1.is_none());
     } else if lock.ts.physical() + lock.ttl < current_ts.physical() {
+        if lock.generation > 0 {
+            warn!("flushed lock has been rollbacked";
+                "lock" => ?&lock,
+                "current_ts" => current_ts,
+            );
+        }
         let released = rollback_lock(txn, reader, primary_key, &lock, is_pessimistic_txn, true)?;
         MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
         return Ok((TxnStatus::TtlExpire, released));
