@@ -27,7 +27,7 @@ deny = [
     { name = "ecdsa" },
     { name = "ed25519" },
     # Message authentication codes
-    { name = "hamc" },
+    { name = "hmac" },
     # We prefer the system native TLS or OpenSSL.
     { name = "rustls" },
     { name = "ring" },
