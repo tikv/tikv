@@ -875,10 +875,6 @@ where
         inspector: LatencyInspector,
     },
 
-    /// Message only used for test.
-    #[cfg(any(test, feature = "testexport"))]
-    Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
-
     UnsafeRecoveryReport(pdpb::StoreReport),
     UnsafeRecoveryCreatePeer {
         syncer: UnsafeRecoveryExecutePlanSyncer,
@@ -890,6 +886,10 @@ where
     AwakenRegions {
         abnormal_stores: Vec<u64>,
     },
+
+    /// Message only used for test.
+    #[cfg(any(test, feature = "testexport"))]
+    Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
 }
 
 impl<EK: KvEngine> ResourceMetered for StoreMsg<EK> {}
@@ -916,8 +916,6 @@ where
             ),
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
             StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
-            #[cfg(any(test, feature = "testexport"))]
-            StoreMsg::Validate(_) => write!(fmt, "Validate config"),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
             StoreMsg::LatencyInspect { .. } => write!(fmt, "LatencyInspect"),
             StoreMsg::UnsafeRecoveryReport(..) => write!(fmt, "UnsafeRecoveryReport"),
@@ -926,6 +924,8 @@ where
             }
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
             StoreMsg::AwakenRegions { .. } => write!(fmt, "AwakenRegions"),
+            #[cfg(any(test, feature = "testexport"))]
+            StoreMsg::Validate(_) => write!(fmt, "Validate config"),
         }
     }
 }
@@ -939,15 +939,15 @@ impl<EK: KvEngine> StoreMsg<EK> {
             StoreMsg::ClearRegionSizeInRange { .. } => 3,
             StoreMsg::Tick(_) => 4,
             StoreMsg::Start { .. } => 5,
+            StoreMsg::UpdateReplicationMode(_) => 6,
+            StoreMsg::LatencyInspect { .. } => 7,
+            StoreMsg::UnsafeRecoveryReport(_) => 8,
+            StoreMsg::UnsafeRecoveryCreatePeer { .. } => 9,
+            StoreMsg::GcSnapshotFinish => 10,
+            StoreMsg::AwakenRegions { .. } => 11,
+            StoreMsg::ValidateSstResult { .. } => 12,
             #[cfg(any(test, feature = "testexport"))]
-            StoreMsg::Validate(_) => 6,
-            StoreMsg::UpdateReplicationMode(_) => 7,
-            StoreMsg::LatencyInspect { .. } => 8,
-            StoreMsg::UnsafeRecoveryReport(_) => 9,
-            StoreMsg::UnsafeRecoveryCreatePeer { .. } => 10,
-            StoreMsg::GcSnapshotFinish => 11,
-            StoreMsg::AwakenRegions { .. } => 12,
-            StoreMsg::ValidateSstResult { .. } => 13,
+            StoreMsg::Validate(_) => 13,
         }
     }
 }
