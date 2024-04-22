@@ -1252,8 +1252,6 @@ impl<T: Simulator> Cluster<T> {
         );
     }
 
-<<<<<<< HEAD
-=======
     pub fn wait_peer_state(&self, region_id: u64, store_id: u64, peer_state: PeerState) {
         for _ in 0..100 {
             if let Some(state) = self
@@ -1303,7 +1301,6 @@ impl<T: Simulator> Cluster<T> {
         );
     }
 
->>>>>>> 6ec0b703e7 (*: fix issue of stale peer block resolve-ts cause by ignore gc message (#16505))
     pub fn wait_last_index(
         &mut self,
         region_id: u64,
