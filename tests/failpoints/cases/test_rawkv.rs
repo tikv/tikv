@@ -290,7 +290,8 @@ fn test_raw_put_key_guard() {
     let region_id = region.get_id();
     let client = suite.get_client(region_id);
     let ctx = suite.get_context(region_id);
-    let node_id = region.get_peers()[0].get_id();
+    let leader = suite.cluster.leader_of_region(region_id).unwrap();
+    let node_id = leader.get_id();
     let leader_cm = suite.cluster.sim.rl().get_concurrency_manager(node_id);
     let ts_provider = suite.get_causal_ts_provider(node_id).unwrap();
     let ts = block_on(ts_provider.async_get_ts()).unwrap();
@@ -305,9 +306,10 @@ fn test_raw_put_key_guard() {
     // Wait for global_min_lock_ts.
     sleep_ms(500);
     let start = Instant::now();
-    while leader_cm.global_min_lock_ts().is_none()
-        && start.saturating_elapsed() < Duration::from_secs(5)
-    {
+    while leader_cm.global_min_lock_ts().is_none() {
+        if start.saturating_elapsed() > Duration::from_secs(5) {
+            panic!("wait for global_min_lock_ts timeout");
+        }
         sleep_ms(200);
     }
 

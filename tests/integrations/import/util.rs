@@ -16,10 +16,7 @@ const CLEANUP_SST_MILLIS: u64 = 10;
 pub fn new_cluster(cfg: TikvConfig) -> (Cluster<RocksEngine, ServerCluster<RocksEngine>>, Context) {
     let count = 1;
     let mut cluster = new_server_cluster(0, count);
-    cluster.cfg = Config {
-        tikv: cfg,
-        prefer_mem: true,
-    };
+    cluster.set_cfg(cfg);
     cluster.run();
 
     let region_id = 1;
@@ -41,10 +38,7 @@ pub fn new_cluster_v2(
 ) {
     let count = 1;
     let mut cluster = test_raftstore_v2::new_server_cluster(0, count);
-    cluster.cfg = Config {
-        tikv: cfg,
-        prefer_mem: true,
-    };
+    cluster.set_cfg(cfg);
     cluster.run();
 
     let region_id = 1;
