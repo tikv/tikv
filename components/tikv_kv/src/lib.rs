@@ -532,6 +532,10 @@ pub trait SnapshotExt {
     fn get_buckets(&self) -> Option<Arc<BucketMeta>> {
         None
     }
+
+    fn range_cache_engine_snap(&self) -> bool {
+        false
+    }
 }
 
 pub struct DummySnapshotExt;

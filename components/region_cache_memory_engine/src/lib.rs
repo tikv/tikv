@@ -93,8 +93,8 @@ impl RangeCacheEngineConfig {
         RangeCacheEngineConfig {
             enabled: true,
             gc_interval: ReadableDuration(Duration::from_secs(180)),
-            soft_limit_threshold: Some(ReadableSize::gb(1)),
-            hard_limit_threshold: Some(ReadableSize::gb(2)),
+            soft_limit_threshold: Some(ReadableSize::gb(100)),
+            hard_limit_threshold: Some(ReadableSize::gb(200)),
         }
     }
 }
