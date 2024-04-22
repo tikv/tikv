@@ -515,6 +515,59 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
     }
 }
 
+/// This will only collect min_ts, max_ts and num_rows.
+pub struct MvccPropertiesCollectorLite {
+    props: MvccProperties,
+    num_errors: u64,
+}
+
+impl Default for MvccPropertiesCollectorLite {
+    fn default() -> MvccPropertiesCollectorLite {
+        MvccPropertiesCollectorLite {
+            props: MvccProperties::new(),
+            num_errors: 0,
+        }
+    }
+}
+
+impl TablePropertiesCollector for MvccPropertiesCollectorLite {
+    fn add(&mut self, key: &[u8], _value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
+        if !matches!(
+            entry_type,
+            DBEntryType::Put | DBEntryType::Delete | DBEntryType::BlobIndex
+        ) {
+            return;
+        }
+
+        let ts = match Key::decode_ts_from(key) {
+            Ok(ts) => ts,
+            Err(_) => {
+                self.num_errors += 1;
+                return;
+            }
+        };
+
+        self.props.min_ts = cmp::min(self.props.min_ts, ts);
+        self.props.max_ts = cmp::max(self.props.max_ts, ts);
+        self.props.num_rows += 1;
+    }
+
+    fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
+        RocksMvccProperties::encode(&self.props).0
+    }
+}
+
+#[derive(Default)]
+pub struct LiteMvccPropertiesCollectorFactory {}
+
+impl TablePropertiesCollectorFactory<MvccPropertiesCollectorLite>
+    for LiteMvccPropertiesCollectorFactory
+{
+    fn create_table_properties_collector(&mut self, _: u32) -> MvccPropertiesCollectorLite {
+        MvccPropertiesCollectorLite::default()
+    }
+}
+
 /// Can be used for write CF of TiDB/TxnKV, default CF of RawKV.
 #[derive(Default)]
 pub struct MvccPropertiesCollectorFactory {}

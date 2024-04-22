@@ -37,10 +37,11 @@ use engine_rocks::{
         FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
         RangeCompactionFilterFactory, StackingCompactionFilterFactory,
     },
-    RaftDbLogger, RangePropertiesCollectorFactory, RawMvccPropertiesCollectorFactory,
-    RocksCfOptions, RocksDbOptions, RocksEngine, RocksEventListener, RocksStatistics,
-    RocksTitanDbOptions, RocksdbLogger, TtlPropertiesCollectorFactory,
-    DEFAULT_PROP_KEYS_INDEX_DISTANCE, DEFAULT_PROP_SIZE_INDEX_DISTANCE,
+    LiteMvccPropertiesCollectorFactory, RaftDbLogger, RangePropertiesCollectorFactory,
+    RawMvccPropertiesCollectorFactory, RocksCfOptions, RocksDbOptions, RocksEngine,
+    RocksEventListener, RocksStatistics, RocksTitanDbOptions, RocksdbLogger,
+    TtlPropertiesCollectorFactory, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
+    DEFAULT_PROP_SIZE_INDEX_DISTANCE,
 };
 use engine_traits::{
     CfOptions as _, DbOptions as _, MiscExt, TitanCfOptions as _, CF_DEFAULT, CF_LOCK, CF_RAFT,
@@ -805,6 +806,10 @@ impl DefaultCfConfig {
             prop_keys_index_distance: self.prop_keys_index_distance,
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
+        cf_opts.add_table_properties_collector_factory(
+            "tikv.mvcc-properties-collector-lite",
+            LiteMvccPropertiesCollectorFactory::default(),
+        );
         if let Some(factory) = filter_factory {
             match api_version {
                 ApiVersion::V1 => {
