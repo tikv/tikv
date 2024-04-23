@@ -898,7 +898,10 @@ fn test_serde_default_config() {
 
     let content = read_file_in_project_dir("integrations/config/test-default.toml");
     let mut cfg: TikvConfig = toml::from_str(&content).unwrap();
-    assert_eq!(cfg.raft_engine.config().batch_compression_threshold, RaftEngineReadableSize::kb(8)); // default: 8kb in RaftEngine
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        RaftEngineReadableSize::kb(8)
+    ); // default: 8kb in RaftEngine
     cfg.raft_engine.mut_config().batch_compression_threshold = RaftEngineReadableSize::kb(4);
     assert_eq!(cfg, TikvConfig::default());
 }
