@@ -894,26 +894,29 @@ pub fn quarter(t: &DateTime) -> Result<Option<Int>> {
     Ok(Some(Int::from(t.month() + 2) / 3))
 }
 
-/// Cast Duration into string representation and drop subsec if possible.
-fn duration_to_string(duration: Duration) -> String {
-    match duration.subsec_micros() {
-        0 => duration.minimize_fsp().to_string(),
-        _ => duration.maximize_fsp().to_string(),
-    }
-}
-
-/// Cast DateTime into string representation and drop subsec if possible.
-fn datetime_to_string(mut datetime: DateTime) -> String {
-    match datetime.micro() {
-        0 => datetime.minimize_fsp(),
-        _ => datetime.maximize_fsp(),
-    };
-    datetime.to_string()
-}
-
-#[rpn_fn()]
+#[rpn_fn(nullable, capture = [ctx])]
 #[inline]
-pub fn add_date_string_int(_arg0: BytesRef, _arg1: &Int, _arg2: BytesRef) -> Result<Option<Bytes>> {
+pub fn add_date_string_int(
+    ctx: &mut EvalContext,
+    date_str: Option<BytesRef>,
+    interval: Option<&Int>,
+    unit_str: Option<BytesRef>
+) -> Result<Option<Bytes>> {
+    if unit_str.is_none() || date_str.is_none() {
+        return Ok(None);
+    }
+    let date = get_date_from_string(ctx, &date_str, &unit_str);
+    if date.is_zero() {
+        return ctx
+        .handle_invalid_time_error(Error::incorrect_datetime_value(t))
+        .map(|_| Ok(None))?;
+    }
+
+    if interval.is_none() {
+        return Ok(None);
+    }
+    let interval_val = get_interval_from_int(interval)
+
     Ok(None)
 }
 
@@ -945,6 +948,62 @@ pub fn sub_date_string_real(_arg0: BytesRef, _arg1: &Real, _arg2: BytesRef) -> R
 #[inline]
 pub fn sub_date_datetime_int(_arg0: &DateTime, _arg1: &Int, _arg2: BytesRef) -> Result<Option<Bytes>> {
     Ok(None)
+}
+
+fn get_date_from_string(ctx: &mut EvalContext, str: BytesRef, unit: BytesRef) -> Time {
+    let str = String::from_utf8_lossy(str);
+    let tp = TimeType::Date;
+    if !is_date_format(str) || is_clock_unit(unit) {
+        tp = TimeType::DateTime;
+    }
+    Time::parse(
+        ctx,
+        &str,
+        tp,
+        MAX_FSP,
+        false,
+    )
+    .map(Some)
+    .or_else(|e| Ok(ctx.handle_invalid_time_error(e).map(|_| None)?))
+}
+
+fn is_clock_unit(unit: BytesRef) -> bool {
+	// switch strings.ToUpper(unit) {
+    //     case "MICROSECOND", "SECOND", "MINUTE", "HOUR",
+    //         "SECOND_MICROSECOND", "MINUTE_MICROSECOND", "HOUR_MICROSECOND", "DAY_MICROSECOND",
+    //         "MINUTE_SECOND", "HOUR_SECOND", "DAY_SECOND",
+    //         "HOUR_MINUTE", "DAY_MINUTE",
+    //         "DAY_HOUR":
+    //         return true
+    //     default:
+    //         return false
+    //     }
+    false
+}
+
+fn is_date_format(format: BytesRef) -> bool {
+    false
+}
+
+fn get_interval_from_int(val: &Int) -> Bytes {
+    ""
+}
+
+/// Cast Duration into string representation and drop subsec if possible.
+fn duration_to_string(duration: Duration) -> String {
+    match duration.subsec_micros() {
+        0 => duration.minimize_fsp().to_string(),
+        _ => duration.maximize_fsp().to_string(),
+    }
+}
+
+/// Cast DateTime into string representation and drop subsec if possible.
+fn datetime_to_string(mut datetime: DateTime) -> String {
+    match datetime.micro() {
+        0 => datetime.minimize_fsp(),
+        _ => datetime.maximize_fsp(),
+    };
+    datetime.to_string()
 }
 
 #[cfg(test)]
