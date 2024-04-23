@@ -2828,7 +2828,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#1f4880c800b923e088883159ebf6e8457003d4ad"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#adf04900485ee780c5276b22bbe7e47b3c14e787"
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2847,7 +2847,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#1f4880c800b923e088883159ebf6e8457003d4ad"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#adf04900485ee780c5276b22bbe7e47b3c14e787"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4682,7 +4682,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#1f4880c800b923e088883159ebf6e8457003d4ad"
+source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-6.5#adf04900485ee780c5276b22bbe7e47b3c14e787"
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",
