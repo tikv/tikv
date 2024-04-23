@@ -1182,7 +1182,7 @@ where
     #[inline]
     pub fn maybe_update_apply_unpersisted_log_state(&mut self, applied_index: u64) {
         if self.min_safe_index_for_unpersisted_apply > 0
-            && self.min_safe_index_for_unpersisted_apply < applied_index
+            && self.min_safe_index_for_unpersisted_apply <= applied_index
         {
             if self.max_apply_unpersisted_log_limit > 0
                 && self
