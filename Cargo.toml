@@ -244,9 +244,6 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "7693954bd1dd86e
 # After the PR to rust-rocksdb is merged, remember to comment this out and run `cargo update -p rocksdb`.
 # [patch.'https://github.com/tikv/rust-rocksdb']
 # rocksdb = { git = "https://github.com/your_github_id/rust-rocksdb", branch = "your_branch" }
-[patch.'https://github.com/tikv/raft-engine']
-raft-engine = { git = "https://github.com/LykxSassinator/raft-engine", branch = "add_write_compression_ratio" }
-raft-engine-ctl = { git = "https://github.com/LykxSassinator/raft-engine", branch = "add_write_compression_ratio" }
 
 [workspace]
 # See https://github.com/rust-lang/rfcs/blob/master/text/2957-cargo-features2.md

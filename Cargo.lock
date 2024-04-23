@@ -4155,8 +4155,8 @@ dependencies = [
 
 [[package]]
 name = "raft-engine"
-version = "0.4.1"
-source = "git+https://github.com/LykxSassinator/raft-engine?branch=add_write_compression_ratio#9db431fcb7cf7b6f4839ea383b7bb2089e133205"
+version = "0.4.2"
+source = "git+https://github.com/tikv/raft-engine.git#cd1533d79cfea02d005b458bd70fd9675846c9c6"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4189,8 +4189,8 @@ dependencies = [
 
 [[package]]
 name = "raft-engine-ctl"
-version = "0.4.1"
-source = "git+https://github.com/LykxSassinator/raft-engine?branch=add_write_compression_ratio#9db431fcb7cf7b6f4839ea383b7bb2089e133205"
+version = "0.4.2"
+source = "git+https://github.com/tikv/raft-engine.git#cd1533d79cfea02d005b458bd70fd9675846c9c6"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
