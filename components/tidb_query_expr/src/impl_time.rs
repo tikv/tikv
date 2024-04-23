@@ -911,6 +911,12 @@ fn datetime_to_string(mut datetime: DateTime) -> String {
     datetime.to_string()
 }
 
+#[rpn_fn()]
+#[inline]
+pub fn add_date(_arg0: &DateTime, _arg1: &DateTime) -> Result<Option<Bytes>> {
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use tidb_query_datatype::{
