@@ -22,7 +22,7 @@ use grpcio_health::{proto::HealthCheckRequest, *};
 use kvproto::{
     coprocessor::*,
     debugpb,
-    kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
+    kvrpcpb::{Action::MinCommitTsPushed, PrewriteRequestPessimisticAction::*, *},
     metapb, raft_serverpb,
     raft_serverpb::*,
     tikvpb::*,
@@ -3310,7 +3310,8 @@ fn test_pipelined_dml_read_write_conflict() {
     let (_cluster, client, ctx) = new_cluster();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
-    // flushed lock can be observed by another read
+    // flushed lock can be observed by another read, and its min_commit_ts can be
+    // pushed
     let mut req = FlushRequest::default();
     req.set_mutations(
         vec![Mutation {
@@ -3336,6 +3337,18 @@ fn test_pipelined_dml_read_write_conflict() {
     let resp = client.kv_get(&req).unwrap();
     assert!(!resp.has_region_error());
     assert!(resp.get_error().has_locked());
+
+    // reader pushing the lock's min_commit_ts
+    let mut req = CheckTxnStatusRequest::default();
+    req.set_context(ctx.clone());
+    req.set_primary_key(k.clone());
+    req.set_lock_ts(1);
+    req.set_caller_start_ts(2);
+    req.set_current_ts(2);
+    let resp = client.kv_check_txn_status(&req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(!resp.has_error());
+    assert_eq!(resp.get_action(), MinCommitTsPushed);
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
