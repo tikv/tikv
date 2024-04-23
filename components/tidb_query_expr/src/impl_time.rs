@@ -913,7 +913,37 @@ fn datetime_to_string(mut datetime: DateTime) -> String {
 
 #[rpn_fn()]
 #[inline]
-pub fn add_date(_arg0: &DateTime, _arg1: &DateTime) -> Result<Option<Bytes>> {
+pub fn add_date_string_int(_arg0: BytesRef, _arg1: &Int, _arg2: BytesRef) -> Result<Option<Bytes>> {
+    Ok(None)
+}
+
+#[rpn_fn()]
+#[inline]
+pub fn add_date_string_real(_arg0: BytesRef, _arg1: &Real, _arg2: BytesRef) -> Result<Option<Bytes>> {
+    Ok(None)
+}
+
+#[rpn_fn()]
+#[inline]
+pub fn add_date_datetime_int(_arg0: &DateTime, _arg1: &Int, _arg2: BytesRef) -> Result<Option<Bytes>> {
+    Ok(None)
+}
+
+#[rpn_fn()]
+#[inline]
+pub fn sub_date_string_int(_arg0: BytesRef, _arg1: &Int, _arg2: BytesRef) -> Result<Option<Bytes>> {
+    Ok(None)
+}
+
+#[rpn_fn()]
+#[inline]
+pub fn sub_date_string_real(_arg0: BytesRef, _arg1: &Real, _arg2: BytesRef) -> Result<Option<Bytes>> {
+    Ok(None)
+}
+
+#[rpn_fn()]
+#[inline]
+pub fn sub_date_datetime_int(_arg0: &DateTime, _arg1: &Int, _arg2: BytesRef) -> Result<Option<Bytes>> {
     Ok(None)
 }
 

@@ -852,12 +852,12 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::StringStringTimeDiff => string_string_time_diff_fn_meta(),
         ScalarFuncSig::DurationStringTimeDiff => duration_string_time_diff_fn_meta(),
         ScalarFuncSig::Quarter => quarter_fn_meta(),
-        ScalarFuncSig::AddDateStringInt => add_date_fn_meta(),
-        ScalarFuncSig::AddDateStringReal => add_date_fn_meta(),
-        ScalarFuncSig::AddDateDatetimeInt => add_date_fn_meta(),
-        ScalarFuncSig::SubDateStringInt => add_date_fn_meta(),
-        ScalarFuncSig::SubDateStringReal => add_date_fn_meta(),
-        ScalarFuncSig::SubDateDatetimeInt => add_date_fn_meta(),
+        ScalarFuncSig::AddDateStringInt => add_date_string_int_fn_meta(),
+        ScalarFuncSig::AddDateStringReal => add_date_string_real_fn_meta(),
+        ScalarFuncSig::AddDateDatetimeInt => add_date_datetime_int_fn_meta(),
+        ScalarFuncSig::SubDateStringInt => sub_date_string_int_fn_meta(),
+        ScalarFuncSig::SubDateStringReal => sub_date_string_real_fn_meta(),
+        ScalarFuncSig::SubDateDatetimeInt => sub_date_datetime_int_fn_meta(),
         _ => return Err(other_err!(
             "ScalarFunction {:?} is not supported in batch mode",
             value
