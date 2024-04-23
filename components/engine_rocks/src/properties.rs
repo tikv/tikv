@@ -9,7 +9,9 @@ use std::{
 };
 
 use api_version::{ApiV2, KeyMode, KvFormat};
-use engine_traits::{raw_ttl::ttl_current_ts, MvccProperties, Range, RangeStats};
+use engine_traits::{
+    raw_ttl::ttl_current_ts, DefaultCfProperties, MvccProperties, Range, RangeStats,
+};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
@@ -100,6 +102,14 @@ impl UserProperties {
 
     pub fn encode_handles(&mut self, name: &str, handles: &IndexHandles) {
         self.encode(name, handles.encode())
+    }
+
+    pub fn encode_u64s(&mut self, name: &str, u64s: impl IntoIterator<Item = u64>) {
+        let mut val = vec![];
+        for u in u64s {
+            val.encode_var_u64(u).unwrap();
+        }
+        self.insert(name.as_bytes().to_owned(), val);
     }
 }
 
@@ -516,22 +526,22 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
 }
 
 /// This will only collect min_ts, max_ts and num_rows.
-pub struct MvccPropertiesCollectorLite {
-    props: MvccProperties,
+pub struct DefaultCfPropertiesCollector {
+    props: DefaultCfProperties,
     num_errors: u64,
 }
 
-impl Default for MvccPropertiesCollectorLite {
-    fn default() -> MvccPropertiesCollectorLite {
-        MvccPropertiesCollectorLite {
-            props: MvccProperties::new(),
+impl Default for DefaultCfPropertiesCollector {
+    fn default() -> DefaultCfPropertiesCollector {
+        DefaultCfPropertiesCollector {
+            props: DefaultCfProperties::default(),
             num_errors: 0,
         }
     }
 }
 
-impl TablePropertiesCollector for MvccPropertiesCollectorLite {
-    fn add(&mut self, key: &[u8], _value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
+impl TablePropertiesCollector for DefaultCfPropertiesCollector {
+    fn add(&mut self, key: &[u8], value: &[u8], entry_type: DBEntryType, _: u64, _: u64) {
         if !matches!(
             entry_type,
             DBEntryType::Put | DBEntryType::Delete | DBEntryType::BlobIndex
@@ -550,21 +560,32 @@ impl TablePropertiesCollector for MvccPropertiesCollectorLite {
         self.props.min_ts = cmp::min(self.props.min_ts, ts);
         self.props.max_ts = cmp::max(self.props.max_ts, ts);
         self.props.num_rows += 1;
+        if entry_type == DBEntryType::BlobIndex {
+            match TitanBlobIndex::decode(value) {
+                Err(_) => {
+                    self.num_errors += 1;
+                }
+                Ok(idx) => {
+                    self.props.blob_files.insert(idx.file_number);
+                    self.props.num_value_in_blob += 1;
+                }
+            }
+        }
     }
 
     fn finish(&mut self) -> HashMap<Vec<u8>, Vec<u8>> {
-        RocksMvccProperties::encode(&self.props).0
+        RocksDefaultCfProperties::encode(&self.props).0
     }
 }
 
 #[derive(Default)]
-pub struct LiteMvccPropertiesCollectorFactory {}
+pub struct DefaultCfPropertiesCollectorFactory {}
 
-impl TablePropertiesCollectorFactory<MvccPropertiesCollectorLite>
-    for LiteMvccPropertiesCollectorFactory
+impl TablePropertiesCollectorFactory<DefaultCfPropertiesCollector>
+    for DefaultCfPropertiesCollectorFactory
 {
-    fn create_table_properties_collector(&mut self, _: u32) -> MvccPropertiesCollectorLite {
-        MvccPropertiesCollectorLite::default()
+    fn create_table_properties_collector(&mut self, _: u32) -> DefaultCfPropertiesCollector {
+        DefaultCfPropertiesCollector::default()
     }
 }
 

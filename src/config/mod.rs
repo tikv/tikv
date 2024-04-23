@@ -37,7 +37,7 @@ use engine_rocks::{
         FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
         RangeCompactionFilterFactory, StackingCompactionFilterFactory,
     },
-    LiteMvccPropertiesCollectorFactory, RaftDbLogger, RangePropertiesCollectorFactory,
+    DefaultCfPropertiesCollectorFactory, RaftDbLogger, RangePropertiesCollectorFactory,
     RawMvccPropertiesCollectorFactory, RocksCfOptions, RocksDbOptions, RocksEngine,
     RocksEventListener, RocksStatistics, RocksTitanDbOptions, RocksdbLogger,
     TtlPropertiesCollectorFactory, DEFAULT_PROP_KEYS_INDEX_DISTANCE,
@@ -807,8 +807,8 @@ impl DefaultCfConfig {
         };
         cf_opts.add_table_properties_collector_factory("tikv.range-properties-collector", f);
         cf_opts.add_table_properties_collector_factory(
-            "tikv.mvcc-properties-collector-lite",
-            LiteMvccPropertiesCollectorFactory::default(),
+            "tikv.default-cf-properties-collector",
+            DefaultCfPropertiesCollectorFactory::default(),
         );
         if let Some(factory) = filter_factory {
             match api_version {
