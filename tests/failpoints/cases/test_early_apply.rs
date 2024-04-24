@@ -41,6 +41,7 @@ fn test_multi_early_apply() {
     let mut cluster = new_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     cluster.cfg.raft_store.store_batch_system.pool_size = 1;
+    cluster.cfg.raft_store.max_apply_unpersisted_log_limit = 0;
     // So compact log will not be triggered automatically.
     configure_for_request_snapshot(&mut cluster.cfg);
 
