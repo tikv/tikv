@@ -4,7 +4,8 @@ use std::{collections::BTreeSet, sync::Arc};
 use bytes::Bytes;
 use crossbeam::epoch;
 use engine_traits::{
-    CacheRange, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
+    CacheRange, Mutable, RangeCacheEngine, Result, WriteBatch, WriteBatchExt, WriteOptions,
+    CF_DEFAULT,
 };
 use tikv_util::{box_err, config::ReadableSize, debug, error, info, time::Instant, warn};
 
@@ -501,9 +502,13 @@ impl WriteBatch for RangeCacheWriteBatch {
     }
 
     fn prepare_for_range(&mut self, range: CacheRange) {
-        self.set_range_cache_status(self.engine.prepare_for_apply(&range));
+        if !self.engine.enabled() {
+            self.set_range_cache_status(RangeCacheStatus::NotInCache);
+        } else {
+            self.set_range_cache_status(self.engine.prepare_for_apply(&range));
+            self.memory_usage_reach_hard_limit = false;
+        }
         self.current_range = Some(range);
-        self.memory_usage_reach_hard_limit = false;
     }
 }
 
@@ -552,6 +557,7 @@ mod tests {
     };
     use skiplist_rs::SkipList;
     use tempfile::Builder;
+    use tikv_util::config::VersionTrack;
 
     use super::*;
     use crate::{background::flush_epoch, RangeCacheEngineConfig};
@@ -573,7 +579,9 @@ mod tests {
 
     #[test]
     fn test_write_to_skiplist() {
-        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
+            RangeCacheEngineConfig::config_for_test(),
+        )));
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
@@ -593,7 +601,9 @@ mod tests {
 
     #[test]
     fn test_savepoints() {
-        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
+            RangeCacheEngineConfig::config_for_test(),
+        )));
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
@@ -618,7 +628,9 @@ mod tests {
 
     #[test]
     fn test_put_write_clear_delete_put_write() {
-        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
+            RangeCacheEngineConfig::config_for_test(),
+        )));
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
@@ -652,7 +664,9 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
         let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
-        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
+            RangeCacheEngineConfig::config_for_test(),
+        )));
         let r1 = CacheRange::new(b"k01".to_vec(), b"k05".to_vec());
         let r2 = CacheRange::new(b"k05".to_vec(), b"k10".to_vec());
         let r3 = CacheRange::new(b"k10".to_vec(), b"k15".to_vec());
@@ -773,7 +787,7 @@ mod tests {
         let mut config = RangeCacheEngineConfig::default();
         config.soft_limit_threshold = Some(ReadableSize(500));
         config.hard_limit_threshold = Some(ReadableSize(1000));
-        let engine = RangeCacheMemoryEngine::new(&config);
+        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(config)));
         let r1 = CacheRange::new(b"kk00".to_vec(), b"kk10".to_vec());
         let r2 = CacheRange::new(b"kk10".to_vec(), b"kk20".to_vec());
         let r3 = CacheRange::new(b"kk20".to_vec(), b"kk30".to_vec());
@@ -857,7 +871,9 @@ mod tests {
 
     #[test]
     fn test_delete_lock_cf() {
-        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
+            RangeCacheEngineConfig::config_for_test(),
+        )));
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
