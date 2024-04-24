@@ -48,8 +48,8 @@ impl Error {
             | Error::RegionNotFound(_)
             | Error::StoreTombstone(_)
             | Error::ClusterBootstrapped(_)
-            | Error::Incompatible => false,
-            Error::UnsafeServiceGcSafePoint { .. } => false,
+            | Error::Incompatible
+            | Error::UnsafeServiceGcSafePoint { .. } => false,
         }
     }
 }
