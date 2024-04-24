@@ -1,7 +1,7 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     Mutex,
 };
 
@@ -24,6 +24,7 @@ pub struct Service {
     buckets: Mutex<HashMap<u64, Buckets>>,
     leaders: Mutex<HashMap<u64, Peer>>,
     feature_gate: Mutex<String>,
+    service_gc_safepoint: AtomicU64,
 }
 
 impl Service {
@@ -37,6 +38,7 @@ impl Service {
             leaders: Mutex::new(HashMap::default()),
             feature_gate: Mutex::new(String::default()),
             buckets: Mutex::new(HashMap::default()),
+            service_gc_safepoint: Default::default(),
         }
     }
 
@@ -351,6 +353,33 @@ impl PdMocker for Service {
         let mut resp = GetGcSafePointResponse::default();
         let header = Service::header();
         resp.set_header(header);
+        Some(Ok(resp))
+    }
+
+    fn update_service_gc_safe_point(
+        &self,
+        req: &UpdateServiceGcSafePointRequest,
+    ) -> Option<Result<UpdateServiceGcSafePointResponse>> {
+        let val = self
+            .service_gc_safepoint
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
+                if v > req.safe_point {
+                    None
+                } else {
+                    Some(req.safe_point)
+                }
+            });
+        let val = match val {
+            Ok(v) => v,
+            Err(v) => v,
+        };
+
+        let mut resp = UpdateServiceGcSafePointResponse::default();
+        let header = Service::header();
+        resp.set_header(header);
+        resp.set_min_safe_point(val);
+        resp.set_ttl(req.get_ttl());
+        resp.set_service_id(req.get_service_id().to_owned());
         Some(Ok(resp))
     }
 }

@@ -235,3 +235,16 @@ fn test_retry() {
     fail::remove(pd_client_v2_timeout_fp);
     fail::remove(pd_client_v2_backoff_fp);
 }
+
+#[test]
+fn test_update_service_gc_safe_point() {
+    let (_server, mut client) = new_test_server_and_client(ReadableDuration::secs(100));
+
+    let mut update_gc_safepoint = |x| {
+        block_on(client.update_service_safe_point("test".to_owned(), x, Duration::from_secs(1)))
+    };
+    update_gc_safepoint(42.into()).unwrap();
+    update_gc_safepoint(41.into()).unwrap_err();
+    update_gc_safepoint(43.into()).unwrap();
+    update_gc_safepoint(42.into()).unwrap_err();
+}

@@ -19,12 +19,16 @@ use std::{cmp::Ordering, ops::Deref, sync::Arc, time::Duration};
 
 use futures::future::BoxFuture;
 use kvproto::{
-    metapb, pdpb,
+    metapb,
+    pdpb::{self, UpdateServiceGcSafePointResponse},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
     resource_manager::TokenBucketsRequest,
 };
 use pdpb::QueryStats;
-use tikv_util::time::{Instant, UnixSecs};
+use tikv_util::{
+    box_err,
+    time::{Instant, UnixSecs},
+};
 use txn_types::TimeStamp;
 
 pub use self::{
@@ -540,4 +544,18 @@ pub fn take_peer_address(store: &mut metapb::Store) -> String {
     } else {
         store.take_address()
     }
+}
+
+fn check_update_service_safe_point_resp(
+    resp: &UpdateServiceGcSafePointResponse,
+    required_safepoint: u64,
+) -> Result<()> {
+    if resp.min_safe_point > required_safepoint {
+        return Err(Error::Other(box_err!(
+            "service safepoint cannot be created: current min is {}, you provide {}",
+            resp.min_safe_point,
+            required_safepoint
+        )));
+    }
+    Ok(())
 }

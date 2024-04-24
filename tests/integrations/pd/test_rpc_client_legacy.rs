@@ -689,3 +689,18 @@ fn test_cluster_version() {
     emit_heartbeat();
     assert!(feature_gate.can_enable(feature_c));
 }
+
+#[test]
+fn test_update_service_gc_safepoint() {
+    let server = MockServer::new(1);
+    let eps = server.bind_addrs();
+
+    let client = new_client(eps, None);
+    let update_gc_safepoint = |x| {
+        block_on(client.update_service_safe_point("test".to_owned(), x, Duration::from_secs(1)))
+    };
+    update_gc_safepoint(42.into()).unwrap();
+    update_gc_safepoint(41.into()).unwrap_err();
+    update_gc_safepoint(43.into()).unwrap();
+    update_gc_safepoint(42.into()).unwrap_err();
+}
