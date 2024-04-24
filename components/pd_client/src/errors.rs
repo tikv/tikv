@@ -4,7 +4,6 @@ use std::{error, result};
 
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use futures::channel::mpsc::SendError;
-use kvproto::pdpb::Timestamp;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -28,11 +27,11 @@ pub enum Error {
     #[error("required watch revision is smaller than current compact/min revision. {0:?}")]
     DataCompacted(String),
     #[error(
-        "the requested service gc safe point({requested:?}) isn't safe(safe point now is {current_minimal:?})"
+        "the requested service gc safe point({requested}) isn't safe(safe point now is {current_minimal})"
     )]
-    StaleServiceGcSafePoint {
-        requested: Timestamp,
-        current_minimal: Timestamp,
+    UnsafeServiceGcSafePoint {
+        requested: txn_types::TimeStamp,
+        current_minimal: txn_types::TimeStamp,
     },
 }
 
@@ -50,7 +49,7 @@ impl Error {
             | Error::StoreTombstone(_)
             | Error::ClusterBootstrapped(_)
             | Error::Incompatible => false,
-            Error::StaleServiceGcSafePoint { .. } => false,
+            Error::UnsafeServiceGcSafePoint { .. } => false,
         }
     }
 }
@@ -66,7 +65,7 @@ impl ErrorCodeExt for Error {
             Error::RegionNotFound(_) => error_code::pd::REGION_NOT_FOUND,
             Error::StoreTombstone(_) => error_code::pd::STORE_TOMBSTONE,
             Error::DataCompacted(_) => error_code::pd::DATA_COMPACTED,
-            Error::StaleServiceGcSafePoint { .. } => error_code::pd::STALE_SERVICE_GC_SAFE_POINT,
+            Error::UnsafeServiceGcSafePoint { .. } => error_code::pd::STALE_SERVICE_GC_SAFE_POINT,
             Error::Other(_) => error_code::pd::UNKNOWN,
         }
     }

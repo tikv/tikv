@@ -25,10 +25,7 @@ use kvproto::{
     resource_manager::TokenBucketsRequest,
 };
 use pdpb::QueryStats;
-use tikv_util::{
-    box_err,
-    time::{Instant, UnixSecs},
-};
+use tikv_util::time::{Instant, UnixSecs};
 use txn_types::TimeStamp;
 
 pub use self::{
@@ -551,11 +548,10 @@ fn check_update_service_safe_point_resp(
     required_safepoint: u64,
 ) -> Result<()> {
     if resp.min_safe_point > required_safepoint {
-        return Err(Error::Other(box_err!(
-            "service safepoint cannot be created: current min is {}, you provide {}",
-            resp.min_safe_point,
-            required_safepoint
-        )));
+        return Err(Error::UnsafeServiceGcSafePoint {
+            requested: required_safepoint.into(),
+            current_minimal: resp.min_safe_point.into(),
+        });
     }
     Ok(())
 }

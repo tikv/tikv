@@ -232,7 +232,7 @@ where
                 )
                 .await
                 .or_else(|err| match err {
-                    pd_client::Error::StaleServiceGcSafePoint { .. } => {
+                    pd_client::Error::UnsafeServiceGcSafePoint { .. } => {
                         warn!("gc safe point exceeds the task checkpoint. skipping uploading..."; "err" => %err);
                         Ok(())
                     }
