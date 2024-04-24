@@ -1541,29 +1541,26 @@ impl DbConfig {
 
     pub fn build_cf_resources(&self, cache: Cache) -> CfResources {
         let mut compaction_thread_limiters = HashMap::new();
-        if let Some(n) = self.defaultcf.max_compactions && n > 0 {
-            compaction_thread_limiters.insert(
-                CF_DEFAULT,
-                ConcurrentTaskLimiter::new(CF_DEFAULT, n),
-            );
+        if let Some(n) = self.defaultcf.max_compactions
+            && n > 0
+        {
+            compaction_thread_limiters
+                .insert(CF_DEFAULT, ConcurrentTaskLimiter::new(CF_DEFAULT, n));
         }
-        if let Some(n) = self.writecf.max_compactions && n > 0 {
-            compaction_thread_limiters.insert(
-                CF_WRITE,
-                ConcurrentTaskLimiter::new(CF_WRITE, n),
-            );
+        if let Some(n) = self.writecf.max_compactions
+            && n > 0
+        {
+            compaction_thread_limiters.insert(CF_WRITE, ConcurrentTaskLimiter::new(CF_WRITE, n));
         }
-        if let Some(n) = self.lockcf.max_compactions && n > 0 {
-            compaction_thread_limiters.insert(
-                CF_LOCK,
-                ConcurrentTaskLimiter::new(CF_LOCK, n),
-            );
+        if let Some(n) = self.lockcf.max_compactions
+            && n > 0
+        {
+            compaction_thread_limiters.insert(CF_LOCK, ConcurrentTaskLimiter::new(CF_LOCK, n));
         }
-        if let Some(n) = self.raftcf.max_compactions && n > 0 {
-            compaction_thread_limiters.insert(
-                CF_RAFT,
-                ConcurrentTaskLimiter::new(CF_RAFT, n),
-            );
+        if let Some(n) = self.raftcf.max_compactions
+            && n > 0
+        {
+            compaction_thread_limiters.insert(CF_RAFT, ConcurrentTaskLimiter::new(CF_RAFT, n));
         }
         let mut write_buffer_managers = HashMap::default();
         self.lockcf.write_buffer_limit.map(|limit| {
@@ -1745,7 +1742,9 @@ impl Default for RaftDefaultCfConfig {
 
 impl RaftDefaultCfConfig {
     pub fn build_opt(&self, cache: &Cache) -> RocksCfOptions {
-        let limiter = if let Some(n) = self.max_compactions && n > 0 {
+        let limiter = if let Some(n) = self.max_compactions
+            && n > 0
+        {
             Some(ConcurrentTaskLimiter::new(CF_DEFAULT, n))
         } else {
             None
@@ -4011,7 +4010,12 @@ impl TikvConfig {
             && let Some(b) = self.rocksdb.writecf.block_cache_size
             && let Some(c) = self.rocksdb.lockcf.block_cache_size
         {
-            let d = self.raftdb.defaultcf.block_cache_size.map(|s| s.0).unwrap_or_default();
+            let d = self
+                .raftdb
+                .defaultcf
+                .block_cache_size
+                .map(|s| s.0)
+                .unwrap_or_default();
             let sum = a.0 + b.0 + c.0 + d;
             self.storage.block_cache.capacity = Some(ReadableSize(sum));
         }

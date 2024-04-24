@@ -39,11 +39,7 @@ use tikv_util::{
 use tokio::{
     io::Result as TokioResult,
     runtime::{Handle, Runtime},
-<<<<<<< HEAD
-    sync::{oneshot, Semaphore},
-=======
-    sync::{mpsc::Sender, Semaphore},
->>>>>>> de72fcf385 (log-backup: Fix flush invalid ts (#16832))
+    sync::{mpsc::Sender, oneshot, Semaphore},
 };
 use tokio_stream::StreamExt;
 use txn_types::TimeStamp;
@@ -767,28 +763,7 @@ where
         }
     }
 
-<<<<<<< HEAD
-    fn get_resolved_regions(&self, min_ts: TimeStamp) -> future![Result<ResolvedRegions>] {
-        let (tx, rx) = oneshot::channel();
-        let op = self.region_operator.clone();
-        async move {
-            let req = ObserveOp::ResolveRegions {
-                callback: Box::new(move |rs| {
-                    let _ = tx.send(rs);
-                }),
-                min_ts,
-            };
-            op.request(req).await;
-            rx.await
-                .map_err(|err| annotate!(err, "failed to send request for resolve regions"))
-        }
-    }
-
-    fn do_flush(&self, task: String, min_ts: TimeStamp) -> future![Result<()>] {
-        let get_rts = self.get_resolved_regions(min_ts);
-=======
     fn do_flush(&self, task: String, mut resolved: ResolvedRegions) -> future![Result<()>] {
->>>>>>> de72fcf385 (log-backup: Fix flush invalid ts (#16832))
         let router = self.range_router.clone();
         let store_id = self.store_id;
         let mut flush_ob = self.flush_observer();
@@ -847,14 +822,6 @@ where
         })
     }
 
-<<<<<<< HEAD
-    fn on_flush_with_min_ts(&self, task: String, min_ts: TimeStamp) {
-        self.pool.spawn(self.do_flush(task, min_ts).map(|r| {
-            if let Err(err) = r {
-                err.report("during updating flush status")
-            }
-        }));
-=======
     fn on_exec_flush(&mut self, task: String, resolved: ResolvedRegions) {
         self.checkpoint_mgr.freeze();
         self.pool
@@ -863,7 +830,6 @@ where
                     err.report("during updating flush status")
                 }
             })));
->>>>>>> de72fcf385 (log-backup: Fix flush invalid ts (#16832))
     }
 
     fn update_global_checkpoint(&self, task: String) -> future![()] {

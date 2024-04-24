@@ -25,16 +25,12 @@ mod all {
         GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
     };
     use futures::executor::block_on;
-<<<<<<< HEAD
-    use tikv_util::{config::ReadableSize, defer};
-=======
     use raftstore::coprocessor::ObserveHandle;
     use tikv_util::{
         config::{ReadableDuration, ReadableSize},
         defer,
     };
     use txn_types::Key;
->>>>>>> de72fcf385 (log-backup: Fix flush invalid ts (#16832))
 
     use super::{
         make_record_key, make_split_key_at_record, mutation, run_async_test, SuiteBuilder,

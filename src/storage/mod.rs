@@ -3909,9 +3909,9 @@ mod tests {
         let result = block_on(storage.get(Context::default(), Key::from_raw(b"x"), 100.into()));
         assert!(matches!(
             result,
-            Err(Error(box ErrorInner::Txn(txn::Error(
-                box txn::ErrorInner::Mvcc(mvcc::Error(box mvcc::ErrorInner::KeyIsLocked { .. }))
-            ))))
+            Err(Error(box ErrorInner::Txn(txn::Error(box txn::ErrorInner::Mvcc(mvcc::Error(
+                box mvcc::ErrorInner::KeyIsLocked { .. },
+            ))))))
         ));
     }
 

@@ -452,7 +452,9 @@ impl ReadStats {
         region_info.flow.add(data);
         // the bucket of the follower only have the version info and not needs to be
         // recorded the hot bucket.
-        if let Some(buckets) = buckets && !buckets.sizes.is_empty() {
+        if let Some(buckets) = buckets
+            && !buckets.sizes.is_empty()
+        {
             let bucket_stat = self
                 .region_buckets
                 .entry(region_id)

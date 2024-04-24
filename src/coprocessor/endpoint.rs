@@ -424,15 +424,16 @@ impl<E: Engine> Endpoint<E> {
 
         // Check if the buckets version is latest.
         // skip if request don't carry this bucket version.
-        if let Some(ref buckets) = latest_buckets&&
-            buckets.version > tracker.req_ctx.context.buckets_version &&
-            tracker.req_ctx.context.buckets_version!=0 {
-                let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
-                bucket_not_match.set_version(buckets.version);
-                bucket_not_match.set_keys(buckets.keys.clone().into());
-                let mut err = errorpb::Error::default();
-                err.set_bucket_version_not_match(bucket_not_match);
-                return Err(Error::Region(err));
+        if let Some(ref buckets) = latest_buckets
+            && buckets.version > tracker.req_ctx.context.buckets_version
+            && tracker.req_ctx.context.buckets_version != 0
+        {
+            let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
+            bucket_not_match.set_version(buckets.version);
+            bucket_not_match.set_keys(buckets.keys.clone().into());
+            let mut err = errorpb::Error::default();
+            err.set_bucket_version_not_match(bucket_not_match);
+            return Err(Error::Region(err));
         }
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();

@@ -14,12 +14,7 @@ use kvproto::{
     metapb::Region,
 };
 use pd_client::PdClient;
-<<<<<<< HEAD
 use tikv_util::{box_err, defer, info, time::Instant, warn, worker::Scheduler};
-=======
-use tikv_util::{box_err, defer, info, warn, worker::Scheduler};
-use tracing::instrument;
->>>>>>> de72fcf385 (log-backup: Fix flush invalid ts (#16832))
 use txn_types::TimeStamp;
 use uuid::Uuid;
 

@@ -418,11 +418,10 @@ impl<S: EngineSnapshot> MvccReader<S> {
                                 estimated_versions_to_last_change,
                             } if estimated_versions_to_last_change >= SEEK_BOUND => {
                                 let key_with_ts = key.clone().append_ts(commit_ts);
-                                let Some(value) = self
-                                        .snapshot
-                                        .get_cf(CF_WRITE, &key_with_ts)? else {
-                                        return Ok(None);
-                                    };
+                                let Some(value) = self.snapshot.get_cf(CF_WRITE, &key_with_ts)?
+                                else {
+                                    return Ok(None);
+                                };
                                 self.statistics.write.get += 1;
                                 let write = WriteRef::parse(&value)?.to_owned();
                                 assert!(
