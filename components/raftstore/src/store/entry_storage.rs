@@ -479,12 +479,8 @@ fn validate_states<ER: RaftEngine>(
         info!("updating commit index"; "region_id" => region_id, "old" => commit_index, "new" => recorded_commit_index);
         commit_index = recorded_commit_index;
     }
-    // Invariant: applied index <= max(commit index, recorded commit index)
     if apply_state.get_applied_index() > commit_index {
-        return Err(box_err!(
-            "applied index > max(commit index, recorded commit index), {}",
-            state_str()
-        ));
+        info!("applied index is larger than recorded commit index"; "apply" => apply_state.get_applied_index(), "commit" => commit_index);
     }
     // Invariant: max(commit index, recorded commit index) <= last index
     if commit_index > last_index {
@@ -538,6 +534,7 @@ pub fn init_last_term<ER: RaftEngine>(
 pub fn init_applied_term<ER: RaftEngine>(
     raft_engine: &ER,
     region: &metapb::Region,
+    raft_state: &RaftLocalState,
     apply_state: &RaftApplyState,
 ) -> Result<u64> {
     if apply_state.applied_index == RAFT_INIT_LOG_INDEX {
@@ -546,6 +543,13 @@ pub fn init_applied_term<ER: RaftEngine>(
     let truncated_state = apply_state.get_truncated_state();
     if apply_state.applied_index == truncated_state.get_index() {
         return Ok(truncated_state.get_term());
+    }
+
+    // Applied index > last index means that some committed entries have applied but
+    // not persisted, in this case, the raft term must not be changed, so we use the
+    // term persisted in apply_state.
+    if apply_state.applied_index > raft_state.get_last_index() {
+        return Ok(apply_state.commit_term);
     }
 
     match raft_engine.get_entry(region.get_id(), apply_state.applied_index)? {
@@ -662,7 +666,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             ));
         }
         let last_term = init_last_term(&raft_engine, region, &raft_state, &apply_state)?;
-        let applied_term = init_applied_term(&raft_engine, region, &apply_state)?;
+        let applied_term = init_applied_term(&raft_engine, region, &raft_state, &apply_state)?;
         Ok(Self {
             region_id: region.id,
             peer_id,

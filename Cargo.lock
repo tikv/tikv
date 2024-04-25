@@ -4141,7 +4141,7 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#f60fb9e143e5b93f7db8917ea376cda04effcbb4"
+source = "git+https://github.com/tikv/raft-rs?branch=master#a76fb6ef2cbd002ec10d63a2ac68b4a20b20fe3e"
 dependencies = [
  "bytes",
  "fxhash",
@@ -4200,7 +4200,7 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
-source = "git+https://github.com/tikv/raft-rs?branch=master#f60fb9e143e5b93f7db8917ea376cda04effcbb4"
+source = "git+https://github.com/tikv/raft-rs?branch=master#a76fb6ef2cbd002ec10d63a2ac68b4a20b20fe3e"
 dependencies = [
  "bytes",
  "protobuf",
@@ -4601,6 +4601,7 @@ dependencies = [
  "kvproto",
  "lazy_static",
  "log_wrappers",
+ "online_config",
  "parking_lot 0.12.1",
  "pd_client",
  "prometheus",
@@ -4615,6 +4616,7 @@ dependencies = [
  "tempfile",
  "test_pd",
  "test_pd_client",
+ "thiserror",
  "tikv_util",
  "txn_types",
  "yatp",
@@ -6437,7 +6439,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "8.1.0-alpha"
+version = "8.2.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
