@@ -4410,6 +4410,11 @@ where
     }
 
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext<EK>, msgs: &mut Vec<Msg<EK>>) {
+        fail_point!(
+            "only_apply_for_region_1_on_store_1",
+            self.delegate.region_id() == 1 && apply_ctx.store_id != 1,
+            |_| unimplemented!()
+        );
         let mut drainer = msgs.drain(..);
         let mut batch_apply = None;
         loop {

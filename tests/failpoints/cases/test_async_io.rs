@@ -5,11 +5,14 @@ use std::{
     time::Duration,
 };
 
+use engine_traits::{Peekable, RaftEngineReadOnly, CF_RAFT};
+use kvproto::raft_serverpb::RaftApplyState;
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use tikv_util::HandyRwLock;
+use test_util::eventually;
+use tikv_util::{config::ReadableDuration, HandyRwLock};
 
 // Test if the entries can be committed and applied on followers even when
 // leader's io is paused.
@@ -135,6 +138,93 @@ fn test_async_io_apply_conf_change_without_leader_persist() {
 
     cluster.must_put(b"k1", b"v3");
     eventually_get_equal(&cluster.get_engine(1), b"k1", b"v3");
+}
+
+#[test]
+fn test_async_io_apply_before_persist_apply_snapshot() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.store_io_pool_size = 1;
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
+    configure_for_snapshot(&mut cluster.cfg);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    let peer_1 = find_peer(&region, 1).cloned().unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_1);
+    cluster.must_put(b"k1", b"v1");
+
+    let raft_before_save_on_store_1_fp = "raft_before_persist_on_store_1";
+    // Skip persisting to simulate raft log persist lag but not block node restart.
+    fail::cfg(raft_before_save_on_store_1_fp, "return").unwrap();
+    let only_apply_on_store_1_fp = "only_apply_for_region_1_on_store_1";
+    // Pause applying raft log on all stores but store 1.
+    fail::cfg(only_apply_on_store_1_fp, "pause").unwrap();
+
+    for i in 2..10 {
+        let _ = cluster
+            .async_put(format!("k{}", i).as_bytes(), b"v1")
+            .unwrap();
+    }
+    must_get_equal(&cluster.get_engine(1), b"k9", b"v1");
+    must_get_none(&cluster.get_engine(2), b"k9");
+    must_get_none(&cluster.get_engine(3), b"k9");
+
+    let region = pd_client.get_region(b"k2").unwrap();
+    assert_eq!(region.id, 1);
+
+    cluster.must_split(&region, b"k2");
+    for i in 2..=10 {
+        cluster.must_put(b"k2", format!("v{}", i).as_bytes());
+    }
+    must_get_equal(&cluster.get_engine(1), b"k2", b"v10");
+
+    cluster.stop_node(1);
+
+    let raft_state1 = cluster
+        .get_raft_engine(1)
+        .get_raft_state(1)
+        .unwrap()
+        .unwrap();
+
+    fail::remove(raft_before_save_on_store_1_fp);
+    fail::remove(only_apply_on_store_1_fp);
+
+    cluster.must_put(b"k2", b"v11");
+
+    let leader = cluster.leader_of_region(1).unwrap();
+    assert!(leader.store_id != 1);
+    // wait leader gc raft log.
+    eventually(
+        Duration::from_millis(100),
+        Duration::from_millis(1000),
+        || {
+            let apply_state: RaftApplyState = cluster
+                .get_engine(leader.store_id)
+                .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
+                .unwrap()
+                .unwrap();
+            apply_state.get_truncated_state().get_index() > raft_state1.last_index
+        },
+    );
+
+    // stop the follower, thus there will be only 2 peer and the follower need to
+    // sync snapshot.
+    for i in 2..=3 {
+        if i != leader.store_id {
+            cluster.stop_node(i);
+        }
+    }
+    cluster.run_node(1).unwrap();
+
+    eventually_get_equal(&cluster.get_engine(1), b"k2", b"v11");
+    // test new write
+    cluster.must_put(b"k1", b"v12");
+    cluster.must_put(b"k2", b"v12");
+    eventually_get_equal(&cluster.get_engine(1), b"k1", b"v12");
+    eventually_get_equal(&cluster.get_engine(1), b"k2", b"v12");
 }
 
 /// Test if the leader delays its destroy after applying conf change to
