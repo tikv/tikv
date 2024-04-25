@@ -78,4 +78,12 @@ impl MiscExt for PanicEngine {
     fn is_stalled_or_stopped(&self) -> bool {
         panic!()
     }
+
+    fn disable_manual_compaction(&self) -> Result<()> {
+        panic!()
+    }
+
+    fn enable_manual_compaction(&self) -> Result<()> {
+        panic!()
+    }
 }
