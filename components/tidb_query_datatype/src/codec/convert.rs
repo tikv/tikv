@@ -2258,11 +2258,6 @@ mod tests {
         for (dec, flen, decimal, want) in cases {
             ft.set_flen(flen);
             ft.set_decimal(decimal);
-<<<<<<< HEAD
-            let nd = produce_dec_with_specified_tp(&mut ctx, dec, &ft);
-            assert!(nd.is_ok());
-            let nd = nd.unwrap();
-=======
             let nd = produce_dec_with_specified_tp(&mut ctx, dec, &ft).unwrap();
             assert_eq!(
                 nd.frac_cnt(),
@@ -2271,7 +2266,6 @@ mod tests {
                 nd.frac_cnt(),
                 nd.result_frac_cnt()
             );
->>>>>>> 7d96b6d6e8 (expr: fix the wrong decimal's result frac in some cases (#16914))
             assert_eq!(nd, want, "{}, {}, {}, {}, {}", dec, nd, want, flen, decimal);
         }
     }
