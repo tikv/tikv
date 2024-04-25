@@ -11,7 +11,7 @@ use pd_client::{
     Error as PdError, PdClient, RpcClient,
 };
 use serde::{Deserialize, Serialize};
-use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{debug, error, info, timer::GLOBAL_TIMER_HANDLE};
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(1); // to consistent with pd_client
 const KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE: &str = "gc_management_type";
@@ -416,8 +416,8 @@ impl KeyspaceMetaService {
                 max_ks_gc_sp = ks_gc;
             }
         }
-        info!(
-            "[test-yjy]get_max_ts_of_all_ks_gc_safe_point return :{}",
+        debug!(
+            "max ts of all keyspace level gc safe point:{}",
             max_ks_gc_sp
         );
         max_ks_gc_sp

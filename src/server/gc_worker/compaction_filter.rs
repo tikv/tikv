@@ -219,10 +219,6 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
 
         let safe_point = gc_context.safe_point.load(Ordering::Relaxed);
         let keyspace_meta_service = gc_context.keyspace_meta_service.clone();
-        info!(
-            "[test-yjy]keyspace_meta_service.is_some():{}",
-            keyspace_meta_service.is_some()
-        );
 
         let mut is_all_ks_not_init_gc_sp = true;
         if let Some(ref ks_meta_service) = *keyspace_meta_service {
@@ -253,6 +249,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             "creating compaction filter"; "feature_enable" => enable,
             "skip_version_check" => skip_vcheck,
             "ratio_threshold" => ratio_threshold,
+            "keyspace_meta_service is init" => keyspace_meta_service.is_some(),
         );
 
         if db
@@ -814,15 +811,24 @@ pub fn check_need_gc(
 
         // Check is there any keyspace level gc safe point >= props.min_ts, the
         // following check should proceed.
-        let mut no_any_ks_gc_sp_ge_than_props_min_ts = true;
+        let mut any_ks_gc_sp_ge_than_props_min_ts = false;
         if let Some(ref ks_meta_service) = *keyspace_meta_service {
             let max_all_ks_gc_sp = ks_meta_service.get_max_ts_of_all_ks_gc_safe_point();
+            debug!("check props.min_ts and max ts of all keyspace level gc safe point";
+                "props.min_ts" => %props.min_ts,
+                "max-gc-sp-of-all-ks" => %max_all_ks_gc_sp,
+            );
             if props.min_ts <= max_all_ks_gc_sp.into() {
-                no_any_ks_gc_sp_ge_than_props_min_ts = false;
+                any_ks_gc_sp_ge_than_props_min_ts = true;
             }
         }
 
-        if props.min_ts > safe_point && no_any_ks_gc_sp_ge_than_props_min_ts {
+        if props.min_ts > safe_point && !any_ks_gc_sp_ge_than_props_min_ts {
+            debug!("skip gc in compaction filter because of props.min_ts greater than all gc safe point";
+                "props.min_ts" => %props.min_ts,
+                "global-gc-safe-point" => %safe_point,
+                "any-ks-gc-sp-ge-than-props-min-ts" =>%any_ks_gc_sp_ge_than_props_min_ts,
+            );
             return (false, false);
         }
         if ratio_threshold < 1.0 || context.is_bottommost_level() {
