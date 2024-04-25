@@ -162,7 +162,9 @@ fn test_txn_gc_keys_handled() {
     let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
     let safe_point = Arc::new(AtomicU64::new(500));
 
-    gc_worker.start_auto_gc(auto_gc_cfg, safe_point, Arc::new(None)).unwrap();
+    gc_worker
+        .start_auto_gc(auto_gc_cfg, safe_point, Arc::new(None))
+        .unwrap();
     host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
     let db = engine.kv_engine().unwrap().as_inner().clone();
@@ -307,7 +309,9 @@ fn test_raw_gc_keys_handled() {
     let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, store_id);
     let safe_point = Arc::new(AtomicU64::new(500));
 
-    gc_worker.start_auto_gc(auto_gc_cfg, safe_point, Arc::new(None)).unwrap();
+    gc_worker
+        .start_auto_gc(auto_gc_cfg, safe_point, Arc::new(None))
+        .unwrap();
     host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
 
     let db = engine.kv_engine().unwrap().as_inner().clone();

@@ -21,9 +21,9 @@ use engine_rocks::{
 };
 use engine_traits::{KvEngine, MiscExt, MvccProperties, WriteBatch, WriteOptions};
 use file_system::{IoType, WithIoType};
+use keyspace_meta::KeyspaceMetaService;
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
-use keyspace_meta::KeyspaceMetaService;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::{
     time::Instant,
@@ -218,16 +218,18 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         };
 
         let safe_point = gc_context.safe_point.load(Ordering::Relaxed);
-        let keyspace_meta_service=gc_context.keyspace_meta_service.clone();
-        info!("[test-yjy]keyspace_meta_service.is_some():{}",keyspace_meta_service.is_some());
+        let keyspace_meta_service = gc_context.keyspace_meta_service.clone();
+        info!(
+            "[test-yjy]keyspace_meta_service.is_some():{}",
+            keyspace_meta_service.is_some()
+        );
 
         let mut is_all_ks_not_init_gc_sp = true;
         if let Some(ref ks_meta_service) = *keyspace_meta_service {
             is_all_ks_not_init_gc_sp = ks_meta_service.is_all_keyspace_level_gc_have_not_inited()
         }
 
-        if safe_point == 0
-        && is_all_ks_not_init_gc_sp {
+        if safe_point == 0 && is_all_ks_not_init_gc_sp {
             // Safe point has not been initialized yet.
             debug!("skip gc in compaction filter because of no safe point");
             return None;
@@ -266,12 +268,16 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             return None;
         }
 
-
         drop(gc_context_option);
         GC_COMPACTION_FILTER_PERFORM
             .with_label_values(&[STAT_TXN_KEYMODE])
             .inc();
-        if !check_need_gc(safe_point.into(), ratio_threshold, context, keyspace_meta_service.clone()) {
+        if !check_need_gc(
+            safe_point.into(),
+            ratio_threshold,
+            context,
+            keyspace_meta_service.clone(),
+        ) {
             debug!("skip gc in compaction filter because it's not necessary");
             GC_COMPACTION_FILTER_SKIP
                 .with_label_values(&[STAT_TXN_KEYMODE])
@@ -485,11 +491,20 @@ impl WriteCompactionFilter {
     ) -> Result<CompactionFilterDecision, String> {
         let (mvcc_key_prefix, commit_ts) = split_ts(key)?;
 
-        info!("[test-yjy]do_filter key:{:?},self.safe_point:{}", keys::origin_key(key), self.safe_point);
+        info!(
+            "[test-yjy]do_filter key:{:?},self.safe_point:{}",
+            keys::origin_key(key),
+            self.safe_point
+        );
         // `keyspace_meta_service` will be None when run Api V1 ut.
-        if let Some(keyspace_meta_service)= self.keyspace_meta_service.as_ref() {
-            self.safe_point=keyspace_meta_service.get_gc_safe_point_by_key(self.safe_point, keys::origin_key(key));
-            info!("[test-yjy]get_gc_safe_point_by_key key:{:?},self.safe_point:{}", keys::origin_key(key), self.safe_point);
+        if let Some(keyspace_meta_service) = self.keyspace_meta_service.as_ref() {
+            self.safe_point = keyspace_meta_service
+                .get_gc_safe_point_by_key(self.safe_point, keys::origin_key(key));
+            info!(
+                "[test-yjy]get_gc_safe_point_by_key key:{:?},self.safe_point:{}",
+                keys::origin_key(key),
+                self.safe_point
+            );
         }
 
         if commit_ts > self.safe_point || value_type != CompactionFilterValueType::Value {
@@ -797,11 +812,12 @@ pub fn check_need_gc(
             return (false, false);
         }
 
-        // Check is there any keyspace level gc safe point >= props.min_ts, the following check should proceed.
+        // Check is there any keyspace level gc safe point >= props.min_ts, the
+        // following check should proceed.
         let mut no_any_ks_gc_sp_ge_than_props_min_ts = true;
         if let Some(ref ks_meta_service) = *keyspace_meta_service {
             let max_all_ks_gc_sp = ks_meta_service.get_max_ts_of_all_ks_gc_safe_point();
-            if props.min_ts <= max_all_ks_gc_sp.into(){
+            if props.min_ts <= max_all_ks_gc_sp.into() {
                 no_any_ks_gc_sp_ge_than_props_min_ts = false;
             }
         }
@@ -951,7 +967,7 @@ pub mod test_utils {
                 gc_scheduler: self.gc_scheduler.clone(),
                 region_info_provider: Arc::new(MockRegionInfoProvider::new(vec![])),
                 callbacks_on_drop: self.callbacks_on_drop.clone(),
-                keyspace_meta_service:Arc::new(None),
+                keyspace_meta_service: Arc::new(None),
             });
         }
 

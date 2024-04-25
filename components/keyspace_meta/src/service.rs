@@ -1,25 +1,21 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    sync::Arc,
-    time::Duration,
-};
-use dashmap::DashMap;
+use std::{sync::Arc, time::Duration};
 
 use api_version::ApiV2;
+use dashmap::DashMap;
 use futures::{compat::Future01CompatExt, stream, StreamExt};
-use kvproto::{keyspacepb, meta_storagepb::EventEventType};
-use kvproto::keyspacepb::KeyspaceMeta;
+use kvproto::{keyspacepb, keyspacepb::KeyspaceMeta, meta_storagepb::EventEventType};
 use pd_client::{
     meta_storage::{Checked, Get, MetaStorageClient, Sourced, Watch},
-    Error as PdError, PdClient, RpcClient
+    Error as PdError, PdClient, RpcClient,
 };
 use serde::{Deserialize, Serialize};
 use tikv_util::{error, info, timer::GLOBAL_TIMER_HANDLE};
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(1); // to consistent with pd_client
-const KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE: &str="gc_management_type";
-const GC_MGMT_TYPE_KEYSPACE_LEVEL_GC: &str="keyspace_level_gc";
+const KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE: &str = "gc_management_type";
+const GC_MGMT_TYPE_KEYSPACE_LEVEL_GC: &str = "keyspace_level_gc";
 
 #[derive(Clone)]
 pub struct KeyspaceLevelGCWatchService {
@@ -52,7 +48,7 @@ impl KeyspaceLevelGCWatchService {
                 pd_client::meta_storage::Source::KeysapceLevelGC,
             )),
             pd_client,
-            keyspace_level_gc_map:keyspace_level_gc,
+            keyspace_level_gc_map: keyspace_level_gc,
         }
     }
 
@@ -60,7 +56,7 @@ impl KeyspaceLevelGCWatchService {
         info!("[test-yjy]watch_keyspace_gc");
         // Firstly, load all resource groups as of now.
         self.reload_all_keyspace_level_gc().await;
-        let keyspace_level_gc_prefix=self.get_keyspcace_level_gc_prefix();
+        let keyspace_level_gc_prefix = self.get_keyspcace_level_gc_prefix();
 
         'outer: loop {
             // Secondly, start watcher at loading revision.
@@ -106,7 +102,7 @@ impl KeyspaceLevelGCWatchService {
                     }
                     Err(PdError::DataCompacted(msg)) => {
                         error!("required revision has been compacted"; "err" => ?msg);
-                        //self.reload_all_resource_groups().await;
+                        // self.reload_all_resource_groups().await;
                         info!("[test-yjy] PdError::DataCompacted");
                         self.reload_all_keyspace_level_gc().await;
                         cancel.abort();
@@ -127,15 +123,13 @@ impl KeyspaceLevelGCWatchService {
     }
 
     fn get_keyspcace_level_gc_prefix(&self) -> String {
-        let cluster_id = self.pd_client
-            .get_cluster_id()
-            .unwrap();
-        let keyspace_level_gc_prefix=format!("/pd/{}/keyspaces/gc_safe_point", cluster_id);
+        let cluster_id = self.pd_client.get_cluster_id().unwrap();
+        let keyspace_level_gc_prefix = format!("/pd/{}/keyspaces/gc_safe_point", cluster_id);
         keyspace_level_gc_prefix
     }
 
     async fn reload_all_keyspace_level_gc(&mut self) {
-        let keyspace_level_gc_prefix=self.get_keyspcace_level_gc_prefix();
+        let keyspace_level_gc_prefix = self.get_keyspcace_level_gc_prefix();
         loop {
             match self
                 .meta_client
@@ -201,7 +195,7 @@ impl KeyspaceMetaWatchService {
         info!("[test-yjy]watch_keyspace_meta");
         // Firstly, load all resource groups as of now.
         self.reload_all_keyspace_meta().await;
-        let keyspace_meta_prefix=self.get_keyspace_meta_prefix();
+        let keyspace_meta_prefix = self.get_keyspace_meta_prefix();
 
         'outer: loop {
             // Secondly, start watcher at loading revision.
@@ -244,7 +238,7 @@ impl KeyspaceMetaWatchService {
                     }
                     Err(PdError::DataCompacted(msg)) => {
                         error!("required revision has been compacted"; "err" => ?msg);
-                        //self.reload_all_resource_groups().await;
+                        // self.reload_all_resource_groups().await;
                         info!("[test-yjy] PdError::DataCompacted");
                         self.reload_all_keyspace_meta().await;
                         cancel.abort();
@@ -265,15 +259,13 @@ impl KeyspaceMetaWatchService {
     }
 
     fn get_keyspace_meta_prefix(&self) -> String {
-        let cluster_id = self.pd_client
-            .get_cluster_id()
-            .unwrap();
-        let keyspace_meta_prefix=format!("/pd/{}/keyspaces/meta", cluster_id);
+        let cluster_id = self.pd_client.get_cluster_id().unwrap();
+        let keyspace_meta_prefix = format!("/pd/{}/keyspaces/meta", cluster_id);
         keyspace_meta_prefix
     }
 
     async fn reload_all_keyspace_meta(&mut self) {
-        let keyspace_meta_prefix=self.get_keyspace_meta_prefix();
+        let keyspace_meta_prefix = self.get_keyspace_meta_prefix();
         loop {
             match self
                 .meta_client
@@ -324,18 +316,20 @@ impl KeyspaceMetaService {
         }
     }
 
-
-    // is_keyspace_use_global_gc_safe_point return true it means that keyspace use global GC safe point.
-    fn is_keyspace_use_global_gc_safe_point(&self, keyspace_id: u32) ->bool{
-        let keyspace_meta_opt=self.keyspace_id_meta_map.get(&keyspace_id);
+    // is_keyspace_use_global_gc_safe_point return true it means that keyspace use
+    // global GC safe point.
+    fn is_keyspace_use_global_gc_safe_point(&self, keyspace_id: u32) -> bool {
+        let keyspace_meta_opt = self.keyspace_id_meta_map.get(&keyspace_id);
         match keyspace_meta_opt {
             None => {
-                // We haven't got this keyspace meta yet, it will be updated by KeyspaceMetaWatchService.
-                // So we can't use global GC safe point directly.
+                // We haven't got this keyspace meta yet, it will be updated by
+                // KeyspaceMetaWatchService. So we can't use global GC safe
+                // point directly.
                 false
             }
             Some(keyspace_meta) => {
-                let ks_gc_management_type = keyspace_meta.config.get(KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE);
+                let ks_gc_management_type =
+                    keyspace_meta.config.get(KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE);
                 match ks_gc_management_type {
                     None => {
                         // Keyspace meta config doesn't set 'keyspace_level_gc'.
@@ -344,9 +338,10 @@ impl KeyspaceMetaService {
                     }
                     Some(gc_management_type) => {
                         if gc_management_type == GC_MGMT_TYPE_KEYSPACE_LEVEL_GC {
-                            // The keyspace meta has already set "gc_management_type" = "keyspace_level_gc".
-                            // We should use keyspace level GC safe point.
-                            return false
+                            // The keyspace meta has already set "gc_management_type" =
+                            // "keyspace_level_gc". We should use
+                            // keyspace level GC safe point.
+                            return false;
                         }
                         true
                     }
@@ -355,42 +350,50 @@ impl KeyspaceMetaService {
         }
     }
 
-    pub fn get_gc_safe_point_by_key(&self, safe_point:u64, key: &[u8]) -> u64 {
-        let keyspace_id_opt=ApiV2::get_u32_keyspace_id_by_key(key);
+    pub fn get_gc_safe_point_by_key(&self, safe_point: u64, key: &[u8]) -> u64 {
+        let keyspace_id_opt = ApiV2::get_u32_keyspace_id_by_key(key);
         match keyspace_id_opt {
             Some(keyspace_id) => {
-                info!("[test-yjy]get_gc_safe_point_by_key keyspace_id:{}",keyspace_id);
+                info!(
+                    "[test-yjy]get_gc_safe_point_by_key keyspace_id:{}",
+                    keyspace_id
+                );
                 // API V2 with keyspace.
-                let keyspace_gc_safe_point_opt=self.keyspace_level_gc_map.get(&keyspace_id);
+                let keyspace_gc_safe_point_opt = self.keyspace_level_gc_map.get(&keyspace_id);
                 match keyspace_gc_safe_point_opt {
                     Some(keyspace_id_2_safe_point) => {
-                        info!("[test-yjy]get_gc_safe_point_by_key can get gc safepoint:{}",*keyspace_id_2_safe_point.value());
+                        info!(
+                            "[test-yjy]get_gc_safe_point_by_key can get gc safepoint:{}",
+                            *keyspace_id_2_safe_point.value()
+                        );
                         // If we can get the keyspace level GC safe point of this keyspace id,
                         // return this keyspace level GC safe point directly.
                         *keyspace_id_2_safe_point.value()
-                    },
+                    }
                     None => {
                         // Can't get keyspace level GC safe point.
-                        let is_keyspace_use_global_gc_safe_point = self.is_keyspace_use_global_gc_safe_point(keyspace_id);
+                        let is_keyspace_use_global_gc_safe_point =
+                            self.is_keyspace_use_global_gc_safe_point(keyspace_id);
                         if is_keyspace_use_global_gc_safe_point {
                             // keyspace don't enable keyspace level gc.
                             info!("[test-yjy]get_gc_safe_point_by_key none 01");
                             safe_point
                         } else {
                             // If keyspace meta enable keyspace level gc,
-                            // but can not get keyspace meta, or can not get keyspace level gc safe point here,
-                            // may be gc safe point of this keyspace hasn't been calculated yet.
+                            // but can not get keyspace meta, or can not get keyspace level gc safe
+                            // point here, may be gc safe point of this
+                            // keyspace hasn't been calculated yet.
                             info!("[test-yjy]get_gc_safe_point_by_key none 02");
                             0
                         }
                     }
                 }
-            },
+            }
             None => {
                 // Api V1
                 info!("[test-yjy]get_gc_safe_point_by_key none 03");
                 safe_point
-            },
+            }
         }
     }
 
@@ -406,14 +409,17 @@ impl KeyspaceMetaService {
     }
 
     pub fn get_max_ts_of_all_ks_gc_safe_point(&self) -> u64 {
-        let mut max_ks_gc_sp=0;
+        let mut max_ks_gc_sp = 0;
         for kv in self.keyspace_level_gc_map.iter() {
-            let ks_gc=*kv.value();
-            if ks_gc >max_ks_gc_sp {
-                max_ks_gc_sp=ks_gc;
+            let ks_gc = *kv.value();
+            if ks_gc > max_ks_gc_sp {
+                max_ks_gc_sp = ks_gc;
             }
         }
-        info!("[test-yjy]get_max_ts_of_all_ks_gc_safe_point return :{}",max_ks_gc_sp);
+        info!(
+            "[test-yjy]get_max_ts_of_all_ks_gc_safe_point return :{}",
+            max_ks_gc_sp
+        );
         max_ks_gc_sp
     }
 }

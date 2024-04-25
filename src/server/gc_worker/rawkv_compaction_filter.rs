@@ -15,8 +15,8 @@ use engine_rocks::{
     RocksEngine,
 };
 use engine_traits::{raw_ttl::ttl_current_ts, MiscExt};
-use prometheus::local::LocalHistogramVec;
 use keyspace_meta::KeyspaceMetaService;
+use prometheus::local::LocalHistogramVec;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::worker::{ScheduleError, Scheduler};
 use txn_types::Key;
@@ -57,8 +57,11 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
         let current = ttl_current_ts();
         let safe_point = gc_context.safe_point.load(Ordering::Relaxed);
 
-        let keyspace_meta_service=gc_context.keyspace_meta_service.clone();
-        info!("[test-yjy]keyspace_meta_service.is_some():{}",keyspace_meta_service.is_some());
+        let keyspace_meta_service = gc_context.keyspace_meta_service.clone();
+        info!(
+            "[test-yjy]keyspace_meta_service.is_some():{}",
+            keyspace_meta_service.is_some()
+        );
 
         let mut is_all_ks_not_init_gc_sp = true;
         if let Some(ref ks_meta_service) = *keyspace_meta_service {
@@ -96,7 +99,12 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
             .with_label_values(&[STAT_RAW_KEYMODE])
             .inc();
 
-        if !check_need_gc(safe_point.into(), ratio_threshold, context, keyspace_meta_service.clone()) {
+        if !check_need_gc(
+            safe_point.into(),
+            ratio_threshold,
+            context,
+            keyspace_meta_service.clone(),
+        ) {
             debug!("skip gc in compaction filter because it's not necessary");
             GC_COMPACTION_FILTER_SKIP
                 .with_label_values(&[STAT_RAW_KEYMODE])

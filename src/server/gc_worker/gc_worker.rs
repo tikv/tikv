@@ -1907,7 +1907,9 @@ mod tests {
 
         let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
         let safe_point = Arc::new(AtomicU64::new(0));
-        gc_worker.start_auto_gc(auto_gc_cfg, safe_point, Arc::new(None)).unwrap();
+        gc_worker
+            .start_auto_gc(auto_gc_cfg, safe_point, Arc::new(None))
+            .unwrap();
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
         host.on_region_changed(&r2, RegionChangeEvent::Create, StateRole::Leader);
         host.on_region_changed(&r3, RegionChangeEvent::Create, StateRole::Leader);

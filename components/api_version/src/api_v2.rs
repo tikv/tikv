@@ -260,7 +260,9 @@ impl ApiV2 {
     pub fn get_u32_keyspace_id_by_key(key: &[u8]) -> Option<u32> {
         let key_mode = Self::parse_key_mode(key);
         if key_mode == KeyMode::Raw || key_mode == KeyMode::Txn {
-            Some(Self::get_u32_keyspace_id_by_key_prefix(Self::get_keyspace_prefix_by_key(key)))
+            Some(Self::get_u32_keyspace_id_by_key_prefix(
+                Self::get_keyspace_prefix_by_key(key),
+            ))
         } else {
             None
         }
