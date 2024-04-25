@@ -561,13 +561,13 @@ mod tests {
         CacheRange, FailedReason, KvEngine, Peekable, RangeCacheEngine, WriteBatch, CF_LOCK,
         CF_WRITE, DATA_CFS,
     };
+    use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use skiplist_rs::SkipList;
     use tempfile::Builder;
     use tikv_util::config::VersionTrack;
 
     use super::*;
     use crate::{background::flush_epoch, config::RangeCacheConfigManager, RangeCacheEngineConfig};
-    use online_config::{ConfigChange, ConfigManager, ConfigValue};
 
     // We should not use skiplist.get directly as we only cares keys without
     // sequence number suffix
@@ -963,7 +963,8 @@ mod tests {
         config_manager.dispatch(config_change).unwrap();
 
         wb.write_impl(1000).unwrap();
-        // existing snapshot can still work after the range cache is disabled, but new snapshot will fail to create
+        // existing snapshot can still work after the range cache is disabled, but new
+        // snapshot will fail to create
         assert!(snap1.get_value(b"kk00").unwrap().is_none());
 
         let mut wb = RangeCacheWriteBatch::from(&engine);
