@@ -960,7 +960,7 @@ impl Decimal {
         Decimal {
             int_cnt,
             frac_cnt,
-            result_frac_cnt: 0,
+            result_frac_cnt: frac_cnt,
             negative,
             word_buf: [0; 9],
         }
@@ -1176,10 +1176,12 @@ impl Decimal {
                 res.word_buf[idx as usize] = 0;
             }
             res.frac_cnt = frac as u8;
+            res.result_frac_cnt = res.frac_cnt;
             return res;
         }
         if frac >= res.frac_cnt as i8 {
             res.frac_cnt = frac as u8;
+            res.result_frac_cnt = res.frac_cnt;
             return res;
         }
 
@@ -1322,6 +1324,7 @@ impl Decimal {
                     dec.int_cnt = 1;
                     dec.negative = false;
                     dec.frac_cnt = cmp::max(0, frac) as u8;
+                    dec.result_frac_cnt = dec.frac_cnt;
                     for i in 0..idx {
                         dec.word_buf[i as usize] = 0;
                     }
@@ -1335,6 +1338,7 @@ impl Decimal {
             dec.int_cnt += 1;
         }
         dec.frac_cnt = cmp::max(0, frac) as u8;
+        dec.result_frac_cnt = dec.frac_cnt;
         dec
     }
 
@@ -1705,6 +1709,16 @@ impl Decimal {
     pub fn is_zero(&self) -> bool {
         let len = word_cnt!(self.int_cnt) + word_cnt!(self.frac_cnt);
         self.word_buf[0..len as usize].iter().all(|&x| x == 0)
+    }
+
+    #[cfg(test)]
+    pub fn result_frac_cnt(&self) -> u8 {
+        self.result_frac_cnt
+    }
+
+    #[cfg(test)]
+    pub fn frac_cnt(&self) -> u8 {
+        self.frac_cnt
     }
 }
 
@@ -2936,11 +2950,17 @@ mod tests {
 
         for (dec_str, scale, half_exp, trunc_exp, ceil_exp) in cases {
             let dec = dec_str.parse::<Decimal>().unwrap();
-            let res = dec.round(scale, RoundMode::HalfEven).map(|d| d.to_string());
+            let round_dec = dec.round(scale, RoundMode::HalfEven);
+            assert_eq!(round_dec.frac_cnt, round_dec.result_frac_cnt);
+            let res = round_dec.map(|d| d.to_string());
             assert_eq!(res, half_exp.map(|s| s.to_owned()));
-            let res = dec.round(scale, RoundMode::Truncate).map(|d| d.to_string());
+            let round_dec = dec.round(scale, RoundMode::Truncate);
+            assert_eq!(round_dec.frac_cnt, round_dec.result_frac_cnt);
+            let res = round_dec.map(|d| d.to_string());
             assert_eq!(res, trunc_exp.map(|s| s.to_owned()));
-            let res = dec.round(scale, RoundMode::Ceiling).map(|d| d.to_string());
+            let round_dec = dec.round(scale, RoundMode::Ceiling);
+            assert_eq!(round_dec.frac_cnt, round_dec.result_frac_cnt);
+            let res = round_dec.map(|d| d.to_string());
             assert_eq!(res, ceil_exp.map(|s| s.to_owned()));
         }
     }
