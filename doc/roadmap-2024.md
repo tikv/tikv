@@ -7,7 +7,7 @@ This is a roadmap of TiKV project from engineering and architecture aspects. It 
 
 ## QoS: Single-Digit Millsecond Predictable Latency
 
-This domain meant to enhance TiKV to provide predictable single-digit millisecond latency under different scenarios like too many MVCC versions, disk IO temporarily jitter, high read QPS in a small data range, etc. 
+This domain aims to enhance TiKV to provide predictable single-digit millisecond latency under different scenarios like too many MVCC versions, disk IO temporarily jitter, high read QPS in a small data range, etc. 
 
 ### In-Memory Engine
 
