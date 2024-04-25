@@ -1,6 +1,5 @@
 # TiKV Roadmap (2024~2025)
 
-- Author(s): [zhangjinpeng87](https://github.com/zhangjinpeng87)
 - Last Updated: 2024-04-23
 
 This is a roadmap of TiKV project from engineering and architecture aspects. It expresses the intension of how we will improve this project to make TiKV fit more users' use cases in next 1 to 2 years. The roadmap includes several domains like latency and performance improvement, stability, observability, etc. Notice: all content list in the roadmap is our intension, we will try our best efforts to make it happen, but it doesn't mean we have a commitment for it, please don't rely on features/capabilities currently TiCDC doesn't have for your projects which have strick timeline requirement, even these features listed in the roadmap.
