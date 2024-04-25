@@ -63,11 +63,20 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
             keyspace_meta_service.is_some()
         );
 
+        println!(
+            "[test-yjy]keyspace_meta_service.is_some():{}",
+            keyspace_meta_service.is_some()
+        );
+
         let mut is_all_ks_not_init_gc_sp = true;
         if let Some(ref ks_meta_service) = *keyspace_meta_service {
             is_all_ks_not_init_gc_sp = ks_meta_service.is_all_keyspace_level_gc_have_not_inited()
         }
 
+        println!(
+            "[test-yjy]raw compaction filter:{}",
+            is_all_ks_not_init_gc_sp
+        );
         if safe_point == 0 && is_all_ks_not_init_gc_sp {
             // Safe point has not been initialized yet.
             debug!("skip gc in compaction filter because of no safe point");
@@ -106,6 +115,7 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
             keyspace_meta_service.clone(),
         ) {
             debug!("skip gc in compaction filter because it's not necessary");
+            println!("[test-yjy]skip gc in compaction filter because it's not necessary");
             GC_COMPACTION_FILTER_SKIP
                 .with_label_values(&[STAT_RAW_KEYMODE])
                 .inc();

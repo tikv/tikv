@@ -225,9 +225,11 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             is_all_ks_not_init_gc_sp = ks_meta_service.is_all_keyspace_level_gc_have_not_inited()
         }
 
+        println!("[test-yjy]create_compaction_filter");
         if safe_point == 0 && is_all_ks_not_init_gc_sp {
             // Safe point has not been initialized yet.
             debug!("skip gc in compaction filter because of no safe point");
+            println!("[test-yjy]skip gc in compaction filter because of no safe point");
             return None;
         }
 
@@ -249,7 +251,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             "creating compaction filter"; "feature_enable" => enable,
             "skip_version_check" => skip_vcheck,
             "ratio_threshold" => ratio_threshold,
-            "keyspace_meta_service is init" => keyspace_meta_service.is_some(),
+            "keyspace_meta_service_is_some" => keyspace_meta_service.is_some(),
         );
 
         if db
@@ -279,6 +281,7 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             GC_COMPACTION_FILTER_SKIP
                 .with_label_values(&[STAT_TXN_KEYMODE])
                 .inc();
+            println!("[test-yjy]txn check_need_gc skip");
             return None;
         }
 
@@ -799,6 +802,8 @@ pub fn check_need_gc(
     context: &CompactionFilterContext,
     keyspace_meta_service: Arc<Option<KeyspaceMetaService>>,
 ) -> bool {
+    info!("[test-yjy] check_need_gc");
+    println!("[test-yjy] check_need_gc println");
     let check_props = |props: &MvccProperties| -> (bool, bool /* skip_more_checks */) {
         // Disable GC directly once the config is negative or +inf.
         // Disabling GC is useful in some abnormal scenarios where the transaction model
@@ -816,18 +821,21 @@ pub fn check_need_gc(
             let max_all_ks_gc_sp = ks_meta_service.get_max_ts_of_all_ks_gc_safe_point();
             debug!("check props.min_ts and max ts of all keyspace level gc safe point";
                 "props.min_ts" => %props.min_ts,
-                "max-gc-sp-of-all-ks" => %max_all_ks_gc_sp,
+                "max_gc_sp_of_all_ks" => %max_all_ks_gc_sp,
             );
             if props.min_ts <= max_all_ks_gc_sp.into() {
                 any_ks_gc_sp_ge_than_props_min_ts = true;
             }
         }
-
         if props.min_ts > safe_point && !any_ks_gc_sp_ge_than_props_min_ts {
             debug!("skip gc in compaction filter because of props.min_ts greater than all gc safe point";
                 "props.min_ts" => %props.min_ts,
-                "global-gc-safe-point" => %safe_point,
-                "any-ks-gc-sp-ge-than-props-min-ts" =>%any_ks_gc_sp_ge_than_props_min_ts,
+                "global_gc_safe_point" => %safe_point,
+                "any_ks_gc_sp_ge_than_props_min_ts" =>%any_ks_gc_sp_ge_than_props_min_ts,
+            );
+            println!(
+                "[test-yjy] props.min_ts > safe_point ,safe_point:{}",
+                safe_point
             );
             return (false, false);
         }
@@ -922,6 +930,7 @@ pub mod test_utils {
         pub gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         pub gc_receiver: ReceiverWrapper<GcTask<RocksEngine>>,
         pub(super) callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
+        pub keyspace_meta_service: Arc<Option<KeyspaceMetaService>>,
     }
 
     impl<'a> TestGcRunner<'a> {
@@ -937,6 +946,7 @@ pub mod test_utils {
                 gc_scheduler,
                 gc_receiver,
                 callbacks_on_drop: vec![],
+                keyspace_meta_service: Arc::new(None),
             }
         }
     }
@@ -964,6 +974,7 @@ pub mod test_utils {
             };
 
             let mut gc_context_opt = GC_CONTEXT.lock().unwrap();
+
             *gc_context_opt = Some(GcContext {
                 db: Some(engine.clone()),
                 store_id: 1,
@@ -973,8 +984,12 @@ pub mod test_utils {
                 gc_scheduler: self.gc_scheduler.clone(),
                 region_info_provider: Arc::new(MockRegionInfoProvider::new(vec![])),
                 callbacks_on_drop: self.callbacks_on_drop.clone(),
-                keyspace_meta_service: Arc::new(None),
+                keyspace_meta_service: self.keyspace_meta_service.clone(),
             });
+            println!(
+                "[test-yjy]prepare_gc is has ks meta:{}",
+                self.keyspace_meta_service.clone().is_some()
+            );
         }
 
         pub fn post_gc(&mut self) {

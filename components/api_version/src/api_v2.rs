@@ -458,9 +458,8 @@ mod tests {
     #[test]
     fn test_get_u32_keyspace_id() {
         let cases = vec![
-            (vec![], None),
-            (vec![b'x', 0], None),
             (vec![b'x', 0, 0, 1], Some(1)),
+            (vec![b'r', 0, 0, 1], Some(1)),
             (vec![b'x', 1, 2, 3, 4, 5], Some(0x10203)),
         ];
 

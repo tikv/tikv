@@ -1,9 +1,16 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{collections::HashMap, sync::Arc};
+
 use api_version::{ApiV2, KvFormat, RawValue};
+use dashmap::DashMap;
 use engine_rocks::RocksEngine;
 use engine_traits::{MiscExt, CF_DEFAULT};
-use kvproto::kvrpcpb::{Context, *};
+use keyspace_meta::KeyspaceMetaService;
+use kvproto::{
+    keyspacepb,
+    kvrpcpb::{Context, *},
+};
 use tempfile::TempDir;
 use tikv::{
     config::DbConfig,
@@ -29,6 +36,7 @@ pub fn make_key(key: &[u8], ts: u64) -> Vec<u8> {
 
 #[test]
 fn test_check_need_gc() {
+    info!("aaaaa");
     GC_COMPACTION_FILTER_PERFORM.reset();
     GC_COMPACTION_FILTER_SKIP.reset();
 
@@ -110,8 +118,189 @@ fn test_check_need_gc() {
     );
 }
 
+fn make_keyspace_meta_service() -> Arc<Option<KeyspaceMetaService>> {
+    // Init keyspace level gc cache.
+    let ks_gc_map = DashMap::new();
+    // make data ts < props.min_ts
+    ks_gc_map.insert(1_u32, 60_u64);
+    ks_gc_map.insert(2_u32, 69_u64);
+
+    let keyspace_level_gc_cache = Arc::new(ks_gc_map);
+
+    // Init keyspace meta cache.
+    let keyspace_id_meta_map = DashMap::new();
+
+    let mut keyspace_config = HashMap::new();
+    keyspace_config.insert(
+        "gc_management_type".to_string(),
+        "keyspace_level_gc".to_string(),
+    );
+    let keyspace_1_meta = keyspacepb::KeyspaceMeta {
+        id: 1,
+        name: "test_keyspace".to_string(),
+        state: Default::default(),
+        created_at: 0,
+        state_changed_at: 0,
+        config: keyspace_config.clone(),
+        unknown_fields: Default::default(),
+        cached_size: Default::default(),
+    };
+
+    let keyspace_2_meta = keyspacepb::KeyspaceMeta {
+        id: 2,
+        name: "test_keyspace".to_string(),
+        state: Default::default(),
+        created_at: 0,
+        state_changed_at: 0,
+        config: keyspace_config,
+        unknown_fields: Default::default(),
+        cached_size: Default::default(),
+    };
+
+    // Make data ts < props.min_ts( props.min_ts = 70).
+    keyspace_id_meta_map.insert(1_u32, keyspace_1_meta);
+    keyspace_id_meta_map.insert(2_u32, keyspace_2_meta);
+
+    let keyspace_id_meta_cache = Arc::new(keyspace_id_meta_map);
+
+    Arc::new(Some(KeyspaceMetaService::new(
+        Arc::clone(&keyspace_level_gc_cache),
+        Arc::clone(&keyspace_id_meta_cache),
+    )))
+}
+
+#[test]
+fn test_keyspace_meta_service() {
+    // Make empty cache in keyspace_meta_service.
+    let keyspace_meta_service = Arc::new(Some(KeyspaceMetaService::new(
+        Arc::clone(&Default::default()),
+        Arc::clone(&Default::default()),
+    )));
+
+    // Case 1: If there is no keyspace level gc in cache, then
+    // is_all_keyspace_level_gc_have_not_inited return true.
+    assert_eq!(true, keyspace_meta_service.is_some());
+    if let Some(ref ks_meta_service) = *keyspace_meta_service {
+        let is_all_keyspace_level_gc_have_not_inited =
+            ks_meta_service.is_all_keyspace_level_gc_have_not_inited();
+        assert_eq!(true, is_all_keyspace_level_gc_have_not_inited);
+    }
+
+    // Case 2: If there have any keyspace level gc in cache, then
+    // is_all_keyspace_level_gc_have_not_inited return false.
+    let keyspace_meta_service = make_keyspace_meta_service();
+
+    assert_eq!(true, keyspace_meta_service.is_some());
+    if let Some(ref ks_meta_service) = *keyspace_meta_service {
+        let is_all_keyspace_level_gc_have_not_inited =
+            ks_meta_service.is_all_keyspace_level_gc_have_not_inited();
+        assert_eq!(false, is_all_keyspace_level_gc_have_not_inited);
+    }
+
+    // Case 3: Check get_max_ts_of_all_ks_gc_safe_point will return max(all keyspace
+    // level gc safe point).
+    if let Some(ref ks_meta_service) = *keyspace_meta_service {
+        let max_ts_of_all_ks_gc_safe_point = ks_meta_service.get_max_ts_of_all_ks_gc_safe_point();
+        assert_eq!(69, max_ts_of_all_ks_gc_safe_point);
+    }
+}
+
+#[test]
+fn test_check_need_gc_by_keyspace_level_gc() {
+    GC_COMPACTION_FILTER_PERFORM.reset();
+    GC_COMPACTION_FILTER_SKIP.reset();
+
+    let mut cfg = DbConfig::default();
+    cfg.defaultcf.disable_auto_compactions = true;
+    cfg.defaultcf.dynamic_level_bytes = false;
+    let dir = tempfile::TempDir::new().unwrap();
+    let builder = TestEngineBuilder::new().path(dir.path());
+    let engine = builder
+        .api_version(ApiVersion::V2)
+        .build_with_cfg(&cfg)
+        .unwrap();
+    let raw_engine = engine.get_rocksdb();
+
+    let mut gc_runner = TestGcRunner::new(0);
+    gc_runner.keyspace_meta_service = make_keyspace_meta_service().clone();
+
+    do_write_keyspace_data(&engine, false, 5);
+
+    // Check init value
+    assert_eq!(
+        GC_COMPACTION_FILTER_PERFORM
+            .with_label_values(&[STAT_RAW_KEYMODE])
+            .get(),
+        0
+    );
+    assert_eq!(
+        GC_COMPACTION_FILTER_SKIP
+            .with_label_values(&[STAT_RAW_KEYMODE])
+            .get(),
+        0
+    );
+
+    gc_runner.safe_point(0).gc_raw(&raw_engine);
+
+    // skip compaction filter
+    assert_eq!(
+        GC_COMPACTION_FILTER_PERFORM
+            .with_label_values(&[STAT_RAW_KEYMODE])
+            .get(),
+        1
+    );
+    // global GC safe point = 0, keyspace_id(1) gc safe point=60
+    // then check_need_gc return false.
+    assert_eq!(
+        GC_COMPACTION_FILTER_SKIP
+            .with_label_values(&[STAT_RAW_KEYMODE])
+            .get(),
+        1
+    );
+}
+
 fn do_write<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
     make_data(engine, is_delete, op_nums);
+}
+
+fn do_write_keyspace_data<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
+    make_keyspace_data(engine, is_delete, op_nums);
+}
+
+fn make_keyspace_data<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
+    let user_key = vec![b'r', 0, 0, 1, 1, 2, 3];
+
+    let mut test_raws = vec![];
+    let start_mvcc = 70;
+
+    let mut i = 0;
+    while i < op_nums {
+        test_raws.push((user_key.as_slice(), start_mvcc + i, is_delete));
+        i += 1;
+    }
+
+    let modifies = test_raws
+        .into_iter()
+        .map(|(key, ts, is_delete)| {
+            (
+                make_key(key, ts),
+                ApiV2::encode_raw_value(RawValue {
+                    user_value: &[0; 1024][..],
+                    expire_ts: Some(TimeStamp::max().into_inner()),
+                    is_delete,
+                }),
+            )
+        })
+        .map(|(k, v)| Modify::Put(CF_DEFAULT, Key::from_encoded_slice(k.as_slice()), v))
+        .collect();
+
+    let ctx = Context {
+        api_version: ApiVersion::V2,
+        ..Default::default()
+    };
+
+    let batch = WriteData::from_modifies(modifies);
+    engine.write(&ctx, batch).unwrap();
 }
 
 fn make_data<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
