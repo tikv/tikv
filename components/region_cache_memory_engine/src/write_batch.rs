@@ -184,6 +184,16 @@ impl RangeCacheWriteBatch {
             return;
         }
 
+        if !self.engine.enabled() {
+            let range = self.current_range.clone().unwrap();
+            info!(
+                "range cache is disabled, evict the range";
+                "range_start" => log_wrappers::Value(&range.start),
+                "range_end" => log_wrappers::Value(&range.end),
+            );
+            self.ranges_to_evict.insert(range);
+            return;
+        }
         let memory_expect = entry_size();
         if !self.memory_acquire(memory_expect) {
             let range = self.current_range.clone().unwrap();
@@ -502,12 +512,8 @@ impl WriteBatch for RangeCacheWriteBatch {
     }
 
     fn prepare_for_range(&mut self, range: CacheRange) {
-        if !self.engine.enabled() {
-            self.set_range_cache_status(RangeCacheStatus::NotInCache);
-        } else {
-            self.set_range_cache_status(self.engine.prepare_for_apply(&range));
-            self.memory_usage_reach_hard_limit = false;
-        }
+        self.set_range_cache_status(self.engine.prepare_for_apply(&range));
+        self.memory_usage_reach_hard_limit = false;
         self.current_range = Some(range);
     }
 }
@@ -560,7 +566,8 @@ mod tests {
     use tikv_util::config::VersionTrack;
 
     use super::*;
-    use crate::{background::flush_epoch, RangeCacheEngineConfig};
+    use crate::{background::flush_epoch, config::RangeCacheConfigManager, RangeCacheEngineConfig};
+    use online_config::{ConfigChange, ConfigManager, ConfigValue};
 
     // We should not use skiplist.get directly as we only cares keys without
     // sequence number suffix
@@ -787,6 +794,7 @@ mod tests {
         let mut config = RangeCacheEngineConfig::default();
         config.soft_limit_threshold = Some(ReadableSize(500));
         config.hard_limit_threshold = Some(ReadableSize(1000));
+        config.enabled = true;
         let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(config)));
         let r1 = CacheRange::new(b"kk00".to_vec(), b"kk10".to_vec());
         let r2 = CacheRange::new(b"kk10".to_vec(), b"kk20".to_vec());
@@ -921,5 +929,65 @@ mod tests {
             // We cannot get any sequence version of it
             assert!(!iter.valid());
         }
+    }
+
+    #[test]
+    fn test_write_batch_with_config_change() {
+        let mut config = RangeCacheEngineConfig::default();
+        config.soft_limit_threshold = Some(ReadableSize(u64::MAX));
+        config.hard_limit_threshold = Some(ReadableSize(u64::MAX));
+        config.enabled = true;
+        let config = Arc::new(VersionTrack::new(config));
+        let engine = RangeCacheMemoryEngine::new(config.clone());
+        let r1 = CacheRange::new(b"kk00".to_vec(), b"kk10".to_vec());
+        let r2 = CacheRange::new(b"kk10".to_vec(), b"kk20".to_vec());
+        for r in [&r1, &r2] {
+            engine.new_range(r.clone());
+            {
+                let mut core = engine.core.write();
+                core.mut_range_manager().set_safe_point(r, 10);
+            }
+            let _ = engine.snapshot(r.clone(), 1000, 1000).unwrap();
+        }
+
+        let val1: Vec<u8> = (0..150).map(|_| 0).collect();
+        let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.prepare_for_range(r2.clone());
+        wb.put(b"kk11", &val1).unwrap();
+        let snap1 = engine.snapshot(r1.clone(), 1000, 1000).unwrap();
+
+        // disable the range cache
+        let mut config_manager = RangeCacheConfigManager(config.clone());
+        let mut config_change = ConfigChange::new();
+        config_change.insert(String::from("enabled"), ConfigValue::Bool(false));
+        config_manager.dispatch(config_change).unwrap();
+
+        wb.write_impl(1000).unwrap();
+        // existing snapshot can still work after the range cache is disabled, but new snapshot will fail to create
+        assert!(snap1.get_value(b"kk00").unwrap().is_none());
+
+        let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.prepare_for_range(r1.clone());
+        // put should trigger the evict and it won't write into range cache
+        wb.put(b"kk01", &val1).unwrap();
+        wb.write_impl(1000).unwrap();
+
+        // new snapshot will fail to create as it's evicted already
+        let snap1 = engine.snapshot(r1.clone(), 1000, 1000);
+        assert!(snap1.is_err());
+        let snap2 = engine.snapshot(r2.clone(), 1000, 1000).unwrap();
+        // if no new write, the range cache can still be used.
+        assert_eq!(snap2.get_value(b"kk11").unwrap().unwrap(), &val1);
+
+        // enable the range cache again
+        let mut config_manager = RangeCacheConfigManager(config.clone());
+        let mut config_change = ConfigChange::new();
+        config_change.insert(String::from("enabled"), ConfigValue::Bool(true));
+        config_manager.dispatch(config_change).unwrap();
+
+        let snap1 = engine.snapshot(r1.clone(), 1000, 1000);
+        assert!(snap1.is_err());
+        let snap2 = engine.snapshot(r2.clone(), 1000, 1000).unwrap();
+        assert_eq!(snap2.get_value(b"kk11").unwrap().unwrap(), &val1);
     }
 }
