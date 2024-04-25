@@ -800,6 +800,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
         // If it's not a leader, the read index request will be redirected to the leader
         // later.
         if msg.get_msg_type() != MessageType::MsgReadIndex || role != StateRole::Leader {
+            info!("!!!! quit due to not leader {:?}", role; "msg" => ?msg);
             return;
         }
         assert_eq!(msg.get_entries().len(), 1);
