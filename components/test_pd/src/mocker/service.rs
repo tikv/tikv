@@ -370,7 +370,7 @@ impl PdMocker for Service {
                 }
             });
         let val = match val {
-            Ok(v) => req.safe_point,
+            Ok(_) => req.safe_point,
             Err(v) => v,
         };
 
