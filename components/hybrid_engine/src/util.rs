@@ -1,11 +1,12 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::Arc;
+
 use engine_rocks::{util::new_engine, RocksEngine};
 use engine_traits::{Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use region_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheMemoryEngine};
 use tempfile::{Builder, TempDir};
 use tikv_util::config::VersionTrack;
-use std::sync::Arc;
 
 use crate::HybridEngine;
 
