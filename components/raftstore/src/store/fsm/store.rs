@@ -2873,7 +2873,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .swap(false, Ordering::Relaxed);
         stats.set_is_busy(store_is_busy || busy_on_apply);
         STORE_PROCESS_BUSY_GAUGE_VEC
-            .with_label_values(&["busy_on_apply"])
+            .with_label_values(&["applystore_busy"])
             .set(busy_on_apply as i64);
         STORE_PROCESS_BUSY_GAUGE_VEC
             .with_label_values(&["raftstore_busy"])

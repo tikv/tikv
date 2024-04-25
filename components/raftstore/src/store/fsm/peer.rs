@@ -2249,10 +2249,7 @@ where
         // it should propose a read index to check whether its lag is behind the leader.
         // It won't generate flooding fetching messages. This proposal will only be sent
         // out before it gets response and updates the `last_leader_committed_index`.
-        if self.fsm.peer.needs_update_last_leader_committed_idx() {
-            self.try_to_fetch_committed_index();
-            debug!("propose read index to check whether its lag is behind the leader");
-        }
+        self.try_to_fetch_committed_index();
 
         // When having pending snapshot, if election timeout is met, it can't pass
         // the pending conf change check because first index has been updated to
@@ -6714,7 +6711,7 @@ where
     /// index from the leader.
     fn try_to_fetch_committed_index(&mut self) {
         // Already completed, skip.
-        if !self.fsm.peer.needs_update_last_leader_committed_idx() {
+        if !self.fsm.peer.needs_update_last_leader_committed_idx() || self.fsm.peer.is_leader() {
             return;
         }
         // Construct a MsgReadIndex message and send it to the leader to
@@ -6724,20 +6721,12 @@ where
             // The leader is unknown, so we can't fetch the committed index.
             return;
         }
-        let mut msg = raft::eraftpb::Message::new();
-        msg.set_msg_type(MessageType::MsgReadIndex);
         let rctx = ReadIndexContext {
             id: uuid::Uuid::new_v4(),
             request: None,
             locked: None,
         };
-        let mut e = raft::eraftpb::Entry::default();
-        e.set_data(rctx.to_bytes().into());
-        msg.mut_entries().push(e);
-        msg.from = self.fsm.peer_id();
-        msg.to = leader_id;
-        let raft_msg = self.fsm.peer.build_raft_messages(self.ctx, vec![msg]);
-        self.fsm.peer.send_raft_messages(self.ctx, raft_msg);
+        self.fsm.peer.raft_group.read_index(rctx.to_bytes());
         debug!(
             "try to fetch committed index from leader";
             "region_id" => self.region_id(),
