@@ -974,7 +974,7 @@ mod tests {
 
         // new snapshot will fail to create as it's evicted already
         let snap1 = engine.snapshot(r1.clone(), 1000, 1000);
-        assert!(snap1.is_err());
+        assert_eq!(snap1.unwrap_err(), FailedReason::NotCached);
         let snap2 = engine.snapshot(r2.clone(), 1000, 1000).unwrap();
         // if no new write, the range cache can still be used.
         assert_eq!(snap2.get_value(b"kk11").unwrap().unwrap(), &val1);
@@ -986,7 +986,7 @@ mod tests {
         config_manager.dispatch(config_change).unwrap();
 
         let snap1 = engine.snapshot(r1.clone(), 1000, 1000);
-        assert!(snap1.is_err());
+        assert_eq!(snap1.unwrap_err(), FailedReason::NotCached);
         let snap2 = engine.snapshot(r2.clone(), 1000, 1000).unwrap();
         assert_eq!(snap2.get_value(b"kk11").unwrap().unwrap(), &val1);
     }
