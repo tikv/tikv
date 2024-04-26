@@ -717,7 +717,8 @@ where
     }
     let factory = builder.build();
     let disk_engine = factory.create_shared_db(dir.path()).unwrap();
-    let kv_engine: EK = KvEngineBuilder::build(&cfg.tikv.range_cache_engine, disk_engine, None);
+    let config = Arc::new(VersionTrack::new(cfg.tikv.range_cache_engine.clone()));
+    let kv_engine: EK = KvEngineBuilder::build(config, disk_engine, None);
     let engines = Engines::new(kv_engine, raft_engine);
     (
         engines,
