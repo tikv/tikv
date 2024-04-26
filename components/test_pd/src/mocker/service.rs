@@ -360,6 +360,15 @@ impl PdMocker for Service {
         &self,
         req: &UpdateServiceGcSafePointRequest,
     ) -> Option<Result<UpdateServiceGcSafePointResponse>> {
+        // WARNING:
+        // This mocker is only used for testing the behavior that the client yeets an
+        // error if failed to update the service safe point. So it lacks the functions
+        // below, you may need to extend this when needed:
+        //
+        // - Upload many service safe points. (For now, `service_id` will be ignored.)
+        // - Remove the service safe point when request with `ttl` = 0.
+        // - The safe point `gc_worker` always exists with the latest GC safe point.
+
         let val = self
             .service_gc_safepoint
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
