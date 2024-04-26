@@ -18,7 +18,7 @@ IO latency is very critical to the QoS of TiKV, because TiKV highly depends on t
 
 ### Low Read Latency of Hot Region
 
-The read queries evenly distributed in different data ranges is a ideally workload, it can make good use of all resources across different TiKV nodes. But in the real world, queries tend to skew to some small data ranges, like latest added/modified data has higher possibility to be retrieved, a specified category's data has higher read queries in some special time range, etc. We call these highly retrieved data ranges as hot regions. Hot regions tend to cause higher query latency since there might be some queries need to wait. A faster in-memory engine cache layer might have a great benefit in this hot region case since it will use less resource to serve a query.
+Read queries being evenly distributed in different data ranges is an ideal workload, which can make good use of all resources across different TiKV nodes. But in the real world, queries tend to skew to some small data ranges, like latest added/modified data has higher possibility to be retrieved, a specified category's data has higher read queries in some special time range, etc. We call these highly retrieved data ranges as hot regions. Hot regions tend to cause higher query latency since there might be some queries need to wait. A faster in-memory engine cache layer might have a great benefit in this hot region case since it will use less resource to serve a query.
 
 ### Data Warmup before Leader Transfer
 
