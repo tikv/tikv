@@ -62,7 +62,7 @@ Heavy read and write queries distributed in some small data ranges is normal, ho
 
 ### Locate Latency Jitter Issues Easily
 
-Latency jitter may happen when there is disk IO jitter, network jitter, or other environmental or non-environmental causes. We are goning to improve the observability to easily locate the root cause of temporary latency jitter.
+Latency jitter may happen when there is disk IO jitter, network jitter, or other environmental or non-environmental causes. We are going to improve the observability to easily locate the root cause of temporary latency jitter.
 
 ## Developer Experience & Efficiency
 
