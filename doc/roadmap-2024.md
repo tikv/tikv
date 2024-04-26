@@ -4,7 +4,7 @@
 
 This is a roadmap of TiKV project from engineering and architecture aspects. It expresses the intension of how we will improve this project to make TiKV fit more users' use cases in next 1 to 2 years. The roadmap includes several domains like latency and performance improvement, stability, observability, etc. Notice: all content list in the roadmap is our intension, we will try our best efforts to make it happen, but it doesn't mean we have a commitment for it, please don't rely on features/capabilities currently TiKV doesn't have for your projects which have strict timeline requirement, even these features listed in the roadmap.
 
-## QoS: Single-Digit Millsecond Predictable Latency
+## QoS: Stable and Predictable Latency
 
 This domain aims to enhance TiKV to provide predictable single-digit millisecond latency under different scenarios like too many MVCC versions, disk IO temporarily jitter, high read QPS in a small data range, etc. 
 
@@ -46,11 +46,11 @@ TiKV has some soft limits for different components' memory usage like scheduler,
 
 ### RocksDB Engine
 
-Newer version RocksDB introduced some promising features like "WAL compression support" and "async-io", we are going to upgrade TiKV's RocksDB to 8.1 version and leverage these powerful features.
+Newer version RocksDB introduced some promising features like "WAL compression support" and "async-io", we are going to upgrade TiKV's RocksDB to 8.10 version and leverage these powerful features.
 
 ### Titan Engine
 
-Titan engine can reduce write amplification dramatically for large value sceanrios, but there are also some drawbacks of Titan engine like space amplification caused by lazy GC, range scan speed has regression in some cases. We will introduce "Punch Hole" feature into Titan to reduce the space amplification. We probably will introduce "Level-Merge" feature to gain better range scan performance for Titan engine.
+Titan engine can reduce write amplification dramatically for large value sceanrios, but there are also some drawbacks of Titan engine like space amplification caused by lazy GC, range scan speed has regression in some cases. We will introduce "Punch Hole" feature into Titan to reduce the space amplification. We probably will introduce "Level-Merge" feature to gain better range scan performance for Titan engine. We also will improve the read performance by prioritize the caching of blob file meta blocks.
 
 ## Observability & Diagnosability
 
