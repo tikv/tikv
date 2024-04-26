@@ -45,7 +45,7 @@ TiKV has the following key features:
 
 ## Roadmap
 
-If you are interest in the future direction of TiKV, please see [TiKV 2024 Roadmap](./doc/roadmap-2024.md).
+If you are interested in the future direction of TiKV, please see [TiKV 2024 Roadmap](./doc/roadmap-2024.md).
 
 ## Governance
 
