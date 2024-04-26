@@ -75,7 +75,7 @@ use raftstore::{
     },
     RaftRouterCompactedEventSender,
 };
-use region_cache_memory_engine::RangeCacheMemoryEngine;
+use region_cache_memory_engine::{config::RangeCacheConfigManager, RangeCacheMemoryEngine};
 use resolved_ts::{LeadershipResolver, Task};
 use resource_control::ResourceGroupManager;
 use security::SecurityManager;
@@ -1690,11 +1690,15 @@ where
         let disk_engine = factory
             .create_shared_db(&self.core.store_path)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
+        let range_cache_engine_config = Arc::new(VersionTrack::new(
+            self.core.config.range_cache_engine.clone(),
+        ));
         let kv_engine: EK = KvEngineBuilder::build(
-            &self.core.config.range_cache_engine,
+            range_cache_engine_config.clone(),
             disk_engine.clone(),
             Some(self.pd_client.clone()),
         );
+        let range_cache_config_manager = RangeCacheConfigManager(range_cache_engine_config);
         self.kv_statistics = Some(factory.rocks_statistics());
         let engines = Engines::new(kv_engine, raft_engine);
 
@@ -1706,6 +1710,10 @@ where
                 disk_engine.clone(),
                 DbType::Kv,
             )),
+        );
+        cfg_controller.register(
+            tikv::config::Module::RangeCacheEngine,
+            Box::new(range_cache_config_manager),
         );
         let reg = TabletRegistry::new(
             Box::new(SingletonFactory::new(disk_engine)),
