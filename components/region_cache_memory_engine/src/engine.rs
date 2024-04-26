@@ -20,7 +20,7 @@ use skiplist_rs::{
     SkipList,
 };
 use slog_global::error;
-use tikv_util::info;
+use tikv_util::{config::VersionTrack, info};
 
 use crate::{
     background::{BackgroundTask, BgWorkManager, PdRangeHintService},
@@ -246,23 +246,20 @@ pub struct RangeCacheMemoryEngine {
     pub(crate) rocks_engine: Option<RocksEngine>,
     bg_work_manager: Arc<BgWorkManager>,
     memory_controller: Arc<MemoryController>,
+    config: Arc<VersionTrack<RangeCacheEngineConfig>>,
 }
 
 impl RangeCacheMemoryEngine {
-    pub fn new(config: &RangeCacheEngineConfig) -> Self {
+    pub fn new(config: Arc<VersionTrack<RangeCacheEngineConfig>>) -> Self {
         info!("init range cache memory engine";);
         let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
         let skiplist_engine = { core.read().engine().clone() };
 
-        let memory_controller = Arc::new(MemoryController::new(
-            config.soft_limit_threshold(),
-            config.hard_limit_threshold(),
-            skiplist_engine,
-        ));
+        let memory_controller = Arc::new(MemoryController::new(config.clone(), skiplist_engine));
 
         let bg_work_manager = Arc::new(BgWorkManager::new(
             core.clone(),
-            config.gc_interval.0,
+            config.value().gc_interval.0,
             memory_controller.clone(),
         ));
 
@@ -271,6 +268,7 @@ impl RangeCacheMemoryEngine {
             rocks_engine: None,
             bg_work_manager,
             memory_controller,
+            config,
         }
     }
 
@@ -478,6 +476,10 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
         let core = self.core.read();
         core.range_manager().get_range_for_key(key)
     }
+
+    fn enabled(&self) -> bool {
+        self.config.value().enabled
+    }
 }
 
 impl Iterable for RangeCacheMemoryEngine {
@@ -491,13 +493,18 @@ impl Iterable for RangeCacheMemoryEngine {
 
 #[cfg(test)]
 pub mod tests {
+    use std::sync::Arc;
+
     use engine_traits::CacheRange;
+    use tikv_util::config::VersionTrack;
 
     use crate::{RangeCacheEngineConfig, RangeCacheMemoryEngine};
 
     #[test]
     fn test_overlap_with_pending() {
-        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
+            RangeCacheEngineConfig::config_for_test(),
+        )));
         let range1 = CacheRange::new(b"k1".to_vec(), b"k3".to_vec());
         engine.load_range(range1).unwrap();
 
