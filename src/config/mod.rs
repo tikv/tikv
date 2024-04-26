@@ -1970,12 +1970,7 @@ impl Default for RaftEngineConfig {
     fn default() -> Self {
         Self {
             enable: true,
-            config: RawRaftEngineConfig {
-                // As the async-io is enabled by default, testing records shows that using 4kb as
-                // the default value can achieve better performance and reduce the IO overhead.
-                batch_compression_threshold: RaftEngineReadableSize::kb(4),
-                ..Default::default()
-            },
+            config: RawRaftEngineConfig::default(),
         }
     }
 }
@@ -1989,6 +1984,19 @@ impl RaftEngineConfig {
             self.config.memory_limit = Some(RaftEngineReadableSize(memory_limit as u64));
         }
         Ok(())
+    }
+
+    fn optimize_for(&mut self, raft_store: &RaftstoreConfig, raft_kv_v2: bool) {
+        if !raft_kv_v2 {
+            let cur_batch_compression_thd = self.config().batch_compression_threshold;
+            // As the async-io is enabled by default (raftstore.store_io_pool_size == 1),
+            // testing records shows that using 4kb as the default value can achieve
+            // better performance and reduce the IO overhead.
+            self.mut_config().batch_compression_threshold = RaftEngineReadableSize(std::cmp::min(
+                cur_batch_compression_thd.0 / (raft_store.store_io_pool_size + 1) as u64,
+                RaftEngineReadableSize::kb(4).0,
+            ));
+        }
     }
 
     pub fn config(&self) -> RawRaftEngineConfig {
@@ -3692,6 +3700,8 @@ impl TikvConfig {
         if self.storage.engine == EngineType::RaftKv2 {
             self.raft_store.store_io_pool_size = cmp::max(self.raft_store.store_io_pool_size, 1);
         }
+        self.raft_engine
+            .optimize_for(&self.raft_store, self.storage.engine == EngineType::RaftKv2);
         if self.storage.block_cache.capacity.is_none() {
             let total_mem = SysQuota::memory_limit_in_bytes();
             let capacity = if self.storage.engine == EngineType::RaftKv2 {
@@ -6930,6 +6940,10 @@ mod tests {
         default_cfg
             .raft_store
             .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
+        default_cfg.raft_engine.optimize_for(
+            &default_cfg.raft_store,
+            default_cfg.storage.engine == EngineType::RaftKv2,
+        );
         default_cfg.security.redact_info_log = Some(false);
         default_cfg.coprocessor.region_max_size = Some(default_cfg.coprocessor.region_max_size());
         default_cfg.coprocessor.region_max_keys = Some(default_cfg.coprocessor.region_max_keys());
@@ -6954,7 +6968,6 @@ mod tests {
         cfg.storage.block_cache.capacity = None; // Either `None` and a value is computed or `Some(_)` fixed value.
         cfg.memory_usage_limit = None;
         cfg.raft_engine.mut_config().memory_limit = None;
-        cfg.raft_engine.mut_config().batch_compression_threshold = RaftEngineReadableSize::kb(4);
         cfg.coprocessor_v2.coprocessor_plugin_directory = None; // Default is `None`, which is represented by not setting the key.
         cfg.rocksdb.write_buffer_limit = None;
         cfg.rocksdb.max_total_wal_size = None;
@@ -7023,6 +7036,10 @@ mod tests {
 
         cfg.coprocessor
             .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
+        cfg.raft_engine.optimize_for(
+            &cfg.raft_store,
+            default_cfg.storage.engine == EngineType::RaftKv2,
+        );
 
         assert_eq_debug(&cfg, &default_cfg);
     }
