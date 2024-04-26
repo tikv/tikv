@@ -1992,7 +1992,9 @@ impl RaftEngineConfig {
             // As the async-io is enabled by default (raftstore.store_io_pool_size == 1),
             // testing records shows that using 4kb as the default value can achieve
             // better performance and reduce the IO overhead.
-            self.mut_config().batch_compression_threshold = RaftEngineReadableSize(std::cmp::min(
+            // Meanwhile, the batch_compression_threshold cannot be modified dynamically if
+            // the threads count of async-io are changed manually.
+            self.mut_config().batch_compression_threshold = RaftEngineReadableSize(std::cmp::max(
                 cur_batch_compression_thd.0 / (raft_store.store_io_pool_size + 1) as u64,
                 RaftEngineReadableSize::kb(4).0,
             ));
@@ -6943,6 +6945,10 @@ mod tests {
         default_cfg.raft_engine.optimize_for(
             &default_cfg.raft_store,
             default_cfg.storage.engine == EngineType::RaftKv2,
+        );
+        assert_eq!(
+            default_cfg.raft_engine.config().batch_compression_threshold,
+            RaftEngineReadableSize::kb(4)
         );
         default_cfg.security.redact_info_log = Some(false);
         default_cfg.coprocessor.region_max_size = Some(default_cfg.coprocessor.region_max_size());

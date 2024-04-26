@@ -897,7 +897,7 @@ fn test_serde_default_config() {
     assert_eq!(cfg, TikvConfig::default());
 
     let content = read_file_in_project_dir("integrations/config/test-default.toml");
-    let mut cfg: TikvConfig = toml::from_str(&content).unwrap();
+    let cfg: TikvConfig = toml::from_str(&content).unwrap();
     assert_eq!(cfg, TikvConfig::default());
 }
 
@@ -976,4 +976,58 @@ engine = "partitioned-raft-kv"
     let old_cfg: TikvConfig = toml::from_str(old_content).unwrap();
     let new_cfg: TikvConfig = toml::from_str(new_content).unwrap();
     assert_eq_debug(&old_cfg, &new_cfg);
+}
+
+#[test]
+fn test_raft_engine_compression_thd() {
+    let disable_async_io_content = r#"
+        [raftstore]
+        store-io-pool-size = 0
+
+        [raft-engine]
+        batch-compression-threshold = "64KB"
+    "#;
+    let mut cfg: TikvConfig = toml::from_str(disable_async_io_content).unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        RaftEngineReadableSize::kb(64)
+    );
+    cfg.validate().unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        RaftEngineReadableSize::kb(64)
+    );
+
+    let async_io_content = r#"
+        [raftstore]
+        store-io-pool-size = 3
+
+        [raft-engine]
+        batch-compression-threshold = "64KB"
+    "#;
+    cfg = toml::from_str(async_io_content).unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        RaftEngineReadableSize::kb(64)
+    );
+    cfg.validate().unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        RaftEngineReadableSize::kb(16)
+    );
+
+    let async_io_content = r#"
+        [raftstore]
+        store-io-pool-size = 5
+    "#;
+    cfg = toml::from_str(async_io_content).unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        RaftEngineReadableSize::kb(8)
+    );
+    cfg.validate().unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        RaftEngineReadableSize::kb(4)
+    );
 }

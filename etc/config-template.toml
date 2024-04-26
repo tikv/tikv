@@ -1130,7 +1130,7 @@
 ## configuration is compressed.
 ##
 ## If you set this configuration item to `0`, compression is disabled.
-# batch-compression-threshold = "4KB"
+# batch-compression-threshold = "8KB"
 
 ## Specifies the maximum size of log files. When a log file is larger than this
 ## value, it is rotated.
