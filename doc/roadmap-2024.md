@@ -54,7 +54,7 @@ Titan engine can reduce write amplification dramatically for large value sceanri
 
 ## Observability & Diagnosability
 
-Improve TiKV's observability and diagnosability, make it easily locate issues that might impact the quality of TiKV service.
+Improve TiKV's observability and diagnosability, making it easy to locate issues that might impact the quality of TiKV service.
 
 ### Locate Hot Read/Write Data Range Easily
 
