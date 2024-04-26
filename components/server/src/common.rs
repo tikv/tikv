@@ -38,7 +38,7 @@ use tikv::{
     server::{status_server::StatusServer, DEFAULT_CLUSTER_ID},
 };
 use tikv_util::{
-    config::{ensure_dir_exist, RaftDataStateMachine},
+    config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
     math::MovingAvgU32,
     metrics::INSTANCE_BACKEND_CPU_QUOTA,
     quota_limiter::QuotaLimiter,
@@ -701,7 +701,7 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
 
 pub trait KvEngineBuilder: KvEngine {
     fn build(
-        range_cache_engine_config: &RangeCacheEngineConfig,
+        range_cache_engine_config: Arc<VersionTrack<RangeCacheEngineConfig>>,
         disk_engine: RocksEngine,
         pd_client: Option<Arc<RpcClient>>,
     ) -> Self;
@@ -709,7 +709,7 @@ pub trait KvEngineBuilder: KvEngine {
 
 impl KvEngineBuilder for RocksEngine {
     fn build(
-        _range_cache_engine_config: &RangeCacheEngineConfig,
+        _range_cache_engine_config: Arc<VersionTrack<RangeCacheEngineConfig>>,
         disk_engine: RocksEngine,
         _pd_client: Option<Arc<RpcClient>>,
     ) -> Self {
@@ -719,7 +719,7 @@ impl KvEngineBuilder for RocksEngine {
 
 impl KvEngineBuilder for HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
     fn build(
-        range_cache_engine_config: &RangeCacheEngineConfig,
+        range_cache_engine_config: Arc<VersionTrack<RangeCacheEngineConfig>>,
         disk_engine: RocksEngine,
         pd_client: Option<Arc<RpcClient>>,
     ) -> Self {
