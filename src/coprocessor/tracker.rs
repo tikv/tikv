@@ -372,7 +372,11 @@ impl<E: Engine> Tracker<E> {
 
         // only collect metrics for select and index, exclude transient read flow such
         // like analyze and checksum.
-        if self.req_ctx.tag == ReqTag::select || self.req_ctx.tag == ReqTag::index {
+        if self.req_ctx.tag == ReqTag::select
+            || self.req_ctx.tag == ReqTag::index
+            || self.req_ctx.tag == ReqTag::select_by_range_cache
+            || self.req_ctx.tag == ReqTag::index_by_range_cache
+        {
             tls_collect_query(
                 region_id,
                 peer,
