@@ -143,7 +143,7 @@ fn test_async_io_apply_conf_change_without_leader_persist() {
 #[test]
 fn test_async_io_apply_before_persist_apply_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.store_io_pool_size = 1;
+    cluster.cfg.raft_store.store_io_pool_size = 2;
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(10);
     configure_for_snapshot(&mut cluster.cfg);
     let pd_client = Arc::clone(&cluster.pd_client);
