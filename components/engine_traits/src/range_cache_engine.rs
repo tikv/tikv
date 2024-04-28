@@ -43,6 +43,10 @@ pub trait RangeCacheEngine:
 
     type RangeHintService: RangeHintService;
     fn start_hint_service(&self, range_hint_service: Self::RangeHintService);
+
+    fn enabled(&self) -> bool {
+        false
+    }
 }
 
 /// A service that should run in the background to retrieve and apply cache
