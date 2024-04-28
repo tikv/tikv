@@ -41,9 +41,12 @@ impl AllocStatsCollector {
             .namespace(ns),
             &["type", "thread_name"],
         )?;
-        let arena_count = IntGauge::new(
-            "allocator_arena_count",
-            "The count of arenas in the allocator.",
+        let arena_count = IntGauge::with_opts(
+            Opts::new(
+                "allocator_arena_count",
+                "The count of arenas in the allocator.",
+            )
+            .namespace(ns),
         )?;
         Ok(AllocStatsCollector {
             descs: [&stats, &thread_stats, &allocation]
