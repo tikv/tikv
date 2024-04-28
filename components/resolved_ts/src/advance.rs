@@ -433,7 +433,6 @@ impl LeadershipResolver {
     }
 }
 
-<<<<<<< HEAD
 pub async fn resolve_by_raft<T, E>(regions: Vec<u64>, min_ts: TimeStamp, cdc_handle: T) -> Vec<u64>
 where
     T: 'static + CdcHandle<E>,
@@ -465,11 +464,11 @@ where
 
     let resps = futures::future::join_all(reqs).await;
     resps.into_iter().flatten().collect::<Vec<u64>>()
-=======
+}
+
 #[inline]
 fn get_min_timeout(timeout: Option<Duration>, default: Duration) -> Duration {
     timeout.unwrap_or(default).min(default)
->>>>>>> cc242e2eae (resolved_ts: use smaller timeout when do check_leader (#16000))
 }
 
 fn region_has_quorum(peers: &[Peer], stores: &[u64]) -> bool {
