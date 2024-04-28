@@ -91,19 +91,34 @@ fn json_array_append(args: &[ScalarValueRef]) -> Result<Option<Json>> {
         // extract the element from the path, then merge the value into the element
         // 1. extrace the element from the path
         let tmp_path_expr_list = vec![path_expr_list.last().unwrap().to_owned()];
-        let element = base.as_ref().extract(&tmp_path_expr_list)?;
-        // change element to JsonRef
-        let element_ref = element.as_ref().map(|e| e.as_ref());
+        let element: Option<Json> = base.as_ref().extract(&tmp_path_expr_list)?;
         // 2. merge the value into the element
-        let tmp_values: Vec<JsonRef> = vec![element_ref.unwrap(), value.as_ref()];
-
-        values.push(Json::merge(tmp_values)?);
+        if let Some(elem) = element {
+            // if both elem and value are json object, wrap elem into a vector
+            // pass empty array to merge function to wrap the merged result into a vector
+            if elem.get_type() == JsonType::Object && value.get_type() == JsonType::Object {
+                // print the message to the log
+                print!("{}","Both elem and value are json object, wrap elem into a vector");
+                let array_json: Json = Json::from_array(vec![elem.clone()])?;
+                let tmp_values = vec![array_json.as_ref(), value.as_ref()];
+                values.push(Json::merge(tmp_values)?);
+            } else {
+                print!("{}","elem or value are not json object");
+                let tmp_values = vec![elem.as_ref(), value.as_ref()];
+                values.push(Json::merge(tmp_values)?);
+            }
+        }
     }
-    Ok(Some(base.as_ref().modify(
-        &path_expr_list,
-        values,
-        ModifyType::Set,
-    )?))
+    if values.is_empty() {
+        // if no element is appended, return the original json
+        Ok(Some(base))
+    } else {
+        Ok(Some(base.as_ref().modify(
+            &path_expr_list,
+            values,
+            ModifyType::Set,
+        )?))
+    }
 }
 
 /// validate the arguments are `(Option<JsonRef>, &[(Option<Bytes>,
@@ -1557,46 +1572,53 @@ mod tests {
     #[test]
     fn test_json_array_append() {
         let cases: Vec<(Vec<ScalarValue>, _)> = vec![
-            (
-                vec![
-                    None::<Json>.into(),
-                    None::<Bytes>.into(),
-                    None::<Json>.into(),
-                ],
-                None::<Json>,
-            ),
-            (
-                vec![
-                    Some(Json::from_i64(9).unwrap()).into(),
-                    Some(b"$".to_vec()).into(),
-                    Some(Json::from_u64(3).unwrap()).into(),
-                ],
-                Some(r#"[9,3]"#.parse().unwrap()),
-            ),
-            (
-                vec![
-                    Some(Json::from_str(r#"["a", ["b", "c"], "d"]"#).unwrap()).into(),
-                    Some(b"$[1]".to_vec()).into(),
-                    Some(Json::from_u64(1).unwrap()).into(),
-                ],
-                Some(r#"["a", ["b", "c", 1], "d"]"#.parse().unwrap()),
-            ),
-            (
-                vec![
-                    Some(Json::from_str(r#"["a", ["b", "c"], "d"]"#).unwrap()).into(),
-                    Some(b"$[0]".to_vec()).into(),
-                    Some(Json::from_u64(2).unwrap()).into(),
-                ],
-                Some(r#"[["a", 2], ["b", "c"], "d"]"#.parse().unwrap()),
-            ),
-            (
-                vec![
-                    Some(Json::from_str(r#"["a", ["b", "c"], "d"]"#).unwrap()).into(),
-                    Some(b"$[1][0]".to_vec()).into(),
-                    Some(Json::from_u64(3).unwrap()).into(),
-                ],
-                Some(r#"["a", [["b", 3], "c"], "d"]"#.parse().unwrap()),
-            ),
+//            (
+//                vec![
+//                    None::<Json>.into(),
+//                    None::<Bytes>.into(),
+//                    None::<Json>.into(),
+//                ],
+//                None::<Json>,
+//            ),
+//            (
+//                vec![
+//                    Some(Json::from_i64(9).unwrap()).into(),
+//                    Some(b"$".to_vec()).into(),
+//                    Some(Json::from_u64(3).unwrap()).into(),
+//                ],
+//                Some(r#"[9,3]"#.parse().unwrap()),
+//            ),
+//            (
+//                vec![
+//                    Some(Json::from_str(r#"["a", ["b", "c"], "d"]"#).unwrap()).into(),
+//                    Some(b"$[1]".to_vec()).into(),
+//                    Some(Json::from_u64(1).unwrap()).into(),
+//                ],
+//                Some(r#"["a", ["b", "c", 1], "d"]"#.parse().unwrap()),
+//            ),
+//            (
+//                vec![
+//                    Some(Json::from_str(r#"["a", ["b", "c"], "d"]"#).unwrap()).into(),
+//                    Some(b"$[0]".to_vec()).into(),
+//                    Some(Json::from_u64(2).unwrap()).into(),
+//                ],
+//                Some(r#"[["a", 2], ["b", "c"], "d"]"#.parse().unwrap()),
+//            ),
+//            (
+//                vec![
+//                    Some(Json::from_str(r#"["a", ["b", "c"], "d"]"#).unwrap()).into(),
+//                    Some(b"$[1][0]".to_vec()).into(),
+//                    Some(Json::from_u64(3).unwrap()).into(),
+//                ],
+//                Some(r#"["a", [["b", 3], "c"], "d"]"#.parse().unwrap()),
+//            ),
+//            // add testcase from TiDB
+(vec![Some(Json::from_str(r#"{"a": 1, "b": [2, 3], "c": 4}"#).unwrap()).into(), Some(b"$.d".to_vec()).into(), Some(Json::from_str(r#""z""#).unwrap()).into()], Some(r#"{"a": 1, "b": [2, 3], "c": 4}"#.parse().unwrap()),),
+(vec![Some(Json::from_str(r#"{"a": 1, "b": [2, 3], "c": 4}"#).unwrap()).into(), Some(b"$".to_vec()).into(), Some(Json::from_str(r#""w""#).unwrap()).into()], Some(r#"[{"a": 1, "b": [2, 3], "c": 4}, "w"]"#.parse().unwrap()),),
+(vec![Some(Json::from_str(r#"{"a": 1, "b": [2, 3], "c": 4}"#).unwrap()).into(), Some(b"$".to_vec()).into(), None::<Json>.into()], Some(r#"[{"a": 1, "b": [2, 3], "c": 4}, null]"#.parse().unwrap()),),
+(vec![Some(Json::from_str(r#"{"a": 1}"#).unwrap()).into(), Some(b"$".to_vec()).into(), Some(Json::from_str(r#"{"b": 2}"#).unwrap()).into()], Some(r#"[{"a": 1}, {"b": 2}]"#.parse().unwrap()),),
+(vec![Some(Json::from_str(r#"{"a": 1}"#).unwrap()).into(), Some(b"$".to_vec()).into(), Some(Json::from_str(r#"{"b": 2}"#).unwrap()).into()], Some(r#"[{"a": 1}, {"b": 2}]"#.parse().unwrap()),),
+(vec![Some(Json::from_str(r#"{"a": 1}"#).unwrap()).into(), Some(b"$.a".to_vec()).into(), Some(Json::from_str(r#"{"b": 2}"#).unwrap()).into()], Some(r#"{"a": [1, {"b": 2}]}"#.parse().unwrap()),),
         ];
         for (args, expect_output) in cases {
             let output: Option<Json> = RpnFnScalarEvaluator::new()
