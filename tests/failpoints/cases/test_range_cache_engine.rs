@@ -7,15 +7,15 @@ use engine_traits::{CacheRange, RangeCacheEngine, SnapshotContext, CF_DEFAULT, C
 use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use test_raftstore::{
-    make_cb, new_node_cluster_with_hybrid_engine, new_put_cmd, new_request, Cluster,
-    HybridEngineImpl, NodeCluster, Simulator,
+    make_cb, new_node_cluster_with_hybrid_engine_with_no_range_cache, new_put_cmd, new_request,
+    Cluster, HybridEngineImpl, NodeCluster, Simulator,
 };
 use tikv_util::HandyRwLock;
 use txn_types::Key;
 
 #[test]
 fn test_basic_put_get() {
-    let mut cluster = new_node_cluster_with_hybrid_engine(0, 1);
+    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
     cluster.run();
 
@@ -26,8 +26,6 @@ fn test_basic_put_get() {
         let cache_range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
         core.mut_range_manager().new_range(cache_range.clone());
         core.mut_range_manager().set_safe_point(&cache_range, 1000);
-        core.mut_range_manager()
-            .set_range_readable(&cache_range, true);
     }
 
     cluster.put(b"k05", b"val").unwrap();
@@ -41,7 +39,7 @@ fn test_basic_put_get() {
     })
     .unwrap();
 
-    let val = cluster.get_with_snap_ctx(b"k05", snap_ctx).unwrap();
+    let val = cluster.get_with_snap_ctx(b"k05", false, snap_ctx).unwrap();
     assert_eq!(&val, b"val");
 
     // verify it's read from range cache engine
@@ -51,7 +49,7 @@ fn test_basic_put_get() {
 #[test]
 fn test_load() {
     let test_load = |concurrent_with_split: bool| {
-        let mut cluster = new_node_cluster_with_hybrid_engine(0, 1);
+        let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
         cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
         cluster.run();
 
@@ -71,7 +69,7 @@ fn test_load() {
         cluster.must_split(&r, &split_key2);
 
         let (tx, rx) = sync_channel(1);
-        fail::cfg_callback("on_snapshot_loaded", move || {
+        fail::cfg_callback("on_snapshot_load_finished", move || {
             tx.send(true).unwrap();
         })
         .unwrap();
@@ -105,15 +103,10 @@ fn test_load() {
             cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
         }
 
-        if concurrent_with_split {
-            // The range is not splitted at the time of becoming pending
-            rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        } else {
-            // ensure the snapshot is loaded
-            rx.recv_timeout(Duration::from_secs(5)).unwrap();
-            rx.recv_timeout(Duration::from_secs(5)).unwrap();
-            rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        }
+        // ensure the snapshot is loaded
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
         for i in (1..30).step_by(2) {
             let key = format!("key-{:04}", i);
@@ -141,14 +134,14 @@ fn test_load() {
                 .append_ts(20.into())
                 .into_encoded();
             let val = cluster
-                .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, snap_ctx.clone())
+                .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, false, snap_ctx.clone())
                 .unwrap();
             assert_eq!(&val, b"val-write");
             // verify it's read from range cache engine
             assert!(rx.try_recv().unwrap());
 
             let val = cluster
-                .get_with_snap_ctx(&encoded_key, snap_ctx.clone())
+                .get_with_snap_ctx(&encoded_key, false, snap_ctx.clone())
                 .unwrap();
             assert_eq!(&val, b"val-default");
             // verify it's read from range cache engine
@@ -161,7 +154,7 @@ fn test_load() {
 
 #[test]
 fn test_write_batch_cache_during_load() {
-    let mut cluster = new_node_cluster_with_hybrid_engine(0, 1);
+    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     cluster.run();
 
@@ -174,7 +167,7 @@ fn test_write_batch_cache_during_load() {
         cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
     }
 
-    fail::cfg("on_snapshot_loaded", "pause").unwrap();
+    fail::cfg("on_snapshot_load_finished", "pause").unwrap();
     // load range
     {
         let range_cache_engine = cluster.get_range_cache_engine(1);
@@ -204,7 +197,7 @@ fn test_write_batch_cache_during_load() {
     // use it to mock concurrency between consuming cached write batch and cache
     // further writes
     fail::cfg("on_cached_write_batch_consumed", "pause").unwrap();
-    fail::remove("on_snapshot_loaded");
+    fail::remove("on_snapshot_load_finished");
 
     let (tx2, rx2) = sync_channel(1);
     fail::cfg_callback("on_range_cache_get_value", move || {
@@ -223,7 +216,7 @@ fn test_write_batch_cache_during_load() {
                 .append_ts(20.into())
                 .into_encoded();
             let val = cluster
-                .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, snap_ctx.clone())
+                .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, false, snap_ctx.clone())
                 .unwrap();
             assert_eq!(&val, b"val-write");
             // We should not read the value in the memory engine at this phase.
@@ -247,14 +240,14 @@ fn test_write_batch_cache_during_load() {
             .append_ts(20.into())
             .into_encoded();
         let val = cluster
-            .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, snap_ctx.clone())
+            .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, false, snap_ctx.clone())
             .unwrap();
         assert_eq!(&val, b"val-write");
         // verify it's read from range cache engine
         assert!(rx2.try_recv().unwrap());
 
         let val = cluster
-            .get_with_snap_ctx(&encoded_key, snap_ctx.clone())
+            .get_with_snap_ctx(&encoded_key, false, snap_ctx.clone())
             .unwrap();
         assert_eq!(&val, b"val-default");
         // verify it's read from range cache engine
@@ -266,7 +259,7 @@ fn test_write_batch_cache_during_load() {
 // It tests that after we schedule the pending range to load snapshot, the range
 // splits.
 fn test_load_with_split() {
-    let mut cluster = new_node_cluster_with_hybrid_engine(0, 1);
+    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     cluster.run();
 
@@ -283,7 +276,7 @@ fn test_load_with_split() {
     // let channel to make load process block at finishing loading snapshot
     let (tx2, rx2) = sync_channel(0);
     let rx2 = Arc::new(Mutex::new(rx2));
-    fail::cfg_callback("on_snapshot_loaded", move || {
+    fail::cfg_callback("on_snapshot_load_finished", move || {
         tx.send(true).unwrap();
         let _ = rx2.lock().unwrap().recv().unwrap();
     })
@@ -340,19 +333,107 @@ fn test_load_with_split() {
             .append_ts(20.into())
             .into_encoded();
         let val = cluster
-            .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, snap_ctx.clone())
+            .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, false, snap_ctx.clone())
             .unwrap();
         assert_eq!(&val, b"val-write");
         // verify it's read from range cache engine
         assert!(rx.try_recv().unwrap());
 
         let val = cluster
-            .get_with_snap_ctx(&encoded_key, snap_ctx.clone())
+            .get_with_snap_ctx(&encoded_key, false, snap_ctx.clone())
             .unwrap();
         assert_eq!(&val, b"val-default");
         // verify it's read from range cache engine
         assert!(rx.try_recv().unwrap());
     }
+}
+
+// It tests race between split and load.
+// Takes k1-k10 as an example:
+// We want to load k1-k10 where k1-k10 is already split into k1-k5, and k5-k10.
+// And before we `load_range` k1-k10, k1-k5 has cached some writes, say k1, in
+// write_batch which means k1 cannot be loaded from snapshot. Now, `load_range`
+// k1-k10 is called, and k5-k10 calls prepare_for_apply and the snapshot is
+// acquired and load task of k1-k10 is scheduled. We will loss data of k1 before
+// this PR.
+#[test]
+fn test_load_with_split2() {
+    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+    cluster.cfg.raft_store.apply_batch_system.pool_size = 4;
+    cluster.run();
+
+    cluster.must_put(b"k01", b"val");
+    cluster.must_put(b"k10", b"val");
+
+    let r = cluster.get_region(b"");
+    cluster.must_split(&r, b"k05");
+
+    fail::cfg("on_handle_put", "pause").unwrap();
+    let write_req = make_write_req(&mut cluster, b"k02");
+    let (cb, _) = make_cb::<HybridEngineImpl>(&write_req);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(1, write_req, cb)
+        .unwrap();
+
+    std::thread::sleep(Duration::from_secs(1));
+    {
+        let range_cache_engine = cluster.get_range_cache_engine(1);
+        let mut core = range_cache_engine.core().write();
+        core.mut_range_manager()
+            .load_range(CacheRange::new(
+                DATA_MIN_KEY.to_vec(),
+                DATA_MAX_KEY.to_vec(),
+            ))
+            .unwrap();
+    }
+
+    let (tx, rx) = sync_channel(1);
+    fail::cfg_callback("on_snapshot_load_finished", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+
+    let write_req = make_write_req(&mut cluster, b"k09");
+    let (cb2, _) = make_cb::<HybridEngineImpl>(&write_req);
+    cluster
+        .sim
+        .rl()
+        .async_command_on_node(1, write_req, cb2)
+        .unwrap();
+    let _ = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    fail::remove("on_handle_put");
+    std::thread::sleep(Duration::from_secs(1));
+
+    let (tx, rx) = sync_channel(1);
+    fail::cfg_callback("on_range_cache_get_value", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+    let snap_ctx = SnapshotContext {
+        read_ts: 20,
+        range: None,
+    };
+
+    let _ = cluster
+        .get_with_snap_ctx(b"k09", false, snap_ctx.clone())
+        .unwrap();
+    assert!(rx.try_recv().unwrap());
+
+    // k1-k5 should not cached now
+    let _ = cluster
+        .get_with_snap_ctx(b"k02", false, snap_ctx.clone())
+        .unwrap();
+    rx.try_recv().unwrap_err();
+
+    // write a key to trigger load task
+    cluster.must_put(b"k03", b"val");
+    let _ = cluster
+        .get_with_snap_ctx(b"k02", false, snap_ctx.clone())
+        .unwrap();
+    assert!(rx.try_recv().unwrap());
 }
 
 fn make_write_req(
@@ -377,7 +458,7 @@ fn make_write_req(
 // to engine, the range has finished the loading, became a normal range, and
 // even been evicted.
 fn test_load_with_eviction() {
-    let mut cluster = new_node_cluster_with_hybrid_engine(0, 1);
+    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
     cluster.run();
     // load range
     {
@@ -444,13 +525,13 @@ fn test_load_with_eviction() {
         range: None,
     };
     let val = cluster
-        .get_cf_with_snap_ctx(CF_DEFAULT, b"k01", snap_ctx.clone())
+        .get_cf_with_snap_ctx(CF_DEFAULT, b"k01", false, snap_ctx.clone())
         .unwrap();
     assert_eq!(&val, b"v");
     assert!(rx.try_recv().unwrap());
 
     let val = cluster
-        .get_cf_with_snap_ctx(CF_DEFAULT, b"k15", snap_ctx.clone())
+        .get_cf_with_snap_ctx(CF_DEFAULT, b"k15", false, snap_ctx.clone())
         .unwrap();
     assert_eq!(&val, b"v");
     rx.try_recv().unwrap_err();

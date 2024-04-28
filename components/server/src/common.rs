@@ -31,14 +31,14 @@ use grpcio::Environment;
 use hybrid_engine::HybridEngine;
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
-use region_cache_memory_engine::RangeCacheMemoryEngine;
+use region_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheMemoryEngine};
 use security::SecurityManager;
 use tikv::{
     config::{ConfigController, DbConfigManger, DbType, TikvConfig},
     server::{status_server::StatusServer, DEFAULT_CLUSTER_ID},
 };
 use tikv_util::{
-    config::{ensure_dir_exist, RaftDataStateMachine},
+    config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
     math::MovingAvgU32,
     metrics::INSTANCE_BACKEND_CPU_QUOTA,
     quota_limiter::QuotaLimiter,
@@ -700,20 +700,39 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
 }
 
 pub trait KvEngineBuilder: KvEngine {
-    fn build(disk_engine: RocksEngine) -> Self;
+    fn build(
+        range_cache_engine_config: Arc<VersionTrack<RangeCacheEngineConfig>>,
+        disk_engine: RocksEngine,
+        pd_client: Option<Arc<RpcClient>>,
+    ) -> Self;
 }
 
 impl KvEngineBuilder for RocksEngine {
-    fn build(disk_engine: RocksEngine) -> Self {
+    fn build(
+        _range_cache_engine_config: Arc<VersionTrack<RangeCacheEngineConfig>>,
+        disk_engine: RocksEngine,
+        _pd_client: Option<Arc<RpcClient>>,
+    ) -> Self {
         disk_engine
     }
 }
 
 impl KvEngineBuilder for HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
-    fn build(disk_engine: RocksEngine) -> Self {
-        // todo(SpadeA): make time configurable
-        let mut memory_engine = RangeCacheMemoryEngine::new(std::time::Duration::from_secs(180));
+    fn build(
+        range_cache_engine_config: Arc<VersionTrack<RangeCacheEngineConfig>>,
+        disk_engine: RocksEngine,
+        pd_client: Option<Arc<RpcClient>>,
+    ) -> Self {
+        // todo(SpadeA): add config for it
+        let mut memory_engine = RangeCacheMemoryEngine::new(range_cache_engine_config);
         memory_engine.set_disk_engine(disk_engine.clone());
+        if let Some(pd_client) = pd_client.as_ref() {
+            memory_engine.start_hint_service(
+                <RangeCacheMemoryEngine as RangeCacheEngine>::RangeHintService::from(
+                    pd_client.clone(),
+                ),
+            )
+        }
         HybridEngine::new(disk_engine, memory_engine)
     }
 }

@@ -1,35 +1,60 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use core::slice::SlicePattern;
-use std::cmp::{self, Ordering};
+use std::{
+    cmp::{self, Ordering},
+    sync::Arc,
+};
 
 use bytes::{BufMut, Bytes};
 use engine_traits::CacheRange;
 use txn_types::{Key, TimeStamp};
+
+use crate::{memory_controller::MemoryController, write_batch::MEM_CONTROLLER_OVERHEAD};
 
 /// The internal bytes used in the skiplist. See comments on
 /// `encode_internal_bytes`.
 #[derive(Debug)]
 pub struct InternalBytes {
     bytes: Bytes,
+    // memory_limiter **must** be set when used as key/values being interted into skiplist as
+    // keys/values.
+    memory_controller: Option<Arc<MemoryController>>,
 }
 
-impl Clone for InternalBytes {
-    fn clone(&self) -> Self {
-        let bytes = Bytes::copy_from_slice(self.as_slice());
-        InternalBytes::from_bytes(bytes)
+impl Drop for InternalBytes {
+    fn drop(&mut self) {
+        let size = self.bytes.len() + MEM_CONTROLLER_OVERHEAD;
+        let controller = self.memory_controller.take();
+        if let Some(controller) = controller {
+            // Reclaim the memory though the bytes have not been drop. This time gap should
+            // not matter.
+            controller.release(size);
+        }
     }
 }
 
 impl InternalBytes {
     pub fn from_bytes(bytes: Bytes) -> Self {
-        Self { bytes }
+        Self {
+            bytes,
+            memory_controller: None,
+        }
     }
 
     pub fn from_vec(vec: Vec<u8>) -> Self {
         Self {
             bytes: Bytes::from(vec),
+            memory_controller: None,
         }
+    }
+
+    pub fn memory_controller_set(&self) -> bool {
+        self.memory_controller.is_some()
+    }
+
+    pub fn set_memory_controller(&mut self, controller: Arc<MemoryController>) {
+        self.memory_controller = Some(controller);
     }
 
     pub fn clone_bytes(&self) -> Bytes {
@@ -154,19 +179,6 @@ pub fn decode_key(encoded_key: &[u8]) -> InternalKey<'_> {
     }
 }
 
-#[inline]
-pub fn extract_user_key_and_suffix_u64(encoded_key: &[u8]) -> (&[u8], u64) {
-    assert!(encoded_key.len() >= ENC_KEY_SEQ_LENGTH);
-    let seq_offset = encoded_key.len() - ENC_KEY_SEQ_LENGTH;
-    let num = u64::from_be_bytes(
-        encoded_key[seq_offset..seq_offset + ENC_KEY_SEQ_LENGTH]
-            .try_into()
-            .unwrap(),
-    );
-
-    (&encoded_key[..seq_offset], num)
-}
-
 /// Format for an internal key (used by the skip list.)
 /// ```
 /// contents:      key of size n     | value type | sequence number shifted by 8 bits
@@ -258,7 +270,7 @@ mod tests {
     use crate::keys::{encode_key, ValueType};
 
     fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {
-        let k = format!("k{:08}", i);
+        let k = format!("zk{:08}", i);
         let mut key = k.as_bytes().to_vec();
         // mvcc version should be make bit-wise reverse so that k-100 is less than k-99
         key.put_u64(!mvcc);

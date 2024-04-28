@@ -8,6 +8,7 @@ use std::{
 use collections::HashMap;
 use engine_traits::{Peekable, CF_RAFT};
 use kvproto::raft_serverpb::RaftApplyState;
+use pd_client::PdClient;
 use raftstore::store::*;
 use test_raftstore::*;
 use tikv_util::config::*;
@@ -115,6 +116,98 @@ fn test_node_async_fetch() {
         1,
         true, // must_compacted
     );
+}
+
+#[test]
+fn test_persist_delay_block_log_compaction() {
+    let mut cluster = new_node_cluster(0, 3);
+
+    cluster.cfg.raft_store.store_io_pool_size = 1;
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(100000);
+    cluster.cfg.raft_store.raft_log_gc_threshold = 50;
+    cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(50);
+    cluster.cfg.raft_store.raft_log_reserve_max_ticks = 2;
+    cluster.cfg.raft_store.raft_entry_cache_life_time = ReadableDuration::millis(100);
+    cluster.run();
+
+    let region = cluster.pd_client.get_region(b"k1").unwrap();
+    let peer_1 = find_peer(&region, 1).cloned().unwrap();
+    cluster.must_transfer_leader(region.get_id(), peer_1);
+
+    let raft_before_save_on_store_1_fp = "raft_before_persist_on_store_1";
+
+    for i in 0..100 {
+        let k = format!("k{}", i).into_bytes();
+        let v = "v1".as_bytes().to_owned();
+        cluster.must_put(&k, &v);
+    }
+    // Wait log gc.
+    sleep_ms(100);
+
+    let mut before_states = HashMap::default();
+    for (&id, engines) in &cluster.engines {
+        must_get_equal(&engines.kv, b"k1", b"v1");
+        let mut state: RaftApplyState = engines
+            .kv
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
+            .unwrap()
+            .unwrap_or_default();
+        let state = state.take_truncated_state();
+        println!("  store id: {}, truncate state: {:?}", id, &state);
+        // Should trigger compact.
+        assert!(state.get_index() > RAFT_INIT_LOG_INDEX);
+        assert!(state.get_term() > RAFT_INIT_LOG_TERM);
+        before_states.insert(id, state);
+    }
+
+    // Skip persisting to simulate raft log persist lag but not block node restart.
+    fail::cfg(raft_before_save_on_store_1_fp, "pause").unwrap();
+
+    for i in 0..100 {
+        let k = format!("k{}", i).into_bytes();
+        let v = "v2".as_bytes().to_owned();
+        cluster.must_put(&k, &v);
+    }
+    for i in 0..100 {
+        let k = format!("k{}", i).into_bytes();
+        must_get_equal(&cluster.engines[&1].kv, &k, "v2".as_bytes());
+    }
+
+    // Wait log gc.
+    sleep_ms(100);
+    // Log perisist is block, should not trigger log gc.
+    for (&id, engines) in &cluster.engines {
+        let mut state: RaftApplyState = engines
+            .kv
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
+            .unwrap()
+            .unwrap_or_default();
+        let after_state = state.take_truncated_state();
+
+        let before_state = &before_states[&id];
+        let idx = after_state.get_index();
+        assert!(idx <= before_state.get_index() + 10);
+    }
+
+    fail::remove(raft_before_save_on_store_1_fp);
+
+    // Wait log persist and trigger gc.
+    sleep_ms(200);
+
+    // Log perisist is block, should not trigger log gc.
+    for (&id, engines) in &cluster.engines {
+        let mut state: RaftApplyState = engines
+            .kv
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
+            .unwrap()
+            .unwrap_or_default();
+        let after_state = state.take_truncated_state();
+
+        let before_state = &before_states[&id];
+        let idx = after_state.get_index();
+        assert!(idx > before_state.get_index() + 100);
+    }
 }
 
 // Test the case that async fetch is performed well while the peer is removed.

@@ -1,11 +1,12 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::time::Duration;
+use std::sync::Arc;
 
 use engine_rocks::{util::new_engine, RocksEngine};
 use engine_traits::{Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use region_cache_memory_engine::RangeCacheMemoryEngine;
+use region_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheMemoryEngine};
 use tempfile::{Builder, TempDir};
+use tikv_util::config::VersionTrack;
 
 use crate::HybridEngine;
 
@@ -29,7 +30,7 @@ use crate::HybridEngine;
 /// ```
 pub fn hybrid_engine_for_tests<F>(
     prefix: &str,
-    gc_internal: Duration,
+    config: RangeCacheEngineConfig,
     configure_memory_engine_fn: F,
 ) -> Result<(TempDir, HybridEngine<RocksEngine, RangeCacheMemoryEngine>)>
 where
@@ -40,7 +41,7 @@ where
         path.path().to_str().unwrap(),
         &[CF_DEFAULT, CF_LOCK, CF_WRITE],
     )?;
-    let memory_engine = RangeCacheMemoryEngine::new(gc_internal);
+    let memory_engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(config)));
     configure_memory_engine_fn(&memory_engine);
     let hybrid_engine = HybridEngine::new(disk_engine, memory_engine);
     Ok((path, hybrid_engine))
