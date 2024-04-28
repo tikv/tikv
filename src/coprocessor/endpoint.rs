@@ -834,7 +834,10 @@ macro_rules! make_error_response_common {
             }
             Error::DeadlineExceeded => {
                 $tag = "deadline_exceeded";
-                $resp.set_other_error($e.to_string());
+                let mut err = errorpb::Error::default();
+                set_deadline_exceeded_busy_error(&mut err);
+                err.set_message($e.to_string());
+                $resp.set_region_error(err);
             }
             Error::MaxPendingTasksExceeded => {
                 $tag = "max_pending_tasks_exceeded";
@@ -863,41 +866,7 @@ fn make_error_batch_response(batch_resp: &mut coppb::StoreBatchTaskResponse, e: 
         "err" => %e
     );
     let tag;
-<<<<<<< HEAD
-    match e {
-        Error::Region(e) => {
-            tag = storage::get_tag_from_header(&e);
-            batch_resp.set_region_error(e);
-        }
-        Error::Locked(info) => {
-            tag = "meet_lock";
-            batch_resp.set_locked(info);
-        }
-        Error::DeadlineExceeded => {
-            tag = "deadline_exceeded";
-            let mut err = errorpb::Error::default();
-            set_deadline_exceeded_busy_error(&mut err);
-            err.set_message(e.to_string());
-            batch_resp.set_region_error(err);
-        }
-        Error::MaxPendingTasksExceeded => {
-            tag = "max_pending_tasks_exceeded";
-            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
-            server_is_busy_err.set_reason(e.to_string());
-            let mut errorpb = errorpb::Error::default();
-            errorpb.set_message(e.to_string());
-            errorpb.set_server_is_busy(server_is_busy_err);
-            batch_resp.set_region_error(errorpb);
-        }
-        Error::Other(_) => {
-            tag = "other";
-            batch_resp.set_other_error(e.to_string());
-        }
-    };
-    COPR_REQ_ERROR.with_label_values(&[tag]).inc();
-=======
     make_error_response_common!(batch_resp, tag, e);
->>>>>>> a932082fe4 (server: change the log level to debug for cop error response (#15882))
 }
 
 fn make_error_response(e: Error) -> coppb::Response {
@@ -906,42 +875,8 @@ fn make_error_response(e: Error) -> coppb::Response {
         "err" => %e
     );
     let tag;
-<<<<<<< HEAD
-    match e {
-        Error::Region(e) => {
-            tag = storage::get_tag_from_header(&e);
-            resp.set_region_error(e);
-        }
-        Error::Locked(info) => {
-            tag = "meet_lock";
-            resp.set_locked(info);
-        }
-        Error::DeadlineExceeded => {
-            tag = "deadline_exceeded";
-            let mut err = errorpb::Error::default();
-            set_deadline_exceeded_busy_error(&mut err);
-            err.set_message(e.to_string());
-            resp.set_region_error(err);
-        }
-        Error::MaxPendingTasksExceeded => {
-            tag = "max_pending_tasks_exceeded";
-            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
-            server_is_busy_err.set_reason(e.to_string());
-            let mut errorpb = errorpb::Error::default();
-            errorpb.set_message(e.to_string());
-            errorpb.set_server_is_busy(server_is_busy_err);
-            resp.set_region_error(errorpb);
-        }
-        Error::Other(_) => {
-            tag = "other";
-            resp.set_other_error(e.to_string());
-        }
-    };
-    COPR_REQ_ERROR.with_label_values(&[tag]).inc();
-=======
     let mut resp = coppb::Response::default();
     make_error_response_common!(resp, tag, e);
->>>>>>> a932082fe4 (server: change the log level to debug for cop error response (#15882))
     resp
 }
 
