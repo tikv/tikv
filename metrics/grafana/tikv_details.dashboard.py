@@ -7605,6 +7605,18 @@ def Memory() -> RowPanel:
                     )
                 ],
             ),
+            graph_panel(
+                title="Arena Count",
+                description=None,
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_allocator_arena_count",
+                            by_labels=["instance"],
+                        )
+                    )
+                ],
+            ),
         ]
     )
     return layout.row_panel
