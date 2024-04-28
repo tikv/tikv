@@ -445,7 +445,7 @@ impl Default for Config {
             raft_log_gc_threshold: 50,
             raft_log_gc_count_limit: None,
             raft_log_gc_size_limit: None,
-            max_apply_unpersisted_log_limit: 0,
+            max_apply_unpersisted_log_limit: 1024,
             follower_read_max_log_gap: 100,
             raft_log_reserve_max_ticks: 6,
             raft_engine_purge_interval: ReadableDuration::secs(10),

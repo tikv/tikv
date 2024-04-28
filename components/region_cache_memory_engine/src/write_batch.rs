@@ -1,17 +1,20 @@
+use core::slice::SlicePattern;
 use std::{collections::BTreeSet, sync::Arc};
 
 use bytes::Bytes;
 use crossbeam::epoch;
 use engine_traits::{
-    CacheRange, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT,
+    CacheRange, Mutable, RangeCacheEngine, Result, WriteBatch, WriteBatchExt, WriteOptions,
+    CF_DEFAULT,
 };
-use tikv_util::{box_err, config::ReadableSize, error, warn};
+use tikv_util::{box_err, config::ReadableSize, debug, error, info, time::Instant, warn};
 
 use crate::{
     background::BackgroundTask,
-    engine::{cf_to_id, SkiplistEngine},
-    keys::{encode_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
+    engine::{cf_to_id, id_to_cf, is_lock_cf, SkiplistEngine, SkiplistHandle},
+    keys::{encode_key, encode_seek_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
     memory_controller::{MemoryController, MemoryUsage},
+    metrics::WRITE_DURATION_HISTOGRAM,
     range_manager::{RangeCacheStatus, RangeManager},
     RangeCacheMemoryEngine,
 };
@@ -109,6 +112,7 @@ impl RangeCacheWriteBatch {
             std::mem::take(&mut self.pending_range_in_loading_buffer),
         );
         let guard = &epoch::pin();
+        let start = Instant::now();
         // Some entries whose ranges may be marked as evicted above, but it does not
         // matter, they will be deleted later.
         let res = entries_to_write
@@ -117,6 +121,8 @@ impl RangeCacheWriteBatch {
             .try_for_each(|e| {
                 e.write_to_memory(seq, &engine, self.memory_controller.clone(), guard)
             });
+        let duration = start.saturating_elapsed_secs();
+        WRITE_DURATION_HISTOGRAM.observe(duration);
 
         if !ranges_to_delete.is_empty() {
             if let Err(e) = self
@@ -149,12 +155,11 @@ impl RangeCacheWriteBatch {
                 continue;
             }
 
-            if let Some((range, _, canceled)) = range_manager
+            if let Some((.., canceled)) = range_manager
                 .pending_ranges_loading_data
                 .iter_mut()
                 .find(|(range, ..)| range.contains_range(&r))
             {
-                range_manager.ranges_being_deleted.insert(range.clone());
                 *canceled = true;
             }
         }
@@ -179,10 +184,25 @@ impl RangeCacheWriteBatch {
             return;
         }
 
+        if !self.engine.enabled() {
+            let range = self.current_range.clone().unwrap();
+            info!(
+                "range cache is disabled, evict the range";
+                "range_start" => log_wrappers::Value(&range.start),
+                "range_end" => log_wrappers::Value(&range.end),
+            );
+            self.ranges_to_evict.insert(range);
+            return;
+        }
         let memory_expect = entry_size();
         if !self.memory_acquire(memory_expect) {
-            self.ranges_to_evict
-                .insert(self.current_range.clone().unwrap());
+            let range = self.current_range.clone().unwrap();
+            info!(
+                "memory acquire failed due to reaching hard limit";
+                "range_start" => log_wrappers::Value(&range.start),
+                "range_end" => log_wrappers::Value(&range.end),
+            );
+            self.ranges_to_evict.insert(range);
             return;
         }
 
@@ -223,18 +243,13 @@ impl RangeCacheWriteBatch {
                 self.memory_usage_reach_hard_limit = true;
                 warn!(
                     "the memory usage of in-memory engine reaches to hard limit";
+                    "range" => ?self.current_range.as_ref().unwrap(),
                     "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
-                    "memory_acquire(MB)" => ReadableSize(mem_required as u64).as_mb_f64(),
                 );
                 self.schedule_memory_check();
                 return false;
             }
-            MemoryUsage::SoftLimitReached(n) => {
-                warn!(
-                    "the memory usage of in-memory engine reaches to soft limit";
-                    "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
-                    "memory_acquire(MB)" => ReadableSize(mem_required as u64).as_mb_f64(),
-                );
+            MemoryUsage::SoftLimitReached(_) => {
                 self.schedule_memory_check();
             }
             _ => {}
@@ -319,12 +334,44 @@ impl RangeCacheWriteBatchEntry {
         memory_controller: Arc<MemoryController>,
         guard: &epoch::Guard,
     ) -> Result<()> {
-        let handle = &skiplist_engine.data[self.cf];
-        let (mut key, mut value) = self.encode(seq);
-        key.set_memory_controller(memory_controller.clone());
-        value.set_memory_controller(memory_controller);
-        handle.insert(key, value, guard).release(guard);
+        let handle = skiplist_engine.cf_handle(id_to_cf(self.cf));
+        if is_lock_cf(self.cf) && matches!(self.inner, WriteBatchEntryInternal::Deletion) {
+            self.delete_in_lock_cf(seq, &handle, guard);
+        } else {
+            let (mut key, mut value) = self.encode(seq);
+            key.set_memory_controller(memory_controller.clone());
+            value.set_memory_controller(memory_controller);
+            handle.insert(key, value, guard);
+        }
+
         Ok(())
+    }
+
+    // For lock cf, we delete directly rather than writing tombstone for performance
+    // purpose.
+    // todo(SpadeA): we need to verify the corretness of it before GA range cache
+    // engine.
+    fn delete_in_lock_cf(&self, seq: u64, handle: &SkiplistHandle, guard: &epoch::Guard) {
+        let seek_key = encode_seek_key(&self.key, seq);
+        let Some(mut entry) = handle.get_with_user_key(&seek_key, guard) else {
+            debug!(
+                "write to memory failed for lock cf, not get";
+                "key" => log_wrappers::Value::key(self.key.as_slice()),
+                "encoded_key" => log_wrappers::Value::key(seek_key.as_bytes()),
+            );
+            return;
+        };
+
+        let last_to_remove = InternalBytes::from_bytes(entry.key().as_bytes().clone());
+        while let Some(e) = entry.next() {
+            if e.key().same_user_key_with(&last_to_remove) {
+                handle.remove(e.key(), guard);
+                entry.move_next();
+            } else {
+                break;
+            }
+        }
+        handle.remove(&last_to_remove, guard);
     }
 }
 
@@ -466,8 +513,8 @@ impl WriteBatch for RangeCacheWriteBatch {
 
     fn prepare_for_range(&mut self, range: CacheRange) {
         self.set_range_cache_status(self.engine.prepare_for_apply(&range));
-        self.current_range = Some(range);
         self.memory_usage_reach_hard_limit = false;
+        self.current_range = Some(range);
     }
 }
 
@@ -511,14 +558,16 @@ mod tests {
 
     use engine_rocks::util::new_engine;
     use engine_traits::{
-        CacheRange, FailedReason, KvEngine, Peekable, RangeCacheEngine, WriteBatch, CF_WRITE,
-        DATA_CFS,
+        CacheRange, FailedReason, KvEngine, Peekable, RangeCacheEngine, WriteBatch, CF_LOCK,
+        CF_WRITE, DATA_CFS,
     };
+    use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use skiplist_rs::SkipList;
     use tempfile::Builder;
+    use tikv_util::config::VersionTrack;
 
     use super::*;
-    use crate::RangeCacheEngineConfig;
+    use crate::{background::flush_epoch, config::RangeCacheConfigManager, RangeCacheEngineConfig};
 
     // We should not use skiplist.get directly as we only cares keys without
     // sequence number suffix
@@ -537,7 +586,9 @@ mod tests {
 
     #[test]
     fn test_write_to_skiplist() {
-        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
+            RangeCacheEngineConfig::config_for_test(),
+        )));
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
@@ -557,7 +608,9 @@ mod tests {
 
     #[test]
     fn test_savepoints() {
-        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
+            RangeCacheEngineConfig::config_for_test(),
+        )));
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
@@ -582,7 +635,9 @@ mod tests {
 
     #[test]
     fn test_put_write_clear_delete_put_write() {
-        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
+            RangeCacheEngineConfig::config_for_test(),
+        )));
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(r.clone());
         {
@@ -616,7 +671,9 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
         let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
-        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
+            RangeCacheEngineConfig::config_for_test(),
+        )));
         let r1 = CacheRange::new(b"k01".to_vec(), b"k05".to_vec());
         let r2 = CacheRange::new(b"k05".to_vec(), b"k10".to_vec());
         let r3 = CacheRange::new(b"k10".to_vec(), b"k15".to_vec());
@@ -714,17 +771,6 @@ mod tests {
         });
     }
 
-    // use to make cleanup opeartion in epoch-based memory management be performed
-    fn flush_epoch() {
-        {
-            let guard = &epoch::pin();
-            guard.flush();
-        }
-        for _ in 0..258 {
-            let _ = &epoch::pin();
-        }
-    }
-
     fn wait_evict_done(engine: &RangeCacheMemoryEngine) {
         let mut wait = 0;
         while wait < 10 {
@@ -748,7 +794,8 @@ mod tests {
         let mut config = RangeCacheEngineConfig::default();
         config.soft_limit_threshold = Some(ReadableSize(500));
         config.hard_limit_threshold = Some(ReadableSize(1000));
-        let engine = RangeCacheMemoryEngine::new(&config);
+        config.enabled = true;
+        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(config)));
         let r1 = CacheRange::new(b"kk00".to_vec(), b"kk10".to_vec());
         let r2 = CacheRange::new(b"kk10".to_vec(), b"kk20".to_vec());
         let r3 = CacheRange::new(b"kk20".to_vec(), b"kk30".to_vec());
@@ -828,5 +875,120 @@ mod tests {
         flush_epoch();
         wait_evict_done(&engine);
         assert_eq!(548, memory_controller.mem_usage());
+    }
+
+    #[test]
+    fn test_delete_lock_cf() {
+        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
+            RangeCacheEngineConfig::config_for_test(),
+        )));
+        let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(r.clone());
+        {
+            let mut core = engine.core.write();
+            core.mut_range_manager().set_safe_point(&r, 10);
+        }
+        let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.prepare_for_range(r.clone());
+        wb.put_cf(CF_LOCK, b"aaa", b"bbb").unwrap();
+        wb.set_sequence_number(1).unwrap();
+        assert_eq!(wb.write().unwrap(), 1);
+        let lock_handle = engine.core.read().engine().cf_handle(CF_LOCK);
+
+        let guard = &epoch::pin();
+        let entry = lock_handle
+            .get_with_user_key(&encode_key(b"aaa", 1, ValueType::Value), guard)
+            .unwrap();
+        assert_eq!(&b"bbb"[..], entry.value().as_bytes());
+
+        let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.prepare_for_range(r.clone());
+        wb.put_cf(CF_LOCK, b"aaa", b"ccc").unwrap();
+        wb.set_sequence_number(2).unwrap();
+        assert_eq!(wb.write().unwrap(), 2);
+
+        {
+            let mut iter = engine.core.read().engine.cf_handle(CF_LOCK).iterator();
+            let seek_key = encode_seek_key(b"aaa", 2);
+            iter.seek(&seek_key, guard);
+            assert_eq!(iter.value().as_bytes().as_slice(), b"ccc");
+            iter.next(guard);
+            assert_eq!(iter.value().as_bytes().as_slice(), b"bbb");
+        }
+
+        let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.prepare_for_range(r.clone());
+        wb.delete_cf(CF_LOCK, b"aaa").unwrap();
+        wb.set_sequence_number(10).unwrap();
+        assert_eq!(wb.write().unwrap(), 10);
+
+        {
+            let mut iter = engine.core.read().engine.cf_handle(CF_LOCK).iterator();
+            let seek_key = encode_seek_key(b"aaa", 2);
+            iter.seek(&seek_key, guard);
+            // We cannot get any sequence version of it
+            assert!(!iter.valid());
+        }
+    }
+
+    #[test]
+    fn test_write_batch_with_config_change() {
+        let mut config = RangeCacheEngineConfig::default();
+        config.soft_limit_threshold = Some(ReadableSize(u64::MAX));
+        config.hard_limit_threshold = Some(ReadableSize(u64::MAX));
+        config.enabled = true;
+        let config = Arc::new(VersionTrack::new(config));
+        let engine = RangeCacheMemoryEngine::new(config.clone());
+        let r1 = CacheRange::new(b"kk00".to_vec(), b"kk10".to_vec());
+        let r2 = CacheRange::new(b"kk10".to_vec(), b"kk20".to_vec());
+        for r in [&r1, &r2] {
+            engine.new_range(r.clone());
+            {
+                let mut core = engine.core.write();
+                core.mut_range_manager().set_safe_point(r, 10);
+            }
+            let _ = engine.snapshot(r.clone(), 1000, 1000).unwrap();
+        }
+
+        let val1: Vec<u8> = (0..150).map(|_| 0).collect();
+        let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.prepare_for_range(r2.clone());
+        wb.put(b"kk11", &val1).unwrap();
+        let snap1 = engine.snapshot(r1.clone(), 1000, 1000).unwrap();
+
+        // disable the range cache
+        let mut config_manager = RangeCacheConfigManager(config.clone());
+        let mut config_change = ConfigChange::new();
+        config_change.insert(String::from("enabled"), ConfigValue::Bool(false));
+        config_manager.dispatch(config_change).unwrap();
+
+        wb.write_impl(1000).unwrap();
+        // existing snapshot can still work after the range cache is disabled, but new
+        // snapshot will fail to create
+        assert!(snap1.get_value(b"kk00").unwrap().is_none());
+
+        let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.prepare_for_range(r1.clone());
+        // put should trigger the evict and it won't write into range cache
+        wb.put(b"kk01", &val1).unwrap();
+        wb.write_impl(1000).unwrap();
+
+        // new snapshot will fail to create as it's evicted already
+        let snap1 = engine.snapshot(r1.clone(), 1000, 1000);
+        assert_eq!(snap1.unwrap_err(), FailedReason::NotCached);
+        let snap2 = engine.snapshot(r2.clone(), 1000, 1000).unwrap();
+        // if no new write, the range cache can still be used.
+        assert_eq!(snap2.get_value(b"kk11").unwrap().unwrap(), &val1);
+
+        // enable the range cache again
+        let mut config_manager = RangeCacheConfigManager(config.clone());
+        let mut config_change = ConfigChange::new();
+        config_change.insert(String::from("enabled"), ConfigValue::Bool(true));
+        config_manager.dispatch(config_change).unwrap();
+
+        let snap1 = engine.snapshot(r1.clone(), 1000, 1000);
+        assert_eq!(snap1.unwrap_err(), FailedReason::NotCached);
+        let snap2 = engine.snapshot(r2.clone(), 1000, 1000).unwrap();
+        assert_eq!(snap2.get_value(b"kk11").unwrap().unwrap(), &val1);
     }
 }

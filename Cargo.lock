@@ -2545,9 +2545,12 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "lazy_static",
+ "online_config",
  "prometheus",
  "prometheus-static-metric",
  "region_cache_memory_engine",
+ "slog",
+ "slog-global",
  "tempfile",
  "tikv_util",
  "txn_types",
@@ -6439,7 +6442,7 @@ dependencies = [
 
 [[package]]
 name = "tikv"
-version = "8.1.0-alpha"
+version = "8.2.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",

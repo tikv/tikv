@@ -112,9 +112,8 @@ pub struct RangeManager {
     // Range before an eviction. It is recorded due to some undropped snapshot, which block the
     // evicted range deleting the relevant data.
     historical_ranges: BTreeMap<CacheRange, RangeMeta>,
-    // `ranges_being_deleted` contains two types of ranges: 1. the range is evicted and not finish
-    // the delete(or even not start to delete due to ongoing snapshot), 2. the range is loading
-    // data but memory acquirement is rejected.
+    // `ranges_being_deleted` contains ranges that are evicted but not finished the delete (or even
+    // not start to delete due to ongoing snapshot)
     pub(crate) ranges_being_deleted: BTreeSet<CacheRange>,
     // ranges that are cached now
     ranges: BTreeMap<CacheRange, RangeMeta>,
@@ -309,6 +308,12 @@ impl RangeManager {
             );
             return false;
         };
+
+        info!(
+            "evict range in cache range engine";
+            "range_start" => log_wrappers::Value(&evict_range.start),
+            "range_end" => log_wrappers::Value(&evict_range.end),
+        );
 
         let meta = self.ranges.remove(&range_key).unwrap();
         let (left_range, right_range) = range_key.split_off(evict_range);

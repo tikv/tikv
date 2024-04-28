@@ -11,6 +11,7 @@ use thiserror::Error;
 use tikv_util::config::{ReadableDuration, ReadableSize};
 
 mod background;
+pub mod config;
 mod engine;
 mod keys;
 mod memory_controller;
@@ -37,8 +38,8 @@ pub enum Error {
 pub struct RangeCacheEngineConfig {
     pub enabled: bool,
     pub gc_interval: ReadableDuration,
-    soft_limit_threshold: Option<ReadableSize>,
-    hard_limit_threshold: Option<ReadableSize>,
+    pub soft_limit_threshold: Option<ReadableSize>,
+    pub hard_limit_threshold: Option<ReadableSize>,
 }
 
 impl Default for RangeCacheEngineConfig {

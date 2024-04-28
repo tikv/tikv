@@ -74,14 +74,18 @@ where
 
     fn snapshot(&self, ctx: Option<SnapshotContext>) -> Self::Snapshot {
         let disk_snap = self.disk_engine.snapshot(ctx.clone());
-        let region_cache_snap = if let Some(ctx) = ctx {
-            SNAPSHOT_TYPE_COUNT_STATIC.range_cache_engine.inc();
+        let region_cache_snap = if !self.region_cache_engine.enabled() {
+            None
+        } else if let Some(ctx) = ctx {
             match self.region_cache_engine.snapshot(
                 ctx.range.unwrap(),
                 ctx.read_ts,
                 disk_snap.sequence_number(),
             ) {
-                Ok(snap) => Some(snap),
+                Ok(snap) => {
+                    SNAPSHOT_TYPE_COUNT_STATIC.range_cache_engine.inc();
+                    Some(snap)
+                }
                 Err(FailedReason::TooOldRead) => {
                     RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
                         .too_old_read
@@ -214,10 +218,16 @@ where
 #[cfg(test)]
 mod tests {
 
+    use std::sync::Arc;
+
     use engine_rocks::util::new_engine;
     use engine_traits::{CacheRange, KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
-    use region_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheMemoryEngine};
+    use online_config::{ConfigChange, ConfigManager, ConfigValue};
+    use region_cache_memory_engine::{
+        config::RangeCacheConfigManager, RangeCacheEngineConfig, RangeCacheMemoryEngine,
+    };
     use tempfile::Builder;
+    use tikv_util::config::VersionTrack;
 
     use crate::HybridEngine;
 
@@ -229,7 +239,9 @@ mod tests {
             &[CF_DEFAULT, CF_LOCK, CF_WRITE],
         )
         .unwrap();
-        let memory_engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
+        let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test()));
+        let memory_engine = RangeCacheMemoryEngine::new(config.clone());
+
         let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
         memory_engine.new_range(range.clone());
         {
@@ -249,6 +261,15 @@ mod tests {
         assert!(s.region_cache_snapshot_available());
 
         snap_ctx.read_ts = 5;
+        let s = hybrid_engine.snapshot(Some(snap_ctx.clone()));
+        assert!(!s.region_cache_snapshot_available());
+
+        let mut config_manager = RangeCacheConfigManager(config.clone());
+        let mut config_change = ConfigChange::new();
+        config_change.insert(String::from("enabled"), ConfigValue::Bool(false));
+        config_manager.dispatch(config_change).unwrap();
+        assert!(!config.value().enabled);
+        snap_ctx.read_ts = 15;
         let s = hybrid_engine.snapshot(Some(snap_ctx));
         assert!(!s.region_cache_snapshot_available());
     }

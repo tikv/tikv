@@ -1,8 +1,18 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::{
+    fmt,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
+};
 
-use crate::{engine::SkiplistEngine, write_batch::NODE_OVERHEAD_SIZE_EXPECTATION};
+use tikv_util::config::VersionTrack;
+
+use crate::{
+    engine::SkiplistEngine, write_batch::NODE_OVERHEAD_SIZE_EXPECTATION, RangeCacheEngineConfig,
+};
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum MemoryUsage {
@@ -18,27 +28,34 @@ pub(crate) enum MemoryUsage {
 /// for keys and values, and the overhead of the skiplist where the overhead is
 /// estimated by using the node count of the skiplist times the
 /// `NODE_OVERHEAD_SIZE_EXPECTATION`.
-#[derive(Debug)]
 pub struct MemoryController {
     // Allocated memory for keys and values (node overhead is not included)
     // The number of writes that are buffered but not yet written.
     allocated: AtomicUsize,
-    soft_limit_threshold: usize,
-    hard_limit_threshold: usize,
+    config: Arc<VersionTrack<RangeCacheEngineConfig>>,
     memory_checking: AtomicBool,
     skiplist_engine: SkiplistEngine,
 }
 
+impl fmt::Debug for MemoryController {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MemoryController")
+            .field("allocated", &self.allocated)
+            .field("soft_limit", &self.config.value().soft_limit_threshold())
+            .field("hard_limit", &self.config.value().hard_limit_threshold())
+            .field("memory_checking", &self.memory_checking)
+            .field("skiplist_engine", &self.skiplist_engine)
+            .finish()
+    }
+}
 impl MemoryController {
     pub fn new(
-        soft_limit_threshold: usize,
-        hard_limit_threshold: usize,
+        config: Arc<VersionTrack<RangeCacheEngineConfig>>,
         skiplist_engine: SkiplistEngine,
     ) -> Self {
         Self {
             allocated: AtomicUsize::new(0),
-            soft_limit_threshold,
-            hard_limit_threshold,
+            config,
             memory_checking: AtomicBool::new(false),
             skiplist_engine,
         }
@@ -52,12 +69,12 @@ impl MemoryController {
         let mem_usage = self.allocated.fetch_add(n, Ordering::Relaxed)
             + n
             + node_count * NODE_OVERHEAD_SIZE_EXPECTATION;
-        if mem_usage >= self.hard_limit_threshold {
+        if mem_usage >= self.config.value().hard_limit_threshold() {
             self.allocated.fetch_sub(n, Ordering::Relaxed);
             return MemoryUsage::HardLimitReached(mem_usage - n);
         }
 
-        if mem_usage >= self.soft_limit_threshold {
+        if mem_usage >= self.config.value().soft_limit_threshold() {
             return MemoryUsage::SoftLimitReached(mem_usage);
         }
 
@@ -70,12 +87,12 @@ impl MemoryController {
 
     #[inline]
     pub(crate) fn reached_soft_limit(&self) -> bool {
-        self.mem_usage() >= self.soft_limit_threshold
+        self.mem_usage() >= self.config.value().soft_limit_threshold()
     }
 
     #[inline]
     pub(crate) fn soft_limit_threshold(&self) -> usize {
-        self.soft_limit_threshold
+        self.config.value().soft_limit_threshold()
     }
 
     #[inline]
@@ -98,6 +115,7 @@ impl MemoryController {
 #[cfg(test)]
 mod tests {
     use crossbeam::epoch;
+    use tikv_util::config::ReadableSize;
 
     use super::*;
     use crate::keys::{encode_key, InternalBytes, ValueType};
@@ -105,7 +123,13 @@ mod tests {
     #[test]
     fn test_memory_controller() {
         let skiplist_engine = SkiplistEngine::new();
-        let mc = MemoryController::new(300, 500, skiplist_engine.clone());
+        let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig {
+            enabled: true,
+            gc_interval: Default::default(),
+            soft_limit_threshold: Some(ReadableSize(300)),
+            hard_limit_threshold: Some(ReadableSize(500)),
+        }));
+        let mc = MemoryController::new(config, skiplist_engine.clone());
         assert_eq!(mc.acquire(100), MemoryUsage::NormalUsage(100));
         assert_eq!(mc.acquire(150), MemoryUsage::NormalUsage(250));
         assert_eq!(mc.acquire(50), MemoryUsage::SoftLimitReached(300));
