@@ -1725,9 +1725,9 @@ mod tests {
                     Some(b"$".to_vec()).into(),
                     Some(Json::from_u64(7).unwrap()).into(),
                     Some(b"$[3].a".to_vec()).into(),
-                    Some(Json::from_f64(3.14).unwrap()).into(),
+                    Some(Json::from_f64(3.15).unwrap()).into(),
                 ],
-                Some(r#"[1, 2, 3, {"a": [4, 5, 6, 3.14]}, 7]"#.parse().unwrap()),
+                Some(r#"[1, 2, 3, {"a": [4, 5, 6, 3.15]}, 7]"#.parse().unwrap()),
             ),
             (
                 vec![
