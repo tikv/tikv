@@ -390,6 +390,7 @@ impl Suite {
             cluster.pd_client.clone(),
             cm,
             BackupStreamResolver::V1(resolver),
+            sim.importers[id].da,
         );
         worker.start(endpoint);
     }

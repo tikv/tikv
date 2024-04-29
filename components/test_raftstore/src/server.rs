@@ -162,6 +162,7 @@ pub struct ServerCluster<EK: KvEngine> {
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     env: Arc<Environment>,
     pub causal_ts_providers: HashMap<u64, Arc<CausalTsProviderImpl>>,
+    encryption: Option<Arc<DataKeyManager>>,
 }
 
 impl<EK: KvEngineWithRocks> ServerCluster<EK> {
@@ -205,6 +206,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
             env,
             txn_extra_schedulers: HashMap::default(),
             causal_ts_providers: HashMap::default(),
+            encryption: None,
         }
     }
 
