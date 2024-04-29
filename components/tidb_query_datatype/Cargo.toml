@@ -1,9 +1,10 @@
 [package]
 name = "tidb_query_datatype"
 version = "0.0.1"
-edition = "2018"
+edition = "2021"
 publish = false
 description = "Data type of a query engine to run TiDB pushed down executors"
+license = "Apache-2.0"
 
 [dependencies]
 api_version = { workspace = true }
@@ -12,12 +13,12 @@ bitfield = "0.13.2"
 bitflags = "1.0.1"
 boolinator = "2.4.0"
 bstr = "0.2.8"
-chrono = "0.4"
+chrono = { workspace = true }
 chrono-tz = "0.5.1"
 codec = { workspace = true }
 collections = { workspace = true }
 crc32fast = "1.2"
-encoding_rs = { git = "https://github.com/xiongjiwei/encoding_rs.git", rev = "68e0bc5a72a37a78228d80cd98047326559cf43c" }
+encoding_rs = { git = "https://github.com/tikv/encoding_rs.git", rev = "68e0bc5a72a37a78228d80cd98047326559cf43c" }
 error_code = { workspace = true }
 hex = "0.4"
 kvproto = { workspace = true }

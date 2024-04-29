@@ -24,12 +24,13 @@
 use std::{i16, i32, i8, u16, u32, u8};
 
 use codec::prelude::*;
+use num_traits::Zero;
 use tipb::FieldType;
 
 use crate::{
     codec::{
         data_type::ScalarValue,
-        mysql::{decimal::DecimalEncoder, json::JsonEncoder},
+        mysql::{decimal::DecimalEncoder, json::JsonEncoder, Duration},
         Error, Result,
     },
     expr::EvalContext,
@@ -63,6 +64,14 @@ impl Column {
         }
     }
 
+    pub fn new_with_ft(id: i64, ft: FieldType, value: impl Into<ScalarValue>) -> Self {
+        Column {
+            id,
+            ft,
+            value: value.into(),
+        }
+    }
+
     pub fn ft(&self) -> &FieldType {
         &self.ft
     }
@@ -88,6 +97,142 @@ impl Column {
         self.ft.as_mut_accessor().set_decimal(decimal);
         self
     }
+
+    // The encode rule follows https://github.com/pingcap/tidb/pull/43141.
+    // It's different from the other encoding rules and used for verification
+    // test cases in tikv, the actual checksum encoding would be done on the
+    // tidb side with row value generation.
+    pub fn encode_for_checksum(&self, buf: &mut Vec<u8>) -> Result<()> {
+        match self.ft.as_accessor().tp() {
+            FieldTypeTp::Tiny
+            | FieldTypeTp::Short
+            | FieldTypeTp::Long
+            | FieldTypeTp::LongLong
+            | FieldTypeTp::Int24
+            | FieldTypeTp::Year => {
+                let res = self.value.as_int().ok_or(Error::InvalidDataType(format!(
+                    "invalid type: {:?}",
+                    self.ft,
+                )))?;
+                buf.write_u64_le(*res as u64)?;
+            }
+            FieldTypeTp::VarChar
+            | FieldTypeTp::VarString
+            | FieldTypeTp::String
+            | FieldTypeTp::TinyBlob
+            | FieldTypeTp::MediumBlob
+            | FieldTypeTp::LongBlob
+            | FieldTypeTp::Blob => {
+                let res = self.value.as_bytes().ok_or(Error::InvalidDataType(format!(
+                    "invalid type: {:?}",
+                    self.ft,
+                )))?;
+                buf.write_u32_le(res.len() as u32)?;
+                buf.write_bytes(res)?;
+            }
+            FieldTypeTp::Timestamp
+            | FieldTypeTp::DateTime
+            | FieldTypeTp::Date
+            | FieldTypeTp::NewDate => {
+                let time = self
+                    .value
+                    .as_date_time()
+                    .ok_or(Error::InvalidDataType(format!(
+                        "invalid type: {:?}",
+                        self.ft,
+                    )))?
+                    .to_numeric_string();
+                buf.write_u32_le(time.len() as u32)?;
+                buf.write_bytes(time.as_bytes())?;
+            }
+            FieldTypeTp::Duration => {
+                let dur = self
+                    .value
+                    .as_duration()
+                    .ok_or(Error::InvalidDataType(format!(
+                        "invalid type: {:?}",
+                        self.ft,
+                    )))?
+                    .to_numeric_string();
+                buf.write_u32_le(dur.len() as u32)?;
+                buf.write_bytes(dur.as_bytes())?;
+            }
+            FieldTypeTp::Float | FieldTypeTp::Double => {
+                let mut val = self
+                    .value
+                    .as_real()
+                    .ok_or(Error::InvalidDataType(format!(
+                        "invalid type: {:?}",
+                        self.ft,
+                    )))?
+                    .to_owned();
+                if val.is_infinite() || val.is_nan() {
+                    // Because ticdc has such a transform.
+                    val.set_zero();
+                }
+                buf.write_u64_le(val.to_bits())?;
+            }
+            FieldTypeTp::NewDecimal => {
+                let dec = self
+                    .value
+                    .as_decimal()
+                    .ok_or(Error::InvalidDataType(format!(
+                        "invalid type: {:?}",
+                        self.ft,
+                    )))?
+                    .to_string();
+                buf.write_u32_le(dec.len() as u32)?;
+                buf.write_bytes(dec.as_bytes())?;
+            }
+            FieldTypeTp::Enum => {
+                let res = self
+                    .value
+                    .as_enum()
+                    .ok_or(Error::InvalidDataType(format!(
+                        "invalid type: {:?}",
+                        self.ft
+                    )))?
+                    .value();
+                buf.write_u64_le(res)?;
+            }
+            FieldTypeTp::Set => {
+                let res = self
+                    .value
+                    .as_set()
+                    .ok_or(Error::InvalidDataType(format!(
+                        "invalid type: {:?}",
+                        self.ft
+                    )))?
+                    .value();
+                buf.write_u64_le(res)?;
+            }
+            FieldTypeTp::Bit => {
+                // TODO: it's not supported yet. In current test only `INT` and `Varchar`
+                // types would be used.
+                buf.write_u64_le(u64::MAX)?;
+            }
+            FieldTypeTp::Json => {
+                let res = self
+                    .value
+                    .as_json()
+                    .ok_or(Error::InvalidDataType(format!(
+                        "invalid type: {:?}",
+                        self.ft,
+                    )))?
+                    .to_string();
+                buf.write_u32_le(res.len() as u32)?;
+                buf.write_bytes(res.as_bytes())?;
+            }
+            FieldTypeTp::Null | FieldTypeTp::Geometry => {}
+            _ => {
+                return Err(Error::Other(box_err!(
+                    "unsupported type {:?}",
+                    self.ft.as_accessor().tp()
+                )));
+            }
+        };
+        Ok(())
+    }
 }
 
 /// Checksum
@@ -97,8 +242,8 @@ impl Column {
 /// - CHECKSUM(4 bytes)
 ///   - little-endian CRC32(IEEE) when hdr.ver = 0 (default)
 pub trait ChecksumHandler {
-    // update_col updates the checksum with the encoded value of the column.
-    fn checksum(&mut self, buf: &[u8]) -> Result<()>;
+    // checksum calculates the checksum value according to the input column values.
+    fn checksum(&mut self, cols: &[Column]) -> Result<()>;
 
     // header_value returns the checksum header value.
     fn header_value(&self) -> u8;
@@ -110,11 +255,31 @@ pub trait ChecksumHandler {
 pub struct Crc32RowChecksumHandler {
     header: ChecksumHeader,
     hasher: crc32fast::Hasher,
+    buf: Vec<u8>,
+}
+
+fn get_non_null_columns(cols: &[Column]) -> Vec<Column> {
+    let mut res = vec![];
+    for col in cols {
+        if col.value.is_some() {
+            res.push(col.clone());
+        }
+    }
+    res.sort_by_key(|c| c.id);
+    res
 }
 
 impl ChecksumHandler for Crc32RowChecksumHandler {
-    fn checksum(&mut self, buf: &[u8]) -> Result<()> {
-        self.hasher.update(buf);
+    fn checksum(&mut self, cols: &[Column]) -> Result<()> {
+        // For testing purposes, the DDL compatibility was not fully considered for
+        // checksum calculation, using all non-null columns regardless of the column's
+        // DDL status, such as write-reorg.
+        // Reference: https://github.com/pingcap/tidb/pull/43141.
+        for col in get_non_null_columns(cols) {
+            self.buf.clear();
+            col.encode_for_checksum(&mut self.buf)?;
+            self.hasher.update(self.buf.as_slice());
+        }
         Ok(())
     }
 
@@ -154,6 +319,7 @@ impl Crc32RowChecksumHandler {
         let mut res = Crc32RowChecksumHandler {
             header: ChecksumHeader::new(),
             hasher: crc32fast::Hasher::new(),
+            buf: Vec::new(),
         };
         if has_extra_checksum {
             res.header.set_extra_checksum();
@@ -181,14 +347,15 @@ pub trait RowEncoder: NumberEncoder {
         extra_checksum: Option<u32>,
     ) -> Result<()> {
         let mut handler = Crc32RowChecksumHandler::new(extra_checksum.is_some());
-        self.write_row_impl(ctx, columns, Some(&mut handler), extra_checksum)
+        handler.checksum(&columns)?;
+        self.write_row_impl(ctx, columns, Some(&handler), extra_checksum)
     }
 
     fn write_row_impl(
         &mut self,
         ctx: &mut EvalContext,
         columns: Vec<Column>,
-        mut checksum_handler: Option<&mut dyn ChecksumHandler>,
+        checksum_handler: Option<&dyn ChecksumHandler>,
         extra_checksum: Option<u32>,
     ) -> Result<()> {
         let mut is_big = false;
@@ -225,7 +392,7 @@ pub trait RowEncoder: NumberEncoder {
 
         // encode begins
         self.write_u8(super::CODEC_VERSION)?;
-        self.write_flag(is_big)?;
+        self.write_flag(is_big, checksum_handler.is_some())?;
         self.write_u16_le(non_null_ids.len() as u16)?;
         self.write_u16_le(null_ids.len() as u16)?;
 
@@ -241,9 +408,8 @@ pub trait RowEncoder: NumberEncoder {
         self.write_bytes(&offset_wtr)?;
         self.write_bytes(&value_wtr)?;
 
-        if let Some(checksum_handler) = checksum_handler.as_mut() {
+        if let Some(checksum_handler) = checksum_handler {
             let header_val = checksum_handler.header_value();
-            checksum_handler.checksum(value_wtr.as_slice())?;
             let val = checksum_handler.value();
             self.write_u8(header_val)?;
             self.write_u32_le(val)?;
@@ -256,11 +422,12 @@ pub trait RowEncoder: NumberEncoder {
     }
 
     #[inline]
-    fn write_flag(&mut self, is_big: bool) -> codec::Result<()> {
-        let flag = if is_big {
-            super::Flags::BIG
-        } else {
-            super::Flags::default()
+    fn write_flag(&mut self, is_big: bool, has_checksum: bool) -> codec::Result<()> {
+        let flag = match (is_big, has_checksum) {
+            (true, true) => super::Flags::BIG | super::Flags::WITH_CHECKSUM,
+            (true, false) => super::Flags::BIG,
+            (false, true) => super::Flags::WITH_CHECKSUM,
+            (false, false) => super::Flags::default(),
         };
         self.write_u8(flag.bits)
     }
@@ -334,6 +501,26 @@ pub trait ScalarValueEncoder: NumberEncoder + DecimalEncoder + JsonEncoder {
 }
 impl<T: BufferWriter> ScalarValueEncoder for T {}
 
+// This is a helper function for test.
+pub fn prepare_cols_for_test() -> Vec<Column> {
+    vec![
+        Column::new_with_ft(1, FieldType::from(FieldTypeTp::Short), 1000),
+        Column::new_with_ft(12, FieldType::from(FieldTypeTp::Long), 2),
+        Column::new_with_ft(
+            335,
+            FieldType::from(FieldTypeTp::Short),
+            ScalarValue::Int(None),
+        ),
+        Column::new_with_ft(3, FieldType::from(FieldTypeTp::Float), 3.55),
+        Column::new_with_ft(8, FieldType::from(FieldTypeTp::VarChar), b"abc".to_vec()),
+        Column::new_with_ft(
+            17,
+            FieldType::from(FieldTypeTp::Duration),
+            Duration::from_millis(34, 2).unwrap(),
+        ),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -346,7 +533,8 @@ mod tests {
             data_type::ScalarValue,
             mysql::{duration::NANOS_PER_SEC, Decimal, Duration, Json, Time},
             row::v2::encoder_for_test::{
-                ChecksumHandler, Crc32RowChecksumHandler, ScalarValueEncoder,
+                get_non_null_columns, prepare_cols_for_test, ChecksumHandler,
+                Crc32RowChecksumHandler,
             },
         },
         expr::EvalContext,
@@ -423,48 +611,30 @@ mod tests {
 
     #[test]
     fn test_encode_checksum() {
-        let encode_col_values = |ctx: &mut EvalContext, non_null_cols: Vec<Column>| -> Vec<u8> {
+        let encode_col_values = |non_null_cols: Vec<Column>| -> Vec<u8> {
             let mut res = vec![];
             for col in non_null_cols {
-                res.write_value(ctx, &col).unwrap();
+                col.encode_for_checksum(&mut res).unwrap();
             }
             res
         };
-        let get_non_null_columns = |cols: &Vec<Column>| -> Vec<Column> {
-            let mut res = vec![];
-            for col in cols {
-                if col.value.is_some() {
-                    res.push(col.clone());
-                }
-            }
-            res.sort_by_key(|c| c.id);
-            res
-        };
-        let cols = vec![
-            Column::new(1, 1000),
-            Column::new(12, 2),
-            Column::new(335, ScalarValue::Int(None)),
-            Column::new(3, 3),
-            Column::new(8, 32767),
-        ];
+        let cols = prepare_cols_for_test();
 
         let mut buf = vec![];
         let mut handler = Crc32RowChecksumHandler::new(false);
         handler.header.set_version(0);
+        handler.checksum(&cols).unwrap();
         buf.write_row_impl(
             &mut EvalContext::default(),
             cols.clone(),
-            Some(&mut handler),
+            Some(&handler),
             None,
         )
         .unwrap();
 
         let exp = {
             let mut hasher = crc32fast::Hasher::new();
-            hasher.update(
-                encode_col_values(&mut EvalContext::default(), get_non_null_columns(&cols))
-                    .as_slice(),
-            );
+            hasher.update(encode_col_values(get_non_null_columns(&cols)).as_slice());
             hasher.finalize()
         };
         let mut val_slice = &buf[buf.len() - 4..];
@@ -475,13 +645,9 @@ mod tests {
         buf.clear();
         let mut handler = Crc32RowChecksumHandler::new(true);
         handler.header.set_version(1);
-        buf.write_row_impl(
-            &mut EvalContext::default(),
-            cols,
-            Some(&mut handler),
-            Some(exp),
-        )
-        .unwrap();
+        handler.checksum(&cols).unwrap();
+        buf.write_row_impl(&mut EvalContext::default(), cols, Some(&handler), Some(exp))
+            .unwrap();
         let mut val_slice = &buf[buf.len() - 4..];
         let mut extra_val_slice = &buf[buf.len() - 8..buf.len() - 4];
         assert_eq!(exp, handler.value());

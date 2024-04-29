@@ -8,9 +8,8 @@ pub mod future;
 pub mod priority_queue;
 
 use std::{
-    cell::Cell,
     sync::{
-        atomic::{AtomicBool, AtomicIsize, Ordering},
+        atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering},
         Arc,
     },
     time::Duration,
@@ -208,7 +207,7 @@ const CHECK_INTERVAL: usize = 8;
 /// A sender of channel that limits the maximun pending messages count loosely.
 pub struct LooseBoundedSender<T> {
     sender: Sender<T>,
-    tried_cnt: Cell<usize>,
+    tried_cnt: AtomicUsize,
     limit: usize,
 }
 
@@ -230,25 +229,23 @@ impl<T> LooseBoundedSender<T> {
     /// Send a message regardless its capacity limit.
     #[inline]
     pub fn force_send(&self, t: T) -> Result<(), SendError<T>> {
-        let cnt = self.tried_cnt.get();
-        self.tried_cnt.set(cnt + 1);
+        self.tried_cnt.fetch_add(1, Ordering::AcqRel);
         self.sender.send(t)
     }
 
     /// Attempts to send a message into the channel without blocking.
     #[inline]
     pub fn try_send(&self, t: T) -> Result<(), TrySendError<T>> {
-        let cnt = self.tried_cnt.get();
         let check_interval = || {
             fail_point!("loose_bounded_sender_check_interval", |_| 0);
             CHECK_INTERVAL
         };
-        if cnt < check_interval() {
-            self.tried_cnt.set(cnt + 1);
-        } else if self.len() < self.limit {
-            self.tried_cnt.set(1);
-        } else {
-            return Err(TrySendError::Full(t));
+        if self.tried_cnt.fetch_add(1, Ordering::AcqRel) >= check_interval() {
+            if self.len() < self.limit {
+                self.tried_cnt.store(1, Ordering::Release);
+            } else {
+                return Err(TrySendError::Full(t));
+            }
         }
 
         match self.sender.send(t) {
@@ -275,7 +272,7 @@ impl<T> Clone for LooseBoundedSender<T> {
     fn clone(&self) -> LooseBoundedSender<T> {
         LooseBoundedSender {
             sender: self.sender.clone(),
-            tried_cnt: self.tried_cnt.clone(),
+            tried_cnt: AtomicUsize::new(0),
             limit: self.limit,
         }
     }
@@ -287,7 +284,7 @@ pub fn loose_bounded<T>(cap: usize) -> (LooseBoundedSender<T>, Receiver<T>) {
     (
         LooseBoundedSender {
             sender,
-            tried_cnt: Cell::new(0),
+            tried_cnt: AtomicUsize::new(0),
             limit: cap,
         },
         receiver,

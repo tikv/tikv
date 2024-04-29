@@ -101,7 +101,7 @@ mod tests {
         assert!(worker.is_busy());
         drop(worker);
         // when shutdown, StepRunner should send back a 0.
-        assert_eq!(0, rx.recv().unwrap());
+        assert_eq!(0, rx.recv_timeout(Duration::from_secs(3)).unwrap());
     }
 
     #[test]
@@ -116,7 +116,7 @@ mod tests {
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 90);
         assert_eq!(rx.recv_timeout(Duration::from_secs(3)).unwrap(), 110);
         worker.stop();
-        assert_eq!(0, rx.recv().unwrap());
+        assert_eq!(0, rx.recv_timeout(Duration::from_secs(3)).unwrap());
     }
 
     #[test]

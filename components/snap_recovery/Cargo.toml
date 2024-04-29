@@ -5,18 +5,29 @@ edition = "2021"
 publish = false
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
+test-engine-kv-rocksdb = ["tikv/test-engine-kv-rocksdb"]
+test-engine-raft-raft-engine = ["tikv/test-engine-raft-raft-engine"]
+test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
+test-engines-panic = ["tikv/test-engines-panic"]
+
 [dependencies]
-chrono = "0.4"
+chrono = { workspace = true }
 encryption = { workspace = true }
 encryption_export = { workspace = true }
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 futures = { version = "0.3", features = ["executor"] }
 grpcio = { workspace = true }
+itertools = "0.10"
 keys = { workspace = true }
 kvproto = { workspace = true }
+lazy_static = "1.4"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 pd_client = { workspace = true }
+prometheus = { version = "0.13", default_features = false, features = ["nightly"] }
+prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
 raft_log_engine = { workspace = true }
 raftstore = { workspace = true }
@@ -28,5 +39,7 @@ thiserror = "1.0"
 tikv = { workspace = true }
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
+tokio = { version = "1.17", features = ["rt"] }
 toml = "0.5"
 txn_types = { workspace = true }
+

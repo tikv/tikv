@@ -83,6 +83,18 @@ macro_rules! trace(($($args:tt)+) => {
     ::slog_global::trace!($($args)+)
 };);
 
+/// Logs a infor or debug level message using the slog global logger.
+#[macro_export]
+macro_rules! info_or_debug{
+  ($cond:expr; $($args:tt)+) => {
+        if $cond {
+            info!($($args)+)
+        } else {
+            debug!($($args)+)
+        }
+  };
+}
+
 use std::fmt::{self, Display, Write};
 
 use slog::{BorrowedKV, OwnedKVList, Record, KV};

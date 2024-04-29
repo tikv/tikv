@@ -9,6 +9,7 @@ use std::{
     thread::{Builder as ThreadBuilder, JoinHandle},
 };
 
+use api_version::KvFormat;
 use collections::HashSet;
 use engine_rocks::{
     raw::{CompactOptions, DBBottommostLevelCompaction},
@@ -16,12 +17,14 @@ use engine_rocks::{
     RocksEngine, RocksEngineIterator, RocksMvccProperties, RocksStatistics, RocksWriteBatchVec,
 };
 use engine_traits::{
-    Engines, IterOptions, Iterable, Iterator as EngineIterator, MiscExt, Mutable, MvccProperties,
-    Peekable, RaftEngine, RaftLogBatch, Range, RangePropertiesExt, SyncMutable, WriteBatch,
-    WriteBatchExt, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    Engines, Error as EngineTraitError, IterOptions, Iterable, Iterator as EngineIterator, MiscExt,
+    Mutable, MvccProperties, Peekable, RaftEngine, RaftLogBatch, Range, RangePropertiesExt,
+    SyncMutable, WriteBatch, WriteBatchExt, WriteOptions, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
+use futures::future::Future;
 use kvproto::{
     debugpb::{self, Db as DbType},
+    kvrpcpb::{self, Context, MvccInfo},
     metapb::{PeerRole, Region},
     raft_serverpb::*,
 };
@@ -32,17 +35,23 @@ use raftstore::{
     store::{write_initial_apply_state, write_initial_raft_state, write_peer_state, PeerStorage},
 };
 use thiserror::Error;
+use tikv_kv::Engine;
 use tikv_util::{
     config::ReadableSize, keybuilder::KeyBuilder, store::find_peer,
     sys::thread::StdThreadBuildWrapper, worker::Worker,
 };
 use txn_types::Key;
 
+use super::service::{future_flashback_to_version, future_prepare_flashback_to_version};
 pub use crate::storage::mvcc::MvccInfoIterator;
 use crate::{
     config::ConfigController,
     server::reset_to_version::ResetToVersionManager,
-    storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType},
+    storage::{
+        lock_manager::LockManager,
+        mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType},
+        Storage,
+    },
 };
 
 pub type Result<T> = result::Result<T, Error>;
@@ -57,6 +66,12 @@ pub enum Error {
 
     #[error("{0:?}")]
     Other(#[from] Box<dyn StdError + Sync + Send>),
+
+    #[error("Engine error {0}")]
+    EngineTrait(#[from] EngineTraitError),
+
+    #[error("Flashback Failed {0:?}")]
+    FlashbackFailed(String),
 }
 
 /// Describes the meta information of a Region.
@@ -68,7 +83,7 @@ pub struct RegionInfo {
 }
 
 impl RegionInfo {
-    fn new(
+    pub fn new(
         raft_local: Option<RaftLocalState>,
         raft_apply: Option<RaftApplyState>,
         region_local: Option<RegionLocalState>,
@@ -125,16 +140,89 @@ trait InnerRocksEngineExtractor {
     fn get_db_from_type(&self, db: DbType) -> Result<&RocksEngine>;
 }
 
+pub trait Debugger {
+    fn get(&self, db: DbType, cf: &str, key: &[u8]) -> Result<Vec<u8>>;
+
+    fn raft_log(&self, region_id: u64, log_index: u64) -> Result<Entry>;
+
+    fn region_info(&self, region_id: u64) -> Result<RegionInfo>;
+
+    fn region_size<T: AsRef<str>>(&self, region_id: u64, cfs: Vec<T>) -> Result<Vec<(T, usize)>>;
+
+    /// Scan MVCC Infos for given range `[start, end)`.
+    fn scan_mvcc(
+        &self,
+        start: &[u8],
+        end: &[u8],
+        limit: u64,
+    ) -> Result<impl Iterator<Item = raftstore::Result<(Vec<u8>, MvccInfo)>> + Send + 'static>;
+
+    /// Compact the cf[start..end) in the db.
+    fn compact(
+        &self,
+        db: DbType,
+        cf: &str,
+        start: &[u8],
+        end: &[u8],
+        threads: u32,
+        bottommost: BottommostLevelCompaction,
+    ) -> Result<()>;
+
+    /// Get all regions holding region meta data from raft CF in KV storage.
+    fn get_all_regions_in_store(&self) -> Result<Vec<u64>>;
+
+    fn get_store_ident(&self) -> Result<StoreIdent>;
+
+    fn dump_kv_stats(&self) -> Result<String>;
+
+    fn dump_raft_stats(&self) -> Result<String>;
+
+    fn modify_tikv_config(&self, config_name: &str, config_value: &str) -> Result<()>;
+
+    fn get_region_properties(&self, region_id: u64) -> Result<Vec<(String, String)>>;
+
+    fn reset_to_version(&self, version: u64);
+
+    fn key_range_flashback_to_version(
+        &self,
+        version: u64,
+        region_id: u64,
+        start_key: &[u8],
+        end_key: &[u8],
+        start_ts: u64,
+        commit_ts: u64,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    fn set_kv_statistics(&mut self, s: Option<Arc<RocksStatistics>>);
+
+    fn set_raft_statistics(&mut self, s: Option<Arc<RocksStatistics>>);
+
+    fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>>;
+}
+
 #[derive(Clone)]
-pub struct Debugger<ER: RaftEngine> {
+pub struct DebuggerImpl<ER, E, L, K>
+where
+    ER: RaftEngine,
+    E: Engine,
+    L: LockManager,
+    K: KvFormat,
+{
     engines: Engines<RocksEngine, ER>,
     kv_statistics: Option<Arc<RocksStatistics>>,
     raft_statistics: Option<Arc<RocksStatistics>>,
     reset_to_version_manager: ResetToVersionManager,
     cfg_controller: ConfigController,
+    storage: Option<Storage<E, L, K>>,
 }
 
-impl<ER: RaftEngine> InnerRocksEngineExtractor for Debugger<ER> {
+impl<ER, E, L, K> InnerRocksEngineExtractor for DebuggerImpl<ER, E, L, K>
+where
+    ER: RaftEngine,
+    E: Engine,
+    L: LockManager,
+    K: KvFormat,
+{
     default fn get_db_from_type(&self, db: DbType) -> Result<&RocksEngine> {
         match db {
             DbType::Kv => Ok(&self.engines.kv),
@@ -144,7 +232,12 @@ impl<ER: RaftEngine> InnerRocksEngineExtractor for Debugger<ER> {
     }
 }
 
-impl InnerRocksEngineExtractor for Debugger<RocksEngine> {
+impl<E, L, K> InnerRocksEngineExtractor for DebuggerImpl<RocksEngine, E, L, K>
+where
+    E: Engine,
+    L: LockManager,
+    K: KvFormat,
+{
     fn get_db_from_type(&self, db: DbType) -> Result<&RocksEngine> {
         match db {
             DbType::Kv => Ok(&self.engines.kv),
@@ -154,173 +247,31 @@ impl InnerRocksEngineExtractor for Debugger<RocksEngine> {
     }
 }
 
-impl<ER: RaftEngine> Debugger<ER> {
+impl<ER, E, L, K> DebuggerImpl<ER, E, L, K>
+where
+    ER: RaftEngine,
+    E: Engine,
+    L: LockManager,
+    K: KvFormat,
+{
     pub fn new(
         engines: Engines<RocksEngine, ER>,
         cfg_controller: ConfigController,
-    ) -> Debugger<ER> {
+        storage: Option<Storage<E, L, K>>,
+    ) -> DebuggerImpl<ER, E, L, K> {
         let reset_to_version_manager = ResetToVersionManager::new(engines.kv.clone());
-        Debugger {
+        DebuggerImpl {
             engines,
             kv_statistics: None,
             raft_statistics: None,
             reset_to_version_manager,
             cfg_controller,
+            storage,
         }
-    }
-
-    pub fn set_kv_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
-        self.kv_statistics = s;
-    }
-
-    pub fn set_raft_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
-        self.raft_statistics = s;
     }
 
     pub fn get_engine(&self) -> &Engines<RocksEngine, ER> {
         &self.engines
-    }
-
-    pub fn dump_kv_stats(&self) -> Result<String> {
-        let mut kv_str = box_try!(MiscExt::dump_stats(&self.engines.kv));
-        if let Some(s) = self.kv_statistics.as_ref() && let Some(s) = s.to_string() {
-            kv_str.push_str(&s);
-        }
-        Ok(kv_str)
-    }
-
-    pub fn dump_raft_stats(&self) -> Result<String> {
-        let mut raft_str = box_try!(RaftEngine::dump_stats(&self.engines.raft));
-        if let Some(s) = self.raft_statistics.as_ref() && let Some(s) = s.to_string() {
-            raft_str.push_str(&s);
-        }
-        Ok(raft_str)
-    }
-
-    /// Get all regions holding region meta data from raft CF in KV storage.
-    pub fn get_all_regions_in_store(&self) -> Result<Vec<u64>> {
-        let db = &self.engines.kv;
-        let cf = CF_RAFT;
-        let start_key = keys::REGION_META_MIN_KEY;
-        let end_key = keys::REGION_META_MAX_KEY;
-        let mut regions = Vec::with_capacity(128);
-        box_try!(db.scan(cf, start_key, end_key, false, |key, _| {
-            let (id, suffix) = box_try!(keys::decode_region_meta_key(key));
-            if suffix != keys::REGION_STATE_SUFFIX {
-                return Ok(true);
-            }
-            regions.push(id);
-            Ok(true)
-        }));
-        regions.sort_unstable();
-        Ok(regions)
-    }
-
-    pub fn get(&self, db: DbType, cf: &str, key: &[u8]) -> Result<Vec<u8>> {
-        validate_db_and_cf(db, cf)?;
-        let db = self.get_db_from_type(db)?;
-        match db.get_value_cf(cf, key) {
-            Ok(Some(v)) => Ok(v.to_vec()),
-            Ok(None) => Err(Error::NotFound(format!(
-                "value for key {:?} in db {:?}",
-                key, db
-            ))),
-            Err(e) => Err(box_err!(e)),
-        }
-    }
-
-    pub fn raft_log(&self, region_id: u64, log_index: u64) -> Result<Entry> {
-        if let Some(e) = box_try!(self.engines.raft.get_entry(region_id, log_index)) {
-            return Ok(e);
-        }
-        Err(Error::NotFound(format!(
-            "raft log for region {} at index {}",
-            region_id, log_index
-        )))
-    }
-
-    pub fn region_info(&self, region_id: u64) -> Result<RegionInfo> {
-        let raft_state = box_try!(self.engines.raft.get_raft_state(region_id));
-
-        let apply_state_key = keys::apply_state_key(region_id);
-        let apply_state = box_try!(
-            self.engines
-                .kv
-                .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
-        );
-
-        let region_state_key = keys::region_state_key(region_id);
-        let region_state = box_try!(
-            self.engines
-                .kv
-                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
-        );
-
-        match (raft_state, apply_state, region_state) {
-            (None, None, None) => Err(Error::NotFound(format!("info for region {}", region_id))),
-            (raft_state, apply_state, region_state) => {
-                Ok(RegionInfo::new(raft_state, apply_state, region_state))
-            }
-        }
-    }
-
-    pub fn region_size<T: AsRef<str>>(
-        &self,
-        region_id: u64,
-        cfs: Vec<T>,
-    ) -> Result<Vec<(T, usize)>> {
-        let region_state_key = keys::region_state_key(region_id);
-        match self
-            .engines
-            .kv
-            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
-        {
-            Ok(Some(region_state)) => {
-                let region = region_state.get_region();
-                let start_key = &keys::data_key(region.get_start_key());
-                let end_key = &keys::data_end_key(region.get_end_key());
-                let mut sizes = vec![];
-                for cf in cfs {
-                    let mut size = 0;
-                    box_try!(self.engines.kv.scan(
-                        cf.as_ref(),
-                        start_key,
-                        end_key,
-                        false,
-                        |k, v| {
-                            size += k.len() + v.len();
-                            Ok(true)
-                        }
-                    ));
-                    sizes.push((cf, size));
-                }
-                Ok(sizes)
-            }
-            Ok(None) => Err(Error::NotFound(format!("none region {:?}", region_id))),
-            Err(e) => Err(box_err!(e)),
-        }
-    }
-
-    /// Scan MVCC Infos for given range `[start, end)`.
-    pub fn scan_mvcc(
-        &self,
-        start: &[u8],
-        end: &[u8],
-        limit: u64,
-    ) -> Result<MvccInfoIterator<RocksEngineIterator>> {
-        if end.is_empty() && limit == 0 {
-            return Err(Error::InvalidArgument("no limit and to_key".to_owned()));
-        }
-        MvccInfoIterator::new(
-            |cf, opts| {
-                let kv = &self.engines.kv;
-                kv.iterator_opt(cf, opts).map_err(|e| box_err!(e))
-            },
-            if start.is_empty() { None } else { Some(start) },
-            if end.is_empty() { None } else { Some(end) },
-            limit as usize,
-        )
-        .map_err(|e| box_err!(e))
     }
 
     /// Scan raw keys for given range `[start, end)` in given cf.
@@ -350,32 +301,6 @@ impl<ER: RaftEngine> Debugger<ER> {
         }
 
         Ok(res)
-    }
-
-    /// Compact the cf[start..end) in the db.
-    pub fn compact(
-        &self,
-        db: DbType,
-        cf: &str,
-        start: &[u8],
-        end: &[u8],
-        threads: u32,
-        bottommost: BottommostLevelCompaction,
-    ) -> Result<()> {
-        validate_db_and_cf(db, cf)?;
-        let db = self.get_db_from_type(db)?;
-        let handle = box_try!(get_cf_handle(db.as_inner(), cf));
-        let start = if start.is_empty() { None } else { Some(start) };
-        let end = if end.is_empty() { None } else { Some(end) };
-        info!("Debugger starts manual compact"; "db" => ?db, "cf" => cf);
-        let mut opts = CompactOptions::new();
-        opts.set_max_subcompactions(threads as i32);
-        opts.set_exclusive_manual_compaction(false);
-        opts.set_bottommost_level_compaction(bottommost.0);
-        db.as_inner()
-            .compact_range_cf_opt(handle, &opts, start, end);
-        info!("Debugger finishes manual compact"; "db" => ?db, "cf" => cf);
-        Ok(())
     }
 
     /// Set regions to tombstone by manual, and apply other status(such as
@@ -486,18 +411,14 @@ impl<ER: RaftEngine> Debugger<ER> {
                 .name(format!("mvcc-recover-thread-{}", thread_index))
                 .spawn_wrapper(move || {
                     tikv_util::thread_group::set_properties(props);
-                    tikv_alloc::add_thread_memory_accessor();
+
                     info!(
                         "thread {}: started on range [{}, {})",
                         thread_index,
                         log_wrappers::Value::key(&start_key),
                         log_wrappers::Value::key(&end_key)
                     );
-
-                    let result =
-                        recover_mvcc_for_range(&db, &start_key, &end_key, read_only, thread_index);
-                    tikv_alloc::remove_thread_memory_accessor();
-                    result
+                    recover_mvcc_for_range(&db, &start_key, &end_key, read_only, thread_index)
                 })
                 .unwrap();
 
@@ -859,25 +780,6 @@ impl<ER: RaftEngine> Debugger<ER> {
         Ok(())
     }
 
-    pub fn get_store_ident(&self) -> Result<StoreIdent> {
-        let db = &self.engines.kv;
-        db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
-            .map_err(|e| box_err!(e))
-            .and_then(|ident| match ident {
-                Some(ident) => Ok(ident),
-                None => Err(Error::NotFound("No store ident key".to_owned())),
-            })
-    }
-
-    pub fn modify_tikv_config(&self, config_name: &str, config_value: &str) -> Result<()> {
-        if let Err(e) = self.cfg_controller.update_config(config_name, config_value) {
-            return Err(Error::Other(
-                format!("failed to update config, err: {:?}", e).into(),
-            ));
-        }
-        Ok(())
-    }
-
     fn get_region_state(&self, region_id: u64) -> Result<RegionLocalState> {
         let region_state_key = keys::region_state_key(region_id);
         let region_state = box_try!(
@@ -890,13 +792,205 @@ impl<ER: RaftEngine> Debugger<ER> {
             None => Err(Error::NotFound(format!("region {}", region_id))),
         }
     }
+}
 
-    pub fn get_region_properties(&self, region_id: u64) -> Result<Vec<(String, String)>> {
+impl<ER, E, L, K> Debugger for DebuggerImpl<ER, E, L, K>
+where
+    ER: RaftEngine,
+    E: Engine,
+    L: LockManager,
+    K: KvFormat,
+{
+    fn get(&self, db: DbType, cf: &str, key: &[u8]) -> Result<Vec<u8>> {
+        validate_db_and_cf(db, cf)?;
+        let db = self.get_db_from_type(db)?;
+        match db.get_value_cf(cf, key) {
+            Ok(Some(v)) => Ok(v.to_vec()),
+            Ok(None) => Err(Error::NotFound(format!(
+                "value for key {:?} in db {:?}",
+                key, db
+            ))),
+            Err(e) => Err(box_err!(e)),
+        }
+    }
+
+    fn raft_log(&self, region_id: u64, log_index: u64) -> Result<Entry> {
+        if let Some(e) = box_try!(self.engines.raft.get_entry(region_id, log_index)) {
+            return Ok(e);
+        }
+        Err(Error::NotFound(format!(
+            "raft log for region {} at index {}",
+            region_id, log_index
+        )))
+    }
+
+    fn region_info(&self, region_id: u64) -> Result<RegionInfo> {
+        let raft_state = box_try!(self.engines.raft.get_raft_state(region_id));
+
+        let apply_state_key = keys::apply_state_key(region_id);
+        let apply_state = box_try!(
+            self.engines
+                .kv
+                .get_msg_cf::<RaftApplyState>(CF_RAFT, &apply_state_key)
+        );
+
+        let region_state_key = keys::region_state_key(region_id);
+        let region_state = box_try!(
+            self.engines
+                .kv
+                .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+        );
+
+        match (raft_state, apply_state, region_state) {
+            (None, None, None) => Err(Error::NotFound(format!("info for region {}", region_id))),
+            (raft_state, apply_state, region_state) => {
+                Ok(RegionInfo::new(raft_state, apply_state, region_state))
+            }
+        }
+    }
+
+    fn region_size<T: AsRef<str>>(&self, region_id: u64, cfs: Vec<T>) -> Result<Vec<(T, usize)>> {
+        let region_state_key = keys::region_state_key(region_id);
+        match self
+            .engines
+            .kv
+            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_state_key)
+        {
+            Ok(Some(region_state)) => {
+                let region = region_state.get_region();
+                let start_key = &keys::data_key(region.get_start_key());
+                let end_key = &keys::data_end_key(region.get_end_key());
+                let mut sizes = vec![];
+                for cf in cfs {
+                    let mut size = 0;
+                    box_try!(self.engines.kv.scan(
+                        cf.as_ref(),
+                        start_key,
+                        end_key,
+                        false,
+                        |k, v| {
+                            size += k.len() + v.len();
+                            Ok(true)
+                        }
+                    ));
+                    sizes.push((cf, size));
+                }
+                Ok(sizes)
+            }
+            Ok(None) => Err(Error::NotFound(format!("none region {:?}", region_id))),
+            Err(e) => Err(box_err!(e)),
+        }
+    }
+
+    fn scan_mvcc(
+        &self,
+        start: &[u8],
+        end: &[u8],
+        limit: u64,
+    ) -> Result<impl Iterator<Item = raftstore::Result<(Vec<u8>, MvccInfo)>> + Send + 'static> {
+        if end.is_empty() && limit == 0 {
+            return Err(Error::InvalidArgument("no limit and to_key".to_owned()));
+        }
+        MvccInfoIterator::new(
+            |cf, opts| {
+                let kv = &self.engines.kv;
+                kv.iterator_opt(cf, opts).map_err(|e| box_err!(e))
+            },
+            if start.is_empty() { None } else { Some(start) },
+            if end.is_empty() { None } else { Some(end) },
+            limit as usize,
+        )
+        .map_err(|e| box_err!(e))
+    }
+
+    /// Compact the cf[start..end) in the db.
+    fn compact(
+        &self,
+        db: DbType,
+        cf: &str,
+        start: &[u8],
+        end: &[u8],
+        threads: u32,
+        bottommost: BottommostLevelCompaction,
+    ) -> Result<()> {
+        validate_db_and_cf(db, cf)?;
+        let db = self.get_db_from_type(db)?;
+        let handle = box_try!(get_cf_handle(db.as_inner(), cf));
+        let start = if start.is_empty() { None } else { Some(start) };
+        let end = if end.is_empty() { None } else { Some(end) };
+        info!("Debugger starts manual compact"; "db" => ?db, "cf" => cf);
+        let mut opts = CompactOptions::new();
+        opts.set_max_subcompactions(threads as i32);
+        opts.set_exclusive_manual_compaction(false);
+        opts.set_bottommost_level_compaction(bottommost.0);
+        db.as_inner()
+            .compact_range_cf_opt(handle, &opts, start, end);
+        info!("Debugger finishes manual compact"; "db" => ?db, "cf" => cf);
+        Ok(())
+    }
+
+    fn get_all_regions_in_store(&self) -> Result<Vec<u64>> {
+        let db = &self.engines.kv;
+        let cf = CF_RAFT;
+        let start_key = keys::REGION_META_MIN_KEY;
+        let end_key = keys::REGION_META_MAX_KEY;
+        let mut regions = Vec::with_capacity(128);
+        box_try!(db.scan(cf, start_key, end_key, false, |key, _| {
+            let (id, suffix) = box_try!(keys::decode_region_meta_key(key));
+            if suffix != keys::REGION_STATE_SUFFIX {
+                return Ok(true);
+            }
+            regions.push(id);
+            Ok(true)
+        }));
+        regions.sort_unstable();
+        Ok(regions)
+    }
+
+    fn get_store_ident(&self) -> Result<StoreIdent> {
+        let db = &self.engines.kv;
+        db.get_msg::<StoreIdent>(keys::STORE_IDENT_KEY)
+            .map_err(|e| box_err!(e))
+            .and_then(|ident| match ident {
+                Some(ident) => Ok(ident),
+                None => Err(Error::NotFound("No store ident key".to_owned())),
+            })
+    }
+
+    fn dump_kv_stats(&self) -> Result<String> {
+        let mut kv_str = box_try!(MiscExt::dump_stats(&self.engines.kv));
+        if let Some(s) = self.kv_statistics.as_ref()
+            && let Some(s) = s.to_string()
+        {
+            kv_str.push_str(&s);
+        }
+        Ok(kv_str)
+    }
+
+    fn dump_raft_stats(&self) -> Result<String> {
+        let mut raft_str = box_try!(RaftEngine::dump_stats(&self.engines.raft));
+        if let Some(s) = self.raft_statistics.as_ref()
+            && let Some(s) = s.to_string()
+        {
+            raft_str.push_str(&s);
+        }
+        Ok(raft_str)
+    }
+
+    fn modify_tikv_config(&self, config_name: &str, config_value: &str) -> Result<()> {
+        if let Err(e) = self.cfg_controller.update_config(config_name, config_value) {
+            return Err(Error::Other(
+                format!("failed to update config, err: {:?}", e).into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn get_region_properties(&self, region_id: u64) -> Result<Vec<(String, String)>> {
         let region_state = self.get_region_state(region_id)?;
         let region = region_state.get_region();
         let start = keys::enc_start_key(region);
         let end = keys::enc_end_key(region);
-
         let mut res = dump_write_cf_properties(&self.engines.kv, &start, &end)?;
         let mut res1 = dump_default_cf_properties(&self.engines.kv, &start, &end)?;
         res.append(&mut res1);
@@ -915,11 +1009,51 @@ impl<ER: RaftEngine> Debugger<ER> {
             "region.middle_key_by_approximate_size".to_owned(),
             hex::encode(middle_key),
         ));
-
         Ok(res)
     }
 
-    pub fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
+    fn reset_to_version(&self, version: u64) {
+        self.reset_to_version_manager.start(version.into());
+    }
+
+    fn key_range_flashback_to_version(
+        &self,
+        version: u64,
+        region_id: u64,
+        start_key: &[u8],
+        end_key: &[u8],
+        start_ts: u64,
+        commit_ts: u64,
+    ) -> impl Future<Output = Result<()>> + Send {
+        let store_id = self.get_store_ident().unwrap().get_store_id();
+        let r = self.region_info(region_id).unwrap();
+        let region = r
+            .region_local_state
+            .as_ref()
+            .map(|s| s.get_region().clone())
+            .unwrap();
+
+        async_key_range_flashback_to_version(
+            self.storage.as_ref().unwrap().clone(),
+            region,
+            version,
+            store_id,
+            start_key.to_vec(),
+            end_key.to_vec(),
+            start_ts,
+            commit_ts,
+        )
+    }
+
+    fn set_kv_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
+        self.kv_statistics = s;
+    }
+
+    fn set_raft_statistics(&mut self, s: Option<Arc<RocksStatistics>>) {
+        self.raft_statistics = s;
+    }
+
+    fn get_range_properties(&self, start: &[u8], end: &[u8]) -> Result<Vec<(String, String)>> {
         let mut props = dump_write_cf_properties(
             &self.engines.kv,
             &keys::data_key(start),
@@ -933,19 +1067,88 @@ impl<ER: RaftEngine> Debugger<ER> {
         props.append(&mut props1);
         Ok(props)
     }
-
-    pub fn reset_to_version(&self, version: u64) {
-        self.reset_to_version_manager.start(version.into());
-    }
 }
 
-fn dump_default_cf_properties(
+async fn async_key_range_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
+    storage: Storage<E, L, F>,
+    region: Region,
+    version: u64,
+    store_id: u64,
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
+    start_ts: u64,
+    commit_ts: u64,
+) -> Result<()> {
+    let is_in_flashback = region.get_is_in_flashback();
+    let in_prepare_state = TimeStamp::from(commit_ts).is_zero();
+    if in_prepare_state && is_in_flashback {
+        return Ok(());
+    } else if !in_prepare_state && !is_in_flashback {
+        return Err(Error::FlashbackFailed("not in flashback state".into()));
+    }
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().to_owned());
+    let peer = find_peer(&region, store_id).unwrap();
+    ctx.set_peer(peer.clone());
+
+    // Flashback will encode the key, so we need to use raw key.
+    let start_key = Key::from_encoded_slice(&start_key)
+        .to_raw()
+        .unwrap_or_default();
+    let end_key = Key::from_encoded_slice(&end_key)
+        .to_raw()
+        .unwrap_or_default();
+
+    // Means now is prepare flashback.
+    if in_prepare_state {
+        let mut req = kvrpcpb::PrepareFlashbackToVersionRequest::new();
+        req.set_version(version);
+        req.set_start_key(start_key.clone());
+        req.set_end_key(end_key.clone());
+        req.set_context(ctx.clone());
+        req.set_start_ts(start_ts);
+
+        let resp = future_prepare_flashback_to_version(storage, req)
+            .await
+            .unwrap();
+        if !resp.get_error().is_empty() || resp.has_region_error() {
+            error!("exec prepare flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
+            return Err(Error::FlashbackFailed(format!(
+                "exec prepare flashback failed: resp err is: {:?}, region err is: {:?}",
+                resp.get_error(),
+                resp.get_region_error()
+            )));
+        }
+    } else {
+        let mut req = kvrpcpb::FlashbackToVersionRequest::new();
+        req.set_version(version);
+        req.set_start_key(start_key.clone());
+        req.set_end_key(end_key.clone());
+        req.set_context(ctx.clone());
+        req.set_start_ts(start_ts);
+        req.set_commit_ts(commit_ts);
+
+        let resp = future_flashback_to_version(storage, req).await.unwrap();
+        if !resp.get_error().is_empty() || resp.has_region_error() {
+            error!("exec finish flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
+            return Err(Error::FlashbackFailed(format!(
+                "exec finish flashback failed: resp err is: {:?}, region err is: {:?}",
+                resp.get_error(),
+                resp.get_region_error()
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub fn dump_default_cf_properties(
     db: &RocksEngine,
     start: &[u8],
     end: &[u8],
 ) -> Result<Vec<(String, String)>> {
     let mut num_entries = 0; // number of Rocksdb K/V entries.
-
     let collection = box_try!(db.get_range_properties_cf(CF_DEFAULT, start, end));
     let num_files = collection.len();
 
@@ -972,7 +1175,7 @@ fn dump_default_cf_properties(
     Ok(res)
 }
 
-fn dump_write_cf_properties(
+pub fn dump_write_cf_properties(
     db: &RocksEngine,
     start: &[u8],
     end: &[u8],
@@ -1033,7 +1236,7 @@ fn dump_write_cf_properties(
     Ok(res)
 }
 
-fn recover_mvcc_for_range(
+pub fn recover_mvcc_for_range(
     db: &RocksEngine,
     start_key: &[u8],
     end_key: &[u8],
@@ -1086,7 +1289,7 @@ pub struct MvccChecker {
 }
 
 impl MvccChecker {
-    fn new(db: RocksEngine, start_key: &[u8], end_key: &[u8]) -> Result<Self> {
+    pub fn new(db: RocksEngine, start_key: &[u8], end_key: &[u8]) -> Result<Self> {
         let start_key = keys::data_key(start_key);
         let end_key = keys::data_end_key(end_key);
         let gen_iter = |cf: &str| -> Result<_> {
@@ -1425,6 +1628,7 @@ fn divide_db(db: &RocksEngine, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> 
 
 #[cfg(test)]
 mod tests {
+    use api_version::ApiV1;
     use engine_rocks::{util::new_engine_opt, RocksCfOptions, RocksDbOptions, RocksEngine};
     use engine_traits::{Mutable, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::{
@@ -1433,9 +1637,13 @@ mod tests {
     };
     use raft::eraftpb::EntryType;
     use tempfile::Builder;
+    use tikv_kv::MockEngine;
 
     use super::*;
-    use crate::storage::mvcc::{Lock, LockType};
+    use crate::storage::{
+        lock_manager::MockLockManager,
+        mvcc::{Lock, LockType},
+    };
 
     fn init_region_state(
         engine: &RocksEngine,
@@ -1560,16 +1768,21 @@ mod tests {
         }
     }
 
-    fn new_debugger() -> Debugger<RocksEngine> {
+    fn new_debugger() -> DebuggerImpl<RocksEngine, MockEngine, MockLockManager, ApiV1> {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = engine_rocks::util::new_engine(path, ALL_CFS).unwrap();
 
         let engines = Engines::new(engine.clone(), engine);
-        Debugger::new(engines, ConfigController::default())
+        DebuggerImpl::new(engines, ConfigController::default(), None)
     }
 
-    impl Debugger<RocksEngine> {
+    impl<E, L, K> DebuggerImpl<RocksEngine, E, L, K>
+    where
+        E: Engine,
+        L: LockManager,
+        K: KvFormat,
+    {
         fn set_store_id(&self, store_id: u64) {
             let mut ident = self.get_store_ident().unwrap_or_default();
             ident.set_store_id(store_id);
@@ -1923,6 +2136,7 @@ mod tests {
         let kv_engine = &debugger.engines.kv;
         let raft_engine = &debugger.engines.raft;
         let store_id = 1; // It's a fake id.
+        debugger.set_store_id(store_id);
 
         let mut wb1 = raft_engine.write_batch();
         let cf1 = CF_DEFAULT;
@@ -2166,6 +2380,7 @@ mod tests {
                 for_update_ts.into(),
                 0,
                 TimeStamp::zero(),
+                false,
             );
             kv.push((CF_LOCK, Key::from_raw(key), lock.to_bytes(), expect));
         }

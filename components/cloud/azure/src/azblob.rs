@@ -1,6 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
     env, io,
+    ops::Deref,
     str::FromStr,
     sync::{Arc, RwLock},
 };
@@ -8,31 +9,28 @@ use std::{
 use async_trait::async_trait;
 use azure_core::{
     auth::{TokenCredential, TokenResponse},
-    prelude::*,
+    new_http_client,
 };
-use azure_identity::token_credentials::{ClientSecretCredential, TokenCredentialOptions};
-use azure_storage::{
-    blob::prelude::*,
-    core::{prelude::*, ConnectionStringBuilder},
-};
-use chrono::{Duration as ChronoDuration, Utc};
+use azure_identity::{ClientSecretCredential, TokenCredentialOptions};
+use azure_storage::{prelude::*, ConnectionString, ConnectionStringBuilder};
+use azure_storage_blobs::{blob::operations::PutBlockBlobBuilder, prelude::*};
 use cloud::blob::{
     none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty,
 };
+use futures::TryFutureExt;
 use futures_util::{
     io::{AsyncRead, AsyncReadExt},
     stream,
     stream::StreamExt,
     TryStreamExt,
 };
-pub use kvproto::brpb::{AzureBlobStorage as InputConfig, Bucket as InputBucket, CloudDynamic};
-use lazy_static::lazy_static;
+pub use kvproto::brpb::{AzureBlobStorage as InputConfig, AzureCustomerKey};
 use oauth2::{ClientId, ClientSecret};
-use regex::Regex;
 use tikv_util::{
     debug,
     stream::{retry, RetryError},
 };
+use time::OffsetDateTime;
 use tokio::{
     sync::Mutex,
     time::{timeout, Duration},
@@ -55,15 +53,39 @@ struct CredentialInfo {
     client_secret: ClientSecret,
 }
 
+#[derive(Clone, Debug)]
+struct EncryptionCustomer {
+    encryption_key: String,
+    encryption_key_sha256: String,
+}
+
+impl From<AzureCustomerKey> for EncryptionCustomer {
+    fn from(value: AzureCustomerKey) -> Self {
+        EncryptionCustomer {
+            encryption_key: value.encryption_key,
+            encryption_key_sha256: value.encryption_key_sha256,
+        }
+    }
+}
+
+impl From<EncryptionCustomer> for (String, String) {
+    fn from(value: EncryptionCustomer) -> (String, String) {
+        (value.encryption_key, value.encryption_key_sha256)
+    }
+}
+
 #[derive(Clone)]
 pub struct Config {
     bucket: BucketConf,
 
     account_name: Option<StringNonEmpty>,
     shared_key: Option<StringNonEmpty>,
+    sas_token: Option<StringNonEmpty>,
     credential_info: Option<CredentialInfo>,
     env_account_name: Option<StringNonEmpty>,
     env_shared_key: Option<StringNonEmpty>,
+    encryption_scope: Option<StringNonEmpty>,
+    encryption_customer: Option<EncryptionCustomer>,
 }
 
 impl std::fmt::Debug for Config {
@@ -72,9 +94,12 @@ impl std::fmt::Debug for Config {
             .field("bucket", &self.bucket)
             .field("account_name", &self.account_name)
             .field("shared_key", &"?")
+            .field("sas_token", &"?")
             .field("credential_info", &self.credential_info)
             .field("env_account_name", &self.env_account_name)
             .field("env_shared_key", &"?")
+            .field("encryption_scope", &self.encryption_scope)
+            .field("encryption_customer_key", &"?")
             .finish()
     }
 }
@@ -86,9 +111,12 @@ impl Config {
             bucket,
             account_name: None,
             shared_key: None,
+            sas_token: None,
             credential_info: Self::load_credential_info(),
             env_account_name: Self::load_env_account_name(),
             env_shared_key: Self::load_env_shared_key(),
+            encryption_scope: None,
+            encryption_customer: None,
         }
     }
 
@@ -121,21 +149,6 @@ impl Config {
         env::var(ENV_SHARED_KEY).ok().and_then(StringNonEmpty::opt)
     }
 
-    pub fn from_cloud_dynamic(cloud_dynamic: &CloudDynamic) -> io::Result<Config> {
-        let bucket = BucketConf::from_cloud_dynamic(cloud_dynamic)?;
-        let attrs = &cloud_dynamic.attrs;
-        let def = &String::new();
-
-        Ok(Config {
-            bucket,
-            account_name: StringNonEmpty::opt(attrs.get("account_name").unwrap_or(def).clone()),
-            shared_key: StringNonEmpty::opt(attrs.get("shared_key").unwrap_or(def).clone()),
-            credential_info: Self::load_credential_info(),
-            env_account_name: Self::load_env_account_name(),
-            env_shared_key: Self::load_env_shared_key(),
-        })
-    }
-
     pub fn from_input(input: InputConfig) -> io::Result<Config> {
         let bucket = BucketConf {
             endpoint: StringNonEmpty::opt(input.endpoint),
@@ -145,13 +158,21 @@ impl Config {
             region: None,
         };
 
+        let encryption_customer = input
+            .encryption_key
+            .into_option()
+            .map(EncryptionCustomer::from);
+
         Ok(Config {
             bucket,
             account_name: StringNonEmpty::opt(input.account_name),
             shared_key: StringNonEmpty::opt(input.shared_key),
+            sas_token: StringNonEmpty::opt(input.access_sig),
             credential_info: Self::load_credential_info(),
             env_account_name: Self::load_env_account_name(),
             env_shared_key: Self::load_env_shared_key(),
+            encryption_scope: StringNonEmpty::opt(input.encryption_scope),
+            encryption_customer,
         })
     }
 
@@ -226,7 +247,6 @@ impl BlobConfig for Config {
 
 enum RequestError {
     InvalidInput(Box<dyn std::error::Error + Send + Sync>, String),
-    InternalError(String),
     TimeOut(String),
 }
 
@@ -234,9 +254,8 @@ impl From<RequestError> for io::Error {
     fn from(err: RequestError) -> Self {
         match err {
             RequestError::InvalidInput(e, tag) => {
-                Self::new(io::ErrorKind::InvalidInput, format!("{}: {}", tag, &e))
+                Self::new(io::ErrorKind::InvalidInput, format!("{}: {:?}", tag, &e))
             }
-            RequestError::InternalError(msg) => Self::new(io::ErrorKind::Other, msg),
             RequestError::TimeOut(msg) => Self::new(io::ErrorKind::TimedOut, msg),
         }
     }
@@ -244,19 +263,8 @@ impl From<RequestError> for io::Error {
 
 impl RetryError for RequestError {
     fn is_retryable(&self) -> bool {
-        matches!(self, Self::TimeOut(_) | Self::InternalError(_))
+        matches!(self, Self::TimeOut(_))
     }
-}
-
-fn err_is_retryable(err_info: &str) -> bool {
-    // HTTP Code 503: The server is busy
-    // HTTP Code 500: Operation could not be completed within the specified time.
-    // More details seen in https://learn.microsoft.com/en-us/rest/api/storageservices/blob-service-error-codes
-    lazy_static! {
-        static ref RE: Regex = Regex::new(r"status: 5[0-9][0-9],").unwrap();
-    }
-
-    RE.is_match(err_info)
 }
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
@@ -266,7 +274,9 @@ struct AzureUploader {
     client_builder: Arc<dyn ContainerBuilder>,
     name: String,
 
-    storage_class: AccessTier,
+    storage_class: Option<AccessTier>,
+    encryption_scope: Option<StringNonEmpty>,
+    encryption_customer: Option<EncryptionCustomer>,
 }
 
 impl AzureUploader {
@@ -280,11 +290,13 @@ impl AzureUploader {
             storage_class: Self::parse_storage_class(none_to_empty(
                 config.bucket.storage_class.clone(),
             )),
+            encryption_scope: config.encryption_scope.clone(),
+            encryption_customer: config.encryption_customer.clone(),
         }
     }
 
-    fn parse_storage_class(storage_class: String) -> AccessTier {
-        AccessTier::from_str(storage_class.as_str()).unwrap_or(AccessTier::Hot)
+    fn parse_storage_class(storage_class: String) -> Option<AccessTier> {
+        AccessTier::from_str(storage_class.as_str()).ok()
     }
 
     /// Executes the upload process.
@@ -305,41 +317,53 @@ impl AzureUploader {
     /// This should be used only when the data is known to be short, and thus
     /// relatively cheap to retry the entire upload.
     async fn upload(&self, data: &[u8]) -> Result<(), RequestError> {
-        match timeout(Self::get_timeout(), async {
-            self.client_builder
+        let res = timeout(Self::get_timeout(), async {
+            let builder = self
+                .client_builder
                 .get_client()
                 .await
                 .map_err(|e| e.to_string())?
-                .as_blob_client(&self.name)
-                .put_block_blob(data.to_vec())
-                .access_tier(self.storage_class)
-                .execute()
-                .await?;
+                .blob_client(&self.name)
+                .put_block_blob(data.to_vec());
+
+            let builder = self.adjust_put_builder(builder);
+
+            builder.await?;
             Ok(())
         })
-        .await
-        {
+        .await;
+        match res {
             Ok(res) => match res {
                 Ok(_) => Ok(()),
-                Err(err) => {
-                    let err_info = ToString::to_string(&err);
-                    if err_is_retryable(&err_info) {
-                        Err(RequestError::InternalError(format!(
-                            "internal error: {}, retry later",
-                            err_info
-                        )))
-                    } else {
-                        Err(RequestError::InvalidInput(
-                            err,
-                            "upload block failed".to_owned(),
-                        ))
-                    }
-                }
+                Err(err) => Err(RequestError::InvalidInput(
+                    err,
+                    "upload block failed".to_owned(),
+                )),
             },
             Err(_) => Err(RequestError::TimeOut(
                 "timeout after 15mins for complete in azure storage".to_owned(),
             )),
         }
+    }
+
+    #[inline]
+    fn adjust_put_builder(&self, builder: PutBlockBlobBuilder) -> PutBlockBlobBuilder {
+        // the encryption scope and the access tier can not be both in the HTTP headers
+        if let Some(scope) = &self.encryption_scope {
+            return builder.encryption_scope(scope.deref().clone());
+        }
+
+        // the encryption customer provided key and the access tier can not be both in
+        // the HTTP headers
+        if let Some(key) = &self.encryption_customer {
+            return builder.encryption_key::<(String, String)>(key.clone().into());
+        }
+
+        if let Some(tier) = self.storage_class {
+            return builder.access_tier(tier);
+        }
+
+        builder
     }
 
     fn get_timeout() -> Duration {
@@ -414,13 +438,13 @@ impl ContainerBuilder for TokenCredContainerBuilder {
         {
             let token_response = self.token_cache.read().unwrap();
             if let Some(ref t) = *token_response {
-                let interval = t.0.expires_on - Utc::now();
+                let interval = (t.0.expires_on - OffsetDateTime::now_utc()).whole_minutes();
                 // keep token updated 5 minutes before it expires
-                if interval > ChronoDuration::minutes(TOKEN_UPDATE_LEFT_TIME_MINS) {
+                if interval > TOKEN_UPDATE_LEFT_TIME_MINS {
                     return Ok(t.1.clone());
                 }
 
-                if interval > ChronoDuration::minutes(TOKEN_EXPIRE_LEFT_TIME_MINS) {
+                if interval > TOKEN_EXPIRE_LEFT_TIME_MINS {
                     // there still have time to use the token,
                     // and only need one thread to update token.
                     if let Ok(l) = self.modify_place.try_lock() {
@@ -443,9 +467,9 @@ impl ContainerBuilder for TokenCredContainerBuilder {
             {
                 let token_response = self.token_cache.read().unwrap();
                 if let Some(ref t) = *token_response {
-                    let interval = t.0.expires_on - Utc::now();
+                    let interval = (t.0.expires_on - OffsetDateTime::now_utc()).whole_minutes();
                     // token is already updated
-                    if interval > ChronoDuration::minutes(TOKEN_UPDATE_LEFT_TIME_MINS) {
+                    if interval > TOKEN_UPDATE_LEFT_TIME_MINS {
                         return Ok(t.1.clone());
                     }
                 }
@@ -456,15 +480,13 @@ impl ContainerBuilder for TokenCredContainerBuilder {
                 .token_cred
                 .get_token(&self.token_resource)
                 .await
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", &e)))?;
-            let http_client = new_http_client();
-            let storage_client = StorageAccountClient::new_bearer_token(
-                http_client,
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{:?}", &e)))?;
+            let blob_service = BlobServiceClient::new(
                 self.account_name.clone(),
-                token.token.secret(),
-            )
-            .as_storage_client()
-            .as_container_client(self.container_name.clone());
+                StorageCredentials::BearerToken(token.token.secret().into()),
+            );
+            let storage_client =
+                Arc::new(blob_service.container_client(self.container_name.clone()));
 
             {
                 let mut token_response = self.token_cache.write().unwrap();
@@ -493,22 +515,70 @@ impl AzureStorage {
         Self::new(Config::from_input(input)?)
     }
 
-    pub fn from_cloud_dynamic(cloud_dynamic: &CloudDynamic) -> io::Result<Self> {
-        Self::new(Config::from_cloud_dynamic(cloud_dynamic)?)
+    /// Mock a dummpy AzureStorage with a shared key Config for
+    /// testing by Azurite tool.
+    ///
+    /// This function should only be used for testing Blob with a
+    /// local Azurite server.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    fn from_dummy_input(input: InputConfig) -> io::Result<Self> {
+        let config = Config::from_input(input)?;
+        let bucket = (*config.bucket.bucket).to_owned();
+        Ok(AzureStorage {
+            config,
+            client_builder: Arc::new(SharedKeyContainerBuilder {
+                container_client: Arc::new(
+                    ClientBuilder::emulator()
+                        .blob_service_client()
+                        .container_client(bucket),
+                ),
+            }),
+        })
     }
 
     pub fn new(config: Config) -> io::Result<AzureStorage> {
-        // priority: explicit shared key > env Azure AD > env shared key
-        if let Some(connection_string) = config.parse_plaintext_account_url() {
-            let bucket = (*config.bucket.bucket).to_owned();
-            let http_client = new_http_client();
-            let container_client = StorageAccountClient::new_connection_string(
-                http_client.clone(),
-                connection_string.as_str(),
-            )
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", &e)))?
-            .as_storage_client()
-            .as_container_client(bucket);
+        Self::check_config(&config)?;
+
+        let account_name = config.get_account_name()?;
+        let bucket = (*config.bucket.bucket).to_owned();
+        // priority:
+        //   explicit sas token > explicit shared key > env Azure AD > env shared key
+        if let Some(sas_token) = config.sas_token.as_ref() {
+            let token = sas_token.deref();
+            let storage_credentials = StorageCredentials::sas_token(token).map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("invalid configurations for SAS token, err: {}", e),
+                )
+            })?;
+            let container_client = Arc::new(
+                BlobServiceClient::new(account_name, storage_credentials).container_client(bucket),
+            );
+
+            let client_builder = Arc::new(SharedKeyContainerBuilder { container_client });
+            Ok(AzureStorage {
+                config,
+                client_builder,
+            })
+        } else if let Some(connection_string) = config.parse_plaintext_account_url() {
+            let storage_credentials = ConnectionString::new(&connection_string)
+                .map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("invalid configurations for SharedKey, err: {}", e),
+                    )
+                })?
+                .storage_credentials()
+                .map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("invalid credentials for blob, err: {}", e),
+                    )
+                })?;
+            let container_client = Arc::new(
+                BlobServiceClient::new(account_name, storage_credentials).container_client(bucket),
+            );
 
             let client_builder = Arc::new(SharedKeyContainerBuilder { container_client });
             Ok(AzureStorage {
@@ -516,10 +586,9 @@ impl AzureStorage {
                 client_builder,
             })
         } else if let Some(credential_info) = config.credential_info.as_ref() {
-            let bucket = (*config.bucket.bucket).to_owned();
-            let account_name = config.get_account_name()?;
             let token_resource = format!("https://{}.blob.core.windows.net", &account_name);
             let cred = ClientSecretCredential::new(
+                new_http_client(),
                 credential_info.tenant_id.clone(),
                 credential_info.client_id.to_string(),
                 credential_info.client_secret.secret().clone(),
@@ -538,15 +607,23 @@ impl AzureStorage {
                 client_builder,
             })
         } else if let Some(connection_string) = config.parse_env_plaintext_account_url() {
-            let bucket = (*config.bucket.bucket).to_owned();
-            let http_client = new_http_client();
-            let container_client = StorageAccountClient::new_connection_string(
-                http_client.clone(),
-                connection_string.as_str(),
-            )
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", &e)))?
-            .as_storage_client()
-            .as_container_client(bucket);
+            let storage_credentials = ConnectionString::new(&connection_string)
+                .map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("invald configurations for SharedKey from ENV, err: {}", e),
+                    )
+                })?
+                .storage_credentials()
+                .map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("invalid credentials for blob, err: {}", e),
+                    )
+                })?;
+            let container_client = Arc::new(
+                BlobServiceClient::new(account_name, storage_credentials).container_client(bucket),
+            );
 
             let client_builder = Arc::new(SharedKeyContainerBuilder { container_client });
             Ok(AzureStorage {
@@ -559,6 +636,38 @@ impl AzureStorage {
                 "credential info not found".to_owned(),
             ))
         }
+    }
+
+    fn check_config(config: &Config) -> io::Result<()> {
+        if config.bucket.storage_class.is_some() {
+            if config.encryption_scope.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    concat!(
+                        "Set Blob Tier cannot be used with customer-provided scope. ",
+                        "Please don't supply the access-tier when use encryption-scope."
+                    ),
+                ));
+            }
+            if config.encryption_customer.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    concat!(
+                        "Set Blob Tier cannot be used with customer-provided key. ",
+                        "Please don't supply the access-tier when use encryption-key."
+                    ),
+                ));
+            }
+        } else if config.encryption_scope.is_some() && config.encryption_customer.is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                concat!(
+                    "Undefined input: There are both encryption-scope and customer provided key. ",
+                    "Please select only one to encrypt blobs."
+                ),
+            ));
+        }
+        Ok(())
     }
 
     fn maybe_prefix_key(&self, key: &str) -> String {
@@ -576,7 +685,7 @@ impl AzureStorage {
         let name = self.maybe_prefix_key(name);
         debug!("read file from Azure storage"; "key" => %name);
         let t = async move {
-            let blob_client = self.client_builder.get_client().await?.as_blob_client(name);
+            let blob_client = self.client_builder.get_client().await?.blob_client(name);
 
             let builder = if let Some(r) = range {
                 blob_client.get().range(r)
@@ -584,15 +693,26 @@ impl AzureStorage {
                 blob_client.get()
             };
 
-            builder
-                .execute()
-                .await
-                .map(|res| res.data)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e)))
+            let builder = if let Some(key) = &self.config.encryption_customer {
+                builder.encryption_key::<(String, String)>(key.clone().into())
+            } else {
+                builder
+            };
+
+            let mut chunk: Vec<u8> = vec![];
+            let mut stream = builder.into_stream();
+            while let Some(value) = stream.next().await {
+                let value = value?.data.collect().await?;
+                chunk.extend(&value);
+            }
+            azure_core::Result::Ok(chunk)
         };
-        let k = stream::once(t);
-        let t = k.boxed().into_async_read();
-        Box::new(t)
+        let stream = stream::once(
+            t.map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}", e))),
+        )
+        .boxed()
+        .into_async_read();
+        Box::new(stream)
     }
 }
 
@@ -716,7 +836,7 @@ mod tests {
         input.set_endpoint("http://127.0.0.1:10000/devstoreaccount1".to_owned());
         input.set_prefix("backup 01/prefix/".to_owned());
 
-        let storage = AzureStorage::from_input(input).unwrap();
+        let storage = AzureStorage::from_dummy_input(input).unwrap();
         assert_eq!(storage.maybe_prefix_key("t"), "backup 01/prefix/t");
         let mut magic_contents = String::new();
         for _ in 0..4096 {
@@ -740,63 +860,78 @@ mod tests {
     }
 
     #[test]
-    fn test_config_round_trip() {
-        let mut input = InputConfig::default();
-        input.set_bucket("bucket".to_owned());
-        input.set_prefix("backup 02/prefix/".to_owned());
-        input.set_account_name("user".to_owned());
-        let c1 = Config::from_input(input.clone()).unwrap();
-        let c2 = Config::from_cloud_dynamic(&cloud_dynamic_from_input(input)).unwrap();
-        assert_eq!(c1.bucket.bucket, c2.bucket.bucket);
-        assert_eq!(c1.bucket.prefix, c2.bucket.prefix);
-        assert_eq!(c1.account_name, c2.account_name);
-    }
-
-    fn cloud_dynamic_from_input(mut azure: InputConfig) -> CloudDynamic {
-        let mut bucket = InputBucket::default();
-        if !azure.endpoint.is_empty() {
-            bucket.endpoint = azure.take_endpoint();
+    fn test_config_check() {
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            let config = Config::from_input(input).unwrap();
+            AzureStorage::check_config(&config).unwrap();
         }
-        if !azure.prefix.is_empty() {
-            bucket.prefix = azure.take_prefix();
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            input.set_storage_class("Hot".to_owned());
+            let config = Config::from_input(input).unwrap();
+            AzureStorage::check_config(&config).unwrap();
         }
-        if !azure.storage_class.is_empty() {
-            bucket.storage_class = azure.take_storage_class();
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            input.set_storage_class("Hot".to_owned());
+            let mut encryption_key = AzureCustomerKey::default();
+            encryption_key.set_encryption_key("test".to_owned());
+            encryption_key.set_encryption_key_sha256("test".to_owned());
+            input.set_encryption_key(encryption_key);
+            let config = Config::from_input(input).unwrap();
+            assert!(AzureStorage::check_config(&config).is_err());
         }
-        if !azure.bucket.is_empty() {
-            bucket.bucket = azure.take_bucket();
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            input.set_storage_class("Hot".to_owned());
+            input.set_encryption_scope("test".to_owned());
+            let config = Config::from_input(input).unwrap();
+            assert!(AzureStorage::check_config(&config).is_err());
         }
-        let mut attrs = std::collections::HashMap::new();
-        if !azure.account_name.is_empty() {
-            attrs.insert("account_name".to_owned(), azure.take_account_name());
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            input.set_storage_class("Hot".to_owned());
+            let mut encryption_key = AzureCustomerKey::default();
+            encryption_key.set_encryption_key("test".to_owned());
+            encryption_key.set_encryption_key_sha256("test".to_owned());
+            input.set_encryption_key(encryption_key);
+            input.set_encryption_scope("test".to_owned());
+            let config = Config::from_input(input).unwrap();
+            assert!(AzureStorage::check_config(&config).is_err());
         }
-        if !azure.shared_key.is_empty() {
-            attrs.insert("shared_key".to_owned(), azure.take_shared_key());
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            let mut encryption_key = AzureCustomerKey::default();
+            encryption_key.set_encryption_key("test".to_owned());
+            encryption_key.set_encryption_key_sha256("test".to_owned());
+            input.set_encryption_key(encryption_key);
+            let config = Config::from_input(input).unwrap();
+            AzureStorage::check_config(&config).unwrap();
         }
-        let mut cd = CloudDynamic::default();
-        cd.set_provider_name("azure".to_owned());
-        cd.set_attrs(attrs);
-        cd.set_bucket(bucket);
-        cd
-    }
-
-    #[tokio::test]
-    async fn test_error_retryable() {
-        let err_info = "HTTP error status (status: 503,... The server is busy.";
-        assert!(err_is_retryable(err_info));
-        let err_info = "HTTP error status (status: 500,... Operation could not be completed within the specified time.";
-        assert!(err_is_retryable(err_info));
-        let err_info =
-            "HTTP error status (status: 409,... The blob type is invalid for this operation.";
-        assert!(!err_is_retryable(err_info));
-        let err_info = "HTTP error status (status: 50,... ";
-        assert!(!err_is_retryable(err_info));
-        let err = "NaN".parse::<u32>().unwrap_err();
-        let err1 = RequestError::InvalidInput(Box::new(err), "invalid-input".to_owned());
-        let err2 = RequestError::InternalError("internal-error".to_owned());
-        let err3 = RequestError::TimeOut("time-out".to_owned());
-        assert!(!err1.is_retryable());
-        assert!(err2.is_retryable());
-        assert!(err3.is_retryable());
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            input.set_encryption_scope("test".to_owned());
+            let config = Config::from_input(input).unwrap();
+            AzureStorage::check_config(&config).unwrap();
+        }
+        {
+            let mut input = InputConfig::default();
+            input.set_bucket("test".to_owned());
+            let mut encryption_key = AzureCustomerKey::default();
+            input.set_encryption_scope("test".to_owned());
+            encryption_key.set_encryption_key("test".to_owned());
+            encryption_key.set_encryption_key_sha256("test".to_owned());
+            input.set_encryption_key(encryption_key);
+            let config = Config::from_input(input).unwrap();
+            assert!(AzureStorage::check_config(&config).is_err());
+        }
     }
 }

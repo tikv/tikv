@@ -574,13 +574,13 @@ pub fn bytes_to_int_without_context(bytes: &[u8]) -> Result<i64> {
     if let Some(&c) = trimed.next() {
         if c == b'-' {
             negative = true;
-        } else if (b'0'..=b'9').contains(&c) {
+        } else if c.is_ascii_digit() {
             r = Some(i64::from(c) - i64::from(b'0'));
         } else if c != b'+' {
             return Ok(0);
         }
 
-        for c in trimed.take_while(|&c| (b'0'..=b'9').contains(c)) {
+        for c in trimed.take_while(|&c| c.is_ascii_digit()) {
             let cur = i64::from(*c - b'0');
             r = r.and_then(|r| r.checked_mul(10)).and_then(|r| {
                 if negative {
@@ -605,13 +605,13 @@ pub fn bytes_to_uint_without_context(bytes: &[u8]) -> Result<u64> {
     let mut trimed = bytes.iter().skip_while(|&&b| b == b' ' || b == b'\t');
     let mut r = Some(0u64);
     if let Some(&c) = trimed.next() {
-        if (b'0'..=b'9').contains(&c) {
+        if c.is_ascii_digit() {
             r = Some(u64::from(c) - u64::from(b'0'));
         } else if c != b'+' {
             return Ok(0);
         }
 
-        for c in trimed.take_while(|&c| (b'0'..=b'9').contains(c)) {
+        for c in trimed.take_while(|&c| c.is_ascii_digit()) {
             r = r
                 .and_then(|r| r.checked_mul(10))
                 .and_then(|r| r.checked_add(u64::from(*c - b'0')));
@@ -856,7 +856,7 @@ pub fn get_valid_int_prefix_helper<'a>(
             if (c == '+' || c == '-') && i == 0 {
                 continue;
             }
-            if ('0'..='9').contains(&c) {
+            if c.is_ascii_digit() {
                 valid_len = i + 1;
                 continue;
             }
@@ -917,7 +917,7 @@ pub fn get_valid_float_prefix_helper<'a>(
                     break;
                 }
                 e_idx = i
-            } else if !('0'..='9').contains(&c) {
+            } else if !c.is_ascii_digit() {
                 break;
             } else {
                 saw_digit = true;
@@ -2354,6 +2354,13 @@ mod tests {
             ft.set_flen(flen);
             ft.set_decimal(decimal);
             let nd = produce_dec_with_specified_tp(&mut ctx, dec, &ft).unwrap();
+            assert_eq!(
+                nd.frac_cnt(),
+                nd.result_frac_cnt(),
+                "frac_cnt {} is not equal to result_frac_cnt {}",
+                nd.frac_cnt(),
+                nd.result_frac_cnt()
+            );
             assert_eq!(nd, want, "{}, {}, {}, {}, {}", dec, nd, want, flen, decimal);
         }
     }
@@ -2765,6 +2772,13 @@ mod tests {
                 match &expect {
                     Ok(d) => {
                         assert!(r.is_ok(), "{}", log);
+                        assert_eq!(
+                            d.frac_cnt(),
+                            d.result_frac_cnt(),
+                            "frac_cnt {} is not equal to result_frac_cnt {}",
+                            d.frac_cnt(),
+                            d.result_frac_cnt()
+                        );
                         assert_eq!(&r.unwrap(), d, "{}", log);
                     }
                     Err(Error::Eval(..)) => {

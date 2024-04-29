@@ -2,8 +2,9 @@
 name = "engine_panic"
 version = "0.0.1"
 description = "An example TiKV storage engine that does nothing but panic"
-edition = "2018"
+edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [features]
 testexport = []
@@ -11,7 +12,8 @@ testexport = []
 [dependencies]
 engine_traits = { workspace = true }
 kvproto = { workspace = true }
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+encryption = { workspace = true }
+raft = { workspace = true }
 tikv_alloc = { workspace = true }
 # FIXME: Remove this dep from the engine_traits interface
 tikv_util = { workspace = true }

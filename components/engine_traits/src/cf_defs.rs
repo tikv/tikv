@@ -16,9 +16,17 @@ pub fn data_cf_offset(cf: &str) -> usize {
     DATA_CFS.iter().position(|c| *c == cf).expect(cf)
 }
 
+pub fn offset_to_cf(off: usize) -> &'static str {
+    DATA_CFS[off]
+}
+
 pub fn name_to_cf(name: &str) -> Option<CfName> {
     if name.is_empty() {
         return Some(CF_DEFAULT);
     }
     ALL_CFS.iter().copied().find(|c| name == *c)
+}
+
+pub fn is_data_cf(cf: &str) -> bool {
+    DATA_CFS.iter().any(|c| *c == cf)
 }

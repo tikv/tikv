@@ -1,28 +1,17 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{fmt::Debug, path::Path};
+use std::path::Path;
 
-use async_trait::async_trait;
-#[cfg(feature = "cloud-aws")]
 use aws::{AwsKms, STORAGE_VENDOR_NAME_AWS};
-#[cfg(feature = "cloud-aws")]
+use azure::{AzureKms, STORAGE_VENDOR_NAME_AZURE};
 use cloud::kms::Config as CloudConfig;
-use cloud::{
-    kms::{EncryptedKey as CloudEncryptedKey, KmsProvider as CloudKmsProvider},
-    Error as CloudError,
-};
-use derive_more::Deref;
-#[cfg(feature = "cloud-aws")]
-pub use encryption::KmsBackend;
 pub use encryption::{
-    from_engine_encryption_method, Backend, DataKeyManager, DataKeyManagerArgs, DecrypterReader,
-    EncryptionConfig, Error, FileConfig, Iv, KmsConfig, MasterKeyConfig, Result,
+    clean_up_dir, clean_up_trash, trash_dir_all, AzureConfig, Backend, DataKeyImporter,
+    DataKeyManager, DataKeyManagerArgs, DecrypterReader, EncryptionConfig, Error, FileConfig, Iv,
+    KmsBackend, KmsConfig, MasterKeyConfig, Result,
 };
-use encryption::{
-    DataKeyPair, EncryptedKey, FileBackend, KmsProvider, PlainKey, PlaintextBackend,
-    RetryCodedError,
-};
-use error_code::{self, ErrorCode, ErrorCodeExt};
-use tikv_util::{box_err, error, info, stream::RetryError};
+use encryption::{cloud_convert_error, FileBackend, PlaintextBackend};
+use gcp::{GcpKms, STORAGE_VENDOR_NAME_GCP};
+use tikv_util::{box_err, error, info};
 
 pub fn data_key_manager_from_config(
     config: &EncryptionConfig,
@@ -47,26 +36,42 @@ pub fn create_backend(config: &MasterKeyConfig) -> Result<Box<dyn Backend>> {
     result
 }
 
-fn cloud_convert_error(msg: String) -> Box<dyn FnOnce(CloudError) -> CloudConvertError> {
-    Box::new(|err: CloudError| CloudConvertError(err, msg))
-}
-
 pub fn create_cloud_backend(config: &KmsConfig) -> Result<Box<dyn Backend>> {
-    info!("Encryption init cloud backend";
+    info!("Encryption init aws backend";
         "region" => &config.region,
         "endpoint" => &config.endpoint,
         "key_id" => &config.key_id,
         "vendor" => &config.vendor,
     );
     match config.vendor.as_str() {
-        #[cfg(feature = "cloud-aws")]
         STORAGE_VENDOR_NAME_AWS | "" => {
             let conf = CloudConfig::from_proto(config.clone().into_proto())
                 .map_err(cloud_convert_error("aws from proto".to_owned()))?;
-            let kms_provider = CloudKms(Box::new(
-                AwsKms::new(conf).map_err(cloud_convert_error("new AWS KMS".to_owned()))?,
-            ));
-            Ok(Box::new(KmsBackend::new(Box::new(kms_provider))?) as Box<dyn Backend>)
+            let kms_provider =
+                Box::new(AwsKms::new(conf).map_err(cloud_convert_error("new AWS KMS".to_owned()))?);
+            Ok(Box::new(KmsBackend::new(kms_provider)?) as Box<dyn Backend>)
+        }
+        STORAGE_VENDOR_NAME_AZURE => {
+            if config.azure.is_none() {
+                return Err(Error::Other(box_err!(
+                    "invalid configurations for Azure KMS"
+                )));
+            }
+            let (mk, azure_kms_cfg) = config.clone().convert_to_azure_kms_config();
+            let conf = CloudConfig::from_azure_kms_config(mk, azure_kms_cfg)
+                .map_err(cloud_convert_error("azure from proto".to_owned()))?;
+            let keyvault_provider = Box::new(
+                AzureKms::new(conf).map_err(cloud_convert_error("new Azure KMS".to_owned()))?,
+            );
+            Ok(Box::new(KmsBackend::new(keyvault_provider)?))
+        }
+        STORAGE_VENDOR_NAME_GCP => {
+            let (mk, gcp_cfg) = config.clone().convert_to_gcp_config();
+            let conf = CloudConfig::from_gcp_kms_config(mk, gcp_cfg)
+                .map_err(cloud_convert_error("gcp from proto".to_owned()))?;
+            let kms_provider =
+                GcpKms::new(conf).map_err(cloud_convert_error("new GCP KMS".to_owned()))?;
+            Ok(Box::new(KmsBackend::new(Box::new(kms_provider))?))
         }
         provider => Err(Error::Other(box_err!("provider not found {}", provider))),
     }
@@ -82,72 +87,34 @@ fn create_backend_inner(config: &MasterKeyConfig) -> Result<Box<dyn Backend>> {
     })
 }
 
-// CloudKMS adapts the KmsProvider definition from the cloud crate to that of
-// the encryption crate
-#[derive(Debug, Deref)]
-struct CloudKms(Box<dyn CloudKmsProvider>);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[async_trait]
-impl KmsProvider for CloudKms {
-    async fn generate_data_key(&self) -> Result<DataKeyPair> {
-        let cdk = (**self)
-            .generate_data_key()
-            .await
-            .map_err(cloud_convert_error(format!(
-                "{} generate data key API",
-                self.name()
-            )))?;
-        Ok(DataKeyPair {
-            plaintext: PlainKey::new(cdk.plaintext.to_vec())?,
-            encrypted: EncryptedKey::new(cdk.encrypted.to_vec())?,
-        })
-    }
-
-    async fn decrypt_data_key(&self, data_key: &EncryptedKey) -> Result<Vec<u8>> {
-        let key = CloudEncryptedKey::new((*data_key).to_vec()).map_err(cloud_convert_error(
-            format!("{} data key init for decrypt", self.name()),
-        ))?;
-        Ok((**self)
-            .decrypt_data_key(&key)
-            .await
-            .map_err(cloud_convert_error(format!(
-                "{} decrypt data key API",
-                self.name()
-            )))?)
-    }
-
-    fn name(&self) -> &str {
-        (**self).name()
-    }
-}
-
-// CloudConverError adapts cloud errors to encryption errors
-// As the abstract RetryCodedError
-#[derive(Debug)]
-pub struct CloudConvertError(CloudError, String);
-
-impl RetryCodedError for CloudConvertError {}
-
-impl std::fmt::Display for CloudConvertError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("{} {}", &self.0, &self.1))
-    }
-}
-
-impl std::convert::From<CloudConvertError> for Error {
-    fn from(err: CloudConvertError) -> Error {
-        Error::RetryCodedError(Box::new(err) as Box<dyn RetryCodedError>)
-    }
-}
-
-impl RetryError for CloudConvertError {
-    fn is_retryable(&self) -> bool {
-        self.0.is_retryable()
-    }
-}
-
-impl ErrorCodeExt for CloudConvertError {
-    fn error_code(&self) -> ErrorCode {
-        self.0.error_code()
+    #[test]
+    fn test_kms_cloud_backend_azure() {
+        let config = KmsConfig {
+            key_id: "key_id".to_owned(),
+            region: "region".to_owned(),
+            endpoint: "endpoint".to_owned(),
+            vendor: STORAGE_VENDOR_NAME_AZURE.to_owned(),
+            azure: Some(AzureConfig {
+                tenant_id: "tenant_id".to_owned(),
+                client_id: "client_id".to_owned(),
+                keyvault_url: "https://keyvault_url.vault.azure.net".to_owned(),
+                hsm_name: "hsm_name".to_owned(),
+                hsm_url: "https://hsm_url.managedhsm.azure.net/".to_owned(),
+                client_secret: Some("client_secret".to_owned()),
+                ..AzureConfig::default()
+            }),
+            gcp: None,
+        };
+        let invalid_config = KmsConfig {
+            azure: None,
+            ..config.clone()
+        };
+        create_cloud_backend(&invalid_config).unwrap_err();
+        let backend = create_cloud_backend(&config).unwrap();
+        assert!(backend.is_secure());
     }
 }

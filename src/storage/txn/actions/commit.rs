@@ -6,7 +6,7 @@ use txn_types::{Key, TimeStamp, Write, WriteType};
 use crate::storage::{
     mvcc::{
         metrics::{MVCC_CONFLICT_COUNTER, MVCC_DUPLICATE_CMD_COUNTER_VEC},
-        ErrorInner, LockType, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader,
+        ErrorInner, MvccTxn, ReleasedLock, Result as MvccResult, SnapshotReader,
     },
     Snapshot,
 };
@@ -21,8 +21,8 @@ pub fn commit<S: Snapshot>(
         crate::storage::mvcc::txn::make_txn_error(err, &key, reader.start_ts,).into()
     ));
 
-    let mut lock = match reader.load_lock(&key)? {
-        Some(mut lock) if lock.ts == reader.start_ts => {
+    let (mut lock, commit) = match reader.load_lock(&key)? {
+        Some(lock) if lock.ts == reader.start_ts => {
             // A lock with larger min_commit_ts than current commit_ts can't be committed
             if commit_ts < lock.min_commit_ts {
                 info!(
@@ -43,20 +43,21 @@ pub fn commit<S: Snapshot>(
 
             // It's an abnormal routine since pessimistic locks shouldn't be committed in
             // our transaction model. But a pessimistic lock will be left if the pessimistic
-            // rollback request fails to send and the transaction need not to acquire this
-            // lock again(due to WriteConflict). If the transaction is committed, we should
-            // commit this pessimistic lock too.
-            if lock.lock_type == LockType::Pessimistic {
+            // rollback request fails to send or TiKV receives duplicated stale pessimistic
+            // lock request, and the transaction need not to acquire this lock again(due to
+            // WriteConflict). If the transaction is committed, we should remove the
+            // pessimistic lock (like pessimistic_rollback) instead of committing.
+            if lock.is_pessimistic_lock() {
                 warn!(
-                    "commit a pessimistic lock with Lock type";
+                    "rollback a pessimistic lock when trying to commit";
                     "key" => %key,
                     "start_ts" => reader.start_ts,
                     "commit_ts" => commit_ts,
                 );
-                // Commit with WriteType::Lock.
-                lock.lock_type = LockType::Lock;
+                (lock, false)
+            } else {
+                (lock, true)
             }
-            lock
         }
         _ => {
             return match reader.get_txn_commit_record(&key)?.info() {
@@ -87,12 +88,20 @@ pub fn commit<S: Snapshot>(
             };
         }
     };
+
+    if !commit {
+        // Rollback a stale pessimistic lock. This function must be called by
+        // resolve-lock in this case.
+        assert!(lock.is_pessimistic_lock());
+        return Ok(txn.unlock_key(key, lock.is_pessimistic_txn(), TimeStamp::zero()));
+    }
+
     let mut write = Write::new(
         WriteType::from_lock_type(lock.lock_type).unwrap(),
         reader.start_ts,
         lock.short_value.take(),
     )
-    .set_last_change(lock.last_change_ts, lock.versions_to_last_change)
+    .set_last_change(lock.last_change.clone())
     .set_txn_source(lock.txn_source);
 
     for ts in &lock.rollback_ts {
@@ -112,7 +121,8 @@ pub mod tests {
     #[cfg(test)]
     use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
     use tikv_kv::SnapContext;
-    use txn_types::TimeStamp;
+    #[cfg(test)]
+    use txn_types::{LastChange, TimeStamp};
 
     use super::*;
     #[cfg(test)]
@@ -123,7 +133,10 @@ pub mod tests {
     };
     #[cfg(test)]
     use crate::storage::{
-        mvcc::SHORT_VALUE_MAX_LEN, txn::commands::check_txn_status, TestEngineBuilder, TxnStatus,
+        mvcc::SHORT_VALUE_MAX_LEN,
+        txn::commands::check_txn_status,
+        txn::tests::{must_acquire_pessimistic_lock, must_pessimistic_prewrite_put},
+        TestEngineBuilder, TxnStatus,
     };
     use crate::storage::{
         mvcc::{tests::*, MvccTxn},
@@ -135,8 +148,8 @@ pub mod tests {
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
-    ) {
-        must_succeed_impl(engine, key, start_ts, commit_ts, None);
+    ) -> Option<ReleasedLock> {
+        must_succeed_impl(engine, key, start_ts, commit_ts, None)
     }
 
     pub fn must_succeed_on_region<E: Engine>(
@@ -145,8 +158,8 @@ pub mod tests {
         key: &[u8],
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
-    ) {
-        must_succeed_impl(engine, key, start_ts, commit_ts, Some(region_id));
+    ) -> Option<ReleasedLock> {
+        must_succeed_impl(engine, key, start_ts, commit_ts, Some(region_id))
     }
 
     fn must_succeed_impl<E: Engine>(
@@ -155,7 +168,7 @@ pub mod tests {
         start_ts: impl Into<TimeStamp>,
         commit_ts: impl Into<TimeStamp>,
         region_id: Option<u64>,
-    ) {
+    ) -> Option<ReleasedLock> {
         let mut ctx = Context::default();
         if let Some(region_id) = region_id {
             ctx.region_id = region_id;
@@ -169,8 +182,9 @@ pub mod tests {
         let cm = ConcurrencyManager::new(start_ts);
         let mut txn = MvccTxn::new(start_ts, cm);
         let mut reader = SnapshotReader::new(start_ts, snapshot, true);
-        commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).unwrap();
+        let res = commit(&mut txn, &mut reader, Key::from_raw(key), commit_ts.into()).unwrap();
         write(engine, &ctx, txn.into_modifies());
+        res
     }
 
     pub fn must_err<E: Engine>(
@@ -335,22 +349,18 @@ pub mod tests {
         // WriteType is Lock
         must_prewrite_lock(&mut engine, k, k, 15);
         let lock = must_locked(&mut engine, k, 15);
-        assert_eq!(lock.last_change_ts, 10.into());
-        assert_eq!(lock.versions_to_last_change, 1);
+        assert_eq!(lock.last_change, LastChange::make_exist(10.into(), 1));
         must_succeed(&mut engine, k, 15, 20);
         let write = must_written(&mut engine, k, 15, 20, WriteType::Lock);
-        assert_eq!(write.last_change_ts, 10.into());
-        assert_eq!(write.versions_to_last_change, 1);
+        assert_eq!(write.last_change, LastChange::make_exist(10.into(), 1));
 
         // WriteType is Put
         must_prewrite_put(&mut engine, k, b"v2", k, 25);
         let lock = must_locked(&mut engine, k, 25);
-        assert!(lock.last_change_ts.is_zero());
-        assert_eq!(lock.versions_to_last_change, 0);
+        assert_eq!(lock.last_change, LastChange::Unknown);
         must_succeed(&mut engine, k, 25, 30);
         let write = must_written(&mut engine, k, 25, 30, WriteType::Put);
-        assert!(write.last_change_ts.is_zero());
-        assert_eq!(write.versions_to_last_change, 0);
+        assert_eq!(write.last_change, LastChange::Unknown);
     }
 
     #[test]
@@ -367,5 +377,30 @@ pub mod tests {
             let write = must_written(&mut engine, k, 25, 30, WriteType::Put);
             assert_eq!(write.txn_source, source);
         }
+    }
+
+    #[test]
+    fn test_commit_rollback_pessimistic_lock() {
+        let mut engine = TestEngineBuilder::new().build().unwrap();
+
+        let k1 = b"k1";
+        let k2 = b"k2";
+
+        must_acquire_pessimistic_lock(&mut engine, k1, k1, 10, 10);
+        must_acquire_pessimistic_lock(&mut engine, k2, k1, 10, 10);
+        must_pessimistic_prewrite_put(&mut engine, k1, b"v1", k1, 10, 10, DoPessimisticCheck);
+        let res = must_succeed(&mut engine, k1, 10, 20).unwrap();
+        assert_eq!(res.key, Key::from_raw(k1));
+        assert_eq!(res.start_ts, 10.into());
+        assert_eq!(res.commit_ts, 20.into());
+
+        let res = must_succeed(&mut engine, k2, 10, 20).unwrap();
+        assert_eq!(res.key, Key::from_raw(k2));
+        assert_eq!(res.start_ts, 10.into());
+        assert_eq!(res.commit_ts, 0.into());
+
+        must_written(&mut engine, k1, 10, 20, WriteType::Put);
+        must_not_have_write(&mut engine, k2, 20);
+        must_not_have_write(&mut engine, k2, 10);
     }
 }

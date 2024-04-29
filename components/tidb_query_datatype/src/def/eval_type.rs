@@ -77,7 +77,7 @@ impl std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
             | crate::FieldTypeTp::Null => EvalType::Bytes,
             crate::FieldTypeTp::Enum => EvalType::Enum,
             _ => {
-                // TODO: we need to handle FieldTypeTp::{Enum, Set} after we implement encode
+                // TODO: we need to handle FieldTypeTp::{Set} after we implement encode
                 // and decode.
                 return Err(crate::DataTypeError::UnsupportedType {
                     name: tp.to_string(),
@@ -90,8 +90,6 @@ impl std::convert::TryFrom<crate::FieldTypeTp> for EvalType {
 
 #[cfg(test)]
 mod tests {
-    use std::convert::TryFrom;
-
     use super::*;
     use crate::{FieldTypeAccessor, FieldTypeTp::*};
 

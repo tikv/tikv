@@ -15,13 +15,13 @@ use std::{
 };
 
 use collections::{HashMap, HashMapEntry as Entry};
-use encryption::{create_aes_ctr_crypter, from_engine_encryption_method, DataKeyManager, Iv};
-use engine_traits::{CfName, EncryptionKeyManager, KvEngine, CF_DEFAULT, CF_LOCK, CF_WRITE};
+use encryption::{create_aes_ctr_crypter, DataKeyManager, Iv};
+use engine_traits::{CfName, KvEngine, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use fail::fail_point;
 use file_system::{
-    calc_crc32, calc_crc32_and_size, delete_file_if_exist, file_exists, get_file_size, sync_dir,
-    File, Metadata, OpenOptions,
+    calc_crc32, calc_crc32_and_size, delete_dir_if_exist, delete_file_if_exist, file_exists,
+    get_file_size, sync_dir, File, Metadata, OpenOptions,
 };
 use keys::{enc_end_key, enc_start_key};
 use kvproto::{
@@ -88,6 +88,12 @@ pub enum Error {
 
 impl From<io::Error> for Error {
     fn from(e: io::Error) -> Self {
+        Error::Other(Box::new(e))
+    }
+}
+
+impl From<engine_traits::Error> for Error {
+    fn from(e: engine_traits::Error) -> Self {
         Error::Other(Box::new(e))
     }
 }
@@ -182,6 +188,7 @@ where
     pub abort: Arc<AtomicUsize>,
     pub write_batch_size: usize,
     pub coprocessor_host: CoprocessorHost<EK>,
+    pub ingest_copy_symlink: bool,
 }
 
 // A helper function to copy snapshot.
@@ -613,7 +620,7 @@ impl Snapshot {
 
                 if let Some(mgr) = &s.mgr.encryption_key_manager {
                     let enc_info = mgr.new_file(&file_paths[idx])?;
-                    let mthd = from_engine_encryption_method(enc_info.method);
+                    let mthd = enc_info.method;
                     if mthd != EncryptionMethod::Plaintext {
                         let file_for_recving = cf_file.file_for_recving.last_mut().unwrap();
                         file_for_recving.encrypter = Some(
@@ -711,21 +718,11 @@ impl Snapshot {
                     ));
                 }
                 if meta.get_size() != 0 {
-                    let file_path = self.cf_files[cf_idx].add_file_with_size_checksum(
+                    let _ = self.cf_files[cf_idx].add_file_with_size_checksum(
                         file_idx,
                         meta.get_size(),
                         meta.get_checksum(),
                     );
-                    if file_exists(&file_path) {
-                        let mgr = self.mgr.encryption_key_manager.as_ref();
-                        let file_path = Path::new(&file_path);
-                        let (_, size) = calc_checksum_and_size(file_path, mgr)?;
-                        check_file_size(
-                            size,
-                            *(self.cf_files[cf_idx].size.last().unwrap()),
-                            file_path,
-                        )?;
-                    }
                 }
                 file_idx += 1;
                 if file_idx >= cf_file_count_from_meta[cf_idx] {
@@ -770,32 +767,26 @@ impl Snapshot {
         )
     }
 
-    fn validate(&self, for_send: bool) -> RaftStoreResult<()> {
+    fn validate<F>(&self, post_check: F) -> RaftStoreResult<()>
+    where
+        F: Fn(&CfFile, usize) -> RaftStoreResult<()>,
+    {
         for cf_file in &self.cf_files {
             let file_paths = cf_file.file_paths();
-            let clone_file_paths = cf_file.clone_file_paths();
-            for (i, file_path) in file_paths.iter().enumerate() {
+            for i in 0..file_paths.len() {
                 if cf_file.size[i] == 0 {
                     // Skip empty file. The checksum of this cf file should be 0 and
                     // this is checked when loading the snapshot meta.
                     continue;
                 }
 
-                let file_path = Path::new(file_path);
                 check_file_size_and_checksum(
-                    file_path,
+                    Path::new(&file_paths[i]),
                     cf_file.size[i],
                     cf_file.checksum[i],
                     self.mgr.encryption_key_manager.as_ref(),
                 )?;
-
-                if !for_send && !plain_file_used(cf_file.cf) {
-                    sst_importer::prepare_sst_for_ingestion(
-                        file_path,
-                        Path::new(&clone_file_paths[i]),
-                        self.mgr.encryption_key_manager.as_deref(),
-                    )?;
-                }
+                post_check(cf_file, i)?;
             }
         }
         Ok(())
@@ -851,7 +842,7 @@ impl Snapshot {
     {
         fail_point!("snapshot_enter_do_build");
         if self.exists() {
-            match self.validate(true) {
+            match self.validate(|_, _| -> RaftStoreResult<()> { Ok(()) }) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
                     error!(?e;
@@ -878,8 +869,13 @@ impl Snapshot {
             self.switch_to_cf_file(cf)?;
             let cf_file = &mut self.cf_files[self.cf_index];
             let cf_stat = if plain_file_used(cf_file.cf) {
-                let key_mgr = self.mgr.encryption_key_manager.as_ref();
-                snap_io::build_plain_cf_file::<EK>(cf_file, key_mgr, kv_snap, &begin_key, &end_key)?
+                snap_io::build_plain_cf_file::<EK>(
+                    cf_file,
+                    self.mgr.encryption_key_manager.as_ref(),
+                    kv_snap,
+                    &begin_key,
+                    &end_key,
+                )?
             } else {
                 snap_io::build_sst_cf_file_list::<EK>(
                     cf_file,
@@ -890,6 +886,7 @@ impl Snapshot {
                     self.mgr
                         .get_actual_max_per_file_size(allow_multi_files_snapshot),
                     &self.mgr.limiter,
+                    self.mgr.encryption_key_manager.clone(),
                 )?
             };
             SNAPSHOT_LIMIT_GENERATE_BYTES.inc_by(cf_stat.total_size as u64);
@@ -905,7 +902,7 @@ impl Snapshot {
                 }
                 if let Some(ref mgr) = self.mgr.encryption_key_manager {
                     for tmp_file_path in cf_file.tmp_file_paths() {
-                        mgr.delete_file(&tmp_file_path)?;
+                        mgr.delete_file(&tmp_file_path, None)?;
                     }
                 }
             }
@@ -953,7 +950,7 @@ impl Snapshot {
                     if file_exists(&file_path) {
                         delete_file_if_exist(&file_path).unwrap();
                         if let Some(ref mgr) = self.mgr.encryption_key_manager {
-                            mgr.delete_file(file_path.to_str().unwrap()).unwrap();
+                            mgr.delete_file(file_path.to_str().unwrap(), None).unwrap();
                         }
                         file_id += 1;
                     } else {
@@ -1003,15 +1000,46 @@ impl Snapshot {
                 }
                 if let Some(ref mgr) = self.mgr.encryption_key_manager {
                     for file_path in &file_paths {
-                        mgr.delete_file(file_path).unwrap();
+                        mgr.delete_file(file_path, None).unwrap();
                     }
                 }
+            }
+        }
+        if let Some(ref meta) = self.meta_file.meta {
+            if !meta.tablet_snap_path.is_empty() {
+                delete_dir_if_exist(&meta.tablet_snap_path).unwrap();
             }
         }
         delete_file_if_exist(&self.meta_file.path).unwrap();
         if self.hold_tmp_files {
             delete_file_if_exist(&self.meta_file.tmp_path).unwrap();
         }
+    }
+
+    // This is only used for v2 compatibility.
+    fn new_for_tablet_snapshot<T: Into<PathBuf>>(
+        dir: T,
+        key: &SnapKey,
+        mgr: &SnapManagerCore,
+        tablet_snapshot_path: &str,
+        for_balance: bool,
+    ) -> RaftStoreResult<Self> {
+        let mut s = Self::new(dir, key, false, CheckPolicy::ErrNotAllowed, mgr)?;
+        s.init_for_building()?;
+        let mut meta = gen_snapshot_meta(&s.cf_files[..], for_balance)?;
+        meta.tablet_snap_path = tablet_snapshot_path.to_string();
+        s.meta_file.meta = Some(meta);
+        s.save_meta_file()?;
+        Ok(s)
+    }
+
+    #[cfg(any(test, feature = "testexport"))]
+    pub fn tablet_snap_path(&self) -> Option<String> {
+        Some(self.meta_file.meta.as_ref()?.tablet_snap_path.clone())
+    }
+
+    pub fn snapshot_meta(&self) -> &Option<SnapshotMeta> {
+        &self.meta_file.meta
     }
 }
 
@@ -1072,7 +1100,28 @@ impl Snapshot {
     }
 
     pub fn apply<EK: KvEngine>(&mut self, options: ApplyOptions<EK>) -> Result<()> {
-        box_try!(self.validate(false));
+        let post_check = |cf_file: &CfFile, offset: usize| {
+            if !plain_file_used(cf_file.cf) {
+                let file_paths = cf_file.file_paths();
+                let clone_file_paths = cf_file.clone_file_paths();
+                if options.ingest_copy_symlink && is_symlink(&file_paths[offset])? {
+                    sst_importer::copy_sst_for_ingestion(
+                        &file_paths[offset],
+                        &clone_file_paths[offset],
+                        self.mgr.encryption_key_manager.as_deref(),
+                    )?;
+                } else {
+                    sst_importer::prepare_sst_for_ingestion(
+                        &file_paths[offset],
+                        &clone_file_paths[offset],
+                        self.mgr.encryption_key_manager.as_deref(),
+                    )?;
+                }
+            }
+            Ok(())
+        };
+
+        box_try!(self.validate(post_check));
 
         let abort_checker = ApplyAbortChecker(options.abort);
         let coprocessor_host = options.coprocessor_host;
@@ -1165,7 +1214,7 @@ impl Snapshot {
 
                 if file_for_recving.written_size != cf_file.size[i] {
                     return Err(io::Error::new(
-                        ErrorKind::Other,
+                        ErrorKind::InvalidData,
                         format!(
                             "snapshot file {} for cf {} size mismatches, \
                             real size {}, expected size {}",
@@ -1180,7 +1229,7 @@ impl Snapshot {
                 let checksum = file_for_recving.write_digest.finalize();
                 if checksum != cf_file.checksum[i] {
                     return Err(io::Error::new(
-                        ErrorKind::Other,
+                        ErrorKind::InvalidData,
                         format!(
                             "snapshot file {} for cf {} checksum \
                             mismatches, real checksum {}, expected \
@@ -1276,7 +1325,7 @@ impl Write for Snapshot {
             }
 
             assert!(cf_file.size[self.cf_file_index] != 0);
-            let mut file_for_recving = cf_file
+            let file_for_recving = cf_file
                 .file_for_recving
                 .get_mut(self.cf_file_index)
                 .unwrap();
@@ -1387,6 +1436,9 @@ struct SnapManagerCore {
 pub struct SnapManager {
     core: SnapManagerCore,
     max_total_size: Arc<AtomicU64>,
+
+    // only used to receive snapshot from v2
+    tablet_snap_manager: Option<TabletSnapManager>,
 }
 
 impl Clone for SnapManager {
@@ -1394,6 +1446,7 @@ impl Clone for SnapManager {
         SnapManager {
             core: self.core.clone(),
             max_total_size: self.max_total_size.clone(),
+            tablet_snap_manager: self.tablet_snap_manager.clone(),
         }
     }
 }
@@ -1433,6 +1486,7 @@ impl SnapManager {
                 }
             }
         }
+
         Ok(())
     }
 
@@ -1601,6 +1655,38 @@ impl SnapManager {
         Ok(Box::new(f))
     }
 
+    // Tablet snapshot is the snapshot sent from raftstore-v2.
+    // We enable v1 to receive it to enable tiflash node to receive and apply
+    // snapshot from raftstore-v2.
+    // To make it easy, we maintain an empty `store::snapshot` with tablet snapshot
+    // path storing in it. So tiflash node can detect it and apply properly.
+    pub fn gen_empty_snapshot_for_tablet_snapshot(
+        &self,
+        tablet_snap_key: &TabletSnapKey,
+        for_balance: bool,
+    ) -> RaftStoreResult<()> {
+        let _lock = self.core.registry.rl();
+        let base = &self.core.base;
+        let tablet_snap_path = self
+            .tablet_snap_manager
+            .as_ref()
+            .unwrap()
+            .final_recv_path(tablet_snap_key);
+        let snap_key = SnapKey::new(
+            tablet_snap_key.region_id,
+            tablet_snap_key.term,
+            tablet_snap_key.idx,
+        );
+        let _ = Snapshot::new_for_tablet_snapshot(
+            base,
+            &snap_key,
+            &self.core,
+            tablet_snap_path.to_str().unwrap(),
+            for_balance,
+        )?;
+        Ok(())
+    }
+
     pub fn get_snapshot_for_applying(&self, key: &SnapKey) -> RaftStoreResult<Box<Snapshot>> {
         let _lock = self.core.registry.rl();
         let base = &self.core.base;
@@ -1614,13 +1700,33 @@ impl SnapManager {
         Ok(Box::new(s))
     }
 
+    pub fn meta_file_exist(&self, key: &SnapKey) -> RaftStoreResult<()> {
+        let _lock = self.core.registry.rl();
+        let base = &self.core.base;
+        // Use CheckPolicy::None to avoid reading meta file
+        let s = Snapshot::new(base, key, false, CheckPolicy::None, &self.core)?;
+        if !file_exists(s.meta_file.path.as_path()) {
+            return Err(RaftStoreError::Other(From::from(format!(
+                "snapshot of {:?} not exists.",
+                key
+            ))));
+        }
+        Ok(())
+    }
+
     /// Get the approximate size of snap file exists in snap directory.
     ///
     /// Return value is not guaranteed to be accurate.
     ///
     /// NOTE: don't call it in raftstore thread.
     pub fn get_total_snap_size(&self) -> Result<u64> {
-        self.core.get_total_snap_size()
+        let size_v1 = self.core.get_total_snap_size()?;
+        let size_v2 = self
+            .tablet_snap_manager
+            .as_ref()
+            .map(|s| s.total_snap_size().unwrap_or(0))
+            .unwrap_or(0);
+        Ok(size_v1 + size_v2)
     }
 
     pub fn max_total_snap_size(&self) -> u64 {
@@ -1755,6 +1861,14 @@ impl SnapManager {
     pub fn delete_snapshot(&self, key: &SnapKey, snap: &Snapshot, check_entry: bool) -> bool {
         self.core.delete_snapshot(key, snap, check_entry)
     }
+
+    pub fn tablet_snap_manager(&self) -> Option<&TabletSnapManager> {
+        self.tablet_snap_manager.as_ref()
+    }
+
+    pub fn limiter(&self) -> &Limiter {
+        &self.core.limiter
+    }
 }
 
 impl SnapManagerCore {
@@ -1818,14 +1932,14 @@ impl SnapManagerCore {
                 // because without metadata file, saved cf files are nothing.
                 while let Err(e) = mgr.link_file(src, dst) {
                     if e.kind() == ErrorKind::AlreadyExists {
-                        mgr.delete_file(dst)?;
+                        mgr.delete_file(dst, None)?;
                         continue;
                     }
                     return Err(e.into());
                 }
                 let r = file_system::rename(src, dst);
                 let del_file = if r.is_ok() { src } else { dst };
-                if let Err(e) = mgr.delete_file(del_file) {
+                if let Err(e) = mgr.delete_file(del_file, None) {
                     warn!("fail to remove encryption metadata during 'rename_tmp_cf_file_for_send'";
                           "err" => ?e);
                 }
@@ -1858,6 +1972,7 @@ pub struct SnapManagerBuilder {
     max_total_size: u64,
     max_per_file_size: u64,
     enable_multi_snapshot_files: bool,
+    enable_receive_tablet_snapshot: bool,
     key_manager: Option<Arc<DataKeyManager>>,
 }
 
@@ -1880,6 +1995,10 @@ impl SnapManagerBuilder {
         self.enable_multi_snapshot_files = enabled;
         self
     }
+    pub fn enable_receive_tablet_snapshot(mut self, enabled: bool) -> SnapManagerBuilder {
+        self.enable_receive_tablet_snapshot = enabled;
+        self
+    }
     #[must_use]
     pub fn encryption_key_manager(mut self, m: Option<Arc<DataKeyManager>>) -> SnapManagerBuilder {
         self.key_manager = m;
@@ -1896,9 +2015,19 @@ impl SnapManagerBuilder {
         } else {
             u64::MAX
         };
+        let path = path.into();
+        assert!(!path.is_empty());
+        let mut path_v2 = path.clone();
+        path_v2.push_str("_v2");
+        let tablet_snap_manager = if self.enable_receive_tablet_snapshot {
+            Some(TabletSnapManager::new(&path_v2, self.key_manager.clone()).unwrap())
+        } else {
+            None
+        };
+
         let mut snapshot = SnapManager {
             core: SnapManagerCore {
-                base: path.into(),
+                base: path,
                 registry: Default::default(),
                 limiter,
                 temp_sst_id: Arc::new(AtomicU64::new(0)),
@@ -1910,6 +2039,7 @@ impl SnapManagerBuilder {
                 stats: Default::default(),
             },
             max_total_size: Arc::new(AtomicU64::new(max_total_size)),
+            tablet_snap_manager,
         };
         snapshot.set_max_per_file_size(self.max_per_file_size); // set actual max_per_file_size
         snapshot
@@ -1939,6 +2069,22 @@ impl TabletSnapKey {
         let index = snap.get_metadata().get_index();
         let term = snap.get_metadata().get_term();
         TabletSnapKey::new(region_id, to_peer, term, index)
+    }
+
+    pub fn from_path<T: Into<PathBuf>>(path: T) -> Result<TabletSnapKey> {
+        let path = path.into();
+        let name = path.file_name().unwrap().to_str().unwrap();
+        let numbers: Vec<u64> = name
+            .split('_')
+            .skip(1)
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        if numbers.len() < 4 {
+            return Err(box_err!("invalid tablet snapshot file name:{}", name));
+        }
+        Ok(TabletSnapKey::new(
+            numbers[0], numbers[1], numbers[2], numbers[3],
+        ))
     }
 }
 
@@ -1974,13 +2120,18 @@ impl Drop for ReceivingGuard<'_> {
 pub struct TabletSnapManager {
     // directory to store snapfile.
     base: PathBuf,
+    key_manager: Option<Arc<DataKeyManager>>,
     receiving: Arc<Mutex<Vec<TabletSnapKey>>>,
     stats: Arc<Mutex<HashMap<TabletSnapKey, (Instant, SnapshotStat)>>>,
+    sending_count: Arc<AtomicUsize>,
+    recving_count: Arc<AtomicUsize>,
 }
 
 impl TabletSnapManager {
-    pub fn new<T: Into<PathBuf>>(path: T) -> io::Result<Self> {
-        // Initialize the directory if it doesn't exist.
+    pub fn new<T: Into<PathBuf>>(
+        path: T,
+        key_manager: Option<Arc<DataKeyManager>>,
+    ) -> io::Result<Self> {
         let path = path.into();
         if !path.exists() {
             file_system::create_dir_all(&path)?;
@@ -1991,11 +2142,15 @@ impl TabletSnapManager {
                 format!("{} should be a directory", path.display()),
             ));
         }
-        file_system::clean_up_trash(&path)?;
+        encryption::clean_up_dir(&path, SNAP_GEN_PREFIX, key_manager.as_deref())?;
+        encryption::clean_up_trash(&path, key_manager.as_deref())?;
         Ok(Self {
             base: path,
+            key_manager,
             receiving: Arc::default(),
             stats: Arc::default(),
+            sending_count: Arc::default(),
+            recving_count: Arc::default(),
         })
     }
 
@@ -2023,13 +2178,13 @@ impl TabletSnapManager {
             .stats
             .lock()
             .unwrap()
-            .drain_filter(|_, (_, stat)| stat.get_region_id() > 0)
+            .extract_if(|_, (_, stat)| stat.get_region_id() > 0)
             .map(|(_, (_, stat))| stat)
             .filter(|stat| stat.get_total_duration_sec() > 1)
             .collect();
         SnapStats {
-            sending_count: 0,
-            receiving_count: 0,
+            sending_count: self.sending_count.load(Ordering::SeqCst),
+            receiving_count: self.recving_count.load(Ordering::SeqCst),
             stats,
         }
     }
@@ -2051,16 +2206,38 @@ impl TabletSnapManager {
 
     pub fn delete_snapshot(&self, key: &TabletSnapKey) -> bool {
         let path = self.tablet_gen_path(key);
-        if path.exists() && let Err(e) = file_system::trash_dir_all(&path) {
-            error!(
-                "delete snapshot failed";
-                "path" => %path.display(),
-                "err" => ?e,
-            );
-            false
-        } else {
-            true
+        debug!("delete tablet snapshot file";"path" => %path.display());
+        if path.exists() {
+            if let Err(e) = encryption::trash_dir_all(&path, self.key_manager.as_deref()) {
+                error!(
+                    "delete snapshot failed";
+                    "path" => %path.display(),
+                    "err" => ?e,
+                );
+                return false;
+            }
         }
+        true
+    }
+
+    pub fn list_snapshot(&self) -> Result<Vec<PathBuf>> {
+        let mut paths = Vec::new();
+        for entry in file_system::read_dir(&self.base)? {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) if e.kind() == ErrorKind::NotFound => continue,
+                Err(e) => return Err(Error::from(e)),
+            };
+
+            let path = entry.path();
+            if path.file_name().and_then(|n| n.to_str()).map_or(true, |n| {
+                !n.starts_with(SNAP_GEN_PREFIX) || n.ends_with(TMP_FILE_SUFFIX)
+            }) {
+                continue;
+            }
+            paths.push(path);
+        }
+        Ok(paths)
     }
 
     pub fn total_snap_size(&self) -> Result<u64> {
@@ -2113,12 +2290,30 @@ impl TabletSnapManager {
             key,
         })
     }
+
+    pub fn sending_count(&self) -> &Arc<AtomicUsize> {
+        &self.sending_count
+    }
+
+    pub fn recving_count(&self) -> &Arc<AtomicUsize> {
+        &self.recving_count
+    }
+
+    #[inline]
+    pub fn key_manager(&self) -> &Option<Arc<DataKeyManager>> {
+        &self.key_manager
+    }
+}
+
+fn is_symlink<P: AsRef<Path>>(path: P) -> Result<bool> {
+    let metadata = box_try!(std::fs::symlink_metadata(path));
+    Ok(metadata.is_symlink())
 }
 
 #[cfg(test)]
 pub mod tests {
     use std::{
-        cmp,
+        cmp, fs,
         io::{self, Read, Seek, SeekFrom, Write},
         path::{Path, PathBuf},
         sync::{
@@ -2448,7 +2643,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db = get_db(src_db_dir.path(), None, None).unwrap();
-        let snapshot = db.snapshot();
+        let snapshot = db.snapshot(None);
 
         let src_dir = Builder::new()
             .prefix("test-snap-file-db-src")
@@ -2521,6 +2716,7 @@ pub mod tests {
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
             coprocessor_host: CoprocessorHost::<KvTestEngine>::default(),
+            ingest_copy_symlink: false,
         };
         // Verify the snapshot applying is ok.
         s4.apply(options).unwrap();
@@ -2555,7 +2751,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db = get_db(db_dir.path(), None, None).unwrap();
-        let snapshot = db.snapshot();
+        let snapshot = db.snapshot(None);
 
         let dir = Builder::new()
             .prefix("test-snap-validation")
@@ -2578,26 +2774,6 @@ pub mod tests {
             .build(&db, &snapshot, &region, true, false, UnixSecs::now())
             .unwrap();
         assert!(s2.exists());
-    }
-
-    // Make all the snapshot in the specified dir corrupted to have incorrect size.
-    fn corrupt_snapshot_size_in<T: Into<PathBuf>>(dir: T) {
-        let dir_path = dir.into();
-        let read_dir = file_system::read_dir(dir_path).unwrap();
-        for p in read_dir {
-            if p.is_ok() {
-                let e = p.as_ref().unwrap();
-                if !e
-                    .file_name()
-                    .into_string()
-                    .unwrap()
-                    .ends_with(META_FILE_SUFFIX)
-                {
-                    let mut f = OpenOptions::new().append(true).open(e.path()).unwrap();
-                    f.write_all(b"xxxxx").unwrap();
-                }
-            }
-        }
     }
 
     // Make all the snapshot in the specified dir corrupted to have incorrect
@@ -2700,7 +2876,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_snap_corruption_on_size_or_checksum() {
+    fn test_snap_corruption_on_checksum() {
         let region_id = 1;
         let region = gen_test_region(region_id, 1, 1);
         let db_dir = Builder::new()
@@ -2708,7 +2884,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db: KvTestEngine = open_test_db(db_dir.path(), None, None).unwrap();
-        let snapshot = db.snapshot();
+        let snapshot = db.snapshot(None);
 
         let dir = Builder::new()
             .prefix("test-snap-corruption")
@@ -2719,21 +2895,10 @@ pub mod tests {
         let mut s1 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
         assert!(!s1.exists());
 
-        let _ = s1
+        let snap_data = s1
             .build(&db, &snapshot, &region, true, false, UnixSecs::now())
             .unwrap();
         assert!(s1.exists());
-
-        corrupt_snapshot_size_in(dir.path());
-
-        Snapshot::new_for_sending(dir.path(), &key, &mgr_core).unwrap_err();
-
-        let mut s2 = Snapshot::new_for_building(dir.path(), &key, &mgr_core).unwrap();
-        assert!(!s2.exists());
-        let snap_data = s2
-            .build(&db, &snapshot, &region, true, false, UnixSecs::now())
-            .unwrap();
-        assert!(s2.exists());
 
         let dst_dir = Builder::new()
             .prefix("test-snap-corruption-dst")
@@ -2747,12 +2912,11 @@ pub mod tests {
             snap_data.get_meta().clone(),
         );
 
-        let mut metas = corrupt_snapshot_checksum_in(dst_dir.path());
+        let metas = corrupt_snapshot_checksum_in(dst_dir.path());
         assert_eq!(1, metas.len());
-        let snap_meta = metas.pop().unwrap();
 
-        let mut s5 = Snapshot::new_for_applying(dst_dir.path(), &key, &mgr_core).unwrap();
-        assert!(s5.exists());
+        let mut s2 = Snapshot::new_for_applying(dst_dir.path(), &key, &mgr_core).unwrap();
+        assert!(s2.exists());
 
         let dst_db_dir = Builder::new()
             .prefix("test-snap-corruption-dst-db")
@@ -2765,12 +2929,9 @@ pub mod tests {
             abort: Arc::new(AtomicUsize::new(JOB_STATUS_RUNNING)),
             write_batch_size: TEST_WRITE_BATCH_SIZE,
             coprocessor_host: CoprocessorHost::<KvTestEngine>::default(),
+            ingest_copy_symlink: false,
         };
-        s5.apply(options).unwrap_err();
-
-        corrupt_snapshot_size_in(dst_dir.path());
-        Snapshot::new_for_receiving(dst_dir.path(), &key, &mgr_core, snap_meta).unwrap_err();
-        Snapshot::new_for_applying(dst_dir.path(), &key, &mgr_core).unwrap_err();
+        s2.apply(options).unwrap_err();
     }
 
     #[test]
@@ -2782,7 +2943,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db: KvTestEngine = open_test_db_with_100keys(db_dir.path(), None, None).unwrap();
-        let snapshot = db.snapshot();
+        let snapshot = db.snapshot(None);
 
         let dir = Builder::new()
             .prefix("test-snap-corruption-meta")
@@ -2863,7 +3024,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db: KvTestEngine = open_test_db(db_dir.path(), None, None).unwrap();
-        let snapshot = db.snapshot();
+        let snapshot = db.snapshot(None);
         let key1 = SnapKey::new(1, 1, 1);
         let mgr_core = create_manager_core(&path, u64::MAX);
         let mut s1 = Snapshot::new_for_building(&path, &key1, &mgr_core).unwrap();
@@ -2934,7 +3095,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db: KvTestEngine = open_test_db(src_db_dir.path(), None, None).unwrap();
-        let snapshot = db.snapshot();
+        let snapshot = db.snapshot(None);
 
         let key = SnapKey::new(1, 1, 1);
         let region = gen_test_region(1, 1, 1);
@@ -3015,7 +3176,8 @@ pub mod tests {
         let snap_mgr = SnapManagerBuilder::default()
             .max_total_size(max_total_size)
             .build::<_>(snapfiles_path.path().to_str().unwrap());
-        let snapshot = engine.kv.snapshot();
+        snap_mgr.init().unwrap();
+        let snapshot = engine.kv.snapshot(None);
 
         // Add an oldest snapshot for receiving.
         let recv_key = SnapKey::new(100, 100, 100);
@@ -3100,7 +3262,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let start = Instant::now();
-        let mgr = TabletSnapManager::new(snap_dir.path()).unwrap();
+        let mgr = TabletSnapManager::new(snap_dir.path(), None).unwrap();
         let key = TabletSnapKey::new(1, 1, 1, 1);
         mgr.begin_snapshot(key.clone(), start - time::Duration::from_secs(2), 1);
         // filter out the snapshot that is not finished
@@ -3112,9 +3274,12 @@ pub mod tests {
         assert!(mgr.stats().stats.is_empty());
 
         // filter out the total duration seconds less than one sencond.
-        mgr.begin_snapshot(key.clone(), start, 1);
-        mgr.finish_snapshot(key, start);
+        let path = mgr.tablet_gen_path(&key);
+        std::fs::create_dir_all(&path).unwrap();
+        assert!(path.exists());
+        mgr.delete_snapshot(&key);
         assert_eq!(mgr.stats().stats.len(), 0);
+        assert!(!path.exists());
     }
 
     #[test]
@@ -3137,7 +3302,7 @@ pub mod tests {
             .tempdir()
             .unwrap();
         let db: KvTestEngine = open_test_db(kv_dir.path(), None, None).unwrap();
-        let snapshot = db.snapshot();
+        let snapshot = db.snapshot(None);
         let key = SnapKey::new(1, 1, 1);
         let region = gen_test_region(1, 1, 1);
 
@@ -3150,5 +3315,80 @@ pub mod tests {
                 .unwrap();
             assert!(snap_mgr.delete_snapshot(&key, &s1, false));
         }
+    }
+
+    #[test]
+    fn test_generate_snap_for_tablet_snapshot() {
+        let snap_dir = Builder::new().prefix("test_snapshot").tempdir().unwrap();
+        let snap_mgr = SnapManagerBuilder::default()
+            .enable_receive_tablet_snapshot(true)
+            .build(snap_dir.path().to_str().unwrap());
+        snap_mgr.init().unwrap();
+        let tablet_snap_key = TabletSnapKey::new(1, 2, 3, 4);
+        snap_mgr
+            .gen_empty_snapshot_for_tablet_snapshot(&tablet_snap_key, false)
+            .unwrap();
+
+        let snap_key = SnapKey::new(1, 3, 4);
+        let s = snap_mgr.get_snapshot_for_applying(&snap_key).unwrap();
+        let expect_path = snap_mgr
+            .tablet_snap_manager()
+            .as_ref()
+            .unwrap()
+            .final_recv_path(&tablet_snap_key);
+        assert_eq!(expect_path.to_str().unwrap(), s.tablet_snap_path().unwrap());
+    }
+
+    #[test]
+    fn test_init_enable_receive_tablet_snapshot() {
+        let builder = SnapManagerBuilder::default().enable_receive_tablet_snapshot(true);
+        let snap_dir = Builder::new()
+            .prefix("test_snap_path_does_not_exist")
+            .tempdir()
+            .unwrap();
+        let path = snap_dir.path().join("snap");
+        let snap_mgr = builder.build(path.as_path().to_str().unwrap());
+        snap_mgr.init().unwrap();
+
+        assert!(path.exists());
+        let mut path = path.as_path().to_str().unwrap().to_string();
+        path.push_str("_v2");
+        assert!(Path::new(&path).exists());
+
+        let builder = SnapManagerBuilder::default().enable_receive_tablet_snapshot(true);
+        let snap_dir = Builder::new()
+            .prefix("test_snap_path_exist")
+            .tempdir()
+            .unwrap();
+        let path = snap_dir.path();
+        let snap_mgr = builder.build(path.to_str().unwrap());
+        snap_mgr.init().unwrap();
+
+        let mut path = path.to_str().unwrap().to_string();
+        path.push_str("_v2");
+        assert!(Path::new(&path).exists());
+
+        let builder = SnapManagerBuilder::default().enable_receive_tablet_snapshot(true);
+        let snap_dir = Builder::new()
+            .prefix("test_tablet_snap_path_exist")
+            .tempdir()
+            .unwrap();
+        let path = snap_dir.path().join("snap/v2");
+        fs::create_dir_all(path).unwrap();
+        let path = snap_dir.path().join("snap");
+        let snap_mgr = builder.build(path.to_str().unwrap());
+        snap_mgr.init().unwrap();
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn test_from_path() {
+        let snap_dir = Builder::new().prefix("test_from_path").tempdir().unwrap();
+        let path = snap_dir.path().join("gen_1_2_3_4");
+        let key = TabletSnapKey::from_path(path).unwrap();
+        let expect_key = TabletSnapKey::new(1, 2, 3, 4);
+        assert_eq!(expect_key, key);
+        let path = snap_dir.path().join("gen_1_2_3_4.tmp");
+        TabletSnapKey::from_path(path).unwrap_err();
     }
 }

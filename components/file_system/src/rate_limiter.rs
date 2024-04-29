@@ -497,9 +497,7 @@ impl IoRateLimiter {
     pub fn request(&self, io_type: IoType, io_op: IoOp, mut bytes: usize) -> usize {
         if self.mode.contains(io_op) {
             bytes = self.throughput_limiter.request(
-                IoPriority::unsafe_from_u32(
-                    self.priority_map[io_type as usize].load(Ordering::Relaxed),
-                ),
+                IoPriority::from_u32(self.priority_map[io_type as usize].load(Ordering::Relaxed)),
                 bytes,
             );
         }
@@ -518,7 +516,7 @@ impl IoRateLimiter {
             bytes = self
                 .throughput_limiter
                 .async_request(
-                    IoPriority::unsafe_from_u32(
+                    IoPriority::from_u32(
                         self.priority_map[io_type as usize].load(Ordering::Relaxed),
                     ),
                     bytes,
@@ -535,9 +533,7 @@ impl IoRateLimiter {
     fn request_with_skewed_clock(&self, io_type: IoType, io_op: IoOp, mut bytes: usize) -> usize {
         if self.mode.contains(io_op) {
             bytes = self.throughput_limiter.request_with_skewed_clock(
-                IoPriority::unsafe_from_u32(
-                    self.priority_map[io_type as usize].load(Ordering::Relaxed),
-                ),
+                IoPriority::from_u32(self.priority_map[io_type as usize].load(Ordering::Relaxed)),
                 bytes,
             );
         }

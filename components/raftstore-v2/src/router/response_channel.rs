@@ -92,7 +92,7 @@ impl<Res> EventCore<Res> {
         }
     }
 
-    /// Set the result.
+    /// Set the result. Caller must guarantee result is set only once.
     ///
     /// After this call, no events should be notified.
     #[inline]
@@ -103,6 +103,8 @@ impl<Res> EventCore<Res> {
             }
             *self.res.get() = Some(result);
         }
+        // FIXME: this is not safe. previous line can be reordered after this unless
+        // with a global barrier.
         let previous = self.event.fetch_or(
             fired_bit_of(PAYLOAD_EVENT) | fired_bit_of(CANCEL_EVENT),
             Ordering::AcqRel,
@@ -236,6 +238,30 @@ impl<Res> BaseSubscriber<Res> {
         let e = self.core.event.load(Ordering::Relaxed);
         check_bit(e, fired_bit_of(PAYLOAD_EVENT)).is_some()
     }
+
+    /// Synchronous version of `result`. It cannot be called concurrently with
+    /// another `try_result`, `take_result` or `result`.
+    #[inline]
+    pub fn take_result(&self) -> Option<Res> {
+        let e = self.core.event.load(Ordering::Relaxed);
+        if check_bit(e, fired_bit_of(PAYLOAD_EVENT)).is_some() {
+            let r = unsafe { (*self.core.res.get()).take() };
+            assert!(r.is_some());
+            r
+        } else {
+            None
+        }
+    }
+
+    /// Return an reference of the result. It be called concurrently with
+    /// other `try_result`.
+    pub fn try_result(&self) -> Option<&Res> {
+        if self.has_result() {
+            unsafe { (*self.core.res.get()).as_ref() }
+        } else {
+            None
+        }
+    }
 }
 
 unsafe impl<Res: Send> Send for BaseSubscriber<Res> {}
@@ -272,6 +298,14 @@ impl<Res> BaseChannel<Res> {
     #[inline]
     pub fn set_result(self, res: Res) {
         self.core.set_result(res);
+    }
+
+    pub fn with_callback(f: Box<dyn FnOnce(&mut Res) + Send>) -> (Self, BaseSubscriber<Res>) {
+        let (c, s) = pair();
+        unsafe {
+            *c.core.before_set.get() = Some(f);
+        }
+        (c, s)
     }
 }
 
@@ -615,16 +649,6 @@ impl QueryResChannel {
     #[inline]
     pub fn pair() -> (Self, QueryResSubscriber) {
         pair()
-    }
-
-    pub fn with_callback(
-        f: Box<dyn FnOnce(&mut QueryResult) + Send>,
-    ) -> (Self, QueryResSubscriber) {
-        let (c, s) = pair();
-        unsafe {
-            *c.core.before_set.get() = Some(f);
-        }
-        (c, s)
     }
 }
 

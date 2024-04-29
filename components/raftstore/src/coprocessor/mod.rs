@@ -13,9 +13,13 @@ use engine_traits::{CfName, SstMetaInfo};
 use kvproto::{
     metapb::Region,
     pdpb::CheckPolicy,
-    raft_cmdpb::{AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request},
+    raft_cmdpb::{
+        AdminRequest, AdminResponse, RaftCmdRequest, RaftCmdResponse, Request,
+        TransferLeaderRequest,
+    },
     raft_serverpb::RaftApplyState,
 };
+use pd_client::RegionStat;
 use raft::{eraftpb, StateRole};
 
 pub mod config;
@@ -130,6 +134,14 @@ pub trait AdminObserver: Coprocessor {
     ) -> bool {
         false
     }
+
+    fn pre_transfer_leader(
+        &self,
+        _ctx: &mut ObserverContext<'_>,
+        _tr: &TransferLeaderRequest,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 pub trait QueryObserver: Coprocessor {
@@ -205,6 +217,8 @@ pub trait ApplySnapshotObserver: Coprocessor {
         _snapshot: Option<&crate::store::Snapshot>,
     ) {
     }
+
+    fn cancel_apply_snapshot(&self, _: u64, _: u64) {}
 
     /// We call pre_apply_snapshot only when one of the observer returns true.
     fn should_pre_apply_snapshot(&self) -> bool {
@@ -305,6 +319,7 @@ pub enum RegionChangeReason {
     CommitMerge,
     RollbackMerge,
     SwitchWitness,
+    Flashback,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -336,6 +351,9 @@ pub trait RegionChangeObserver: Coprocessor {
     fn pre_write_apply_state(&self, _: &mut ObserverContext<'_>) -> bool {
         true
     }
+}
+pub trait RegionHeartbeatObserver: Coprocessor {
+    fn on_region_heartbeat(&self, _: &mut ObserverContext<'_>, _: &RegionStat) {}
 }
 
 pub trait MessageObserver: Coprocessor {
@@ -438,7 +456,7 @@ impl CmdObserveInfo {
     /// PiTR: Observer supports the `backup-log` function.
     /// RTS: Observer supports the `resolved-ts` advancing (and follower read,
     /// etc.).
-    fn observe_level(&self) -> ObserveLevel {
+    pub fn observe_level(&self) -> ObserveLevel {
         let cdc = if self.cdc_id.is_observing() {
             // `cdc` observe all data
             ObserveLevel::All
@@ -510,6 +528,19 @@ impl CmdBatch {
         assert_eq!(observe_info.rts_id.id, self.rts_id);
         assert_eq!(observe_info.pitr_id.id, self.pitr_id);
         self.cmds.push(cmd)
+    }
+
+    pub fn extend<I: IntoIterator<Item = Cmd>>(
+        &mut self,
+        observe_info: &CmdObserveInfo,
+        region_id: u64,
+        cmds: I,
+    ) {
+        assert_eq!(region_id, self.region_id);
+        assert_eq!(observe_info.cdc_id.id, self.cdc_id);
+        assert_eq!(observe_info.rts_id.id, self.rts_id);
+        assert_eq!(observe_info.pitr_id.id, self.pitr_id);
+        self.cmds.extend(cmds)
     }
 
     pub fn into_iter(self, region_id: u64) -> IntoIter<Cmd> {

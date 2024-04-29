@@ -5,6 +5,7 @@ use rocksdb::{DBStatisticsHistogramType as HistType, DBStatisticsTickerType as T
 pub const ROCKSDB_TOTAL_SST_FILES_SIZE: &str = "rocksdb.total-sst-files-size";
 pub const ROCKSDB_TABLE_READERS_MEM: &str = "rocksdb.estimate-table-readers-mem";
 pub const ROCKSDB_CUR_SIZE_ALL_MEM_TABLES: &str = "rocksdb.cur-size-all-mem-tables";
+pub const ROCKSDB_SIZE_ALL_MEM_TABLES: &str = "rocksdb.size-all-mem-tables";
 pub const ROCKSDB_ESTIMATE_NUM_KEYS: &str = "rocksdb.estimate-num-keys";
 pub const ROCKSDB_PENDING_COMPACTION_BYTES: &str = "rocksdb.\
                                                     estimate-pending-compaction-bytes";

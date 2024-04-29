@@ -9,7 +9,7 @@ use raftstore::{
         fsm::apply::notify_stale_req,
         metrics::RAFT_READ_INDEX_PENDING_COUNT,
         msg::{ErrorCallback, ReadCallback},
-        propose_read_index, ReadIndexRequest, Transport,
+        propose_read_index, Config, ReadIndexContext, ReadIndexRequest,
     },
     Error,
 };
@@ -23,10 +23,33 @@ use crate::{
     router::{QueryResChannel, QueryResult, ReadResponse},
 };
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
+    /// `ReadIndex` requests could be lost in network, so on followers commands
+    /// could queue in `pending_reads` forever. Sending a new `ReadIndex`
+    /// periodically can resolve this.
+    pub fn retry_pending_reads(&mut self, cfg: &Config) {
+        if self.is_leader()
+            || !self.pending_reads_mut().check_needs_retry(cfg)
+            || self.pre_read_index().is_err()
+        {
+            return;
+        }
+
+        let read = self.pending_reads().back().unwrap();
+        debug!(
+            self.logger,
+            "request to get a read index from follower, retry";
+            "request_id" => ?read.id,
+        );
+        let ctx =
+            ReadIndexContext::fields_to_bytes(read.id, read.addition_request.as_deref(), None);
+        debug_assert!(read.read_index.is_none());
+        self.raft_group_mut().read_index(ctx);
+    }
+
     /// read index on follower
     ///
     /// call set_has_ready if it's proposed.
-    pub(crate) fn read_index_follower<T: Transport>(
+    pub(crate) fn read_index_follower<T>(
         &mut self,
         ctx: &mut StoreContext<EK, ER, T>,
         mut req: RaftCmdRequest,
@@ -49,7 +72,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .get_mut(0)
             .filter(|req| req.has_read_index())
             .map(|req| req.take_read_index());
-        let (id, _dropped) = propose_read_index(self.raft_group_mut(), request.as_ref(), None);
+        // No need to check `dropped` as it only meaningful for leader.
+        let (id, _dropped) = propose_read_index(self.raft_group_mut(), request.as_ref());
         let now = monotonic_raw_now();
         let mut read = ReadIndexRequest::with_command(id, req, ch, now);
         read.addition_request = request.map(Box::new);
@@ -102,6 +126,33 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 let term = self.term();
                 notify_stale_req(term, ch);
             }
+        }
+    }
+
+    pub(crate) fn respond_replica_read_error(
+        &self,
+        read_index_req: &mut ReadIndexRequest<QueryResChannel>,
+        response: RaftCmdResponse,
+    ) {
+        debug!(
+            self.logger,
+            "handle replica reads with a read index failed";
+            "request_id" => ?read_index_req.id,
+            "response" => ?response,
+        );
+        RAFT_READ_INDEX_PENDING_COUNT.sub(read_index_req.cmds().len() as i64);
+        let time = monotonic_raw_now();
+        for (_, ch, _) in read_index_req.take_cmds().drain(..) {
+            ch.read_tracker().map(|tracker| {
+                GLOBAL_TRACKERS.with_tracker(tracker, |t| {
+                    t.metrics.read_index_confirm_wait_nanos = (time - read_index_req.propose_time)
+                        .to_std()
+                        .unwrap()
+                        .as_nanos()
+                        as u64;
+                })
+            });
+            ch.report_error(response.clone());
         }
     }
 }

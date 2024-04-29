@@ -284,6 +284,13 @@ fn divide_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
     }
 }
 
+fn divide_decimal_mapper(lhs_is_unsigned: bool, rhs_is_unsigned: bool) -> RpnFnMeta {
+    match (lhs_is_unsigned, rhs_is_unsigned) {
+        (false, false) => int_divide_decimal_fn_meta(),
+        _ => int_divide_decimal_unsigned_fn_meta(),
+    }
+}
+
 fn map_rhs_int_sig<F>(value: ScalarFuncSig, children: &[Expr], mapper: F) -> Result<RpnFnMeta>
 where
     F: Fn(bool) -> RpnFnMeta,
@@ -357,27 +364,7 @@ pub fn map_unary_minus_int_func(value: ScalarFuncSig, children: &[Expr]) -> Resu
     }
 }
 
-fn map_lower_sig(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
-    if children.len() != 1 {
-        return Err(other_err!(
-            "ScalarFunction {:?} (params = {}) is not supported in batch mode",
-            value,
-            children.len()
-        ));
-    }
-    if children[0].get_field_type().is_binary_string_like() {
-        Ok(lower_fn_meta())
-    } else {
-        let ret_field_type = children[0].get_field_type();
-        Ok(match_template_charset! {
-            TT, match Charset::from_name(ret_field_type.get_charset()).map_err(tidb_query_datatype::codec::Error::from)? {
-                Charset::TT => lower_utf8_fn_meta::<TT>(),
-            }
-        })
-    }
-}
-
-fn map_upper_sig(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
+fn map_upper_utf8_sig(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMeta> {
     if children.len() != 1 {
         return Err(other_err!(
             "ScalarFunction {:?} (params = {}) is not supported in batch mode",
@@ -409,6 +396,14 @@ fn map_lower_utf8_sig(value: ScalarFuncSig, children: &[Expr]) -> Result<RpnFnMe
     })
 }
 
+fn map_field_string_sig(ret_field_type: &FieldType) -> Result<RpnFnMeta> {
+    Ok(match_template_collator! {
+        TT, match ret_field_type.as_accessor().collation().map_err(tidb_query_datatype::codec::Error::from)? {
+            Collation::TT => field_bytes_fn_meta::<TT>()
+        }
+    })
+}
+
 #[rustfmt::skip]
 fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
     let value = expr.get_sig();
@@ -433,7 +428,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::DivideDecimal => arithmetic_with_ctx_fn_meta::<DecimalDivide>(),
         ScalarFuncSig::DivideReal => arithmetic_with_ctx_fn_meta::<RealDivide>(),
         ScalarFuncSig::IntDivideInt => map_int_sig(value, children, divide_mapper)?,
-        ScalarFuncSig::IntDivideDecimal => int_divide_decimal_fn_meta(),
+        ScalarFuncSig::IntDivideDecimal => map_int_sig(value, children, divide_decimal_mapper)?,
         ScalarFuncSig::ModReal => arithmetic_fn_meta::<RealMod>(),
         ScalarFuncSig::ModDecimal => arithmetic_with_ctx_fn_meta::<DecimalMod>(),
         ScalarFuncSig::ModInt => map_int_sig(value, children, mod_mapper)?,
@@ -631,6 +626,9 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::JsonValidJsonSig => json_valid_fn_meta(),
         ScalarFuncSig::JsonValidStringSig => json_valid_fn_meta(),
         ScalarFuncSig::JsonValidOthersSig => json_valid_fn_meta(),
+        ScalarFuncSig::JsonMemberOfSig => member_of_fn_meta(),
+        ScalarFuncSig::JsonArrayAppendSig => json_array_append_fn_meta(),
+        ScalarFuncSig::JsonMergePatchSig => json_merge_patch_fn_meta(),
         // impl_like
         ScalarFuncSig::LikeSig => map_like_sig(ft, children)?,
         // impl_regexp
@@ -778,15 +776,15 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::Insert => insert_fn_meta(),
         ScalarFuncSig::InsertUtf8 => insert_utf8_fn_meta(),
         ScalarFuncSig::RightUtf8 => right_utf8_fn_meta(),
-        ScalarFuncSig::UpperUtf8 => map_upper_sig(value, children)?,
+        ScalarFuncSig::UpperUtf8 => map_upper_utf8_sig(value, children)?,
         ScalarFuncSig::Upper => upper_fn_meta(),
-        ScalarFuncSig::Lower => map_lower_sig(value, children)?,
         ScalarFuncSig::LowerUtf8 => map_lower_utf8_sig(value, children)?,
+        ScalarFuncSig::Lower => lower_fn_meta(),
         ScalarFuncSig::Locate2Args => locate_2_args_fn_meta(),
         ScalarFuncSig::Locate3Args => locate_3_args_fn_meta(),
         ScalarFuncSig::FieldInt => field_fn_meta::<Int>(),
         ScalarFuncSig::FieldReal => field_fn_meta::<Real>(),
-        ScalarFuncSig::FieldString => field_bytes_fn_meta(),
+        ScalarFuncSig::FieldString => map_field_string_sig(ft)?,
         ScalarFuncSig::Elt => elt_fn_meta(),
         ScalarFuncSig::MakeSet => make_set_fn_meta(),
         ScalarFuncSig::Space => space_fn_meta(),

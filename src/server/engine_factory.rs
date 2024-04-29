@@ -2,6 +2,7 @@
 
 use std::{path::Path, sync::Arc};
 
+use encryption_export::DataKeyManager;
 use engine_rocks::{
     raw::{Cache, Env},
     util::RangeCompactionFilterFactory,
@@ -28,6 +29,7 @@ struct FactoryInner {
     api_version: ApiVersion,
     flow_listener: Option<engine_rocks::FlowListener>,
     sst_recovery_sender: Option<Scheduler<String>>,
+    encryption_key_manager: Option<Arc<DataKeyManager>>,
     db_resources: DbResources,
     cf_resources: CfResources,
     state_storage: Option<Arc<dyn StateStorage>>,
@@ -40,7 +42,12 @@ pub struct KvEngineFactoryBuilder {
 }
 
 impl KvEngineFactoryBuilder {
-    pub fn new(env: Arc<Env>, config: &TikvConfig, cache: Cache) -> Self {
+    pub fn new(
+        env: Arc<Env>,
+        config: &TikvConfig,
+        cache: Cache,
+        key_manager: Option<Arc<DataKeyManager>>,
+    ) -> Self {
         Self {
             inner: FactoryInner {
                 region_info_accessor: None,
@@ -48,7 +55,8 @@ impl KvEngineFactoryBuilder {
                 api_version: config.storage.api_version(),
                 flow_listener: None,
                 sst_recovery_sender: None,
-                db_resources: config.rocksdb.build_resources(env),
+                encryption_key_manager: key_manager,
+                db_resources: config.rocksdb.build_resources(env, config.storage.engine),
                 cf_resources: config.rocksdb.build_cf_resources(cache),
                 state_storage: None,
                 lite: false,
@@ -203,13 +211,10 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
             db_opts.add_event_listener(listener.clone_with(ctx.id));
         }
         if let Some(storage) = &self.inner.state_storage
-            && let Some(flush_state) = ctx.flush_state {
-            let listener = PersistenceListener::new(
-                ctx.id,
-                ctx.suffix.unwrap(),
-                flush_state,
-                storage.clone(),
-            );
+            && let Some(flush_state) = ctx.flush_state
+        {
+            let listener =
+                PersistenceListener::new(ctx.id, ctx.suffix.unwrap(), flush_state, storage.clone());
             db_opts.add_event_listener(RocksPersistenceListener::new(listener));
         }
         let kv_engine =
@@ -233,7 +238,9 @@ impl TabletFactory<RocksEngine> for KvEngineFactory {
         //   kv_db_opts,
         //   kv_cfs_opts,
         // )?;
-        let _ = file_system::trash_dir_all(path);
+        // TODO: use RocksDB::DestroyDB.
+        let _ =
+            encryption_export::trash_dir_all(path, self.inner.encryption_key_manager.as_deref());
         if let Some(listener) = &self.inner.flow_listener {
             listener.clone_with(ctx.id).on_destroyed();
         }
@@ -273,14 +280,11 @@ mod tests {
                 e
             );
         });
-        let cache = cfg
-            .storage
-            .block_cache
-            .build_shared_cache(cfg.storage.engine);
+        let cache = cfg.storage.block_cache.build_shared_cache();
         let dir = test_util::temp_dir(name, false);
         let env = cfg.build_shared_rocks_env(None, None).unwrap();
 
-        let factory = KvEngineFactoryBuilder::new(env, &cfg, cache).build();
+        let factory = KvEngineFactoryBuilder::new(env, &cfg, cache, None).build();
         let reg = TabletRegistry::new(Box::new(factory), dir.path()).unwrap();
         (dir, reg)
     }

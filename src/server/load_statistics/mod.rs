@@ -13,7 +13,7 @@ use parking_lot::Mutex;
 use tikv_util::sys::thread::{self, Pid};
 
 thread_local! {
-    static CURRENT_LOAD: RefCell<Option<Arc<AtomicUsize>>> = RefCell::new(None);
+    static CURRENT_LOAD: RefCell<Option<Arc<AtomicUsize>>> = const { RefCell::new(None)};
 }
 
 /// A load metric for all threads.

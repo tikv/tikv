@@ -12,13 +12,16 @@ const DEFAULT_DATA_SIZE: usize = 100_000;
 
 fn enc_write_kvs(db: &RocksEngine, kvs: &[(Vec<u8>, Vec<u8>)]) {
     let mut wb = db.write_batch();
-    for &(ref k, ref v) in kvs {
+    for (k, v) in kvs {
         wb.put(&keys::data_key(k), v).unwrap();
     }
     wb.write().unwrap();
 }
 
-fn prepare_cluster<T: Simulator>(cluster: &mut Cluster<T>, initial_kvs: &[(Vec<u8>, Vec<u8>)]) {
+fn prepare_cluster<T: Simulator<RocksEngine>>(
+    cluster: &mut Cluster<RocksEngine, T>,
+    initial_kvs: &[(Vec<u8>, Vec<u8>)],
+) {
     cluster.run();
     for engines in cluster.engines.values() {
         enc_write_kvs(&engines.kv, initial_kvs);
@@ -35,7 +38,7 @@ struct SetConfig<F> {
 
 fn bench_set<T, F>(b: &mut Bencher<'_>, input: &SetConfig<F>)
 where
-    T: Simulator,
+    T: Simulator<RocksEngine>,
     F: ClusterFactory<T>,
 {
     let mut cluster = input.factory.build(input.nodes);
@@ -57,7 +60,7 @@ struct GetConfig<F> {
 
 fn bench_get<T, F>(b: &mut Bencher<'_>, input: &GetConfig<F>)
 where
-    T: Simulator,
+    T: Simulator<RocksEngine>,
     F: ClusterFactory<T>,
 {
     let mut cluster = input.factory.build(input.nodes);
@@ -84,7 +87,7 @@ struct DeleteConfig<F> {
 
 fn bench_delete<T, F>(b: &mut Bencher<'_>, input: &DeleteConfig<F>)
 where
-    T: Simulator,
+    T: Simulator<RocksEngine>,
     F: ClusterFactory<T>,
 {
     let mut cluster = input.factory.build(input.nodes);
@@ -105,7 +108,7 @@ where
 
 fn bench_raft_cluster<T, F>(c: &mut Criterion, factory: F, label: &str)
 where
-    T: Simulator + 'static,
+    T: Simulator<RocksEngine> + 'static,
     F: ClusterFactory<T>,
 {
     let nodes_coll = vec![1, 3, 5];
@@ -136,15 +139,15 @@ where
     group.finish();
 }
 
-trait ClusterFactory<T: Simulator>: Clone + fmt::Debug + 'static {
-    fn build(&self, nodes: usize) -> Cluster<T>;
+trait ClusterFactory<T: Simulator<RocksEngine>>: Clone + fmt::Debug + 'static {
+    fn build(&self, nodes: usize) -> Cluster<RocksEngine, T>;
 }
 
 #[derive(Clone)]
 struct NodeClusterFactory;
 
-impl ClusterFactory<NodeCluster> for NodeClusterFactory {
-    fn build(&self, nodes: usize) -> Cluster<NodeCluster> {
+impl ClusterFactory<NodeCluster<RocksEngine>> for NodeClusterFactory {
+    fn build(&self, nodes: usize) -> Cluster<RocksEngine, NodeCluster<RocksEngine>> {
         new_node_cluster(1, nodes)
     }
 }
@@ -158,8 +161,8 @@ impl fmt::Debug for NodeClusterFactory {
 #[derive(Clone)]
 struct ServerClusterFactory;
 
-impl ClusterFactory<ServerCluster> for ServerClusterFactory {
-    fn build(&self, nodes: usize) -> Cluster<ServerCluster> {
+impl ClusterFactory<ServerCluster<RocksEngine>> for ServerClusterFactory {
+    fn build(&self, nodes: usize) -> Cluster<RocksEngine, ServerCluster<RocksEngine>> {
         new_server_cluster(1, nodes)
     }
 }

@@ -97,6 +97,20 @@ See the [style doc](https://github.com/rust-lang/fmt-rfcs/blob/master/guide/guid
 
 Please follow this style to make TiKV easy to review, maintain, and develop.
 
+### Run test in docker
+
+Alternatively, you can run test in a docker environment. Simply running the following command, it will build the pingcap/tikv_dev image and run the tikv unittests. And you may re-use the pingcap/tikv_dev image directly for ad-hoc test.
+
+```bash
+make docker_test
+```
+
+Note that you may find many messages below, which in fact are not errors. They're emitted by rustc or cargo.
+
+```bash
+<jemalloc>: Invalid conf pair: prof:true
+```
+
 ### Build issues
 
 To reduce compilation time and disk usage, TiKV builds do not include full debugging information by default &mdash; only tests package will have line debug info enabled. To change debuginfo, just precede build commands with `RUSTFLAGS=-Cdebuginfo=1` (for line numbers), or `RUSTFLAGS=-Cdebuginfo=2` (for full debuginfo). For example,

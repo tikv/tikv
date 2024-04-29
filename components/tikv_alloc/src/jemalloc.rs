@@ -2,7 +2,13 @@
 
 // The implementation of this crate when jemalloc is turned on
 
-use std::{collections::HashMap, ptr, slice, sync::Mutex, thread};
+use std::{
+    collections::HashMap,
+    ptr::{self, NonNull},
+    slice,
+    sync::Mutex,
+    thread,
+};
 
 use libc::{self, c_char, c_void};
 use tikv_jemalloc_ctl::{epoch, stats, Error};
@@ -21,20 +27,103 @@ lazy_static! {
         Mutex::new(HashMap::new());
 }
 
+/// The struct for tracing the statistic of another thread.
+/// The target pointer should be bound to some TLS of another thread, this
+/// structure is just "peeking" it -- with out modifying.
+// It should be covariant so we wrap it with `NonNull`.
+#[repr(transparent)]
+struct PeekableRemoteStat<T>(Option<NonNull<T>>);
+
+// SAFETY: all constructors of `PeekableRemoteStat` returns pointer points to a
+// thread local variable. Once this be sent, a reasonable life time of this
+// variable should be as long as the thread holding the underlying thread local
+// variable. But it is impossible to express such lifetime in current Rust.
+// Then it is the user's responsibility to trace that lifetime.
+unsafe impl<T: Send> Send for PeekableRemoteStat<T> {}
+
+impl<T: Copy> PeekableRemoteStat<T> {
+    /// Try access the underlying data. When the pointer is `nullptr`, returns
+    /// `None`.
+    ///
+    /// # Safety
+    ///
+    /// The pointer should not be dangling. (i.e. the thread to be traced should
+    /// be accessible.)
+    unsafe fn peek(&self) -> Option<T> {
+        self.0
+            .map(|nlp| unsafe { core::intrinsics::atomic_load_seqcst(nlp.as_ptr()) })
+    }
+
+    fn from_raw(ptr: *mut T) -> Self {
+        Self(NonNull::new(ptr))
+    }
+}
+
+impl PeekableRemoteStat<u64> {
+    fn allocated() -> Self {
+        // SAFETY: it is transparent.
+        // NOTE: perhaps we'd better add something like `as_raw()` for `ThreadLocal`...
+        Self::from_raw(
+            tikv_jemalloc_ctl::thread::allocatedp::read()
+                .map(|x| unsafe { std::mem::transmute(x) })
+                .unwrap_or(std::ptr::null_mut()),
+        )
+    }
+
+    fn deallocated() -> Self {
+        // SAFETY: it is transparent.
+        Self::from_raw(
+            tikv_jemalloc_ctl::thread::deallocatedp::read()
+                .map(|x| unsafe { std::mem::transmute(x) })
+                .unwrap_or(std::ptr::null_mut()),
+        )
+    }
+}
+
 struct MemoryStatsAccessor {
-    // TODO: trace arena, allocated, deallocated. Original implement doesn't
-    // work actually.
+    allocated: PeekableRemoteStat<u64>,
+    deallocated: PeekableRemoteStat<u64>,
     thread_name: String,
 }
 
-pub fn add_thread_memory_accessor() {
+impl MemoryStatsAccessor {
+    fn get_allocated(&self) -> u64 {
+        // SAFETY: `add_thread_memory_accessor` is unsafe, and that is the only way for
+        // outer crates to create this.
+        unsafe { self.allocated.peek().unwrap_or_default() }
+    }
+
+    fn get_deallocated(&self) -> u64 {
+        // SAFETY: `add_thread_memory_accessor` is unsafe, and that is the only way for
+        // outer crates to create this.
+        unsafe { self.deallocated.peek().unwrap_or_default() }
+    }
+}
+
+/// Register the current thread to the collector that collects the jemalloc
+/// allocation / deallocation info.
+///
+/// Generally you should call this via `spawn_wrapper`s instead of invoke this
+/// directly. The former is a safe function.
+///
+/// # Safety
+///
+/// Make sure the `remove_thread_memory_accessor` is called before the thread
+/// exits.
+pub unsafe fn add_thread_memory_accessor() {
     let mut thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
-    thread_memory_map.insert(
-        thread::current().id(),
-        MemoryStatsAccessor {
-            thread_name: thread::current().name().unwrap().to_string(),
-        },
-    );
+    thread_memory_map
+        .entry(thread::current().id())
+        .or_insert_with(|| {
+            let allocated = PeekableRemoteStat::allocated();
+            let deallocated = PeekableRemoteStat::deallocated();
+
+            MemoryStatsAccessor {
+                thread_name: thread::current().name().unwrap_or("<unknown>").to_string(),
+                allocated,
+                deallocated,
+            }
+        });
 }
 
 pub fn remove_thread_memory_accessor() {
@@ -44,7 +133,7 @@ pub fn remove_thread_memory_accessor() {
 
 use std::thread::ThreadId;
 
-pub use self::profiling::{activate_prof, deactivate_prof, dump_prof};
+pub use self::profiling::*;
 
 pub fn dump_stats() -> String {
     let mut buf = Vec::with_capacity(1024);
@@ -64,7 +153,15 @@ pub fn dump_stats() -> String {
 
     let thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
     for (_, accessor) in thread_memory_map.iter() {
-        memory_stats.push_str(format!("Thread [{}]: \n", accessor.thread_name).as_str());
+        let alloc = accessor.get_allocated();
+        let dealloc = accessor.get_deallocated();
+        memory_stats.push_str(
+            format!(
+                "Thread [{}]: alloc_bytes={alloc},dealloc_bytes={dealloc}\n",
+                accessor.thread_name
+            )
+            .as_str(),
+        );
     }
     memory_stats
 }
@@ -91,6 +188,35 @@ pub fn fetch_stats() -> Result<Option<AllocStats>, Error> {
     ]))
 }
 
+/// remove the postfix of threads generated by the YATP (-*).
+/// YATP will append the id of the threads in a thread pool, which will bring
+/// too many labels to the metric (and usually the memory usage should be evenly
+/// distributed among these threads).
+/// Fine-grained memory statistic is still available in the interface provided
+/// for `tikv-ctl`.
+fn trim_yatp_suffix(s: &str) -> &str {
+    s.trim_end_matches(|c: char| c.is_ascii_digit() || c == '-')
+}
+
+/// Iterate over the allocation stat.
+/// Format of the callback: `(name, allocated, deallocated)`.
+pub fn iterate_thread_allocation_stats(mut f: impl FnMut(&str, u64, u64)) {
+    // Given we have called `epoch::advance()` in `fetch_stats`, we (magically!)
+    // skip advancing the epoch here.
+    let thread_memory_map = THREAD_MEMORY_MAP.lock().unwrap();
+    let mut collected = HashMap::<&str, (u64, u64)>::with_capacity(thread_memory_map.len());
+    for (_, accessor) in thread_memory_map.iter() {
+        let ent = collected
+            .entry(trim_yatp_suffix(&accessor.thread_name))
+            .or_default();
+        ent.0 += accessor.get_allocated();
+        ent.1 += accessor.get_deallocated();
+    }
+    for (name, val) in collected {
+        f(name, val.0, val.1)
+    }
+}
+
 #[allow(clippy::cast_ptr_alignment)]
 extern "C" fn write_cb(printer: *mut c_void, msg: *const c_char) {
     unsafe {
@@ -106,10 +232,71 @@ extern "C" fn write_cb(printer: *mut c_void, msg: *const c_char) {
 
 #[cfg(test)]
 mod tests {
+    use crate::{
+        add_thread_memory_accessor, imp::THREAD_MEMORY_MAP, remove_thread_memory_accessor,
+    };
 
+    fn assert_delta(name: impl std::fmt::Display, delta: f64, a: u64, b: u64) {
+        let (base, diff) = if a > b { (a, a - b) } else { (b, b - a) };
+        let error = diff as f64 / base as f64;
+        assert!(
+            error < delta,
+            "{name}: the error is too huge: a={a}, b={b}, base={base}, diff={diff}, error={error}"
+        );
+    }
     #[test]
     fn dump_stats() {
         assert_ne!(super::dump_stats().len(), 0);
+    }
+
+    #[test]
+    fn test_allocation_stat() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut threads = vec![];
+        for i in 1..6 {
+            let tx = tx.clone();
+            // It is in test... let skip calling hooks.
+            #[allow(clippy::disallowed_methods)]
+            let hnd = std::thread::Builder::new()
+                .name(format!("test_allocation_stat_{i}"))
+                .spawn(move || {
+                    if i == 5 {
+                        return;
+                    }
+                    // SAFETY: we call `remove_thread_memory_accessor` below.
+                    unsafe {
+                        add_thread_memory_accessor();
+                    }
+                    let (tx2, rx2) = std::sync::mpsc::channel::<()>();
+                    let v = vec![42u8; 1024 * 1024 * i];
+                    drop(v);
+                    let _v2 = vec![42u8; 512 * 1024 * i];
+                    tx.send((i, std::thread::current().id(), tx2)).unwrap();
+                    drop(tx);
+                    rx2.recv().unwrap();
+                    remove_thread_memory_accessor();
+                })
+                .unwrap();
+            threads.push(hnd);
+        }
+        drop(tx);
+
+        let chs = rx.into_iter().collect::<Vec<_>>();
+        let l = THREAD_MEMORY_MAP.lock().unwrap();
+        for (i, tid, tx) in chs {
+            let a = l.get(&tid).unwrap();
+            unsafe {
+                let alloc = a.allocated.peek().unwrap();
+                let dealloc = a.deallocated.peek().unwrap();
+                assert_delta(i, 0.05, alloc, (1024 + 512) * 1024 * i as u64);
+                assert_delta(i, 0.05, dealloc, (1024) * 1024 * i as u64);
+            }
+            tx.send(()).unwrap();
+        }
+        drop(l);
+        for th in threads.into_iter() {
+            th.join().unwrap();
+        }
     }
 }
 
@@ -124,6 +311,21 @@ mod profiling {
     // C string should end with a '\0'.
     const PROF_ACTIVE: &[u8] = b"prof.active\0";
     const PROF_DUMP: &[u8] = b"prof.dump\0";
+    const PROF_RESET: &[u8] = b"prof.reset\0";
+    const OPT_PROF: &[u8] = b"opt.prof\0";
+
+    pub fn set_prof_sample(rate: u64) -> ProfResult<()> {
+        let rate = (rate as f64).log2().ceil() as usize;
+        unsafe {
+            if let Err(e) = tikv_jemalloc_ctl::raw::write(PROF_RESET, rate) {
+                return Err(ProfError::JemallocError(format!(
+                    "failed to set prof sample: {}",
+                    e
+                )));
+            }
+        }
+        Ok(())
+    }
 
     pub fn activate_prof() -> ProfResult<()> {
         unsafe {
@@ -164,22 +366,44 @@ mod profiling {
         Ok(())
     }
 
+    pub fn is_profiling_active() -> bool {
+        match unsafe { tikv_jemalloc_ctl::raw::read(PROF_ACTIVE) } {
+            Err(e) => {
+                panic!("is_profiling_active: {:?}", e);
+            }
+            Ok(prof) => prof,
+        }
+    }
+
+    pub fn is_profiling_enabled() -> bool {
+        match unsafe { tikv_jemalloc_ctl::raw::read(OPT_PROF) } {
+            Err(e) => {
+                // Shouldn't be possible since mem-profiling is set
+                panic!("is_profiling_enabled: {:?}", e);
+            }
+            Ok(prof) => prof,
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use std::fs;
 
         use tempfile::Builder;
 
-        const OPT_PROF: &[u8] = b"opt.prof\0";
+        use super::*;
 
-        fn is_profiling_on() -> bool {
-            match unsafe { tikv_jemalloc_ctl::raw::read(OPT_PROF) } {
-                Err(e) => {
-                    // Shouldn't be possible since mem-profiling is set
-                    panic!("is_profiling_on: {:?}", e);
-                }
-                Ok(prof) => prof,
-            }
+        #[test]
+        #[ignore = "#ifdef MALLOC_CONF"]
+        fn test_profiling_active() {
+            // Make sure somebody has turned on profiling
+            assert!(is_profiling_enabled(), "set MALLOC_CONF=prof:true");
+            activate_prof().unwrap();
+            assert!(is_profiling_active());
+            deactivate_prof().unwrap();
+            assert!(!is_profiling_active());
+
+            super::set_prof_sample(512 * 1024 * 1024).unwrap();
         }
 
         // Only trigger this test with jemallocs `opt.prof` set to
@@ -195,7 +419,7 @@ mod profiling {
         #[ignore = "#ifdef MALLOC_CONF"]
         fn test_profiling_memory_ifdef_malloc_conf() {
             // Make sure somebody has turned on profiling
-            assert!(is_profiling_on(), "set MALLOC_CONF=prof:true");
+            assert!(is_profiling_enabled(), "set MALLOC_CONF=prof:true");
 
             let dir = Builder::new()
                 .prefix("test_profiling_memory")
@@ -204,11 +428,11 @@ mod profiling {
 
             let os_path = dir.path().to_path_buf().join("test1.dump").into_os_string();
             let path = os_path.into_string().unwrap();
-            super::dump_prof(&path).unwrap();
+            dump_prof(&path).unwrap();
 
             let os_path = dir.path().to_path_buf().join("test2.dump").into_os_string();
             let path = os_path.into_string().unwrap();
-            super::dump_prof(&path).unwrap();
+            dump_prof(&path).unwrap();
 
             let files = fs::read_dir(dir.path()).unwrap().count();
             assert_eq!(files, 2);
@@ -243,5 +467,11 @@ mod profiling {
     }
     pub fn deactivate_prof() -> ProfResult<()> {
         Err(ProfError::MemProfilingNotEnabled)
+    }
+    pub fn set_prof_sample(_rate: u64) -> ProfResult<()> {
+        Err(ProfError::MemProfilingNotEnabled)
+    }
+    pub fn is_profiling_active() -> bool {
+        false
     }
 }

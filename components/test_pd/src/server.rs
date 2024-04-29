@@ -1,7 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    str::from_utf8,
     sync::{
         atomic::{AtomicI64, Ordering},
         Arc,
@@ -14,17 +13,19 @@ use fail::fail_point;
 use futures::{future, SinkExt, TryFutureExt, TryStreamExt};
 use grpcio::{
     ClientStreamingSink, DuplexSink, EnvBuilder, RequestStream, RpcContext, RpcStatus,
-    RpcStatusCode, Server as GrpcServer, ServerBuilder, ServerStreamingSink, UnarySink, WriteFlags,
+    RpcStatusCode, Server as GrpcServer, ServerBuilder, UnarySink, WriteFlags,
 };
 use kvproto::{
     meta_storagepb_grpc::{create_meta_storage, MetaStorage},
     pdpb::*,
+    resource_manager,
+    resource_manager_grpc::create_resource_manager,
 };
 use pd_client::Error as PdError;
 use security::*;
 
 use super::mocker::*;
-use crate::mocker::etcd::{EtcdClient, Keys, KvEventType, MetaKey};
+use crate::mocker::etcd::EtcdClient;
 
 pub struct Server<C: PdMocker> {
     server: Option<GrpcServer>,
@@ -75,6 +76,7 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
     pub fn start(&mut self, mgr: &SecurityManager, eps: Vec<(String, u16)>) {
         let pd = create_pd(self.mocker.clone());
         let meta_store = create_meta_storage(self.mocker.clone());
+        let resource_manager = create_resource_manager(self.mocker.clone());
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(1)
@@ -83,7 +85,8 @@ impl<C: PdMocker + Send + Sync + 'static> Server<C> {
         );
         let mut sb = ServerBuilder::new(env)
             .register_service(pd)
-            .register_service(meta_store);
+            .register_service(meta_store)
+            .register_service(resource_manager);
         for (host, port) in eps {
             sb = mgr.bind(sb, &host, port);
         }
@@ -225,82 +228,18 @@ impl<C: PdMocker + Send + Sync + 'static> MetaStorage for PdMock<C> {
     ) {
         hijack_unary(self, ctx, sink, |m| m.meta_store_put(req.clone()))
     }
+
+    fn delete(
+        &mut self,
+        ctx: grpcio::RpcContext<'_>,
+        req: kvproto::meta_storagepb::DeleteRequest,
+        sink: grpcio::UnarySink<kvproto::meta_storagepb::DeleteResponse>,
+    ) {
+        hijack_unary(self, ctx, sink, |m| m.meta_store_delete(req.clone()))
+    }
 }
 
 impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
-    fn load_global_config(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: LoadGlobalConfigRequest,
-        sink: UnarySink<LoadGlobalConfigResponse>,
-    ) {
-        let cli = self.etcd_client.clone();
-        hijack_unary(self, ctx, sink, |c| c.load_global_config(&req, cli.clone()))
-    }
-
-    fn store_global_config(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: StoreGlobalConfigRequest,
-        sink: UnarySink<StoreGlobalConfigResponse>,
-    ) {
-        let cli = self.etcd_client.clone();
-        hijack_unary(self, ctx, sink, |c| {
-            c.store_global_config(&req, cli.clone())
-        })
-    }
-
-    fn watch_global_config(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: WatchGlobalConfigRequest,
-        mut sink: ServerStreamingSink<WatchGlobalConfigResponse>,
-    ) {
-        let cli = self.etcd_client.clone();
-        let future = async move {
-            let mut watcher = match cli
-                .lock()
-                .await
-                .watch(
-                    Keys::Range(MetaKey(b"".to_vec()), MetaKey(b"\xff".to_vec())),
-                    req.revision,
-                )
-                .await
-            {
-                Ok(w) => w,
-                Err(err) => {
-                    error!("failed to watch: {:?}", err);
-                    return;
-                }
-            };
-
-            while let Some(event) = watcher.as_mut().recv().await {
-                info!("watch event from etcd"; "event" => ?event);
-                let mut change = GlobalConfigItem::new();
-                change.set_kind(match event.kind {
-                    KvEventType::Put => EventType::Put,
-                    KvEventType::Delete => EventType::Delete,
-                });
-                change.set_name(from_utf8(event.pair.key()).unwrap().to_string());
-                change.set_payload(event.pair.value().into());
-                let mut wc = WatchGlobalConfigResponse::default();
-                wc.set_changes(vec![change].into());
-                let _ = sink.send((wc, WriteFlags::default())).await;
-                let _ = sink.flush().await;
-                #[cfg(feature = "failpoints")]
-                {
-                    use futures::executor::block_on;
-                    let cli_clone = cli.clone();
-                    fail_point!("watch_global_config_return", |_| {
-                        block_on(async move { cli_clone.lock().await.clear_subs() });
-                        watcher.close();
-                    });
-                }
-            }
-        };
-        ctx.spawn(future);
-    }
-
     fn get_members(
         &mut self,
         ctx: RpcContext<'_>,
@@ -586,11 +525,11 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
 
     fn update_service_gc_safe_point(
         &mut self,
-        _ctx: RpcContext<'_>,
-        _req: UpdateServiceGcSafePointRequest,
-        _sink: UnarySink<UpdateServiceGcSafePointResponse>,
+        ctx: RpcContext<'_>,
+        req: UpdateServiceGcSafePointRequest,
+        sink: UnarySink<UpdateServiceGcSafePointResponse>,
     ) {
-        unimplemented!()
+        hijack_unary(self, ctx, sink, |c| c.update_service_gc_safe_point(&req))
     }
 
     fn sync_max_ts(
@@ -618,5 +557,33 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
         _: UnarySink<kvproto::pdpb::GetDcLocationInfoResponse>,
     ) {
         unimplemented!()
+    }
+}
+
+impl<C: PdMocker + Send + Sync + 'static> resource_manager::ResourceManager for PdMock<C> {
+    fn acquire_token_buckets(
+        &mut self,
+        ctx: grpcio::RpcContext<'_>,
+        stream: grpcio::RequestStream<resource_manager::TokenBucketsRequest>,
+        sink: grpcio::DuplexSink<resource_manager::TokenBucketsResponse>,
+    ) {
+        let mock = self.clone();
+        ctx.spawn(async move {
+            let mut stream = stream.map_err(PdError::from).try_filter_map(move |req| {
+                let resp = mock
+                    .case
+                    .as_ref()
+                    .and_then(|case| case.report_ru_metrics(&req))
+                    .or_else(|| mock.default_handler.report_ru_metrics(&req));
+                match resp {
+                    None => future::ok(None),
+                    Some(Ok(resp)) => future::ok(Some((resp, WriteFlags::default()))),
+                    Some(Err(e)) => future::err(box_err!("{:?}", e)),
+                }
+            });
+            let mut sink = sink.sink_map_err(PdError::from);
+            let _ = sink.send_all(&mut stream).await;
+            let _ = sink.close().await;
+        });
     }
 }

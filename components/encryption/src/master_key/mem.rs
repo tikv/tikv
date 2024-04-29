@@ -1,10 +1,11 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
+use cloud::kms::{CryptographyType, PlainKey};
 use kvproto::encryptionpb::EncryptedContent;
 use tikv_util::box_err;
 
 use super::metadata::*;
-use crate::{crypter::*, AesGcmCrypter, Error, Iv, Result};
+use crate::{crypter::*, errors::cloud_convert_error, AesGcmCrypter, Error, Iv, Result};
 
 /// An in-memory backend, it saves master key in memory.
 #[derive(Debug)]
@@ -15,7 +16,8 @@ pub(crate) struct MemAesGcmBackend {
 impl MemAesGcmBackend {
     pub fn new(key: Vec<u8>) -> Result<MemAesGcmBackend> {
         Ok(MemAesGcmBackend {
-            key: PlainKey::new(key)?,
+            key: PlainKey::new(key, CryptographyType::AesGcm256)
+                .map_err(cloud_convert_error("new AWS KMS".to_owned()))?,
         })
     }
 
@@ -126,7 +128,9 @@ mod tests {
             .unwrap();
 
         let backend = MemAesGcmBackend::new(key).unwrap();
-        let encrypted_content = backend.encrypt_content(&pt, Iv::new_gcm()).unwrap();
+        let encrypted_content = backend
+            .encrypt_content(&pt, Iv::new_gcm().unwrap())
+            .unwrap();
         let plaintext = backend.decrypt_content(&encrypted_content).unwrap();
         assert_eq!(plaintext, pt);
 

@@ -11,26 +11,40 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{KvEngine, RaftEngineReadOnly};
+use collections::HashMap;
+use engine_rocks::RocksEngine;
+use engine_traits::{Checkpointer, KvEngine, RaftEngineDebug};
 use file_system::{IoOp, IoType};
 use futures::executor::block_on;
-use grpcio::Environment;
-use kvproto::raft_serverpb::*;
+use grpcio::{self, ChannelBuilder, Environment};
+use kvproto::{
+    raft_serverpb::{RaftMessage, RaftSnapshotData},
+    tikvpb::TikvClient,
+};
+use protobuf::Message as M1;
 use raft::eraftpb::{Message, MessageType, Snapshot};
-use raftstore::{store::*, Result};
+use raftstore::{
+    coprocessor::{ApplySnapshotObserver, BoxApplySnapshotObserver, Coprocessor, CoprocessorHost},
+    store::{snap::TABLET_SNAPSHOT_VERSION, *},
+    Result,
+};
 use rand::Rng;
 use security::SecurityManager;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
-use tikv::server::snap::send_snap;
+use test_raftstore_v2::WrapFactory;
+use tikv::server::{snap::send_snap, tablet_snap::send_snap as send_snap_v2};
 use tikv_util::{
     config::*,
-    time::{Instant, UnixSecs},
+    time::{Instant, Limiter, UnixSecs},
     HandyRwLock,
 };
 
-fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>, max_snapshot_file_size: u64) {
-    cluster.cfg.rocksdb.titan.enabled = true;
+fn test_huge_snapshot<T: Simulator<RocksEngine>>(
+    cluster: &mut Cluster<RocksEngine, T>,
+    max_snapshot_file_size: u64,
+) {
+    cluster.cfg.rocksdb.titan.enabled = Some(true);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);
     cluster.cfg.raft_store.snap_apply_batch_size = ReadableSize(500);
@@ -217,16 +231,73 @@ fn test_server_snap_gc() {
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore::new_server_cluster)]
-#[test_case(test_raftstore_v2::new_node_cluster)]
-#[test_case(test_raftstore_v2::new_server_cluster)]
 fn test_concurrent_snap() {
     let mut cluster = new_cluster(0, 3);
     // Test that the handling of snapshot is correct when there are multiple
     // snapshots which have overlapped region ranges arrive at the same
     // raftstore.
-    cluster.cfg.rocksdb.titan.enabled = true;
+    cluster.cfg.rocksdb.titan.enabled = Some(true);
     // Disable raft log gc in this test case.
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
+    // For raftstore v2, after split, follower delays first messages (see
+    // is_first_message() for details), so leader does not send snapshot to
+    // follower and CollectSnapshotFilter holds parent region snapshot forever.
+    // We need to set a short wait duration so that leader can send snapshot
+    // in time and thus CollectSnapshotFilter can send parent region snapshot.
+    cluster.cfg.raft_store.snap_wait_split_duration = ReadableDuration::millis(100);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    // Force peer 2 to be followers all the way.
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r1, 2)
+            .msg_type(MessageType::MsgRequestVote)
+            .direction(Direction::Send),
+    ));
+    cluster.must_transfer_leader(r1, new_peer(1, 1));
+    cluster.must_put(b"k3", b"v3");
+    // Pile up snapshots of overlapped region ranges and deliver them all at once.
+    let (tx, rx) = mpsc::channel();
+    cluster.add_recv_filter_on_node(3, Box::new(CollectSnapshotFilter::new(tx)));
+    pd_client.must_add_peer(r1, new_peer(3, 3));
+    let region = cluster.get_region(b"k1");
+    // Ensure the snapshot of range ("", "") is sent and piled in filter.
+    if let Err(e) = rx.recv_timeout(Duration::from_secs(1)) {
+        panic!("the snapshot is not sent before split, e: {:?}", e);
+    }
+    // Split the region range and then there should be another snapshot for the
+    // split ranges.
+    cluster.must_split(&region, b"k2");
+    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+    // Ensure the regions work after split.
+    cluster.must_put(b"k11", b"v11");
+    must_get_equal(&cluster.get_engine(3), b"k11", b"v11");
+    cluster.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(3), b"k4", b"v4");
+}
+
+#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_concurrent_snap_v2() {
+    let mut cluster = new_cluster(0, 3);
+    // TODO: v2 doesn't support titan.
+    // Test that the handling of snapshot is correct when there are multiple
+    // snapshots which have overlapped region ranges arrive at the same
+    // raftstore.
+    // cluster.cfg.rocksdb.titan.enabled = Some(true);
+    // Disable raft log gc in this test case.
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
+    // For raftstore v2, after split, follower delays first messages (see
+    // is_first_message() for details), so leader does not send snapshot to
+    // follower and CollectSnapshotFilter holds parent region snapshot forever.
+    // We need to set a short wait duration so that leader can send snapshot
+    // in time and thus CollectSnapshotFilter can send parent region snapshot.
+    cluster.cfg.raft_store.snap_wait_split_duration = ReadableDuration::millis(100);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
@@ -552,7 +623,7 @@ fn test_gen_during_heavy_recv() {
     let snap = do_snapshot(
         snap_mgr.clone(),
         &engine,
-        engine.snapshot(),
+        engine.snapshot(None),
         r2,
         snap_term,
         snap_apply_state,
@@ -732,4 +803,241 @@ fn test_snapshot_clean_up_logs_with_log_gc() {
     raft_engine.get_all_entries_to(1, &mut dest).unwrap();
     // No new log is proposed, so there should be no log at all.
     assert!(dest.is_empty(), "{:?}", dest);
+}
+
+fn generate_snap<EK: KvEngine>(
+    engine: &WrapFactory<EK>,
+    region_id: u64,
+    snap_mgr: &TabletSnapManager,
+) -> (RaftMessage, TabletSnapKey) {
+    let tablet = engine.get_tablet_by_id(region_id).unwrap();
+    let region_state = engine.region_local_state(region_id).unwrap().unwrap();
+    let apply_state = engine.raft_apply_state(region_id).unwrap().unwrap();
+    let raft_state = engine.raft_local_state(region_id).unwrap().unwrap();
+
+    // Construct snapshot by hand
+    let mut snapshot = Snapshot::default();
+    // use commit term for simplicity
+    snapshot
+        .mut_metadata()
+        .set_term(raft_state.get_hard_state().term + 1);
+    snapshot.mut_metadata().set_index(apply_state.applied_index);
+    let conf_state = raftstore::store::util::conf_state_from_region(region_state.get_region());
+    snapshot.mut_metadata().set_conf_state(conf_state);
+
+    let mut snap_data = RaftSnapshotData::default();
+    snap_data.set_region(region_state.get_region().clone());
+    snap_data.set_version(TABLET_SNAPSHOT_VERSION);
+    use protobuf::Message;
+    snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
+    let snap_key = TabletSnapKey::from_region_snap(region_id, 1, &snapshot);
+    let checkpointer_path = snap_mgr.tablet_gen_path(&snap_key);
+    let mut checkpointer = tablet.new_checkpointer().unwrap();
+    checkpointer
+        .create_at(checkpointer_path.as_path(), None, 0)
+        .unwrap();
+
+    let mut msg = RaftMessage::default();
+    msg.region_id = region_id;
+    msg.set_to_peer(new_peer(1, 1));
+    msg.mut_message().set_snapshot(snapshot);
+    msg.mut_message()
+        .set_term(raft_state.get_hard_state().commit + 1);
+    msg.mut_message().set_msg_type(MessageType::MsgSnapshot);
+    msg.set_region_epoch(region_state.get_region().get_region_epoch().clone());
+
+    (msg, snap_key)
+}
+
+#[derive(Clone)]
+struct MockApplySnapshotObserver {
+    tablet_snap_paths: Arc<Mutex<HashMap<u64, (bool, String)>>>,
+}
+
+impl Coprocessor for MockApplySnapshotObserver {}
+
+impl ApplySnapshotObserver for MockApplySnapshotObserver {
+    fn should_pre_apply_snapshot(&self) -> bool {
+        true
+    }
+
+    fn pre_apply_snapshot(
+        &self,
+        _: &mut raftstore::coprocessor::ObserverContext<'_>,
+        peer_id: u64,
+        _: &raftstore::store::SnapKey,
+        snap: Option<&raftstore::store::Snapshot>,
+    ) {
+        let tablet_path = snap.unwrap().tablet_snap_path().as_ref().unwrap().clone();
+        self.tablet_snap_paths
+            .lock()
+            .unwrap()
+            .insert(peer_id, (false, tablet_path));
+    }
+
+    fn post_apply_snapshot(
+        &self,
+        _: &mut raftstore::coprocessor::ObserverContext<'_>,
+        peer_id: u64,
+        _: &raftstore::store::SnapKey,
+        snap: Option<&raftstore::store::Snapshot>,
+    ) {
+        let tablet_path = snap.unwrap().tablet_snap_path().as_ref().unwrap().clone();
+        match self.tablet_snap_paths.lock().unwrap().entry(peer_id) {
+            collections::HashMapEntry::Occupied(mut entry) => {
+                if entry.get_mut().1 == tablet_path {
+                    entry.get_mut().0 = true;
+                }
+            }
+            collections::HashMapEntry::Vacant(_) => {}
+        }
+    }
+}
+
+#[test]
+fn test_v1_apply_snap_from_v2() {
+    let mut cluster_v1 = test_raftstore::new_server_cluster(1, 1);
+    let mut cluster_v2 = test_raftstore_v2::new_server_cluster(1, 1);
+    cluster_v1.cfg.raft_store.enable_v2_compatible_learner = true;
+    cluster_v1.cfg.raft_store.snap_mgr_gc_tick_interval = ReadableDuration::millis(200);
+
+    let observer = MockApplySnapshotObserver {
+        tablet_snap_paths: Arc::default(),
+    };
+    let observer_clone = observer.clone();
+    cluster_v1.register_hook(
+        1,
+        Box::new(move |host: &mut CoprocessorHost<_>| {
+            host.registry.register_apply_snapshot_observer(
+                1,
+                BoxApplySnapshotObserver::new(observer_clone.clone()),
+            );
+        }),
+    );
+
+    cluster_v1.run();
+    cluster_v2.run();
+
+    let region = cluster_v2.get_region(b"");
+    cluster_v2.must_split(&region, b"k0010");
+
+    let s1_addr = cluster_v1.get_addr(1);
+    let region_id = region.get_id();
+    let engine = cluster_v2.get_engine(1);
+
+    for i in 0..50 {
+        let k = format!("k{:04}", i);
+        cluster_v2.must_put(k.as_bytes(), b"val");
+    }
+    cluster_v2.flush_data();
+
+    let tablet_snap_mgr = cluster_v2.get_snap_mgr(1);
+    let security_mgr = cluster_v2.get_security_mgr();
+    let (msg, snap_key) = generate_snap(&engine, region_id, &tablet_snap_mgr);
+    let limit = Limiter::new(f64::INFINITY);
+    let env = Arc::new(Environment::new(1));
+    let _ = block_on(async {
+        let client =
+            TikvClient::new(security_mgr.connect(ChannelBuilder::new(env.clone()), &s1_addr));
+        send_snap_v2(client, tablet_snap_mgr.clone(), msg, limit.clone())
+            .await
+            .unwrap()
+    });
+
+    let snap_mgr = cluster_v1.get_snap_mgr(region_id);
+    let path = snap_mgr
+        .tablet_snap_manager()
+        .as_ref()
+        .unwrap()
+        .final_recv_path(&snap_key);
+    let path_str = path.as_path().to_str().unwrap();
+
+    check_observer(&observer, region_id, path_str);
+
+    let region = cluster_v2.get_region(b"k0011");
+    let region_id = region.get_id();
+    let (msg, snap_key) = generate_snap(&engine, region_id, &tablet_snap_mgr);
+    let _ = block_on(async {
+        let client =
+            TikvClient::new(security_mgr.connect(ChannelBuilder::new(env.clone()), &s1_addr));
+        send_snap_v2(client, tablet_snap_mgr, msg, limit)
+            .await
+            .unwrap()
+    });
+
+    let snap_mgr = cluster_v1.get_snap_mgr(region_id);
+    let path = snap_mgr
+        .tablet_snap_manager()
+        .as_ref()
+        .unwrap()
+        .final_recv_path(&snap_key);
+    let path_str = path.as_path().to_str().unwrap();
+
+    check_observer(&observer, region_id, path_str);
+
+    // Verify that the tablet snap will be gced
+    for _ in 0..10 {
+        if !path.exists() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    panic!("tablet snap {:?} still exists", path_str);
+}
+
+fn check_observer(observer: &MockApplySnapshotObserver, region_id: u64, snap_path: &str) {
+    for _ in 0..10 {
+        if let Some(pair) = observer
+            .tablet_snap_paths
+            .as_ref()
+            .lock()
+            .unwrap()
+            .get(&region_id)
+        {
+            if pair.0 && pair.1 == snap_path {
+                return;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    panic!("cannot find {:?} in observer", snap_path);
+}
+
+#[test]
+fn test_v2_leaner_snapshot_commit_index() {
+    let mut cluster = test_raftstore_v2::new_node_cluster(0, 2);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+    let r = cluster.run_conf_change();
+
+    let (tx, rx) = mpsc::channel();
+    cluster.add_recv_filter_on_node(
+        2,
+        Box::new(RecvSnapshotFilter {
+            notifier: Mutex::new(Some(tx)),
+            region_id: r,
+        }),
+    );
+
+    cluster.must_put(b"k1", b"v1");
+
+    // Set commit index for learner snapshots. It's needed to address
+    // compatibility issues between v1 and v2 snapshots.
+    // See https://github.com/pingcap/tiflash/issues/7568#issuecomment-1576382311
+    pd_client.must_add_peer(r, new_learner_peer(2, 2));
+    let msg = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let mut snapshot_data = RaftSnapshotData::default();
+    snapshot_data
+        .merge_from_bytes(msg.get_message().get_snapshot().get_data())
+        .unwrap();
+    assert_ne!(snapshot_data.get_meta().get_commit_index_hint(), 0);
+
+    cluster.must_put(b"k2", b"v2");
+
+    pd_client.must_add_peer(r, new_peer(2, 2));
+    cluster.must_transfer_leader(1, new_peer(2, 2));
+
+    cluster.must_put(b"k3", b"v3");
 }

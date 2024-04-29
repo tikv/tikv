@@ -1,8 +1,9 @@
 [package]
 name = "tikv_util"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [features]
 failpoints = ["fail/failpoints"]
@@ -13,7 +14,7 @@ async-speed-limit = "0.4.0"
 backtrace = "0.3.9"
 byteorder = "1.2"
 bytes = "1.0"
-chrono = "0.4"
+chrono = { workspace = true }
 codec = { workspace = true }
 collections = { workspace = true }
 cpu-time = "1.0.0"
@@ -32,12 +33,11 @@ lazy_static = "1.3"
 libc = "0.2"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
 log_wrappers = { workspace = true }
-mnt = "0.3.1"
 nix = "0.24"
 num-traits = "0.2"
 num_cpus = "1"
 online_config = { workspace = true }
-openssl = "0.10"
+openssl = { workspace = true }
 parking_lot_core = "0.9.1"
 pin-project = "1.0"
 prometheus = { version = "0.13", features = ["nightly"] }
@@ -51,19 +51,20 @@ slog-async = "2.3"
 slog-global = { workspace = true }
 slog-json = "2.3"
 slog-term = "2.4"
+strum = { version = "0.20", features = ["derive"] }
 sysinfo = "0.26"
 thiserror = "1.0"
 tikv_alloc = { workspace = true }
-time = "0.1"
+time = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
-tokio-executor = "0.1"
+tokio-executor = { workspace = true }
 tokio-timer = { workspace = true }
 tracker = { workspace = true }
 url = "2"
 yatp = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
+procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "7693954bd1dd86eb1709572fd7b62fd5f7ff2ea1" }
 page_size = "0.4"
 procfs = { version = "0.12", default-features = false }
 

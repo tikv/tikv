@@ -4,7 +4,10 @@
 use std::marker::PhantomData;
 
 use api_version::KvFormat;
-use engine_traits::{raw_ttl::ttl_current_ts, CfName, IterOptions, ReadOptions};
+use engine_rocks::PerfContext;
+use engine_traits::{
+    raw_ttl::ttl_current_ts, CfName, IterMetricsCollector, IterOptions, MetricsExt, ReadOptions,
+};
 use txn_types::{Key, Value};
 
 use crate::storage::{
@@ -191,5 +194,25 @@ impl<I: Iterator, F: KvFormat> Iterator for RawEncodeIterator<I, F> {
 
     fn value(&self) -> &[u8] {
         F::decode_raw_value(self.inner.value()).unwrap().user_value
+    }
+}
+
+pub struct RawEncodeIterMetricsCollector;
+
+impl IterMetricsCollector for RawEncodeIterMetricsCollector {
+    fn internal_delete_skipped_count(&self) -> usize {
+        PerfContext::get().internal_delete_skipped_count() as usize
+    }
+
+    fn internal_key_skipped_count(&self) -> usize {
+        PerfContext::get().internal_key_skipped_count() as usize
+    }
+}
+
+impl<I: Iterator, F: KvFormat> MetricsExt for RawEncodeIterator<I, F> {
+    type Collector = RawEncodeIterMetricsCollector;
+
+    fn metrics_collector(&self) -> Self::Collector {
+        RawEncodeIterMetricsCollector {}
     }
 }

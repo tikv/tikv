@@ -1,40 +1,27 @@
 [package]
 name = "external_storage"
 version = "0.0.1"
-edition = "2018"
+edition = "2021"
 publish = false
-
-[features]
-cloud-storage-dylib = [
-  "ffi-support",
-  "libloading",
-  "protobuf",
-]
-cloud-storage-grpc = [
-  "grpcio",
-]
-failpoints = ["fail/failpoints"]
+license = "Apache-2.0"
 
 [dependencies]
 async-compression = { version = "0.3.14", features = ["futures-io", "zstd"] }
 async-trait = "0.1"
-bytes = "1.0"
+aws = { workspace = true }
+azure = { workspace = true }
+cloud = { workspace = true }
 encryption = { workspace = true }
 engine_traits = { workspace = true }
-fail = "0.5"
-ffi-support = { optional = true, version = "0.4.2" }
 file_system = { workspace = true }
 futures = "0.3"
-futures-executor = "0.3"
 futures-io = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
-grpcio = { workspace = true, optional = true }
+gcp = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.3"
-libloading = { optional = true, version = "0.7.0" }
-openssl = "0.10"
+openssl = { workspace = true }
 prometheus = { version = "0.13", default-features = false, features = ["nightly", "push"] }
-protobuf = { optional = true, version = "2" }
 rand = "0.8"
 slog = { workspace = true }
 # better to not use slog-global, but pass in the logger
@@ -51,3 +38,7 @@ rust-ini = "0.14.0"
 structopt = "0.3"
 tempfile = "3.1"
 tokio = { version = "1.5", features = ["macros"] }
+
+[[example]]
+name = "scli"
+path = "examples/scli.rs"

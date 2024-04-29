@@ -34,7 +34,10 @@ use std::{
 };
 
 pub use file::{File, OpenOptions};
-pub use io_stats::{get_io_type, init as init_io_stats_collector, set_io_type};
+pub use io_stats::{
+    fetch_io_bytes, get_io_type, get_thread_io_bytes_total, init as init_io_stats_collector,
+    set_io_type,
+};
 pub use metrics_manager::{BytesFetcher, MetricsManager};
 use online_config::ConfigValue;
 use openssl::{
@@ -72,6 +75,7 @@ pub enum IoType {
     Gc = 8,
     Import = 9,
     Export = 10,
+    RewriteLog = 11,
 }
 
 impl IoType {
@@ -88,6 +92,7 @@ impl IoType {
             IoType::Gc => "gc",
             IoType::Import => "import",
             IoType::Export => "export",
+            IoType::RewriteLog => "log_rewrite",
         }
     }
 }
@@ -111,10 +116,10 @@ impl Drop for WithIoType {
 }
 
 #[repr(C)]
-#[derive(Debug, Copy, Clone, Default)]
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub struct IoBytes {
-    read: u64,
-    write: u64,
+    pub read: u64,
+    pub write: u64,
 }
 
 impl std::ops::Sub for IoBytes {
@@ -125,6 +130,13 @@ impl std::ops::Sub for IoBytes {
             read: self.read.saturating_sub(other.read),
             write: self.write.saturating_sub(other.write),
         }
+    }
+}
+
+impl std::ops::AddAssign for IoBytes {
+    fn add_assign(&mut self, rhs: Self) {
+        self.read += rhs.read;
+        self.write += rhs.write;
     }
 }
 
@@ -145,8 +157,13 @@ impl IoPriority {
         }
     }
 
-    fn unsafe_from_u32(i: u32) -> Self {
-        unsafe { std::mem::transmute(i) }
+    fn from_u32(i: u32) -> Self {
+        match i {
+            0 => IoPriority::Low,
+            1 => IoPriority::Medium,
+            2 => IoPriority::High,
+            _ => panic!("unknown io priority {}", i),
+        }
     }
 }
 
@@ -442,42 +459,6 @@ pub fn reserve_space_for_recover<P: AsRef<Path>>(data_dir: P, file_size: u64) ->
     }
 }
 
-const TRASH_PREFIX: &str = "TRASH-";
-
-/// Remove a directory.
-///
-/// Rename it before actually removal.
-#[inline]
-pub fn trash_dir_all(path: impl AsRef<Path>) -> io::Result<()> {
-    let path = path.as_ref();
-    let name = match path.file_name() {
-        Some(n) => n,
-        None => return Err(io::Error::new(ErrorKind::InvalidInput, "path is invalid")),
-    };
-    let trash_path = path.with_file_name(format!("{}{}", TRASH_PREFIX, name.to_string_lossy()));
-    if let Err(e) = rename(path, &trash_path) {
-        if e.kind() == ErrorKind::NotFound {
-            return Ok(());
-        }
-        return Err(e);
-    }
-    remove_dir_all(trash_path)
-}
-
-/// When using `trash_dir_all`, it's possible the directory is marked as trash
-/// but not being actually deleted after a restart. This function can be used
-/// to resume all those removal in the given directory.
-#[inline]
-pub fn clean_up_trash(path: impl AsRef<Path>) -> io::Result<()> {
-    for e in read_dir(path)? {
-        let e = e?;
-        if e.file_name().to_string_lossy().starts_with(TRASH_PREFIX) {
-            remove_dir_all(e.path())?;
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::{io::Write, iter};
@@ -643,35 +624,5 @@ mod tests {
         assert_eq!(meta.len(), reserve_size);
         reserve_space_for_recover(data_path, 0).unwrap();
         assert!(!file.exists());
-    }
-
-    #[test]
-    fn test_trash_dir_all() {
-        let tmp_dir = Builder::new()
-            .prefix("test_reserve_space_for_recover")
-            .tempdir()
-            .unwrap();
-        let data_path = tmp_dir.path();
-        let sub_dir0 = data_path.join("sub_dir0");
-        let trash_sub_dir0 = data_path.join(format!("{}sub_dir0", TRASH_PREFIX));
-        create_dir_all(&sub_dir0).unwrap();
-        assert!(sub_dir0.exists());
-
-        trash_dir_all(&sub_dir0).unwrap();
-        assert!(!sub_dir0.exists());
-        assert!(!trash_sub_dir0.exists());
-
-        create_dir_all(&sub_dir0).unwrap();
-        create_dir_all(&trash_sub_dir0).unwrap();
-        trash_dir_all(&sub_dir0).unwrap();
-        assert!(!sub_dir0.exists());
-        assert!(!trash_sub_dir0.exists());
-
-        clean_up_trash(data_path).unwrap();
-
-        create_dir_all(&trash_sub_dir0).unwrap();
-        assert!(trash_sub_dir0.exists());
-        clean_up_trash(data_path).unwrap();
-        assert!(!trash_sub_dir0.exists());
     }
 }

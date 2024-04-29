@@ -444,10 +444,12 @@ impl IndexScanExecutorImpl {
         Ok(())
     }
 
-    // Process index values that are in old collation.
-    // NOTE: We should extract the index columns from the key first, and extract the
-    // handles from value if there is no handle in the key. Otherwise, extract the
-    // handles from the key.
+    // Process index values that are in old collation, when
+    // `new_collations_enabled_on_first_bootstrap` = true also will access this
+    // function.
+    // NOTE: We should extract the index columns from the key first,
+    // and extract the handles from value if there is no handle in the key.
+    // Otherwise, extract the handles from the key.
     fn process_old_collation_kv(
         &mut self,
         mut key_payload: &[u8],
@@ -479,9 +481,11 @@ impl IndexScanExecutorImpl {
             }
             DecodeCommonHandle => {
                 // Otherwise, if the handle is common handle, we extract it from the key.
+                let end_index =
+                    columns.columns_len() - self.pid_column_cnt - self.physical_table_id_column_cnt;
                 Self::extract_columns_from_datum_format(
                     &mut key_payload,
-                    &mut columns[self.columns_id_without_handle.len()..],
+                    &mut columns[self.columns_id_without_handle.len()..end_index],
                 )?;
             }
         }
@@ -607,8 +611,8 @@ impl IndexScanExecutorImpl {
     }
 
     #[inline]
-    fn build_operations<'a, 'b>(
-        &'b self,
+    fn build_operations<'a>(
+        &self,
         mut key_payload: &'a [u8],
         index_value: &'a [u8],
     ) -> Result<(DecodeHandleOp<'a>, DecodePartitionIdOp<'a>, RestoreData<'a>)> {
@@ -1399,7 +1403,7 @@ mod tests {
         ];
 
         let columns = vec![Column::new(1, 2), Column::new(2, 3), Column::new(3, 4.0)];
-        let datums = vec![Datum::U64(2), Datum::U64(3), Datum::F64(4.0)];
+        let datums = [Datum::U64(2), Datum::U64(3), Datum::F64(4.0)];
 
         let mut value_prefix = vec![];
         let mut restore_data = vec![];
@@ -1553,7 +1557,7 @@ mod tests {
             FieldTypeTp::Double.into(),
         ];
 
-        let datums = vec![Datum::U64(2), Datum::U64(3), Datum::F64(4.0)];
+        let datums = [Datum::U64(2), Datum::U64(3), Datum::F64(4.0)];
 
         let common_handle = datum::encode_key(
             &mut EvalContext::default(),
@@ -1651,7 +1655,7 @@ mod tests {
         ];
 
         let columns = vec![Column::new(1, 2), Column::new(2, 3.0), Column::new(3, 4)];
-        let datums = vec![Datum::U64(2), Datum::F64(3.0), Datum::U64(4)];
+        let datums = [Datum::U64(2), Datum::F64(3.0), Datum::U64(4)];
         let index_data = datum::encode_key(&mut EvalContext::default(), &datums[0..2]).unwrap();
         let key = table::encode_index_seek_key(TABLE_ID, INDEX_ID, &index_data);
 
@@ -1944,7 +1948,7 @@ mod tests {
         ];
 
         let columns = vec![Column::new(1, 2), Column::new(2, 3), Column::new(3, 4.0)];
-        let datums = vec![Datum::U64(2), Datum::U64(3), Datum::F64(4.0)];
+        let datums = [Datum::U64(2), Datum::U64(3), Datum::F64(4.0)];
 
         let mut value_prefix = vec![];
         let mut restore_data = vec![];
@@ -3292,6 +3296,78 @@ mod tests {
         assert_eq!(
             columns[9].raw().last().unwrap().read_datum().unwrap(),
             Datum::Bytes("A ".as_bytes().to_vec())
+        );
+    }
+
+    #[test]
+    fn test_common_handle_with_physical_table_id() {
+        // CREATE TABLE `tcommonhash` (
+        //     `a` int(11) NOT NULL,
+        //     `b` int(11) DEFAULT NULL,
+        //     `c` int(11) NOT NULL,
+        //     `d` int(11) NOT NUL,
+        //     PRIMARY KEY (`a`,`c`,`d`) /*T![clustered_index] CLUSTERED */,
+        //     KEY `idx_bc` (`b`,`c`)
+        //  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin
+        // insert into tcommonhash values (1, 2, 3, 1);
+
+        // idx_bc
+        let mut idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![
+                FieldTypeTp::Long.into(),
+                FieldTypeTp::Long.into(),
+                FieldTypeTp::Long.into(),
+                FieldTypeTp::Long.into(),
+                FieldTypeTp::Long.into(),
+                // EXTRA_PHYSICAL_TABLE_ID_COL
+                FieldTypeTp::Long.into(),
+            ],
+            columns_id_without_handle: vec![2, 3],
+            columns_id_for_common_handle: vec![1, 3, 4],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeCommonHandle,
+            pid_column_cnt: 0,
+            physical_table_id_column_cnt: 1,
+            index_version: -1,
+        };
+        let mut columns = idx_exe.build_column_vec(10);
+        idx_exe
+            .process_kv_pair(
+                &[
+                    0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x5c, 0x5f, 0x69, 0x80, 0x0, 0x0,
+                    0x0, 0x0, 0x0, 0x0, 0x2, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x2, 0x3,
+                    0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x3, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0,
+                    0x0, 0x1, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x3, 0x3, 0x80, 0x0, 0x0,
+                    0x0, 0x0, 0x0, 0x0, 0x1,
+                ],
+                &[0x0, 0x7d, 0x1],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
+            Datum::I64(2)
+        );
+        assert_eq!(
+            columns[1].raw().last().unwrap().read_datum().unwrap(),
+            Datum::I64(3)
+        );
+        assert_eq!(
+            columns[2].raw().last().unwrap().read_datum().unwrap(),
+            Datum::I64(1)
+        );
+        assert_eq!(
+            columns[3].raw().last().unwrap().read_datum().unwrap(),
+            Datum::I64(3)
+        );
+        assert_eq!(
+            columns[4].raw().last().unwrap().read_datum().unwrap(),
+            Datum::I64(1)
+        );
+        assert_eq!(
+            // physical table id
+            columns[5].mut_decoded().to_int_vec()[0].unwrap(),
+            92
         );
     }
 

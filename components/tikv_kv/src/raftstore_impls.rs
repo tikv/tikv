@@ -29,7 +29,7 @@ pub struct RegionSnapshotExt<'a, S: Snapshot> {
 impl<'a, S: Snapshot> SnapshotExt for RegionSnapshotExt<'a, S> {
     #[inline]
     fn get_data_version(&self) -> Option<u64> {
-        self.snapshot.get_apply_index().ok()
+        self.snapshot.get_data_version().ok()
     }
 
     fn is_max_ts_synced(&self) -> bool {

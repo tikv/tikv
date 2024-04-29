@@ -8,6 +8,7 @@
 #![feature(bound_map)]
 #![feature(min_specialization)]
 #![feature(type_alias_impl_trait)]
+#![feature(impl_trait_in_assoc_type)]
 #![feature(associated_type_defaults)]
 
 #[macro_use(fail_point)]
@@ -36,11 +37,11 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{
-    CfName, IterOptions, KvEngine as LocalEngine, Mutable, MvccProperties, ReadOptions,
+    CfName, IterOptions, KvEngine as LocalEngine, MetricsExt, Mutable, MvccProperties, ReadOptions,
     TabletRegistry, WriteBatch, CF_DEFAULT, CF_LOCK,
 };
 use error_code::{self, ErrorCode, ErrorCodeExt};
-use futures::{compat::Future01CompatExt, future::BoxFuture, prelude::*};
+use futures::{future::BoxFuture, prelude::*};
 use into_other::IntoOther;
 use kvproto::{
     errorpb::Error as ErrorHeader,
@@ -51,19 +52,21 @@ use kvproto::{
 use pd_client::BucketMeta;
 use raftstore::store::{PessimisticLockPair, TxnExt};
 use thiserror::Error;
-use tikv_util::{deadline::Deadline, escape, time::ThreadReadId, timer::GLOBAL_TIMER_HANDLE};
+use tikv_util::{
+    deadline::Deadline, escape, future::block_on_timeout, memory::HeapSize, time::ThreadReadId,
+};
 use tracker::with_tls_tracker;
 use txn_types::{Key, PessimisticLock, TimeStamp, TxnExtra, Value};
 
 pub use self::{
     btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot},
     cursor::{Cursor, CursorBuilder},
-    mock_engine::{ExpectedWrite, MockEngineBuilder},
+    mock_engine::{ExpectedWrite, MockEngine, MockEngineBuilder},
     raft_extension::{FakeExtension, RaftExtension},
     rocksdb_engine::{RocksEngine, RocksSnapshot},
     stats::{
-        CfStatistics, FlowStatistics, FlowStatsReporter, StageLatencyStats, Statistics,
-        StatisticsSummary, RAW_VALUE_TOMBSTONE,
+        CfStatistics, FlowStatistics, FlowStatsReporter, LoadDataHint, StageLatencyStats,
+        Statistics, StatisticsSummary, RAW_VALUE_TOMBSTONE,
     },
 };
 
@@ -83,6 +86,20 @@ pub enum Modify {
     // cf_name, start_key, end_key, notify_only
     DeleteRange(CfName, Key, Key, bool),
     Ingest(Box<SstMeta>),
+}
+
+impl HeapSize for Modify {
+    fn approximate_heap_size(&self) -> usize {
+        match self {
+            Modify::Delete(_, k) => k.approximate_heap_size(),
+            Modify::Put(_, k, v) => k.approximate_heap_size() + v.approximate_heap_size(),
+            Modify::PessimisticLock(k, _) => k.approximate_heap_size(),
+            Modify::DeleteRange(_, k1, k2, _) => {
+                k1.approximate_heap_size() + k2.approximate_heap_size()
+            }
+            Modify::Ingest(_) => 0,
+        }
+    }
 }
 
 impl Modify {
@@ -376,34 +393,19 @@ pub trait Engine: Send + Clone + 'static {
 
     fn write(&self, ctx: &Context, batch: WriteData) -> Result<()> {
         let f = write(self, ctx, batch, None);
-        let timeout = GLOBAL_TIMER_HANDLE
-            .delay(Instant::now() + DEFAULT_TIMEOUT)
-            .compat();
-
-        futures::executor::block_on(async move {
-            futures::select! {
-                res = f.fuse() => {
-                    if let Some(res) = res {
-                        return res;
-                    }
-                },
-                _ = timeout.fuse() => (),
-            };
-            Err(Error::from(ErrorInner::Timeout(DEFAULT_TIMEOUT)))
-        })
+        let res = block_on_timeout(f, DEFAULT_TIMEOUT)
+            .map_err(|_| Error::from(ErrorInner::Timeout(DEFAULT_TIMEOUT)))?;
+        if let Some(res) = res {
+            return res;
+        }
+        Err(Error::from(ErrorInner::Timeout(DEFAULT_TIMEOUT)))
     }
 
     fn release_snapshot(&mut self) {}
 
     fn snapshot(&mut self, ctx: SnapContext<'_>) -> Result<Self::Snap> {
-        let deadline = Instant::now() + DEFAULT_TIMEOUT;
-        let timeout = GLOBAL_TIMER_HANDLE.delay(deadline).compat();
-        futures::executor::block_on(async move {
-            futures::select! {
-                res = self.async_snapshot(ctx).fuse() => res,
-                _ = timeout.fuse() => Err(Error::from(ErrorInner::Timeout(DEFAULT_TIMEOUT))),
-            }
-        })
+        block_on_timeout(self.async_snapshot(ctx), DEFAULT_TIMEOUT)
+            .map_err(|_| Error::from(ErrorInner::Timeout(DEFAULT_TIMEOUT)))?
     }
 
     fn put(&self, ctx: &Context, key: Key, value: Value) -> Result<()> {
@@ -536,7 +538,7 @@ pub struct DummySnapshotExt;
 
 impl SnapshotExt for DummySnapshotExt {}
 
-pub trait Iterator: Send {
+pub trait Iterator: Send + MetricsExt {
     fn next(&mut self) -> Result<bool>;
     fn prev(&mut self) -> Result<bool>;
     fn seek(&mut self, key: &Key) -> Result<bool>;
@@ -568,10 +570,12 @@ pub enum ErrorInner {
     Request(ErrorHeader),
     #[error("timeout after {0:?}")]
     Timeout(Duration),
-    #[error("an empty requets")]
+    #[error("an empty request")]
     EmptyRequest,
     #[error("key is locked (backoff or cleanup) {0:?}")]
     KeyIsLocked(kvproto::kvrpcpb::LockInfo),
+    #[error("undetermined write result {0:?}")]
+    Undetermined(String),
     #[error("unknown error {0:?}")]
     Other(#[from] Box<dyn error::Error + Send + Sync>),
 }
@@ -595,6 +599,7 @@ impl ErrorInner {
             ErrorInner::Timeout(d) => Some(ErrorInner::Timeout(d)),
             ErrorInner::EmptyRequest => Some(ErrorInner::EmptyRequest),
             ErrorInner::KeyIsLocked(ref info) => Some(ErrorInner::KeyIsLocked(info.clone())),
+            ErrorInner::Undetermined(ref msg) => Some(ErrorInner::Undetermined(msg.clone())),
             ErrorInner::Other(_) => None,
         }
     }
@@ -632,6 +637,7 @@ impl ErrorCodeExt for Error {
             ErrorInner::KeyIsLocked(_) => error_code::storage::KEY_IS_LOCKED,
             ErrorInner::Timeout(_) => error_code::storage::TIMEOUT,
             ErrorInner::EmptyRequest => error_code::storage::EMPTY_REQUEST,
+            ErrorInner::Undetermined(_) => error_code::storage::UNDETERMINED,
             ErrorInner::Other(_) => error_code::storage::UNKNOWN,
         }
     }
@@ -639,7 +645,7 @@ impl ErrorCodeExt for Error {
 
 thread_local! {
     // A pointer to thread local engine. Use raw pointer and `UnsafeCell` to reduce runtime check.
-    static TLS_ENGINE_ANY: UnsafeCell<*mut ()> = UnsafeCell::new(ptr::null_mut());
+    static TLS_ENGINE_ANY: UnsafeCell<*mut ()> = const { UnsafeCell::new(ptr::null_mut())};
 }
 
 /// Execute the closure on the thread local engine.
@@ -1304,6 +1310,7 @@ pub mod tests {
 #[cfg(test)]
 mod unit_tests {
     use engine_traits::CF_WRITE;
+    use txn_types::LastChange;
 
     use super::*;
     use crate::raft_cmdpb;
@@ -1325,8 +1332,8 @@ mod unit_tests {
                     ttl: 200,
                     for_update_ts: 101.into(),
                     min_commit_ts: 102.into(),
-                    last_change_ts: 80.into(),
-                    versions_to_last_change: 2,
+                    last_change: LastChange::make_exist(80.into(), 2),
+                    is_locked_with_conflict: false,
                 },
             ),
             Modify::DeleteRange(
@@ -1369,8 +1376,8 @@ mod unit_tests {
                         ttl: 200,
                         for_update_ts: 101.into(),
                         min_commit_ts: 102.into(),
-                        last_change_ts: 80.into(),
-                        versions_to_last_change: 2,
+                        last_change: LastChange::make_exist(80.into(), 2),
+                        is_locked_with_conflict: false,
                     }
                     .into_lock()
                     .to_bytes(),

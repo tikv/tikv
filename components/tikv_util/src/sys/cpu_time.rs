@@ -83,7 +83,7 @@ impl ProcessStat {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod imp {
     use std::{fs::File, io, io::Read, time::Duration};
 
@@ -191,7 +191,7 @@ mod imp {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(target_os = "windows")]
 mod imp {
     use std::io;
 
@@ -333,7 +333,7 @@ mod tests {
         for _ in 0..num * 10 {
             std::thread::spawn(move || {
                 loop {
-                    let _ = (0..10_000_000).into_iter().sum::<u128>();
+                    let _ = (0..10_000_000).sum::<u128>();
                 }
             });
         }

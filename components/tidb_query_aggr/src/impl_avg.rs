@@ -30,8 +30,6 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
         out_schema: &mut Vec<FieldType>,
         out_exp: &mut Vec<RpnExpression>,
     ) -> Result<Box<dyn AggrFunction>> {
-        use std::convert::TryFrom;
-
         use tidb_query_datatype::FieldTypeAccessor;
 
         assert_eq!(root_expr.get_tp(), ExprType::Avg);
@@ -40,7 +38,7 @@ impl super::AggrDefinitionParser for AggrFnDefinitionParserAvg {
         let col_sum_et = box_try!(EvalType::try_from(col_sum_ft.as_accessor().tp()));
 
         // Rewrite expression to insert CAST() if needed.
-        super::util::rewrite_exp_for_sum_avg(src_schema, &mut exp).unwrap();
+        super::util::rewrite_exp_for_sum_avg(src_schema, &mut exp)?;
 
         let rewritten_eval_type =
             EvalType::try_from(exp.ret_field_type(src_schema).as_accessor().tp()).unwrap();

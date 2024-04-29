@@ -1,10 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    sync::{mpsc, Arc},
-    time::*,
-};
+use std::{sync::Arc, time::*};
 
+use engine_rocks::RocksEngine;
 use kvproto::{
     metapb::{self, PeerRole, Region},
     raft_cmdpb::{ChangePeerRequest, RaftCmdRequest, RaftCmdResponse},
@@ -13,7 +11,7 @@ use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
 use raftstore::Result;
 use test_raftstore::*;
-use tikv_util::store::find_peer;
+use tikv_util::{future::block_on_timeout, store::find_peer};
 
 /// Tests multiple confchange commands can be done by one request
 #[test]
@@ -170,10 +168,7 @@ fn test_request_in_joint_state() {
     let rx = cluster
         .async_request(put_request(&region, 1, b"k3", b"v3"))
         .unwrap();
-    assert_eq!(
-        rx.recv_timeout(Duration::from_millis(100)),
-        Err(mpsc::RecvTimeoutError::Timeout)
-    );
+    block_on_timeout(rx, Duration::from_millis(100)).unwrap_err();
     cluster.clear_send_filters();
 
     // Isolated peer 3, so the new configuation can't reach quorum
@@ -181,10 +176,7 @@ fn test_request_in_joint_state() {
     let rx = cluster
         .async_request(put_request(&region, 1, b"k4", b"v4"))
         .unwrap();
-    assert_eq!(
-        rx.recv_timeout(Duration::from_millis(100)),
-        Err(mpsc::RecvTimeoutError::Timeout)
-    );
+    block_on_timeout(rx, Duration::from_millis(100)).unwrap_err();
     cluster.clear_send_filters();
 
     // Leave joint
@@ -482,12 +474,12 @@ fn test_leader_down_in_joint_state() {
 }
 
 fn call_conf_change_v2<T>(
-    cluster: &mut Cluster<T>,
+    cluster: &mut Cluster<RocksEngine, T>,
     region_id: u64,
     changes: Vec<ChangePeerRequest>,
 ) -> Result<RaftCmdResponse>
 where
-    T: Simulator,
+    T: Simulator<RocksEngine>,
 {
     let conf_change = new_change_peer_v2_request(changes);
     let epoch = cluster.pd_client.get_region_epoch(region_id);
@@ -496,13 +488,13 @@ where
 }
 
 fn call_conf_change<T>(
-    cluster: &mut Cluster<T>,
+    cluster: &mut Cluster<RocksEngine, T>,
     region_id: u64,
     conf_change_type: ConfChangeType,
     peer: metapb::Peer,
 ) -> Result<RaftCmdResponse>
 where
-    T: Simulator,
+    T: Simulator<RocksEngine>,
 {
     let conf_change = new_change_peer_request(conf_change_type, peer);
     let epoch = cluster.pd_client.get_region_epoch(region_id);
@@ -510,9 +502,9 @@ where
     cluster.call_command_on_leader(admin_req, Duration::from_secs(3))
 }
 
-fn leave_joint<T>(cluster: &mut Cluster<T>, region_id: u64) -> Result<RaftCmdResponse>
+fn leave_joint<T>(cluster: &mut Cluster<RocksEngine, T>, region_id: u64) -> Result<RaftCmdResponse>
 where
-    T: Simulator,
+    T: Simulator<RocksEngine>,
 {
     call_conf_change_v2(cluster, region_id, vec![])
 }

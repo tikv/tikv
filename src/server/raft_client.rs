@@ -25,8 +25,8 @@ use futures::{
 };
 use futures_timer::Delay;
 use grpcio::{
-    Channel, ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment,
-    RpcStatusCode, WriteFlags,
+    CallOption, Channel, ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment,
+    MetadataBuilder, RpcStatusCode, WriteFlags,
 };
 use kvproto::{
     raft_serverpb::{Done, RaftMessage, RaftSnapshotData},
@@ -40,15 +40,34 @@ use tikv_kv::RaftExtension;
 use tikv_util::{
     config::{Tracker, VersionTrack},
     lru::LruCache,
+    time::duration_to_sec,
     timer::GLOBAL_TIMER_HANDLE,
     worker::Scheduler,
 };
 use yatp::{task::future::TaskCell, ThreadPool};
 
 use crate::server::{
-    self, load_statistics::ThreadLoadPool, metrics::*, snap::Task as SnapTask, Config,
-    StoreAddrResolver,
+    load_statistics::ThreadLoadPool,
+    metrics::*,
+    resolve::{Error as ResolveError, Result as ResolveResult},
+    snap::Task as SnapTask,
+    Config, StoreAddrResolver,
 };
+
+pub struct MetadataSourceStoreId {}
+
+impl MetadataSourceStoreId {
+    pub const KEY: &'static str = "source_store_id";
+
+    pub fn parse(value: &[u8]) -> u64 {
+        let value = std::str::from_utf8(value).unwrap();
+        value.parse::<u64>().unwrap()
+    }
+
+    pub fn format(id: u64) -> String {
+        format!("{}", id)
+    }
+}
 
 static CONN_ID: AtomicI32 = AtomicI32::new(0);
 
@@ -616,6 +635,7 @@ impl<S, R> ConnectionBuilder<S, R> {
 /// StreamBackEnd watches lifetime of a connection and handles reconnecting,
 /// spawn new RPC.
 struct StreamBackEnd<S, R> {
+    self_store_id: u64,
     store_id: u64,
     queue: Arc<Queue>,
     builder: ConnectionBuilder<S, R>,
@@ -626,7 +646,7 @@ where
     S: StoreAddrResolver,
     R: RaftExtension + Unpin + 'static,
 {
-    fn resolve(&self) -> impl Future<Output = server::Result<String>> {
+    fn resolve(&self) -> impl Future<Output = ResolveResult<String>> {
         let (tx, rx) = oneshot::channel();
         let store_id = self.store_id;
         let res = self.builder.resolver.resolve(
@@ -657,7 +677,7 @@ where
             res?;
             match rx.await {
                 Ok(a) => a,
-                Err(_) => Err(server::Error::Other(
+                Err(_) => Err(ResolveError::Other(
                     "failed to receive resolve result".into(),
                 )),
             }
@@ -697,7 +717,8 @@ where
     }
 
     fn batch_call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<RaftCallRes> {
-        let (batch_sink, batch_stream) = client.batch_raft().unwrap();
+        let (batch_sink, batch_stream) = client.batch_raft_opt(self.get_call_option()).unwrap();
+
         let (tx, rx) = oneshot::channel();
         let mut call = RaftCall {
             sender: AsyncRaftSender {
@@ -721,7 +742,8 @@ where
     }
 
     fn call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<RaftCallRes> {
-        let (sink, stream) = client.raft().unwrap();
+        let (sink, stream) = client.raft_opt(self.get_call_option()).unwrap();
+
         let (tx, rx) = oneshot::channel();
         let mut call = RaftCall {
             sender: AsyncRaftSender {
@@ -741,6 +763,15 @@ where
             call.poll().await;
         });
         rx
+    }
+
+    fn get_call_option(&self) -> CallOption {
+        let mut metadata = MetadataBuilder::with_capacity(1);
+        let value = MetadataSourceStoreId::format(self.self_store_id);
+        metadata
+            .add_str(MetadataSourceStoreId::KEY, &value)
+            .unwrap();
+        CallOption::default().headers(metadata.build())
     }
 }
 
@@ -782,10 +813,15 @@ async fn start<S, R>(
     R: RaftExtension + Unpin + Send + 'static,
 {
     let mut last_wake_time = None;
-    let mut first_time = true;
     let backoff_duration = back_end.builder.cfg.value().raft_client_max_backoff.0;
     let mut addr_channel = None;
+    let mut begin = None;
+    let mut try_count = 0;
     loop {
+        if begin.is_none() {
+            begin = Some(Instant::now());
+        }
+        try_count += 1;
         maybe_backoff(backoff_duration, &mut last_wake_time).await;
         let f = back_end.resolve();
         let addr = match f.await {
@@ -798,8 +834,7 @@ async fn start<S, R>(
                 RESOLVE_STORE_COUNTER.with_label_values(&["failed"]).inc();
                 back_end.clear_pending_message("resolve");
                 error_unknown!(?e; "resolve store address failed"; "store_id" => back_end.store_id,);
-                // TOMBSTONE
-                if format!("{}", e).contains("has been removed") {
+                if let ResolveError::StoreTombstone(_) = e {
                     let mut pool = pool.lock().unwrap();
                     if let Some(s) = pool.connections.remove(&(back_end.store_id, conn_id)) {
                         s.set_conn_state(ConnState::Disconnected);
@@ -828,18 +863,25 @@ async fn start<S, R>(
             // shutdown.
             back_end.clear_pending_message("unreachable");
 
-            // broadcast is time consuming operation which would blocks raftstore, so report
-            // unreachable only once until being connected again.
-            if first_time {
-                first_time = false;
-                back_end
-                    .builder
-                    .router
-                    .report_store_unreachable(back_end.store_id);
-            }
+            back_end
+                .builder
+                .router
+                .report_store_unreachable(back_end.store_id);
             continue;
         } else {
-            debug!("connection established"; "store_id" => back_end.store_id, "addr" => %addr);
+            let wait_conn_duration = begin.unwrap_or_else(Instant::now).elapsed();
+            info!("connection established";
+                "store_id" => back_end.store_id,
+                "addr" => %addr,
+                "cost" => ?wait_conn_duration,
+                "msg_count" => ?back_end.queue.len(),
+                "try_count" => try_count,
+            );
+            RAFT_CLIENT_WAIT_CONN_READY_DURATION_HISTOGRAM_VEC
+                .with_label_values(&[addr.as_str()])
+                .observe(duration_to_sec(wait_conn_duration));
+            begin = None;
+            try_count = 0;
         }
 
         let client = TikvClient::new(channel);
@@ -868,7 +910,6 @@ async fn start<S, R>(
                     .router
                     .report_store_unreachable(back_end.store_id);
                 addr_channel = None;
-                first_time = false;
             }
         }
     }
@@ -920,12 +961,13 @@ struct CachedQueue {
 /// ```text
 /// for m in msgs {
 ///     if !raft_client.send(m) {
-///         // handle error.   
+///         // handle error.
 ///     }
 /// }
 /// raft_client.flush();
 /// ```
 pub struct RaftClient<S, R> {
+    self_store_id: u64,
     pool: Arc<Mutex<ConnectionPool>>,
     cache: LruCache<(u64, usize), CachedQueue>,
     need_flush: Vec<(u64, usize)>,
@@ -940,13 +982,14 @@ where
     S: StoreAddrResolver + Send + 'static,
     R: RaftExtension + Unpin + Send + 'static,
 {
-    pub fn new(builder: ConnectionBuilder<S, R>) -> Self {
+    pub fn new(self_store_id: u64, builder: ConnectionBuilder<S, R>) -> Self {
         let future_pool = Arc::new(
             yatp::Builder::new(thd_name!("raft-stream"))
                 .max_thread_count(1)
                 .build_future_pool(),
         );
         RaftClient {
+            self_store_id,
             pool: Arc::default(),
             cache: LruCache::with_capacity_and_sample(0, 7),
             need_flush: vec![],
@@ -982,6 +1025,7 @@ where
                         queue.set_conn_state(ConnState::Paused);
                     }
                     let back_end = StreamBackEnd {
+                        self_store_id: self.self_store_id,
                         store_id,
                         queue: queue.clone(),
                         builder: self.builder.clone(),
@@ -1143,6 +1187,7 @@ where
 {
     fn clone(&self) -> Self {
         RaftClient {
+            self_store_id: self.self_store_id,
             pool: self.pool.clone(),
             cache: LruCache::with_capacity_and_sample(0, 7),
             need_flush: vec![],

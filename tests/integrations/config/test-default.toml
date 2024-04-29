@@ -2,6 +2,8 @@
 
 [log.file]
 
+[memory]
+
 [readpool.unified]
 
 [readpool.storage]
@@ -39,7 +41,6 @@
 [raftdb.defaultcf]
 
 [raft-engine]
-enable-log-recycle = true # enable by default
 
 [security]
 

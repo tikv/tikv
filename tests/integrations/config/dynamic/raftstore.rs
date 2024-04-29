@@ -2,13 +2,14 @@
 
 use std::{
     iter::FromIterator,
-    sync::{mpsc, Arc, Mutex},
+    sync::{atomic::AtomicU64, mpsc, Arc, Mutex},
     time::Duration,
 };
 
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
 use engine_traits::{Engines, ALL_CFS, CF_DEFAULT};
+use health_controller::HealthController;
 use kvproto::raft_serverpb::RaftMessage;
 use raftstore::{
     coprocessor::CoprocessorHost,
@@ -20,6 +21,7 @@ use raftstore::{
     Result,
 };
 use resource_metering::CollectorRegHandle;
+use service::service_manager::GrpcServiceManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{
@@ -27,7 +29,7 @@ use tikv::{
     import::SstImporter,
 };
 use tikv_util::{
-    config::{ReadableSize, VersionTrack},
+    config::{ReadableDuration, ReadableSize, VersionTrack},
     worker::{dummy_scheduler, LazyWorker, Worker},
 };
 
@@ -76,7 +78,7 @@ fn start_raftstore(
             .as_path()
             .display()
             .to_string();
-        Arc::new(SstImporter::new(&cfg.import, p, None, cfg.storage.api_version()).unwrap())
+        Arc::new(SstImporter::new(&cfg.import, p, None, cfg.storage.api_version(), false).unwrap())
     };
     let snap_mgr = {
         let p = dir
@@ -110,8 +112,10 @@ fn start_raftstore(
             Arc::default(),
             ConcurrencyManager::new(1.into()),
             CollectorRegHandle::new_for_test(),
+            HealthController::new(),
             None,
-            None,
+            GrpcServiceManager::dummy(),
+            Arc::new(AtomicU64::new(0)),
         )
         .unwrap();
 
@@ -163,6 +167,7 @@ fn test_update_raftstore_config() {
         ("raftstore.store-max-batch-size", "4321"),
         ("raftstore.raft-entry-max-size", "32MiB"),
         ("raftstore.apply-yield-write-size", "10KiB"),
+        ("raftstore.snap-wait-split-duration", "10s"),
     ]);
 
     cfg_controller.update(change).unwrap();
@@ -176,6 +181,7 @@ fn test_update_raftstore_config() {
     raft_store.store_batch_system.max_batch_size = Some(4321);
     raft_store.raft_max_size_per_msg = ReadableSize::mb(128);
     raft_store.raft_entry_max_size = ReadableSize::mb(32);
+    raft_store.snap_wait_split_duration = ReadableDuration::secs(10);
     let validate_store_cfg = |raft_cfg: &Config| {
         let raftstore_cfg = raft_cfg.clone();
         validate_store(&router, move |cfg: &Config| {
@@ -231,6 +237,7 @@ fn test_update_raftstore_io_config() {
     // Start from SYNC mode.
     {
         let (mut resize_config, _dir) = TikvConfig::with_tmp().unwrap();
+        resize_config.raft_store.store_io_pool_size = 0; // SYNC mode
         resize_config.validate().unwrap();
         let (cfg_controller, _, _, mut system) = start_raftstore(resize_config, &_dir);
 

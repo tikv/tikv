@@ -15,7 +15,7 @@ use tikv_util::{time::Instant, HandyRwLock};
 #[test]
 fn test_proposal_prevent_sleep() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_hibernate(&mut cluster);
+    configure_for_hibernate(&mut cluster.cfg);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k1", b"v1");
@@ -62,7 +62,7 @@ fn test_proposal_prevent_sleep() {
         true,
     );
     request.mut_header().set_peer(new_peer(1, 1));
-    let (cb, rx) = make_cb(&request);
+    let (cb, mut rx) = make_cb_rocks(&request);
     // send to peer 2
     cluster
         .sim
@@ -90,7 +90,7 @@ fn test_proposal_prevent_sleep() {
     let conf_change = new_change_peer_request(ConfChangeType::RemoveNode, new_peer(3, 3));
     let mut admin_req = new_admin_request(1, region.get_region_epoch(), conf_change);
     admin_req.mut_header().set_peer(new_peer(1, 1));
-    let (cb, _rx) = make_cb(&admin_req);
+    let (cb, _rx) = make_cb_rocks(&admin_req);
     cluster
         .sim
         .rl()
@@ -108,7 +108,7 @@ fn test_proposal_prevent_sleep() {
 #[test]
 fn test_single_voter_restart() {
     let mut cluster = new_server_cluster(0, 2);
-    configure_for_hibernate(&mut cluster);
+    configure_for_hibernate(&mut cluster.cfg);
     cluster.pd_client.disable_default_operator();
     cluster.run_conf_change();
     cluster.pd_client.must_add_peer(1, new_learner_peer(2, 2));
@@ -127,7 +127,7 @@ fn test_single_voter_restart() {
 #[test]
 fn test_prompt_learner() {
     let mut cluster = new_server_cluster(0, 4);
-    configure_for_hibernate(&mut cluster);
+    configure_for_hibernate(&mut cluster.cfg);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(20);
     cluster.pd_client.disable_default_operator();
     cluster.run_conf_change();
@@ -169,7 +169,7 @@ fn test_prompt_learner() {
 #[test]
 fn test_transfer_leader_delay() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_hibernate(&mut cluster);
+    configure_for_hibernate(&mut cluster.cfg);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k1", b"v1");
@@ -199,9 +199,9 @@ fn test_transfer_leader_delay() {
     );
 
     cluster.clear_send_filters();
-    cluster.add_send_filter(CloneFilterFactory(DropMessageFilter::new(
-        MessageType::MsgTimeoutNow,
-    )));
+    cluster.add_send_filter(CloneFilterFactory(DropMessageFilter::new(Arc::new(|m| {
+        m.get_message().get_msg_type() != MessageType::MsgTimeoutNow
+    }))));
     let router = cluster.sim.wl().get_router(1).unwrap();
     router
         .send_raft_message(messages.lock().unwrap().pop().unwrap())
@@ -237,7 +237,7 @@ fn test_transfer_leader_delay() {
 #[test]
 fn test_split_delay() {
     let mut cluster = new_server_cluster(0, 4);
-    configure_for_hibernate(&mut cluster);
+    configure_for_hibernate(&mut cluster.cfg);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(20);
     cluster.pd_client.disable_default_operator();
     cluster.run_conf_change();
@@ -277,7 +277,7 @@ fn test_split_delay() {
 #[test]
 fn test_inconsistent_configuration() {
     let mut cluster = new_node_cluster(0, 3);
-    configure_for_hibernate(&mut cluster);
+    configure_for_hibernate(&mut cluster.cfg);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k1", b"v1");
@@ -362,7 +362,7 @@ fn test_inconsistent_configuration() {
 fn test_hibernate_feature_gate() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.pd_client.reset_version("4.0.0");
-    configure_for_hibernate(&mut cluster);
+    configure_for_hibernate(&mut cluster.cfg);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k1", b"v1");
@@ -411,7 +411,7 @@ fn test_hibernate_feature_gate() {
 #[test]
 fn test_leader_demoted_when_hibernated() {
     let mut cluster = new_node_cluster(0, 4);
-    configure_for_hibernate(&mut cluster);
+    configure_for_hibernate(&mut cluster.cfg);
     cluster.pd_client.disable_default_operator();
     let r = cluster.run_conf_change();
     cluster.pd_client.must_add_peer(r, new_peer(2, 2));
@@ -450,7 +450,7 @@ fn test_leader_demoted_when_hibernated() {
         ));
     }
     // Leave joint.
-    cluster.async_exit_joint(r).unwrap();
+    let _ = cluster.async_exit_joint(r).unwrap();
     // Ensure peer 3 can campaign.
     cluster.wait_last_index(r, 3, 11, Duration::from_secs(5));
     cluster.add_send_filter(CloneFilterFactory(
@@ -482,7 +482,7 @@ fn test_leader_demoted_when_hibernated() {
         );
         request.mut_header().set_peer(new_peer(3, 3));
         // In case peer 3 is hibernated.
-        let (cb, _rx) = make_cb(&request);
+        let (cb, _rx) = make_cb_rocks(&request);
         cluster
             .sim
             .rl()

@@ -104,7 +104,7 @@ pub fn start_global_timer(name: &str) -> Handle {
         .name(thd_name!(name))
         .spawn_wrapper(move || {
             crate::thread_group::set_properties(props);
-            tikv_alloc::add_thread_memory_accessor();
+
             let mut timer = tokio_timer::Timer::default();
             tx.send(timer.handle()).unwrap();
             loop {

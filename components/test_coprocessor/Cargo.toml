@@ -1,8 +1,9 @@
 [package]
 name = "test_coprocessor"
 version = "0.0.1"
-edition = "2018"
+edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [features]
 default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]

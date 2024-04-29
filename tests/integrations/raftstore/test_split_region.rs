@@ -7,26 +7,35 @@ use std::{
     time::Duration,
 };
 
+use engine_rocks::RocksEngine;
 use engine_traits::{Peekable, CF_DEFAULT, CF_WRITE};
 use keys::data_key;
-use kvproto::{metapb, pdpb, raft_cmdpb::*, raft_serverpb::RaftMessage};
+use kvproto::{
+    metapb, pdpb,
+    raft_cmdpb::*,
+    raft_serverpb::{ExtraMessageType, RaftMessage},
+};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use raftstore::{
     store::{Bucket, BucketRange, Callback, WriteResponse},
     Result,
 };
+use raftstore_v2::router::QueryResult;
 use test_raftstore::*;
 use test_raftstore_macro::test_case;
 use tikv::storage::{kv::SnapshotExt, Snapshot};
-use tikv_util::config::*;
-use txn_types::{Key, PessimisticLock};
+use tikv_util::{config::*, future::block_on_timeout};
+use txn_types::{Key, LastChange, PessimisticLock};
+
+use crate::tikv_util::HandyRwLock;
 
 pub const REGION_MAX_SIZE: u64 = 50000;
 pub const REGION_SPLIT_SIZE: u64 = 30000;
 
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_server_base_split_region() {
     let test_base_split_region = |right_derive| {
         let count = 5;
@@ -99,6 +108,7 @@ fn test_server_base_split_region() {
 
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_server_split_region_twice() {
     let count = 5;
     let mut cluster = new_cluster(0, count);
@@ -150,6 +160,8 @@ fn test_server_split_region_twice() {
 #[test_case(test_raftstore::new_incompatible_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
+#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_auto_split_region() {
     let count = 5;
     let mut cluster = new_cluster(0, count);
@@ -285,6 +297,7 @@ macro_rules! check_cluster {
 /// sure broadcast commit is disabled when split.
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_delay_split_region() {
     let mut cluster = new_cluster(0, 3);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(500);
@@ -341,6 +354,8 @@ fn test_delay_split_region() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
+#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_node_split_overlap_snapshot() {
     let mut cluster = new_cluster(0, 3);
     // We use three nodes([1, 2, 3]) for this test.
@@ -397,6 +412,8 @@ fn test_node_split_overlap_snapshot() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
+#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_apply_new_version_snapshot() {
     let mut cluster = new_cluster(0, 3);
     // truncate the log quickly so that we can force sending snapshot.
@@ -453,6 +470,7 @@ fn test_apply_new_version_snapshot() {
 
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_server_split_with_stale_peer() {
     let mut cluster = new_cluster(0, 3);
     // disable raft log gc.
@@ -526,6 +544,8 @@ fn test_server_split_with_stale_peer() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
+#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_split_region_diff_check() {
     let count = 1;
     let mut cluster = new_cluster(0, count);
@@ -579,6 +599,7 @@ fn test_split_region_diff_check() {
 // verify the region is splitted.
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_node_split_region_after_reboot_with_config_change() {
     let count = 1;
     let mut cluster = new_cluster(0, count);
@@ -602,7 +623,7 @@ fn test_node_split_region_after_reboot_with_config_change() {
     sleep_ms(200);
     assert_eq!(pd_client.get_split_count(), 0);
 
-    // change the config to make the region splittable
+    // change the config to make the region splitable
     cluster.cfg.coprocessor.region_max_size = Some(ReadableSize(region_max_size / 3));
     cluster.cfg.coprocessor.region_split_size = Some(ReadableSize(region_split_size / 3));
     cluster.cfg.coprocessor.region_bucket_size = ReadableSize(region_split_size / 3);
@@ -622,7 +643,10 @@ fn test_node_split_region_after_reboot_with_config_change() {
     }
 }
 
-fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {
+fn test_split_epoch_not_match<T: Simulator<RocksEngine>>(
+    cluster: &mut Cluster<RocksEngine, T>,
+    right_derive: bool,
+) {
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -720,6 +744,8 @@ fn test_node_split_epoch_not_match_right_derive() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
+#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_node_quick_election_after_split() {
     let mut cluster = new_cluster(0, 3);
 
@@ -758,6 +784,8 @@ fn test_node_quick_election_after_split() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
+#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_node_split_region() {
     let count = 5;
     let mut cluster = new_cluster(0, count);
@@ -798,6 +826,7 @@ fn test_node_split_region() {
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
 fn test_node_split_update_region_right_derive() {
     let mut cluster = new_cluster(0, 3);
     // Election timeout and max leader lease is 1s.
@@ -817,8 +846,8 @@ fn test_node_split_update_region_right_derive() {
     let new_leader = right
         .get_peers()
         .iter()
+        .find(|&p| p.get_id() != origin_leader.get_id())
         .cloned()
-        .find(|p| p.get_id() != origin_leader.get_id())
         .unwrap();
 
     // Make sure split is done in the new_leader.
@@ -853,6 +882,7 @@ fn test_node_split_update_region_right_derive() {
 
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_split_with_epoch_not_match() {
     let mut cluster = new_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -888,6 +918,7 @@ fn test_split_with_epoch_not_match() {
 
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_split_with_in_memory_pessimistic_locks() {
     let mut cluster = new_cluster(0, 3);
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -910,8 +941,8 @@ fn test_split_with_in_memory_pessimistic_locks() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
-        last_change_ts: 5.into(),
-        versions_to_last_change: 3,
+        last_change: LastChange::make_exist(5.into(), 3),
+        is_locked_with_conflict: false,
     };
     let lock_c = PessimisticLock {
         primary: b"c".to_vec().into_boxed_slice(),
@@ -919,8 +950,8 @@ fn test_split_with_in_memory_pessimistic_locks() {
         ttl: 3000,
         for_update_ts: 20.into(),
         min_commit_ts: 30.into(),
-        last_change_ts: 5.into(),
-        versions_to_last_change: 3,
+        last_change: LastChange::make_exist(5.into(), 3),
+        is_locked_with_conflict: false,
     };
     {
         let mut locks = txn_ext.pessimistic_locks.write();
@@ -969,14 +1000,13 @@ fn test_refresh_region_bucket_keys() {
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
 
+    // case: init bucket info
     cluster.must_put(b"k11", b"v1");
     let mut region = pd_client.get_region(b"k11").unwrap();
-
     let bucket = Bucket {
         keys: vec![b"k11".to_vec()],
         size: 1024 * 1024 * 200,
     };
-
     let mut expected_buckets = metapb::Buckets::default();
     expected_buckets.set_keys(bucket.clone().keys.into());
     expected_buckets
@@ -990,6 +1020,8 @@ fn test_refresh_region_bucket_keys() {
         Option::None,
         Some(expected_buckets.clone()),
     );
+
+    // case: bucket range should refresh if epoch changed
     let conf_ver = region.get_region_epoch().get_conf_ver() + 1;
     region.mut_region_epoch().set_conf_ver(conf_ver);
 
@@ -1011,6 +1043,7 @@ fn test_refresh_region_bucket_keys() {
     );
     assert_eq!(bucket_version2, bucket_version + 1);
 
+    // case: stale epoch will not refresh buckets info
     let conf_ver = 0;
     region.mut_region_epoch().set_conf_ver(conf_ver);
     let bucket_version3 = cluster.refresh_region_bucket_keys(
@@ -1021,6 +1054,7 @@ fn test_refresh_region_bucket_keys() {
     );
     assert_eq!(bucket_version3, bucket_version2);
 
+    // case: bucket split
     // now the buckets is ["", "k12", ""]. further split ["", k12], [k12, ""]
     // buckets into more buckets
     let region = pd_client.get_region(b"k11").unwrap();
@@ -1059,6 +1093,7 @@ fn test_refresh_region_bucket_keys() {
     );
     assert_eq!(bucket_version4, bucket_version3 + 1);
 
+    // case: merge buckets
     // remove k11~k12, k12~k121, k122~[] bucket
     let buckets = vec![
         Bucket {
@@ -1100,7 +1135,7 @@ fn test_refresh_region_bucket_keys() {
 
     assert_eq!(bucket_version5, bucket_version4 + 1);
 
-    // split the region
+    // case: split the region
     pd_client.must_split_region(region, pdpb::CheckPolicy::Usekey, vec![b"k11".to_vec()]);
     let mut buckets = vec![Bucket {
         keys: vec![b"k10".to_vec()],
@@ -1125,7 +1160,7 @@ fn test_refresh_region_bucket_keys() {
         cluster.refresh_region_bucket_keys(&region, buckets, None, Some(expected_buckets.clone()));
     assert_eq!(bucket_version6, bucket_version5 + 1);
 
-    // merge the region
+    // case: merge the region
     pd_client.must_merge(left_id, right.get_id());
     let region = pd_client.get_region(b"k10").unwrap();
     let buckets = vec![Bucket {
@@ -1138,6 +1173,7 @@ fn test_refresh_region_bucket_keys() {
         cluster.refresh_region_bucket_keys(&region, buckets, None, Some(expected_buckets.clone()));
     assert_eq!(bucket_version7, bucket_version6 + 1);
 
+    // case: nothing changed
     let bucket_version8 = cluster.refresh_region_bucket_keys(
         &region,
         vec![],
@@ -1150,9 +1186,9 @@ fn test_refresh_region_bucket_keys() {
 
 #[test]
 fn test_gen_split_check_bucket_ranges() {
-    let count = 5;
-    let mut cluster = new_server_cluster(0, count);
-    cluster.cfg.coprocessor.region_bucket_size = ReadableSize(5);
+    let mut cluster = new_server_cluster(0, 1);
+    let region_bucket_size = ReadableSize::kb(1);
+    cluster.cfg.coprocessor.region_bucket_size = region_bucket_size;
     cluster.cfg.coprocessor.enable_region_bucket = Some(true);
     // disable report buckets; as it will reset the user traffic stats to randomize
     // the test result
@@ -1162,14 +1198,15 @@ fn test_gen_split_check_bucket_ranges() {
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
 
-    cluster.must_put(b"k11", b"v1");
-    let region = pd_client.get_region(b"k11").unwrap();
+    let mut range = 1..;
+    let mid_key = put_till_size(&mut cluster, region_bucket_size.0, &mut range);
+    let second_key = put_till_size(&mut cluster, region_bucket_size.0, &mut range);
+    let region = pd_client.get_region(&second_key).unwrap();
 
     let bucket = Bucket {
-        keys: vec![b"k11".to_vec()],
-        size: 1024 * 1024 * 200,
+        keys: vec![mid_key.clone()],
+        size: region_bucket_size.0 * 2,
     };
-
     let mut expected_buckets = metapb::Buckets::default();
     expected_buckets.set_keys(bucket.clone().keys.into());
     expected_buckets
@@ -1185,32 +1222,28 @@ fn test_gen_split_check_bucket_ranges() {
         Option::None,
         Some(expected_buckets.clone()),
     );
-    cluster.must_put(b"k10", b"v1");
-    cluster.must_put(b"k12", b"v1");
 
-    let expected_bucket_ranges = vec![
-        BucketRange(vec![], b"k11".to_vec()),
-        BucketRange(b"k11".to_vec(), vec![]),
-    ];
+    // put some data into the right buckets, so the bucket range will be check by
+    // split check.
+    let latest_key = put_till_size(&mut cluster, region_bucket_size.0 + 100, &mut range);
+    let expected_bucket_ranges = vec![BucketRange(mid_key.clone(), vec![])];
     cluster.send_half_split_region_message(&region, Some(expected_bucket_ranges));
 
-    // set fsm.peer.last_bucket_regions
+    // reset bucket stats.
     cluster.refresh_region_bucket_keys(
         &region,
         buckets,
         Option::None,
         Some(expected_buckets.clone()),
     );
-    // because the diff between last_bucket_regions and bucket_regions is zero,
-    // bucket range for split check should be empty.
-    let expected_bucket_ranges = vec![];
-    cluster.send_half_split_region_message(&region, Some(expected_bucket_ranges));
+
+    thread::sleep(Duration::from_millis(100));
+    cluster.send_half_split_region_message(&region, Some(vec![]));
 
     // split the region
-    pd_client.must_split_region(region, pdpb::CheckPolicy::Usekey, vec![b"k11".to_vec()]);
-
-    let left = pd_client.get_region(b"k10").unwrap();
-    let right = pd_client.get_region(b"k12").unwrap();
+    pd_client.must_split_region(region, pdpb::CheckPolicy::Usekey, vec![second_key]);
+    let left = pd_client.get_region(&mid_key).unwrap();
+    let right = pd_client.get_region(&latest_key).unwrap();
     if right.get_id() == 1 {
         // the bucket_ranges should be None to refresh the bucket
         cluster.send_half_split_region_message(&right, None);
@@ -1218,10 +1251,273 @@ fn test_gen_split_check_bucket_ranges() {
         // the bucket_ranges should be None to refresh the bucket
         cluster.send_half_split_region_message(&left, None);
     }
-
+    thread::sleep(Duration::from_millis(300));
     // merge the region
     pd_client.must_merge(left.get_id(), right.get_id());
-    let region = pd_client.get_region(b"k10").unwrap();
-    // the bucket_ranges should be None to refresh the bucket
+    let region = pd_client.get_region(&mid_key).unwrap();
     cluster.send_half_split_region_message(&region, None);
+}
+
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
+fn test_catch_up_peers_after_split() {
+    let mut cluster = new_cluster(0, 3);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    let left_key = b"k1";
+    let right_key = b"k3";
+    let split_key = b"k2";
+    cluster.must_put(left_key, b"v1");
+    cluster.must_put(right_key, b"v3");
+
+    // Left and right key must be in same region before split.
+    let region = pd_client.get_region(left_key).unwrap();
+    let region2 = pd_client.get_region(right_key).unwrap();
+    assert_eq!(region.get_id(), region2.get_id());
+
+    // Split with split_key, so left_key must in left, and right_key in right.
+    cluster.must_split(&region, split_key);
+
+    // Get new split region by right_key because default right_derive is false.
+    let right_region = pd_client.get_region(right_key).unwrap();
+
+    let pending_peers = pd_client.get_pending_peers();
+
+    // Ensure new split region has no pending peers.
+    for p in right_region.get_peers() {
+        assert!(!pending_peers.contains_key(&p.id))
+    }
+}
+
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_split_region_keep_records() {
+    let mut cluster = new_cluster(0, 3);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    pd_client.must_remove_peer(r1, new_peer(2, 2));
+
+    let leader = cluster.leader_of_region(r1).unwrap();
+    cluster.add_send_filter_on_node(
+        leader.get_store_id(),
+        Box::new(DropMessageFilter::new(Arc::new(|m: &RaftMessage| {
+            // Drop all gc peer requests and responses.
+            !(m.has_extra_msg()
+                && (m.get_extra_msg().get_type() == ExtraMessageType::MsgGcPeerRequest
+                    || m.get_extra_msg().get_type() == ExtraMessageType::MsgGcPeerResponse))
+        }))),
+    );
+
+    // Make sure split has applied.
+    let region = pd_client.get_region(b"").unwrap();
+    cluster.must_split(&region, b"k1");
+    cluster.must_put(b"k2", b"v2");
+    cluster.must_put(b"k0", b"v0");
+
+    let region_state = cluster.region_local_state(r1, leader.get_store_id());
+    assert!(
+        !region_state.get_removed_records().is_empty(),
+        "{:?}",
+        region_state
+    );
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
+fn test_node_slow_split_does_not_cause_snapshot() {
+    // We use three nodes([1, 2, 3]) for this test.
+    let mut cluster = new_cluster(0, 3);
+    configure_for_lease_read(&mut cluster.cfg, None, Some(5000));
+    cluster.cfg.raft_store.snap_wait_split_duration = ReadableDuration::hours(1);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    cluster.must_transfer_leader(region_id, new_peer(3, 3));
+    cluster.must_put(b"k2", b"v2");
+    cluster.must_transfer_leader(region_id, new_peer(1, 1));
+
+    // isolate node 3 for region 1.
+    cluster.add_recv_filter_on_node(3, Box::new(RegionPacketFilter::new(1, 3)));
+
+    let (notify_tx, notify_rx) = std::sync::mpsc::channel();
+    cluster.add_send_filter_on_node(
+        1,
+        Box::new(MessageTypeNotifier::new(
+            MessageType::MsgSnapshot,
+            notify_tx,
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        )),
+    );
+
+    // split (-inf, +inf) -> (-inf, k1), [k1, +inf]
+    let region = pd_client.get_region(b"").unwrap();
+    cluster.must_split(&region, b"k1");
+
+    // Leader must not send snapshot to new peer on node 3.
+    notify_rx.recv_timeout(Duration::from_secs(3)).unwrap_err();
+    cluster.must_put(b"k0", b"v0");
+    // ... even after node 3 applied split.
+    cluster.clear_recv_filter_on_node(3);
+
+    let new_region = pd_client.get_region(b"").unwrap();
+    let new_peer3 = find_peer(&new_region, 3).unwrap();
+    cluster.must_transfer_leader(new_region.get_id(), new_peer3.clone());
+
+    notify_rx.try_recv().unwrap_err();
+}
+
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_slow_split_does_not_prevent_snapshot() {
+    // We use three nodes([1, 2, 3]) for this test.
+    let mut cluster = new_cluster(0, 3);
+    configure_for_lease_read(&mut cluster.cfg, None, Some(5000));
+    cluster.cfg.raft_store.snap_wait_split_duration = ReadableDuration::secs(2);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    cluster.must_transfer_leader(region_id, new_peer(3, 3));
+    cluster.must_put(b"k2", b"v2");
+    cluster.must_transfer_leader(region_id, new_peer(1, 1));
+
+    // isolate node 3 for region 1.
+    cluster.add_recv_filter_on_node(3, Box::new(RegionPacketFilter::new(1, 3)));
+
+    let (notify_tx, notify_rx) = std::sync::mpsc::channel();
+    cluster.add_send_filter_on_node(
+        1,
+        Box::new(MessageTypeNotifier::new(
+            MessageType::MsgSnapshot,
+            notify_tx,
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        )),
+    );
+
+    // split (-inf, +inf) -> (-inf, k1), [k1, +inf]
+    let region = pd_client.get_region(b"").unwrap();
+    cluster.must_split(&region, b"k1");
+
+    // Leader must not send snapshot to new peer on node 3.
+    notify_rx
+        .recv_timeout(cluster.cfg.raft_store.snap_wait_split_duration.0 / 2)
+        .unwrap_err();
+
+    // A follower can receive a snapshot from leader if split is really slow.
+    thread::sleep(2 * cluster.cfg.raft_store.snap_wait_split_duration.0);
+    let new_region = pd_client.get_region(b"").unwrap();
+    let new_peer3 = find_peer(&new_region, 3).unwrap();
+    cluster.must_transfer_leader(new_region.get_id(), new_peer3.clone());
+
+    notify_rx.try_recv().unwrap();
+}
+
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_slow_split_does_not_prevent_leader_election() {
+    // We use three nodes([1, 2, 3]) for this test.
+    let mut cluster = new_cluster(0, 3);
+    configure_for_lease_read(&mut cluster.cfg, None, Some(5000));
+    cluster.cfg.raft_store.snap_wait_split_duration = ReadableDuration::hours(1);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+
+    // Do not let node 2 and 3 split.
+    cluster.add_recv_filter_on_node(2, Box::new(EraseHeartbeatCommit));
+    cluster.add_recv_filter_on_node(3, Box::new(EraseHeartbeatCommit));
+
+    let (notify_tx, notify_rx) = std::sync::mpsc::channel();
+    cluster.add_recv_filter_on_node(
+        1,
+        Box::new(MessageTypeNotifier::new(
+            MessageType::MsgRequestVoteResponse,
+            notify_tx,
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        )),
+    );
+
+    // split (-inf, +inf) -> (-inf, k1), [k1, +inf]
+    let region = pd_client.get_region(b"").unwrap();
+    cluster.must_split(&region, b"k1");
+
+    // Node 1 must receive request vote response twice.
+    notify_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    notify_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+    cluster.must_put(b"k0", b"v0");
+}
+
+// A filter that disable read index by heartbeat.
+#[derive(Clone)]
+struct EraseHeartbeatContext;
+
+impl Filter for EraseHeartbeatContext {
+    fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        for msg in msgs {
+            if msg.get_message().get_msg_type() == MessageType::MsgHeartbeat {
+                msg.mut_message().clear_context();
+            }
+        }
+        Ok(())
+    }
+}
+
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_split_during_read_index() {
+    let mut cluster = new_cluster(0, 3);
+    configure_for_lease_read(&mut cluster.cfg, None, Some(5000));
+    cluster.cfg.raft_store.snap_wait_split_duration = ReadableDuration::hours(1);
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+
+    let region = cluster.get_region(b"");
+
+    // Delay read index.
+    cluster.add_recv_filter_on_node(2, Box::new(EraseHeartbeatContext));
+    cluster.add_recv_filter_on_node(3, Box::new(EraseHeartbeatContext));
+    let mut request = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_read_index_cmd()],
+        true,
+    );
+    request.mut_header().set_peer(new_peer(1, 1));
+    let (msg, sub) = raftstore_v2::router::PeerMsg::raft_query(request);
+    cluster
+        .sim
+        .rl()
+        .async_peer_msg_on_node(1, region.get_id(), msg)
+        .unwrap();
+
+    cluster.must_split(&region, b"a");
+
+    // Enable read index
+    cluster.clear_recv_filter_on_node(2);
+    cluster.clear_recv_filter_on_node(3);
+
+    match block_on_timeout(sub.result(), Duration::from_secs(5)) {
+        Ok(Some(QueryResult::Response(resp))) if resp.get_header().has_error() => {}
+        other => {
+            panic!("{:?}", other);
+        }
+    }
 }

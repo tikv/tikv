@@ -9,6 +9,7 @@ use txn_types::{Key, TimeStamp};
 use crate::storage::{
     kv::WriteData,
     lock_manager::LockManager,
+    metrics::{CommandKind, KV_COMMAND_COUNTER_VEC_STATIC},
     mvcc::{MvccReader, MvccTxn},
     txn::{
         actions::flashback_to_version::{
@@ -27,7 +28,10 @@ use crate::storage::{
 command! {
     FlashbackToVersion:
         cmd_ty => (),
-        display => "kv::command::flashback_to_version -> {} | {} {} | {:?}", (version, start_ts, commit_ts, ctx),
+        display => {
+            "kv::command::flashback_to_version -> {} | {} {} | {:?}",
+            (version, start_ts, commit_ts, ctx),
+        }
         content => {
             start_ts: TimeStamp,
             commit_ts: TimeStamp,
@@ -36,11 +40,14 @@ command! {
             end_key: Option<Key>,
             state: FlashbackToVersionState,
         }
+        in_heap => {
+            start_key,
+            end_key,
+        }
 }
 
 impl CommandExt for FlashbackToVersion {
     ctx!();
-    tag!(flashback_to_version);
     request_type!(KvFlashbackToVersion);
 
     fn gen_lock(&self) -> latch::Lock {
@@ -67,12 +74,35 @@ impl CommandExt for FlashbackToVersion {
             FlashbackToVersionState::Commit { key_to_commit } => key_to_commit.as_encoded().len(),
         }
     }
+
+    fn tag(&self) -> CommandKind {
+        match self.state {
+            FlashbackToVersionState::RollbackLock { .. } => {
+                CommandKind::flashback_to_version_rollback_lock
+            }
+            _ => CommandKind::flashback_to_version_write,
+        }
+    }
+
+    fn incr_cmd_metric(&self) {
+        match self.state {
+            FlashbackToVersionState::RollbackLock { .. } => {
+                KV_COMMAND_COUNTER_VEC_STATIC
+                    .flashback_to_version_rollback_lock
+                    .inc();
+            }
+            _ => KV_COMMAND_COUNTER_VEC_STATIC
+                .flashback_to_version_write
+                .inc(),
+        }
+    }
 }
 
 impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
     fn process_write(mut self, snapshot: S, context: WriteContext<'_, L>) -> Result<WriteResult> {
         let mut reader =
             MvccReader::new_with_ctx(snapshot.clone(), Some(ScanMode::Forward), &self.ctx);
+        reader.set_allow_in_flashback(true);
         let mut txn = MvccTxn::new(TimeStamp::zero(), context.concurrency_manager);
         match self.state {
             FlashbackToVersionState::RollbackLock {
@@ -162,6 +192,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for FlashbackToVersion {
             new_acquired_locks: vec![],
             lock_guards: vec![],
             response_policy: ResponsePolicy::OnApplied,
+            known_txn_status: vec![],
         })
     }
 }

@@ -2,7 +2,11 @@
 name = "raft_log_engine"
 version = "0.0.1"
 publish = false
-edition = "2018"
+edition = "2021"
+license = "Apache-2.0"
+
+[features]
+failpoints = ["raft-engine/failpoints"]
 
 [dependencies]
 encryption = { workspace = true }
@@ -14,14 +18,13 @@ lazy_static = "1.4.0"
 num_cpus = "1"
 online_config = { workspace = true }
 protobuf = "2"
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-raft-engine = { git = "https://github.com/tikv/raft-engine.git", features = ["swap"] }
+raft = { workspace = true }
+raft-engine = { workspace = true }
 serde = "1.0"
 serde_derive = "1.0"
 slog = { workspace = true }
 slog-global = { workspace = true }
 tikv_util = { workspace = true }
-time = "0.1"
 tracker = { workspace = true }
 
 [dev-dependencies]

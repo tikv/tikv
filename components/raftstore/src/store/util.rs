@@ -5,7 +5,7 @@ use std::{
     cmp,
     collections::{HashMap, VecDeque},
     fmt,
-    fmt::Display,
+    fmt::{Debug, Display},
     option::Option,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
@@ -35,7 +35,7 @@ use tikv_util::{
     codec::number::{decode_u64, NumberEncoder},
     debug, info,
     store::{find_peer_by_id, region},
-    time::monotonic_raw_now,
+    time::{monotonic_raw_now, Instant},
     Either,
 };
 use time::{Duration, Timespec};
@@ -43,7 +43,11 @@ use tokio::sync::Notify;
 use txn_types::WriteBatchFlags;
 
 use super::{metrics::PEER_ADMIN_CMD_COUNTER_VEC, peer_storage, Config};
-use crate::{coprocessor::CoprocessorHost, store::snap::SNAPSHOT_VERSION, Error, Result};
+use crate::{
+    coprocessor::CoprocessorHost,
+    store::{simple_write::SimpleWriteReqDecoder, snap::SNAPSHOT_VERSION},
+    Error, Result,
+};
 
 const INVALID_TIMESTAMP: u64 = u64::MAX;
 
@@ -94,13 +98,13 @@ fn is_first_vote_msg(msg: &eraftpb::Message) -> bool {
 /// received but there is no such region in `Store::region_peers`. In this case
 /// we should put `msg` into `pending_msg` instead of create the peer.
 #[inline]
-fn is_first_append_entry(msg: &eraftpb::Message) -> bool {
+pub fn is_first_append_entry(msg: &eraftpb::Message) -> bool {
     match msg.get_msg_type() {
         MessageType::MsgAppend => {
-            let ent = msg.get_entries();
-            ent.len() == 1
-                && ent[0].data.is_empty()
-                && ent[0].index == peer_storage::RAFT_INIT_LOG_INDEX + 1
+            let entries = msg.get_entries();
+            !entries.is_empty()
+                && entries[0].data.is_empty()
+                && entries[0].index == peer_storage::RAFT_INIT_LOG_INDEX + 1
         }
         _ => false,
     }
@@ -120,8 +124,7 @@ pub fn is_vote_msg(msg: &eraftpb::Message) -> bool {
 /// peer or not.
 // There could be two cases:
 // 1. Target peer already exists but has not established communication with leader yet
-// 2. Target peer is added newly due to member change or region split, but it's not
-//    created yet
+// 2. Target peer is added newly due to member change or region split, but it's not created yet
 // For both cases the region start key and end key are attached in RequestVote and
 // Heartbeat message for the store of that peer to check whether to create a new peer
 // when receiving these messages, or just to wait for a pending region split to perform
@@ -154,6 +157,20 @@ pub fn new_empty_snapshot(
     snap_data.mut_meta().set_for_witness(for_witness);
     snapshot.set_data(snap_data.write_to_bytes().unwrap().into());
     snapshot
+}
+
+pub fn gen_bucket_version(term: u64, current_version: u64) -> u64 {
+    //   term       logical counter
+    // |-----------|-----------|
+    //  high bits     low bits
+    // term: given 10s election timeout, the 32 bit means 1362 year running time
+    let current_version_term = current_version >> 32;
+    let bucket_version: u64 = if current_version_term == term {
+        current_version + 1
+    } else {
+        term << 32
+    };
+    bucket_version
 }
 
 const STR_CONF_CHANGE_ADD_NODE: &str = "AddNode";
@@ -302,7 +319,7 @@ pub fn compare_region_epoch(
     // tells TiDB with a epoch not match error contains the latest target Region
     // info, TiDB updates its region cache and sends requests to TiKV B,
     // and TiKV B has not applied commit merge yet, since the region epoch in
-    // request is higher than TiKV B, the request must be denied due to epoch
+    // request is higher than TiKV B, the request must be suspended due to epoch
     // not match, so it does not read on a stale snapshot, thus avoid the
     // KeyNotInRegion error.
     let current_epoch = region.get_region_epoch();
@@ -340,27 +357,27 @@ pub fn compare_region_epoch(
 pub fn check_flashback_state(
     is_in_flashback: bool,
     flashback_start_ts: u64,
-    req: &RaftCmdRequest,
+    header: &RaftRequestHeader,
+    admin_type: Option<AdminCmdType>,
     region_id: u64,
     skip_not_prepared: bool,
 ) -> Result<()> {
     // The admin flashback cmd could be proposed/applied under any state.
-    if req.has_admin_request()
-        && (req.get_admin_request().get_cmd_type() == AdminCmdType::PrepareFlashback
-            || req.get_admin_request().get_cmd_type() == AdminCmdType::FinishFlashback)
+    if let Some(ty) = admin_type
+        && (ty == AdminCmdType::PrepareFlashback || ty == AdminCmdType::FinishFlashback)
     {
         return Ok(());
     }
     // TODO: only use `flashback_start_ts` to check flashback state.
     let is_in_flashback = is_in_flashback || flashback_start_ts > 0;
-    let is_flashback_request = WriteBatchFlags::from_bits_truncate(req.get_header().get_flags())
+    let is_flashback_request = WriteBatchFlags::from_bits_truncate(header.get_flags())
         .contains(WriteBatchFlags::FLASHBACK);
     // If the region is in the flashback state:
     //   - A request with flashback flag will be allowed.
     //   - A read request whose `read_ts` is smaller than `flashback_start_ts` will
     //     be allowed.
     if is_in_flashback && !is_flashback_request {
-        if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
+        if let Ok(read_ts) = decode_u64(&mut header.get_flag_data()) {
             if read_ts != 0 && read_ts < flashback_start_ts {
                 return Ok(());
             }
@@ -418,11 +435,10 @@ pub fn check_peer_id(header: &RaftRequestHeader, peer_id: u64) -> Result<()> {
     if header.get_peer().get_id() == peer_id {
         Ok(())
     } else {
-        Err(box_err!(
-            "mismatch peer id {} != {}",
-            header.get_peer().get_id(),
-            peer_id
-        ))
+        Err(Error::MismatchPeerId {
+            request_peer_id: header.get_peer().get_id(),
+            store_peer_id: peer_id,
+        })
     }
 }
 
@@ -749,18 +765,30 @@ pub fn get_entry_header(entry: &Entry) -> RaftRequestHeader {
     if entry.get_entry_type() != EntryType::EntryNormal {
         return RaftRequestHeader::default();
     }
-    // request header is encoded into data
-    let mut is = CodedInputStream::from_bytes(entry.get_data());
-    if is.eof().unwrap() {
-        return RaftRequestHeader::default();
+    let logger = slog_global::get_global().new(slog::o!());
+    match SimpleWriteReqDecoder::new(
+        |_, _, _| RaftCmdRequest::default(),
+        &logger,
+        entry.get_data(),
+        entry.get_index(),
+        entry.get_term(),
+    ) {
+        Ok(decoder) => decoder.header().clone(),
+        Err(_) => {
+            // request header is encoded into data
+            let mut is = CodedInputStream::from_bytes(entry.get_data());
+            if is.eof().unwrap() {
+                return RaftRequestHeader::default();
+            }
+            let (field_number, _) = is.read_tag_unpack().unwrap();
+            let t = is.read_message().unwrap();
+            // Header field is of number 1
+            if field_number != 1 {
+                panic!("unexpected field number: {} {:?}", field_number, t);
+            }
+            t
+        }
     }
-    let (field_number, _) = is.read_tag_unpack().unwrap();
-    let t = is.read_message().unwrap();
-    // Header field is of number 1
-    if field_number != 1 {
-        panic!("unexpected field number: {} {:?}", field_number, t);
-    }
-    t
 }
 
 /// Parse data of entry `index`.
@@ -782,6 +810,25 @@ pub fn parse_data_at<T: Message + Default>(data: &[u8], index: u64, tag: &str) -
         );
     });
     result
+}
+
+pub enum RaftCmd<'a> {
+    V1(RaftCmdRequest),
+    V2(SimpleWriteReqDecoder<'a>),
+}
+
+pub fn parse_raft_cmd_request<'a>(data: &'a [u8], index: u64, term: u64, tag: &str) -> RaftCmd<'a> {
+    let logger = slog_global::get_global().new(slog::o!());
+    match SimpleWriteReqDecoder::new(
+        |_, _, _| parse_data_at(data, index, tag),
+        &logger,
+        data,
+        index,
+        term,
+    ) {
+        Ok(simple_write_decoder) => RaftCmd::V2(simple_write_decoder),
+        Err(cmd) => RaftCmd::V1(cmd),
+    }
 }
 
 /// Check if two regions are sibling.
@@ -963,6 +1010,7 @@ pub fn check_conf_change(
     change_peers: &[ChangePeerRequest],
     cc: &impl ConfChangeI,
     ignore_safety: bool,
+    peer_heartbeats: &collections::HashMap<u64, std::time::Instant>,
 ) -> Result<()> {
     let current_progress = node.status().progress.unwrap().clone();
     let mut after_progress = current_progress.clone();
@@ -1046,11 +1094,18 @@ pub fn check_conf_change(
         return Err(box_err!("multiple changes that only effect learner"));
     }
 
+    check_availability_by_last_heartbeats(
+        region,
+        cfg,
+        change_peers,
+        leader.get_id(),
+        peer_heartbeats,
+    )?;
     if !ignore_safety {
         let promoted_commit_index = after_progress.maximal_committed_index().0;
         let first_index = node.raft.raft_log.first_index();
         if current_progress.is_singleton() // It's always safe if there is only one node in the cluster.
-                || promoted_commit_index + 1 >= first_index
+            || promoted_commit_index + 1 >= first_index
         {
             return Ok(());
         }
@@ -1060,10 +1115,12 @@ pub fn check_conf_change(
             .inc();
 
         Err(box_err!(
-            "{:?}: before: {:?}, after: {:?}, first index {}, promoted commit index {}",
+            "{:?}: before: {:?}, {:?}; after: {:?}, {:?}; first index {}; promoted commit index {}",
             change_peers,
-            current_progress.conf().to_conf_state(),
-            after_progress.conf().to_conf_state(),
+            current_progress.conf(),
+            current_progress.iter().collect::<Vec<_>>(),
+            after_progress.conf(),
+            current_progress.iter().collect::<Vec<_>>(),
             first_index,
             promoted_commit_index
         ))
@@ -1072,6 +1129,108 @@ pub fn check_conf_change(
     }
 }
 
+/// Check the would-be availability if the operation proceed.
+/// If the slow peers count would be equal or larger than normal peers count,
+/// then the operations would be rejected
+fn check_availability_by_last_heartbeats(
+    region: &metapb::Region,
+    cfg: &Config,
+    change_peers: &[ChangePeerRequest],
+    leader_id: u64,
+    peer_heartbeats: &collections::HashMap<u64, std::time::Instant>,
+) -> Result<()> {
+    let mut slow_voters = vec![];
+    let mut normal_voters = vec![];
+
+    // Here we assume if the last beartbeat is within 2 election timeout, the peer
+    // is healthy. When a region is hibernate, we expect all its peers are *slow*
+    // and it would still allow the operation
+    let slow_voter_threshold =
+        2 * cfg.raft_base_tick_interval.0 * cfg.raft_max_election_timeout_ticks as u32;
+    for (id, last_heartbeat) in peer_heartbeats {
+        // for slow and normal peer calculation, we only count voter role
+        if region
+            .get_peers()
+            .iter()
+            .find(|p| p.get_id() == *id)
+            .map_or(false, |p| {
+                p.role == PeerRole::Voter || p.role == PeerRole::IncomingVoter
+            })
+        {
+            // leader itself is not a slow peer
+            if *id == leader_id || last_heartbeat.elapsed() <= slow_voter_threshold {
+                normal_voters.push(*id);
+            } else {
+                slow_voters.push(*id);
+            }
+        }
+    }
+
+    let is_healthy = normal_voters.len() > slow_voters.len();
+    // if it's already unhealthy, let it go
+    if !is_healthy {
+        return Ok(());
+    }
+
+    let mut normal_voters_to_remove = vec![];
+    let mut slow_voters_to_add = vec![];
+    for cp in change_peers {
+        let (change_type, peer) = (cp.get_change_type(), cp.get_peer());
+        let is_voter = region
+            .get_peers()
+            .iter()
+            .find(|p| p.get_id() == peer.get_id())
+            .map_or(false, |p| {
+                p.role == PeerRole::Voter || p.role == PeerRole::IncomingVoter
+            });
+        if !is_voter && change_type == ConfChangeType::AddNode {
+            // exiting peers, promoting from learner to voter
+            if let Some(last_heartbeat) = peer_heartbeats.get(&peer.get_id()) {
+                if last_heartbeat.elapsed() <= slow_voter_threshold {
+                    normal_voters.push(peer.get_id());
+                } else {
+                    slow_voters.push(peer.get_id());
+                    slow_voters_to_add.push(peer.get_id());
+                }
+            } else {
+                // it's a new peer, assuming it's a normal voter
+                normal_voters.push(peer.get_id());
+            }
+        }
+
+        if is_voter
+            && (change_type == ConfChangeType::RemoveNode
+                || change_type == ConfChangeType::AddLearnerNode)
+        {
+            // If the change_type is AddLearnerNode and the last heartbeat is found, it
+            // means it's a demote from voter as AddLearnerNode on existing learner node is
+            // not allowed.
+            if let Some(last_heartbeat) = peer_heartbeats.get(&peer.get_id()) {
+                if last_heartbeat.elapsed() <= slow_voter_threshold {
+                    normal_voters.retain(|id| *id != peer.get_id());
+                    normal_voters_to_remove.push(peer.clone());
+                }
+            }
+        }
+    }
+
+    // Only block the conf change when currently it's healthy, but would be
+    // unhealthy. If currently it's already unhealthy, let it go.
+    if slow_voters.len() >= normal_voters.len() {
+        return Err(box_err!(
+            "Ignore conf change command on [region_id={}] because the operations may lead to unavailability.\
+             Normal voters to remove {:?}, slow voters to add {:?}.\
+             Normal voters would be {:?}, slow voters would be {:?}.",
+            region.get_id(),
+            &normal_voters_to_remove,
+            &slow_voters_to_add,
+            &normal_voters,
+            &slow_voters
+        ));
+    }
+
+    Ok(())
+}
 pub struct MsgType<'a>(pub &'a RaftMessage);
 
 impl Display for MsgType<'_> {
@@ -1142,14 +1301,15 @@ impl RegionReadProgressRegistry {
     }
 
     // Get the minimum `resolved_ts` which could ensure that there will be no more
-    // locks whose `start_ts` is greater than it.
+    // locks whose `commit_ts` is smaller than it.
     pub fn get_min_resolved_ts(&self) -> u64 {
         self.registry
             .lock()
             .unwrap()
             .iter()
             .map(|(_, rrp)| rrp.resolved_ts())
-            .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized
+            //TODO: the uninitialized peer should be taken into consideration instead of skipping it(https://github.com/tikv/tikv/issues/15506).
+            .filter(|ts| *ts != 0) // ts == 0 means the peer is uninitialized,
             .min()
             .unwrap_or(0)
     }
@@ -1163,10 +1323,11 @@ impl RegionReadProgressRegistry {
     ) -> Vec<u64> {
         let mut regions = Vec::with_capacity(leaders.len());
         let registry = self.registry.lock().unwrap();
+        let now = Some(Instant::now_coarse());
         for leader_info in &leaders {
             let region_id = leader_info.get_region_id();
             if let Some(rp) = registry.get(&region_id) {
-                if rp.consume_leader_info(leader_info, coprocessor) {
+                if rp.consume_leader_info(leader_info, coprocessor, now) {
                     regions.push(region_id);
                 }
             }
@@ -1246,7 +1407,9 @@ impl RegionReadProgress {
     }
 
     pub fn notify_advance_resolved_ts(&self) {
-        if let Ok(core) = self.core.try_lock() && let Some(advance_notify) = &core.advance_notify {
+        if let Ok(core) = self.core.try_lock()
+            && let Some(advance_notify) = &core.advance_notify
+        {
             advance_notify.notify_waiters();
         }
     }
@@ -1272,7 +1435,7 @@ impl RegionReadProgress {
         }
     }
 
-    pub fn update_safe_ts(&self, apply_index: u64, ts: u64) {
+    pub fn update_safe_ts_with_time(&self, apply_index: u64, ts: u64, now: Option<Instant>) {
         if apply_index == 0 || ts == 0 {
             return;
         }
@@ -1280,11 +1443,15 @@ impl RegionReadProgress {
         if core.discard {
             return;
         }
-        if let Some(ts) = core.update_safe_ts(apply_index, ts) {
+        if let Some(ts) = core.update_safe_ts(apply_index, ts, now) {
             if !core.pause {
                 self.safe_ts.store(ts, AtomicOrdering::Release);
             }
         }
+    }
+
+    pub fn update_safe_ts(&self, apply_index: u64, ts: u64) {
+        self.update_safe_ts_with_time(apply_index, ts, None)
     }
 
     pub fn merge_safe_ts<E: KvEngine>(
@@ -1310,15 +1477,21 @@ impl RegionReadProgress {
         &self,
         leader_info: &LeaderInfo,
         coprocessor: &CoprocessorHost<E>,
+        now: Option<Instant>,
     ) -> bool {
         let mut core = self.core.lock().unwrap();
+        if matches!((core.last_instant_of_consume_leader, now), (None, Some(_)))
+            || matches!((core.last_instant_of_consume_leader, now), (Some(l), Some(r)) if l < r)
+        {
+            core.last_instant_of_consume_leader = now;
+        }
         if leader_info.has_read_state() {
             // It is okay to update `safe_ts` without checking the `LeaderInfo`, the
             // `read_state` is guaranteed to be valid when it is published by the leader
             let rs = leader_info.get_read_state();
             let (apply_index, ts) = (rs.get_applied_index(), rs.get_safe_ts());
             if apply_index != 0 && ts != 0 && !core.discard {
-                if let Some(ts) = core.update_safe_ts(apply_index, ts) {
+                if let Some(ts) = core.update_safe_ts(apply_index, ts, now) {
                     if !core.pause {
                         self.safe_ts.store(ts, AtomicOrdering::Release);
                     }
@@ -1347,6 +1520,10 @@ impl RegionReadProgress {
         core.leader_info.leader_term = term;
         if !is_region_epoch_equal(region.get_region_epoch(), &core.leader_info.epoch) {
             core.leader_info.epoch = region.get_region_epoch().clone();
+        }
+        if core.leader_info.peers != region.get_peers() {
+            // In v2, we check peers and region epoch independently, because
+            // peers are incomplete but epoch is set correctly during split.
             core.leader_info.peers = region.get_peers().to_vec();
         }
         core.leader_info.leader_store_id =
@@ -1387,7 +1564,6 @@ impl RegionReadProgress {
         self.safe_ts()
     }
 
-    // Dump the `LeaderInfo` and the peer list
     pub fn get_core(&self) -> MutexGuard<'_, RegionReadProgressCore> {
         self.core.lock().unwrap()
     }
@@ -1416,6 +1592,11 @@ pub struct RegionReadProgressCore {
     discard: bool,
     // A notify to trigger advancing resolved ts immediately.
     advance_notify: Option<Arc<Notify>>,
+    // The approximate last instant of calling update_safe_ts(), used for diagnosis.
+    // Only the update from advance of resolved-ts is counted. Other sources like CDC or
+    // backup-stream are ignored.
+    last_instant_of_update_safe_ts: Option<Instant>,
+    last_instant_of_consume_leader: Option<Instant>,
 }
 
 // A helpful wrapper of `(apply_index, safe_ts)` item
@@ -1488,6 +1669,8 @@ impl RegionReadProgressCore {
             pause: is_witness,
             discard: is_witness,
             advance_notify: None,
+            last_instant_of_update_safe_ts: None,
+            last_instant_of_consume_leader: None,
         }
     }
 
@@ -1541,9 +1724,14 @@ impl RegionReadProgressCore {
     }
 
     // Return the `safe_ts` if it is updated
-    fn update_safe_ts(&mut self, idx: u64, ts: u64) -> Option<u64> {
+    fn update_safe_ts(&mut self, idx: u64, ts: u64, now: Option<Instant>) -> Option<u64> {
         // Discard stale item with `apply_index` before `last_merge_index`
         // in order to prevent the stale item makes the `safe_ts` larger again
+        if matches!((self.last_instant_of_update_safe_ts, now), (None, Some(_)))
+            || matches!((self.last_instant_of_update_safe_ts, now), (Some(l), Some(r)) if l < r)
+        {
+            self.last_instant_of_update_safe_ts = now;
+        }
         if idx < self.last_merge_index {
             return None;
         }
@@ -1613,68 +1801,33 @@ impl RegionReadProgressCore {
     pub fn get_local_leader_info(&self) -> &LocalLeaderInfo {
         &self.leader_info
     }
-}
 
-/// Represent the duration of all stages of raftstore recorded by one
-/// inspecting.
-#[derive(Default, Debug)]
-pub struct RaftstoreDuration {
-    pub store_wait_duration: Option<std::time::Duration>,
-    pub store_process_duration: Option<std::time::Duration>,
-    pub store_write_duration: Option<std::time::Duration>,
-    pub apply_wait_duration: Option<std::time::Duration>,
-    pub apply_process_duration: Option<std::time::Duration>,
-}
-
-impl RaftstoreDuration {
-    pub fn sum(&self) -> std::time::Duration {
-        self.store_wait_duration.unwrap_or_default()
-            + self.store_process_duration.unwrap_or_default()
-            + self.store_write_duration.unwrap_or_default()
-            + self.apply_wait_duration.unwrap_or_default()
-            + self.apply_process_duration.unwrap_or_default()
-    }
-}
-
-/// Used to inspect the latency of all stages of raftstore.
-pub struct LatencyInspector {
-    id: u64,
-    duration: RaftstoreDuration,
-    cb: Box<dyn FnOnce(u64, RaftstoreDuration) + Send>,
-}
-
-impl LatencyInspector {
-    pub fn new(id: u64, cb: Box<dyn FnOnce(u64, RaftstoreDuration) + Send>) -> Self {
-        Self {
-            id,
-            cb,
-            duration: RaftstoreDuration::default(),
-        }
+    pub fn applied_index(&self) -> u64 {
+        self.applied_index
     }
 
-    pub fn record_store_wait(&mut self, duration: std::time::Duration) {
-        self.duration.store_wait_duration = Some(duration);
+    pub fn paused(&self) -> bool {
+        self.pause
     }
 
-    pub fn record_store_process(&mut self, duration: std::time::Duration) {
-        self.duration.store_process_duration = Some(duration);
+    pub fn pending_items(&self) -> &VecDeque<ReadState> {
+        &self.pending_items
     }
 
-    pub fn record_store_write(&mut self, duration: std::time::Duration) {
-        self.duration.store_write_duration = Some(duration);
+    pub fn read_state(&self) -> &ReadState {
+        &self.read_state
     }
 
-    pub fn record_apply_wait(&mut self, duration: std::time::Duration) {
-        self.duration.apply_wait_duration = Some(duration);
+    pub fn discarding(&self) -> bool {
+        self.discard
     }
 
-    pub fn record_apply_process(&mut self, duration: std::time::Duration) {
-        self.duration.apply_process_duration = Some(duration);
+    pub fn last_instant_of_update_ts(&self) -> &Option<Instant> {
+        &self.last_instant_of_update_safe_ts
     }
 
-    /// Call the callback.
-    pub fn finish(self) {
-        (self.cb)(self.id, self.duration);
+    pub fn last_instant_of_consume_leader(&self) -> &Option<Instant> {
+        &self.last_instant_of_consume_leader
     }
 }
 
@@ -2035,12 +2188,12 @@ mod tests {
         for (msg_type, index, is_append) in tbl {
             let mut msg = Message::default();
             msg.set_msg_type(msg_type);
-            let ent = {
-                let mut e = Entry::default();
-                e.set_index(index);
-                e
-            };
-            msg.set_entries(vec![ent].into());
+            let mut ent = Entry::default();
+            ent.set_index(index);
+            msg.mut_entries().push(ent.clone());
+            assert_eq!(is_first_append_entry(&msg), is_append);
+            ent.set_index(index + 1);
+            msg.mut_entries().push(ent);
             assert_eq!(is_first_append_entry(&msg), is_append);
         }
     }
@@ -2275,7 +2428,8 @@ mod tests {
         }
 
         let cap = 10;
-        let rrp = RegionReadProgress::new(&Default::default(), 10, cap, 1);
+        let mut region = Region::default();
+        let rrp = RegionReadProgress::new(&region, 10, cap, 1);
         for i in 1..=20 {
             rrp.update_safe_ts(i, i);
         }
@@ -2322,5 +2476,358 @@ mod tests {
         rrp.update_safe_ts(400, 0);
         rrp.update_safe_ts(0, 700);
         assert_eq!(pending_items_num(&rrp), 0);
+
+        // update leader info, epoch
+        region.mut_region_epoch().version += 1;
+        rrp.update_leader_info(1, 5, &region);
+        assert_eq!(
+            rrp.core.lock().unwrap().get_local_leader_info().epoch,
+            *region.get_region_epoch(),
+        );
+        // update leader info, peers
+        region.mut_peers().push(new_peer(1, 2));
+        rrp.update_leader_info(1, 5, &region);
+        assert_eq!(
+            rrp.core.lock().unwrap().get_local_leader_info().peers,
+            *region.get_peers(),
+        );
+    }
+
+    #[test]
+    fn test_peer_id_mismatch() {
+        use kvproto::errorpb::{Error, MismatchPeerId};
+        let mut header = RaftRequestHeader::default();
+        let mut peer = Peer::default();
+        peer.set_id(1);
+        header.set_peer(peer);
+        // match
+        check_peer_id(&header, 1).unwrap();
+        // mismatch
+        let err = check_peer_id(&header, 2).unwrap_err();
+        let region_err: Error = err.into();
+        assert!(region_err.has_mismatch_peer_id());
+        let mut mismatch_err = MismatchPeerId::default();
+        mismatch_err.set_request_peer_id(1);
+        mismatch_err.set_store_peer_id(2);
+        assert_eq!(region_err.get_mismatch_peer_id(), &mismatch_err)
+    }
+
+    #[test]
+    fn test_check_conf_change_upon_slow_peers() {
+        // Create a sample configuration
+        let mut cfg = Config::default();
+        cfg.raft_max_election_timeout_ticks = 10;
+
+        // peer 1, 2, 3 are voters, 4, 5 are learners.
+        let mut region = Region::default();
+        for i in 1..3 {
+            region.mut_peers().push(metapb::Peer {
+                id: i,
+                role: PeerRole::Voter,
+                ..Default::default()
+            });
+        }
+        region.mut_peers().push(metapb::Peer {
+            id: 3,
+            role: PeerRole::IncomingVoter,
+            ..Default::default()
+        });
+        for i in 4..6 {
+            region.mut_peers().push(metapb::Peer {
+                id: i,
+                role: PeerRole::Learner,
+                ..Default::default()
+            });
+        }
+
+        // heartbeats: peer 3, 5 are slow
+        let mut peer_heartbeat = collections::HashMap::default();
+        peer_heartbeat.insert(
+            1,
+            std::time::Instant::now() - std::time::Duration::from_secs(1),
+        );
+        peer_heartbeat.insert(
+            2,
+            std::time::Instant::now() - std::time::Duration::from_secs(1),
+        );
+        peer_heartbeat.insert(
+            3,
+            std::time::Instant::now() - std::time::Duration::from_secs(100),
+        );
+        peer_heartbeat.insert(
+            4,
+            std::time::Instant::now() - std::time::Duration::from_secs(1),
+        );
+        peer_heartbeat.insert(
+            5,
+            std::time::Instant::now() - std::time::Duration::from_secs(100),
+        );
+
+        // Initialize change_peers
+        let change_peers_and_expect = vec![
+            // promote peer 4 from learner to voter, it should work
+            (
+                vec![ChangePeerRequest {
+                    change_type: eraftpb::ConfChangeType::AddNode,
+                    peer: Some(metapb::Peer {
+                        id: 4,
+                        ..Default::default()
+                    })
+                    .into(),
+                    ..Default::default()
+                }],
+                true,
+            ),
+            // promote peer 5 from learner to voter, it should be rejected (two slow voters vs two
+            // normal voters)
+            (
+                vec![ChangePeerRequest {
+                    change_type: eraftpb::ConfChangeType::AddNode,
+                    peer: Some(metapb::Peer {
+                        id: 4,
+                        ..Default::default()
+                    })
+                    .into(),
+                    ..Default::default()
+                }],
+                true,
+            ),
+            // remove a peer 3, it should work as peer 3 is slow
+            (
+                vec![ChangePeerRequest {
+                    change_type: eraftpb::ConfChangeType::RemoveNode,
+                    peer: Some(metapb::Peer {
+                        id: 3,
+                        ..Default::default()
+                    })
+                    .into(),
+                    ..Default::default()
+                }],
+                true,
+            ),
+            // remove a peer 2, it should be rejected as peer 3 is slow
+            (
+                vec![ChangePeerRequest {
+                    change_type: eraftpb::ConfChangeType::RemoveNode,
+                    peer: Some(metapb::Peer {
+                        id: 2,
+                        ..Default::default()
+                    })
+                    .into(),
+                    ..Default::default()
+                }],
+                false,
+            ),
+            // demote peer2, it should be rejected
+            (
+                vec![ChangePeerRequest {
+                    change_type: eraftpb::ConfChangeType::AddLearnerNode,
+                    peer: Some(metapb::Peer {
+                        id: 2,
+                        ..Default::default()
+                    })
+                    .into(),
+                    ..Default::default()
+                }],
+                false,
+            ),
+            // demote peer 2, but promote peer 4 as voter, it should work
+            (
+                vec![
+                    ChangePeerRequest {
+                        change_type: eraftpb::ConfChangeType::AddNode,
+                        peer: Some(metapb::Peer {
+                            id: 4,
+                            ..Default::default()
+                        })
+                        .into(),
+                        ..Default::default()
+                    },
+                    ChangePeerRequest {
+                        change_type: eraftpb::ConfChangeType::AddLearnerNode,
+                        peer: Some(metapb::Peer {
+                            id: 2,
+                            ..Default::default()
+                        })
+                        .into(),
+                        ..Default::default()
+                    },
+                ],
+                true,
+            ),
+            // demote peer 2, but promote peer 5 as voter, it should be rejected because peer 5 is
+            // slow
+            (
+                vec![
+                    ChangePeerRequest {
+                        change_type: eraftpb::ConfChangeType::AddNode,
+                        peer: Some(metapb::Peer {
+                            id: 5,
+                            ..Default::default()
+                        })
+                        .into(),
+                        ..Default::default()
+                    },
+                    ChangePeerRequest {
+                        change_type: eraftpb::ConfChangeType::AddLearnerNode,
+                        peer: Some(metapb::Peer {
+                            id: 2,
+                            ..Default::default()
+                        })
+                        .into(),
+                        ..Default::default()
+                    },
+                ],
+                false,
+            ),
+            // promote peer 4 and 5 as voter, it should be ok
+            (
+                vec![
+                    ChangePeerRequest {
+                        change_type: eraftpb::ConfChangeType::AddNode,
+                        peer: Some(metapb::Peer {
+                            id: 4,
+                            ..Default::default()
+                        })
+                        .into(),
+                        ..Default::default()
+                    },
+                    ChangePeerRequest {
+                        change_type: eraftpb::ConfChangeType::AddNode,
+                        peer: Some(metapb::Peer {
+                            id: 5,
+                            ..Default::default()
+                        })
+                        .into(),
+                        ..Default::default()
+                    },
+                ],
+                true,
+            ),
+        ];
+
+        for (cp, expect_result) in change_peers_and_expect {
+            // Call the function under test and assert that the function returns failed
+            // Call the function under test and assert that the function returns Ok
+            let result =
+                check_availability_by_last_heartbeats(&region, &cfg, &cp, 1, &peer_heartbeat);
+            if expect_result {
+                assert!(result.is_ok());
+            } else {
+                assert!(result.is_err(), "{:?}", cp);
+            }
+        }
+    }
+
+    #[test]
+    fn test_check_conf_change_on_unhealthy_status() {
+        // Create a sample configuration
+        let mut cfg = Config::default();
+        cfg.raft_max_election_timeout_ticks = 10;
+
+        // peer 1, 2, 3 are voters, 4 is learner
+        let mut region = Region::default();
+        region.mut_peers().push(metapb::Peer {
+            id: 1,
+            role: PeerRole::Voter,
+            ..Default::default()
+        });
+        for i in 2..4 {
+            region.mut_peers().push(metapb::Peer {
+                id: i,
+                role: PeerRole::IncomingVoter,
+                ..Default::default()
+            });
+        }
+        region.mut_peers().push(metapb::Peer {
+            id: 4,
+            role: PeerRole::Learner,
+            ..Default::default()
+        });
+
+        // heartbeats: peer 2, 3, 4 are slow, it's already unhealthy now
+        let mut peer_heartbeat = collections::HashMap::default();
+        peer_heartbeat.insert(
+            1,
+            std::time::Instant::now() - std::time::Duration::from_secs(1),
+        );
+        peer_heartbeat.insert(
+            2,
+            std::time::Instant::now() - std::time::Duration::from_secs(100),
+        );
+        peer_heartbeat.insert(
+            3,
+            std::time::Instant::now() - std::time::Duration::from_secs(100),
+        );
+        peer_heartbeat.insert(
+            4,
+            std::time::Instant::now() - std::time::Duration::from_secs(100),
+        );
+
+        // Initialize change_peers
+        let change_peers_and_expect = vec![
+            // promote peer 4 from learner to voter, it should work
+            (
+                vec![ChangePeerRequest {
+                    change_type: eraftpb::ConfChangeType::AddNode,
+                    peer: Some(metapb::Peer {
+                        id: 4,
+                        ..Default::default()
+                    })
+                    .into(),
+                    ..Default::default()
+                }],
+                true,
+            ),
+            // remove a peer 3, it should work as peer 3 is slow
+            (
+                vec![ChangePeerRequest {
+                    change_type: eraftpb::ConfChangeType::RemoveNode,
+                    peer: Some(metapb::Peer {
+                        id: 3,
+                        ..Default::default()
+                    })
+                    .into(),
+                    ..Default::default()
+                }],
+                true,
+            ),
+            // remove a peer 2, 3, it should work
+            (
+                vec![
+                    ChangePeerRequest {
+                        change_type: eraftpb::ConfChangeType::RemoveNode,
+                        peer: Some(metapb::Peer {
+                            id: 2,
+                            ..Default::default()
+                        })
+                        .into(),
+                        ..Default::default()
+                    },
+                    ChangePeerRequest {
+                        change_type: eraftpb::ConfChangeType::AddLearnerNode,
+                        peer: Some(metapb::Peer {
+                            id: 3,
+                            ..Default::default()
+                        })
+                        .into(),
+                        ..Default::default()
+                    },
+                ],
+                true,
+            ),
+        ];
+
+        for (cp, expect_result) in change_peers_and_expect {
+            // Call the function under test and assert that the function returns failed
+            // Call the function under test and assert that the function returns Ok
+            let result =
+                check_availability_by_last_heartbeats(&region, &cfg, &cp, 1, &peer_heartbeat);
+            if expect_result {
+                assert!(result.is_ok());
+            } else {
+                assert!(result.is_err(), "{:?}", cp);
+            }
+        }
     }
 }

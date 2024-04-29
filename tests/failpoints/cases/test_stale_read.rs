@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use engine_rocks::RocksEngine;
 use kvproto::metapb::{Peer, Region};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
@@ -83,7 +84,7 @@ fn stale_read_during_splitting(right_derive: bool) {
 }
 
 fn must_not_stale_read(
-    cluster: &mut Cluster<NodeCluster>,
+    cluster: &mut Cluster<RocksEngine, NodeCluster<RocksEngine>>,
     stale_key: &[u8],
     old_region: &Region,
     old_leader: &Peer,
@@ -166,7 +167,7 @@ fn must_not_stale_read(
 }
 
 fn must_not_eq_on_key(
-    cluster: &mut Cluster<NodeCluster>,
+    cluster: &mut Cluster<RocksEngine, NodeCluster<RocksEngine>>,
     key: &[u8],
     value: &[u8],
     read_quorum: bool,
@@ -325,7 +326,7 @@ fn test_read_index_when_transfer_leader_2() {
     // Increase the election tick to make this test case running reliably.
     configure_for_lease_read(&mut cluster.cfg, Some(50), Some(10_000));
     // Stop log compaction to transfer leader with filter easier.
-    configure_for_request_snapshot(&mut cluster);
+    configure_for_request_snapshot(&mut cluster.cfg);
     let max_lease = Duration::from_secs(2);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
 
@@ -455,7 +456,7 @@ fn test_read_after_peer_destroyed() {
         false,
     );
     request.mut_header().set_peer(new_peer(1, 1));
-    let (cb, rx) = make_cb(&request);
+    let (cb, mut rx) = make_cb_rocks(&request);
     cluster
         .sim
         .rl()

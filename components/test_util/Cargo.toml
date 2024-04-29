@@ -1,17 +1,13 @@
 [package]
 name = "test_util"
 version = "0.0.1"
-edition = "2018"
+edition = "2021"
 publish = false
-
-[features]
-default = ["cloud-aws", "cloud-gcp", "cloud-azure"]
-cloud-aws = ["encryption_export/cloud-aws"]
-cloud-gcp = ["encryption_export/cloud-gcp"]
-cloud-azure = ["encryption_export/cloud-azure"]
+license = "Apache-2.0"
 
 [dependencies]
 backtrace = "0.3"
+chrono = { workspace = true }
 collections = { workspace = true }
 encryption_export = { workspace = true }
 fail = "0.5"
@@ -24,4 +20,4 @@ slog = { workspace = true }
 slog-global = { workspace = true }
 tempfile = "3.0"
 tikv_util = { workspace = true }
-time = "0.1"
+time = { workspace = true }

@@ -110,7 +110,7 @@ fn test_write_after_destroy() {
     let mut epoch = cluster.pd_client.get_region_epoch(r1);
     let mut admin_req = new_admin_request(r1, &epoch, conf_change);
     admin_req.mut_header().set_peer(new_peer(1, 1));
-    let (cb1, rx1) = make_cb(&admin_req);
+    let (cb1, mut rx1) = make_cb_rocks(&admin_req);
     let engines_3 = cluster.get_all_engines(3);
     let region = block_on(cluster.pd_client.get_region_by_id(r1))
         .unwrap()
@@ -126,7 +126,7 @@ fn test_write_after_destroy() {
         .async_command_on_node(1, admin_req, cb1)
         .unwrap();
     for _ in 0..100 {
-        let (cb2, _rx2) = make_cb(&put);
+        let (cb2, _rx2) = make_cb_rocks(&put);
         cluster
             .sim
             .rl()

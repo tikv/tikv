@@ -1,7 +1,8 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    io::{Error as IoError, ErrorKind, Result as IoResult},
+    collections::hash_map::Entry,
+    io::{self, Error as IoError, ErrorKind, Result as IoResult},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -12,9 +13,7 @@ use std::{
 };
 
 use crossbeam::channel::{self, select, tick};
-use engine_traits::{
-    EncryptionKeyManager, EncryptionMethod as EtEncryptionMethod, FileEncryptionInfo,
-};
+use crypto::rand;
 use fail::fail_point;
 use file_system::File;
 use kvproto::encryptionpb::{DataKey, EncryptionMethod, FileDictionary, FileInfo, KeyDictionary};
@@ -23,7 +22,7 @@ use tikv_util::{box_err, debug, error, info, sys::thread::StdThreadBuildWrapper,
 
 use crate::{
     config::EncryptionConfig,
-    crypter::{self, Iv},
+    crypter::{self, FileEncryptionInfo, Iv},
     encrypted_file::EncryptedFile,
     file_dict_file::FileDictionaryFile,
     io::{DecrypterReader, EncrypterWriter},
@@ -35,6 +34,7 @@ use crate::{
 const KEY_DICT_NAME: &str = "key.dict";
 const FILE_DICT_NAME: &str = "file.dict";
 const ROTATE_CHECK_PERIOD: u64 = 600; // 10min
+const GENERATE_DATA_KEY_LIMIT: usize = 10;
 
 struct Dicts {
     // Maps data file paths to key id and metadata. This file is stored as plaintext.
@@ -44,6 +44,8 @@ struct Dicts {
     // key id used to encrypt the encryption file dictionary. The content is encrypted
     // using master key.
     key_dict: Mutex<KeyDictionary>,
+    // A lock used to protect key_dict rotation.
+    key_dict_file_lock: Mutex<()>,
     // Thread-safe version of current_key_id. Only when writing back to key_dict,
     // write it back to `key_dict`. Reader should always use this atomic, instead of
     // key_dict.current_key_id, since the latter can reflect an update-in-progress key.
@@ -71,6 +73,7 @@ impl Dicts {
                 current_key_id: 0,
                 ..Default::default()
             }),
+            key_dict_file_lock: Mutex::new(()),
             current_key_id: AtomicU64::new(0),
             rotation_period,
             base: Path::new(path).to_owned(),
@@ -113,6 +116,7 @@ impl Dicts {
                     file_dict: Mutex::new(file_dict),
                     file_dict_file: Mutex::new(file_dict_file),
                     key_dict: Mutex::new(key_dict),
+                    key_dict_file_lock: Mutex::default(),
                     current_key_id,
                     rotation_period,
                     base: base.to_owned(),
@@ -147,6 +151,8 @@ impl Dicts {
     }
 
     fn save_key_dict(&self, master_key: &dyn Backend) -> Result<()> {
+        // In reality we only call this function inside `run_background_rotate_work`.
+        let _lk = self.key_dict_file_lock.try_lock().unwrap();
         let file = EncryptedFile::new(&self.base, KEY_DICT_NAME);
         let (keys_len, key_bytes) = {
             let mut key_dict = self.key_dict.lock().unwrap();
@@ -192,10 +198,10 @@ impl Dicts {
         dict.files.get(fname).cloned()
     }
 
-    fn new_file(&self, fname: &str, method: EncryptionMethod) -> Result<FileInfo> {
+    fn new_file(&self, fname: &str, method: EncryptionMethod, sync: bool) -> Result<FileInfo> {
         let mut file_dict_file = self.file_dict_file.lock().unwrap();
         let iv = if method != EncryptionMethod::Plaintext {
-            Iv::new_ctr()
+            Iv::new_ctr()?
         } else {
             Iv::Empty
         };
@@ -211,7 +217,7 @@ impl Dicts {
             file_dict.files.len() as _
         };
 
-        file_dict_file.insert(fname, &file)?;
+        file_dict_file.insert(fname, &file, sync)?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         if method != EncryptionMethod::Plaintext {
@@ -227,7 +233,7 @@ impl Dicts {
 
     // If the file does not exist, return Ok(())
     // In either case the intent that the file not exist is achieved.
-    fn delete_file(&self, fname: &str) -> Result<()> {
+    fn delete_file(&self, fname: &str, sync: bool) -> Result<()> {
         let mut file_dict_file = self.file_dict_file.lock().unwrap();
         let (file, file_num) = {
             let mut file_dict = self.file_dict.lock().unwrap();
@@ -245,7 +251,7 @@ impl Dicts {
             }
         };
 
-        file_dict_file.remove(fname)?;
+        file_dict_file.remove(fname, sync)?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
         if file.method != EncryptionMethod::Plaintext {
             debug!("delete encrypted file"; "fname" => fname);
@@ -255,7 +261,7 @@ impl Dicts {
         Ok(())
     }
 
-    fn link_file(&self, src_fname: &str, dst_fname: &str) -> Result<Option<()>> {
+    fn link_file(&self, src_fname: &str, dst_fname: &str, sync: bool) -> Result<Option<()>> {
         let mut file_dict_file = self.file_dict_file.lock().unwrap();
         let (method, file, file_num) = {
             let mut file_dict = self.file_dict.lock().unwrap();
@@ -276,7 +282,7 @@ impl Dicts {
             let file_num = file_dict.files.len() as _;
             (method, file, file_num)
         };
-        file_dict_file.insert(dst_fname, &file)?;
+        file_dict_file.insert(dst_fname, &file, sync)?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
 
         if method != EncryptionMethod::Plaintext {
@@ -287,11 +293,15 @@ impl Dicts {
         Ok(Some(()))
     }
 
-    fn rotate_key(&self, key_id: u64, key: DataKey, master_key: &dyn Backend) -> Result<()> {
+    fn rotate_key(&self, key_id: u64, key: DataKey, master_key: &dyn Backend) -> Result<bool> {
         info!("encryption: rotate data key."; "key_id" => key_id);
         {
             let mut key_dict = self.key_dict.lock().unwrap();
-            key_dict.keys.insert(key_id, key);
+            match key_dict.keys.entry(key_id) {
+                // key id collides
+                Entry::Occupied(_) => return Ok(false),
+                Entry::Vacant(e) => e.insert(key),
+            };
             key_dict.current_key_id = key_id;
         };
 
@@ -299,7 +309,7 @@ impl Dicts {
         self.save_key_dict(master_key)?;
         // Update current data key id.
         self.current_key_id.store(key_id, Ordering::SeqCst);
-        Ok(())
+        Ok(true)
     }
 
     fn maybe_rotate_data_key(
@@ -337,15 +347,34 @@ impl Dicts {
         let duration = now.duration_since(UNIX_EPOCH).unwrap();
         let creation_time = duration.as_secs();
 
-        let (key_id, key) = generate_data_key(method);
-        let data_key = DataKey {
-            key,
-            method,
-            creation_time,
-            was_exposed: false,
-            ..Default::default()
-        };
-        self.rotate_key(key_id, data_key, master_key)
+        // Generate new data key.
+        for _ in 0..GENERATE_DATA_KEY_LIMIT {
+            let Ok((key_id, key)) = generate_data_key(method) else {
+                continue;
+            };
+            if key_id == 0 {
+                // 0 is invalid
+                continue;
+            }
+            let data_key = DataKey {
+                key,
+                method,
+                creation_time,
+                was_exposed: false,
+                ..Default::default()
+            };
+
+            let ok = self.rotate_key(key_id, data_key, master_key)?;
+            if !ok {
+                // key id collides, retry
+                continue;
+            }
+            return Ok(());
+        }
+        Err(box_err!(
+            "key id collides {} times!",
+            GENERATE_DATA_KEY_LIMIT
+        ))
     }
 }
 
@@ -365,17 +394,22 @@ fn check_stale_file_exist(
             "Clean stale file information in file dictionary: {:?}",
             fname
         );
-        file_dict_file.remove(fname)?;
+        file_dict_file.remove(fname, true)?;
         let _ = file_dict.files.remove(fname);
     }
     Ok(())
+}
+
+enum RotateTask {
+    Terminate,
+    Save(std::sync::mpsc::Sender<()>),
 }
 
 fn run_background_rotate_work(
     dict: Arc<Dicts>,
     method: EncryptionMethod,
     master_key: &dyn Backend,
-    terminal_recv: channel::Receiver<()>,
+    rx: channel::Receiver<RotateTask>,
 ) {
     let check_period = std::cmp::min(
         Duration::from_secs(ROTATE_CHECK_PERIOD),
@@ -389,28 +423,34 @@ fn run_background_rotate_work(
                 dict.maybe_rotate_data_key(method, master_key)
                     .expect("Rotating key operation encountered error in the background worker");
             },
-            recv(terminal_recv) -> _ => {
-                info!("Key rotate worker has been cancelled.");
-                break
+            recv(rx) -> r => {
+                match r {
+                    Err(_) | Ok(RotateTask::Terminate) => {
+                        info!("Key rotate worker has been cancelled.");
+                        return;
+                    }
+                    Ok(RotateTask::Save(tx)) => {
+                        dict.save_key_dict(master_key).expect("Saving key dict encountered error in the background worker");
+                        tx.send(()).unwrap();
+                    }
+                }
             },
         }
     }
 }
 
-fn generate_data_key(method: EncryptionMethod) -> (u64, Vec<u8>) {
-    use rand::{rngs::OsRng, RngCore};
-
-    let key_id = OsRng.next_u64();
+pub(crate) fn generate_data_key(method: EncryptionMethod) -> Result<(u64, Vec<u8>)> {
+    let key_id = rand::rand_u64()?;
     let key_length = crypter::get_method_key_length(method);
     let mut key = vec![0; key_length];
-    OsRng.fill_bytes(&mut key);
-    (key_id, key)
+    rand::rand_bytes(&mut key)?;
+    Ok((key_id, key))
 }
 
 pub struct DataKeyManager {
     dicts: Arc<Dicts>,
     method: EncryptionMethod,
-    rotate_terminal: channel::Sender<()>,
+    rotate_tx: channel::Sender<RotateTask>,
     background_worker: Option<JoinHandle<()>>,
 }
 
@@ -479,7 +519,7 @@ impl DataKeyManager {
             if info.method != EncryptionMethod::Plaintext {
                 let retain = f(fname);
                 if !retain {
-                    file_dict_file.remove(fname).unwrap();
+                    file_dict_file.remove(fname, true).unwrap();
                 }
                 retain
             } else {
@@ -578,7 +618,7 @@ impl DataKeyManager {
         dicts.maybe_rotate_data_key(method, &*master_key)?;
         let dicts = Arc::new(dicts);
         let dict_clone = dicts.clone();
-        let (rotate_terminal, rx) = channel::bounded(1);
+        let (rotate_tx, rx) = channel::bounded(1);
         let background_worker = std::thread::Builder::new()
             .name(thd_name!("enc:key"))
             .spawn_wrapper(move || {
@@ -590,7 +630,7 @@ impl DataKeyManager {
         Ok(DataKeyManager {
             dicts,
             method,
-            rotate_terminal,
+            rotate_tx,
             background_worker: Some(background_worker),
         })
     }
@@ -600,7 +640,7 @@ impl DataKeyManager {
         self.open_file_with_writer(path, file_writer, true /* create */)
     }
 
-    pub fn open_file_with_writer<P: AsRef<Path>, W: std::io::Write>(
+    pub fn open_file_with_writer<P: AsRef<Path>, W: io::Write>(
         &self,
         path: P,
         writer: W,
@@ -619,9 +659,9 @@ impl DataKeyManager {
         };
         EncrypterWriter::new(
             writer,
-            crypter::from_engine_encryption_method(file.method),
+            file.method,
             &file.key,
-            if file.method == EtEncryptionMethod::Plaintext {
+            if file.method == EncryptionMethod::Plaintext {
                 debug_assert!(file.iv.is_empty());
                 Iv::Empty
             } else {
@@ -649,9 +689,9 @@ impl DataKeyManager {
         let file = self.get_file(fname)?;
         DecrypterReader::new(
             reader,
-            crypter::from_engine_encryption_method(file.method),
+            file.method,
             &file.key,
-            if file.method == EtEncryptionMethod::Plaintext {
+            if file.method == EncryptionMethod::Plaintext {
                 debug_assert!(file.iv.is_empty());
                 Iv::Empty
             } else {
@@ -725,23 +765,90 @@ impl DataKeyManager {
                 }
             }
         };
-        let encrypted_file = FileEncryptionInfo {
-            key,
-            method: crypter::to_engine_encryption_method(method),
-            iv,
-        };
+        let encrypted_file = FileEncryptionInfo { key, method, iv };
         Ok(Some(encrypted_file))
     }
 
-    /// Return which method this manager is using.
-    pub fn encryption_method(&self) -> engine_traits::EncryptionMethod {
-        crypter::to_engine_encryption_method(self.method)
+    /// Returns initial vector and data key.
+    pub fn get_file_internal(&self, fname: &str) -> IoResult<Option<(Vec<u8>, DataKey)>> {
+        let (key_id, iv) = {
+            match self.dicts.get_file(fname) {
+                Some(file) if file.method != EncryptionMethod::Plaintext => (file.key_id, file.iv),
+                _ => return Ok(None),
+            }
+        };
+        // Fail if key is specified but not found.
+        let k = match self.dicts.key_dict.lock().unwrap().keys.get(&key_id) {
+            Some(k) => k.clone(),
+            None => {
+                return Err(IoError::new(
+                    ErrorKind::NotFound,
+                    format!("key not found for id {}", key_id),
+                ));
+            }
+        };
+        Ok(Some((iv, k)))
     }
-}
 
-impl Drop for DataKeyManager {
-    fn drop(&mut self) {
-        if let Err(e) = self.rotate_terminal.send(()) {
+    /// Removes data keys under the directory `logical`. If `physical` is
+    /// present, if means the `logical` directory is already physically renamed
+    /// to `physical`.
+    /// There're two uses of this function:
+    ///
+    /// (1) without `physical`: `remove_dir` is called before
+    /// `fs::remove_dir_all`. User must guarantee that this directory won't be
+    /// read again even if the removal fails or panics.
+    ///
+    /// (2) with `physical`: Use `fs::rename` to rename the directory to trash.
+    /// Then `remove_dir` with `physical` set to the trash directory name.
+    /// Finally remove the trash directory. This is the safest way to delete a
+    /// directory.
+    pub fn remove_dir(&self, logical: &Path, physical: Option<&Path>) -> IoResult<()> {
+        let scan = physical.unwrap_or(logical);
+        debug_assert!(scan.is_dir());
+        if !scan.exists() {
+            return Ok(());
+        }
+        let mut iter = walkdir::WalkDir::new(scan)
+            .into_iter()
+            .filter(|e| e.as_ref().map_or(true, |e| !e.path().is_dir()))
+            .peekable();
+        while let Some(e) = iter.next() {
+            let e = e?;
+            if e.path().is_symlink() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("unexpected symbolic link: {}", e.path().display()),
+                ));
+            }
+            let fname = e.path().to_str().unwrap();
+            let sync = iter.peek().is_none();
+            if let Some(p) = physical {
+                let sub = fname
+                    .strip_prefix(p.to_str().unwrap())
+                    .unwrap()
+                    .trim_start_matches('/');
+                self.dicts
+                    .delete_file(logical.join(sub).to_str().unwrap(), sync)?;
+            } else {
+                self.dicts.delete_file(fname, sync)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Return which method this manager is using.
+    pub fn encryption_method(&self) -> EncryptionMethod {
+        self.method
+    }
+
+    /// For tests.
+    pub fn file_count(&self) -> usize {
+        self.dicts.file_dict.lock().unwrap().files.len()
+    }
+
+    fn shutdown_background_worker(&mut self) {
+        if let Err(e) = self.rotate_tx.send(RotateTask::Terminate) {
             info!("failed to terminate background rotation, are we shutting down?"; "err" => %e);
         }
         if let Some(Err(e)) = self.background_worker.take().map(|w| w.join()) {
@@ -750,9 +857,15 @@ impl Drop for DataKeyManager {
     }
 }
 
-impl EncryptionKeyManager for DataKeyManager {
+impl Drop for DataKeyManager {
+    fn drop(&mut self) {
+        self.shutdown_background_worker();
+    }
+}
+
+impl DataKeyManager {
     // Get key to open existing file.
-    fn get_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
+    pub fn get_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
         match self.get_file_exists(fname) {
             Ok(Some(result)) => Ok(result),
             Ok(None) => {
@@ -762,7 +875,7 @@ impl EncryptionKeyManager for DataKeyManager {
                 let method = EncryptionMethod::Plaintext;
                 Ok(FileEncryptionInfo {
                     key: vec![],
-                    method: crypter::to_engine_encryption_method(method),
+                    method,
                     iv: file.iv,
                 })
             }
@@ -770,36 +883,242 @@ impl EncryptionKeyManager for DataKeyManager {
         }
     }
 
-    fn new_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
+    pub fn new_file(&self, fname: &str) -> IoResult<FileEncryptionInfo> {
         let (_, data_key) = self.dicts.current_data_key();
         let key = data_key.get_key().to_owned();
-        let file = self.dicts.new_file(fname, self.method)?;
+        let file = self.dicts.new_file(fname, self.method, true)?;
         let encrypted_file = FileEncryptionInfo {
             key,
-            method: crypter::to_engine_encryption_method(file.method),
+            method: file.method,
             iv: file.get_iv().to_owned(),
         };
         Ok(encrypted_file)
     }
 
-    fn delete_file(&self, fname: &str) -> IoResult<()> {
+    // Can be used with both file and directory. See comments of `remove_dir` for
+    // more details when using this with a directory.
+    //
+    // `physical_fname` is a hint when `fname` was renamed physically.
+    // Depending on the implementation, providing false negative or false
+    // positive value may result in leaking encryption keys.
+    pub fn delete_file(&self, fname: &str, physical_fname: Option<&str>) -> IoResult<()> {
         fail_point!("key_manager_fails_before_delete_file", |_| IoResult::Err(
-            std::io::ErrorKind::Other.into()
+            io::ErrorKind::Other.into()
         ));
-        self.dicts.delete_file(fname)?;
+        if let Some(physical) = physical_fname {
+            let physical_path = Path::new(physical);
+            if physical_path.is_dir() {
+                self.remove_dir(Path::new(fname), Some(physical_path))?;
+                return Ok(());
+            }
+        } else {
+            let path = Path::new(fname);
+            if path.is_dir() {
+                self.remove_dir(path, None)?;
+                return Ok(());
+            }
+        }
+        self.dicts.delete_file(fname, true)?;
         Ok(())
     }
 
-    fn link_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()> {
-        self.dicts.link_file(src_fname, dst_fname)?;
+    pub fn link_file(&self, src_fname: &str, dst_fname: &str) -> IoResult<()> {
+        let src_path = Path::new(src_fname);
+        let dst_path = Path::new(dst_fname);
+        if src_path.is_dir() {
+            let mut iter = walkdir::WalkDir::new(src_path)
+                .into_iter()
+                .filter(|e| e.as_ref().map_or(true, |e| !e.path().is_dir()))
+                .peekable();
+            while let Some(e) = iter.next() {
+                let e = e?;
+                if e.path().is_symlink() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("unexpected symbolic link: {}", e.path().display()),
+                    ));
+                }
+                let sub_path = e.path().strip_prefix(src_path).unwrap();
+                let src = e.path().to_str().unwrap();
+                let dst_path = dst_path.join(sub_path);
+                let dst = dst_path.to_str().unwrap();
+                self.dicts.link_file(src, dst, iter.peek().is_none())?;
+            }
+        } else {
+            self.dicts.link_file(src_fname, dst_fname, true)?;
+        }
         Ok(())
+    }
+}
+
+/// An RAII-style importer of data keys. It automatically creates data key that
+/// doesn't exist locally. It synchronizes log file in batch. It automatically
+/// reverts changes if caller aborts.
+pub struct DataKeyImporter<'a> {
+    start_time: SystemTime,
+    manager: &'a DataKeyManager,
+    // Added file names.
+    file_additions: Vec<String>,
+    // Added key ids.
+    key_additions: Vec<u64>,
+    committed: bool,
+}
+
+#[allow(dead_code)]
+impl<'a> DataKeyImporter<'a> {
+    const EXPECTED_TIME_WINDOW_SECS: u64 = 120;
+
+    pub fn new(manager: &'a DataKeyManager) -> Self {
+        Self {
+            start_time: SystemTime::now(),
+            manager,
+            file_additions: Vec::new(),
+            key_additions: Vec::new(),
+            committed: false,
+        }
+    }
+
+    pub fn add(&mut self, fname: &str, iv: Vec<u8>, mut new_key: DataKey) -> Result<()> {
+        // Needed for time window check.
+        new_key.creation_time = self
+            .start_time
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let method = new_key.method;
+        let mut key_id = None;
+        {
+            let mut key_dict = self.manager.dicts.key_dict.lock().unwrap();
+            for (id, data_key) in &key_dict.keys {
+                if data_key.key == new_key.key {
+                    // If this key is created within the window, there's a risk it is created by
+                    // another importer, and can be rollback-ed.
+                    if new_key.creation_time.saturating_sub(data_key.creation_time)
+                        > Self::EXPECTED_TIME_WINDOW_SECS
+                    {
+                        key_id = Some(*id);
+                    }
+                    break;
+                }
+            }
+            if key_id.is_none() {
+                for _ in 0..GENERATE_DATA_KEY_LIMIT {
+                    // Match `generate_data_key`.
+                    let id = rand::rand_u64()?;
+                    if let Entry::Vacant(e) = key_dict.keys.entry(id) {
+                        key_id = Some(id);
+                        e.insert(new_key);
+                        self.key_additions.push(id);
+                        info!("generate new ID for imported key"; "id" => id, "fname" => fname);
+                        break;
+                    }
+                }
+                if key_id.is_none() {
+                    return Err(box_err!(
+                        "key id collides {} times!",
+                        GENERATE_DATA_KEY_LIMIT
+                    ));
+                }
+            }
+        }
+
+        let file = FileInfo {
+            iv,
+            key_id: key_id.unwrap(),
+            method,
+            ..Default::default()
+        };
+        let mut file_dict_file = self.manager.dicts.file_dict_file.lock().unwrap();
+        let file_num = {
+            let mut file_dict = self.manager.dicts.file_dict.lock().unwrap();
+            if let Entry::Vacant(e) = file_dict.files.entry(fname.to_owned()) {
+                e.insert(file.clone());
+            } else {
+                // check for physical file.
+                if Path::new(fname).exists() {
+                    return Err(box_err!("file name collides with existing file: {}", fname));
+                } else {
+                    warn!("overwriting existing unused encryption key"; "fname" => fname);
+                }
+            }
+            file_dict.files.len() as _
+        };
+        file_dict_file.insert(fname, &file, false)?;
+        self.file_additions.push(fname.to_owned());
+        ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
+        Ok(())
+    }
+
+    pub fn commit(mut self) -> Result<()> {
+        if !self.key_additions.is_empty() {
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.manager
+                .rotate_tx
+                .send(RotateTask::Save(tx))
+                .map_err(|_| {
+                    Error::Other(box_err!("Failed to request background key dict rotation"))
+                })?;
+            rx.recv().map_err(|_| {
+                Error::Other(box_err!("Failed to wait for background key dict rotation"))
+            })?;
+        }
+        if !self.file_additions.is_empty() {
+            self.manager.dicts.file_dict_file.lock().unwrap().sync()?;
+        }
+        self.committed = true;
+        Ok(())
+    }
+
+    pub fn rollback(&mut self) -> Result<()> {
+        if let Some(fname) = self.file_additions.first() {
+            info!("rollback imported file encryption info"; "sample_fname" => fname);
+        }
+        assert!(!self.committed);
+        let mut iter = self.file_additions.drain(..).peekable();
+        while let Some(f) = iter.next() {
+            self.manager.dicts.delete_file(&f, iter.peek().is_none())?;
+        }
+        // If the duration is longer than the window, we cannot delete keys because they
+        // may already be referenced by other files.
+        // System time can drift, use 1s as safety padding.
+        if !self.key_additions.is_empty()
+            && let Ok(duration) = self.start_time.elapsed()
+            && duration.as_secs() < Self::EXPECTED_TIME_WINDOW_SECS - 1
+        {
+            for key_id in self.key_additions.drain(..) {
+                let mut key_dict = self.manager.dicts.key_dict.lock().unwrap();
+                info!("rollback one imported data key"; "key_id" => key_id);
+                key_dict.keys.remove(&key_id);
+            }
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.manager
+                .rotate_tx
+                .send(RotateTask::Save(tx))
+                .map_err(|_| {
+                    Error::Other(box_err!("Failed to request background key dict rotation"))
+                })?;
+            rx.recv().map_err(|_| {
+                Error::Other(box_err!("Failed to wait for background key dict rotation"))
+            })?;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> Drop for DataKeyImporter<'a> {
+    fn drop(&mut self) {
+        if !self.committed {
+            if let Err(e) = self.rollback() {
+                warn!("failed to rollback imported data keys"; "err" => ?e);
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use engine_traits::EncryptionMethod as EtEncryptionMethod;
     use file_system::{remove_file, File};
+    use kvproto::encryptionpb::EncryptionMethod;
     use matches::assert_matches;
     use tempfile::TempDir;
     use test_util::create_test_key_file;
@@ -811,7 +1130,7 @@ mod tests {
     };
 
     lazy_static::lazy_static! {
-        static ref LOCK_FOR_GAUGE: Mutex<i32> = Mutex::new(1);
+        static ref LOCK_FOR_GAUGE: Mutex<()> = Mutex::new(());
     }
 
     fn new_mock_backend() -> Box<MockBackend> {
@@ -844,7 +1163,7 @@ mod tests {
             rotation_period: Duration::from_secs(60),
             enable_file_dictionary_log: true,
             file_dictionary_rewrite_threshold: 2,
-            dict_path: tmp_dir.path().as_os_str().to_str().unwrap().to_string(),
+            dict_path: tmp_dir.path().to_str().unwrap().to_string(),
         }
     }
 
@@ -921,7 +1240,7 @@ mod tests {
         let foo3 = manager.get_file("foo").unwrap();
         assert_eq!(foo1, foo3);
         let bar = manager.new_file("bar").unwrap();
-        assert_eq!(bar.method, EtEncryptionMethod::Plaintext);
+        assert_eq!(bar.method, EncryptionMethod::Plaintext);
     }
 
     // When enabling encryption, using insecure master key is not allowed.
@@ -1056,9 +1375,9 @@ mod tests {
         let new_file = manager.new_file("foo").unwrap();
         let get_file = manager.get_file("foo").unwrap();
         assert_eq!(new_file, get_file);
-        manager.delete_file("foo").unwrap();
-        manager.delete_file("foo").unwrap();
-        manager.delete_file("foo1").unwrap();
+        manager.delete_file("foo", None).unwrap();
+        manager.delete_file("foo", None).unwrap();
+        manager.delete_file("foo1", None).unwrap();
 
         // Must be plaintext if file not found.
         assert_eq!(manager.get_file_exists("foo").unwrap(), None,);
@@ -1120,14 +1439,14 @@ mod tests {
         let file = manager.new_file("foo").unwrap();
 
         manager.link_file("foo", "foo1").unwrap();
-        manager.delete_file("foo").unwrap();
+        manager.delete_file("foo", None).unwrap();
 
         // Must be the same.
         let file1 = manager.get_file("foo1").unwrap();
         assert_eq!(file1, file);
 
         manager.link_file("foo", "foo2").unwrap();
-        manager.delete_file("foo").unwrap();
+        manager.delete_file("foo", None).unwrap();
 
         assert_eq!(manager.get_file_exists("foo").unwrap(), None);
         assert_eq!(manager.get_file_exists("foo2").unwrap(), None);
@@ -1137,11 +1456,12 @@ mod tests {
     fn test_key_manager_rotate() {
         let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let tmp_dir = tempfile::TempDir::new().unwrap();
-        let manager = new_key_manager_def(&tmp_dir, None).unwrap();
+        let mut manager = new_key_manager_def(&tmp_dir, None).unwrap();
         let (key_id, key) = {
             let (id, k) = manager.dicts.current_data_key();
             (id, k)
         };
+        manager.shutdown_background_worker();
 
         // Do not rotate.
         let master_key = MockBackend::default();
@@ -1206,11 +1526,12 @@ mod tests {
             Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let previous = new_mock_backend() as Box<dyn Backend>;
-        let manager = new_key_manager(&tmp_dir, None, master_key_backend, previous).unwrap();
+        let mut manager = new_key_manager(&tmp_dir, None, master_key_backend, previous).unwrap();
         let (key_id, key) = {
             let (id, k) = manager.dicts.current_data_key();
             (id, k)
         };
+        manager.shutdown_background_worker();
 
         let master_key_backend =
             Box::new(FileBackend::new(key_path.as_path()).unwrap()) as Box<dyn Backend>;
@@ -1256,7 +1577,8 @@ mod tests {
         let master_key_backend = Box::new(file_backend);
         let tmp_dir = tempfile::TempDir::new().unwrap();
         let previous = new_mock_backend() as Box<dyn Backend>;
-        let manager = new_key_manager(&tmp_dir, None, master_key_backend, previous).unwrap();
+        let mut manager = new_key_manager(&tmp_dir, None, master_key_backend, previous).unwrap();
+        manager.shutdown_background_worker();
 
         let file_backend = FileBackend::new(key_path.as_path()).unwrap();
         let master_key_backend = Box::new(file_backend);
@@ -1313,7 +1635,7 @@ mod tests {
 
     #[test]
     fn test_plaintext_encrypter_writer() {
-        use std::io::{Read, Write};
+        use io::{Read, Write};
 
         let _guard = LOCK_FOR_GAUGE.lock().unwrap();
         let (key_path, _tmp_key_dir) = create_key_file("key");
@@ -1347,7 +1669,7 @@ mod tests {
     }
 
     fn generate_mock_file<P: AsRef<Path>>(dkm: Option<&DataKeyManager>, path: P, content: &String) {
-        use std::io::Write;
+        use io::Write;
         match dkm {
             Some(manager) => {
                 // Encryption enabled. Use DataKeyManager to manage file.
@@ -1369,7 +1691,7 @@ mod tests {
         path: P,
         expected: &String,
     ) {
-        use std::io::Read;
+        use io::Read;
 
         match dkm {
             Some(manager) => {
@@ -1452,5 +1774,205 @@ mod tests {
                 test_change_method(from, to)
             }
         }
+    }
+
+    #[test]
+    fn test_rename_dir() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let manager = new_key_manager_def(&tmp_dir, Some(EncryptionMethod::Aes192Ctr)).unwrap();
+        let subdir = tmp_dir.path().join("foo");
+        std::fs::create_dir(&subdir).unwrap();
+        let file_a = manager
+            .new_file(subdir.join("a").to_str().unwrap())
+            .unwrap();
+        File::create(subdir.join("a")).unwrap();
+        let file_b = manager
+            .new_file(subdir.join("b").to_str().unwrap())
+            .unwrap();
+        File::create(subdir.join("b")).unwrap();
+
+        let dstdir = tmp_dir.path().join("bar");
+        manager
+            .link_file(subdir.to_str().unwrap(), dstdir.to_str().unwrap())
+            .unwrap();
+        manager.delete_file(subdir.to_str().unwrap(), None).unwrap();
+
+        assert_eq!(
+            manager
+                .get_file(dstdir.join("a").to_str().unwrap())
+                .unwrap(),
+            file_a
+        );
+        assert_eq!(
+            manager
+                .get_file_exists(subdir.join("a").to_str().unwrap())
+                .unwrap(),
+            None
+        );
+
+        assert_eq!(
+            manager
+                .get_file(dstdir.join("b").to_str().unwrap())
+                .unwrap(),
+            file_b
+        );
+        assert_eq!(
+            manager
+                .get_file_exists(subdir.join("b").to_str().unwrap())
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_import_keys() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let manager = new_key_manager_def(&tmp_dir, Some(EncryptionMethod::Aes192Ctr)).unwrap();
+
+        let mut importer = DataKeyImporter::new(&manager);
+        let file0 = manager.new_file("0").unwrap();
+
+        // conflict with actual file.
+        let f = tmp_dir.path().join("0").to_str().unwrap().to_owned();
+        let _ = manager.new_file(&f).unwrap();
+        File::create(&f).unwrap();
+        importer
+            .add(&f, file0.iv.clone(), DataKey::default())
+            .unwrap_err();
+        // conflict with only key.
+        importer
+            .add("0", file0.iv.clone(), DataKey::default())
+            .unwrap();
+        // same key
+        importer
+            .add(
+                "1",
+                file0.iv.clone(),
+                DataKey {
+                    key: file0.key.clone(),
+                    method: EncryptionMethod::Aes192Ctr,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        // different key
+        let (_, key2) = generate_data_key(EncryptionMethod::Aes192Ctr).unwrap();
+        importer
+            .add(
+                "2",
+                Iv::new_ctr().unwrap().as_slice().to_owned(),
+                DataKey {
+                    key: key2.clone(),
+                    method: EncryptionMethod::Aes192Ctr,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        assert_eq!(manager.get_file("0").unwrap(), file0);
+        assert_eq!(manager.get_file("1").unwrap(), file0);
+        assert_eq!(manager.get_file("2").unwrap().key, key2);
+
+        drop(importer);
+        assert_eq!(manager.get_file_exists("1").unwrap(), None);
+        assert_eq!(manager.get_file_exists("2").unwrap(), None);
+
+        let mut importer = DataKeyImporter::new(&manager);
+        // same key
+        importer
+            .add(
+                "1",
+                file0.iv.clone(),
+                DataKey {
+                    key: file0.key.clone(),
+                    method: EncryptionMethod::Aes192Ctr,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        // different key
+        importer
+            .add(
+                "2",
+                Iv::new_ctr().unwrap().as_slice().to_owned(),
+                DataKey {
+                    key: key2.clone(),
+                    method: EncryptionMethod::Aes192Ctr,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        // importer is dropped here.
+        importer.commit().unwrap();
+        assert_eq!(manager.get_file("1").unwrap(), file0);
+        assert_eq!(manager.get_file("2").unwrap().key, key2);
+    }
+
+    // Test two importer importing duplicate files.
+    // issue-15052
+    #[test]
+    fn test_import_keys_duplicate() {
+        let _guard = LOCK_FOR_GAUGE.lock().unwrap();
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let manager = new_key_manager_def(&tmp_dir, Some(EncryptionMethod::Aes192Ctr)).unwrap();
+
+        let (_, key) = generate_data_key(EncryptionMethod::Aes192Ctr).unwrap();
+        let file0 = manager.new_file("0").unwrap();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let key = DataKey {
+            key,
+            method: EncryptionMethod::Aes192Ctr,
+            creation_time: now,
+            ..Default::default()
+        };
+
+        // Because of time window check, importer2 will create yet another key_id, so no
+        // conflict.
+        let mut importer1 = DataKeyImporter::new(&manager);
+        importer1.add("1", file0.iv.clone(), key.clone()).unwrap();
+        let mut importer2 = DataKeyImporter::new(&manager);
+        importer2.add("2", file0.iv.clone(), key.clone()).unwrap();
+        importer1.rollback().unwrap();
+        importer2.commit().unwrap();
+        assert_eq!(manager.get_file_exists("1").unwrap(), None);
+        assert_eq!(manager.get_file("2").unwrap().key, key.key);
+
+        let mut importer1 = DataKeyImporter::new(&manager);
+        // Use a super old time.
+        importer1.start_time = SystemTime::now() - std::time::Duration::from_secs(1000000);
+        importer1.add("3", file0.iv.clone(), key.clone()).unwrap();
+        let mut importer2 = DataKeyImporter::new(&manager);
+        importer2.add("4", file0.iv, key.clone()).unwrap();
+        // This time, even though importer2 will use the same key_id, importer1 rollback
+        // cannot remove it.
+        importer1.rollback().unwrap();
+        importer2.commit().unwrap();
+        assert_eq!(manager.get_file_exists("3").unwrap(), None);
+        assert_eq!(manager.get_file("4").unwrap().key, key.key);
+    }
+
+    #[test]
+    fn test_trash_encrypted_dir() {
+        let tmp_dir = tempfile::Builder::new()
+            .prefix("test_trash_encrypted_dir")
+            .tempdir()
+            .unwrap();
+        let manager = new_key_manager_def(&tmp_dir, Some(EncryptionMethod::Aes192Ctr)).unwrap();
+        let data_path = tmp_dir.path();
+        let sub_dir = data_path.join("sub_dir");
+        file_system::create_dir_all(&sub_dir).unwrap();
+        let file_path = sub_dir.join("f");
+        file_system::File::create(&file_path).unwrap();
+        manager.new_file(file_path.to_str().unwrap()).unwrap();
+        file_system::create_dir_all(sub_dir.join("deep_dir")).unwrap();
+        assert_eq!(manager.file_count(), 1);
+
+        crate::trash_dir_all(&sub_dir, Some(&manager)).unwrap();
+        assert_eq!(manager.file_count(), 0);
     }
 }

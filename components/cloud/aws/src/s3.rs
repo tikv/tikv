@@ -1,7 +1,12 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{error::Error as StdError, io, time::Duration};
+use std::{
+    error::Error as StdError,
+    io,
+    time::{Duration, SystemTime},
+};
 
 use async_trait::async_trait;
+use aws_config::sts::AssumeRoleProvider;
 use aws_credential_types::{provider::ProvideCredentials, Credentials};
 use aws_sdk_s3::{
     operation::get_object::GetObjectError,
@@ -18,7 +23,8 @@ use cloud::{
 use fail::fail_point;
 use futures::{executor::block_on, FutureExt, Stream, TryStreamExt};
 use futures_util::io::{AsyncRead, AsyncReadExt};
-pub use kvproto::brpb::{Bucket as InputBucket, CloudDynamic, S3 as InputConfig};
+pub use kvproto::brpb::S3 as InputConfig;
+
 use thiserror::Error;
 use tikv_util::{
     debug,
@@ -36,6 +42,7 @@ pub const STORAGE_VENDOR_NAME_AWS: &str = "aws";
 pub struct AccessKeyPair {
     pub access_key: StringNonEmpty,
     pub secret_access_key: StringNonEmpty,
+    pub session_token: Option<StringNonEmpty>,
 }
 
 impl std::fmt::Debug for AccessKeyPair {
@@ -43,6 +50,7 @@ impl std::fmt::Debug for AccessKeyPair {
         f.debug_struct("AccessKeyPair")
             .field("access_key", &self.access_key)
             .field("secret_access_key", &"?")
+            .field("session_token", &self.session_token)
             .finish()
     }
 }
@@ -58,6 +66,8 @@ pub struct Config {
     storage_class: Option<StringNonEmpty>,
     multi_part_size: usize,
     object_lock_enabled: bool,
+    role_arn: Option<StringNonEmpty>,
+    external_id: Option<StringNonEmpty>,
 }
 
 impl Config {
@@ -73,40 +83,9 @@ impl Config {
             storage_class: None,
             multi_part_size: MINIMUM_PART_SIZE,
             object_lock_enabled: false,
+            role_arn: None,
+            external_id: None,
         }
-    }
-
-    pub fn from_cloud_dynamic(cloud_dynamic: &CloudDynamic) -> io::Result<Config> {
-        let bucket = BucketConf::from_cloud_dynamic(cloud_dynamic)?;
-        let attrs = &cloud_dynamic.attrs;
-        let def = &String::new();
-        let force_path_style_str = attrs.get("force_path_style").unwrap_or(def).clone();
-        let force_path_style = force_path_style_str == "true" || force_path_style_str == "True";
-        let access_key_opt = attrs.get("access_key");
-        let access_key_pair = if let Some(access_key) = access_key_opt {
-            let secret_access_key = attrs.get("secret_access_key").unwrap_or(def).clone();
-            Some(AccessKeyPair {
-                access_key: StringNonEmpty::required_field(access_key.clone(), "access_key")?,
-                secret_access_key: StringNonEmpty::required_field(
-                    secret_access_key,
-                    "secret_access_key",
-                )?,
-            })
-        } else {
-            None
-        };
-        let storage_class = bucket.storage_class.clone();
-        Ok(Config {
-            bucket,
-            storage_class,
-            sse: StringNonEmpty::opt(attrs.get("sse").unwrap_or(def).clone()),
-            acl: StringNonEmpty::opt(attrs.get("acl").unwrap_or(def).clone()),
-            access_key_pair,
-            force_path_style,
-            sse_kms_key_id: StringNonEmpty::opt(attrs.get("sse_kms_key_id").unwrap_or(def).clone()),
-            multi_part_size: MINIMUM_PART_SIZE,
-            object_lock_enabled: false,
-        })
     }
 
     pub fn from_input(input: InputConfig) -> io::Result<Config> {
@@ -121,13 +100,17 @@ impl Config {
         };
         let access_key_pair = match StringNonEmpty::opt(input.access_key) {
             None => None,
-            Some(ak) => Some(AccessKeyPair {
-                access_key: ak,
-                secret_access_key: StringNonEmpty::required_field(
-                    input.secret_access_key,
-                    "secret_access_key",
-                )?,
-            }),
+            Some(ak) => {
+                let session_token = StringNonEmpty::opt(input.session_token);
+                Some(AccessKeyPair {
+                    access_key: ak,
+                    secret_access_key: StringNonEmpty::required_field(
+                        input.secret_access_key,
+                        "secret_access_key",
+                    )?,
+                    session_token,
+                })
+            }
         };
         Ok(Config {
             storage_class,
@@ -139,6 +122,8 @@ impl Config {
             sse_kms_key_id: StringNonEmpty::opt(input.sse_kms_key_id),
             multi_part_size: MINIMUM_PART_SIZE,
             object_lock_enabled: input.object_lock_enabled,
+            role_arn: StringNonEmpty::opt(input.role_arn),
+            external_id: StringNonEmpty::opt(input.external_id),
         })
     }
 }
@@ -174,8 +159,12 @@ impl S3Storage {
         Self::new(Config::from_input(input)?)
     }
 
-    pub fn from_cloud_dynamic(cloud_dynamic: &CloudDynamic) -> io::Result<Self> {
-        Self::new(Config::from_cloud_dynamic(cloud_dynamic)?)
+    pub fn set_multi_part_size(&mut self, mut size: usize) {
+        if size < MINIMUM_PART_SIZE {
+            // default multi_part_size is 5MB, S3 cannot allow a smaller size.
+            size = MINIMUM_PART_SIZE
+        }
+        self.config.multi_part_size = size;
     }
 
     /// Create a new S3 storage for the given config.
@@ -195,10 +184,37 @@ impl S3Storage {
                 (*access_key_pair.secret_access_key).to_owned(),
                 None,
             );
-            Self::new_with_creds_connector(config, connector, creds)
+            Self::maybe_assume_role(config, connector, creds)
         } else {
             let creds = util::new_credentials_provider();
-            Self::new_with_creds_connector(config, connector, creds)
+            Self::maybe_assume_role(config, connector, creds)
+        }
+    }
+
+    fn maybe_assume_role<Creds, Conn>(config: Config, connector: Conn, credentials_provider: Creds) -> io::Result<Self> 
+    where
+        Conn: SmithyConnector + 'static,
+        Creds: ProvideCredentials + 'static,
+    {
+        if config.role_arn.is_some() {
+            let duration_since_epoch = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap();
+            let timestamp_secs = duration_since_epoch.as_secs();
+
+            let mut builder = AssumeRoleProvider::builder(config.role_arn.as_deref().unwrap())
+                .session_name(format!("{}", timestamp_secs))
+                .connection(util::new_http_conn());
+                // TODO fix
+                // .region(Region::new(region))
+            if let Some(external_id) = &config.external_id {
+                builder = builder.external_id(external_id.as_str());
+            }
+            let credentials_provider = builder.build(credentials_provider);
+            Self::new_with_creds_connector(config, connector, credentials_provider)
+        } else {
+            // or just use original cred_provider to access s3.
+            Self::new_with_creds_connector(config, connector, credentials_provider)
         }
     }
 
@@ -244,14 +260,6 @@ impl S3Storage {
         let client = Client::from_conf(s3_config);
 
         Ok(S3Storage { config, client })
-    }
-
-    pub fn set_multi_part_size(&mut self, mut size: usize) {
-        if size < MINIMUM_PART_SIZE {
-            // default multi_part_size is 5MB, S3 cannot allow a smaller size.
-            size = MINIMUM_PART_SIZE
-        }
-        self.config.multi_part_size = size;
     }
 
     fn maybe_prefix_key(&self, key: &str) -> String {
@@ -359,7 +367,7 @@ impl<T: 'static + StdError> From<SdkError<T>> for UploadError {
     }
 }
 
-/// try_read_exact tries to read exact length data as the buffer size.  
+/// try_read_exact tries to read exact length data as the buffer size.
 /// like [`std::io::Read::read_exact`], but won't return `UnexpectedEof` when
 /// cannot read anything more from the `Read`. once returning a size less than
 /// the buffer length, implies a EOF was meet, or nothing read.
@@ -380,6 +388,8 @@ async fn try_read_exact<R: AsyncRead + ?Sized + Unpin>(
     }
 }
 
+// NOTICE: the openssl fips doesn't support md5, therefore use md5 package to
+// hash
 fn get_content_md5(object_lock_enabled: bool, content: &[u8]) -> Option<String> {
     object_lock_enabled.then(|| {
         let digest = md5::compute(content);
@@ -732,6 +742,7 @@ mod tests {
         config.access_key_pair = Some(AccessKeyPair {
             access_key: StringNonEmpty::required("abc".to_string()).unwrap(),
             secret_access_key: StringNonEmpty::required("xyz".to_string()).unwrap(),
+            session_token: Some(StringNonEmpty::required("token".to_string()).unwrap()),
         });
         let mut s = S3Storage::new(config.clone()).unwrap();
         // set a less than 5M value not work
@@ -1078,66 +1089,6 @@ mod tests {
             s3.url().unwrap().to_string(),
             "http://endpoint.com/bucket/backup%2001/prefix/"
         );
-    }
-
-    #[test]
-    fn test_config_round_trip() {
-        let mut input = InputConfig::default();
-        input.set_bucket("bucket".to_owned());
-        input.set_prefix("backup 02/prefix/".to_owned());
-        input.set_region("us-west-2".to_owned());
-        let c1 = Config::from_input(input.clone()).unwrap();
-        let c2 = Config::from_cloud_dynamic(&cloud_dynamic_from_input(input)).unwrap();
-        assert_eq!(c1.bucket.bucket, c2.bucket.bucket);
-        assert_eq!(c1.bucket.prefix, c2.bucket.prefix);
-        assert_eq!(c1.bucket.region, c2.bucket.region);
-        assert_eq!(
-            c1.bucket.region,
-            StringNonEmpty::opt("us-west-2".to_owned())
-        );
-    }
-
-    fn cloud_dynamic_from_input(mut s3: InputConfig) -> CloudDynamic {
-        let mut bucket = InputBucket::default();
-        if !s3.endpoint.is_empty() {
-            bucket.endpoint = s3.take_endpoint();
-        }
-        if !s3.region.is_empty() {
-            bucket.region = s3.take_region();
-        }
-        if !s3.prefix.is_empty() {
-            bucket.prefix = s3.take_prefix();
-        }
-        if !s3.storage_class.is_empty() {
-            bucket.storage_class = s3.take_storage_class();
-        }
-        if !s3.bucket.is_empty() {
-            bucket.bucket = s3.take_bucket();
-        }
-        let mut attrs = std::collections::HashMap::new();
-        if !s3.sse.is_empty() {
-            attrs.insert("sse".to_owned(), s3.take_sse());
-        }
-        if !s3.acl.is_empty() {
-            attrs.insert("acl".to_owned(), s3.take_acl());
-        }
-        if !s3.access_key.is_empty() {
-            attrs.insert("access_key".to_owned(), s3.take_access_key());
-        }
-        if !s3.secret_access_key.is_empty() {
-            attrs.insert("secret_access_key".to_owned(), s3.take_secret_access_key());
-        }
-        if !s3.sse_kms_key_id.is_empty() {
-            attrs.insert("sse_kms_key_id".to_owned(), s3.take_sse_kms_key_id());
-        }
-        if s3.force_path_style {
-            attrs.insert("force_path_style".to_owned(), "true".to_owned());
-        }
-        let mut cd = CloudDynamic::default();
-        cd.set_provider_name("aws".to_owned());
-        cd.set_attrs(attrs);
-        cd.set_bucket(bucket);
-        cd
     }
 
     #[tokio::test]

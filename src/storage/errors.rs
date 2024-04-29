@@ -12,7 +12,7 @@ use std::{
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use kvproto::{errorpb, kvrpcpb, kvrpcpb::ApiVersion};
 use thiserror::Error;
-use tikv_util::deadline::DeadlineError;
+use tikv_util::deadline::{set_deadline_exceeded_busy_error, DeadlineError};
 use txn_types::{KvPair, TimeStamp};
 
 use crate::storage::{
@@ -176,6 +176,14 @@ pub enum ErrorHeaderKind {
     StaleCommand,
     StoreNotMatch,
     RaftEntryTooLarge,
+    ReadIndexNotReady,
+    ProposalInMergeMode,
+    DataNotReady,
+    RegionNotInitialized,
+    DiskFull,
+    RecoveryInProgress,
+    FlashbackInProgress,
+    BucketsVersionNotMatch,
     Other,
 }
 
@@ -193,6 +201,14 @@ impl ErrorHeaderKind {
             ErrorHeaderKind::StaleCommand => "stale_command",
             ErrorHeaderKind::StoreNotMatch => "store_not_match",
             ErrorHeaderKind::RaftEntryTooLarge => "raft_entry_too_large",
+            ErrorHeaderKind::ReadIndexNotReady => "read_index_not_ready",
+            ErrorHeaderKind::ProposalInMergeMode => "proposal_in_merge_mode",
+            ErrorHeaderKind::DataNotReady => "data_not_ready",
+            ErrorHeaderKind::RegionNotInitialized => "region_not_initialized",
+            ErrorHeaderKind::DiskFull => "disk_full",
+            ErrorHeaderKind::RecoveryInProgress => "recovery_in_progress",
+            ErrorHeaderKind::FlashbackInProgress => "flashback_in_progress",
+            ErrorHeaderKind::BucketsVersionNotMatch => "buckets_version_not_match",
             ErrorHeaderKind::Other => "other",
         }
     }
@@ -206,7 +222,6 @@ impl Display for ErrorHeaderKind {
 
 const SCHEDULER_IS_BUSY: &str = "scheduler is busy";
 const GC_WORKER_IS_BUSY: &str = "gc worker is busy";
-const DEADLINE_EXCEEDED: &str = "deadline is exceeded";
 
 /// Get the `ErrorHeaderKind` enum that corresponds to the error in the protobuf
 /// message. Returns `ErrorHeaderKind::Other` if no match found.
@@ -227,6 +242,22 @@ pub fn get_error_kind_from_header(header: &errorpb::Error) -> ErrorHeaderKind {
         ErrorHeaderKind::StoreNotMatch
     } else if header.has_raft_entry_too_large() {
         ErrorHeaderKind::RaftEntryTooLarge
+    } else if header.has_read_index_not_ready() {
+        ErrorHeaderKind::ReadIndexNotReady
+    } else if header.has_proposal_in_merging_mode() {
+        ErrorHeaderKind::ProposalInMergeMode
+    } else if header.has_data_is_not_ready() {
+        ErrorHeaderKind::DataNotReady
+    } else if header.has_region_not_initialized() {
+        ErrorHeaderKind::RegionNotInitialized
+    } else if header.has_disk_full() {
+        ErrorHeaderKind::DiskFull
+    } else if header.has_recovery_in_progress() {
+        ErrorHeaderKind::RecoveryInProgress
+    } else if header.has_flashback_in_progress() {
+        ErrorHeaderKind::FlashbackInProgress
+    } else if header.has_bucket_version_not_match() {
+        ErrorHeaderKind::BucketsVersionNotMatch
     } else {
         ErrorHeaderKind::Other
     }
@@ -253,6 +284,14 @@ pub fn extract_region_error_from_error(e: &Error) -> Option<errorpb::Error> {
         }))) => {
             let mut err = errorpb::Error::default();
             err.set_max_timestamp_not_synced(Default::default());
+            Some(err)
+        }
+        Error(box ErrorInner::Txn(
+            e @ TxnError(box TxnErrorInner::RawKvMaxTimestampNotSynced { .. }),
+        )) => {
+            let mut err = errorpb::Error::default();
+            err.set_max_timestamp_not_synced(Default::default());
+            err.set_message(format!("{}", e));
             Some(err)
         }
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::FlashbackNotPrepared(
@@ -287,9 +326,8 @@ pub fn extract_region_error_from_error(e: &Error) -> Option<errorpb::Error> {
         }
         Error(box ErrorInner::DeadlineExceeded) => {
             let mut err = errorpb::Error::default();
-            let mut server_is_busy_err = errorpb::ServerIsBusy::default();
-            server_is_busy_err.set_reason(DEADLINE_EXCEEDED.to_owned());
-            err.set_server_is_busy(server_is_busy_err);
+            err.set_message(e.to_string());
+            set_deadline_exceeded_busy_error(&mut err);
             Some(err)
         }
         _ => None,
@@ -423,6 +461,13 @@ pub fn extract_key_error(err: &Error) -> kvrpcpb::KeyError {
             assertion_failed.set_existing_start_ts(existing_start_ts.into_inner());
             assertion_failed.set_existing_commit_ts(existing_commit_ts.into_inner());
             key_error.set_assertion_failed(assertion_failed);
+        }
+        Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
+            box MvccErrorInner::PrimaryMismatch(lock_info),
+        ))))) => {
+            let mut primary_mismatch = kvrpcpb::PrimaryMismatch::default();
+            primary_mismatch.set_lock_info(lock_info.clone());
+            key_error.set_primary_mismatch(primary_mismatch);
         }
         _ => {
             error!(?*err; "txn aborts");

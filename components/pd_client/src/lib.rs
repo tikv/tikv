@@ -19,8 +19,10 @@ use std::{cmp::Ordering, ops::Deref, sync::Arc, time::Duration};
 
 use futures::future::BoxFuture;
 use kvproto::{
-    metapb, pdpb,
+    metapb,
+    pdpb::{self, UpdateServiceGcSafePointResponse},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
+    resource_manager::TokenBucketsRequest,
 };
 use pdpb::QueryStats;
 use tikv_util::time::{Instant, UnixSecs};
@@ -38,7 +40,7 @@ pub use self::{
 pub type Key = Vec<u8>;
 pub type PdFuture<T> = BoxFuture<'static, Result<T>>;
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct RegionStat {
     pub down_peers: Vec<pdpb::PeerStats>,
     pub pending_peers: Vec<metapb::Peer>,
@@ -125,6 +127,11 @@ impl BucketMeta {
         self.keys.remove(idx);
         self.sizes.remove(idx);
     }
+
+    // total size of the whole buckets
+    pub fn total_size(&self) -> u64 {
+        self.sizes.iter().sum()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -193,6 +200,27 @@ impl BucketStat {
         }
     }
 
+    // Notice: It's not evenly distributed, so we update all buckets after ingest
+    // sst. Generally, sst file size is region split size, and this region is
+    // empty region.
+    pub fn ingest_sst(&mut self, key_count: u64, value_size: u64) {
+        for stat in self.stats.mut_write_bytes() {
+            *stat += value_size;
+        }
+        for stat in self.stats.mut_write_keys() {
+            *stat += key_count;
+        }
+    }
+
+    pub fn clean_stats(&mut self, idx: usize) {
+        self.stats.write_keys[idx] = 0;
+        self.stats.write_bytes[idx] = 0;
+        self.stats.read_qps[idx] = 0;
+        self.stats.write_qps[idx] = 0;
+        self.stats.read_keys[idx] = 0;
+        self.stats.read_bytes[idx] = 0;
+    }
+
     pub fn split(&mut self, idx: usize) {
         assert!(idx != 0);
         // inherit the traffic stats for splited bucket
@@ -230,6 +258,9 @@ impl BucketStat {
 pub const INVALID_ID: u64 = 0;
 // TODO: Implementation of config registration for each module
 pub const RESOURCE_CONTROL_CONFIG_PATH: &str = "resource_group/settings";
+pub const RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH: &str = "resource_group/controller";
+
+pub const REGION_LABEL_PATH_PREFIX: &str = "region_label";
 
 /// PdClient communicates with Placement Driver (PD).
 /// Because now one PD only supports one cluster, so it is no need to pass
@@ -237,32 +268,6 @@ pub const RESOURCE_CONTROL_CONFIG_PATH: &str = "resource_group/settings";
 /// creating the PdClient is enough and the PdClient will use this cluster id
 /// all the time.
 pub trait PdClient: Send + Sync {
-    /// Load a list of GlobalConfig
-    fn load_global_config(
-        &self,
-        _config_path: String,
-    ) -> PdFuture<(Vec<pdpb::GlobalConfigItem>, i64)> {
-        unimplemented!();
-    }
-
-    /// Store a list of GlobalConfig
-    fn store_global_config(
-        &self,
-        _config_path: String,
-        _items: Vec<pdpb::GlobalConfigItem>,
-    ) -> PdFuture<()> {
-        unimplemented!();
-    }
-
-    /// Watching change of GlobalConfig
-    fn watch_global_config(
-        &self,
-        _config_path: String,
-        _revision: i64,
-    ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
-        unimplemented!();
-    }
-
     /// Returns the cluster ID.
     fn get_cluster_id(&self) -> Result<u64> {
         unimplemented!();
@@ -457,6 +462,23 @@ pub trait PdClient: Send + Sync {
         unimplemented!();
     }
 
+    fn scan_regions(
+        &self,
+        _start_key: &[u8],
+        _end_key: &[u8],
+        _limit: i32,
+    ) -> Result<Vec<pdpb::Region>> {
+        unimplemented!();
+    }
+
+    fn batch_load_regions(
+        &self,
+        mut _start_key: Vec<u8>,
+        mut _end_key: Vec<u8>,
+    ) -> Vec<Vec<pdpb::Region>> {
+        unimplemented!();
+    }
+
     /// Gets store state if it is not a tombstone store asynchronously.
     fn get_store_stats_async(&self, _store_id: u64) -> BoxFuture<'_, Result<pdpb::StoreStats>> {
         unimplemented!();
@@ -504,6 +526,10 @@ pub trait PdClient: Send + Sync {
     fn report_region_buckets(&self, _bucket_stat: &BucketStat, _period: Duration) -> PdFuture<()> {
         unimplemented!();
     }
+
+    fn report_ru_metrics(&self, _req: TokenBucketsRequest) -> PdFuture<()> {
+        unimplemented!();
+    }
 }
 
 const REQUEST_TIMEOUT: u64 = 2; // 2s
@@ -515,4 +541,17 @@ pub fn take_peer_address(store: &mut metapb::Store) -> String {
     } else {
         store.take_address()
     }
+}
+
+fn check_update_service_safe_point_resp(
+    resp: &UpdateServiceGcSafePointResponse,
+    required_safepoint: u64,
+) -> Result<()> {
+    if resp.min_safe_point > required_safepoint {
+        return Err(Error::UnsafeServiceGcSafePoint {
+            requested: required_safepoint.into(),
+            current_minimal: resp.min_safe_point.into(),
+        });
+    }
+    Ok(())
 }

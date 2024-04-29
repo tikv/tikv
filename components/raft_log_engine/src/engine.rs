@@ -10,12 +10,13 @@ use std::{
 use codec::number::NumberCodec;
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter};
 use engine_traits::{
-    CacheStats, EncryptionKeyManager, EncryptionMethod, PerfContextExt, PerfContextKind, PerfLevel,
-    RaftEngine, RaftEngineDebug, RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, Result,
-    CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
+    CacheStats, PerfContextExt, PerfContextKind, PerfLevel, RaftEngine, RaftEngineDebug,
+    RaftEngineReadOnly, RaftLogBatch as RaftLogBatchTrait, Result, CF_DEFAULT, CF_LOCK, CF_RAFT,
+    CF_WRITE,
 };
-use file_system::{IoOp, IoRateLimiter, IoType};
+use file_system::{IoOp, IoRateLimiter, IoType, WithIoType};
 use kvproto::{
+    encryptionpb::EncryptionMethod,
     metapb::Region,
     raft_serverpb::{
         RaftApplyState, RaftLocalState, RegionLocalState, StoreIdent, StoreRecoverState,
@@ -66,7 +67,8 @@ impl Read for ManagedReader {
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
         let mut size = buf.len();
         if let Some(ref mut limiter) = self.rate_limiter {
-            size = limiter.request(IoType::ForegroundRead, IoOp::Read, size);
+            let io_type = file_system::get_io_type();
+            size = limiter.request(io_type, IoOp::Read, size);
         }
         match self.inner.as_mut() {
             Either::Left(reader) => reader.read(&mut buf[..size]),
@@ -96,7 +98,8 @@ impl Write for ManagedWriter {
     fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
         let mut size = buf.len();
         if let Some(ref mut limiter) = self.rate_limiter {
-            size = limiter.request(IoType::ForegroundWrite, IoOp::Write, size);
+            let io_type = file_system::get_io_type();
+            size = limiter.request(io_type, IoOp::Write, size);
         }
         match self.inner.as_mut() {
             Either::Left(writer) => writer.write(&buf[..size]),
@@ -188,10 +191,11 @@ impl FileSystem for ManagedFileSystem {
     }
 
     fn delete<P: AsRef<Path>>(&self, path: P) -> IoResult<()> {
+        self.base_file_system.delete(path.as_ref())?;
         if let Some(ref manager) = self.key_manager {
-            manager.delete_file(path.as_ref().to_str().unwrap())?;
+            manager.delete_file(path.as_ref().to_str().unwrap(), None)?;
         }
-        self.base_file_system.delete(path)
+        Ok(())
     }
 
     fn rename<P: AsRef<Path>>(&self, src_path: P, dst_path: P) -> IoResult<()> {
@@ -203,8 +207,11 @@ impl FileSystem for ManagedFileSystem {
             let r = self
                 .base_file_system
                 .rename(src_path.as_ref(), dst_path.as_ref());
-            let del_file = if r.is_ok() { src_str } else { dst_str };
-            if let Err(e) = manager.delete_file(del_file) {
+            if r.is_ok() {
+                if let Err(e) = manager.delete_file(src_str, Some(dst_str)) {
+                    warn!("fail to remove encryption metadata during 'rename'"; "err" => ?e);
+                }
+            } else if let Err(e) = manager.delete_file(dst_str, Some(src_str)) {
                 warn!("fail to remove encryption metadata during 'rename'"; "err" => ?e);
             }
             r
@@ -213,6 +220,7 @@ impl FileSystem for ManagedFileSystem {
         }
     }
 
+    // TODO: distinguish reuse to trash and from trash.
     fn reuse<P: AsRef<Path>>(&self, src_path: P, dst_path: P) -> IoResult<()> {
         if let Some(ref manager) = self.key_manager {
             // Note: In contrast to `rename`, `reuse` will make sure the encryption
@@ -226,9 +234,12 @@ impl FileSystem for ManagedFileSystem {
             let r = self
                 .base_file_system
                 .rename(src_path.as_ref(), dst_path.as_ref());
-            let del_file = if r.is_ok() { src_str } else { dst_str };
-            if let Err(e) = manager.delete_file(del_file) {
-                warn!("fail to remove encryption metadata during 'reuse'"; "err" => ?e);
+            if r.is_ok() {
+                if let Err(e) = manager.delete_file(src_str, Some(dst_str)) {
+                    warn!("fail to remove encryption metadata during 'rename'"; "err" => ?e);
+                }
+            } else if let Err(e) = manager.delete_file(dst_str, Some(src_str)) {
+                warn!("fail to remove encryption metadata during 'rename'"; "err" => ?e);
             }
             r
         } else {
@@ -250,7 +261,7 @@ impl FileSystem for ManagedFileSystem {
     fn delete_metadata<P: AsRef<Path>>(&self, path: P) -> IoResult<()> {
         if let Some(ref manager) = self.key_manager {
             // Note: no error if the file doesn't exist.
-            manager.delete_file(path.as_ref().to_str().unwrap())?;
+            manager.delete_file(path.as_ref().to_str().unwrap(), None)?;
         }
         self.base_file_system.delete_metadata(path)
     }
@@ -518,15 +529,6 @@ impl RaftEngineReadOnly for RaftLogEngine {
             .map_err(transfer_error)
     }
 
-    fn get_all_entries_to(&self, raft_group_id: u64, buf: &mut Vec<Entry>) -> Result<()> {
-        if let Some(first) = self.0.first_index(raft_group_id) {
-            let last = self.0.last_index(raft_group_id).unwrap();
-            buf.reserve((last - first + 1) as usize);
-            self.fetch_entries_to(raft_group_id, first, last + 1, None, buf)?;
-        }
-        Ok(())
-    }
-
     fn is_empty(&self) -> Result<bool> {
         self.get_store_ident().map(|i| i.is_none())
     }
@@ -626,12 +628,12 @@ impl RaftEngineReadOnly for RaftLogEngine {
 impl RaftEngineDebug for RaftLogEngine {
     fn scan_entries<F>(&self, raft_group_id: u64, mut f: F) -> Result<()>
     where
-        F: FnMut(&Entry) -> Result<bool>,
+        F: FnMut(Entry) -> Result<bool>,
     {
         if let Some(first_index) = self.first_index(raft_group_id) {
             for idx in first_index..=self.last_index(raft_group_id).unwrap() {
                 if let Some(entry) = self.get_entry(raft_group_id, idx)? {
-                    if !f(&entry)? {
+                    if !f(entry)? {
                         break;
                     }
                 }
@@ -653,6 +655,8 @@ impl RaftEngine for RaftLogEngine {
     }
 
     fn consume(&self, batch: &mut Self::LogBatch, sync: bool) -> Result<usize> {
+        // Always use ForegroundWrite as all `consume` calls share the same write queue.
+        let _guard = WithIoType::new(IoType::ForegroundWrite);
         self.0.write(&mut batch.0, sync).map_err(transfer_error)
     }
 
@@ -663,6 +667,8 @@ impl RaftEngine for RaftLogEngine {
         _: usize,
         _: usize,
     ) -> Result<usize> {
+        // Always use ForegroundWrite as all `consume` calls share the same write queue.
+        let _guard = WithIoType::new(IoType::ForegroundWrite);
         self.0.write(&mut batch.0, sync).map_err(transfer_error)
     }
 

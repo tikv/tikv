@@ -101,7 +101,6 @@ where
     R: Runnable<T> + Send + 'static,
     T: Display + Send + 'static,
 {
-    tikv_alloc::add_thread_memory_accessor();
     let current_thread = thread::current();
     let name = current_thread.name().unwrap();
     let metrics_pending_task_count = WORKER_PENDING_TASK_VEC.with_label_values(&[name]);
@@ -127,7 +126,6 @@ where
             .block_on(handle.run_until(task));
     }
     runner.shutdown();
-    tikv_alloc::remove_thread_memory_accessor();
 }
 
 impl<T: Display + Send + 'static> Worker<T> {

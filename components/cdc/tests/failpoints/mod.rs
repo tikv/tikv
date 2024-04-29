@@ -4,6 +4,7 @@
 #![test_runner(test_util::run_failpoint_tests)]
 
 mod test_endpoint;
+mod test_memory_quota;
 mod test_observe;
 mod test_register;
 mod test_resolve;

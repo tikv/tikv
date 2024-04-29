@@ -1,7 +1,5 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::convert::TryFrom;
-
 use tidb_query_common::Result;
 use tidb_query_datatype::{builder::FieldTypeBuilder, EvalType, FieldTypeAccessor, FieldTypeTp};
 use tidb_query_expr::{impl_cast::get_cast_fn_rpn_node, RpnExpression, RpnExpressionBuilder};

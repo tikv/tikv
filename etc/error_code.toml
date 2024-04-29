@@ -258,11 +258,6 @@ error = '''
 KV:Pd:StoreTombstone
 '''
 
-["KV:Pd:GlobalConfigNotFound"]
-error = '''
-KV:Pd:GlobalConfigNotFound
-'''
-
 ["KV:Pd:DataCompacted"]
 error = '''
 KV:Pd:DataCompacted
@@ -751,6 +746,11 @@ KV:Storage:AssertionFailed
 ["KV:Storage:LockIfExistsFailed"]
 error = '''
 KV:Storage:LockIfExistsFailed
+'''
+
+["KV:Storage:PrimaryMismatch"]
+error = '''
+KV:Storage:PrimaryMismatch
 '''
 
 ["KV:Storage:Unknown"]

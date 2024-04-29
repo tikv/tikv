@@ -1,9 +1,10 @@
 [package]
 name = "tikv_alloc"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 authors = ["Brian Anderson <andersrb@gmail.com>"]
 publish = false
+license = "Apache-2.0"
 
 [features]
 jemalloc = ["tikv-jemallocator", "tikv-jemalloc-ctl", "tikv-jemalloc-sys"]

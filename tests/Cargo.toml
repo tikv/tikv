@@ -1,8 +1,9 @@
 [package]
 name = "tests"
 version = "0.0.1"
-edition = "2018"
+edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [[test]]
 name = "failpoints"
@@ -40,11 +41,8 @@ harness = false
 path = "benches/deadlock_detector/mod.rs"
 
 [features]
-default = ["failpoints", "testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
+default = ["failpoints", "testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
 failpoints = ["fail/failpoints", "tikv/failpoints", "pd_client/failpoints"]
-cloud-aws = ["external_storage_export/cloud-aws"]
-cloud-gcp = ["external_storage_export/cloud-gcp"]
-cloud-azure = ["external_storage_export/cloud-azure"]
 testexport = ["raftstore/testexport", "tikv/testexport", "pd_client/testexport"]
 profiling = ["profiler/profiling"]
 
@@ -55,10 +53,10 @@ test-engine-raft-raft-engine = [
   "raftstore/test-engine-raft-raft-engine"
 ]
 test-engines-rocksdb = [
-  "raftstore/test-engines-rocksdb",
+  "raftstore/test-engines-rocksdb"
 ]
 test-engines-panic = [
-  "raftstore/test-engines-panic",
+  "raftstore/test-engines-panic"
 ]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
@@ -82,7 +80,8 @@ fail = "0.5"
 file_system = { workspace = true }
 futures = "0.3"
 grpcio = { workspace = true }
-grpcio-health = { version = "0.10", default-features = false }
+grpcio-health = { workspace = true }
+health_controller = { workspace = true }
 kvproto = { workspace = true }
 libc = "0.2"
 log_wrappers = { workspace = true }
@@ -91,11 +90,14 @@ online_config = { workspace = true }
 paste = "1.0"
 pd_client = { workspace = true }
 protobuf = { version = "2.8", features = ["bytes"] }
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
+raft = { workspace = true }
 raft_log_engine = { workspace = true }
 raftstore = { workspace = true }
+raftstore-v2 = { workspace = true }
 rand = "0.8.3"
 resource_control = { workspace = true }
+server = { workspace = true }
+service = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }
 tempfile = "3.0"
@@ -106,17 +108,17 @@ tidb_query_executors = { workspace = true }
 tidb_query_expr = { workspace = true }
 tikv = { workspace = true }
 tikv_util = { workspace = true }
-time = "0.1"
+time = { workspace = true }
 tipb = { workspace = true }
 toml = "0.5"
+tracker = { workspace = true }
 txn_types = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
+procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "7693954bd1dd86eb1709572fd7b62fd5f7ff2ea1" }
 
 [dev-dependencies]
-arrow = "13.0"
 byteorder = "1.2"
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage
 # of `real_blackbox` feature.
@@ -127,7 +129,7 @@ criterion-cpu-time = "0.1"
 engine_rocks = { workspace = true }
 engine_test = { workspace = true }
 engine_traits = { workspace = true }
-external_storage_export = { workspace = true }
+external_storage ={ workspace = true }
 file_system = { workspace = true }
 hyper = { version = "0.14", default-features = false, features = ["runtime"] }
 keys = { workspace = true }
@@ -138,7 +140,7 @@ resource_metering = { workspace = true }
 security = { workspace = true }
 serde_json = "1.0"
 sst_importer = { workspace = true }
-test_backup = { workspace = true }
+test_backup = { workspace = true, default-features = false }
 test_coprocessor = { workspace = true }
 test_pd = { workspace = true }
 test_pd_client = { workspace = true }

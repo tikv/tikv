@@ -1,7 +1,8 @@
 [package]
 name = "batch-system"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
+license = "Apache-2.0"
 
 [features]
 default = ["test-runner"]
@@ -10,6 +11,7 @@ test-runner = ["derive_more"]
 [dependencies]
 collections = { workspace = true }
 crossbeam = "0.8"
+dashmap = "5.2"
 derive_more = { version = "0.99", optional = true }
 fail = "0.5"
 file_system = { workspace = true }

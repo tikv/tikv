@@ -9,7 +9,7 @@ use kvproto::kvrpcpb::LockInfo;
 use txn_types::{Key, Lock, PessimisticLock, TimeStamp, Value};
 
 use super::metrics::{GC_DELETE_VERSIONS_HISTOGRAM, MVCC_VERSIONS_HISTOGRAM};
-use crate::storage::{kv::Modify, mvcc::PessimisticLockNotFoundReason};
+use crate::storage::kv::Modify;
 
 pub const MAX_TXN_WRITE_SIZE: usize = 32 * 1024;
 
@@ -246,7 +246,7 @@ pub(crate) fn make_txn_error(
 ) -> crate::storage::mvcc::ErrorInner {
     use kvproto::kvrpcpb::WriteConflictReason;
 
-    use crate::storage::mvcc::ErrorInner;
+    use crate::storage::mvcc::{ErrorInner, PessimisticLockNotFoundReason};
     if let Some(s) = s {
         match s.to_ascii_lowercase().as_str() {
             "keyislocked" => {
@@ -523,7 +523,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_mvcc_txn_pessmistic_prewrite_check_not_exist() {
+    fn test_mvcc_txn_pessimistic_prewrite_check_not_exist() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
         let k = b"k1";
         try_pessimistic_prewrite_check_not_exists(&mut engine, k, k, 3).unwrap_err();
@@ -543,8 +543,10 @@ pub(crate) mod tests {
 
         // Rollback lock
         must_rollback(&mut engine, k, 15, false);
-        // Rollbacks of optimistic transactions needn't be protected
-        must_get_rollback_protected(&mut engine, k, 15, false);
+        // Rollbacks of optimistic transactions need to be protected
+        // TODO: Re-check how the test can be better written after refinement of
+        // `must_rollback`'s       semantics.
+        must_get_rollback_protected(&mut engine, k, 15, true);
     }
 
     #[test]
@@ -896,16 +898,20 @@ pub(crate) mod tests {
     #[test]
     fn test_collapse_prev_rollback() {
         let mut engine = TestEngineBuilder::new().build().unwrap();
-        let (key, value) = (b"key", b"value");
+        let (key, pk, value) = (b"key", b"pk", b"value");
+
+        // Worked around the problem that `must_rollback` always protects primary lock
+        // by setting different PK.
+        // TODO: Cover primary when working on https://github.com/tikv/tikv/issues/16625
 
         // Add a Rollback whose start ts is 1.
-        must_prewrite_put(&mut engine, key, value, key, 1);
+        must_prewrite_put(&mut engine, key, value, pk, 1);
         must_rollback(&mut engine, key, 1, false);
         must_get_rollback_ts(&mut engine, key, 1);
 
         // Add a Rollback whose start ts is 2, the previous Rollback whose
         // start ts is 1 will be collapsed.
-        must_prewrite_put(&mut engine, key, value, key, 2);
+        must_prewrite_put(&mut engine, key, value, pk, 2);
         must_rollback(&mut engine, key, 2, false);
         must_get_none(&mut engine, key, 2);
         must_get_rollback_ts(&mut engine, key, 2);
@@ -1238,7 +1244,7 @@ pub(crate) mod tests {
         must_acquire_pessimistic_lock(&mut engine, k, k, 10, 10);
         must_commit_err(&mut engine, k, 20, 30);
         must_commit(&mut engine, k, 10, 20);
-        must_seek_write(&mut engine, k, 30, 10, 20, WriteType::Lock);
+        must_seek_write_none(&mut engine, k, 30);
     }
 
     #[test]

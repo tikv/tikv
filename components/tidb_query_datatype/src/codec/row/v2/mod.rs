@@ -11,6 +11,7 @@ bitflags! {
     #[derive(Default)]
     struct Flags: u8 {
         const BIG = 1;
+        const WITH_CHECKSUM = 2;
     }
 }
 

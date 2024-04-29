@@ -82,6 +82,7 @@ pub struct ProposalControl {
     // should be empty or 1 element. And access speed is not a concern.
     proposed_admin_cmd: LinkedList<ProposedAdminCmd>,
     has_pending_prepare_merge: bool,
+    // Commit index of prepare merge.
     applied_prepare_merge_index: u64,
     term: u64,
 }

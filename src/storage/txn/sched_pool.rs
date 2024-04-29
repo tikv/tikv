@@ -12,7 +12,9 @@ use kvproto::{kvrpcpb::CommandPri, pdpb::QueryKind};
 use pd_client::{Feature, FeatureGate};
 use prometheus::local::*;
 use raftstore::store::WriteStats;
-use resource_control::{ControlledFuture, ResourceController};
+use resource_control::{
+    with_resource_limiter, ControlledFuture, ResourceController, ResourceGroupManager, TaskMetadata,
+};
 use tikv_util::{
     sys::SysQuota,
     yatp_pool::{Full, FuturePool, PoolTicker, YatpPoolBuilder},
@@ -55,17 +57,100 @@ impl<R: FlowStatsReporter> PoolTicker for SchedTicker<R> {
 }
 
 #[derive(Clone)]
-pub enum SchedPool {
+pub enum QueueType {
     // separated thread pools for different priority commands
-    Vanilla {
-        high_worker_pool: FuturePool,
-        worker_pool: FuturePool,
-    },
-    // one priority based thread pool to handle all commands
-    Priority {
-        worker_pool: FuturePool,
-        resource_ctl: Arc<ResourceController>,
-    },
+    Vanilla,
+    // automatically switch between the `single-queue pool` and `priority-queue pool` based on the
+    // resource group settings, only used when the resource control feature is enabled.
+    Dynamic,
+}
+
+#[derive(Clone)]
+struct VanillaQueue {
+    high_worker_pool: FuturePool,
+    worker_pool: FuturePool,
+}
+
+impl VanillaQueue {
+    fn spawn(
+        &self,
+        priority_level: CommandPri,
+        f: impl futures::Future<Output = ()> + Send + 'static,
+    ) -> Result<(), Full> {
+        if priority_level == CommandPri::High {
+            self.high_worker_pool.spawn(f)
+        } else {
+            self.worker_pool.spawn(f)
+        }
+    }
+
+    fn scale_pool_size(&self, pool_size: usize) {
+        self.high_worker_pool
+            .scale_pool_size(std::cmp::max(1, pool_size / 2));
+        self.worker_pool.scale_pool_size(pool_size);
+    }
+
+    fn get_pool_size(&self, priority_level: CommandPri) -> usize {
+        if priority_level == CommandPri::High {
+            self.high_worker_pool.get_pool_size()
+        } else {
+            self.worker_pool.get_pool_size()
+        }
+    }
+}
+
+#[derive(Clone)]
+struct PriorityQueue {
+    worker_pool: FuturePool,
+    resource_ctl: Arc<ResourceController>,
+    resource_mgr: Arc<ResourceGroupManager>,
+}
+
+impl PriorityQueue {
+    fn spawn(
+        &self,
+        metadata: TaskMetadata<'_>,
+        priority_level: CommandPri,
+        f: impl futures::Future<Output = ()> + Send + 'static,
+    ) -> Result<(), Full> {
+        let fixed_level = match priority_level {
+            CommandPri::High => Some(0),
+            CommandPri::Normal => None,
+            CommandPri::Low => Some(2),
+        };
+        // TODO: maybe use a better way to generate task_id
+        let task_id = rand::random::<u64>();
+        let group_name = metadata.group_name().to_owned();
+        let resource_limiter = self.resource_mgr.get_resource_limiter(
+            unsafe { std::str::from_utf8_unchecked(&group_name) },
+            "",
+            metadata.override_priority() as u64,
+        );
+        let mut extras = Extras::new_multilevel(task_id, fixed_level);
+        extras.set_metadata(metadata.to_vec());
+        self.worker_pool.spawn_with_extras(
+            with_resource_limiter(
+                ControlledFuture::new(f, self.resource_ctl.clone(), group_name),
+                resource_limiter,
+            ),
+            extras,
+        )
+    }
+
+    fn scale_pool_size(&self, pool_size: usize) {
+        self.worker_pool.scale_pool_size(pool_size);
+    }
+
+    fn get_pool_size(&self) -> usize {
+        self.worker_pool.get_pool_size()
+    }
+}
+
+#[derive(Clone)]
+pub struct SchedPool {
+    vanilla: VanillaQueue,
+    priority: Option<PriorityQueue>,
+    queue_type: QueueType,
 }
 
 impl SchedPool {
@@ -74,7 +159,8 @@ impl SchedPool {
         pool_size: usize,
         reporter: R,
         feature_gate: FeatureGate,
-        _resource_ctl: Option<Arc<ResourceController>>,
+        resource_ctl: Option<Arc<ResourceController>>,
+        resource_mgr: Option<Arc<ResourceGroupManager>>,
     ) -> Self {
         let builder = |pool_size: usize, name_prefix: &str| {
             let engine = Arc::new(Mutex::new(engine.clone()));
@@ -101,95 +187,85 @@ impl SchedPool {
                     destroy_tls_engine::<E>();
                     tls_flush(&reporter);
                 })
+                .enable_task_wait_metrics(true)
         };
-        // FIXME: for performance issue, disable priority pool temporarily
-        // if let Some(ref r) = resource_ctl {
-        //     SchedPool::Priority {
-        //         worker_pool: builder(pool_size, "sched-worker-pool")
-        //             .build_priority_future_pool(r.clone()),
-        //         resource_ctl: r.clone(),
-        //     }
-        // } else {
-        SchedPool::Vanilla {
+        let vanilla = VanillaQueue {
             worker_pool: builder(pool_size, "sched-worker-pool").build_future_pool(),
-            high_worker_pool: builder(std::cmp::max(1, pool_size / 2), "sched-high-pri-pool")
+            high_worker_pool: builder(std::cmp::max(1, pool_size / 2), "sched-worker-high")
                 .build_future_pool(),
+        };
+        let priority = resource_ctl.as_ref().map(|r| PriorityQueue {
+            worker_pool: builder(pool_size, "sched-worker-priority")
+                .build_priority_future_pool(r.clone()),
+            resource_ctl: r.clone(),
+            resource_mgr: resource_mgr.unwrap(),
+        });
+        let queue_type = if resource_ctl.is_some() {
+            QueueType::Dynamic
+        } else {
+            QueueType::Vanilla
+        };
+
+        SchedPool {
+            vanilla,
+            priority,
+            queue_type,
         }
-        // }
     }
 
     pub fn spawn(
         &self,
-        group_name: &str,
-        priority: CommandPri,
+        metadata: TaskMetadata<'_>,
+        priority_level: CommandPri,
         f: impl futures::Future<Output = ()> + Send + 'static,
     ) -> Result<(), Full> {
-        match self {
-            SchedPool::Vanilla {
-                high_worker_pool,
-                worker_pool,
-            } => {
-                if priority == CommandPri::High {
-                    high_worker_pool.spawn(f)
+        match self.queue_type {
+            QueueType::Vanilla => self.vanilla.spawn(priority_level, f),
+            QueueType::Dynamic => {
+                if self.can_use_priority() {
+                    fail_point!("priority_pool_task");
+                    self.priority
+                        .as_ref()
+                        .unwrap()
+                        .spawn(metadata, priority_level, f)
                 } else {
-                    worker_pool.spawn(f)
+                    fail_point!("single_queue_pool_task");
+                    self.vanilla.spawn(priority_level, f)
                 }
-            }
-            SchedPool::Priority {
-                worker_pool,
-                resource_ctl,
-            } => {
-                let fixed_level = match priority {
-                    CommandPri::High => Some(0),
-                    CommandPri::Normal => None,
-                    CommandPri::Low => Some(2),
-                };
-                // TODO: maybe use a better way to generate task_id
-                let task_id = rand::random::<u64>();
-                let mut extras = Extras::new_multilevel(task_id, fixed_level);
-                extras.set_metadata(group_name.as_bytes().to_owned());
-                worker_pool.spawn_with_extras(
-                    ControlledFuture::new(
-                        async move {
-                            f.await;
-                        },
-                        resource_ctl.clone(),
-                        group_name.as_bytes().to_owned(),
-                    ),
-                    extras,
-                )
             }
         }
     }
 
     pub fn scale_pool_size(&self, pool_size: usize) {
-        match self {
-            SchedPool::Vanilla {
-                high_worker_pool,
-                worker_pool,
-            } => {
-                high_worker_pool.scale_pool_size(std::cmp::max(1, pool_size / 2));
-                worker_pool.scale_pool_size(pool_size);
+        match self.queue_type {
+            QueueType::Vanilla => {
+                self.vanilla.scale_pool_size(pool_size);
             }
-            SchedPool::Priority { worker_pool, .. } => {
-                worker_pool.scale_pool_size(pool_size);
+            QueueType::Dynamic => {
+                let priority = self.priority.as_ref().unwrap();
+                priority.scale_pool_size(pool_size);
+                self.vanilla.scale_pool_size(pool_size);
             }
         }
     }
 
-    pub fn get_pool_size(&self, priority: CommandPri) -> usize {
-        match self {
-            SchedPool::Vanilla {
-                high_worker_pool,
-                worker_pool,
-            } => {
-                if priority == CommandPri::High {
-                    high_worker_pool.get_pool_size()
+    fn can_use_priority(&self) -> bool {
+        match self.queue_type {
+            QueueType::Vanilla => false,
+            QueueType::Dynamic => self.priority.as_ref().unwrap().resource_ctl.is_customized(),
+        }
+    }
+
+    pub fn get_pool_size(&self, priority_level: CommandPri) -> usize {
+        match self.queue_type {
+            QueueType::Vanilla => self.vanilla.get_pool_size(priority_level),
+            QueueType::Dynamic => {
+                if self.can_use_priority() {
+                    self.priority.as_ref().unwrap().get_pool_size()
                 } else {
-                    worker_pool.get_pool_size()
+                    self.vanilla.get_pool_size(priority_level)
                 }
             }
-            SchedPool::Priority { worker_pool, .. } => worker_pool.get_pool_size(),
         }
     }
 }
@@ -199,7 +275,7 @@ pub fn tls_collect_scan_details(cmd: &'static str, stats: &Statistics) {
         m.borrow_mut()
             .local_scan_details
             .entry(cmd)
-            .or_insert_with(Default::default)
+            .or_default()
             .add(stats);
     });
 }

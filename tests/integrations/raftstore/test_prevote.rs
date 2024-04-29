@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use engine_rocks::RocksEngine;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv_util::HandyRwLock;
@@ -15,7 +16,10 @@ enum FailureType<'a> {
     Reboot(&'a [u64]),
 }
 
-fn attach_prevote_notifiers<T: Simulator>(cluster: &Cluster<T>, peer: u64) -> mpsc::Receiver<()> {
+fn attach_prevote_notifiers<T: Simulator<RocksEngine>>(
+    cluster: &Cluster<RocksEngine, T>,
+    peer: u64,
+) -> mpsc::Receiver<()> {
     // Setup a notifier
     let (tx, rx) = mpsc::channel();
     let response_notifier = Box::new(MessageTypeNotifier::new(
@@ -37,8 +41,8 @@ fn attach_prevote_notifiers<T: Simulator>(cluster: &Cluster<T>, peer: u64) -> mp
 
 // Validate that prevote is used in elections after partition or reboot of some
 // nodes.
-fn test_prevote<T: Simulator>(
-    cluster: &mut Cluster<T>,
+fn test_prevote<T: Simulator<RocksEngine>>(
+    cluster: &mut Cluster<RocksEngine, T>,
     failure_type: FailureType<'_>,
     leader_after_failure_id: impl Into<Option<u64>>,
     detect_during_failure: impl Into<Option<(u64, bool)>>,
@@ -219,7 +223,7 @@ fn test_prevote_reboot_minority_followers() {
 
 // Test isolating a minority of the cluster and make sure that the remove
 // themselves.
-fn test_pair_isolated<T: Simulator>(cluster: &mut Cluster<T>) {
+fn test_pair_isolated<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
     let region = 1;
     let pd_client = Arc::clone(&cluster.pd_client);
 
@@ -246,7 +250,9 @@ fn test_server_pair_isolated() {
     test_pair_isolated(&mut cluster);
 }
 
-fn test_isolated_follower_leader_does_not_change<T: Simulator>(cluster: &mut Cluster<T>) {
+fn test_isolated_follower_leader_does_not_change<T: Simulator<RocksEngine>>(
+    cluster: &mut Cluster<RocksEngine, T>,
+) {
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
     cluster.must_put(b"k1", b"v1");
@@ -282,7 +288,9 @@ fn test_server_isolated_follower_leader_does_not_change() {
     test_isolated_follower_leader_does_not_change(&mut cluster);
 }
 
-fn test_create_peer_from_pre_vote<T: Simulator>(cluster: &mut Cluster<T>) {
+fn test_create_peer_from_pre_vote<T: Simulator<RocksEngine>>(
+    cluster: &mut Cluster<RocksEngine, T>,
+) {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 

@@ -1,16 +1,16 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    collections::{BTreeMap, Bound},
     fmt,
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use collections::HashMap;
 use kvproto::metapb;
 use lazy_static::lazy_static;
 use parking_lot::RwLock;
 use prometheus::{register_int_gauge, IntGauge};
-use txn_types::{Key, PessimisticLock};
+use txn_types::{Key, Lock, PessimisticLock};
 
 /// Transaction extensions related to a peer.
 #[derive(Default)]
@@ -84,7 +84,7 @@ pub struct PeerPessimisticLocks {
     ///   likely to be proposed successfully, while the leader will need at
     ///   least another round to receive the transfer leader message from the
     ///   transferee.
-    ///  
+    ///
     /// - Split region The lock with the deleted mark SHOULD be moved to new
     ///   regions on region split. Considering the following cases with
     ///   different orders: 1. Propose write -> propose split -> apply write ->
@@ -106,7 +106,7 @@ pub struct PeerPessimisticLocks {
     ///   skipped because of version mismatch. So, no lock should be deleted.
     ///   It's correct that we include the locks that are marked deleted in the
     ///   commit merge request.
-    map: HashMap<Key, (PessimisticLock, bool)>,
+    map: BTreeMap<Key, (PessimisticLock, bool)>,
     /// Status of the pessimistic lock map.
     /// The map is writable only in the Normal state.
     pub status: LocksStatus,
@@ -125,6 +125,7 @@ pub enum LocksStatus {
     TransferringLeader,
     MergingRegion,
     NotLeader,
+    IsInFlashback,
 }
 
 impl fmt::Debug for PeerPessimisticLocks {
@@ -142,7 +143,7 @@ impl fmt::Debug for PeerPessimisticLocks {
 impl Default for PeerPessimisticLocks {
     fn default() -> Self {
         PeerPessimisticLocks {
-            map: HashMap::default(),
+            map: BTreeMap::default(),
             status: LocksStatus::Normal,
             term: 0,
             version: 0,
@@ -191,7 +192,7 @@ impl PeerPessimisticLocks {
     }
 
     pub fn clear(&mut self) {
-        self.map = HashMap::default();
+        self.map = BTreeMap::default();
         GLOBAL_MEM_SIZE.sub(self.memory_size as i64);
         self.memory_size = 0;
     }
@@ -243,24 +244,60 @@ impl PeerPessimisticLocks {
         // Locks that are marked deleted still need to be moved to the new regions,
         // and the deleted mark should also be cleared.
         // Refer to the comment in `PeerPessimisticLocks` for details.
-        let removed_locks = self.map.drain_filter(|key, _| {
-            let key = &**key.as_encoded();
+        // There is no drain_filter for BtreeMap, so extra clone are needed.
+        let mut removed_locks = Vec::new();
+        self.map.retain(|key, value| {
+            let key_ref = key.as_encoded().as_slice();
             let (start_key, end_key) = (derived.get_start_key(), derived.get_end_key());
-            key < start_key || (!end_key.is_empty() && key >= end_key)
+            if key_ref < start_key || (!end_key.is_empty() && key_ref >= end_key) {
+                removed_locks.push((key.clone(), value.clone()));
+                false
+            } else {
+                true
+            }
         });
-        for (key, (lock, _)) in removed_locks {
-            let idx = match regions
+
+        for (key, (lock, _)) in removed_locks.into_iter() {
+            let idx = regions
                 .binary_search_by_key(&&**key.as_encoded(), |region| region.get_start_key())
-            {
-                Ok(idx) => idx,
-                Err(idx) => idx - 1,
-            };
+                .unwrap_or_else(|idx| idx - 1);
             let size = key.len() + lock.memory_size();
             self.memory_size -= size;
             res[idx].map.insert(key, (lock, false));
             res[idx].memory_size += size;
         }
         res
+    }
+
+    /// Scan and return locks in the current pessimistic lock map, the map
+    /// should be locked first before calling this method.
+    pub fn scan_locks<F>(
+        &self,
+        start: Option<&Key>,
+        end: Option<&Key>,
+        filter: F,
+        limit: usize,
+    ) -> (Vec<(Key, Lock)>, bool)
+    where
+        F: Fn(&Key, &PessimisticLock) -> bool,
+    {
+        if let (Some(start_key), Some(end_key)) = (start, end) {
+            assert!(end_key >= start_key);
+        }
+        let mut locks = Vec::new();
+        let mut iter = self.map.range((
+            start.map_or(Bound::Unbounded, |k| Bound::Included(k)),
+            end.map_or(Bound::Unbounded, |k| Bound::Excluded(k)),
+        ));
+        while let Some((key, (lock, _))) = iter.next() {
+            if filter(key, lock) {
+                locks.push((key.clone(), lock.clone().into_lock()));
+            }
+            if limit > 0 && locks.len() >= limit {
+                return (locks, iter.next().is_some());
+            }
+        }
+        (locks, false)
     }
 
     #[cfg(test)]
@@ -276,7 +313,7 @@ impl PeerPessimisticLocks {
 
 impl<'a> IntoIterator for &'a PeerPessimisticLocks {
     type Item = (&'a Key, &'a (PessimisticLock, bool));
-    type IntoIter = std::collections::hash_map::Iter<'a, Key, (PessimisticLock, bool)>;
+    type IntoIter = std::collections::btree_map::Iter<'a, Key, (PessimisticLock, bool)>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.map.iter()
@@ -310,6 +347,7 @@ mod tests {
     use std::sync::Mutex;
 
     use tikv_util::defer;
+    use txn_types::LastChange;
 
     use super::*;
 
@@ -324,9 +362,27 @@ mod tests {
             ttl: 3000,
             for_update_ts: 110.into(),
             min_commit_ts: 110.into(),
-            last_change_ts: 105.into(),
-            versions_to_last_change: 2,
+            last_change: LastChange::make_exist(105.into(), 2),
+            is_locked_with_conflict: false,
         }
+    }
+
+    fn lock_with_key(key: &[u8], deleted: bool) -> (Key, (PessimisticLock, bool)) {
+        (
+            Key::from_raw(key),
+            (
+                PessimisticLock {
+                    primary: key.to_vec().into_boxed_slice(),
+                    start_ts: 10.into(),
+                    ttl: 1000,
+                    for_update_ts: 10.into(),
+                    min_commit_ts: 20.into(),
+                    last_change: LastChange::make_exist(5.into(), 2),
+                    is_locked_with_conflict: false,
+                },
+                deleted,
+            ),
+        )
     }
 
     #[test]
@@ -416,23 +472,6 @@ mod tests {
 
     #[test]
     fn test_group_locks_by_regions() {
-        fn lock(key: &[u8], deleted: bool) -> (Key, (PessimisticLock, bool)) {
-            (
-                Key::from_raw(key),
-                (
-                    PessimisticLock {
-                        primary: key.to_vec().into_boxed_slice(),
-                        start_ts: 10.into(),
-                        ttl: 1000,
-                        for_update_ts: 10.into(),
-                        min_commit_ts: 20.into(),
-                        last_change_ts: 5.into(),
-                        versions_to_last_change: 2,
-                    },
-                    deleted,
-                ),
-            )
-        }
         fn region(start_key: &[u8], end_key: &[u8]) -> metapb::Region {
             let mut region = metapb::Region::default();
             region.set_start_key(start_key.to_vec());
@@ -443,11 +482,11 @@ mod tests {
         defer!(GLOBAL_MEM_SIZE.set(0));
 
         let mut original = PeerPessimisticLocks::from_locks(vec![
-            lock(b"a", true),
-            lock(b"c", false),
-            lock(b"e", true),
-            lock(b"g", false),
-            lock(b"i", false),
+            lock_with_key(b"a", true),
+            lock_with_key(b"c", false),
+            lock_with_key(b"e", true),
+            lock_with_key(b"g", false),
+            lock_with_key(b"i", false),
         ]);
         let regions = vec![
             region(b"", b"b"),  // test leftmost region
@@ -458,10 +497,10 @@ mod tests {
         ];
         let output = original.group_by_regions(&regions, &regions[4]);
         let expected: Vec<_> = vec![
-            vec![lock(b"a", false)],
+            vec![lock_with_key(b"a", false)],
             vec![],
-            vec![lock(b"c", false)],
-            vec![lock(b"e", false), lock(b"g", false)],
+            vec![lock_with_key(b"c", false)],
+            vec![lock_with_key(b"e", false), lock_with_key(b"g", false)],
             vec![], // the position of the derived region is empty
         ]
         .into_iter()
@@ -471,7 +510,164 @@ mod tests {
         // The lock that belongs to the derived region is kept in the original map.
         assert_eq!(
             original,
-            PeerPessimisticLocks::from_locks(vec![lock(b"i", false)])
+            PeerPessimisticLocks::from_locks(vec![lock_with_key(b"i", false)])
         );
+    }
+
+    #[test]
+    fn test_scan_memory_lock() {
+        // Create a sample PeerPessimisticLocks instance with some locks.
+        let peer_locks = PeerPessimisticLocks::from_locks(vec![
+            lock_with_key(b"key1", false),
+            lock_with_key(b"key2", false),
+            lock_with_key(b"key3", false),
+        ]);
+
+        fn txn_lock(key: &[u8], deleted: bool) -> Lock {
+            let (_, (pessimistic_lock, _)) = lock_with_key(key, deleted);
+            pessimistic_lock.into_lock()
+        }
+
+        type LockFilter = fn(&Key, &PessimisticLock) -> bool;
+
+        fn filter_pass_all(_: &Key, _: &PessimisticLock) -> bool {
+            true
+        }
+
+        fn filter_pass_key2(key: &Key, _: &PessimisticLock) -> bool {
+            key.as_encoded().starts_with(b"key2")
+        }
+
+        // Case parameter: start_key, end_key, filter, limit, expected results, expected
+        // has more.
+        let cases: [(
+            Option<Key>,
+            Option<Key>,
+            LockFilter,
+            usize,
+            Vec<(Key, Lock)>,
+            bool,
+        ); 12] = [
+            (
+                None,
+                None,
+                filter_pass_all,
+                1,
+                vec![(Key::from_raw(b"key1"), txn_lock(b"key1", false))],
+                true,
+            ),
+            (
+                None,
+                None,
+                filter_pass_all,
+                10,
+                vec![
+                    (Key::from_raw(b"key1"), txn_lock(b"key1", false)),
+                    (Key::from_raw(b"key2"), txn_lock(b"key2", false)),
+                    (Key::from_raw(b"key3"), txn_lock(b"key3", false)),
+                ],
+                false,
+            ),
+            (
+                Some(Key::from_raw(b"key0")),
+                Some(Key::from_raw(b"key1")),
+                filter_pass_all,
+                10,
+                vec![],
+                false,
+            ),
+            (
+                Some(Key::from_raw(b"key0")),
+                Some(Key::from_raw(b"key2")),
+                filter_pass_all,
+                10,
+                vec![(Key::from_raw(b"key1"), txn_lock(b"key1", false))],
+                false,
+            ),
+            (
+                Some(Key::from_raw(b"key1")),
+                Some(Key::from_raw(b"key3")),
+                filter_pass_all,
+                10,
+                vec![
+                    (Key::from_raw(b"key1"), txn_lock(b"key1", false)),
+                    (Key::from_raw(b"key2"), txn_lock(b"key2", false)),
+                ],
+                false,
+            ),
+            (
+                Some(Key::from_raw(b"key1")),
+                Some(Key::from_raw(b"key4")),
+                filter_pass_all,
+                2,
+                vec![
+                    (Key::from_raw(b"key1"), txn_lock(b"key1", false)),
+                    (Key::from_raw(b"key2"), txn_lock(b"key2", false)),
+                ],
+                true,
+            ),
+            (
+                Some(Key::from_raw(b"key1")),
+                Some(Key::from_raw(b"key4")),
+                filter_pass_all,
+                10,
+                vec![
+                    (Key::from_raw(b"key1"), txn_lock(b"key1", false)),
+                    (Key::from_raw(b"key2"), txn_lock(b"key2", false)),
+                    (Key::from_raw(b"key3"), txn_lock(b"key3", false)),
+                ],
+                false,
+            ),
+            (
+                Some(Key::from_raw(b"key2")),
+                Some(Key::from_raw(b"key4")),
+                filter_pass_all,
+                10,
+                vec![
+                    (Key::from_raw(b"key2"), txn_lock(b"key2", false)),
+                    (Key::from_raw(b"key3"), txn_lock(b"key3", false)),
+                ],
+                false,
+            ),
+            (
+                Some(Key::from_raw(b"key4")),
+                Some(Key::from_raw(b"key4")),
+                filter_pass_all,
+                10,
+                vec![],
+                false,
+            ),
+            (
+                None,
+                None,
+                filter_pass_key2,
+                10,
+                vec![(Key::from_raw(b"key2"), txn_lock(b"key2", false))],
+                false,
+            ),
+            (
+                Some(Key::from_raw(b"key2")),
+                None,
+                filter_pass_key2,
+                1,
+                vec![(Key::from_raw(b"key2"), txn_lock(b"key2", false))],
+                true,
+            ),
+            (
+                None,
+                Some(Key::from_raw(b"key2")),
+                filter_pass_key2,
+                1,
+                vec![],
+                false,
+            ),
+        ];
+
+        for (start_key, end_key, filter, limit, expected_locks, expected_has_more) in cases {
+            let (locks, has_more) =
+                peer_locks.scan_locks(start_key.as_ref(), end_key.as_ref(), filter, limit);
+            assert_eq!(locks, expected_locks);
+            assert_eq!(has_more, expected_has_more);
+        }
     }
 }

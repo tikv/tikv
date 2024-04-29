@@ -2,8 +2,9 @@
 name = "coprocessor_plugin_api"
 version = "0.1.0"
 description = "Types and trait for custom coprocessor plugins for TiKV."
-edition = "2018"
+edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [dependencies]
 async-trait = "0.1"

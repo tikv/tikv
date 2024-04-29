@@ -96,7 +96,7 @@ impl PartialEq for SnapState {
             (&SnapState::Relax, &SnapState::Relax)
             | (&SnapState::ApplyAborted, &SnapState::ApplyAborted)
             | (&SnapState::Generating { .. }, &SnapState::Generating { .. }) => true,
-            (&SnapState::Applying(ref b1), &SnapState::Applying(ref b2)) => {
+            (SnapState::Applying(b1), SnapState::Applying(b2)) => {
                 b1.load(Ordering::Relaxed) == b2.load(Ordering::Relaxed)
             }
             _ => false,
@@ -372,7 +372,7 @@ where
 
     #[inline]
     pub fn raw_snapshot(&self) -> EK::Snapshot {
-        self.engines.kv.snapshot()
+        self.engines.kv.snapshot(None)
     }
 
     #[inline]
@@ -507,6 +507,8 @@ where
                     *snap_state = SnapState::Relax;
                     *tried_cnt = 0;
                     if self.validate_snap(&s, request_index) {
+                        info!("start sending snapshot"; "region_id" => self.region.get_id(),
+                            "peer_id" => self.peer_id, "request_peer" => to,);
                         return Ok(s);
                     }
                 }
@@ -1017,6 +1019,9 @@ where
         // The `region` is updated after persisting in order to stay consistent with the
         // one in `StoreMeta::regions` (will be updated soon).
         // See comments in `apply_snapshot` for more details.
+        (|| {
+            fail_point!("before_set_region_on_peer_3", self.peer_id == 3, |_| {});
+        })();
         self.set_region(res.region.clone());
     }
 }
@@ -1604,7 +1609,7 @@ pub mod tests {
             .unwrap()
             .unwrap();
         gen_task.generate_and_schedule_snapshot::<KvTestEngine>(
-            engines.kv.clone().snapshot(),
+            engines.kv.clone().snapshot(None),
             entry.get_term(),
             apply_state,
             sched,
@@ -1629,6 +1634,7 @@ pub mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
+        mgr.init().unwrap();
         let mut worker = Worker::new("region-worker").lazy_build("region-worker");
         let sched = worker.scheduler();
         let (dummy_scheduler, _) = dummy_scheduler();
@@ -1765,6 +1771,7 @@ pub mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mut mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
+        mgr.init().unwrap();
         mgr.set_enable_multi_snapshot_files(true);
         mgr.set_max_per_file_size(500);
         let mut worker = Worker::new("region-worker").lazy_build("region-worker");
@@ -1836,6 +1843,7 @@ pub mod tests {
         let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap_dir").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
+        mgr.init().unwrap();
         let mut worker = Worker::new("region-worker").lazy_build("region-worker");
         let sched = worker.scheduler();
         let (dummy_scheduler, _) = dummy_scheduler();
@@ -1915,6 +1923,7 @@ pub mod tests {
         let td1 = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
         let snap_dir = Builder::new().prefix("snap").tempdir().unwrap();
         let mgr = SnapManager::new(snap_dir.path().to_str().unwrap());
+        mgr.init().unwrap();
         let mut worker = LazyWorker::new("snap-manager");
         let sched = worker.scheduler();
         let (dummy_scheduler, _) = dummy_scheduler();
@@ -2137,25 +2146,15 @@ pub mod tests {
         lb.put_raft_state(1, &raft_state).unwrap();
         engines.raft.consume(&mut lb, false).unwrap();
 
-        // applied_index > commit_index is invalid.
-        let mut apply_state = RaftApplyState::default();
-        apply_state.set_applied_index(13);
-        apply_state.mut_truncated_state().set_index(13);
-        apply_state
-            .mut_truncated_state()
-            .set_term(RAFT_INIT_LOG_TERM);
-        let apply_state_key = keys::apply_state_key(1);
-        engines
-            .kv
-            .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
-            .unwrap();
-        assert!(build_storage().is_err());
-
         // It should not recover if corresponding log doesn't exist.
         engines.raft.gc(1, 14, 15, &mut lb).unwrap();
         engines.raft.consume(&mut lb, false).unwrap();
+        let mut apply_state = RaftApplyState::default();
+        apply_state.set_applied_index(13);
+        apply_state.mut_truncated_state().set_index(13);
         apply_state.set_commit_index(14);
         apply_state.set_commit_term(RAFT_INIT_LOG_TERM);
+        let apply_state_key = keys::apply_state_key(1);
         engines
             .kv
             .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)

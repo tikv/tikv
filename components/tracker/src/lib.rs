@@ -29,6 +29,10 @@ impl Tracker {
         }
     }
 
+    pub fn write_time_detail(&self, detail_v2: &mut pb::TimeDetailV2) {
+        detail_v2.set_kv_grpc_process_time_ns(self.metrics.grpc_process_nanos);
+    }
+
     pub fn write_scan_detail(&self, detail_v2: &mut pb::ScanDetailV2) {
         detail_v2.set_rocksdb_block_read_byte(self.metrics.block_read_byte);
         detail_v2.set_rocksdb_block_read_count(self.metrics.block_read_count);
@@ -68,7 +72,12 @@ impl Tracker {
             self.metrics.wf_commit_log_nanos - self.metrics.wf_batch_wait_nanos,
         );
         detail.set_apply_batch_wait_nanos(self.metrics.apply_wait_nanos);
-        detail.set_apply_log_nanos(self.metrics.apply_time_nanos - self.metrics.apply_wait_nanos);
+        // When async_prewrite_apply is set, the `apply_time_nanos` could be less than
+        // apply_wait_nanos.
+        if self.metrics.apply_time_nanos > self.metrics.apply_wait_nanos {
+            detail
+                .set_apply_log_nanos(self.metrics.apply_time_nanos - self.metrics.apply_wait_nanos);
+        }
         detail.set_apply_mutex_lock_nanos(self.metrics.apply_mutex_lock_nanos);
         detail.set_apply_write_leader_wait_nanos(self.metrics.apply_thread_wait_nanos);
         detail.set_apply_write_wal_nanos(self.metrics.apply_write_wal_nanos);
@@ -120,14 +129,18 @@ pub enum RequestType {
     CoprocessorDag,
     CoprocessorAnalyze,
     CoprocessorChecksum,
+    KvFlush,
+    KvBufferBatchGet,
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct RequestMetrics {
+    pub grpc_process_nanos: u64,
     pub get_snapshot_nanos: u64,
     pub read_index_propose_wait_nanos: u64,
     pub read_index_confirm_wait_nanos: u64,
     pub read_pool_schedule_wait_nanos: u64,
+    pub local_read: bool,
     pub block_cache_hit_count: u64,
     pub block_read_count: u64,
     pub block_read_byte: u64,

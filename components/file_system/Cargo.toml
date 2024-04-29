@@ -1,8 +1,9 @@
 [package]
 name = "file_system"
 version = "0.1.0"
-edition = "2018"
+edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [features]
 bcc-iosnoop = ["bcc"]
@@ -15,7 +16,7 @@ fs2 = "0.4"
 lazy_static = "1.3"
 libc = "0.2"
 online_config = { workspace = true }
-openssl = "0.10"
+openssl = { workspace = true }
 parking_lot = "0.12"
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
@@ -29,7 +30,6 @@ tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["time"] }
 
 [dev-dependencies]
-maligned = "0.2.1"
 tempfile = "3.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]

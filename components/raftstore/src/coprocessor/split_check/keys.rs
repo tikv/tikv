@@ -157,9 +157,11 @@ impl<C: StoreHandle, E: KvEngine> SplitCheckObserver<E> for KeysCheckObserver<C>
             }
         };
 
-        self.router.update_approximate_keys(region_id, region_keys);
+        self.router
+            .update_approximate_keys(region_id, Some(region_keys), None);
 
         REGION_KEYS_HISTOGRAM.observe(region_keys as f64);
+
         // if bucket checker using scan is added, to utilize the scan,
         // add keys checker as well for free
         // It has the assumption that the size's checker is before the keys's check in
@@ -299,12 +301,28 @@ mod tests {
             None,
         ));
         // keys has not reached the max_keys 100 yet.
-        match rx.try_recv() {
-            Ok(SchedTask::UpdateApproximateSize { region_id, .. })
-            | Ok(SchedTask::UpdateApproximateKeys { region_id, .. }) => {
-                assert_eq!(region_id, region.get_id());
+        let mut recv_cnt = 0;
+        loop {
+            match rx.try_recv() {
+                Ok(SchedTask::UpdateApproximateSize {
+                    region_id,
+                    splitable,
+                    ..
+                })
+                | Ok(SchedTask::UpdateApproximateKeys {
+                    region_id,
+                    splitable,
+                    ..
+                }) => {
+                    assert_eq!(region_id, region.get_id());
+                    assert!(splitable.is_none());
+                    recv_cnt += 1;
+                    if recv_cnt == 2 {
+                        break;
+                    }
+                }
+                others => panic!("expect recv empty, but got {:?}", others),
             }
-            others => panic!("expect recv empty, but got {:?}", others),
         }
 
         put_data(&engine, 90, 160, true);
@@ -403,12 +421,28 @@ mod tests {
             None,
         ));
         // keys has not reached the max_keys 100 yet.
-        match rx.try_recv() {
-            Ok(SchedTask::UpdateApproximateSize { region_id, .. })
-            | Ok(SchedTask::UpdateApproximateKeys { region_id, .. }) => {
-                assert_eq!(region_id, region.get_id());
+        let mut recv_cnt = 0;
+        loop {
+            match rx.try_recv() {
+                Ok(SchedTask::UpdateApproximateSize {
+                    region_id,
+                    splitable,
+                    ..
+                })
+                | Ok(SchedTask::UpdateApproximateKeys {
+                    region_id,
+                    splitable,
+                    ..
+                }) => {
+                    assert_eq!(region_id, region.get_id());
+                    assert!(splitable.is_none());
+                    recv_cnt += 1;
+                    if recv_cnt == 2 {
+                        break;
+                    }
+                }
+                others => panic!("expect recv empty, but got {:?}", others),
             }
-            others => panic!("expect recv empty, but got {:?}", others),
         }
 
         put_data(&engine, 90, 160, true);

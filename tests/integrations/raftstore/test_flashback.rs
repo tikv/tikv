@@ -5,40 +5,138 @@ use std::{
     time::{Duration, Instant},
 };
 
-use futures::{channel::oneshot, executor::block_on};
+use engine_rocks::RocksEngine;
+use futures::executor::block_on;
 use kvproto::{
     errorpb::FlashbackInProgress,
     metapb,
-    raft_cmdpb::{AdminCmdType, CmdType, RaftCmdResponse, Request},
+    raft_cmdpb::{AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, Request},
+    raft_serverpb::RegionLocalState,
 };
-use raftstore::store::Callback;
+use raftstore::store::{Callback, LocksStatus};
 use test_raftstore::*;
-use txn_types::WriteBatchFlags;
+use test_raftstore_macro::test_case;
+use tikv::storage::kv::SnapContext;
+use txn_types::{Key, LastChange, PessimisticLock, WriteBatchFlags};
 
 const TEST_KEY: &[u8] = b"k1";
 const TEST_VALUE: &[u8] = b"v1";
 
-#[test]
-fn test_allow_read_only_request() {
-    let mut cluster = new_node_cluster(0, 3);
+#[test_case(test_raftstore::new_server_cluster)]
+#[test_case(test_raftstore_v2::new_server_cluster)]
+fn test_flashback_with_in_memory_pessimistic_locks() {
+    let mut cluster = new_cluster(0, 3);
+    cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
-    let mut region = cluster.get_region(TEST_KEY);
-    let mut snap_req = Request::default();
-    snap_req.set_cmd_type(CmdType::Snap);
-    // Get snapshot normally.
-    let snap_resp = request(&mut cluster, &mut region.clone(), snap_req.clone(), false);
-    assert!(!snap_resp.get_header().has_error());
-    // Get snapshot with flashback flag without in the flashback state.
-    let snap_resp = request(&mut cluster, &mut region.clone(), snap_req.clone(), true);
-    assert!(!snap_resp.get_header().has_error());
-    // Get snapshot with flashback flag with in the flashback state.
+    let region = cluster.get_region(TEST_KEY);
+    // Write a pessimistic lock to the in-memory pessimistic lock table.
+    {
+        let snapshot = cluster.must_get_snapshot_of_region(region.get_id());
+        let txn_ext = snapshot.txn_ext.unwrap();
+        let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
+        assert!(pessimistic_locks.is_writable());
+        pessimistic_locks
+            .insert(vec![(
+                Key::from_raw(TEST_KEY),
+                PessimisticLock {
+                    primary: TEST_KEY.to_vec().into_boxed_slice(),
+                    start_ts: 10.into(),
+                    ttl: 3000,
+                    for_update_ts: 20.into(),
+                    min_commit_ts: 30.into(),
+                    last_change: LastChange::make_exist(5.into(), 3),
+                    is_locked_with_conflict: false,
+                },
+            )])
+            .unwrap();
+        assert_eq!(pessimistic_locks.len(), 1);
+    }
+    // Prepare flashback.
     cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
-    let snap_resp = request(&mut cluster, &mut region.clone(), snap_req.clone(), true);
-    assert!(!snap_resp.get_header().has_error());
-    // Get snapshot without flashback flag with in the flashback state.
-    let snap_resp = request(&mut cluster, &mut region, snap_req, false);
+    // Check the in-memory pessimistic lock table.
+    {
+        let snapshot = cluster.must_get_snapshot_of_region_with_ctx(
+            region.get_id(),
+            SnapContext {
+                allowed_in_flashback: true,
+                ..Default::default()
+            },
+        );
+        let txn_ext = snapshot.txn_ext.unwrap();
+        eventually_meet(
+            Box::new(move || {
+                let pessimistic_locks = txn_ext.pessimistic_locks.read();
+                !pessimistic_locks.is_writable()
+                    && pessimistic_locks.status == LocksStatus::IsInFlashback
+                    && pessimistic_locks.is_empty()
+            }),
+            "pessimistic locks status should be LocksStatus::IsInFlashback",
+        );
+    }
+    // Finish flashback.
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
+    // Check the in-memory pessimistic lock table.
+    {
+        let snapshot = cluster.must_get_snapshot_of_region(region.get_id());
+        let txn_ext = snapshot.txn_ext.unwrap();
+        eventually_meet(
+            Box::new(move || {
+                let pessimistic_locks = txn_ext.pessimistic_locks.read();
+                pessimistic_locks.is_writable() && pessimistic_locks.is_empty()
+            }),
+            "pessimistic locks should be writable again",
+        );
+    }
+}
+
+fn eventually_meet(condition: Box<dyn Fn() -> bool>, purpose: &str) {
+    for _ in 0..30 {
+        if condition() {
+            return;
+        }
+        sleep(Duration::from_millis(100));
+    }
+    panic!("condition never meet: {}", purpose);
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_allow_read_only_request() {
+    let mut cluster = new_cluster(0, 3);
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(30));
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.must_put(TEST_KEY, TEST_VALUE);
+
+    let mut region = cluster.get_region(TEST_KEY);
+    let mut get_req = Request::default();
+    get_req.set_cmd_type(CmdType::Get);
+    // Get normally.
+    let snap_resp = request(&mut cluster, &mut region.clone(), get_req.clone(), false);
+    assert!(
+        !snap_resp.get_header().has_error(),
+        "{:?}",
+        snap_resp.get_header()
+    );
+    // Get with flashback flag without in the flashback state.
+    let snap_resp = request(&mut cluster, &mut region.clone(), get_req.clone(), true);
+    assert!(
+        !snap_resp.get_header().has_error(),
+        "{:?}",
+        snap_resp.get_header()
+    );
+    // Get with flashback flag with in the flashback state.
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
+    let snap_resp = request(&mut cluster, &mut region.clone(), get_req.clone(), true);
+    assert!(
+        !snap_resp.get_header().has_error(),
+        "{:?}",
+        snap_resp.get_header()
+    );
+    // Get without flashback flag with in the flashback state.
+    let snap_resp = request(&mut cluster, &mut region, get_req, false);
     assert!(
         snap_resp
             .get_header()
@@ -51,10 +149,11 @@ fn test_allow_read_only_request() {
     cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
 }
 
-#[test]
 #[cfg(feature = "failpoints")]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_read_after_prepare_flashback() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(1, 1));
 
@@ -73,7 +172,9 @@ fn test_read_after_prepare_flashback() {
     cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
 }
 
-#[test]
+#[cfg(feature = "failpoints")]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_prepare_flashback_after_split() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
@@ -98,23 +199,13 @@ fn test_prepare_flashback_after_split() {
     // Make sure the admin split cmd is ready.
     sleep(Duration::from_millis(100));
     // Send the prepare flashback msg.
-    let (result_tx, result_rx) = oneshot::channel();
-    cluster.must_send_flashback_msg(
-        old_region.get_id(),
-        AdminCmdType::PrepareFlashback,
-        Callback::write(Box::new(move |resp| {
-            if resp.response.get_header().has_error() {
-                result_tx
-                    .send(Some(resp.response.get_header().get_error().clone()))
-                    .unwrap();
-                return;
-            }
-            result_tx.send(None).unwrap();
-        })),
-    );
+    let resp = cluster.must_send_flashback_msg(old_region.get_id(), AdminCmdType::PrepareFlashback);
     // Remove the pause to make these two commands are in the same batch to apply.
     fail::remove(on_handle_apply_fp);
-    let prepare_flashback_err = block_on(result_rx).unwrap().unwrap();
+    let prepare_flashback_err = block_on(async {
+        let resp = resp.await;
+        resp.get_header().get_error().clone()
+    });
     assert!(
         prepare_flashback_err.has_epoch_not_match(),
         "prepare flashback should fail with epoch not match, but got {:?}",
@@ -133,7 +224,9 @@ fn test_prepare_flashback_after_split() {
     must_check_flashback_state(&mut cluster, right_region.get_id(), 1, false);
 }
 
-#[test]
+// #[cfg(feature = "failpoints")]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_prepare_flashback_after_conf_change() {
     let mut cluster = new_node_cluster(0, 3);
     // Disable default max peer count check.
@@ -146,27 +239,17 @@ fn test_prepare_flashback_after_conf_change() {
     let on_handle_apply_fp = "on_handle_apply";
     fail::cfg(on_handle_apply_fp, "pause").unwrap();
     // Send the conf change msg.
-    cluster.async_add_peer(region_id, new_peer(2, 2)).unwrap();
+    let _ = cluster.async_add_peer(region_id, new_peer(2, 2)).unwrap();
     // Make sure the conf change cmd is ready.
     sleep(Duration::from_millis(100));
     // Send the prepare flashback msg.
-    let (result_tx, result_rx) = oneshot::channel();
-    cluster.must_send_flashback_msg(
-        region_id,
-        AdminCmdType::PrepareFlashback,
-        Callback::write(Box::new(move |resp| {
-            if resp.response.get_header().has_error() {
-                result_tx
-                    .send(Some(resp.response.get_header().get_error().clone()))
-                    .unwrap();
-                return;
-            }
-            result_tx.send(None).unwrap();
-        })),
-    );
+    let resp = cluster.must_send_flashback_msg(region_id, AdminCmdType::PrepareFlashback);
     // Remove the pause to make these two commands are in the same batch to apply.
     fail::remove(on_handle_apply_fp);
-    let prepare_flashback_err = block_on(result_rx).unwrap().unwrap();
+    let prepare_flashback_err = block_on(async {
+        let resp = resp.await;
+        resp.get_header().get_error().clone()
+    });
     assert!(
         prepare_flashback_err.has_epoch_not_match(),
         "prepare flashback should fail with epoch not match, but got {:?}",
@@ -179,7 +262,8 @@ fn test_prepare_flashback_after_conf_change() {
     must_check_flashback_state(&mut cluster, region_id, 1, false);
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_flashback_unprepared() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
@@ -193,9 +277,10 @@ fn test_flashback_unprepared() {
     );
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_flashback_for_schedule() {
-    let mut cluster = new_node_cluster(0, 3);
+    let mut cluster = new_cluster(0, 3);
     cluster.run();
     cluster.must_transfer_leader(1, new_peer(2, 2));
     cluster.must_transfer_leader(1, new_peer(1, 1));
@@ -224,7 +309,8 @@ fn test_flashback_for_schedule() {
     cluster.must_transfer_leader(1, new_peer(2, 2));
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_flashback_for_write() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
@@ -259,7 +345,8 @@ fn test_flashback_for_write() {
     );
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_flashback_for_read() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
@@ -341,7 +428,8 @@ fn test_flashback_for_local_read() {
     must_request_with_flashback_flag(&mut cluster, &mut region, new_get_cmd(TEST_KEY));
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_flashback_for_status_cmd_as_region_detail() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
@@ -365,7 +453,8 @@ fn test_flashback_for_status_cmd_as_region_detail() {
     assert_eq!(region_detail.get_leader(), &leader);
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_flashback_for_check_is_in_persist() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.run();
@@ -381,7 +470,8 @@ fn test_flashback_for_check_is_in_persist() {
     must_check_flashback_state(&mut cluster, 1, 2, false);
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_flashback_for_apply_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_snapshot(&mut cluster.cfg);
@@ -450,8 +540,71 @@ fn test_flashback_for_apply_snapshot() {
     );
 }
 
-fn must_check_flashback_state(
-    cluster: &mut Cluster<NodeCluster>,
+trait ClusterI {
+    fn region_local_state(&self, region_id: u64, store_id: u64) -> RegionLocalState;
+    fn query_leader(
+        &self,
+        store_id: u64,
+        region_id: u64,
+        timeout: Duration,
+    ) -> Option<metapb::Peer>;
+    fn call_command(
+        &self,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> raftstore::Result<RaftCmdResponse>;
+}
+
+impl ClusterI for Cluster<RocksEngine, NodeCluster<RocksEngine>> {
+    fn region_local_state(&self, region_id: u64, store_id: u64) -> RegionLocalState {
+        Cluster::<RocksEngine, NodeCluster<RocksEngine>>::region_local_state(
+            self, region_id, store_id,
+        )
+    }
+    fn query_leader(
+        &self,
+        store_id: u64,
+        region_id: u64,
+        timeout: Duration,
+    ) -> Option<metapb::Peer> {
+        Cluster::<RocksEngine, NodeCluster<RocksEngine>>::query_leader(
+            self, store_id, region_id, timeout,
+        )
+    }
+    fn call_command(
+        &self,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> raftstore::Result<RaftCmdResponse> {
+        Cluster::<RocksEngine, NodeCluster<RocksEngine>>::call_command(self, request, timeout)
+    }
+}
+
+type ClusterV2 =
+    test_raftstore_v2::Cluster<test_raftstore_v2::NodeCluster<RocksEngine>, RocksEngine>;
+impl ClusterI for ClusterV2 {
+    fn region_local_state(&self, region_id: u64, store_id: u64) -> RegionLocalState {
+        ClusterV2::region_local_state(self, region_id, store_id)
+    }
+    fn query_leader(
+        &self,
+        store_id: u64,
+        region_id: u64,
+        timeout: Duration,
+    ) -> Option<metapb::Peer> {
+        ClusterV2::query_leader(self, store_id, region_id, timeout)
+    }
+    fn call_command(
+        &self,
+        request: RaftCmdRequest,
+        timeout: Duration,
+    ) -> raftstore::Result<RaftCmdResponse> {
+        ClusterV2::call_command(self, request, timeout)
+    }
+}
+
+fn must_check_flashback_state<T: ClusterI>(
+    cluster: &mut T,
     region_id: u64,
     store_id: u64,
     is_in_flashback: bool,
@@ -473,8 +626,8 @@ fn must_check_flashback_state(
     );
 }
 
-fn request<T: Simulator>(
-    cluster: &mut Cluster<T>,
+fn request<T: ClusterI>(
+    cluster: &mut T,
     region: &mut metapb::Region,
     req: Request,
     with_flashback_flag: bool,
@@ -497,8 +650,8 @@ fn request<T: Simulator>(
 }
 
 // Make sure the request could be executed with flashback flag.
-fn must_request_with_flashback_flag<T: Simulator>(
-    cluster: &mut Cluster<T>,
+fn must_request_with_flashback_flag<T: ClusterI>(
+    cluster: &mut T,
     region: &mut metapb::Region,
     req: Request,
 ) {
@@ -506,8 +659,8 @@ fn must_request_with_flashback_flag<T: Simulator>(
     assert!(!resp.get_header().has_error(), "{:?}", resp);
 }
 
-fn must_get_flashback_not_prepared_error<T: Simulator>(
-    cluster: &mut Cluster<T>,
+fn must_get_flashback_not_prepared_error<T: ClusterI>(
+    cluster: &mut T,
     region: &mut metapb::Region,
     req: Request,
 ) {
@@ -516,8 +669,8 @@ fn must_get_flashback_not_prepared_error<T: Simulator>(
 }
 
 // Make sure the request could be executed without flashback flag.
-fn must_request_without_flashback_flag<T: Simulator>(
-    cluster: &mut Cluster<T>,
+fn must_request_without_flashback_flag<T: ClusterI>(
+    cluster: &mut T,
     region: &mut metapb::Region,
     req: Request,
 ) {
@@ -525,8 +678,8 @@ fn must_request_without_flashback_flag<T: Simulator>(
     assert!(!resp.get_header().has_error(), "{:?}", resp);
 }
 
-fn must_get_flashback_in_progress_error<T: Simulator>(
-    cluster: &mut Cluster<T>,
+fn must_get_flashback_in_progress_error<T: ClusterI>(
+    cluster: &mut T,
     region: &mut metapb::Region,
     req: Request,
 ) {

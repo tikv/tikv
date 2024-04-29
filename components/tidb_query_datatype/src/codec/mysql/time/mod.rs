@@ -1349,10 +1349,7 @@ impl Time {
     ) -> Result<Self> {
         let dur = chrono::Duration::nanoseconds(duration.to_nanos());
 
-        let time = Utc::today()
-            .and_hms(0, 0, 0)
-            .checked_add_signed(dur)
-            .map(|utc| utc.with_timezone(&ctx.cfg.tz));
+        let time = Utc::today().and_hms(0, 0, 0).checked_add_signed(dur);
 
         let time = time.ok_or::<Error>(box_err!("parse from duration {} overflows", duration))?;
 
@@ -2404,15 +2401,19 @@ mod tests {
 
     #[test]
     fn test_parse_time_with_tz() -> Result<()> {
-        let ctx_with_tz = |tz: &str| {
+        let ctx_with_tz = |tz: &str, by_offset: bool| {
             let mut cfg = EvalConfig::default();
-            let raw = tz.as_bytes();
-            // brutally turn timezone in format +08:00 into offset in minute
-            let offset = if raw[0] == b'-' { -1 } else { 1 }
-                * ((raw[1] - b'0') as i64 * 10 + (raw[2] - b'0') as i64)
-                * 60
-                + ((raw[4] - b'0') as i64 * 10 + (raw[5] - b'0') as i64);
-            cfg.set_time_zone_by_offset(offset * 60).unwrap();
+            if by_offset {
+                let raw = tz.as_bytes();
+                // brutally turn timezone in format +08:00 into offset in minute
+                let offset = if raw[0] == b'-' { -1 } else { 1 }
+                    * ((raw[1] - b'0') as i64 * 10 + (raw[2] - b'0') as i64)
+                    * 60
+                    + ((raw[4] - b'0') as i64 * 10 + (raw[5] - b'0') as i64);
+                cfg.set_time_zone_by_offset(offset * 60).unwrap();
+            } else {
+                cfg.set_time_zone_by_name(tz).unwrap();
+            }
             let warnings = cfg.new_eval_warnings();
             EvalContext {
                 cfg: Arc::new(cfg),
@@ -2421,6 +2422,7 @@ mod tests {
         };
         struct Case {
             tz: &'static str,
+            by_offset: bool,
             t: &'static str,
             r: Option<&'static str>,
             tp: TimeType,
@@ -2428,60 +2430,70 @@ mod tests {
         let cases = vec![
             Case {
                 tz: "+00:00",
+                by_offset: true,
                 t: "2020-10-10T10:10:10Z",
                 r: Some("2020-10-10 10:10:10.000000"),
                 tp: TimeType::DateTime,
             },
             Case {
                 tz: "+00:00",
+                by_offset: true,
                 t: "2020-10-10T10:10:10+",
                 r: None,
                 tp: TimeType::DateTime,
             },
             Case {
                 tz: "+00:00",
+                by_offset: true,
                 t: "2020-10-10T10:10:10+14:01",
                 r: None,
                 tp: TimeType::DateTime,
             },
             Case {
                 tz: "+00:00",
+                by_offset: true,
                 t: "2020-10-10T10:10:10-00:00",
                 r: None,
                 tp: TimeType::DateTime,
             },
             Case {
                 tz: "-08:00",
+                by_offset: true,
                 t: "2020-10-10T10:10:10-08",
                 r: Some("2020-10-10 10:10:10.000000"),
                 tp: TimeType::DateTime,
             },
             Case {
                 tz: "+08:00",
+                by_offset: true,
                 t: "2020-10-10T10:10:10+08:00",
                 r: Some("2020-10-10 10:10:10.000000"),
                 tp: TimeType::DateTime,
             },
             Case {
                 tz: "+08:00",
+                by_offset: true,
                 t: "2020-10-10T10:10:10+08:00",
                 r: Some("2020-10-10 10:10:10.000000"),
                 tp: TimeType::Timestamp,
             },
             Case {
                 tz: "+08:00",
+                by_offset: true,
                 t: "2022-06-02T10:10:10Z",
                 r: Some("2022-06-02 18:10:10.000000"),
                 tp: TimeType::DateTime,
             },
             Case {
                 tz: "-08:00",
+                by_offset: true,
                 t: "2022-06-02T10:10:10Z",
                 r: Some("2022-06-02 02:10:10.000000"),
                 tp: TimeType::DateTime,
             },
             Case {
                 tz: "+06:30",
+                by_offset: true,
                 t: "2022-06-02T10:10:10-05:00",
                 r: Some("2022-06-02 21:40:10.000000"),
                 tp: TimeType::DateTime,
@@ -2489,26 +2501,45 @@ mod tests {
             // Time with fraction
             Case {
                 tz: "+08:00",
+                by_offset: true,
                 t: "2022-06-02T10:10:10.123Z",
                 r: Some("2022-06-02 18:10:10.123000"),
                 tp: TimeType::DateTime,
             },
             Case {
                 tz: "-08:00",
+                by_offset: true,
                 t: "2022-06-02T10:10:10.123Z",
                 r: Some("2022-06-02 02:10:10.123000"),
                 tp: TimeType::DateTime,
             },
             Case {
                 tz: "+06:30",
+                by_offset: true,
                 t: "2022-06-02T10:10:10.654321-05:00",
                 r: Some("2022-06-02 21:40:10.654321"),
                 tp: TimeType::DateTime,
             },
+            Case {
+                // Note: this case may fail if Brazil observes DST again.
+                // See https://github.com/pingcap/tidb/issues/49586
+                tz: "Brazil/East",
+                by_offset: false,
+                t: "2023-11-30T17:02:00.654321+00:00",
+                r: Some("2023-11-30 14:02:00.654321"),
+                tp: TimeType::DateTime,
+            },
         ];
         let mut result: Vec<Option<String>> = vec![];
-        for Case { tz, t, r: _, tp } in &cases {
-            let mut ctx = ctx_with_tz(tz);
+        for Case {
+            tz,
+            by_offset,
+            t,
+            r: _,
+            tp,
+        } in &cases
+        {
+            let mut ctx = ctx_with_tz(tz, *by_offset);
             let parsed = Time::parse(&mut ctx, t, *tp, 6, true);
             match parsed {
                 Ok(p) => result.push(Some(p.to_string())),
@@ -2670,7 +2701,7 @@ mod tests {
 
     #[test]
     fn test_no_zero_in_date() -> Result<()> {
-        let cases = vec!["2019-01-00", "2019-00-01"];
+        let cases = ["2019-01-00", "2019-00-01"];
 
         for &case in cases.iter() {
             // Enable NO_ZERO_IN_DATE only. If zero-date is encountered, a warning is

@@ -1,20 +1,25 @@
 [package]
 name = "encryption"
 version = "0.0.1"
-edition = "2018"
+edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [features]
 failpoints = ["fail/failpoints"]
+# openssl/vendored is necssary in order to conditionally building SM4 encryption
+# support, as SM4 is disabled on various openssl distributions, such as Rocky Linux 9.
+sm4 = ["openssl/vendored"]
 
 [dependencies]
 async-trait = "0.1"
 byteorder = "1.2"
 bytes = "1.0"
+cloud = { workspace = true }
 crc32fast = "1.2"
 crossbeam = "0.8"
+crypto = { workspace = true }
 derive_more = "0.99.3"
-engine_traits = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
@@ -24,10 +29,12 @@ hex = "0.4.2"
 kvproto = { workspace = true }
 lazy_static = "1.3"
 online_config = { workspace = true }
-openssl = "0.10"
+openssl = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
-rand = "0.8"
+# For simplicity and compliance with FIPS 140 requirements for random number
+# generation, do not use the 'rand' crate in encryption-related code.
+# rand = "*"
 serde = "1.0"
 serde_derive = "1.0"
 slog = { workspace = true }
@@ -37,6 +44,7 @@ thiserror = "1.0"
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["time", "rt"] }
+walkdir = "2"
 
 [dev-dependencies]
 matches = "0.1.8"

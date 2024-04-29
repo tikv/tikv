@@ -13,15 +13,22 @@
 //! Updates truncated index, and compacts logs if the corresponding changes have
 //! been persisted in kvdb.
 
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
 
 use engine_traits::{KvEngine, RaftEngine, RaftLogBatch};
 use kvproto::raft_cmdpb::{AdminCmdType, AdminRequest, AdminResponse, RaftCmdRequest};
 use protobuf::Message;
 use raftstore::{
     store::{
-        fsm::new_admin_request, metrics::REGION_MAX_LOG_LAG, needs_evict_entry_cache, Transport,
-        WriteTask, RAFT_INIT_LOG_INDEX,
+        entry_storage::MAX_WARMED_UP_CACHE_KEEP_TIME, fsm::new_admin_request,
+        metrics::REGION_MAX_LOG_LAG, needs_evict_entry_cache, Transport, WriteTask,
+        RAFT_INIT_LOG_INDEX,
     },
     Result,
 };
@@ -34,7 +41,7 @@ use crate::{
     operation::AdminCmdResult,
     raft::{Apply, Peer},
     router::{CmdResChannel, PeerTick},
-    worker::tablet_gc,
+    worker::tablet,
 };
 
 #[derive(Debug)]
@@ -42,20 +49,28 @@ pub struct CompactLogContext {
     skipped_ticks: usize,
     approximate_log_size: u64,
     last_applying_index: u64,
+    /// The index of last compacted raft log.
+    last_compacted_idx: u64,
     /// Tombstone tablets can only be destroyed when the tablet that replaces it
     /// is persisted. This is a list of tablet index that awaits to be
-    /// persisted. When persisted_apply is advanced, we need to notify tablet_gc
+    /// persisted. When persisted_apply is advanced, we need to notify tablet
     /// worker to destroy them.
     tombstone_tablets_wait_index: Vec<u64>,
+    /// Sometimes a tombstone tablet can be registered after tablet index is
+    /// advanced. We should not consider it as an active tablet otherwise it
+    /// might block peer destroy progress.
+    persisted_tablet_index: Arc<AtomicU64>,
 }
 
 impl CompactLogContext {
-    pub fn new(last_applying_index: u64) -> CompactLogContext {
+    pub fn new(last_applying_index: u64, persisted_applied: u64) -> CompactLogContext {
         CompactLogContext {
             skipped_ticks: 0,
             approximate_log_size: 0,
             last_applying_index,
+            last_compacted_idx: 0,
             tombstone_tablets_wait_index: vec![],
+            persisted_tablet_index: AtomicU64::new(persisted_applied).into(),
         }
     }
 
@@ -81,10 +96,20 @@ impl CompactLogContext {
     pub fn last_applying_index(&self) -> u64 {
         self.last_applying_index
     }
+
+    pub fn set_last_compacted_idx(&mut self, index: u64) {
+        self.last_compacted_idx = index;
+    }
+
+    pub fn last_compacted_idx(&self) -> u64 {
+        self.last_compacted_idx
+    }
 }
 
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> PeerFsmDelegate<'a, EK, ER, T> {
     pub fn on_compact_log_tick(&mut self, force: bool) {
+        // Might read raft logs.
+        debug_assert!(self.fsm.peer().serving());
         if !self.fsm.peer().is_leader() {
             // `compact_cache_to` is called when apply, there is no need to call
             // `compact_to` here, snapshot generating has already been cancelled
@@ -120,6 +145,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         store_ctx: &mut StoreContext<EK, ER, T>,
         force: bool,
     ) {
+        fail::fail_point!("maybe_propose_compact_log", |_| {});
+
         // As leader, we would not keep caches for the peers that didn't response
         // heartbeat in the last few seconds. That happens probably because
         // another TiKV is down. In this case if we do not clean up the cache,
@@ -217,9 +244,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
 
         // Create a compact log request and notify directly.
-        // TODO: move this into a function
-        let term = self.raft_group().raft.raft_log.term(compact_idx).unwrap();
-
+        let term = self.index_term(compact_idx);
         let mut req = new_admin_request(self.region_id(), self.peer().clone());
         let mut admin = AdminRequest::default();
         admin.set_cmd_type(AdminCmdType::CompactLog);
@@ -303,8 +328,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .push(new_tablet_index);
         let _ = ctx
             .schedulers
-            .tablet_gc
-            .schedule(tablet_gc::Task::prepare_destroy(
+            .tablet
+            .schedule(tablet::Task::prepare_destroy(
                 old_tablet,
                 self.region_id(),
                 new_tablet_index,
@@ -330,15 +355,46 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .push(new_tablet_index);
         let _ = ctx
             .schedulers
-            .tablet_gc
-            .schedule(tablet_gc::Task::prepare_destroy_path(
+            .tablet
+            .schedule(tablet::Task::prepare_destroy_path(
                 old_tablet,
                 self.region_id(),
                 new_tablet_index,
             ));
     }
 
-    /// Returns if there's any tombstone being removed.
+    #[inline]
+    pub fn record_tombstone_tablet_path_callback<T>(
+        &mut self,
+        ctx: &StoreContext<EK, ER, T>,
+        old_tablet: PathBuf,
+        new_tablet_index: u64,
+        cb: impl FnOnce() + Send + 'static,
+    ) {
+        info!(
+            self.logger,
+            "record tombstone tablet";
+            "prev_tablet_path" => old_tablet.display(),
+            "new_tablet_index" => new_tablet_index
+        );
+        let compact_log_context = self.compact_log_context_mut();
+        compact_log_context
+            .tombstone_tablets_wait_index
+            .push(new_tablet_index);
+        let _ = ctx
+            .schedulers
+            .tablet
+            .schedule(tablet::Task::prepare_destroy_path_callback(
+                old_tablet,
+                self.region_id(),
+                new_tablet_index,
+                cb,
+            ));
+    }
+
+    /// Returns if there's any tombstone being removed. `persisted` state may
+    /// not be persisted yet, caller is responsible for actually destroying the
+    /// physical tablets afterwards.
     #[inline]
     pub fn remove_tombstone_tablets(&mut self, persisted: u64) -> bool {
         let compact_log_context = self.compact_log_context_mut();
@@ -357,11 +413,21 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
     }
 
+    /// User can only increase this counter.
+    #[inline]
+    pub fn remember_persisted_tablet_index(&self) -> Arc<AtomicU64> {
+        self.compact_log_context().persisted_tablet_index.clone()
+    }
+
+    /// Returns whether there's any tombstone tablet newer than persisted tablet
+    /// index. They might still be referenced by inflight apply and cannot be
+    /// destroyed.
     pub fn has_pending_tombstone_tablets(&self) -> bool {
-        !self
-            .compact_log_context()
-            .tombstone_tablets_wait_index
-            .is_empty()
+        let ctx = self.compact_log_context();
+        let persisted = ctx.persisted_tablet_index.load(Ordering::Relaxed);
+        ctx.tombstone_tablets_wait_index
+            .iter()
+            .any(|i| *i > persisted)
     }
 
     #[inline]
@@ -370,6 +436,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         ctx: &StoreContext<EK, ER, T>,
         task: &mut WriteTask<EK, ER>,
     ) {
+        let applied_index = self.entry_storage().applied_index();
+        self.remove_tombstone_tablets(applied_index);
         assert!(
             !self.has_pending_tombstone_tablets(),
             "{} all tombstone should be cleared before being destroyed.",
@@ -380,15 +448,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             None => return,
         };
         let region_id = self.region_id();
-        let applied_index = self.entry_storage().applied_index();
-        let sched = ctx.schedulers.tablet_gc.clone();
-        let _ = sched.schedule(tablet_gc::Task::prepare_destroy(
+        let sched = ctx.schedulers.tablet.clone();
+        let _ = sched.schedule(tablet::Task::prepare_destroy(
             tablet,
             self.region_id(),
             applied_index,
         ));
         task.persisted_cbs.push(Box::new(move || {
-            let _ = sched.schedule(tablet_gc::Task::destroy(region_id, applied_index));
+            let _ = sched.schedule(tablet::Task::destroy(region_id, applied_index));
         }));
     }
 
@@ -425,7 +492,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             res.compact_index,
             self.compact_log_context().last_applying_index
         );
-        // TODO: check entry_cache_warmup_state
+
+        // Since this peer may be warming up the entry cache, log compaction should be
+        // temporarily skipped. Otherwise, the warmup task may fail.
+        if let Some(state) = self.entry_storage_mut().entry_cache_warmup_state_mut() {
+            if !state.check_stale(MAX_WARMED_UP_CACHE_KEEP_TIME) {
+                return;
+            }
+        }
+
         self.entry_storage_mut()
             .compact_entry_cache(res.compact_index);
         self.storage_mut()
@@ -435,7 +510,6 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .entry_storage_mut()
             .apply_state_mut()
             .mut_truncated_state();
-        let old_truncated = truncated_state.get_index();
         truncated_state.set_index(res.compact_index);
         truncated_state.set_term(res.compact_term);
 
@@ -447,23 +521,26 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             .unwrap();
         self.set_has_extra_write();
 
-        // All logs < perssited_apply will be deleted, so should check with +1.
-        if old_truncated + 1 < self.storage().apply_trace().persisted_apply_index()
+        // All logs < persisted_apply will be deleted.
+        let prev_first_index = first_index;
+        if prev_first_index < self.storage().apply_trace().persisted_apply_index()
             && let Some(index) = self.compact_log_index()
         {
             // Raft Engine doesn't care about first index.
-            if let Err(e) = store_ctx
-                .engine
-                .gc(self.region_id(), 0, index, self.state_changes_mut())
+            if let Err(e) =
+                store_ctx
+                    .engine
+                    .gc(self.region_id(), 0, index, self.state_changes_mut())
             {
                 error!(self.logger, "failed to compact raft logs"; "err" => ?e);
             }
+            self.compact_log_context_mut().set_last_compacted_idx(index);
             // Extra write set right above.
         }
 
         let context = self.compact_log_context_mut();
         let applied = context.last_applying_index;
-        let total_cnt = applied - old_truncated;
+        let total_cnt = applied - prev_first_index;
         let remain_cnt = applied - res.compact_index;
         context.approximate_log_size =
             (context.approximate_log_size as f64 * (remain_cnt as f64 / total_cnt as f64)) as u64;
@@ -495,34 +572,36 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 && old_persisted < self.entry_storage().truncated_index() + 1
                 && let Some(index) = self.compact_log_index()
             {
-                let batch = task.extra_write.ensure_v2(|| self.entry_storage().raft_engine().log_batch(0));
+                let batch = task
+                    .extra_write
+                    .ensure_v2(|| self.entry_storage().raft_engine().log_batch(0));
                 // Raft Engine doesn't care about first index.
-                if let Err(e) =
-                store_ctx
-                    .engine
-                    .gc(self.region_id(), 0, index, batch)
-                {
+                if let Err(e) = store_ctx.engine.gc(self.region_id(), 0, index, batch) {
                     error!(self.logger, "failed to compact raft logs"; "err" => ?e);
                 }
             }
             if self.remove_tombstone_tablets(new_persisted) {
-                let sched = store_ctx.schedulers.tablet_gc.clone();
+                let sched = store_ctx.schedulers.tablet.clone();
+                let counter = self.remember_persisted_tablet_index();
                 if !task.has_snapshot {
                     task.persisted_cbs.push(Box::new(move || {
-                        let _ = sched.schedule(tablet_gc::Task::destroy(region_id, new_persisted));
+                        let _ = sched.schedule(tablet::Task::destroy(region_id, new_persisted));
+                        // Writer guarantees no race between different callbacks.
+                        counter.store(new_persisted, Ordering::Relaxed);
                     }));
                 } else {
                     // In snapshot, the index is persisted, tablet can be destroyed directly.
-                    let _ = sched.schedule(tablet_gc::Task::destroy(region_id, new_persisted));
+                    let _ = sched.schedule(tablet::Task::destroy(region_id, new_persisted));
+                    counter.store(new_persisted, Ordering::Relaxed);
                 }
             }
         }
     }
 
     fn compact_log_index(&mut self) -> Option<u64> {
-        let truncated = self.entry_storage().truncated_index() + 1;
+        let first_index = self.entry_storage().first_index();
         let persisted_applied = self.storage().apply_trace().persisted_apply_index();
-        let compact_index = std::cmp::min(truncated, persisted_applied);
+        let compact_index = std::cmp::min(first_index, persisted_applied);
         if compact_index == RAFT_INIT_LOG_INDEX + 1 {
             // There is no logs at RAFT_INIT_LOG_INDEX, nothing to delete.
             return None;

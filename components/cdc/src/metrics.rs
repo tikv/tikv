@@ -88,6 +88,15 @@ lazy_static! {
         exponential_buckets(0.005, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref CDC_SCAN_SINK_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_cdc_scan_sink_duration_seconds",
+        "Bucketed histogram of cdc async scan sink time duration",
+    )
+    .unwrap();
+    pub static ref CDC_SCAN_LONG_DURATION_REGIONS : IntGauge = register_int_gauge!(
+        "tikv_cdc_scan_long_duration_region",
+        "The number of regions that take a long time to scan"
+    ).unwrap();
     pub static ref CDC_SCAN_BYTES: IntCounter = register_int_counter!(
         "tikv_cdc_scan_bytes_total",
         "Total fetched bytes of CDC incremental scan"
@@ -214,6 +223,13 @@ lazy_static! {
 
     pub static ref CDC_ROCKSDB_PERF_COUNTER_STATIC: PerfCounter =
         auto_flush_from!(CDC_ROCKSDB_PERF_COUNTER, PerfCounter);
+
+    pub static ref CDC_EVENTS_PENDING_DURATION: Histogram = register_histogram!(
+        "tikv_cdc_events_pending_duration",
+        "Pending duration for all events, in milliseconds",
+        exponential_buckets(0.01, 2.0, 17).unwrap(),
+    )
+    .unwrap();
 }
 
 thread_local! {

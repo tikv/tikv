@@ -15,12 +15,12 @@ use aws_sig_auth::middleware::SigningStageError;
 use aws_smithy_client::bounds::SmithyConnector;
 use aws_smithy_http::result::SdkError;
 use cloud::{
-    error::{Error, KmsError, Result},
-    kms::{Config, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey},
+    error::{Error, KmsError, OtherError, Result},
+    kms::{Config, CryptographyType, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey},
 };
 use futures::executor::block_on;
 
-use crate::util;
+use crate::util::{self, is_retryable};
 
 const AWS_KMS_DATA_KEY_SPEC: DataKeySpec = DataKeySpec::Aes256;
 
@@ -116,7 +116,7 @@ impl KmsProvider for AwsKms {
                 let plaintext_key = response.plaintext().unwrap().as_ref().to_vec();
                 Ok(DataKeyPair {
                     encrypted: EncryptedKey::new(ciphertext_key)?,
-                    plaintext: PlainKey::new(plaintext_key)?,
+                    plaintext: PlainKey::new(plaintext_key, CryptographyType::AesGcm256)?,
                 })
             })
     }
@@ -145,11 +145,12 @@ fn classify_generate_data_key_error(err: SdkError<GenerateDataKeyError>) -> Erro
         match &service_err.err() {
             GenerateDataKeyError::NotFoundException(_) => Error::ApiNotFound(err.into()),
             GenerateDataKeyError::InvalidKeyUsageException(_) => {
-                Error::KmsError(KmsError::Other(err.into()))
+                // Error::KmsError(KmsError::Other(err.into()))
+             Error::KmsError(KmsError::Other(OtherError::new(is_retryable(&err), FixSdkErrorDisplay(err).into())))
             }
             GenerateDataKeyError::DependencyTimeoutException(_) => Error::ApiTimeout(err.into()),
             GenerateDataKeyError::KmsInternalException(_) => Error::ApiInternal(err.into()),
-            _ => Error::KmsError(KmsError::Other(FixSdkErrorDisplay(err).into())),
+            _ => Error::KmsError(KmsError::Other(OtherError::new(is_retryable(&err), FixSdkErrorDisplay(err).into()))),
         }
     } else {
         classify_error(err)
@@ -164,7 +165,7 @@ fn classify_decrypt_error(err: SdkError<DecryptError>) -> Error {
             }
             DecryptError::DependencyTimeoutException(_) => Error::ApiTimeout(err.into()),
             DecryptError::KmsInternalException(_) => Error::ApiInternal(err.into()),
-            _ => Error::KmsError(KmsError::Other(FixSdkErrorDisplay(err).into())),
+            _ => Error::KmsError(KmsError::Other(OtherError::new(is_retryable(&err), FixSdkErrorDisplay(err).into()))),
         }
     } else {
         classify_error(err)
@@ -180,8 +181,7 @@ fn classify_error<E: std::error::Error + Send + Sync + 'static>(err: SdkError<E>
         {
             Error::ApiAuthentication(err.into())
         }
-        e if util::is_retryable(e) => Error::ApiInternal(err.into()),
-        _ => Error::KmsError(KmsError::Other(FixSdkErrorDisplay(err).into())),
+        _ => Error::KmsError(KmsError::Other(OtherError::new(is_retryable(&err), FixSdkErrorDisplay(err).into()))),
     }
 }
 
@@ -220,6 +220,8 @@ mod tests {
                 region: "cn-north-1".to_string(),
                 endpoint: String::new(),
             },
+            azure: None,
+            gcp: None,
         };
 
         let resp = format!(
@@ -289,6 +291,8 @@ mod tests {
                 region: "cn-north-1".to_string(),
                 endpoint: String::new(),
             },
+            azure: None,
+            gcp: None,
         };
 
         let enc_key = EncryptedKey::new(b"invalid".to_vec()).unwrap();

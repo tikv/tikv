@@ -6,12 +6,13 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::RaftEngineReadOnly;
+use engine_traits::{RaftEngineDebug, RaftEngineReadOnly};
 use futures::executor::block_on;
 use kvproto::raft_serverpb::{PeerState, RaftLocalState, RaftMessage};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
 use test_raftstore::*;
+use test_raftstore_macro::test_case;
 use tikv_util::{config::ReadableDuration, time::Instant, HandyRwLock};
 
 #[test]
@@ -44,7 +45,8 @@ fn test_one_node_leader_missing() {
     fail::remove(check_stale_state);
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_node_update_localreader_after_removed() {
     let mut cluster = new_node_cluster(0, 6);
     let pd_client = cluster.pd_client.clone();
@@ -90,7 +92,8 @@ fn test_node_update_localreader_after_removed() {
     cluster.must_region_not_exist(r1, 2);
 }
 
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_stale_learner_restart() {
     let mut cluster = new_node_cluster(0, 2);
     cluster.pd_client.disable_default_operator();
@@ -133,9 +136,11 @@ fn test_stale_learner_restart() {
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
 }
 
+/// pass
 /// Test if a peer can be destroyed through tombstone msg when applying
 /// snapshot.
-#[test]
+//#[test_case(test_raftstore_v2::new_node_cluster)] // unstable test case
+#[test_case(test_raftstore::new_node_cluster)]
 fn test_stale_peer_destroy_when_apply_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
     configure_for_snapshot(&mut cluster.cfg);
@@ -205,14 +210,17 @@ fn test_stale_peer_destroy_when_apply_snapshot() {
     fail::remove(region_apply_snap_fp);
     // Wait for peer 3 changing `SnapState`
     sleep_ms(100);
-    cluster.sim.wl().send_raft_msg(tombstone_msg).unwrap();
 
+    // we expect the peer would be destroyed after applying the snapshot without
+    // another message trigger
     must_get_none(&cluster.get_engine(3), b"k1");
 }
 
+/// pass
 /// Test if destroy a uninitialized peer through tombstone msg would allow a
 /// staled peer be created again.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_destroy_uninitialized_peer_when_there_exists_old_peer() {
     // 4 stores cluster.
     let mut cluster = new_node_cluster(0, 4);
@@ -291,7 +299,8 @@ fn test_destroy_uninitialized_peer_when_there_exists_old_peer() {
 /// Logs scan are now moved to raftlog gc threads. The case is to test if logs
 /// are still cleaned up when there is stale logs before first index during
 /// destroy.
-#[test]
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
 fn test_destroy_clean_up_logs_with_unfinished_log_gc() {
     let mut cluster = new_node_cluster(0, 3);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(15);

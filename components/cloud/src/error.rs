@@ -2,7 +2,7 @@
 
 use std::{
     error,
-    fmt::{Debug, Display},
+    fmt::{self, Debug, Display},
     io::{Error as IoError, ErrorKind},
     result,
 };
@@ -46,7 +46,13 @@ pub enum KmsError {
     #[error("Empty key {0}")]
     EmptyKey(String),
     #[error("Kms error {0}")]
-    Other(Box<dyn error::Error + Sync + Send>),
+    Other(OtherError),
+}
+
+impl From<KmsError> for Error {
+    fn from(e: KmsError) -> Self {
+        Error::KmsError(e)
+    }
 }
 
 impl From<Error> for IoError {
@@ -105,7 +111,44 @@ impl RetryError for KmsError {
         match self {
             KmsError::WrongMasterKey(_) => false,
             KmsError::EmptyKey(_) => false,
-            KmsError::Other(_) => true,
+            KmsError::Other(e) => e.retryable,
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct OtherError {
+    retryable: bool,
+    err: Box<dyn error::Error + Sync + Send>,
+}
+
+impl OtherError {
+    pub fn new(retryable: bool, err: Box<dyn error::Error + Sync + Send>) -> Self {
+        Self {
+            retryable,
+            err
+        }
+    }
+
+    pub fn from_box(err: Box<dyn error::Error + Sync + Send>) -> Self {
+        Self {
+            retryable: false,
+            err,
+        }
+    }
+}
+
+impl<E: RetryError + error::Error + Sync + Send + 'static> From<E> for OtherError {
+    fn from(e: E) -> Self {
+        Self {
+            retryable: e.is_retryable(),
+            err: Box::new(e),
+        }
+    }
+}
+
+impl fmt::Display for OtherError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.err)
     }
 }

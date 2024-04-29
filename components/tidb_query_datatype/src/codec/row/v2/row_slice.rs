@@ -10,6 +10,7 @@ use num_traits::PrimInt;
 
 use crate::codec::{Error, Result};
 
+#[derive(Debug)]
 pub enum RowSlice<'a> {
     Small {
         origin: &'a [u8],
@@ -17,6 +18,7 @@ pub enum RowSlice<'a> {
         null_ids: LeBytes<'a, u8>,
         offsets: LeBytes<'a, u16>,
         values: LeBytes<'a, u8>,
+        checksum: Option<Checksum>,
     },
     Big {
         origin: &'a [u8],
@@ -24,7 +26,47 @@ pub enum RowSlice<'a> {
         null_ids: LeBytes<'a, u32>,
         offsets: LeBytes<'a, u32>,
         values: LeBytes<'a, u8>,
+        checksum: Option<Checksum>,
     },
+}
+
+/// Checksum
+/// - HEADER(1 byte)
+///   - VER: version(3 bit)
+///   - E:   has extra checksum
+/// - CHECKSUM(4 bytes)
+///   - little-endian CRC32(IEEE) when hdr.ver = 0 (default)
+#[derive(Copy, Clone, Debug)]
+pub struct Checksum {
+    header: u8,
+    val: u32,
+    extra_val: u32,
+}
+
+impl Checksum {
+    fn new(header: u8, val: u32) -> Self {
+        Self {
+            header,
+            val,
+            extra_val: 0,
+        }
+    }
+
+    pub fn get_checksum_val(&self) -> u32 {
+        self.val
+    }
+
+    pub fn has_extra_checksum(&self) -> bool {
+        (self.header & 0b1000) > 0
+    }
+
+    fn set_extra_checksum(&mut self, extra_val: u32) {
+        self.extra_val = extra_val;
+    }
+
+    pub fn get_extra_checksum_val(&self) -> u32 {
+        self.extra_val
+    }
 }
 
 impl RowSlice<'_> {
@@ -34,18 +76,21 @@ impl RowSlice<'_> {
     pub fn from_bytes(mut data: &[u8]) -> Result<RowSlice<'_>> {
         let origin = data;
         assert_eq!(data.read_u8()?, super::CODEC_VERSION);
-        let is_big = super::Flags::from_bits_truncate(data.read_u8()?) == super::Flags::BIG;
+        let flags = super::Flags::from_bits_truncate(data.read_u8()?);
+        let is_big = flags.contains(super::Flags::BIG);
+        let with_checksum = flags.contains(super::Flags::WITH_CHECKSUM);
 
         // read ids count
         let non_null_cnt = data.read_u16_le()? as usize;
         let null_cnt = data.read_u16_le()? as usize;
-        let row = if is_big {
+        let mut row = if is_big {
             RowSlice::Big {
                 origin,
                 non_null_ids: read_le_bytes(&mut data, non_null_cnt)?,
                 null_ids: read_le_bytes(&mut data, null_cnt)?,
                 offsets: read_le_bytes(&mut data, non_null_cnt)?,
                 values: LeBytes::new(data),
+                checksum: None,
             }
         } else {
             RowSlice::Small {
@@ -54,7 +99,20 @@ impl RowSlice<'_> {
                 null_ids: read_le_bytes(&mut data, null_cnt)?,
                 offsets: read_le_bytes(&mut data, non_null_cnt)?,
                 values: LeBytes::new(data),
+                checksum: None,
             }
+        };
+        if with_checksum {
+            let mut checksum_bytes = row.cut_checksum_bytes(non_null_cnt);
+            assert!(checksum_bytes.len() == 5 || checksum_bytes.len() == 9);
+            let header = checksum_bytes.read_u8()?;
+            let val = checksum_bytes.read_u32_le()?;
+            let mut checksum = Checksum::new(header, val);
+            if checksum.has_extra_checksum() {
+                let extra_val = checksum_bytes.read_u32_le()?;
+                checksum.set_extra_checksum(extra_val);
+            }
+            row.set_checksum(Some(checksum));
         };
         Ok(row)
     }
@@ -166,6 +224,54 @@ impl RowSlice<'_> {
             Ok(None)
         }
     }
+
+    #[inline]
+    // Return the checksum byte slice, remove it from the `values` field of
+    // `RowSlice`.
+    pub fn cut_checksum_bytes(&mut self, non_null_col_num: usize) -> &[u8] {
+        match self {
+            RowSlice::Big {
+                offsets, values, ..
+            } => {
+                let last_slice_idx = if non_null_col_num == 0 {
+                    0
+                } else {
+                    offsets.get(non_null_col_num - 1).unwrap() as usize
+                };
+                let slice = values.slice;
+                *values = LeBytes::new(&slice[..last_slice_idx]);
+                &slice[last_slice_idx..]
+            }
+            RowSlice::Small {
+                offsets, values, ..
+            } => {
+                let last_slice_idx = if non_null_col_num == 0 {
+                    0
+                } else {
+                    offsets.get(non_null_col_num - 1).unwrap() as usize
+                };
+                let slice = values.slice;
+                *values = LeBytes::new(&slice[..last_slice_idx]);
+                &slice[last_slice_idx..]
+            }
+        }
+    }
+
+    #[inline]
+    pub fn get_checksum(&self) -> Option<Checksum> {
+        match self {
+            RowSlice::Big { checksum, .. } => *checksum,
+            RowSlice::Small { checksum, .. } => *checksum,
+        }
+    }
+
+    #[inline]
+    fn set_checksum(&mut self, checksum_input: Option<Checksum>) {
+        match self {
+            RowSlice::Big { checksum, .. } => *checksum = checksum_input,
+            RowSlice::Small { checksum, .. } => *checksum = checksum_input,
+        }
+    }
 }
 
 /// Decodes `len` number of ints from `buf` in little endian
@@ -189,6 +295,7 @@ where
 }
 
 #[cfg(target_endian = "little")]
+#[derive(Debug)]
 pub struct LeBytes<'a, T: PrimInt> {
     slice: &'a [u8],
     _marker: PhantomData<T>,
@@ -199,7 +306,7 @@ impl<'a, T: PrimInt> LeBytes<'a, T> {
     fn new(slice: &'a [u8]) -> Self {
         Self {
             slice,
-            _marker: PhantomData::default(),
+            _marker: PhantomData,
         }
     }
 
@@ -255,12 +362,17 @@ mod tests {
     use std::u16;
 
     use codec::prelude::NumberEncoder;
+    use tipb::FieldType;
 
     use super::{
         super::encoder_for_test::{Column, RowEncoder},
         read_le_bytes, RowSlice,
     };
-    use crate::{codec::data_type::ScalarValue, expr::EvalContext};
+    use crate::{
+        codec::data_type::{Duration, ScalarValue},
+        expr::EvalContext,
+        FieldTypeTp,
+    };
 
     #[test]
     fn test_read_le_bytes() {
@@ -353,6 +465,56 @@ mod tests {
         assert!(!row.search_in_null_ids(0xCC21));
         assert!(!row.search_in_null_ids(0xFF0021));
         assert!(!row.search_in_null_ids(0xFF00000021));
+    }
+
+    fn encoded_data_with_checksum(extra_checksum: Option<u32>, null_row_id: i64) -> Vec<u8> {
+        let cols = vec![
+            Column::new_with_ft(1, FieldType::from(FieldTypeTp::Short), 1000),
+            Column::new_with_ft(12, FieldType::from(FieldTypeTp::Long), 2),
+            Column::new_with_ft(
+                null_row_id,
+                FieldType::from(FieldTypeTp::Short),
+                ScalarValue::Int(None),
+            ),
+            Column::new_with_ft(3, FieldType::from(FieldTypeTp::Float), 3.55),
+            Column::new_with_ft(8, FieldType::from(FieldTypeTp::VarChar), b"abc".to_vec()),
+            Column::new_with_ft(
+                17,
+                FieldType::from(FieldTypeTp::Duration),
+                Duration::from_millis(34, 2).unwrap(),
+            ),
+        ];
+        let mut buf = vec![];
+        buf.write_row_with_checksum(&mut EvalContext::default(), cols, extra_checksum)
+            .unwrap();
+        buf
+    }
+
+    #[test]
+    fn test_decode_with_checksum() {
+        for null_row_id in [235, 355] {
+            for extra_checksum in [None, Some(37217)] {
+                let data = encoded_data_with_checksum(extra_checksum, null_row_id);
+                let row = RowSlice::from_bytes(&data).unwrap();
+                assert_eq!(null_row_id > 255, row.is_big());
+                assert_eq!(Some((0, 2)), row.search_in_non_null_ids(1).unwrap());
+                assert_eq!(Some((2, 10)), row.search_in_non_null_ids(3).unwrap());
+                assert_eq!(Some((10, 13)), row.search_in_non_null_ids(8).unwrap());
+                assert_eq!(Some((13, 14)), row.search_in_non_null_ids(12).unwrap());
+                assert_eq!(Some((14, 18)), row.search_in_non_null_ids(17).unwrap());
+                assert_eq!(None, row.search_in_non_null_ids(235).unwrap());
+                assert!(row.search_in_null_ids(null_row_id));
+                assert!(!row.search_in_null_ids(8));
+
+                let checksum = row.get_checksum().unwrap();
+                assert!(checksum.get_checksum_val() > 0);
+                assert_eq!(extra_checksum.is_some(), checksum.has_extra_checksum());
+                assert_eq!(
+                    extra_checksum.unwrap_or(0),
+                    checksum.get_extra_checksum_val()
+                );
+            }
+        }
     }
 }
 

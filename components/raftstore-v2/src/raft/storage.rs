@@ -9,6 +9,7 @@ use collections::HashMap;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     metapb,
+    metapb::RegionEpoch,
     raft_serverpb::{RaftApplyState, RaftLocalState, RegionLocalState},
 };
 use raft::{
@@ -46,6 +47,9 @@ pub struct Storage<EK: KvEngine, ER> {
     split_init: Option<Box<SplitInit>>,
     /// The flushed index of all CFs.
     apply_trace: ApplyTrace,
+    // The flushed epoch means that the epoch has persisted into the raft engine.
+    // raft epoch >= engine epoch >= flushed epoch
+    flushed_epoch: RegionEpoch,
 }
 
 impl<EK: KvEngine, ER> Debug for Storage<EK, ER> {
@@ -129,6 +133,18 @@ impl<EK: KvEngine, ER> Storage<EK, ER> {
     pub fn has_dirty_data(&self) -> bool {
         self.has_dirty_data
     }
+
+    #[inline]
+    pub fn set_flushed_epoch(&mut self, epoch: &RegionEpoch) {
+        if util::is_epoch_stale(&self.flushed_epoch, epoch) {
+            self.flushed_epoch = epoch.clone();
+        }
+    }
+
+    #[inline]
+    pub fn flushed_epoch(&self) -> &RegionEpoch {
+        &self.flushed_epoch
+    }
 }
 
 impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
@@ -151,6 +167,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             }
         };
         let region = region_state.get_region();
+        let epoch = region.get_region_epoch().clone();
         let logger = logger.new(o!("region_id" => region.id, "peer_id" => peer.get_id()));
         let has_dirty_data =
             match engine.get_dirty_mark(region.get_id(), region_state.get_tablet_index()) {
@@ -183,6 +200,7 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
             gen_snap_task: RefCell::new(Box::new(None)),
             split_init: None,
             apply_trace,
+            flushed_epoch: epoch,
         })
     }
 
@@ -246,6 +264,14 @@ impl<EK: KvEngine, ER: RaftEngine> Storage<EK, ER> {
                 break;
             }
         }
+    }
+
+    // call `estimate` as persisted_applied is not guaranteed to be persisted
+    #[inline]
+    pub fn estimate_replay_count(&self) -> u64 {
+        let apply_index = self.apply_state().get_applied_index();
+        let persisted_apply = self.apply_trace.persisted_apply_index();
+        apply_index.saturating_sub(persisted_apply)
     }
 }
 
@@ -318,24 +344,33 @@ mod tests {
 
     use engine_test::{
         ctor::{CfOptions, DbOptions},
-        kv::TestTabletFactory,
+        kv::{KvTestEngine, TestTabletFactory},
     };
     use engine_traits::{
-        FlushState, RaftEngine, RaftLogBatch, TabletContext, TabletRegistry, DATA_CFS,
+        FlushState, RaftEngine, RaftLogBatch, SstApplyState, TabletContext, TabletRegistry,
+        DATA_CFS,
     };
     use kvproto::{
-        metapb::{Peer, Region},
-        raft_serverpb::PeerState,
+        metapb::Region,
+        raft_serverpb::{PeerState, RaftSnapshotData},
     };
+    use protobuf::Message;
     use raft::{Error as RaftError, StorageError};
-    use raftstore::store::{
-        util::new_empty_snapshot, write_to_db_for_test, AsyncReadNotifier, Config, FetchedLogs,
-        GenSnapRes, ReadRunner, TabletSnapKey, TabletSnapManager, WriteTask, RAFT_INIT_LOG_INDEX,
-        RAFT_INIT_LOG_TERM,
+    use raftstore::{
+        coprocessor::CoprocessorHost,
+        store::{
+            util::new_empty_snapshot, write_to_db_for_test, AsyncReadNotifier, Config, FetchedLogs,
+            GenSnapRes, ReadRunner, TabletSnapKey, TabletSnapManager, WriteTask,
+            RAFT_INIT_LOG_INDEX, RAFT_INIT_LOG_TERM,
+        },
     };
     use slog::o;
     use tempfile::TempDir;
-    use tikv_util::worker::Worker;
+    use tikv_util::{
+        store::new_peer,
+        worker::{dummy_scheduler, Worker},
+        yatp_pool::{DefaultTicker, YatpPoolBuilder},
+    };
 
     use super::*;
     use crate::{
@@ -375,10 +410,8 @@ mod tests {
     fn new_region() -> Region {
         let mut region = Region::default();
         region.set_id(4);
-        let mut p = Peer::default();
-        p.set_id(5);
-        p.set_store_id(6);
-        region.mut_peers().push(p);
+        region.mut_peers().push(new_peer(6, 5));
+        region.mut_peers().push(new_peer(8, 7));
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(4);
         region
@@ -395,7 +428,8 @@ mod tests {
     fn test_apply_snapshot() {
         let region = new_region();
         let path = TempDir::new().unwrap();
-        let mgr = TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap()).unwrap();
+        let mgr =
+            TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap(), None).unwrap();
         let engines = engine_test::new_temp_engine(&path);
         let raft_engine = engines.raft.clone();
         let mut wb = raft_engine.log_batch(10);
@@ -434,8 +468,7 @@ mod tests {
             .unwrap();
         let snapshot = new_empty_snapshot(region.clone(), snap_index, snap_term, false);
         let mut task = WriteTask::new(region.get_id(), 5, 1);
-        s.apply_snapshot(&snapshot, &mut task, mgr, reg.clone())
-            .unwrap();
+        s.apply_snapshot(&snapshot, &mut task, &mgr, &reg).unwrap();
         // Add more entries to check if old entries are cleared. If not, it should panic
         // with memtable hole when using raft engine.
         let entries = (snap_index + 1..=snap_index + 10)
@@ -478,7 +511,8 @@ mod tests {
         write_initial_states(&mut wb, region.clone()).unwrap();
         assert!(!wb.is_empty());
         raft_engine.consume(&mut wb, true).unwrap();
-        let mgr = TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap()).unwrap();
+        let mgr =
+            TabletSnapManager::new(path.path().join("snap_dir").to_str().unwrap(), None).unwrap();
         // building a tablet factory
         let ops = DbOptions::default();
         let cf_opts = DATA_CFS.iter().map(|cf| (*cf, CfOptions::new())).collect();
@@ -500,6 +534,10 @@ mod tests {
         let mut state = RegionLocalState::default();
         state.set_region(region.clone());
         let (_tmp_dir, importer) = create_tmp_importer();
+        let host = CoprocessorHost::<KvTestEngine>::default();
+
+        let (dummy_scheduler1, _) = dummy_scheduler();
+        let high_priority_pool = YatpPoolBuilder::new(DefaultTicker::default()).build_future_pool();
         // setup peer applyer
         let mut apply = Apply::new(
             &Config::default(),
@@ -509,10 +547,14 @@ mod tests {
             reg,
             sched,
             Arc::new(FlushState::new(5)),
+            SstApplyState::default(),
             None,
             5,
             None,
             importer,
+            host,
+            dummy_scheduler1,
+            high_priority_pool,
             logger,
         );
 
@@ -524,7 +566,7 @@ mod tests {
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         apply.schedule_gen_snapshot(gen_task);
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        s.on_snapshot_generated(res);
+        s.on_snapshot_generated(res, 10);
         assert_eq!(s.snapshot(0, 8).unwrap_err(), unavailable);
         assert!(s.snap_states.borrow().get(&8).is_some());
         let snap = match *s.snap_states.borrow().get(&to_peer_id).unwrap() {
@@ -534,14 +576,15 @@ mod tests {
         assert_eq!(snap.get_metadata().get_index(), 5);
         assert_eq!(snap.get_metadata().get_term(), 5);
         assert_eq!(snap.get_data().is_empty(), false);
+        let mut snapshot_data = RaftSnapshotData::default();
+        snapshot_data.merge_from_bytes(snap.get_data()).unwrap();
+        assert_eq!(snapshot_data.get_meta().get_commit_index_hint(), 0);
         let snap_key = TabletSnapKey::from_region_snap(4, 7, &snap);
         let checkpointer_path = mgr.tablet_gen_path(&snap_key);
         assert!(checkpointer_path.exists());
         s.snapshot(0, to_peer_id).unwrap();
 
         // Test cancel snapshot
-        let snap = s.snapshot(0, 7);
-        assert_eq!(snap.unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         apply.schedule_gen_snapshot(gen_task);
         let _res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
@@ -564,8 +607,8 @@ mod tests {
         apply.set_apply_progress(10, 5);
         apply.schedule_gen_snapshot(gen_task_b);
         // on snapshot a and b
-        assert_eq!(s.on_snapshot_generated(res), false);
+        assert_eq!(s.on_snapshot_generated(res, 0), false);
         let res = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        assert_eq!(s.on_snapshot_generated(res), true);
+        assert_eq!(s.on_snapshot_generated(res, 0), true);
     }
 }

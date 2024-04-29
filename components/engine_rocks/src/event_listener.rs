@@ -120,6 +120,9 @@ impl rocksdb::EventListener for RocksEventListener {
                 DBBackgroundErrorReason::Compaction => "compaction",
                 DBBackgroundErrorReason::WriteCallback => "write_callback",
                 DBBackgroundErrorReason::MemTable => "memtable",
+                DBBackgroundErrorReason::ManifestWrite => "manifest_write",
+                DBBackgroundErrorReason::FlushNoWAL => "flush_no_wal",
+                DBBackgroundErrorReason::ManifestWriteNoWAL => "manifest_write_no_wal",
             };
 
             if err.starts_with("Corruption") || err.starts_with("IO error") {
@@ -127,6 +130,7 @@ impl rocksdb::EventListener for RocksEventListener {
                     if let Some(path) = resolve_sst_filename_from_err(&err) {
                         warn!(
                             "detected rocksdb background error";
+                            "reason" => r,
                             "sst" => &path,
                             "err" => &err
                         );
@@ -191,8 +195,15 @@ impl rocksdb::EventListener for RocksPersistenceListener {
     fn on_memtable_sealed(&self, info: &MemTableInfo) {
         // Note: first_seqno is effectively the smallest seqno of memtable.
         // earliest_seqno has ambiguous semantics.
-        self.0
-            .on_memtable_sealed(info.cf_name().to_string(), info.first_seqno());
+        self.0.on_memtable_sealed(
+            info.cf_name().to_string(),
+            info.first_seqno(),
+            info.largest_seqno(),
+        );
+    }
+
+    fn on_flush_begin(&self, _: &FlushJobInfo) {
+        fail::fail_point!("on_flush_begin");
     }
 
     fn on_flush_completed(&self, job: &FlushJobInfo) {

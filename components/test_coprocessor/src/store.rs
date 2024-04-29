@@ -6,7 +6,12 @@ use collections::HashMap;
 use kvproto::kvrpcpb::{Context, IsolationLevel};
 use test_storage::SyncTestStorageApiV1;
 use tidb_query_datatype::{
-    codec::{datum, table, Datum},
+    codec::{
+        data_type::ScalarValue,
+        datum,
+        row::v2::encoder_for_test::{Column as ColumnV2, RowEncoder},
+        table, Datum,
+    },
     expr::EvalContext,
 };
 use tikv::{
@@ -26,6 +31,7 @@ pub struct Insert<'a, E: Engine> {
     store: &'a mut Store<E>,
     table: &'a Table,
     values: BTreeMap<i64, Datum>,
+    values_v2: BTreeMap<i64, ScalarValue>,
 }
 
 impl<'a, E: Engine> Insert<'a, E> {
@@ -34,6 +40,7 @@ impl<'a, E: Engine> Insert<'a, E> {
             store,
             table,
             values: BTreeMap::new(),
+            values_v2: BTreeMap::new(),
         }
     }
 
@@ -44,8 +51,24 @@ impl<'a, E: Engine> Insert<'a, E> {
         self
     }
 
+    pub fn set_v2(mut self, col: &Column, value: ScalarValue) -> Self {
+        assert!(self.table.column_by_id(col.id).is_some());
+        self.values_v2.insert(col.id, value);
+        self
+    }
+
     pub fn execute(self) -> i64 {
         self.execute_with_ctx(Context::default())
+    }
+
+    fn prepare_index_kv(&self, handle: &Datum, buf: &mut Vec<(Vec<u8>, Vec<u8>)>) {
+        for (&id, idxs) in &self.table.idxs {
+            let mut v: Vec<_> = idxs.iter().map(|id| self.values[id].clone()).collect();
+            v.push(handle.clone());
+            let encoded = datum::encode_key(&mut EvalContext::default(), &v).unwrap();
+            let idx_key = table::encode_index_seek_key(self.table.id, id, &encoded);
+            buf.push((idx_key, vec![0]));
+        }
     }
 
     pub fn execute_with_ctx(self, ctx: Context) -> i64 {
@@ -59,13 +82,44 @@ impl<'a, E: Engine> Insert<'a, E> {
         let values: Vec<_> = self.values.values().cloned().collect();
         let value = table::encode_row(&mut EvalContext::default(), values, &ids).unwrap();
         let mut kvs = vec![(key, value)];
-        for (&id, idxs) in &self.table.idxs {
-            let mut v: Vec<_> = idxs.iter().map(|id| self.values[id].clone()).collect();
-            v.push(handle.clone());
-            let encoded = datum::encode_key(&mut EvalContext::default(), &v).unwrap();
-            let idx_key = table::encode_index_seek_key(self.table.id, id, &encoded);
-            kvs.push((idx_key, vec![0]));
+        self.prepare_index_kv(&handle, &mut kvs);
+        self.store.put(ctx, kvs);
+        handle.i64()
+    }
+
+    pub fn execute_with_v2_checksum(
+        self,
+        ctx: Context,
+        with_checksum: bool,
+        extra_checksum: Option<u32>,
+    ) -> i64 {
+        let handle = self
+            .values
+            .get(&self.table.handle_id)
+            .cloned()
+            .unwrap_or_else(|| Datum::I64(next_id()));
+        let key = table::encode_row_key(self.table.id, handle.i64());
+        let mut columns: Vec<ColumnV2> = Vec::new();
+        for (id, value) in self.values_v2.iter() {
+            let col_info = self.table.column_by_id(*id).unwrap();
+            columns.push(ColumnV2::new_with_ft(
+                *id,
+                col_info.as_field_type(),
+                value.to_owned(),
+            ));
         }
+        let mut val_buf = Vec::new();
+        if with_checksum {
+            val_buf
+                .write_row_with_checksum(&mut EvalContext::default(), columns, extra_checksum)
+                .unwrap();
+        } else {
+            val_buf
+                .write_row(&mut EvalContext::default(), columns)
+                .unwrap();
+        }
+        let mut kvs = vec![(key, val_buf)];
+        self.prepare_index_kv(&handle, &mut kvs);
         self.store.put(ctx, kvs);
         handle.i64()
     }
@@ -149,7 +203,7 @@ impl<E: Engine> Store<E> {
     }
 
     pub fn put(&mut self, ctx: Context, mut kv: Vec<(Vec<u8>, Vec<u8>)>) {
-        self.handles.extend(kv.iter().map(|&(ref k, _)| k.clone()));
+        self.handles.extend(kv.iter().map(|(k, _)| k.clone()));
         let pk = kv[0].0.clone();
         let kv = kv
             .drain(..)
@@ -217,8 +271,7 @@ impl<E: Engine> Store<E> {
             )
             .unwrap()
             .into_iter()
-            .filter(Result::is_ok)
-            .map(Result::unwrap)
+            .flatten()
             .collect()
     }
 
@@ -244,6 +297,26 @@ impl<E: Engine> Store<E> {
             .map(|(key, value)| (Key::from_raw(&key), Ok(value)))
             .collect();
         FixtureStore::new(data)
+    }
+
+    pub fn insert_all_null_row(
+        &mut self,
+        tbl: &Table,
+        ctx: Context,
+        with_checksum: bool,
+        extra_checksum: Option<u32>,
+    ) {
+        self.begin();
+        let inserts = self
+            .insert_into(tbl)
+            .set(&tbl["id"], Datum::Null)
+            .set(&tbl["name"], Datum::Null)
+            .set(&tbl["count"], Datum::Null)
+            .set_v2(&tbl["id"], ScalarValue::Int(None))
+            .set_v2(&tbl["name"], ScalarValue::Bytes(None))
+            .set_v2(&tbl["count"], ScalarValue::Int(None));
+        inserts.execute_with_v2_checksum(ctx, with_checksum, extra_checksum);
+        self.commit();
     }
 }
 

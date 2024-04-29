@@ -4,6 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use concurrency_manager::ConcurrencyManager;
 use crossbeam::channel::{unbounded, Receiver, RecvTimeoutError, Sender};
+use engine_rocks::RocksEngine as RocksDb;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{coprocessor, kvrpcpb::*, resource_usage_agent::ResourceUsageRecord, tikvpb::*};
 use protobuf::Message;
@@ -108,7 +109,14 @@ pub fn test_read_keys() {
     });
 }
 
-fn new_cluster(port: u16, env: Arc<Environment>) -> (Cluster<ServerCluster>, TikvClient, Context) {
+fn new_cluster(
+    port: u16,
+    env: Arc<Environment>,
+) -> (
+    Cluster<RocksDb, ServerCluster<RocksDb>>,
+    TikvClient,
+    Context,
+) {
     let (cluster, leader, ctx) = must_new_and_configure_cluster(|cluster| {
         cluster.cfg.resource_metering.receiver_address = format!("127.0.0.1:{}", port);
         cluster.cfg.resource_metering.precision = ReadableDuration::millis(100);
@@ -229,6 +237,7 @@ fn init_coprocessor_with_data(
         cm,
         tag_factory,
         Arc::new(QuotaLimiter::default()),
+        None,
     )
 }
 
