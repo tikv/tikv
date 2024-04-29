@@ -525,11 +525,11 @@ impl<C: PdMocker + Send + Sync + 'static> Pd for PdMock<C> {
 
     fn update_service_gc_safe_point(
         &mut self,
-        _ctx: RpcContext<'_>,
-        _req: UpdateServiceGcSafePointRequest,
-        _sink: UnarySink<UpdateServiceGcSafePointResponse>,
+        ctx: RpcContext<'_>,
+        req: UpdateServiceGcSafePointRequest,
+        sink: UnarySink<UpdateServiceGcSafePointResponse>,
     ) {
-        unimplemented!()
+        hijack_unary(self, ctx, sink, |c| c.update_service_gc_safe_point(&req))
     }
 
     fn sync_max_ts(
