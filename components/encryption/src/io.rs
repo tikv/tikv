@@ -423,7 +423,7 @@ impl<W: AsyncWrite> AsyncWrite for CrypterWriter<W> {
                     crypter.async_write = AsyncWriteState::Idle;
 
                     // We need to reset the status on failed or partial write.
-                    let n = res.unwrap_or(0);
+                    let n = *res.as_ref().unwrap_or(&0);
                     if n < count {
                         let missing = count - n;
                         let new_offset = crypter.offset - missing as u64;
@@ -432,6 +432,7 @@ impl<W: AsyncWrite> AsyncWrite for CrypterWriter<W> {
                         // `BufWriter`.
                         crypter.lazy_reset_crypter(new_offset);
                     }
+                    res?;
                     return Ok(n).into();
                 }
                 AsyncWriteState::Idle => {
@@ -670,6 +671,7 @@ mod tests {
     struct DecoratedCursor {
         cursor: Cursor<Vec<u8>>,
         read_size: usize,
+        inject_write_err: Option<Box<dyn FnMut() -> std::io::Result<()>>>,
     }
 
     impl DecoratedCursor {
@@ -677,6 +679,7 @@ mod tests {
             Self {
                 cursor: Cursor::new(buff.to_vec()),
                 read_size,
+                inject_write_err: None,
             }
         }
 
@@ -702,6 +705,9 @@ mod tests {
             _cx: &mut Context<'_>,
             buf: &[u8],
         ) -> Poll<IoResult<usize>> {
+            if let Some(err_func) = &mut self.inject_write_err {
+                err_func()?;
+            }
             let max_size = self.read_size;
             let n = self
                 .cursor
@@ -1080,11 +1086,45 @@ mod tests {
         std::io::Write::write(&mut wt.0, &plain_text[size / 2..]).unwrap();
     }
 
+    async fn test_failure() {
+        use futures_util::AsyncWriteExt;
+
+        let methods = [
+            EncryptionMethod::Plaintext,
+            EncryptionMethod::Aes128Ctr,
+            EncryptionMethod::Aes192Ctr,
+            EncryptionMethod::Aes256Ctr,
+            #[cfg(feature = "sm4")]
+            EncryptionMethod::Sm4Ctr,
+        ];
+        let iv = Iv::new_ctr().unwrap();
+        let size = 128;
+        let mut plain_text = vec![0; size];
+        rand::rand_bytes(&mut plain_text).unwrap();
+
+        for method in methods {
+            let key = generate_data_key(method).unwrap().1;
+            let mut pipe = DecoratedCursor::new(vec![], 17);
+            pipe.inject_write_err = Some(Box::new(move || {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "injected error",
+                ))
+            }));
+            let mut writer = EncrypterWriter::new(pipe, method, &key, iv).unwrap();
+            let err = AsyncWriteExt::write_all(&mut writer, plain_text.as_slice())
+                .await
+                .unwrap_err();
+            assert_eq!(err.to_string(), "injected error")
+        }
+    }
+
     #[test]
     fn test_async() {
         futures::executor::block_on(async {
             test_poll_read().await;
             test_async_write().await;
+            test_failure().await;
         });
     }
 }
