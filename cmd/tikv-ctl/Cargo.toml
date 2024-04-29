@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [features]
-default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
 tcmalloc = ["tikv/tcmalloc"]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
@@ -15,15 +15,6 @@ portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
-cloud-aws = [
-   "encryption_export/cloud-aws",
-]
-cloud-gcp = [
-  "encryption_export/cloud-gcp",
-]
-cloud-azure = [
-  "encryption_export/cloud-azure",
-]
 openssl-vendored = ["tikv/openssl-vendored"]
 test-engine-kv-rocksdb = [
   "tikv/test-engine-kv-rocksdb"
@@ -44,17 +35,16 @@ nortcheck = ["engine_rocks/nortcheck"]
 api_version = { workspace = true }
 backup = { workspace = true }
 cdc = { workspace = true }
-chrono = "0.4"
-clap = "2.32"
+clap = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crossbeam = "0.8"
+crypto = { workspace = true }
 encryption_export = { workspace = true }
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 error_code = { workspace = true }
 file_system = { workspace = true }
-fips = { workspace = true }
 futures = "0.3"
 gag = "1.0"
 grpcio = { workspace = true }
@@ -68,11 +58,10 @@ pd_client = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { workspace = true }
-raft-engine = { git = "https://github.com/tikv/raft-engine.git" }
-raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git" }
+raft-engine = { workspace = true }
+raft-engine-ctl = { workspace = true }
 raft_log_engine = { workspace = true }
 raftstore = { workspace = true }
-rand = "0.8"
 regex = "1"
 security = { workspace = true }
 serde_json = "1.0"
@@ -90,7 +79,7 @@ txn_types = { workspace = true }
 
 [build-dependencies]
 cc = "1.0"
-time = "0.1"
+time = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"

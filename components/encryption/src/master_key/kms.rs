@@ -158,7 +158,7 @@ impl KmsBackend {
 
 impl Backend for KmsBackend {
     fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
-        self.encrypt_content(plaintext, Iv::new_gcm())
+        self.encrypt_content(plaintext, Iv::new_gcm()?)
     }
 
     fn decrypt(&self, content: &EncryptedContent) -> Result<Vec<u8>> {

@@ -333,7 +333,7 @@ mod tests {
         for _ in 0..num * 10 {
             std::thread::spawn(move || {
                 loop {
-                    let _ = (0..10_000_000).into_iter().sum::<u128>();
+                    let _ = (0..10_000_000).sum::<u128>();
                 }
             });
         }

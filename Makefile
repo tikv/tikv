@@ -34,6 +34,8 @@
 SHELL := bash
 ENABLE_FEATURES ?=
 
+ENABLE_FEATURES += memory-engine
+
 # Frame pointer is enabled by default. The purpose is to provide stable and
 # reliable stack backtraces (for CPU Profiling).
 #
@@ -114,10 +116,8 @@ else
 # Caller is responsible for setting up test engine features
 endif
 
-ifneq ($(NO_CLOUD),1)
-ENABLE_FEATURES += cloud-aws
-ENABLE_FEATURES += cloud-gcp
-ENABLE_FEATURES += cloud-azure
+ifneq ($(NO_ASYNC_BACKTRACE),1)
+ENABLE_FEATURES += trace-async-tasks
 endif
 
 export DOCKER_FILE ?= Dockerfile
@@ -343,7 +343,7 @@ unset-override:
 
 pre-format: unset-override
 	@rustup component add rustfmt
-	@which cargo-sort &> /dev/null || cargo +nightly install -q cargo-sort
+	@which cargo-sort &> /dev/null || cargo +nightly install -q cargo-sort@1.0.9
 
 format: pre-format
 	@cargo fmt
@@ -363,6 +363,7 @@ clippy: pre-clippy
 	@./scripts/check-dashboards
 	@./scripts/check-docker-build
 	@./scripts/check-license
+	@./scripts/deny
 	@./scripts/clippy-all
 
 pre-audit:
@@ -377,7 +378,7 @@ audit: pre-audit
 	cargo audit
 
 check-udeps:
-	which cargo-udeps &>/dev/null || cargo install cargo-udeps && cargo udeps
+	which cargo-udeps &>/dev/null || cargo install cargo-udeps@0.1.47 && cargo udeps
 
 FUZZER ?= Honggfuzz
 

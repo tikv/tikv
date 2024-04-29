@@ -10,6 +10,7 @@ use std::{
     time::Duration,
 };
 
+use engine_rocks::RocksEngine;
 use engine_traits::{Peekable, CF_RAFT};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
@@ -199,6 +200,80 @@ fn test_node_merge_restart() {
     cluster.start().unwrap();
     must_get_none(&cluster.get_engine(3), b"k1");
     must_get_none(&cluster.get_engine(3), b"k3");
+}
+
+#[test]
+fn test_async_io_apply_before_leader_persist_merge() {
+    let mut cluster = new_node_cluster(0, 3);
+    configure_for_merge(&mut cluster.cfg);
+    cluster.cfg.raft_store.cmd_batch_concurrent_ready_max_count = 0;
+    cluster.cfg.raft_store.store_io_pool_size = 1;
+    cluster.cfg.raft_store.max_apply_unpersisted_log_limit = 10000;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+
+    let region = pd_client.get_region(b"k1").unwrap();
+    cluster.must_split(&region, b"k2");
+    let left = pd_client.get_region(b"k1").unwrap();
+    let right = pd_client.get_region(b"k2").unwrap();
+
+    let peer_1 = find_peer(&left, 1).cloned().unwrap();
+    cluster.must_transfer_leader(left.get_id(), peer_1.clone());
+
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    let raft_before_save_on_store_1_fp = "raft_before_persist_on_store_1";
+    // Skip persisting to simulate raft log persist lag but not block node restart.
+    fail::cfg(raft_before_save_on_store_1_fp, "return").unwrap();
+
+    let schedule_merge_fp = "on_schedule_merge";
+    fail::cfg(schedule_merge_fp, "return()").unwrap();
+
+    // Propose merge on leader will fail with timeout due to not persist.
+    let req = cluster.new_prepare_merge(left.get_id(), right.get_id());
+    cluster
+        .call_command_on_leader(req, Duration::from_secs(1))
+        .unwrap_err();
+
+    cluster.shutdown();
+    let engine = cluster.get_engine(peer_1.get_store_id());
+    let state_key = keys::region_state_key(left.get_id());
+    let state: RegionLocalState = engine.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
+    assert_eq!(state.get_state(), PeerState::Normal, "{:?}", state);
+    let state_key = keys::region_state_key(right.get_id());
+    let state: RegionLocalState = engine.get_msg_cf(CF_RAFT, &state_key).unwrap().unwrap();
+    assert_eq!(state.get_state(), PeerState::Normal, "{:?}", state);
+    fail::remove(schedule_merge_fp);
+    fail::remove(raft_before_save_on_store_1_fp);
+    cluster.start().unwrap();
+
+    // Wait till merge is finished.
+    pd_client.check_merged_timeout(left.get_id(), Duration::from_secs(5));
+
+    cluster.must_put(b"k4", b"v4");
+
+    for i in 1..4 {
+        must_get_equal(&cluster.get_engine(i), b"k4", b"v4");
+        let state_key = keys::region_state_key(left.get_id());
+        let state: RegionLocalState = cluster
+            .get_engine(i)
+            .get_msg_cf(CF_RAFT, &state_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.get_state(), PeerState::Tombstone, "{:?}", state);
+        let state_key = keys::region_state_key(right.get_id());
+        let state: RegionLocalState = cluster
+            .get_engine(i)
+            .get_msg_cf(CF_RAFT, &state_key)
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.get_state(), PeerState::Normal, "{:?}", state);
+        assert!(state.get_region().get_start_key().is_empty());
+        assert!(state.get_region().get_end_key().is_empty());
+    }
 }
 
 /// Test if merge is still working when restart a cluster during catching up
@@ -1232,7 +1307,7 @@ fn test_prewrite_before_max_ts_is_synced() {
     let channel = ChannelBuilder::new(env).connect(&addr);
     let client = TikvClient::new(channel);
 
-    let do_prewrite = |cluster: &mut Cluster<ServerCluster>| {
+    let do_prewrite = |cluster: &mut Cluster<RocksEngine, ServerCluster<RocksEngine>>| {
         let region_id = right.get_id();
         let leader = cluster.leader_of_region(region_id).unwrap();
         let epoch = cluster.get_region_epoch(region_id);

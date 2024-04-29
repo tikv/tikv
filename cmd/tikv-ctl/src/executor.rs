@@ -1,7 +1,7 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::ToOwned, cmp::Ordering, path::Path, pin::Pin, result, str, string::ToString, sync::Arc,
+    borrow::ToOwned, cmp::Ordering, path::Path, result, str, string::ToString, sync::Arc,
     time::Duration,
 };
 
@@ -13,7 +13,12 @@ use engine_traits::{
     CF_WRITE, DATA_CFS,
 };
 use file_system::read_dir;
-use futures::{executor::block_on, future, stream, Stream, StreamExt, TryStreamExt};
+use futures::{
+    executor::block_on,
+    future,
+    stream::{self, BoxStream},
+    StreamExt, TryStreamExt,
+};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     debugpb::{Db as DbType, *},
@@ -55,14 +60,16 @@ pub const METRICS_ROCKSDB_RAFT: &str = "rocksdb_raft";
 pub const METRICS_JEMALLOC: &str = "jemalloc";
 pub const LOCK_FILE_ERROR: &str = "IO error: While lock file";
 
-type MvccInfoStream = Pin<Box<dyn Stream<Item = result::Result<(Vec<u8>, MvccInfo), String>>>>;
+type MvccInfoStream = BoxStream<'static, result::Result<(Vec<u8>, MvccInfo), String>>;
 
 fn get_engine_type(dir: &str) -> EngineType {
     let mut entries = read_dir(dir).unwrap();
     let mut engine1 = false;
     let mut engine2 = false;
     while let Some(Ok(e)) = entries.next() {
-        if let Ok(ty) = e.file_type() && ty.is_dir() {
+        if let Ok(ty) = e.file_type()
+            && ty.is_dir()
+        {
             if e.file_name() == "tablets" {
                 engine2 = true;
             } else if e.file_name() == "db" {

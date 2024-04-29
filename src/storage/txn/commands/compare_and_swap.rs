@@ -29,7 +29,7 @@ command! {
     /// The previous value is always returned regardless of whether the new value is set.
     RawCompareAndSwap:
         cmd_ty => (Option<Value>, bool),
-        display => "kv::command::raw_compare_and_swap {:?}", (ctx),
+        display => { "kv::command::raw_compare_and_swap {:?}", (ctx), }
         content => {
             cf: CfName,
             key: Key,
@@ -37,6 +37,11 @@ command! {
             value: Value,
             ttl: u64,
             api_version: ApiVersion,
+        }
+        in_heap => {
+            key,
+            value,
+            previous_value,
         }
 }
 

@@ -3,9 +3,10 @@ name = "online_config"
 version = "0.1.0"
 edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [dependencies]
-chrono = "0.4"
+chrono = { workspace = true }
 online_config_derive = { path = "./online_config_derive" }
 serde = { version = "1.0", features = ["derive"] }
 

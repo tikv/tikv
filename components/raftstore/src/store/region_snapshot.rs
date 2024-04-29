@@ -11,7 +11,7 @@ use std::{
 
 use engine_traits::{
     util::check_key_in_range, Error as EngineError, IterOptions, Iterable, Iterator, KvEngine,
-    Peekable, RaftEngine, ReadOptions, Result as EngineResult, Snapshot, CF_RAFT,
+    MetricsExt, Peekable, RaftEngine, ReadOptions, Result as EngineResult, Snapshot, CF_RAFT,
 };
 use fail::fail_point;
 use keys::DATA_PREFIX_KEY;
@@ -59,7 +59,7 @@ where
     where
         EK: KvEngine,
     {
-        RegionSnapshot::from_snapshot(Arc::new(db.snapshot()), Arc::new(region))
+        RegionSnapshot::from_snapshot(Arc::new(db.snapshot(None)), Arc::new(region))
     }
 
     pub fn from_snapshot(snap: Arc<S>, region: Arc<Region>) -> RegionSnapshot<S> {
@@ -175,6 +175,11 @@ where
     pub fn get_end_key(&self) -> &[u8] {
         self.region.get_end_key()
     }
+
+    #[cfg(test)]
+    pub fn snap(&self) -> Arc<S> {
+        self.snap.clone()
+    }
 }
 
 impl<S> Clone for RegionSnapshot<S>
@@ -273,6 +278,13 @@ where
 pub struct RegionIterator<S: Snapshot> {
     iter: <S as Iterable>::Iterator,
     region: Arc<Region>,
+}
+
+impl<S: Snapshot> MetricsExt for RegionIterator<S> {
+    type Collector = <<S as Iterable>::Iterator as MetricsExt>::Collector;
+    fn metrics_collector(&self) -> Self::Collector {
+        self.iter.metrics_collector()
+    }
 }
 
 fn update_lower_bound(iter_opt: &mut IterOptions, region: &Region) {
@@ -438,7 +450,7 @@ mod tests {
             (b"a9".to_vec(), b"v9".to_vec()),
         ];
 
-        for &(ref k, ref v) in &base_data {
+        for (k, v) in &base_data {
             engines.kv.put(&data_key(k), v).unwrap();
         }
         let store = new_peer_storage(engines, &r);

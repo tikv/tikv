@@ -1,6 +1,6 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
-#![feature(once_cell)]
+#![feature(lazy_cell)]
 #![feature(let_chains)]
 
 #[macro_use]
@@ -20,6 +20,7 @@ use std::{
 };
 
 use collections::HashMap;
+use crypto::fips;
 use encryption_export::{
     create_backend, data_key_manager_from_config, DataKeyManager, DecrypterReader, Iv,
 };
@@ -126,10 +127,7 @@ fn main() {
             let key_manager =
                 data_key_manager_from_config(&cfg.security.encryption, &cfg.storage.data_dir)
                     .expect("data_key_manager_from_config should success");
-            let file_system = Arc::new(ManagedFileSystem::new(
-                key_manager.map(|m| Arc::new(m)),
-                None,
-            ));
+            let file_system = Arc::new(ManagedFileSystem::new(key_manager.map(Arc::new), None));
             raft_engine_ctl::run_command(args, file_system);
         }
         Cmd::BadSsts { manifest, pd } => {
@@ -795,12 +793,18 @@ fn compact_whole_cluster(
     threads: u32,
     bottommost: BottommostLevelCompaction,
 ) {
-    let stores = pd_client
+    let all_stores = pd_client
         .get_all_stores(true) // Exclude tombstone stores.
         .unwrap_or_else(|e| perror_and_exit("Get all cluster stores from PD failed", e));
 
+    let tikv_stores = all_stores.iter().filter(|s| {
+        !s.get_labels()
+            .iter()
+            .any(|l| l.get_key() == "engine" && l.get_value() == "tiflash")
+    });
+
     let mut handles = Vec::new();
-    for s in stores {
+    for s in tikv_stores {
         let cfg = cfg.clone();
         let mgr = Arc::clone(&mgr);
         let addr = s.address.clone();

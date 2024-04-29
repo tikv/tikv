@@ -2,6 +2,7 @@
 
 mod bucket;
 mod command;
+mod disk_snapshot_backup;
 mod life;
 mod misc;
 mod pd;
@@ -17,6 +18,7 @@ pub use command::{
     SplitFlowControl, SplitPendingAppend, MERGE_IN_PROGRESS_PREFIX, MERGE_SOURCE_PREFIX,
     SPLIT_PREFIX,
 };
+pub use disk_snapshot_backup::UnimplementedHandle as DiskSnapBackupHandle;
 pub use life::{AbnormalPeerContext, DestroyProgress, GcPeerContext};
 pub use ready::{
     write_initial_states, ApplyTrace, AsyncWriter, DataTrace, GenSnapTask, ReplayWatch, SnapState,

@@ -36,7 +36,7 @@ fn test_region_meta_endpoint() {
     cluster.run();
     let region = cluster.get_region(b"");
     let region_id = region.get_id();
-    let peer = region.get_peers().get(0);
+    let peer = region.get_peers().first();
     assert!(peer.is_some());
     let store_id = peer.unwrap().get_store_id();
     let router = cluster.raft_extension(store_id);
@@ -45,7 +45,6 @@ fn test_region_meta_endpoint() {
         ConfigController::default(),
         Arc::new(SecurityConfig::default()),
         router,
-        std::env::temp_dir(),
         None,
         GrpcServiceManager::dummy(),
     )

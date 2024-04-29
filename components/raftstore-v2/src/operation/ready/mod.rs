@@ -43,6 +43,7 @@ use raftstore::{
     coprocessor::{RegionChangeEvent, RoleChange},
     store::{
         fsm::store::StoreRegionMeta,
+        local_metrics::IoType,
         needs_evict_entry_cache,
         util::{self, is_first_append_entry, is_initial_msg},
         worker_metrics::SNAP_COUNTER,
@@ -818,7 +819,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         self.merge_state_changes_to(&mut write_task);
         self.storage_mut()
             .handle_raft_ready(ctx, &mut ready, &mut write_task);
-        self.try_compelete_recovery();
+        self.try_complete_recovery();
         self.on_advance_persisted_apply_index(ctx, prev_persisted, &mut write_task);
 
         if !ready.persisted_messages().is_empty() {
@@ -989,7 +990,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
         let now = Instant::now();
-        let stat_raft_commit_log = &mut ctx.raft_metrics.stat_commit_log;
+        let health_stats = &mut ctx.raft_metrics.health_stats;
         for i in old_index + 1..=new_index {
             if let Some((term, trackers)) = self.proposals().find_trackers(i) {
                 if self.entry_storage().term(i).map_or(false, |t| t == term) {
@@ -1002,14 +1003,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     for tracker in trackers {
                         // Collect the metrics related to commit_log
                         // durations.
-                        stat_raft_commit_log.record(Duration::from_nanos(tracker.observe(
-                            now,
-                            hist,
-                            |t| {
-                                t.metrics.commit_not_persisted = !commit_persisted;
-                                &mut t.metrics.wf_commit_log_nanos
-                            },
-                        )));
+                        let duration = tracker.observe(now, hist, |t| {
+                            t.metrics.commit_not_persisted = !commit_persisted;
+                            &mut t.metrics.wf_commit_log_nanos
+                        });
+                        health_stats.observe(Duration::from_nanos(duration), IoType::Network);
                     }
                 }
             }

@@ -12,6 +12,9 @@ use engine_traits::{KvEngine, SstWriter, SstWriterBuilder};
 use kvproto::import_sstpb::*;
 use uuid::Uuid;
 
+mod util;
+pub use util::*;
+
 pub const PROP_TEST_MARKER_CF_NAME: &[u8] = b"tikv.test_marker_cf_name";
 
 pub fn new_test_engine(path: &str, cfs: &[&str]) -> RocksEngine {

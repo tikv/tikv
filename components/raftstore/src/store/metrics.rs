@@ -260,6 +260,31 @@ make_static_metric! {
         unable_to_split_cpu_top,
     }
 
+    pub label_enum SnapshotBrWaitApplyEventType {
+        sent,
+        trivial,
+        accepted,
+        term_not_match,
+        epoch_not_match,
+        duplicated,
+        finished,
+    }
+
+    pub struct SnapshotBrWaitApplyEvent : IntCounter {
+        "event" => SnapshotBrWaitApplyEventType
+    }
+
+    pub label_enum SnapshotBrLeaseEventType {
+        create,
+        renew,
+        expired,
+        reset,
+    }
+
+    pub struct SnapshotBrLeaseEvent : IntCounter {
+        "event" => SnapshotBrLeaseEventType
+    }
+
     pub struct HibernatedPeerStateGauge: IntGauge {
         "state" => {
             awaken,
@@ -464,6 +489,7 @@ lazy_static! {
             exponential_buckets(0.00001, 2.0, 32).unwrap() // 10us ~ 42949s.
         ).unwrap();
 
+
     pub static ref STORE_APPLY_LOG_HISTOGRAM: Histogram =
         register_histogram!(
             "tikv_raftstore_apply_log_duration_seconds",
@@ -528,6 +554,19 @@ lazy_static! {
             "tikv_raftstore_propose_log_size",
             "Bucketed histogram of peer proposing log size.",
             exponential_buckets(8.0, 2.0, 22).unwrap()
+        ).unwrap();
+
+    pub static ref STORE_APPLY_KEY_SIZE_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_key_size",
+            "Bucketed histogram of apply key size.",
+            exponential_buckets(8.0, 2.0, 17).unwrap()
+        ).unwrap();
+    pub static ref STORE_APPLY_VALUE_SIZE_HISTOGRAM: Histogram =
+        register_histogram!(
+            "tikv_raftstore_apply_value_size",
+            "Bucketed histogram of apply value size.",
+            exponential_buckets(8.0, 2.0, 23).unwrap()
         ).unwrap();
 
     pub static ref REGION_HASH_COUNTER_VEC: IntCounterVec =
@@ -742,6 +781,17 @@ lazy_static! {
         exponential_buckets(8.0, 2.0, 24).unwrap()
     ).unwrap();
 
+    pub static ref RAFT_APPLY_AHEAD_PERSIST_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_raft_apply_ahead_of_persist",
+        "Histogram of the raft log lag between persisted index and applied index",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    ).unwrap();
+
+    pub static ref RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_raft_enable_unpersisted_apply_regions",
+        "The number of regions that disable apply unpersisted raft log."
+    ).unwrap();
+
     pub static ref RAFT_ENTRIES_CACHES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_raft_entries_caches",
         "Total memory size of raft entries caches."
@@ -895,5 +945,30 @@ lazy_static! {
     pub static ref PEER_IN_FLASHBACK_STATE: IntGauge = register_int_gauge!(
         "tikv_raftstore_peer_in_flashback_state",
         "Total number of peers in the flashback state"
+    ).unwrap();
+
+    pub static ref SNAP_BR_SUSPEND_COMMAND_TYPE: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_snap_br_suspend_command_type",
+        "The statistic of rejecting some admin commands being proposed.",
+        &["type"]
+    ).unwrap();
+
+    pub static ref SNAP_BR_WAIT_APPLY_EVENT: SnapshotBrWaitApplyEvent = register_static_int_counter_vec!(
+        SnapshotBrWaitApplyEvent,
+        "tikv_raftstore_snap_br_wait_apply_event",
+        "The events of wait apply issued by snapshot br.",
+        &["event"]
+    ).unwrap();
+
+    pub static ref SNAP_BR_SUSPEND_COMMAND_LEASE_UNTIL: IntGauge = register_int_gauge!(
+        "tikv_raftstore_snap_br_suspend_command_lease_until",
+        "The lease that snapshot br holds of rejecting some type of commands. (In unix timestamp.)"
+    ).unwrap();
+
+    pub static ref SNAP_BR_LEASE_EVENT: SnapshotBrLeaseEvent = register_static_int_counter_vec!(
+        SnapshotBrLeaseEvent,
+        "tikv_raftstore_snap_br_lease_event",
+        "The events of the lease to denying new admin commands being proposed by snapshot br.",
+        &["event"]
     ).unwrap();
 }

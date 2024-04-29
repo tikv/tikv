@@ -192,7 +192,7 @@ impl ResponseBatchConsumer<(Option<Vec<u8>>, Statistics)> for GetCommandResponse
             request_source,
             resource_priority,
         );
-        let task = MeasuredSingleResponse::new(id, res, measure);
+        let task = MeasuredSingleResponse::new(id, res, measure, None);
         if self.tx.send_with(task, WakePolicy::Immediately).is_err() {
             error!("KvService response batch commands fail");
         }
@@ -228,7 +228,7 @@ impl ResponseBatchConsumer<Option<Vec<u8>>> for GetCommandResponseConsumer {
             request_source,
             resource_priority,
         );
-        let task = MeasuredSingleResponse::new(id, res, measure);
+        let task = MeasuredSingleResponse::new(id, res, measure, None);
         if self.tx.send_with(task, WakePolicy::Immediately).is_err() {
             error!("KvService response batch commands fail");
         }
@@ -287,7 +287,7 @@ fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
                     source,
                     resource_priority,
                 );
-                let task = MeasuredSingleResponse::new(id, res, measure);
+                let task = MeasuredSingleResponse::new(id, res, measure, None);
                 if tx.send_with(task, WakePolicy::Immediately).is_err() {
                     error!("KvService response batch commands fail");
                 }
@@ -343,7 +343,7 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
                     source,
                     resource_priority,
                 );
-                let task = MeasuredSingleResponse::new(id, res, measure);
+                let task = MeasuredSingleResponse::new(id, res, measure, None);
                 if tx.send_with(task, WakePolicy::Immediately).is_err() {
                     error!("KvService response batch commands fail");
                 }

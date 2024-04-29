@@ -7,10 +7,7 @@ use std::{
     io::{self, BufReader, ErrorKind, Read},
     ops::Bound,
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 
@@ -38,6 +35,7 @@ use tikv_util::{
         stream_event::{EventEncoder, EventIterator, Iterator as EIterator},
     },
     future::RescheduleChecker,
+    memory::{MemoryQuota, OwnedAllocated},
     sys::{thread::ThreadBuildWrapper, SysQuota},
     time::{Instant, Limiter},
     Either, HandyRwLock,
@@ -59,14 +57,13 @@ use crate::{
 };
 
 pub struct LoadedFile {
-    permit: MemUsePermit,
+    _permit: OwnedAllocated,
     content: Arc<[u8]>,
 }
 
 impl std::fmt::Debug for LoadedFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LoadedFileInner")
-            .field("permit", &self.permit)
             .field("content.len()", &self.content.len())
             .finish()
     }
@@ -95,18 +92,6 @@ impl<'a> DownloadExt<'a> {
     pub fn req_type(mut self, req_type: DownloadRequestType) -> Self {
         self.req_type = req_type;
         self
-    }
-}
-
-#[derive(Debug)]
-struct MemUsePermit {
-    amount: u64,
-    statistic: Arc<AtomicU64>,
-}
-
-impl Drop for MemUsePermit {
-    fn drop(&mut self) {
-        self.statistic.fetch_sub(self.amount, Ordering::SeqCst);
     }
 }
 
@@ -164,8 +149,7 @@ pub struct SstImporter<E: KvEngine> {
     // We need to keep reference to the runtime so background tasks won't be dropped.
     _download_rt: Runtime,
     file_locks: Arc<DashMap<String, (CacheKvFile, Instant)>>,
-    mem_use: Arc<AtomicU64>,
-    mem_limit: Arc<AtomicU64>,
+    memory_quota: Arc<MemoryQuota>,
 }
 
 impl<E: KvEngine> SstImporter<E> {
@@ -217,8 +201,7 @@ impl<E: KvEngine> SstImporter<E> {
             file_locks: Arc::new(DashMap::default()),
             cached_storage,
             _download_rt: download_rt,
-            mem_use: Arc::new(AtomicU64::new(0)),
-            mem_limit: Arc::new(AtomicU64::new(memory_limit)),
+            memory_quota: Arc::new(MemoryQuota::new(memory_limit as _)),
         })
     }
 
@@ -383,8 +366,8 @@ impl<E: KvEngine> SstImporter<E> {
     // This method is blocking. It performs the following transformations before
     // writing to disk:
     //
-    //  1. only KV pairs in the *inclusive* range (`[start, end]`) are used.
-    //     (set the range to `["", ""]` to import everything).
+    //  1. only KV pairs in the *inclusive* range (`[start, end]`) are used. (set
+    //     the range to `["", ""]` to import everything).
     //  2. keys are rewritten according to the given rewrite rule.
     //
     // Both the range and rewrite keys are specified using origin keys. However,
@@ -563,10 +546,10 @@ impl<E: KvEngine> SstImporter<E> {
 
     pub fn update_config_memory_use_ratio(&self, cfg_mgr: &ImportConfigManager) {
         let mem_ratio = cfg_mgr.rl().memory_use_ratio;
-        let memory_limit = Self::calcualte_usage_mem(mem_ratio);
+        let memory_limit = Self::calcualte_usage_mem(mem_ratio) as usize;
 
-        if self.mem_limit.load(Ordering::SeqCst) != memory_limit {
-            self.mem_limit.store(memory_limit, Ordering::SeqCst);
+        if self.memory_quota.capacity() != memory_limit {
+            self.memory_quota.set_capacity(memory_limit);
             info!("update importer config";
                 "memory_use_ratio" => mem_ratio,
                 "size" => memory_limit,
@@ -609,7 +592,7 @@ impl<E: KvEngine> SstImporter<E> {
             need_retain
         });
 
-        CACHED_FILE_IN_MEM.set(self.mem_use.load(Ordering::SeqCst) as _);
+        CACHED_FILE_IN_MEM.set(self.memory_quota.capacity() as _);
 
         if self.import_support_download() {
             let shrink_file_count = shrink_files.len();
@@ -631,27 +614,22 @@ impl<E: KvEngine> SstImporter<E> {
         }
     }
 
-    // If mem_limit is 0, which represent download kv-file when import.
+    // If memory_quota is 0, which represent download kv-file when import.
     // Or read kv-file into buffer directly.
     pub fn import_support_download(&self) -> bool {
-        self.mem_limit.load(Ordering::SeqCst) == 0
+        self.memory_quota.capacity() == 0
     }
 
-    fn request_memory(&self, meta: &KvMeta) -> Option<MemUsePermit> {
+    fn request_memory(&self, meta: &KvMeta) -> Option<OwnedAllocated> {
         let size = meta.get_length();
-        let old = self.mem_use.fetch_add(size, Ordering::SeqCst);
-
-        // If the memory is limited, roll backup the mem_use and return false.
-        if old + size > self.mem_limit.load(Ordering::SeqCst) {
-            self.mem_use.fetch_sub(size, Ordering::SeqCst);
+        let mut permit = OwnedAllocated::new(self.memory_quota.clone());
+        // If the memory is limited, roll backup the memory_quota and return false.
+        if permit.alloc(size as _).is_err() {
             CACHE_EVENT.with_label_values(&["out-of-quota"]).inc();
             None
         } else {
             CACHE_EVENT.with_label_values(&["add"]).inc();
-            Some(MemUsePermit {
-                amount: size,
-                statistic: Arc::clone(&self.mem_use),
-            })
+            Some(permit)
         }
     }
 
@@ -707,7 +685,7 @@ impl<E: KvEngine> SstImporter<E> {
 
         Ok(LoadedFile {
             content: Arc::from(buff.into_boxed_slice()),
-            permit,
+            _permit: permit,
         })
     }
 
@@ -1544,7 +1522,7 @@ mod tests {
         let env = get_env(key_manager.clone(), None /* io_rate_limiter */).unwrap();
         let db = new_test_engine_with_env(db_path.to_str().unwrap(), &[CF_DEFAULT], env);
 
-        let cases = vec![(0, 10), (5, 15), (10, 20), (0, 100)];
+        let cases = [(0, 10), (5, 15), (10, 20), (0, 100)];
 
         let mut ingested = Vec::new();
 
@@ -2005,7 +1983,7 @@ mod tests {
         let import_dir = tempfile::tempdir().unwrap();
         let importer =
             SstImporter::<TestEngine>::new(&cfg, import_dir, None, ApiVersion::V1, false).unwrap();
-        let mem_limit_old = importer.mem_limit.load(Ordering::SeqCst);
+        let mem_quota_old = importer.memory_quota.capacity();
 
         // create new config and get the diff config.
         let cfg_new = Config {
@@ -2019,14 +1997,14 @@ mod tests {
         cfg_mgr.dispatch(change).unwrap();
         importer.update_config_memory_use_ratio(&cfg_mgr);
 
-        let mem_limit_new = importer.mem_limit.load(Ordering::SeqCst);
-        assert!(mem_limit_old > mem_limit_new);
+        let mem_quota_new = importer.memory_quota.capacity();
+        assert!(mem_quota_old > mem_quota_new);
         assert_eq!(
-            mem_limit_old / 3,
-            mem_limit_new,
-            "mem_limit_old / 3 = {} mem_limit_new = {}",
-            mem_limit_old / 3,
-            mem_limit_new
+            mem_quota_old / 3,
+            mem_quota_new,
+            "mem_quota_old / 3 = {} mem_quota_new = {}",
+            mem_quota_old / 3,
+            mem_quota_new
         );
     }
 
@@ -2060,11 +2038,10 @@ mod tests {
         )
         .unwrap();
         let ext_storage = {
-            let inner = importer.wrap_kms(
+            importer.wrap_kms(
                 importer.external_storage_or_cache(&backend, "").unwrap(),
                 false,
-            );
-            inner
+            )
         };
 
         // test do_read_kv_file()
@@ -3130,7 +3107,7 @@ mod tests {
             false,
         )
         .unwrap();
-        assert_eq!(importer.mem_use.load(Ordering::SeqCst), 0);
+        assert_eq!(importer.memory_quota.in_use(), 0);
 
         // test inc_mem_and_check() and dec_mem() successfully.
         let meta = KvMeta {
@@ -3139,10 +3116,10 @@ mod tests {
         };
         let check = importer.request_memory(&meta);
         assert!(check.is_some());
-        assert_eq!(importer.mem_use.load(Ordering::SeqCst), meta.get_length());
+        assert_eq!(importer.memory_quota.in_use() as u64, meta.get_length());
 
         drop(check);
-        assert_eq!(importer.mem_use.load(Ordering::SeqCst), 0);
+        assert_eq!(importer.memory_quota.in_use(), 0);
 
         // test inc_mem_and_check() failed.
         let meta = KvMeta {

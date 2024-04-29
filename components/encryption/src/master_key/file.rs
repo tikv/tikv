@@ -49,7 +49,7 @@ impl FileBackend {
 
 impl Backend for FileBackend {
     fn encrypt(&self, plaintext: &[u8]) -> Result<EncryptedContent> {
-        let iv = Iv::new_gcm();
+        let iv = Iv::new_gcm()?;
         self.backend.encrypt_content(plaintext, iv)
     }
 

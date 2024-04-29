@@ -23,7 +23,7 @@ command! {
     /// This should be following a [`Prewrite`](Command::Prewrite).
     Commit:
         cmd_ty => TxnStatus,
-        display => "kv::command::commit {:?} {} -> {} | {:?}", (keys, lock_ts, commit_ts, ctx),
+        display => { "kv::command::commit {:?} {} -> {} | {:?}", (keys, lock_ts, commit_ts, ctx), }
         content => {
             /// The keys affected.
             keys: Vec<Key>,
@@ -31,6 +31,9 @@ command! {
             lock_ts: txn_types::TimeStamp,
             /// The commit timestamp.
             commit_ts: txn_types::TimeStamp,
+        }
+        in_heap => {
+            keys,
         }
 }
 

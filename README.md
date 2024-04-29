@@ -85,7 +85,7 @@ TiKV is able to run separately with PD, which is the minimal deployment required
 1. Download and extract binaries.
 
 ```bash
-$ export TIKV_VERSION=v4.0.12
+$ export TIKV_VERSION=v7.5.0
 $ export GOOS=darwin  # only {darwin, linux} are supported
 $ export GOARCH=amd64 # only {amd64, arm64} are supported
 $ curl -O  https://tiup-mirrors.pingcap.com/tikv-$TIKV_VERSION-$GOOS-$GOARCH.tar.gz

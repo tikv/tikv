@@ -92,7 +92,9 @@ pub struct LimitedFuture<F: Future> {
     #[pin]
     post_delay: OptionalFuture<Compat01As03<Delay>>,
     resource_limiter: Arc<ResourceLimiter>,
-    res: Poll<F::Output>,
+    // if the future is first polled, we need to let it consume a 0 value
+    // to compensate the debt of previously finished tasks.
+    is_first_poll: bool,
 }
 
 impl<F: Future> LimitedFuture<F> {
@@ -102,7 +104,7 @@ impl<F: Future> LimitedFuture<F> {
             pre_delay: None.into(),
             post_delay: None.into(),
             resource_limiter,
-            res: Poll::Pending,
+            is_first_poll: true,
         }
     }
 }
@@ -112,18 +114,31 @@ impl<F: Future> Future for LimitedFuture<F> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.project();
-        if !this.post_delay.is_done() {
-            assert!(this.pre_delay.is_done());
+        if *this.is_first_poll {
+            debug_assert!(this.pre_delay.finished && this.post_delay.finished);
+            *this.is_first_poll = false;
+            let wait_dur = this
+                .resource_limiter
+                .consume(Duration::ZERO, IoBytes::default(), true)
+                .min(MAX_WAIT_DURATION);
+            if wait_dur > Duration::ZERO {
+                *this.pre_delay = Some(
+                    GLOBAL_TIMER_HANDLE
+                        .delay(std::time::Instant::now() + wait_dur)
+                        .compat(),
+                )
+                .into();
+            }
+        }
+        if !this.post_delay.finished {
+            assert!(this.pre_delay.finished);
             std::mem::swap(&mut *this.pre_delay, &mut *this.post_delay);
         }
-        if !this.pre_delay.is_done() {
+        if !this.pre_delay.finished {
             let res = this.pre_delay.poll(cx);
             if res.is_pending() {
                 return Poll::Pending;
             }
-        }
-        if this.res.is_ready() {
-            return std::mem::replace(this.res, Poll::Pending);
         }
         // get io stats is very expensive, so we only do so if only io control is
         // enabled.
@@ -157,8 +172,10 @@ impl<F: Future> Future for LimitedFuture<F> {
         } else {
             IoBytes::default()
         };
-        let mut wait_dur = this.resource_limiter.consume(dur, io_bytes);
-        if wait_dur == Duration::ZERO {
+        let mut wait_dur = this
+            .resource_limiter
+            .consume(dur, io_bytes, res.is_pending());
+        if wait_dur == Duration::ZERO || res.is_ready() {
             return res;
         }
         if wait_dur > MAX_WAIT_DURATION {
@@ -171,31 +188,24 @@ impl<F: Future> Future for LimitedFuture<F> {
                 .compat(),
         )
         .into();
-        if this.post_delay.poll(cx).is_ready() {
-            return res;
-        }
-        *this.res = res;
+        _ = this.post_delay.poll(cx);
         Poll::Pending
     }
 }
 
 /// `OptionalFuture` is similar to futures::OptionFuture, but provide an extra
-/// `is_done` method.
+/// `finished` flag to determine if the future requires poll.
 #[pin_project]
 struct OptionalFuture<F> {
     #[pin]
     f: Option<F>,
-    done: bool,
+    finished: bool,
 }
 
 impl<F> OptionalFuture<F> {
     fn new(f: Option<F>) -> Self {
-        let done = f.is_none();
-        Self { f, done }
-    }
-
-    fn is_done(&self) -> bool {
-        self.done
+        let finished = f.is_none();
+        Self { f, finished }
     }
 }
 
@@ -212,7 +222,7 @@ impl<F: Future> Future for OptionalFuture<F> {
         let this = self.project();
         match this.f.as_pin_mut() {
             Some(x) => x.poll(cx).map(|r| {
-                *this.done = true;
+                *this.finished = true;
                 Some(r)
             }),
             None => Poll::Ready(None),
@@ -265,6 +275,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::unused_async)]
     async fn empty() {}
 
     #[test]
@@ -312,7 +323,7 @@ mod tests {
         let delta = new_stats - stats;
         let dur = start.saturating_elapsed();
         assert_eq!(delta.total_consumed, 150);
-        assert_eq!(delta.total_wait_dur_us, 150_000);
+        assert!(delta.total_wait_dur_us >= 140_000 && delta.total_wait_dur_us <= 160_000);
         assert!(dur >= Duration::from_millis(150) && dur <= Duration::from_millis(160));
 
         // fetch io bytes failed, consumed value is 0.
@@ -320,7 +331,10 @@ mod tests {
         {
             fail::cfg("failed_to_get_thread_io_bytes_stats", "1*return").unwrap();
             spawn_and_wait(&pool, empty(), resource_limiter.clone());
-            assert_eq!(resource_limiter.get_limit_statistics(Io), new_stats);
+            assert_eq!(
+                resource_limiter.get_limit_statistics(Io).total_consumed,
+                new_stats.total_consumed
+            );
             fail::remove("failed_to_get_thread_io_bytes_stats");
         }
     }

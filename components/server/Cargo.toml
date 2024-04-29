@@ -12,11 +12,9 @@ mimalloc = ["tikv/mimalloc"]
 snmalloc = ["tikv/snmalloc"]
 portable = ["tikv/portable"]
 sse = ["tikv/sse"]
+memory-engine = []
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
-cloud-aws = ["encryption_export/cloud-aws"]
-cloud-gcp = ["encryption_export/cloud-gcp"]
-cloud-azure = ["encryption_export/cloud-azure"]
 test-engine-kv-rocksdb = [
   "tikv/test-engine-kv-rocksdb"
 ]
@@ -38,8 +36,8 @@ backup = { workspace = true }
 backup-stream = { workspace = true }
 causal_ts = { workspace = true }
 cdc = { workspace = true }
-chrono = "0.4"
-clap = "2.32"
+chrono = { workspace = true }
+clap = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
 crossbeam = "0.8"
@@ -55,7 +53,9 @@ fs2 = "0.4"
 futures = "0.3"
 grpcio = { workspace = true }
 grpcio-health = { workspace = true }
+health_controller = { workspace = true }
 hex = "0.4"
+hybrid_engine = { workspace = true }
 keys = { workspace = true }
 kvproto = { workspace = true }
 libc = "0.2"
@@ -68,7 +68,7 @@ raft = { workspace = true }
 raft_log_engine = { workspace = true }
 raftstore = { workspace = true, features = ["engine_rocks"] }
 raftstore-v2 = { workspace = true }
-rand = "0.8"
+region_cache_memory_engine = { workspace = true }
 resolved_ts = { workspace = true }
 resource_control = { workspace = true }
 resource_metering = { workspace = true }

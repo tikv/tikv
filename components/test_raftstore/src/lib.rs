@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(let_chains)]
+#![feature(trait_alias)]
 
 #[macro_use]
 extern crate lazy_static;
@@ -10,6 +11,7 @@ extern crate tikv_util;
 mod cluster;
 mod config;
 mod node;
+pub mod range_cache_engine;
 mod router;
 mod server;
 mod transport_simulate;

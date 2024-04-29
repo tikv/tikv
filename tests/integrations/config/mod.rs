@@ -123,6 +123,7 @@ fn test_serde_custom_tikv_config() {
         forward_max_connections_per_address: 5,
         reject_messages_on_memory_ratio: 0.8,
         simplify_metrics: false,
+        health_feedback_interval: ReadableDuration::secs(2),
         ..Default::default()
     };
     value.readpool = ReadPoolConfig {
@@ -248,6 +249,7 @@ fn test_serde_custom_tikv_config() {
         io_reschedule_concurrent_max_count: 1234,
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),
         inspect_interval: ReadableDuration::millis(444),
+        inspect_cpu_util_thd: 0.666,
         check_leader_lease_interval: ReadableDuration::millis(123),
         renew_leader_lease_advance_duration: ReadableDuration::millis(456),
         reactive_memory_lock_tick_interval: ReadableDuration::millis(566),
@@ -271,9 +273,10 @@ fn test_serde_custom_tikv_config() {
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
-        min_blob_size: ReadableSize(2018),
+        min_blob_size: Some(ReadableSize(2018)),
         blob_file_compression: CompressionType::Lz4,
         zstd_dict_size: ReadableSize::kb(16),
+        shared_blob_cache: false,
         blob_cache_size: ReadableSize::gb(12),
         min_gc_batch_size: ReadableSize::kb(12),
         max_gc_batch_size: ReadableSize::mb(12),
@@ -286,7 +289,7 @@ fn test_serde_custom_tikv_config() {
         ..Default::default()
     };
     let titan_db_config = TitanDbConfig {
-        enabled: true,
+        enabled: Some(true),
         dirname: "bar".to_owned(),
         disable_gc: false,
         max_background_gc: 9,
@@ -431,9 +434,10 @@ fn test_serde_custom_tikv_config() {
             hard_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
             force_consistency_checks: true,
             titan: TitanCfConfig {
-                min_blob_size: ReadableSize(1024), // default value
+                min_blob_size: None, // default value
                 blob_file_compression: CompressionType::Zstd,
                 zstd_dict_size: ReadableSize::kb(0),
+                shared_blob_cache: true,
                 blob_cache_size: ReadableSize::mb(0),
                 min_gc_batch_size: ReadableSize::mb(16),
                 max_gc_batch_size: ReadableSize::mb(64),
@@ -505,9 +509,10 @@ fn test_serde_custom_tikv_config() {
             hard_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
             force_consistency_checks: true,
             titan: TitanCfConfig {
-                min_blob_size: ReadableSize(1024), // default value
+                min_blob_size: None, // default value
                 blob_file_compression: CompressionType::Zstd,
                 zstd_dict_size: ReadableSize::kb(0),
+                shared_blob_cache: true,
                 blob_cache_size: ReadableSize::mb(0),
                 min_gc_batch_size: ReadableSize::mb(16),
                 max_gc_batch_size: ReadableSize::mb(64),
@@ -579,9 +584,10 @@ fn test_serde_custom_tikv_config() {
             hard_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
             force_consistency_checks: true,
             titan: TitanCfConfig {
-                min_blob_size: ReadableSize(1024), // default value
+                min_blob_size: None, // default value
                 blob_file_compression: CompressionType::Zstd,
                 zstd_dict_size: ReadableSize::kb(0),
+                shared_blob_cache: true,
                 blob_cache_size: ReadableSize::mb(0),
                 min_gc_batch_size: ReadableSize::mb(16),
                 max_gc_batch_size: ReadableSize::mb(64),
@@ -740,6 +746,7 @@ fn test_serde_custom_tikv_config() {
             num_shard_bits: 10,
             strict_capacity_limit: true,
             high_pri_pool_ratio: 0.8,
+            low_pri_pool_ratio: 0.2,
             memory_allocator: Some(String::from("nodump")),
         },
         io_rate_limit: IoRateLimitConfig {
@@ -760,6 +767,7 @@ fn test_serde_custom_tikv_config() {
         },
         background_error_recovery_window: ReadableDuration::hours(1),
         txn_status_cache_capacity: 1000,
+        memory_quota: ReadableSize::kb(123),
     };
     value.coprocessor = CopConfig {
         split_region_on_table: false,
@@ -833,6 +841,7 @@ fn test_serde_custom_tikv_config() {
         max_write_bytes_per_sec: ReadableSize::mb(10),
         enable_compaction_filter: false,
         compaction_filter_skip_version_check: true,
+        num_threads: 2,
     };
     value.pessimistic_txn = PessimisticTxnConfig {
         wait_for_lock_timeout: ReadableDuration::millis(10),

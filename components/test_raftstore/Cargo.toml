@@ -3,12 +3,10 @@ name = "test_raftstore"
 version = "0.0.1"
 edition = "2018"
 publish = false
+license = "Apache-2.0"
 
 [features]
-default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
-cloud-aws = ["encryption_export/cloud-aws"]
-cloud-gcp = ["encryption_export/cloud-gcp"]
-cloud-azure = ["encryption_export/cloud-azure"]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
 test-engine-kv-rocksdb = [
   "raftstore/test-engine-kv-rocksdb"
 ]
@@ -39,6 +37,8 @@ file_system = { workspace = true }
 futures = "0.3"
 grpcio = { workspace = true }
 grpcio-health = { workspace = true }
+health_controller = { workspace = true }
+hybrid_engine = { workspace = true }
 keys = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.3"
@@ -48,6 +48,7 @@ protobuf = { version = "2.8", features = ["bytes"] }
 raft = { workspace = true }
 raftstore = { workspace = true, features = ["testexport"] }
 rand = "0.8"
+region_cache_memory_engine = { workspace = true }
 resolved_ts = { workspace = true }
 resource_control = { workspace = true }
 resource_metering = { workspace = true }

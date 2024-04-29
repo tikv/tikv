@@ -88,8 +88,8 @@ impl LockTable {
 
     /// Finds the first handle in the given range that `pred` returns `Some`.
     /// The `Some` return value of `pred` will be returned by `find_first`.
-    pub fn find_first<'m, T>(
-        &'m self,
+    pub fn find_first<T>(
+        &self,
         start_key: Option<&Key>,
         end_key: Option<&Key>,
         mut pred: impl FnMut(Arc<KeyHandle>) -> Option<T>,

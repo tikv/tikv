@@ -26,7 +26,7 @@ fn test_singleton_cannot_early_apply() {
 
     // Check singleton region can be scheduled correctly.
     fail::cfg(store_1_fp, "pause").unwrap();
-    cluster.async_put(b"k1", b"v1").unwrap();
+    let _ = cluster.async_put(b"k1", b"v1").unwrap();
     sleep_ms(100);
 
     must_get_none(&cluster.get_engine(1), b"k1");
@@ -41,6 +41,7 @@ fn test_multi_early_apply() {
     let mut cluster = new_cluster(0, 3);
     cluster.pd_client.disable_default_operator();
     cluster.cfg.raft_store.store_batch_system.pool_size = 1;
+    cluster.cfg.raft_store.max_apply_unpersisted_log_limit = 0;
     // So compact log will not be triggered automatically.
     configure_for_request_snapshot(&mut cluster.cfg);
 
@@ -70,10 +71,10 @@ fn test_multi_early_apply() {
                 }
             })),
     ));
-    cluster.async_put(b"k4", b"v4").unwrap();
+    let _ = cluster.async_put(b"k4", b"v4").unwrap();
     // Sleep a while so that follower will send append response
     sleep_ms(100);
-    cluster.async_put(b"k11", b"v22").unwrap();
+    let _ = cluster.async_put(b"k11", b"v22").unwrap();
     // Sleep a while so that follower will send append response.
     sleep_ms(100);
     // Now the store thread of store 1 pauses on `store_1_fp`.

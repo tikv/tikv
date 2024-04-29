@@ -75,6 +75,14 @@ impl MiscExt for PanicEngine {
         panic!()
     }
 
+    fn disable_manual_compaction(&self) -> Result<()> {
+        panic!()
+    }
+
+    fn enable_manual_compaction(&self) -> Result<()> {
+        panic!()
+    }
+
     fn pause_background_work(&self) -> Result<()> {
         panic!()
     }
@@ -127,6 +135,11 @@ impl MiscExt for PanicEngine {
     }
 
     fn get_accumulated_flush_count_cf(cf: &str) -> Result<u64> {
+        panic!()
+    }
+
+    type DiskEngine = PanicEngine;
+    fn get_disk_engine(&self) -> &Self::DiskEngine {
         panic!()
     }
 }

@@ -16,7 +16,7 @@ use futures_util::{
     io::{AsyncRead, AsyncReadExt},
     stream::TryStreamExt,
 };
-pub use kvproto::brpb::{Bucket as InputBucket, S3 as InputConfig};
+pub use kvproto::brpb::S3 as InputConfig;
 use rusoto_core::{request::DispatchSignedRequest, ByteStream, RusotoError};
 use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
 use rusoto_s3::{util::AddressingStyle, *};
@@ -202,7 +202,7 @@ impl S3Storage {
                 sts,
                 String::clone(config.role_arn.as_deref().unwrap()),
                 format!("{}", timestamp_secs),
-                config.external_id.as_deref().map(String::clone),
+                config.external_id.as_deref().cloned(),
                 // default duration is 15min
                 None,
                 None,
@@ -224,7 +224,7 @@ impl S3Storage {
             let cred_provider = StaticProvider::new(
                 (*access_key_pair.access_key).to_owned(),
                 (*access_key_pair.secret_access_key).to_owned(),
-                access_key_pair.session_token.as_deref().map(String::clone),
+                access_key_pair.session_token.as_deref().cloned(),
                 None,
             );
             Self::maybe_assume_role(config, cred_provider, dispatcher)
@@ -330,7 +330,7 @@ async fn try_read_exact<R: AsyncRead + ?Sized + Unpin>(
     }
 }
 
-// NOTICE: the openssl fips doesn't support md5, therefore use md5 pakcage to
+// NOTICE: the openssl fips doesn't support md5, therefore use md5 package to
 // hash
 fn get_content_md5(object_lock_enabled: bool, content: &[u8]) -> Option<String> {
     object_lock_enabled.then(|| {
@@ -487,7 +487,7 @@ impl<'client> S3Uploader<'client> {
         part_number: i64,
         data: &[u8],
     ) -> Result<CompletedPart, RusotoError<UploadPartError>> {
-        match timeout(Self::get_timeout(), async {
+        let res = timeout(Self::get_timeout(), async {
             let start = Instant::now();
             let r = self
                 .client
@@ -507,8 +507,8 @@ impl<'client> S3Uploader<'client> {
                 .observe(start.saturating_elapsed().as_secs_f64());
             r
         })
-        .await
-        {
+        .await;
+        match res {
             Ok(part) => Ok(CompletedPart {
                 e_tag: part?.e_tag,
                 part_number: Some(part_number),

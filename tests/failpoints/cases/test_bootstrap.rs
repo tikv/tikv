@@ -2,6 +2,7 @@
 
 use std::sync::{Arc, RwLock};
 
+use engine_rocks::RocksEngine;
 use engine_traits::Peekable;
 use kvproto::{kvrpcpb::ApiVersion, metapb, raft_serverpb};
 use test_pd_client::TestPdClient;
@@ -9,7 +10,9 @@ use test_raftstore::*;
 
 fn test_bootstrap_half_way_failure(fp: &str) {
     let pd_client = Arc::new(TestPdClient::new(0, false));
-    let sim = Arc::new(RwLock::new(NodeCluster::new(pd_client.clone())));
+    let sim = Arc::new(RwLock::new(NodeCluster::<RocksEngine>::new(
+        pd_client.clone(),
+    )));
     let mut cluster = Cluster::new(0, 5, sim, pd_client, ApiVersion::V1);
 
     // Try to start this node, return after persisted some keys.

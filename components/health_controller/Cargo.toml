@@ -1,0 +1,17 @@
+[package]
+name = "health_controller"
+version = "0.1.0"
+license = "Apache-2.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+grpcio-health = { workspace = true }
+kvproto = { workspace = true }
+ordered-float = "2.6"
+parking_lot = "0.12.1"
+prometheus = { version = "0.13", features = ["nightly"] }
+prometheus-static-metric = "0.5"
+slog = { workspace = true }
+slog-global = { workspace = true }
+tikv_util = { workspace = true }

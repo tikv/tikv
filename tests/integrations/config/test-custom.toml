@@ -3,7 +3,7 @@ slow-log-threshold = "1s"
 panic-when-unexpected-key-or-data = true
 abort-on-panic = true
 memory-usage-limit = "10GB"
-memory-usage-high-water= 0.65
+memory-usage-high-water = 0.65
 
 [log]
 level = "fatal"
@@ -84,6 +84,7 @@ background-thread-count = 999
 end-point-slow-log-threshold = "1s"
 forward-max-connections-per-address = 5
 reject-messages-on-memory-ratio = 0.8
+health-feedback-interval = "2s"
 
 [server.labels]
 a = "b"
@@ -102,6 +103,7 @@ reserve-raft-space = "2GB"
 enable-ttl = true
 ttl-check-poll-interval = "0s"
 txn-status-cache-capacity = 1000
+memory-quota = "123KB"
 
 [storage.block-cache]
 capacity = "40GB"
@@ -134,9 +136,7 @@ export-priority = "high"
 other-priority = "low"
 
 [pd]
-endpoints = [
-    "example.com:443",
-]
+endpoints = ["example.com:443"]
 
 [metric]
 job = "tikv_1"
@@ -223,6 +223,7 @@ waterfall-metrics = true
 io-reschedule-concurrent-max-count = 1234
 io-reschedule-hotpot-duration = "4321s"
 inspect-interval = "444ms"
+inspect-cpu-util-thd = 0.666
 check-leader-lease-interval = "123ms"
 renew-leader-lease-advance-duration = "456ms"
 reactive-memory-lock-tick-interval = "566ms"
@@ -302,15 +303,7 @@ bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
 ribbon-filter-above-level = 1
 read-amp-bytes-per-bit = 0
-compression-per-level = [
-    "no",
-    "no",
-    "zstd",
-    "zstd",
-    "no",
-    "zstd",
-    "lz4",
-]
+compression-per-level = ["no", "no", "zstd", "zstd", "no", "zstd", "lz4"]
 bottommost-level-compression = "disable"
 bottommost-zstd-compression-dict-size = 1024
 bottommost-zstd-compression-sample-size = 1024
@@ -350,6 +343,7 @@ periodic-compaction-seconds = "10d"
 min-blob-size = "2018B"
 blob-file-compression = "lz4"
 zstd-dict-size = "16KB"
+shared-blob-cache = false
 blob-cache-size = "12GB"
 min-gc-batch-size = "12KB"
 max-gc-batch-size = "12MB"
@@ -374,15 +368,7 @@ bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
 ribbon-filter-above-level = 1
 read-amp-bytes-per-bit = 0
-compression-per-level = [
-    "no",
-    "no",
-    "zstd",
-    "zstd",
-    "no",
-    "zstd",
-    "lz4",
-]
+compression-per-level = ["no", "no", "zstd", "zstd", "no", "zstd", "lz4"]
 write-buffer-size = "1MB"
 max-write-buffer-number = 12
 min-write-buffer-number-to-merge = 12
@@ -428,15 +414,7 @@ bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
 ribbon-filter-above-level = 1
 read-amp-bytes-per-bit = 0
-compression-per-level = [
-    "no",
-    "no",
-    "zstd",
-    "zstd",
-    "no",
-    "zstd",
-    "lz4",
-]
+compression-per-level = ["no", "no", "zstd", "zstd", "no", "zstd", "lz4"]
 write-buffer-size = "1MB"
 write-buffer-limit = "16MB"
 max-write-buffer-number = 12
@@ -483,15 +461,7 @@ bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
 ribbon-filter-above-level = 1
 read-amp-bytes-per-bit = 0
-compression-per-level = [
-    "no",
-    "no",
-    "zstd",
-    "zstd",
-    "no",
-    "zstd",
-    "lz4",
-]
+compression-per-level = ["no", "no", "zstd", "zstd", "no", "zstd", "lz4"]
 write-buffer-size = "1MB"
 max-write-buffer-number = 12
 min-write-buffer-number-to-merge = 12
@@ -569,15 +539,7 @@ bloom-filter-bits-per-key = 123
 block-based-bloom-filter = true
 ribbon-filter-above-level = 1
 read-amp-bytes-per-bit = 0
-compression-per-level = [
-    "no",
-    "no",
-    "zstd",
-    "zstd",
-    "no",
-    "zstd",
-    "lz4",
-]
+compression-per-level = ["no", "no", "zstd", "zstd", "no", "zstd", "lz4"]
 write-buffer-size = "1MB"
 max-write-buffer-number = 12
 min-write-buffer-number-to-merge = 12
@@ -611,6 +573,7 @@ max-compactions = 3
 min-blob-size = "2018B"
 blob-file-compression = "lz4"
 zstd-dict-size = "16KB"
+shared-blob-cache = false
 blob-cache-size = "12GB"
 min-gc-batch-size = "12KB"
 max-gc-batch-size = "12MB"
@@ -638,9 +601,7 @@ ca-path = "invalid path"
 cert-path = "invalid path"
 key-path = "invalid path"
 redact-info-log = true
-cert-allowed-cn = [
-    "example.tikv.com",
-]
+cert-allowed-cn = ["example.tikv.com"]
 
 [security.encryption]
 data-encryption-method = "aes128-ctr"
@@ -686,11 +647,12 @@ batch-keys = 256
 max-write-bytes-per-sec = "10MB"
 enable-compaction-filter = false
 compaction-filter-skip-version-check = true
+num-threads = 2
 
 [pessimistic-txn]
-enabled = false # test backward compatibility
+enabled = false                # test backward compatibility
 wait-for-lock-timeout = "10ms"
-wake-up-delay-duration = 100 # test backward compatibility
+wake-up-delay-duration = 100   # test backward compatibility
 pipelined = false
 in-memory = false
 

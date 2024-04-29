@@ -27,14 +27,6 @@ impl FmSketch {
         self.insert_hash_value(hash);
     }
 
-    pub fn into_proto(self) -> tipb::FmSketch {
-        let mut proto = tipb::FmSketch::default();
-        proto.set_mask(self.mask);
-        let hash = self.hash_set.into_iter().collect();
-        proto.set_hashset(hash);
-        proto
-    }
-
     pub fn insert_hash_value(&mut self, hash_val: u64) {
         if (hash_val & self.mask) != 0 {
             return;
@@ -45,6 +37,16 @@ impl FmSketch {
             self.hash_set.retain(|&x| x & mask == 0);
             self.mask = mask;
         }
+    }
+}
+
+impl From<FmSketch> for tipb::FmSketch {
+    fn from(fm: FmSketch) -> tipb::FmSketch {
+        let mut proto = tipb::FmSketch::default();
+        proto.set_mask(fm.mask);
+        let hash = fm.hash_set.into_iter().collect();
+        proto.set_hashset(hash);
+        proto
     }
 }
 

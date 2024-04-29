@@ -3,6 +3,7 @@ name = "error_code"
 version = "0.0.1"
 edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [lib]
 name = "error_code"

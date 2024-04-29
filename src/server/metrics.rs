@@ -63,6 +63,8 @@ make_auto_flush_static_metric! {
         read_index,
         check_leader,
         batch_commands,
+        kv_flush,
+        kv_buffer_batch_get,
     }
 
     pub label_enum GcCommandKind {
@@ -217,10 +219,11 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    // TODO: deprecate the "name" label in v8.0.
     pub static ref GRPC_RESOURCE_GROUP_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_grpc_resource_group_total",
         "Total number of handle grpc message for each resource group",
-        &["name"]
+        &["name", "resource_group"]
     )
     .unwrap();
     pub static ref GRPC_PROXY_MSG_COUNTER_VEC: IntCounterVec = register_int_counter_vec!(
@@ -409,6 +412,13 @@ lazy_static! {
         &["type", "store_id"]
     )
     .unwrap();
+    pub static ref RAFT_CLIENT_WAIT_CONN_READY_DURATION_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_server_raft_client_wait_ready_duration",
+        "Duration of wait raft client connection ready",
+        &["to"],
+        exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
+    )
+    .unwrap();
     pub static ref RAFT_MESSAGE_FLUSH_COUNTER: RaftMessageFlushCounterVec =
         register_static_int_counter_vec!(
             RaftMessageFlushCounterVec,
@@ -454,6 +464,11 @@ lazy_static! {
         "tikv_snapshot_limit_transport_bytes",
         "Total snapshot limit transport used",
         &["type"],
+    )
+    .unwrap();
+    pub static ref MEMORY_LIMIT_GAUGE: Gauge = register_gauge!(
+        "tikv_server_memory_quota_bytes",
+        "Total memory bytes quota for TiKV server"
     )
     .unwrap();
 }
