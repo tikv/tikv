@@ -28,8 +28,9 @@ use crate::{
     memory_controller::MemoryController,
     range_manager::{LoadFailedReason, RangeCacheStatus, RangeManager},
     read::{RangeCacheIterator, RangeCacheSnapshot},
+    statistics::Statistics,
     write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
-    RangeCacheEngineConfig,
+    RangeCacheEngineConfig, RangeCacheEngineOptions,
 };
 
 pub(crate) const CF_DEFAULT_USIZE: usize = 0;
@@ -246,15 +247,18 @@ pub struct RangeCacheMemoryEngine {
     pub(crate) rocks_engine: Option<RocksEngine>,
     bg_work_manager: Arc<BgWorkManager>,
     memory_controller: Arc<MemoryController>,
+    statistics: Arc<Statistics>,
     config: Arc<VersionTrack<RangeCacheEngineConfig>>,
 }
 
 impl RangeCacheMemoryEngine {
-    pub fn new(config: Arc<VersionTrack<RangeCacheEngineConfig>>) -> Self {
+    pub fn new(options: RangeCacheEngineOptions) -> Self {
         info!("init range cache memory engine";);
         let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
         let skiplist_engine = { core.read().engine().clone() };
 
+        let RangeCacheEngineOptions { config, statistics } = options;
+        assert!(config.value().enabled);
         let memory_controller = Arc::new(MemoryController::new(config.clone(), skiplist_engine));
 
         let bg_work_manager = Arc::new(BgWorkManager::new(
@@ -268,6 +272,7 @@ impl RangeCacheMemoryEngine {
             rocks_engine: None,
             bg_work_manager,
             memory_controller,
+            statistics: statistics.unwrap(),
             config,
         }
     }
@@ -435,6 +440,10 @@ impl RangeCacheMemoryEngine {
     pub(crate) fn memory_controller(&self) -> Arc<MemoryController> {
         self.memory_controller.clone()
     }
+
+    pub(crate) fn statistics(&self) -> Arc<Statistics> {
+        self.statistics.clone()
+    }
 }
 
 impl RangeCacheMemoryEngine {
@@ -498,12 +507,12 @@ pub mod tests {
     use engine_traits::CacheRange;
     use tikv_util::config::VersionTrack;
 
-    use crate::{RangeCacheEngineConfig, RangeCacheMemoryEngine};
+    use crate::{RangeCacheEngineConfig, RangeCacheEngineOptions, RangeCacheMemoryEngine};
 
     #[test]
     fn test_overlap_with_pending() {
-        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
-            RangeCacheEngineConfig::config_for_test(),
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range1 = CacheRange::new(b"k1".to_vec(), b"k3".to_vec());
         engine.load_range(range1).unwrap();

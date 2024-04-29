@@ -9,6 +9,10 @@ thread_local! {
 // and transparently.
 #[derive(Default)]
 pub struct PerfContext {
+    // bytes for vals returned by Get
+    pub(crate) get_read_bytes: u64,
+    // bytes for keys/vals decoded by iterator
+    pub(crate) iter_read_bytes: u64,
     // Comment from `RocksDB`
     // total number of internal keys skipped over during iteration.
     // There are several reasons for it:
@@ -24,12 +28,14 @@ pub struct PerfContext {
     //    tombstones will be included here.
     // 4. symmetric cases for Prev() and SeekToLast()
     // internal_recent_skipped_count is not included in this counter.
-    pub(crate) internal_key_skipped_count: usize,
+    pub(crate) internal_key_skipped_count: u64,
     // Total number of deletes skipped over during iteration. There may be one or more deleted keys
     // before the next valid key but every deleted key is counted once.
-    pub(crate) internal_delete_skipped_count: usize,
+    pub(crate) internal_delete_skipped_count: u64,
 }
 
+// todo(SpadeA): whether to add switches to filter the types of metrics like
+// what RocksDB does
 #[macro_export]
 macro_rules! perf_counter_add {
     ($metric:ident, $value:expr) => {

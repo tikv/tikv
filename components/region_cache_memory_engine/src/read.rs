@@ -23,7 +23,9 @@ use crate::{
         ValueType,
     },
     perf_context::PERF_CONTEXT,
-    perf_counter_add, RangeCacheMemoryEngine,
+    perf_counter_add,
+    statistics::{Statistics, Tickers},
+    RangeCacheMemoryEngine,
 };
 
 #[derive(PartialEq)]
@@ -143,6 +145,7 @@ impl Iterable for RangeCacheSnapshot {
             saved_user_key: vec![],
             saved_value: None,
             direction: Direction::Uninit,
+            statistics: self.engine.statistics(),
             prefix_extractor,
         })
     }
@@ -184,7 +187,14 @@ impl Peekable for RangeCacheSnapshot {
                 user_key,
                 v_type: ValueType::Value,
                 ..
-            } if user_key == key => Ok(Some(RangeCacheDbVector(iter.value().clone_bytes()))),
+            } if user_key == key => {
+                let value = iter.value().clone_bytes();
+                self.engine
+                    .statistics()
+                    .record_ticker(Tickers::BytesRead, value.len() as u64);
+                perf_counter_add!(get_read_bytes, value.len() as u64);
+                Ok(Some(RangeCacheDbVector(value)))
+            }
             _ => Ok(None),
         }
     }
@@ -224,6 +234,8 @@ pub struct RangeCacheIterator {
     prefix: Option<Vec<u8>>,
 
     direction: Direction,
+
+    statistics: Arc<Statistics>,
 }
 
 impl RangeCacheIterator {
@@ -286,21 +298,18 @@ impl RangeCacheIterator {
         seq <= self.sequence_number
     }
 
-    fn seek_internal(&mut self, key: &InternalBytes) -> Result<bool> {
+    fn seek_internal(&mut self, key: &InternalBytes) {
         let guard = &epoch::pin();
         self.iter.seek(key, guard);
         if self.iter.valid() {
             self.find_next_visible_key(false, guard);
         }
-        Ok(self.valid)
     }
 
-    fn seek_for_prev_internal(&mut self, key: &InternalBytes) -> Result<bool> {
+    fn seek_for_prev_internal(&mut self, key: &InternalBytes) {
         let guard = &epoch::pin();
         self.iter.seek_for_prev(key, guard);
         self.prev_internal(guard);
-
-        Ok(self.valid)
     }
 
     fn prev_internal(&mut self, guard: &epoch::Guard) {
@@ -442,7 +451,17 @@ impl Iterator for RangeCacheIterator {
         };
 
         let seek_key = encode_seek_key(seek_key, self.sequence_number);
-        self.seek_internal(&seek_key)
+        self.seek_internal(&seek_key);
+        if !self.valid {
+            return Ok(false);
+        }
+
+        // Updating stats and perf context counters
+        let read_bytes = (self.key().len() + self.value().len()) as u64;
+        self.statistics
+            .record_ticker(Tickers::IterBytesRead, read_bytes);
+        perf_counter_add!(iter_read_bytes, read_bytes);
+        Ok(true)
     }
 
     fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
@@ -458,21 +477,53 @@ impl Iterator for RangeCacheIterator {
             encode_seek_for_prev_key(key, 0)
         };
 
-        self.seek_for_prev_internal(&seek_key)
+        self.seek_for_prev_internal(&seek_key);
+        if !self.valid {
+            return Ok(false);
+        }
+
+        // Updating stats and perf context counters
+        let read_bytes = (self.key().len() + self.value().len()) as u64;
+        self.statistics
+            .record_ticker(Tickers::IterBytesRead, read_bytes);
+        perf_counter_add!(iter_read_bytes, read_bytes);
+        Ok(true)
     }
 
     fn seek_to_first(&mut self) -> Result<bool> {
         assert!(self.prefix_extractor.is_none());
         self.direction = Direction::Forward;
         let seek_key = encode_seek_key(&self.lower_bound, self.sequence_number);
-        self.seek_internal(&seek_key)
+        self.seek_internal(&seek_key);
+
+        if !self.valid {
+            return Ok(false);
+        }
+
+        // Updating stats and perf context counters
+        let read_bytes = (self.key().len() + self.value().len()) as u64;
+        self.statistics
+            .record_ticker(Tickers::IterBytesRead, read_bytes);
+        perf_counter_add!(iter_read_bytes, read_bytes);
+        Ok(true)
     }
 
     fn seek_to_last(&mut self) -> Result<bool> {
         assert!(self.prefix_extractor.is_none());
         self.direction = Direction::Backward;
         let seek_key = encode_seek_for_prev_key(&self.upper_bound, u64::MAX);
-        self.seek_for_prev_internal(&seek_key)
+        self.seek_for_prev_internal(&seek_key);
+
+        if !self.valid {
+            return Ok(false);
+        }
+
+        // Updating stats and perf context counters
+        let read_bytes = (self.key().len() + self.value().len()) as u64;
+        self.statistics
+            .record_ticker(Tickers::IterBytesRead, read_bytes);
+        perf_counter_add!(iter_read_bytes, read_bytes);
+        Ok(true)
     }
 
     fn valid(&self) -> Result<bool> {
@@ -483,11 +534,11 @@ impl Iterator for RangeCacheIterator {
 pub struct RangeCacheIterMetricsCollector;
 
 impl IterMetricsCollector for RangeCacheIterMetricsCollector {
-    fn internal_delete_skipped_count(&self) -> usize {
+    fn internal_delete_skipped_count(&self) -> u64 {
         PERF_CONTEXT.with(|perf_context| perf_context.borrow().internal_delete_skipped_count)
     }
 
-    fn internal_key_skipped_count(&self) -> usize {
+    fn internal_key_skipped_count(&self) -> u64 {
         PERF_CONTEXT.with(|perf_context| perf_context.borrow().internal_key_skipped_count)
     }
 }
@@ -544,13 +595,13 @@ mod tests {
             construct_key, construct_user_key, construct_value, decode_key, encode_key,
             encode_seek_key, InternalBytes, ValueType,
         },
-        RangeCacheEngineConfig, RangeCacheMemoryEngine,
+        RangeCacheEngineConfig, RangeCacheEngineOptions, RangeCacheMemoryEngine,
     };
 
     #[test]
     fn test_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
-            RangeCacheEngineConfig::config_for_test(),
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
         engine.new_range(range.clone());
@@ -739,8 +790,8 @@ mod tests {
 
     #[test]
     fn test_get_value() {
-        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
-            RangeCacheEngineConfig::config_for_test(),
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
@@ -819,8 +870,8 @@ mod tests {
 
     #[test]
     fn test_iterator_forawrd() {
-        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
-            RangeCacheEngineConfig::config_for_test(),
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
@@ -1006,8 +1057,8 @@ mod tests {
 
     #[test]
     fn test_iterator_backward() {
-        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
-            RangeCacheEngineConfig::config_for_test(),
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
@@ -1110,8 +1161,8 @@ mod tests {
 
     #[test]
     fn test_seq_visibility() {
-        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
-            RangeCacheEngineConfig::config_for_test(),
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
@@ -1233,8 +1284,8 @@ mod tests {
 
     #[test]
     fn test_seq_visibility_backward() {
-        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
-            RangeCacheEngineConfig::config_for_test(),
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
@@ -1336,8 +1387,8 @@ mod tests {
 
         // backward, all put
         {
-            let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
-                RangeCacheEngineConfig::config_for_test(),
+            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+                VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
             )));
             engine.new_range(range.clone());
             let sl = {
@@ -1374,8 +1425,8 @@ mod tests {
 
         // backward, all deletes
         {
-            let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
-                RangeCacheEngineConfig::config_for_test(),
+            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+                VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
             )));
             engine.new_range(range.clone());
             let sl = {
@@ -1405,8 +1456,8 @@ mod tests {
 
         // backward, all deletes except for last put, last put's seq
         {
-            let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
-                RangeCacheEngineConfig::config_for_test(),
+            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+                VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
             )));
             engine.new_range(range.clone());
             let sl = {
@@ -1438,8 +1489,8 @@ mod tests {
 
         // all deletes except for last put, deletions' seq
         {
-            let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
-                RangeCacheEngineConfig::config_for_test(),
+            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+                VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
             )));
             engine.new_range(range.clone());
             let sl = {
@@ -1470,8 +1521,8 @@ mod tests {
 
     #[test]
     fn test_prefix_seek() {
-        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
-            RangeCacheEngineConfig::config_for_test(),
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"k000".to_vec(), b"k100".to_vec());
         engine.new_range(range.clone());
@@ -1595,8 +1646,8 @@ mod tests {
 
     #[test]
     fn test_evict_range_without_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
-            RangeCacheEngineConfig::config_for_test(),
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
         let evict_range = CacheRange::new(construct_user_key(10), construct_user_key(20));
@@ -1654,8 +1705,8 @@ mod tests {
 
     #[test]
     fn test_evict_range_with_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
-            RangeCacheEngineConfig::config_for_test(),
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
         let evict_range = CacheRange::new(construct_user_key(10), construct_user_key(20));
@@ -1726,8 +1777,8 @@ mod tests {
 
     #[test]
     fn test_tombstone_count_when_iterating() {
-        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
-            RangeCacheEngineConfig::config_for_test(),
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());

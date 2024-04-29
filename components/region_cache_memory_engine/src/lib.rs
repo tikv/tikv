@@ -1,14 +1,16 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 #![feature(let_chains)]
+#![allow(internal_features)]
+#![feature(core_intrinsics)]
 #![feature(slice_pattern)]
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use online_config::OnlineConfig;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tikv_util::config::{ReadableDuration, ReadableSize};
+use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 
 mod background;
 pub mod config;
@@ -20,11 +22,13 @@ mod perf_context;
 mod range_manager;
 mod read;
 mod region_label;
+mod statistics;
 mod write_batch;
 
 pub use background::{BackgroundRunner, GcTask};
 pub use engine::RangeCacheMemoryEngine;
 pub use range_manager::RangeCacheStatus;
+pub use statistics::Statistics as RangeCacheMemoryEngineStatistics;
 pub use write_batch::RangeCacheWriteBatch;
 
 #[derive(Debug, Error)]
@@ -97,5 +101,30 @@ impl RangeCacheEngineConfig {
             soft_limit_threshold: Some(ReadableSize::gb(1)),
             hard_limit_threshold: Some(ReadableSize::gb(2)),
         }
+    }
+}
+
+pub struct RangeCacheEngineOptions {
+    config: Arc<VersionTrack<RangeCacheEngineConfig>>,
+    statistics: Option<Arc<RangeCacheMemoryEngineStatistics>>,
+}
+
+impl RangeCacheEngineOptions {
+    pub fn new(config: Arc<VersionTrack<RangeCacheEngineConfig>>) -> RangeCacheEngineOptions {
+        if config.value().enabled {
+            RangeCacheEngineOptions {
+                config,
+                statistics: Some(Arc::default()),
+            }
+        } else {
+            RangeCacheEngineOptions {
+                config,
+                statistics: None,
+            }
+        }
+    }
+
+    pub fn statistics(&self) -> Option<Arc<RangeCacheMemoryEngineStatistics>> {
+        self.statistics.clone()
     }
 }

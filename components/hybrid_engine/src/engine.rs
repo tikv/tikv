@@ -224,7 +224,8 @@ mod tests {
     use engine_traits::{CacheRange, KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use region_cache_memory_engine::{
-        config::RangeCacheConfigManager, RangeCacheEngineConfig, RangeCacheMemoryEngine,
+        config::RangeCacheConfigManager, RangeCacheEngineConfig, RangeCacheEngineOptions,
+        RangeCacheMemoryEngine,
     };
     use tempfile::Builder;
     use tikv_util::config::VersionTrack;
@@ -240,7 +241,8 @@ mod tests {
         )
         .unwrap();
         let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test()));
-        let memory_engine = RangeCacheMemoryEngine::new(config.clone());
+        let memory_engine =
+            RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(config.clone()));
 
         let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
         memory_engine.new_range(range.clone());
