@@ -3293,7 +3293,7 @@ impl MemoryConfig {
             }
             tikv_alloc::set_prof_sample(self.profiling_sample_per_bytes.0).unwrap();
         }
-        tikv_alloc::set_thread_exclusive_arena(self.enable_exclusive_arena);
+        tikv_alloc::set_thread_exclusive_arena(self.enable_thread_exclusive_arena);
     }
 }
 

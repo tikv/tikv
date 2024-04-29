@@ -38,7 +38,7 @@ impl AllocStatsCollector {
                 "allocator_thread_allocation",
                 "The allocation statistic for threads.",
             )
-            .namespace(ns),
+            .namespace(ns.clone()),
             &["type", "thread_name"],
         )?;
         let arena_count = IntGauge::with_opts(
