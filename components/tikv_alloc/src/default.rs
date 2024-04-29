@@ -33,6 +33,10 @@ pub fn get_arena_count() -> u32 {
     0
 }
 
+pub fn set_thread_exclusive_arena(_enable: bool) {
+    // Do nothing
+}
+
 pub fn is_profiling_active() -> bool {
     false
 }

@@ -323,11 +323,15 @@ mod tests {
 
 #[cfg(feature = "mem-profiling")]
 mod profiling {
-    use std::ffi::CString;
+    use std::{ffi::CString, sync::Mutex};
 
     use libc::c_char;
 
     use super::{ProfError, ProfResult};
+
+    lazy_static! {
+        static ref ENABLE_EXCLUSIVE_ARENA: Mutex<bool> = Mutex::new(false);
+    }
 
     // C string should end with a '\0'.
     const PROF_ACTIVE: &[u8] = b"prof.active\0";
@@ -338,8 +342,16 @@ mod profiling {
     const ARENAS_CREATE: &[u8] = b"arenas.create\0";
     const THREAD_ARENA: &[u8] = b"thread.arena\0";
 
+    pub fn set_thread_exclusive_arena(enable: bool) {
+        *ENABLE_EXCLUSIVE_ARENA.lock().unwrap() = enable;
+    }
+
     // Set exclusive arena for the current thread to avoid contention.
     pub fn thread_allocate_exclusive_arena() -> ProfResult<()> {
+        if !*ENABLE_EXCLUSIVE_ARENA.lock().unwrap() {
+            return Ok(());
+        }
+
         unsafe {
             let mut index: u32 = tikv_jemalloc_ctl::raw::read(THREAD_ARENA).map_err(|e| {
                 ProfError::JemallocError(format!("failed to get thread's arena: {}", e))
@@ -565,6 +577,9 @@ mod profiling {
     }
     pub fn thread_allocate_exclusive_arena() -> ProfResult<()> {
         Ok(())
+    }
+    pub fn set_thread_exclusive_arena(_enable: bool) {
+        // Do nothing
     }
     pub fn fetch_arena_stats(_index: usize) -> (u64, u64, u64) {
         (0, 0, 0)
