@@ -140,6 +140,10 @@ fn test_async_io_apply_conf_change_without_leader_persist() {
     eventually_get_equal(&cluster.get_engine(1), b"k1", b"v3");
 }
 
+/// Test when enables "apply before persistence" and the leader's applied index
+/// is higher than persisted index when restart. And the new leader has already
+/// GCed some raft logs the former leader is not persisted. In this case, the
+/// old leader need to recover by snapshot.
 #[test]
 fn test_async_io_apply_before_persist_apply_snapshot() {
     let mut cluster = new_node_cluster(0, 3);
@@ -175,6 +179,7 @@ fn test_async_io_apply_before_persist_apply_snapshot() {
     let region = pd_client.get_region(b"k2").unwrap();
     assert_eq!(region.id, 1);
 
+    // test unpersisted split won't cause problem when recover via snapshot.
     cluster.must_split(&region, b"k2");
     for i in 2..=10 {
         cluster.must_put(b"k2", format!("v{}", i).as_bytes());
