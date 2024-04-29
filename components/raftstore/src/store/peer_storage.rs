@@ -2146,25 +2146,15 @@ pub mod tests {
         lb.put_raft_state(1, &raft_state).unwrap();
         engines.raft.consume(&mut lb, false).unwrap();
 
-        // applied_index > commit_index is invalid.
-        let mut apply_state = RaftApplyState::default();
-        apply_state.set_applied_index(13);
-        apply_state.mut_truncated_state().set_index(13);
-        apply_state
-            .mut_truncated_state()
-            .set_term(RAFT_INIT_LOG_TERM);
-        let apply_state_key = keys::apply_state_key(1);
-        engines
-            .kv
-            .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
-            .unwrap();
-        assert!(build_storage().is_err());
-
         // It should not recover if corresponding log doesn't exist.
         engines.raft.gc(1, 14, 15, &mut lb).unwrap();
         engines.raft.consume(&mut lb, false).unwrap();
+        let mut apply_state = RaftApplyState::default();
+        apply_state.set_applied_index(13);
+        apply_state.mut_truncated_state().set_index(13);
         apply_state.set_commit_index(14);
         apply_state.set_commit_term(RAFT_INIT_LOG_TERM);
+        let apply_state_key = keys::apply_state_key(1);
         engines
             .kv
             .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)

@@ -5,7 +5,7 @@ use std::{
     error::Error as StdError,
     result,
     sync::{
-        mpsc::{self},
+        mpsc::{self, sync_channel},
         Arc, Mutex, RwLock,
     },
     thread,
@@ -19,11 +19,12 @@ use encryption_export::DataKeyManager;
 use engine_rocks::{RocksCompactedEvent, RocksEngine, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
-    Engines, Iterable, KvEngine, ManualCompactionOptions, Mutable, Peekable, RaftEngineReadOnly,
-    SnapshotContext, SyncMutable, WriteBatch, CF_DEFAULT, CF_RAFT,
+    CacheRange, Engines, Iterable, KvEngine, ManualCompactionOptions, Mutable, Peekable,
+    RaftEngineReadOnly, SnapshotContext, SyncMutable, WriteBatch, CF_DEFAULT, CF_RAFT,
 };
 use file_system::IoRateLimiter;
 use futures::{self, channel::oneshot, executor::block_on, future::BoxFuture, StreamExt};
+use keys::{DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::{
     errorpb::Error as PbError,
     kvrpcpb::{ApiVersion, Context, DiskFullOpt},
@@ -55,7 +56,7 @@ use region_cache_memory_engine::RangeCacheMemoryEngine;
 use resource_control::ResourceGroupManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
-use tikv::server::Result as ServerResult;
+use tikv::{config::TikvConfig, server::Result as ServerResult};
 use tikv_util::{
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
@@ -64,11 +65,13 @@ use tikv_util::{
 };
 use txn_types::WriteBatchFlags;
 
+use self::range_cache_engine::RangCacheEngineExt;
 use super::*;
 use crate::Config;
 
-pub trait KvEngineWithRocks =
-    KvEngine<DiskEngine = RocksEngine, CompactedEvent = RocksCompactedEvent> + KvEngineBuilder;
+pub trait KvEngineWithRocks = KvEngine<DiskEngine = RocksEngine, CompactedEvent = RocksCompactedEvent>
+    + KvEngineBuilder
+    + RangCacheEngineExt;
 
 // We simulate 3 or 5 nodes, each has a store.
 // Sometimes, we use fixed id to test, which means the id
@@ -188,6 +191,11 @@ pub struct Cluster<EK: KvEngineWithRocks, T: Simulator<EK>> {
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
+
+    // When this is set, the `HybridEngineImpl` will be used as the underlying KvEngine. In
+    // addition, it atomaticaly load the whole range when start. When we want to do something
+    // specific, for example, only load ranges of some regions, we may not set this.
+    range_cache_engine_enabled_with_whole_range: bool,
 }
 
 impl<EK, T> Cluster<EK, T>
@@ -206,10 +214,7 @@ where
         // TODO: In the future, maybe it's better to test both case where
         // `use_delete_range` is true and false
         Cluster {
-            cfg: Config {
-                tikv: new_tikv_config_with_api_ver(id, api_version),
-                prefer_mem: true,
-            },
+            cfg: Config::new(new_tikv_config_with_api_ver(id, api_version), true),
             leaders: HashMap::default(),
             count,
             paths: vec![],
@@ -228,7 +233,13 @@ where
             resource_manager: Some(Arc::new(ResourceGroupManager::default())),
             kv_statistics: vec![],
             raft_statistics: vec![],
+            range_cache_engine_enabled_with_whole_range: false,
         }
+    }
+
+    pub fn set_cfg(&mut self, mut cfg: TikvConfig) {
+        cfg.cfg_path = self.cfg.tikv.cfg_path.clone();
+        self.cfg.tikv = cfg;
     }
 
     // To destroy temp dir later.
@@ -352,6 +363,11 @@ where
         self.create_engines();
         self.bootstrap_region().unwrap();
         self.start().unwrap();
+        if self.range_cache_engine_enabled_with_whole_range {
+            self.engines
+                .iter()
+                .for_each(|(_, engines)| engines.kv.cache_all());
+        }
     }
 
     // Bootstrap the store with fixed ID (like 1, 2, .. 5) and
@@ -993,15 +1009,48 @@ where
     }
 
     pub fn get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        self.get_impl(CF_DEFAULT, key, false)
+        if !self.range_cache_engine_enabled_with_whole_range {
+            self.get_impl(CF_DEFAULT, key, false)
+        } else {
+            let ctx = SnapshotContext {
+                read_ts: u64::MAX,
+                range: Some(CacheRange::new(
+                    DATA_MIN_KEY.to_vec(),
+                    DATA_MAX_KEY.to_vec(),
+                )),
+            };
+            self.get_cf_with_snap_ctx(CF_DEFAULT, key, true, ctx)
+        }
     }
 
     pub fn get_cf(&mut self, cf: &str, key: &[u8]) -> Option<Vec<u8>> {
-        self.get_impl(cf, key, false)
+        if !self.range_cache_engine_enabled_with_whole_range {
+            self.get_impl(cf, key, false)
+        } else {
+            let ctx = SnapshotContext {
+                read_ts: u64::MAX,
+                range: Some(CacheRange::new(
+                    DATA_MIN_KEY.to_vec(),
+                    DATA_MAX_KEY.to_vec(),
+                )),
+            };
+            self.get_cf_with_snap_ctx(cf, key, true, ctx)
+        }
     }
 
     pub fn must_get(&mut self, key: &[u8]) -> Option<Vec<u8>> {
-        self.get_impl(CF_DEFAULT, key, true)
+        if !self.range_cache_engine_enabled_with_whole_range {
+            self.get_impl(CF_DEFAULT, key, true)
+        } else {
+            let ctx = SnapshotContext {
+                read_ts: u64::MAX,
+                range: Some(CacheRange::new(
+                    DATA_MIN_KEY.to_vec(),
+                    DATA_MAX_KEY.to_vec(),
+                )),
+            };
+            self.get_cf_with_snap_ctx(CF_DEFAULT, key, true, ctx)
+        }
     }
 
     fn get_impl(&mut self, cf: &str, key: &[u8], read_quorum: bool) -> Option<Vec<u8>> {
@@ -1021,6 +1070,61 @@ where
         } else {
             None
         }
+    }
+
+    pub fn get_with_snap_ctx(
+        &mut self,
+        key: &[u8],
+        read_quorum: bool,
+        snap_ctx: SnapshotContext,
+    ) -> Option<Vec<u8>> {
+        self.get_cf_with_snap_ctx(CF_DEFAULT, key, read_quorum, snap_ctx)
+    }
+
+    // called by range cache engine only
+    pub fn get_cf_with_snap_ctx(
+        &mut self,
+        cf: &str,
+        key: &[u8],
+        read_quorum: bool,
+        snap_ctx: SnapshotContext,
+    ) -> Option<Vec<u8>> {
+        let rx = if self.range_cache_engine_enabled_with_whole_range {
+            fail::remove("on_range_cache_get_value");
+            let (tx, rx) = sync_channel(1);
+            fail::cfg_callback("on_range_cache_get_value", move || {
+                tx.send(true).unwrap();
+            })
+            .unwrap();
+            Some(rx)
+        } else {
+            None
+        };
+
+        let mut resp = self.request_with_snap_ctx(
+            key,
+            vec![new_get_cf_cmd(cf, key)],
+            read_quorum,
+            Duration::from_secs(5),
+            Some(snap_ctx),
+        );
+        if resp.get_header().has_error() {
+            panic!("response {:?} has error", resp);
+        }
+        assert_eq!(resp.get_responses().len(), 1);
+        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
+        let res = if resp.get_responses()[0].has_get() {
+            if let Some(rx) = rx {
+                rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            }
+            Some(resp.mut_responses()[0].mut_get().take_value())
+        } else {
+            None
+        };
+        if self.range_cache_engine_enabled_with_whole_range {
+            fail::remove("on_range_cache_get_value");
+        }
+        res
     }
 
     pub fn async_request(
@@ -1355,6 +1459,34 @@ where
         panic!(
             "[region {}] peer state still not reach {:?}",
             region_id, peer_state
+        );
+    }
+
+    pub fn wait_peer_role(&self, region_id: u64, store_id: u64, peer_id: u64, role: PeerRole) {
+        for _ in 0..100 {
+            if let Some(state) = self
+                .get_engine(store_id)
+                .get_msg_cf::<RegionLocalState>(
+                    engine_traits::CF_RAFT,
+                    &keys::region_state_key(region_id),
+                )
+                .unwrap()
+            {
+                let peer = state
+                    .get_region()
+                    .get_peers()
+                    .iter()
+                    .find(|p| p.get_id() == peer_id)
+                    .unwrap();
+                if peer.role == role {
+                    return;
+                }
+            }
+            sleep_ms(10);
+        }
+        panic!(
+            "[region {}] peer state still not reach {:?}",
+            region_id, role
         );
     }
 
@@ -1735,7 +1867,7 @@ where
         }
     }
 
-    fn new_prepare_merge(&self, source: u64, target: u64) -> RaftCmdRequest {
+    pub fn new_prepare_merge(&self, source: u64, target: u64) -> RaftCmdRequest {
         let region = block_on(self.pd_client.get_region_by_id(target))
             .unwrap()
             .unwrap();
@@ -2021,6 +2153,10 @@ where
 
         Ok(())
     }
+
+    pub fn range_cache_engine_enabled_with_whole_range(&mut self, v: bool) {
+        self.range_cache_engine_enabled_with_whole_range = v;
+    }
 }
 
 impl<EK: KvEngineWithRocks, T: Simulator<EK>> Drop for Cluster<EK, T> {
@@ -2033,6 +2169,10 @@ impl<EK: KvEngineWithRocks, T: Simulator<EK>> Drop for Cluster<EK, T> {
 pub trait RawEngine<EK: engine_traits::KvEngine>:
     Peekable<DbVector = EK::DbVector> + SyncMutable
 {
+    fn range_cache_engine(&self) -> bool {
+        false
+    }
+
     fn region_local_state(&self, region_id: u64)
     -> engine_traits::Result<Option<RegionLocalState>>;
 
@@ -2058,6 +2198,30 @@ impl RawEngine<RocksEngine> for RocksEngine {
     }
 }
 
+impl RawEngine<RocksEngine> for HybridEngineImpl {
+    fn range_cache_engine(&self) -> bool {
+        true
+    }
+
+    fn region_local_state(
+        &self,
+        region_id: u64,
+    ) -> engine_traits::Result<Option<RegionLocalState>> {
+        self.disk_engine()
+            .get_msg_cf(CF_RAFT, &keys::region_state_key(region_id))
+    }
+
+    fn raft_apply_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftApplyState>> {
+        self.disk_engine()
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(region_id))
+    }
+
+    fn raft_local_state(&self, region_id: u64) -> engine_traits::Result<Option<RaftLocalState>> {
+        self.disk_engine()
+            .get_msg_cf(CF_RAFT, &keys::raft_state_key(region_id))
+    }
+}
+
 impl<T: Simulator<HybridEngineImpl>> Cluster<HybridEngineImpl, T> {
     pub fn get_range_cache_engine(&self, node_id: u64) -> RangeCacheMemoryEngine {
         self.engines
@@ -2066,34 +2230,5 @@ impl<T: Simulator<HybridEngineImpl>> Cluster<HybridEngineImpl, T> {
             .kv
             .region_cache_engine()
             .clone()
-    }
-
-    pub fn get_with_snap_ctx(&mut self, key: &[u8], snap_ctx: SnapshotContext) -> Option<Vec<u8>> {
-        self.get_cf_with_snap_ctx(CF_DEFAULT, key, snap_ctx)
-    }
-
-    pub fn get_cf_with_snap_ctx(
-        &mut self,
-        cf: &str,
-        key: &[u8],
-        snap_ctx: SnapshotContext,
-    ) -> Option<Vec<u8>> {
-        let mut resp = self.request_with_snap_ctx(
-            key,
-            vec![new_get_cf_cmd(cf, key)],
-            false,
-            Duration::from_secs(5),
-            Some(snap_ctx),
-        );
-        if resp.get_header().has_error() {
-            panic!("response {:?} has error", resp);
-        }
-        assert_eq!(resp.get_responses().len(), 1);
-        assert_eq!(resp.get_responses()[0].get_cmd_type(), CmdType::Get);
-        if resp.get_responses()[0].has_get() {
-            Some(resp.mut_responses()[0].mut_get().take_value())
-        } else {
-            None
-        }
     }
 }

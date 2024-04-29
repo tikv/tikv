@@ -31,6 +31,7 @@ use raftstore::{
     },
     Result,
 };
+use region_cache_memory_engine::RangeCacheEngineConfig;
 use resource_control::ResourceGroupManager;
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
@@ -39,7 +40,7 @@ use test_pd_client::TestPdClient;
 use tikv::{
     config::{ConfigController, Module},
     import::SstImporter,
-    server::{raftkv::ReplicaReadLockChecker, Node, Result as ServerResult},
+    server::{raftkv::ReplicaReadLockChecker, MultiRaftServer, Result as ServerResult},
 };
 use tikv_util::{
     config::VersionTrack,
@@ -155,7 +156,7 @@ type SimulateChannelTransport<EK> = SimulateTransport<ChannelTransport<EK>, EK>;
 pub struct NodeCluster<EK: KvEngine> {
     trans: ChannelTransport<EK>,
     pd_client: Arc<TestPdClient>,
-    nodes: HashMap<u64, Node<TestPdClient, EK, RaftTestEngine>>,
+    nodes: HashMap<u64, MultiRaftServer<TestPdClient, EK, RaftTestEngine>>,
     snap_mgrs: HashMap<u64, SnapManager>,
     cfg_controller: HashMap<u64, ConfigController>,
     simulate_trans: HashMap<u64, SimulateChannelTransport<EK>>,
@@ -206,7 +207,7 @@ impl<EK: KvEngine> NodeCluster<EK> {
     pub fn get_node(
         &mut self,
         node_id: u64,
-    ) -> Option<&mut Node<TestPdClient, EK, RaftTestEngine>> {
+    ) -> Option<&mut MultiRaftServer<TestPdClient, EK, RaftTestEngine>> {
         self.nodes.get_mut(&node_id)
     }
 
@@ -247,7 +248,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             .unwrap();
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
         let store_config = Arc::new(VersionTrack::new(raft_store));
-        let mut node = Node::new(
+        let mut node = MultiRaftServer::new(
             system,
             &cfg.server,
             store_config.clone(),
@@ -521,7 +522,21 @@ pub fn new_node_cluster_with_hybrid_engine(
 ) -> Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>> {
     let pd_client = Arc::new(TestPdClient::new(id, false));
     let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
-    Cluster::new(id, count, sim, pd_client, ApiVersion::V1)
+    let mut cluster = Cluster::new(id, count, sim, pd_client, ApiVersion::V1);
+    cluster.range_cache_engine_enabled_with_whole_range(true);
+    cluster.cfg.tikv.range_cache_engine = RangeCacheEngineConfig::config_for_test();
+    cluster
+}
+
+pub fn new_node_cluster_with_hybrid_engine_with_no_range_cache(
+    id: u64,
+    count: usize,
+) -> Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>> {
+    let pd_client = Arc::new(TestPdClient::new(id, false));
+    let sim = Arc::new(RwLock::new(NodeCluster::new(Arc::clone(&pd_client))));
+    let mut cluster = Cluster::new(id, count, sim, pd_client, ApiVersion::V1);
+    cluster.cfg.tikv.range_cache_engine = RangeCacheEngineConfig::config_for_test();
+    cluster
 }
 
 // This cluster does not support batch split, we expect it to transfer the
