@@ -2748,10 +2748,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         completed_apply_peers_count: Option<u64>,
     ) -> bool {
         STORE_BUSY_ON_APPLY_REGIONS_GAUGE_VEC
-            .with_label_values(&["busy_apply_peers"])
+            .busy_apply_peers
             .set(busy_apply_peers_count as i64);
         STORE_BUSY_ON_APPLY_REGIONS_GAUGE_VEC
-            .with_label_values(&["completed_apply_peers"])
+            .completed_apply_peers
             .set(completed_apply_peers_count.unwrap_or_default() as i64);
         // No need to check busy status if there are no regions.
         if completed_apply_peers_count.is_none() || region_count == 0 {
@@ -2873,10 +2873,10 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .swap(false, Ordering::Relaxed);
         stats.set_is_busy(store_is_busy || busy_on_apply);
         STORE_PROCESS_BUSY_GAUGE_VEC
-            .with_label_values(&["applystore_busy"])
+            .applystore_busy
             .set(busy_on_apply as i64);
         STORE_PROCESS_BUSY_GAUGE_VEC
-            .with_label_values(&["raftstore_busy"])
+            .raftstore_busy
             .set(store_is_busy as i64);
 
         let mut query_stats = QueryStats::default();
