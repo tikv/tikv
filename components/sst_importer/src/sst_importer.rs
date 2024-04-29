@@ -2778,6 +2778,9 @@ mod tests {
             db,
         );
 
+        let path = importer.dir.join_for_write(&meta).unwrap();
+        assert!(!file_system::file_exists(path.save));
+
         match result {
             Ok(None) => {}
             _ => panic!("unexpected download result: {:?}", result),
