@@ -3,7 +3,7 @@
 use std::{
     mem,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicIsize, AtomicUsize, Ordering},
         Arc,
     },
 };
@@ -144,7 +144,9 @@ impl std::error::Error for MemoryQuotaExceeded {}
 impl_display_as_debug!(MemoryQuotaExceeded);
 
 pub struct MemoryQuota {
-    in_use: AtomicUsize,
+    // We suppose the memory quota should not exceed the upper bound of `isize`.
+    // As we don't support 32bit(or lower) arch, this won't be a problem.
+    in_use: AtomicIsize,
     capacity: AtomicUsize,
 }
 
@@ -180,14 +182,19 @@ impl Drop for OwnedAllocated {
 
 impl MemoryQuota {
     pub fn new(capacity: usize) -> MemoryQuota {
+        assert!(capacity as isize >= 0);
         MemoryQuota {
-            in_use: AtomicUsize::new(0),
+            in_use: AtomicIsize::new(0),
             capacity: AtomicUsize::new(capacity),
         }
     }
 
+    #[inline]
     pub fn in_use(&self) -> usize {
-        self.in_use.load(Ordering::Relaxed)
+        let value = self.in_use.load(Ordering::Relaxed);
+        // Saturating at the numeric bounds instead of overflowing.
+        // we handle negative overflow here to make `free` implementation simpler.
+        std::cmp::max(value, 0) as usize
     }
 
     /// Returns a floating number between [0, 1] presents the current memory
@@ -205,55 +212,31 @@ impl MemoryQuota {
     }
 
     pub fn alloc_force(&self, bytes: usize) {
-        let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
-        loop {
-            let new_in_use_bytes = in_use_bytes + bytes;
-            match self.in_use.compare_exchange_weak(
-                in_use_bytes,
-                new_in_use_bytes,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return,
-                Err(current) => in_use_bytes = current,
-            }
-        }
+        self.in_use.fetch_add(bytes as isize, Ordering::Relaxed);
     }
 
     pub fn alloc(&self, bytes: usize) -> Result<(), MemoryQuotaExceeded> {
-        let capacity = self.capacity.load(Ordering::Relaxed);
-        let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
-        loop {
-            if in_use_bytes + bytes > capacity {
-                return Err(MemoryQuotaExceeded);
-            }
-            let new_in_use_bytes = in_use_bytes + bytes;
-            match self.in_use.compare_exchange_weak(
-                in_use_bytes,
-                new_in_use_bytes,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return Ok(()),
-                Err(current) => in_use_bytes = current,
-            }
+        let capacity = self.capacity.load(Ordering::Relaxed) as isize;
+        let bytes = bytes as isize;
+        let in_use_bytes = self.in_use.load(Ordering::Relaxed) as isize;
+        if in_use_bytes + bytes > capacity {
+            return Err(MemoryQuotaExceeded);
         }
+        let new_in_use_bytes = self.in_use.fetch_add(bytes, Ordering::Relaxed) + bytes;
+        if new_in_use_bytes > capacity {
+            self.in_use.fetch_sub(bytes, Ordering::Relaxed);
+            return Err(MemoryQuotaExceeded);
+        }
+        Ok(())
     }
 
     pub fn free(&self, bytes: usize) {
-        let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
-        loop {
-            // Saturating at the numeric bounds instead of overflowing.
-            let new_in_use_bytes = in_use_bytes - std::cmp::min(bytes, in_use_bytes);
-            match self.in_use.compare_exchange_weak(
-                in_use_bytes,
-                new_in_use_bytes,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return,
-                Err(current) => in_use_bytes = current,
-            }
+        let bytes = bytes as isize;
+        let new_in_use_bytes = self.in_use.fetch_sub(bytes, Ordering::Relaxed);
+        if new_in_use_bytes < 0 {
+            // handle overflow.
+            self.in_use
+                .fetch_add(std::cmp::min(-new_in_use_bytes, bytes), Ordering::Relaxed);
         }
     }
 }
@@ -275,6 +258,40 @@ mod tests {
         assert_eq!(quota.in_use(), 100);
         quota.free(95);
         assert_eq!(quota.in_use(), 5);
+    }
+
+    #[test]
+    fn test_memory_quota_multi_thread() {
+        let cap = 1000;
+        // use a number not devided by the cap.
+        let req = 6;
+        let num_threads = 10;
+        let quota = MemoryQuota::new(cap);
+        std::thread::scope(|s| {
+            let mut handlers = vec![];
+            for _i in 0..num_threads {
+                let h = s.spawn(|| {
+                    for j in 0..100 {
+                        let res = quota.alloc(req);
+                        if res.is_err() {
+                            let in_use = quota.in_use();
+                            assert!(
+                                cap - num_threads * req < in_use
+                                    && in_use < cap + num_threads * req
+                            );
+                        } else if j % 3 == 0 {
+                            // do free randomly.
+                            quota.free(6);
+                        }
+                    }
+                });
+                handlers.push(h);
+            }
+            for h in handlers {
+                h.join().unwrap();
+            }
+        });
+        assert_eq!(quota.in_use(), cap - cap % req);
     }
 
     #[test]
