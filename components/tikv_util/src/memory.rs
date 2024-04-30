@@ -218,7 +218,7 @@ impl MemoryQuota {
     pub fn alloc(&self, bytes: usize) -> Result<(), MemoryQuotaExceeded> {
         let capacity = self.capacity.load(Ordering::Relaxed) as isize;
         let bytes = bytes as isize;
-        let in_use_bytes = self.in_use.load(Ordering::Relaxed) as isize;
+        let in_use_bytes = self.in_use.load(Ordering::Relaxed);
         if in_use_bytes + bytes > capacity {
             return Err(MemoryQuotaExceeded);
         }
