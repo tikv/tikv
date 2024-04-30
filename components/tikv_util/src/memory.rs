@@ -181,8 +181,12 @@ impl Drop for OwnedAllocated {
 }
 
 impl MemoryQuota {
-    pub fn new(capacity: usize) -> MemoryQuota {
-        assert!(capacity as isize >= 0);
+    pub fn new(mut capacity: usize) -> MemoryQuota {
+        // handle capacity overflow, isize::MAX should be a 
+        // big enough value that is not possible to overflow.
+        if capacity > isize::MAX as usize {
+            capacity = isize::MAX as usize;
+        }
         MemoryQuota {
             in_use: AtomicIsize::new(0),
             capacity: AtomicUsize::new(capacity),
