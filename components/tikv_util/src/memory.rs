@@ -232,7 +232,7 @@ impl MemoryQuota {
 
     pub fn free(&self, bytes: usize) {
         let bytes = bytes as isize;
-        let new_in_use_bytes = self.in_use.fetch_sub(bytes, Ordering::Relaxed);
+        let new_in_use_bytes = self.in_use.fetch_sub(bytes, Ordering::Relaxed) - bytes;
         if new_in_use_bytes < 0 {
             // handle overflow.
             self.in_use
@@ -267,6 +267,9 @@ mod tests {
         let req = 6;
         let num_threads = 10;
         let quota = MemoryQuota::new(cap);
+
+        // first alloc more than free, the in_use should reach near the capacity but not
+        // exceed.
         std::thread::scope(|s| {
             let mut handlers = vec![];
             for _i in 0..num_threads {
@@ -274,14 +277,14 @@ mod tests {
                     for j in 0..100 {
                         let res = quota.alloc(req);
                         if res.is_err() {
-                            let in_use = quota.in_use();
+                            let in_use = quota.in_use.load(Ordering::Relaxed) as usize;
                             assert!(
                                 cap - num_threads * req < in_use
                                     && in_use < cap + num_threads * req
                             );
                         } else if j % 3 == 0 {
                             // do free randomly.
-                            quota.free(6);
+                            quota.free(req);
                         }
                     }
                 });
@@ -292,6 +295,35 @@ mod tests {
             }
         });
         assert_eq!(quota.in_use(), cap - cap % req);
+
+        // test free more the alloc, the final result should be 0.
+        quota.free(cap / 2);
+        std::thread::scope(|s| {
+            let mut handlers = vec![];
+            for _i in 0..num_threads {
+                let h = s.spawn(|| {
+                    for j in 0..100 {
+                        if quota.alloc(req).is_ok() {
+                            quota.free(req);
+                        }
+                        // do random more free.
+                        if j % 2 == 0 {
+                            quota.free(req);
+                            let in_use = quota.in_use.load(Ordering::Relaxed);
+                            assert!(
+                                in_use < cap as isize && in_use > -((num_threads * req) as isize)
+                            );
+                        }
+                    }
+                });
+                handlers.push(h);
+            }
+            for h in handlers {
+                h.join().unwrap();
+            }
+        });
+        let in_use = quota.in_use.load(Ordering::Relaxed);
+        assert_eq!(in_use, 0);
     }
 
     #[test]
