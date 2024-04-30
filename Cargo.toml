@@ -12,10 +12,7 @@ edition = "2021"
 publish = false
 
 [features]
-default = [
-  "test-engine-kv-rocksdb",
-  "test-engine-raft-raft-engine",
-]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
 trace-tablet-lifetime = ["engine_rocks/trace-lifetime"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
