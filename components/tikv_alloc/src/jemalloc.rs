@@ -323,15 +323,16 @@ mod tests {
 
 #[cfg(feature = "mem-profiling")]
 mod profiling {
-    use std::{ffi::CString, sync::Mutex};
+    use std::{
+        ffi::CString,
+        sync::atomic::{AtomicBool, Ordering},
+    };
 
     use libc::c_char;
 
     use super::{ProfError, ProfResult};
 
-    lazy_static! {
-        static ref ENABLE_EXCLUSIVE_ARENA: Mutex<bool> = Mutex::new(false);
-    }
+    static ENABLE_THREAD_EXCLUSIVE_ARENA: AtomicBool = AtomicBool::new(false);
 
     // C string should end with a '\0'.
     const PROF_ACTIVE: &[u8] = b"prof.active\0";
@@ -343,12 +344,12 @@ mod profiling {
     const THREAD_ARENA: &[u8] = b"thread.arena\0";
 
     pub fn set_thread_exclusive_arena(enable: bool) {
-        *ENABLE_EXCLUSIVE_ARENA.lock().unwrap() = enable;
+        ENABLE_THREAD_EXCLUSIVE_ARENA.store(enable, Ordering::Relaxed);
     }
 
     // Set exclusive arena for the current thread to avoid contention.
     pub fn thread_allocate_exclusive_arena() -> ProfResult<()> {
-        if !*ENABLE_EXCLUSIVE_ARENA.lock().unwrap() {
+        if !ENABLE_THREAD_EXCLUSIVE_ARENA.load(Ordering::Relaxed) {
             return Ok(());
         }
 
