@@ -14,6 +14,7 @@ use aws_sdk_s3::{
     Client,
 };
 use aws_smithy_client::{bounds::SmithyConnector, SdkError};
+use aws_types::region::Region;
 use bytes::Bytes;
 use cloud::{
     blob::{BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty},
@@ -24,7 +25,6 @@ use fail::fail_point;
 use futures::{executor::block_on, FutureExt, Stream, TryStreamExt};
 use futures_util::io::{AsyncRead, AsyncReadExt};
 pub use kvproto::brpb::S3 as InputConfig;
-
 use thiserror::Error;
 use tikv_util::{
     debug,
@@ -191,7 +191,11 @@ impl S3Storage {
         }
     }
 
-    fn maybe_assume_role<Creds, Conn>(config: Config, connector: Conn, credentials_provider: Creds) -> io::Result<Self> 
+    fn maybe_assume_role<Creds, Conn>(
+        config: Config,
+        connector: Conn,
+        credentials_provider: Creds,
+    ) -> io::Result<Self>
     where
         Conn: SmithyConnector + 'static,
         Creds: ProvideCredentials + 'static,
@@ -205,11 +209,15 @@ impl S3Storage {
             let mut builder = AssumeRoleProvider::builder(config.role_arn.as_deref().unwrap())
                 .session_name(format!("{}", timestamp_secs))
                 .connection(util::new_http_conn());
-                // TODO fix
-                // .region(Region::new(region))
+
             if let Some(external_id) = &config.external_id {
                 builder = builder.external_id(external_id.as_str());
             }
+
+            if let Some(region) = &config.bucket.region {
+                builder = builder.region(Region::new(region.to_string()));
+            }
+
             let credentials_provider = builder.build(credentials_provider);
             Self::new_with_creds_connector(config, connector, credentials_provider)
         } else {

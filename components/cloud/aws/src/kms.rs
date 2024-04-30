@@ -146,11 +146,17 @@ fn classify_generate_data_key_error(err: SdkError<GenerateDataKeyError>) -> Erro
             GenerateDataKeyError::NotFoundException(_) => Error::ApiNotFound(err.into()),
             GenerateDataKeyError::InvalidKeyUsageException(_) => {
                 // Error::KmsError(KmsError::Other(err.into()))
-             Error::KmsError(KmsError::Other(OtherError::new(is_retryable(&err), FixSdkErrorDisplay(err).into())))
+                Error::KmsError(KmsError::Other(OtherError::new(
+                    is_retryable(&err),
+                    FixSdkErrorDisplay(err).into(),
+                )))
             }
             GenerateDataKeyError::DependencyTimeoutException(_) => Error::ApiTimeout(err.into()),
             GenerateDataKeyError::KmsInternalException(_) => Error::ApiInternal(err.into()),
-            _ => Error::KmsError(KmsError::Other(OtherError::new(is_retryable(&err), FixSdkErrorDisplay(err).into()))),
+            _ => Error::KmsError(KmsError::Other(OtherError::new(
+                is_retryable(&err),
+                FixSdkErrorDisplay(err).into(),
+            ))),
         }
     } else {
         classify_error(err)
@@ -165,7 +171,10 @@ fn classify_decrypt_error(err: SdkError<DecryptError>) -> Error {
             }
             DecryptError::DependencyTimeoutException(_) => Error::ApiTimeout(err.into()),
             DecryptError::KmsInternalException(_) => Error::ApiInternal(err.into()),
-            _ => Error::KmsError(KmsError::Other(OtherError::new(is_retryable(&err), FixSdkErrorDisplay(err).into()))),
+            _ => Error::KmsError(KmsError::Other(OtherError::new(
+                is_retryable(&err),
+                FixSdkErrorDisplay(err).into(),
+            ))),
         }
     } else {
         classify_error(err)
@@ -181,7 +190,10 @@ fn classify_error<E: std::error::Error + Send + Sync + 'static>(err: SdkError<E>
         {
             Error::ApiAuthentication(err.into())
         }
-        _ => Error::KmsError(KmsError::Other(OtherError::new(is_retryable(&err), FixSdkErrorDisplay(err).into()))),
+        e if is_retryable(e) => Error::ApiInternal(err.into()),
+        _ => Error::KmsError(KmsError::Other(OtherError::from_box(
+            FixSdkErrorDisplay(err).into(),
+        ))),
     }
 }
 
