@@ -1,8 +1,9 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cmp::Ordering,
     collections::{
-        BTreeMap, BTreeSet,
+        BTreeMap,
         Bound::{Excluded, Unbounded},
     },
     fmt::{Display, Formatter, Result as FmtResult},
@@ -567,42 +568,42 @@ impl RegionCollector {
     /// leader. Otherwise, return the top `count` regions from
     /// `self.region_activity`. Top regions are determined by comparing
     /// `read_keys + written_keys` in each region's most recent region stat.
-    /// If count > 0 and size of `self.region_activity` is `> 0`, remove but the
-    /// top `count` regions from `self.region_activity`.
     ///
     /// Note: this function is `O(N log(N))` with respect to size of
     /// region_activity. This is acceptable, as region_activity is populated
     /// by heartbeats for this node's region, so N cannot be greater than
     /// approximately `300_000``.
     pub fn handle_get_top_regions(&mut self, count: usize, callback: Callback<Vec<Region>>) {
+        let compare_fn = |a: &RegionActivity, b: &RegionActivity| {
+            let a = a.region_stat.read_keys + a.region_stat.written_keys;
+            let b = b.region_stat.read_keys + b.region_stat.written_keys;
+            b.cmp(&a)
+        };
         let top_regions = if count == 0 {
             self.regions
                 .values()
                 .filter(|ri| ri.role == StateRole::Leader)
                 .map(|ri| ri.region.clone())
+                .sorted_by(|a, b| {
+                    let a = self.region_activity.get(&a.get_id());
+                    let b = self.region_activity.get(&b.get_id());
+                    match (a, b) {
+                        (None, None) => Ordering::Equal,
+                        (None, Some(_)) => Ordering::Greater,
+                        (Some(_), None) => Ordering::Less,
+                        (Some(a), Some(b)) => compare_fn(a, b),
+                    }
+                })
                 .collect::<Vec<_>>()
         } else {
             let count = usize::max(count, self.region_activity.len());
             self.region_activity
                 .iter()
-                .sorted_by(|(_, activity_0), (_, activity_1)| {
-                    // TODO: Make this extensible e.g., allow considering MVCC/tombstone stats.
-                    let a = activity_0.region_stat.read_keys + activity_0.region_stat.written_keys;
-                    let b = activity_1.region_stat.read_keys + activity_1.region_stat.written_keys;
-                    b.cmp(&a)
-                })
+                .sorted_by(|(_, activity_0), (_, activity_1)| compare_fn(activity_0, activity_1))
                 .take(count)
                 .flat_map(|(id, _)| self.regions.get(id).map(|ri| ri.region.clone()))
                 .collect::<Vec<_>>()
         };
-        if count > 0 && self.region_activity.len() > count {
-            let top_region_ids = top_regions
-                .iter()
-                .map(Region::get_id)
-                .collect::<BTreeSet<_>>();
-            self.region_activity
-                .retain(|id, _| top_region_ids.contains(id))
-        }
         callback(top_regions)
     }
 

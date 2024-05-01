@@ -1,6 +1,16 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::BTreeSet, fmt::Display, sync::Arc, thread::JoinHandle, time::Duration};
+use std::{
+    cmp,
+    collections::{BTreeMap, BTreeSet},
+    fmt::Display,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
+    thread::JoinHandle,
+    time::Duration,
+};
 
 use bytes::Bytes;
 use crossbeam::{
@@ -12,8 +22,10 @@ use engine_traits::{
     CacheRange, IterOptions, Iterable, Iterator, MiscExt, RangeHintService, SnapshotMiscExt,
     CF_DEFAULT, CF_WRITE, DATA_CFS,
 };
-use parking_lot::RwLock;
+use kvproto::metapb::Region;
+use parking_lot::{Mutex, RwLock};
 use pd_client::{PdClient, RpcClient};
+use raftstore::coprocessor::RegionInfoProvider;
 use slog_global::{error, info, warn};
 use tikv_util::{
     config::ReadableSize,
@@ -72,6 +84,7 @@ pub enum BackgroundTask {
     LoadRange,
     MemoryCheckAndEvict,
     DeleteRange(Vec<CacheRange>),
+    TopRegionsLoadEvict,
     CleanLockTombstone(u64),
     SetRocksEngine(RocksEngine),
 }
@@ -85,6 +98,7 @@ impl Display for BackgroundTask {
             BackgroundTask::DeleteRange(ref r) => {
                 f.debug_struct("DeleteRange").field("range", r).finish()
             }
+            BackgroundTask::TopRegionsLoadEvict => f.debug_struct("CheckTopRegions").finish(),
             BackgroundTask::CleanLockTombstone(ref r) => f
                 .debug_struct("CleanLockTombstone")
                 .field("seqno", r)
@@ -203,9 +217,10 @@ impl BgWorkManager {
         pd_client: Arc<dyn PdClient>,
         gc_interval: Duration,
         memory_controller: Arc<MemoryController>,
+        region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
         let worker = Worker::new("range-cache-background-worker");
-        let runner = BackgroundRunner::new(core.clone(), memory_controller);
+        let runner = BackgroundRunner::new(core.clone(), memory_controller, region_info_provider);
         let scheduler = worker.start_with_timer("range-cache-engine-background", runner);
 
         let (h, tx) = BgWorkManager::start_tick(scheduler.clone(), pd_client, gc_interval);
@@ -243,12 +258,13 @@ impl BgWorkManager {
         // TODO: Instead of spawning a new thread, we should run this task
         //       in a shared background thread.
         let h = std::thread::spawn(move || {
-            let ticker = tick(gc_interval);
+            let gc_ticker = tick(gc_interval);
+            let load_evict_ticker = tick(gc_interval * 2); // TODO (afeinberg): Use a real value.
             // 5 seconds should be long enough for getting a TSO from PD.
             let tso_timeout = std::cmp::min(gc_interval, Duration::from_secs(5));
             'LOOP: loop {
                 select! {
-                    recv(ticker) -> _ => {
+                    recv(gc_ticker) -> _ => {
                         let now = match block_on_timeout(pd_client.get_tso(), tso_timeout) {
                             Ok(Ok(ts)) => ts,
                             err => {
@@ -265,6 +281,14 @@ impl BgWorkManager {
                         if let Err(e) = scheduler.schedule(BackgroundTask::Gc(GcTask {safe_point})) {
                             error!(
                                 "schedule range cache engine gc failed";
+                                "err" => ?e,
+                            );
+                        }
+                    },
+                    recv(load_evict_ticker) -> _ => {
+                        if let Err(e) = scheduler.schedule(BackgroundTask::TopRegionsLoadEvict) {
+                            error!(
+                                "schedule load evict failed";
                                 "err" => ?e,
                             );
                         }
@@ -289,6 +313,131 @@ impl BgWorkManager {
 struct BackgroundRunnerCore {
     engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
     memory_controller: Arc<MemoryController>,
+    range_stats_manager: Option<RangeStatsManager>,
+}
+
+// TODO (afeinberg): Core should just hold Arc<RangeStatsMananger>,
+#[derive(Clone)]
+struct RangeStatsManager {
+    num_regions: Arc<AtomicUsize>,
+    info_provider: Arc<dyn RegionInfoProvider>,
+    prev_top_regions: Arc<Mutex<BTreeMap<u64, Region>>>,
+    checking_top_regions: Arc<AtomicBool>,
+}
+
+impl RangeStatsManager {
+    pub fn new(num_regions: usize, info_provider: Arc<dyn RegionInfoProvider>) -> Self {
+        RangeStatsManager {
+            num_regions: Arc::new(AtomicUsize::new(num_regions)),
+            info_provider,
+            prev_top_regions: Arc::new(Mutex::new(BTreeMap::new())),
+            checking_top_regions: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn set_checking_top_regions(&self, v: bool) {
+        self.checking_top_regions.store(v, Ordering::Relaxed);
+    }
+
+    pub fn checking_top_regions(&self) -> bool {
+        self.checking_top_regions.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn set_num_regions(&self, v: usize) {
+        self.num_regions.store(v, Ordering::Relaxed);
+    }
+
+    pub fn num_regions(&self) -> usize {
+        self.num_regions.load(Ordering::Relaxed)
+    }
+
+    pub fn collect_candidates_for_eviction(&self, ranges_out: &mut Vec<(CacheRange, usize)>) {
+        let all_regions = self.info_provider.get_top_regions(0).unwrap();
+        ranges_out.extend(
+            all_regions
+                .iter()
+                .map(|r| (CacheRange::from_region(r), 45_000_000usize)),
+        );
+    }
+
+    pub fn handle_range_evicted(&self, evicted_range: &CacheRange) {
+        // TODO (afeinberg): This is inefficient.
+        let _ = self
+            .info_provider
+            .find_region_by_key(&evicted_range.start)
+            .map(|region| {
+                let _ = self.prev_top_regions.lock().remove(&region.get_id());
+            });
+    }
+
+    pub fn adjust_num_regions(&self, curr_memory_usage: usize, threshold: usize) {
+        match curr_memory_usage.cmp(&threshold) {
+            cmp::Ordering::Less => {
+                let room_to_grow = threshold - curr_memory_usage;
+                if room_to_grow > EXPECTED_AVERAGE_REGION_SIZE * 3 {
+                    let curr_num_regions = self.num_regions();
+                    let next_num_regions =
+                        curr_num_regions + room_to_grow / (EXPECTED_AVERAGE_REGION_SIZE * 3);
+                    info!("increasing number of top regions to cache";
+                        "from" => curr_num_regions,
+                        "to" => next_num_regions,
+                    );
+                    self.set_num_regions(next_num_regions);
+                }
+            }
+            cmp::Ordering::Greater => {
+                let to_shrink_by = curr_memory_usage - threshold;
+                let curr_num_regions = self.num_regions();
+                let next_num_regions = curr_num_regions
+                    .checked_sub(1.max(to_shrink_by / EXPECTED_AVERAGE_REGION_SIZE))
+                    .unwrap_or(1)
+                    .max(1);
+                info!("decreasing number of top regions to cache";
+                    "from" => curr_num_regions,
+                    "to" => next_num_regions,
+                );
+                self.set_num_regions(next_num_regions);
+            }
+            _ => (),
+        };
+    }
+
+    pub fn collect_changed_ranges(
+        &self,
+        ranges_added_out: &mut Vec<CacheRange>,
+        ranges_removed_out: &mut Vec<CacheRange>,
+    ) {
+        info!("collect_changed_ranges"; "num_regions" => self.num_regions());
+        // TODO (afeinberg): Error handling here.
+        let curr_top_regions = self
+            .info_provider
+            .get_top_regions(self.num_regions())
+            .unwrap()
+            .iter()
+            .map(|r| (r.id, r.clone()))
+            .collect::<BTreeMap<_, _>>();
+
+        let prev_top_regions = {
+            let mut mut_prev_top_regions = self.prev_top_regions.lock();
+            let ret = mut_prev_top_regions.clone();
+            *mut_prev_top_regions = curr_top_regions.clone();
+            ret
+        };
+        if prev_top_regions.is_empty() {
+            ranges_added_out.extend(curr_top_regions.values().map(CacheRange::from_region));
+            return;
+        }
+        let added_ranges = curr_top_regions
+            .iter()
+            .filter(|(id, _)| !prev_top_regions.contains_key(id))
+            .map(|(_, region)| CacheRange::from_region(region));
+        let removed_ranges = prev_top_regions
+            .iter()
+            .filter(|(id, _)| !curr_top_regions.contains_key(id))
+            .map(|(_, region)| CacheRange::from_region(region));
+        ranges_added_out.extend(added_ranges);
+        ranges_removed_out.extend(removed_ranges);
+    }
 }
 
 impl BackgroundRunnerCore {
@@ -484,6 +633,74 @@ impl BackgroundRunnerCore {
         #[cfg(test)]
         flush_epoch();
     }
+
+    fn evict_on_soft_limit_reached(&mut self) {
+        if self.range_stats_manager.is_none() {
+            warn!("range stats manager is not initialized, cannot evict on soft limit reached");
+            return;
+        }
+        let range_stats_manager = self.range_stats_manager.as_ref().unwrap();
+        let to_shrink_by = self
+            .memory_controller
+            .mem_usage()
+            .checked_sub(self.memory_controller.soft_limit_threshold());
+        if to_shrink_by.is_none() {
+            return;
+        }
+        let mut remaining = to_shrink_by.unwrap();
+        let mut ranges_to_evict = Vec::<(CacheRange, usize)>::with_capacity(256);
+        range_stats_manager.collect_candidates_for_eviction(&mut ranges_to_evict);
+        let ranges_to_evict = ranges_to_evict
+            .iter()
+            .filter(|(range, _)| self.engine.read().range_manager().contains_range(range))
+            .rev();
+        for (range, approx_size) in ranges_to_evict {
+            if remaining == 0 {
+                break;
+            }
+            if self.engine.write().mut_range_manager().evict_range(range) {
+                info!("evict on soft limit reached"; "range" => ?&range, "approx_size" => approx_size, "remaining" => remaining);
+                remaining = remaining.checked_sub(*approx_size).unwrap_or_default();
+                range_stats_manager.handle_range_evicted(range);
+            }
+        }
+    }
+
+    fn top_regions_load_evict(&self) {
+        if self.range_stats_manager.is_none() {
+            return;
+        }
+        let range_stats_manager = self.range_stats_manager.as_ref().unwrap();
+        if range_stats_manager.checking_top_regions() {
+            return;
+        }
+        range_stats_manager.set_checking_top_regions(true);
+
+        let curr_memory_usage = self.memory_controller.mem_usage();
+        let threshold = self.memory_controller.soft_limit_threshold();
+        range_stats_manager.adjust_num_regions(curr_memory_usage, threshold);
+
+        let mut ranges_to_add = Vec::<CacheRange>::with_capacity(256);
+        let mut ranges_to_remove = Vec::<CacheRange>::with_capacity(256);
+        range_stats_manager.collect_changed_ranges(&mut ranges_to_add, &mut ranges_to_remove);
+        info!("load_evict"; "ranges_to_add" => ?&ranges_to_add, "ranges_to_remove" => ?&ranges_to_remove);
+        for evict_range in ranges_to_remove {
+            // TODO (afeinberg): check when last loaded, do not evict unless range has been
+            // cached for a minimum time.
+            let mut core = self.engine.write();
+            if !core.mut_range_manager().evict_range(&evict_range) {
+                error!("fail to evict range"; "evict_range" => ?&evict_range);
+            }
+        }
+        for cache_range in ranges_to_add {
+            let mut core = self.engine.write();
+            if let Err(e) = core.mut_range_manager().load_range(cache_range.clone()) {
+                error!("error loading range"; "cache_range" => ?&cache_range, "err" => ?e);
+            }
+        }
+        range_stats_manager.set_checking_top_regions(false);
+        info!("load_evict complete");
+    }
 }
 
 // Flush epoch and pin enough times to make the delayed operations be executed
@@ -533,10 +750,15 @@ impl Drop for BackgroundRunner {
     }
 }
 
+// The expected average region size: used to estimate the number of top regions
+// to cache.
+pub const EXPECTED_AVERAGE_REGION_SIZE: usize = 96_000_000;
+
 impl BackgroundRunner {
     pub fn new(
         engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
         memory_controller: Arc<MemoryController>,
+        region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
         let range_load_worker = Builder::new("background-range-load-worker")
             // Range load now is implemented sequentially, so we must use exactly one thread to handle it.
@@ -556,10 +778,15 @@ impl BackgroundRunner {
             .thread_count(1)
             .create();
         let gc_range_remote = gc_range_worker.remote();
+        let num_regions_to_cache =
+            memory_controller.soft_limit_threshold() / EXPECTED_AVERAGE_REGION_SIZE;
+        let range_stats_manager =
+            region_info_provider.map(|r_i_p| RangeStatsManager::new(num_regions_to_cache, r_i_p));
         Self {
             core: BackgroundRunnerCore {
                 engine,
                 memory_controller,
+                range_stats_manager,
             },
             range_load_worker,
             range_load_remote,
@@ -736,7 +963,7 @@ impl Runnable for BackgroundRunner {
                     "mem_usage(MB)" => ReadableSize(mem_usage as u64).as_mb()
                 );
                 if mem_usage > self.core.memory_controller.soft_limit_threshold() {
-                    // todo: select ranges to evict
+                    self.core.evict_on_soft_limit_reached();
                 }
                 self.core.memory_controller.set_memory_checking(false);
             }
@@ -745,6 +972,7 @@ impl Runnable for BackgroundRunner {
                 let f = async move { core.delete_ranges(&ranges) };
                 self.delete_range_remote.spawn(f);
             }
+            BackgroundTask::TopRegionsLoadEvict => self.core.top_regions_load_evict(),
             BackgroundTask::CleanLockTombstone(snapshot_seqno) => {
                 if snapshot_seqno < self.last_seqno {
                     return;
@@ -1427,7 +1655,7 @@ pub mod tests {
         iter_opts.set_lower_bound(&range.start, 0);
         iter_opts.set_upper_bound(&range.end, 0);
 
-        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
+        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone(), None);
         worker.core.gc_range(&range, 40, 100);
 
         let mut iter = snap.iterator_opt("write", iter_opts).unwrap();
@@ -1496,7 +1724,7 @@ pub mod tests {
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
 
-        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
+        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone(), None);
 
         // gc should not hanlde keys with larger seqno than oldest seqno
         worker.core.gc_range(&range, 13, 10);
@@ -1796,7 +2024,7 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller);
+        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller, None);
         let s1 = engine.snapshot(range.clone(), 10, u64::MAX);
         let s2 = engine.snapshot(range.clone(), 11, u64::MAX);
         let s3 = engine.snapshot(range.clone(), 20, u64::MAX);
@@ -1914,7 +2142,7 @@ pub mod tests {
         engine.new_range(r1);
         engine.new_range(r2);
 
-        let mut runner = BackgroundRunner::new(engine.core.clone(), memory_controller);
+        let mut runner = BackgroundRunner::new(engine.core.clone(), memory_controller, None);
         let ranges = runner.core.ranges_for_gc().unwrap();
         assert_eq!(2, ranges.len());
 

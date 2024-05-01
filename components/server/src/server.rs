@@ -1692,6 +1692,7 @@ where
             range_cache_engine_context,
             disk_engine.clone(),
             Some(self.pd_client.clone()),
+            Some(Arc::new(self.region_info_accessor.clone())),
         );
         let range_cache_config_manager = RangeCacheConfigManager(range_cache_engine_config);
         self.kv_statistics = Some(factory.rocks_statistics());
