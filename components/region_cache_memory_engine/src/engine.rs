@@ -15,6 +15,7 @@ use engine_traits::{
     CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
+use raftstore::coprocessor::RegionInfoProvider;
 use skiplist_rs::{
     base::{Entry, OwnedIter},
     SkipList,
@@ -253,6 +254,13 @@ pub struct RangeCacheMemoryEngine {
 
 impl RangeCacheMemoryEngine {
     pub fn new(range_cache_engine_context: RangeCacheEngineContext) -> Self {
+        RangeCacheMemoryEngine::with_region_info_provider(range_cache_engine_context, None)
+    }
+
+    pub fn with_region_info_provider(
+        range_cache_engine_context: RangeCacheEngineContext,
+        region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
+    ) -> Self {
         info!("init range cache memory engine";);
         let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
         let skiplist_engine = { core.read().engine().clone() };
@@ -265,6 +273,7 @@ impl RangeCacheMemoryEngine {
             core.clone(),
             config.value().gc_interval.0,
             memory_controller.clone(),
+            region_info_provider,
         ));
 
         Self {

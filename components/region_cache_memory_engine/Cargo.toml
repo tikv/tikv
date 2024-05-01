@@ -20,6 +20,7 @@ txn_types = { workspace = true }
 kvproto = { workspace = true }
 log_wrappers = { workspace = true }
 pd_client = { workspace = true }
+raftstore = { workspace = true }
 dashmap = "5.1"
 security = { workspace = true }
 serde = "1.0"
