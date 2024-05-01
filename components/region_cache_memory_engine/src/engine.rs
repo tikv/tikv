@@ -261,6 +261,7 @@ impl RangeCacheMemoryEngine {
             core.clone(),
             config.value().gc_interval.0,
             memory_controller.clone(),
+            None,
         ));
 
         Self {

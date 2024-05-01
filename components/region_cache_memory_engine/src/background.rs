@@ -1,6 +1,12 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::BTreeSet, fmt::Display, sync::Arc, thread::JoinHandle, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Display,
+    sync::Arc,
+    thread::JoinHandle,
+    time::Duration,
+};
 
 use bytes::Bytes;
 use crossbeam::{
@@ -12,8 +18,10 @@ use engine_traits::{
     CacheRange, IterOptions, Iterable, Iterator, RangeHintService, SnapshotMiscExt, CF_DEFAULT,
     CF_WRITE, DATA_CFS,
 };
-use parking_lot::RwLock;
+use kvproto::metapb::Region;
+use parking_lot::{Mutex, RwLock};
 use pd_client::RpcClient;
+use raftstore::coprocessor::RegionInfoProvider;
 use slog_global::{error, info, warn};
 use tikv_util::{
     config::ReadableSize,
@@ -68,6 +76,7 @@ pub enum BackgroundTask {
     LoadRange,
     MemoryCheckAndEvict,
     DeleteRange(Vec<CacheRange>),
+    CheckTopRegions,
 }
 
 impl Display for BackgroundTask {
@@ -79,6 +88,7 @@ impl Display for BackgroundTask {
             BackgroundTask::DeleteRange(ref r) => {
                 f.debug_struct("DeleteRange").field("range", r).finish()
             }
+            BackgroundTask::CheckTopRegions => f.debug_struct("CheckTopRegions").finish(),
         }
     }
 }
@@ -191,9 +201,10 @@ impl BgWorkManager {
         core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
         gc_interval: Duration,
         memory_controller: Arc<MemoryController>,
+        region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
         let worker = Worker::new("range-cache-background-worker");
-        let runner = BackgroundRunner::new(core.clone(), memory_controller);
+        let runner = BackgroundRunner::new(core.clone(), memory_controller, region_info_provider);
         let scheduler = worker.start_with_timer("range-cache-engine-background", runner);
 
         let scheduler_clone = scheduler.clone();
@@ -263,6 +274,63 @@ impl BgWorkManager {
 struct BackgroundRunnerCore {
     engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
     memory_controller: Arc<MemoryController>,
+    range_stats_manager: Option<RangeStatsManager>,
+}
+
+#[derive(Clone)]
+struct RangeStatsManager {
+    num_regions: usize,
+    info_provider: Arc<dyn RegionInfoProvider>,
+    prev_top_regions: Arc<Mutex<BTreeMap<u64, Region>>>,
+}
+
+impl RangeStatsManager {
+    pub fn new(num_regions: usize, info_provider: Arc<dyn RegionInfoProvider>) -> Self {
+        RangeStatsManager {
+            num_regions,
+            info_provider,
+            prev_top_regions: Arc::new(Mutex::new(BTreeMap::new())),
+        }
+    }
+
+    pub fn collect_changed_ranges(
+        &self,
+        ranges_added_out: &mut Vec<CacheRange>,
+        ranges_removed_out: &mut Vec<CacheRange>,
+    ) {
+        let curr_top_regions = self
+            .info_provider
+            .get_top_regions(self.num_regions)
+            .unwrap()
+            .iter()
+            .map(|r| (r.id, r.clone()))
+            .collect::<BTreeMap<_, _>>();
+
+        let prev_top_regions = {
+            let mut mut_prev_top_regions = self.prev_top_regions.lock();
+            let ret = mut_prev_top_regions.clone();
+            *mut_prev_top_regions = curr_top_regions.clone();
+            ret
+        };
+        if prev_top_regions.is_empty() {
+            ranges_added_out.extend(
+                curr_top_regions
+                     .values() 
+                     .map(CacheRange::from_region)
+            );
+            return;
+        }
+        let added_ranges = curr_top_regions
+            .iter()
+            .filter(|(id, _)| !prev_top_regions.contains_key(id))
+            .map(|(_, region)| CacheRange::from_region(region));
+        let removed_ranges = prev_top_regions
+            .iter()
+            .filter(|(id, _)| !curr_top_regions.contains_key(id))
+            .map(|(_, region)| CacheRange::from_region(region));
+        ranges_added_out.extend(added_ranges);
+        ranges_removed_out.extend(removed_ranges);
+    }
 }
 
 impl BackgroundRunnerCore {
@@ -451,6 +519,23 @@ impl BackgroundRunnerCore {
         #[cfg(test)]
         flush_epoch();
     }
+
+    fn find_top_regions(&mut self) {
+        let mut ranges_to_add = Vec::<CacheRange>::with_capacity(NUM_REGIONS_FOR_CACHE / 2);
+        let mut ranges_to_remove = Vec::<CacheRange>::with_capacity(NUM_REGIONS_FOR_CACHE / 2);
+        self.range_stats_manager
+            .as_ref()
+            .unwrap()
+            .collect_changed_ranges(&mut ranges_to_add, &mut ranges_to_remove);
+        for cache_range in ranges_to_add {
+            let mut core = self.engine.write();
+            let _ = core.mut_range_manager().load_range(cache_range);
+        }
+        for evict_range in ranges_to_remove {
+            let mut core = self.engine.write();
+            let _ = core.mut_range_manager().evict_range(&evict_range);
+        }
+    }
 }
 
 // Flush epoch and pin enough times to make the delayed operations be executed
@@ -491,10 +576,12 @@ impl Drop for BackgroundRunner {
     }
 }
 
+pub const NUM_REGIONS_FOR_CACHE: usize = 1000;
 impl BackgroundRunner {
     pub fn new(
         engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
         memory_controller: Arc<MemoryController>,
+        region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
         let range_load_worker = Builder::new("background-range-load-worker")
             // Range load now is implemented sequentially, so we must use exactly one thread to handle it.
@@ -511,10 +598,13 @@ impl BackgroundRunner {
             .thread_count(1)
             .create();
         let gc_range_remote = delete_range_worker.remote();
+        let range_stats_manager =
+            region_info_provider.map(|r_i_p| RangeStatsManager::new(NUM_REGIONS_FOR_CACHE, r_i_p));
         Self {
             core: BackgroundRunnerCore {
                 engine,
                 memory_controller,
+                range_stats_manager,
             },
             range_load_worker,
             range_load_remote,
@@ -670,6 +760,10 @@ impl Runnable for BackgroundRunner {
                 let mut core = self.core.clone();
                 let f = async move { core.delete_ranges(&ranges) };
                 self.delete_range_remote.spawn(f);
+            }
+            BackgroundTask::CheckTopRegions => {
+                let mut core = self.core.clone();
+                core.find_top_regions()
             }
         }
     }
@@ -1341,7 +1435,7 @@ pub mod tests {
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
 
-        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
+        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone(), None);
 
         // gc will not remove the latest mvcc put below safe point
         worker.core.gc_range(&range, 14);
@@ -1456,7 +1550,7 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller);
+        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller, None);
         let s1 = engine.snapshot(range.clone(), 10, u64::MAX);
         let s2 = engine.snapshot(range.clone(), 11, u64::MAX);
         let s3 = engine.snapshot(range.clone(), 20, u64::MAX);
@@ -1665,7 +1759,7 @@ pub mod tests {
         engine.new_range(r1);
         engine.new_range(r2);
 
-        let mut runner = BackgroundRunner::new(engine.core.clone(), memory_controller);
+        let mut runner = BackgroundRunner::new(engine.core.clone(), memory_controller, None);
         let ranges = runner.core.ranges_for_gc().unwrap();
         assert_eq!(2, ranges.len());
 
