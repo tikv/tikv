@@ -154,6 +154,8 @@ pub struct TitanCfConfig {
     pub range_merge: bool,
     #[online_config(skip)]
     pub max_sorted_runs: i32,
+    #[online_config(skip)]
+    pub enable_punch_hole_gc: bool,
 
     #[online_config(skip)]
     #[doc(hidden)]
@@ -189,6 +191,7 @@ impl Default for TitanCfConfig {
             range_merge: true,
             max_sorted_runs: 20,
             gc_merge_rewrite: false,
+            enable_punch_hole_gc: false,
         }
     }
 }
@@ -230,6 +233,7 @@ impl TitanCfConfig {
         opts.set_level_merge(self.level_merge);
         opts.set_range_merge(self.range_merge);
         opts.set_max_sorted_runs(self.max_sorted_runs);
+        opts.set_enable_punch_hole_gc(self.enable_punch_hole_gc);
         opts
     }
 
