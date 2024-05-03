@@ -76,7 +76,7 @@ pub enum BackgroundTask {
     LoadRange,
     MemoryCheckAndEvict,
     DeleteRange(Vec<CacheRange>),
-    CheckTopRegions,
+    TopRegionsLoadEvict,
 }
 
 impl Display for BackgroundTask {
@@ -88,7 +88,7 @@ impl Display for BackgroundTask {
             BackgroundTask::DeleteRange(ref r) => {
                 f.debug_struct("DeleteRange").field("range", r).finish()
             }
-            BackgroundTask::CheckTopRegions => f.debug_struct("CheckTopRegions").finish(),
+            BackgroundTask::TopRegionsLoadEvict => f.debug_struct("CheckTopRegions").finish(),
         }
     }
 }
@@ -520,7 +520,7 @@ impl BackgroundRunnerCore {
         flush_epoch();
     }
 
-    fn find_top_regions(&mut self) {
+    fn top_regions_load_evict(&mut self) {
         let mut ranges_to_add = Vec::<CacheRange>::with_capacity(NUM_REGIONS_FOR_CACHE / 2);
         let mut ranges_to_remove = Vec::<CacheRange>::with_capacity(NUM_REGIONS_FOR_CACHE / 2);
         self.range_stats_manager
@@ -761,9 +761,9 @@ impl Runnable for BackgroundRunner {
                 let f = async move { core.delete_ranges(&ranges) };
                 self.delete_range_remote.spawn(f);
             }
-            BackgroundTask::CheckTopRegions => {
+            BackgroundTask::TopRegionsLoadEvict => {
                 let mut core = self.core.clone();
-                core.find_top_regions()
+                core.top_regions_load_evict()
             }
         }
     }
