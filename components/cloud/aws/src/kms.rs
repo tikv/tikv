@@ -3,24 +3,22 @@
 use std::ops::Deref;
 
 use async_trait::async_trait;
-use aws_credential_types::provider::ProvideCredentials;
-use aws_http::auth::CredentialsStageError;
+use aws_config::BehaviorVersion;
+use aws_credential_types::provider::{error::CredentialsError, ProvideCredentials};
 use aws_sdk_kms::{
     operation::{decrypt::DecryptError, generate_data_key::GenerateDataKeyError},
     primitives::Blob,
     types::DataKeySpec,
     Client,
 };
-use aws_sig_auth::middleware::SigningStageError;
-use aws_smithy_client::bounds::SmithyConnector;
-use aws_smithy_http::result::SdkError;
+use aws_sdk_s3::config::HttpClient;
 use cloud::{
     error::{Error, KmsError, OtherError, Result},
     kms::{Config, CryptographyType, DataKeyPair, EncryptedKey, KeyId, KmsProvider, PlainKey},
 };
 use futures::executor::block_on;
 
-use crate::util::{self, is_retryable};
+use crate::util::{self, is_retryable, SdkError};
 
 const AWS_KMS_DATA_KEY_SPEC: DataKeySpec = DataKeySpec::Aes256;
 
@@ -47,23 +45,26 @@ impl std::fmt::Debug for AwsKms {
 }
 
 impl AwsKms {
-    fn new_with_creds_connector<Creds, Conn>(
+    fn new_with_creds_client<Creds, Http>(
         config: Config,
-        connector: Conn,
+        client: Http,
         credentials_provider: Creds,
     ) -> Result<AwsKms>
     where
-        Conn: SmithyConnector + 'static,
+        Http: HttpClient + 'static,
         Creds: ProvideCredentials + 'static,
     {
-        let mut loader = aws_config::from_env().credentials_provider(credentials_provider);
+        let mut loader = aws_config::defaults(BehaviorVersion::latest())
+            .credentials_provider(credentials_provider)
+            .http_client(client);
+
         loader = util::configure_region(
             loader,
             &config.location.region,
             !config.location.endpoint.is_empty(),
         )?;
+
         loader = util::configure_endpoint(loader, &config.location.endpoint);
-        loader = loader.http_connector(connector);
 
         let sdk_config = block_on(loader.load());
         let client = Client::new(&sdk_config);
@@ -77,10 +78,9 @@ impl AwsKms {
     }
 
     pub fn new(config: Config) -> Result<AwsKms> {
-        let conn = util::new_http_conn();
+        let client = util::new_http_client();
         let creds = util::new_credentials_provider();
-
-        Self::new_with_creds_connector(config, conn, creds)
+        Self::new_with_creds_client(config, client, creds)
     }
 }
 
@@ -182,13 +182,21 @@ fn classify_decrypt_error(err: SdkError<DecryptError>) -> Error {
 }
 
 fn classify_error<E: std::error::Error + Send + Sync + 'static>(err: SdkError<E>) -> Error {
-    let src = std::error::Error::source(&err).unwrap();
     match &err {
-        SdkError::DispatchFailure(_) => Error::ApiTimeout(err.into()),
-        SdkError::ConstructionFailure(_)
-            if src.is::<SigningStageError>() || src.is::<CredentialsStageError>() =>
-        {
-            Error::ApiAuthentication(err.into())
+        SdkError::DispatchFailure(dispatch_failure) => {
+            if let Some(connector_err) = dispatch_failure.as_connector_error() {
+                if let Some(src_err) = std::error::Error::source(connector_err) {
+                    if src_err.is::<CredentialsError>() {
+                        Error::ApiAuthentication(err.into())
+                    } else {
+                        Error::ApiTimeout(err.into())
+                    }
+                } else {
+                    Error::ApiTimeout(err.into())
+                }
+            } else {
+                Error::ApiTimeout(err.into())
+            }
         }
         e if is_retryable(e) => Error::ApiInternal(err.into()),
         _ => Error::KmsError(KmsError::Other(OtherError::from_box(
@@ -214,8 +222,8 @@ impl std::fmt::Debug for KmsClientDebug {
 #[cfg(test)]
 mod tests {
     use aws_sdk_kms::config::Credentials;
-    use aws_smithy_client::test_connection::TestConnection;
-    use aws_smithy_http::body::SdkBody;
+    use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
+    use aws_smithy_types::body::SdkBody;
     use cloud::kms::Location;
     use http::Uri;
 
@@ -242,7 +250,7 @@ mod tests {
             base64::encode(magic_contents)
         );
 
-        let conn = TestConnection::new(vec![(
+        let client = StaticReplayClient::new(vec![ReplayEvent::new(
             http::Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("https://kms.cn-north-1.amazonaws.com.cn/"))
@@ -250,13 +258,16 @@ mod tests {
                     "{\"KeyId\":\"test_key_id\",\"KeySpec\":\"AES_256\"}",
                 ))
                 .unwrap(),
-            http::Response::builder().status(200).body(resp).unwrap(),
+            http::Response::builder()
+                .status(200)
+                .body(SdkBody::from(resp))
+                .unwrap(),
         )]);
 
         let creds = Credentials::from_keys("abc", "xyz", None);
 
         let aws_kms =
-            AwsKms::new_with_creds_connector(config.clone(), conn.clone(), creds.clone()).unwrap();
+            AwsKms::new_with_creds_client(config.clone(), client.clone(), creds.clone()).unwrap();
 
         let data_key = aws_kms.generate_data_key().await.unwrap();
 
@@ -266,7 +277,7 @@ mod tests {
         );
         assert_eq!(*data_key.plaintext, key_contents);
 
-        conn.assert_requests_match(&[]);
+        client.assert_requests_match(&[]);
 
         let req = format!(
             "{{\"KeyId\":\"test_key_id\",\"CiphertextBlob\":\"{}\"}}",
@@ -278,20 +289,23 @@ mod tests {
             base64::encode(key_contents.clone()),
         );
 
-        let conn = TestConnection::new(vec![(
+        let client = StaticReplayClient::new(vec![ReplayEvent::new(
             http::Request::builder()
                 .uri(Uri::from_static("https://kms.cn-north-1.amazonaws.com.cn/"))
                 .body(SdkBody::from(req))
                 .unwrap(),
-            http::Response::builder().status(200).body(resp).unwrap(),
+            http::Response::builder()
+                .status(200)
+                .body(SdkBody::from(resp))
+                .unwrap(),
         )]);
 
-        let aws_kms = AwsKms::new_with_creds_connector(config, conn.clone(), creds).unwrap();
+        let aws_kms = AwsKms::new_with_creds_client(config, client.clone(), creds).unwrap();
 
         let plaintext = aws_kms.decrypt_data_key(&data_key.encrypted).await.unwrap();
         assert_eq!(plaintext, key_contents);
 
-        conn.assert_requests_match(&[]);
+        client.assert_requests_match(&[]);
     }
 
     #[tokio::test]
@@ -319,25 +333,25 @@ mod tests {
         // HTTP Status Code: 400
         // Json, see:
         // https://docs.aws.amazon.com/kms/latest/APIReference/API_Decrypt.html#API_Decrypt_Errors
-        let conn = TestConnection::new(vec![(
+        let client = StaticReplayClient::new(vec![ReplayEvent::new(
             http::Request::builder()
                 .uri(Uri::from_static("https://kms.cn-north-1.amazonaws.com.cn/"))
                 .body(SdkBody::from(req))
                 .unwrap(),
             http::Response::builder()
                 .status(400)
-                .body(
+                .body(SdkBody::from(
                     r#"{
                         "__type": "IncorrectKeyException",
                         "Message": "mock"
                     }"#,
-                )
+                ))
                 .unwrap(),
         )]);
 
         let creds = Credentials::from_keys("abc", "xyz", None);
 
-        let aws_kms = AwsKms::new_with_creds_connector(config, conn.clone(), creds).unwrap();
+        let aws_kms = AwsKms::new_with_creds_client(config, client.clone(), creds).unwrap();
         let fut = aws_kms.decrypt_data_key(&enc_key);
 
         match fut.await {
@@ -345,7 +359,7 @@ mod tests {
             other => panic!("{:?}", other),
         }
 
-        conn.assert_requests_match(&[]);
+        client.assert_requests_match(&[]);
     }
 
     #[tokio::test]
@@ -359,16 +373,18 @@ mod tests {
                 region: "us-east-1".to_string(),
                 endpoint: "http://localhost:4566".to_string(),
             },
+            azure: None,
+            gcp: None,
         };
 
         let creds =
             Credentials::from_keys("testUser".to_string(), "testAccessKey".to_string(), None);
         let aws_kms =
-            AwsKms::new_with_creds_connector(config, util::new_http_conn(), creds).unwrap();
+            AwsKms::new_with_creds_client(config, util::new_http_client(), creds).unwrap();
 
         let data_key = aws_kms.generate_data_key().await.unwrap();
         let plaintext = aws_kms.decrypt_data_key(&data_key.encrypted).await.unwrap();
 
-        assert_eq!(plaintext, data_key.plaintext.into_inner());
+        assert_eq!(plaintext, data_key.plaintext.clone());
     }
 }

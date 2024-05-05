@@ -11,15 +11,13 @@ failpoints = ["fail/failpoints"]
 [dependencies]
 async-trait = "0.1"
 
-aws-config = "0.55.0"
-aws-credential-types = { version = "0.55.0", features = ["hardcoded-credentials"] }
-aws-http = "0.55.0"
-aws-sdk-kms = "0.25.1"
-aws-sdk-s3 = "0.25.1"
-aws-sig-auth = "0.55.0"
-aws-smithy-client = "0.55.0"
-aws-smithy-http = "0.55.0"
-aws-types = "0.55.0" 
+aws-config = "1.2.1"
+aws-credential-types = { version = "1.2.0", features = ["hardcoded-credentials"] }
+aws-sdk-kms = "1.22.0"
+aws-sdk-s3 = "1.16.0"
+aws-smithy-runtime = "1.4.0"
+aws-smithy-runtime-api = "1.5.0"
+aws-smithy-types =  { version = "1.1.8", features = ["byte-stream-poll-next"] }
 
 base64 = "0.13.0"
 bytes = "1.0"
@@ -44,10 +42,11 @@ thiserror = "1.0"
 tikv_util = { workspace = true }
 # better to not use slog-global, but pass in the logger
 tokio = { version = "1.5", features = ["time"] }
+tokio-util = { version = "0.7" }
 url = "2.0"
 uuid = { version = "0.8", features = ["v4"] }
 
 [dev-dependencies]
-aws-smithy-client = { version = "0.55.0", features = ["test-util"] }
+aws-smithy-runtime = { version = "1.4.0", features = ["test-util", "client"] }
 base64 = "0.13"
 futures = "0.3"

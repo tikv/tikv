@@ -6,15 +6,14 @@ use std::{
 };
 
 use async_trait::async_trait;
-use aws_config::sts::AssumeRoleProvider;
+use aws_config::{sts::AssumeRoleProvider, BehaviorVersion, Region, SdkConfig};
 use aws_credential_types::{provider::ProvideCredentials, Credentials};
 use aws_sdk_s3::{
+    config::HttpClient,
     operation::get_object::GetObjectError,
     types::{CompletedMultipartUpload, CompletedPart},
     Client,
 };
-use aws_smithy_client::{bounds::SmithyConnector, SdkError};
-use aws_types::region::Region;
 use bytes::Bytes;
 use cloud::{
     blob::{BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty},
@@ -32,8 +31,9 @@ use tikv_util::{
     time::Instant,
 };
 use tokio::time::{sleep, timeout};
+use tokio_util::io::ReaderStream;
 
-use crate::util::{self, retry_and_count};
+use crate::util::{self, retry_and_count, SdkError};
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(900);
 pub const STORAGE_VENDOR_NAME_AWS: &str = "aws";
@@ -169,13 +169,13 @@ impl S3Storage {
 
     /// Create a new S3 storage for the given config.
     pub fn new(config: Config) -> io::Result<Self> {
-        let conn = util::new_http_conn();
-        Self::new_with_connector(config, conn)
+        let client = util::new_http_client();
+        Self::new_with_client(config, client)
     }
 
-    fn new_with_connector<Conn>(config: Config, connector: Conn) -> io::Result<Self>
+    fn new_with_client<Http>(config: Config, client: Http) -> io::Result<Self>
     where
-        Conn: SmithyConnector + 'static,
+        Http: HttpClient + 'static,
     {
         // static credentials are used with minio
         if let Some(access_key_pair) = &config.access_key_pair {
@@ -184,20 +184,20 @@ impl S3Storage {
                 (*access_key_pair.secret_access_key).to_owned(),
                 None,
             );
-            Self::maybe_assume_role(config, connector, creds)
+            Self::maybe_assume_role(config, client, creds)
         } else {
             let creds = util::new_credentials_provider();
-            Self::maybe_assume_role(config, connector, creds)
+            Self::maybe_assume_role(config, client, creds)
         }
     }
 
-    fn maybe_assume_role<Creds, Conn>(
+    fn maybe_assume_role<Creds, Http>(
         config: Config,
-        connector: Conn,
+        client: Http,
         credentials_provider: Creds,
     ) -> io::Result<Self>
     where
-        Conn: SmithyConnector + 'static,
+        Http: HttpClient + 'static,
         Creds: ProvideCredentials + 'static,
     {
         if config.role_arn.is_some() {
@@ -207,8 +207,7 @@ impl S3Storage {
             let timestamp_secs = duration_since_epoch.as_secs();
 
             let mut builder = AssumeRoleProvider::builder(config.role_arn.as_deref().unwrap())
-                .session_name(format!("{}", timestamp_secs))
-                .connection(util::new_http_conn());
+                .session_name(format!("{}", timestamp_secs));
 
             if let Some(external_id) = &config.external_id {
                 builder = builder.external_id(external_id.as_str());
@@ -218,54 +217,72 @@ impl S3Storage {
                 builder = builder.region(Region::new(region.to_string()));
             }
 
-            let credentials_provider = builder.build(credentials_provider);
-            Self::new_with_creds_connector(config, connector, credentials_provider)
+            let credentials_provider: io::Result<AssumeRoleProvider> = block_on(async {
+                let sdk_config =
+                    Self::load_sdk_config(&config, util::new_http_client(), credentials_provider)
+                        .await?;
+                builder = builder.configure(&sdk_config);
+                Ok(builder.build().await)
+            });
+            Self::new_with_creds_client(config, client, credentials_provider?)
         } else {
             // or just use original cred_provider to access s3.
-            Self::new_with_creds_connector(config, connector, credentials_provider)
+            Self::new_with_creds_client(config, client, credentials_provider)
         }
     }
 
-    pub fn new_with_creds_connector<Creds, Conn>(
-        config: Config,
-        connector: Conn,
-        credentials_provider: Creds,
-    ) -> io::Result<Self>
+    async fn load_sdk_config<Http, Creds>(
+        config: &Config,
+        client: Http,
+        creds: Creds,
+    ) -> io::Result<SdkConfig>
     where
-        Conn: SmithyConnector + 'static,
-        Creds: ProvideCredentials + 'static,
-    {
-        block_on(Self::new_with_creds_connector_async(
-            config,
-            connector,
-            credentials_provider,
-        ))
-    }
-
-    async fn new_with_creds_connector_async<Creds, Conn>(
-        config: Config,
-        connector: Conn,
-        credentials_provider: Creds,
-    ) -> io::Result<Self>
-    where
-        Conn: SmithyConnector + 'static,
+        Http: HttpClient + 'static,
         Creds: ProvideCredentials + 'static,
     {
         let bucket_region = none_to_empty(config.bucket.region.clone());
         let bucket_endpoint = none_to_empty(config.bucket.endpoint.clone());
 
-        let mut loader = aws_config::from_env().credentials_provider(credentials_provider);
+        let mut loader =
+            aws_config::defaults(BehaviorVersion::latest()).credentials_provider(creds);
+
         loader = util::configure_region(loader, &bucket_region, !bucket_endpoint.is_empty())?;
         loader = util::configure_endpoint(loader, &bucket_endpoint);
-        loader = loader.http_connector(connector);
+        loader = loader.http_client(client);
+        Ok(loader.load().await)
+    }
 
-        let sdk_config = loader.load().await;
+    fn new_with_creds_client<Creds, Http>(
+        config: Config,
+        client: Http,
+        credentials_provider: Creds,
+    ) -> io::Result<Self>
+    where
+        Http: HttpClient + 'static,
+        Creds: ProvideCredentials + 'static,
+    {
+        block_on(Self::new_with_creds_client_async(
+            config,
+            client,
+            credentials_provider,
+        ))
+    }
+
+    async fn new_with_creds_client_async<Creds, Http>(
+        config: Config,
+        client: Http,
+        credentials_provider: Creds,
+    ) -> io::Result<Self>
+    where
+        Http: HttpClient + 'static,
+        Creds: ProvideCredentials + 'static,
+    {
+        let sdk_config = Self::load_sdk_config(&config, client, credentials_provider).await?;
 
         let mut builder = aws_sdk_s3::config::Builder::from(&sdk_config);
         builder.set_force_path_style(Some(config.force_path_style));
-        let s3_config = builder.build();
 
-        let client = Client::from_conf(s3_config);
+        let client = Client::from_conf(builder.build());
 
         Ok(S3Storage { config, client })
     }
@@ -291,10 +308,7 @@ impl S3Storage {
             .send()
             .map(move |fut| {
                 let stream: Box<dyn Stream<Item = io::Result<Bytes>> + Unpin + Send> = match fut {
-                    Ok(out) => Box::new(
-                        out.body
-                            .map_err(|err| io::Error::new(io::ErrorKind::Other, err)),
-                    ),
+                    Ok(out) => Box::new(ReaderStream::new(out.body.into_async_read())),
                     Err(SdkError::ServiceError(service_err)) => match service_err.err() {
                         GetObjectError::NoSuchKey(_) => create_error_stream(
                             io::ErrorKind::NotFound,
@@ -723,7 +737,7 @@ mod tests {
     use std::assert_matches::assert_matches;
 
     use aws_sdk_s3::{config::Credentials, primitives::SdkBody};
-    use aws_smithy_client::test_connection::TestConnection;
+    use aws_smithy_runtime::client::http::test_util::{ReplayEvent, StaticReplayClient};
     use http::Uri;
 
     use super::*;
@@ -786,8 +800,8 @@ mod tests {
 
         // split magic_contents into 3 parts, so we mock 5 requests here(1 begin + 3
         // part + 1 complete)
-        let conn = TestConnection::new(vec![
-            (
+        let client = StaticReplayClient::new(vec![
+            ReplayEvent::new(
                 http::Request::builder()
                     .uri(Uri::from_static(
                         "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?uploads&x-id=CreateMultipartUpload"
@@ -805,7 +819,7 @@ mod tests {
                             </InitiateMultipartUploadResult>"#
                     )).unwrap()
             ),
-            (
+            ReplayEvent::new(
                 http::Request::builder()
                     .uri(Uri::from_static(
                         "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?x-id=UploadPart&partNumber=1&uploadId=1"
@@ -814,7 +828,7 @@ mod tests {
                     .unwrap(),
                 http::Response::builder().status(200).body(SdkBody::from("")).unwrap()
             ),
-            (
+            ReplayEvent::new(
                 http::Request::builder()
                     .uri(Uri::from_static(
                         "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?x-id=UploadPart&partNumber=2&uploadId=1"
@@ -823,7 +837,7 @@ mod tests {
                     .unwrap(),
                 http::Response::builder().status(200).body(SdkBody::from("")).unwrap()
             ),
-            (
+            ReplayEvent::new(
                 http::Request::builder()
                     .uri(Uri::from_static(
                         "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?x-id=UploadPart&partNumber=3&uploadId=1"
@@ -832,7 +846,7 @@ mod tests {
                     .unwrap(),
                 http::Response::builder().status(200).body(SdkBody::from("")).unwrap()
             ),
-            (
+            ReplayEvent::new(
                 http::Request::builder()
                     .uri(Uri::from_static(
                         "https://s3.cn-north-1.amazonaws.com.cn/mybucket/mykey?x-id=CompleteMultipartUpload&uploadId=1"
@@ -853,12 +867,12 @@ mod tests {
                             </CompleteMultipartUploadResult>
                             "#
                     )).unwrap()
-            )
+            ),
         ]);
 
         let creds = Credentials::from_keys("abc".to_string(), "xyz".to_string(), None);
 
-        let s = S3Storage::new_with_creds_connector(config.clone(), conn.clone(), creds).unwrap();
+        let s = S3Storage::new_with_creds_client(config.clone(), client.clone(), creds).unwrap();
         s.put(
             "mykey",
             PutResource(Box::new(magic_contents.as_bytes())),
@@ -867,7 +881,7 @@ mod tests {
         .await
         .unwrap();
 
-        conn.assert_requests_match(&[]);
+        client.assert_requests_match(&[]);
 
         assert_eq!(
             CLOUD_REQUEST_HISTOGRAM_VEC
@@ -890,8 +904,8 @@ mod tests {
         let mut config = Config::default(bucket);
         config.force_path_style = true;
 
-        let conn = TestConnection::new(vec![
-            (
+        let client = StaticReplayClient::new(vec![
+            ReplayEvent::new(
                 http::Request::builder()
                     .method("PUT")
                     .uri(Uri::from_static(
@@ -904,7 +918,7 @@ mod tests {
                     .body(SdkBody::from(""))
                     .unwrap(),
             ),
-            (
+            ReplayEvent::new(
                 http::Request::builder()
                     .method("GET")
                     .uri(Uri::from_static(
@@ -917,7 +931,7 @@ mod tests {
                     .body(SdkBody::from("5678"))
                     .unwrap(),
             ),
-            (
+            ReplayEvent::new(
                 http::Request::builder()
                     .method("PUT")
                     .uri(Uri::from_static(
@@ -934,7 +948,7 @@ mod tests {
 
         let creds = Credentials::from_keys("abc".to_string(), "xyz".to_string(), None);
 
-        let s = S3Storage::new_with_creds_connector(config.clone(), conn.clone(), creds).unwrap();
+        let s = S3Storage::new_with_creds_client(config.clone(), client.clone(), creds).unwrap();
         s.put(
             "mykey",
             PutResource(Box::new(magic_contents.as_bytes())),
@@ -992,7 +1006,7 @@ mod tests {
         fail::remove(s3_sleep_injected_fp);
         fail::remove(s3_timeout_injected_fp);
 
-        conn.assert_requests_match(&[]);
+        client.assert_requests_match(&[]);
     }
 
     #[tokio::test]
@@ -1005,7 +1019,7 @@ mod tests {
         let mut config = Config::default(bucket);
         config.force_path_style = false;
 
-        let conn = TestConnection::new(vec![(
+        let client = StaticReplayClient::new(vec![ReplayEvent::new(
             http::Request::builder()
                 .method("PUT")
                 .uri(Uri::from_static(
@@ -1021,7 +1035,7 @@ mod tests {
 
         let creds = Credentials::from_keys("abc".to_string(), "xyz".to_string(), None);
 
-        let s = S3Storage::new_with_creds_connector(config.clone(), conn.clone(), creds).unwrap();
+        let s = S3Storage::new_with_creds_client(config.clone(), client.clone(), creds).unwrap();
         s.put(
             "key2",
             PutResource(Box::new(magic_contents.as_bytes())),
@@ -1030,13 +1044,13 @@ mod tests {
         .await
         .unwrap();
 
-        conn.assert_requests_match(&[]);
+        client.assert_requests_match(&[]);
     }
 
     #[tokio::test]
     #[cfg(FALSE)]
     // FIXME: enable this (or move this to an integration test) if we've got a
-    // reliable way to test s3 (rusoto_mock requires custom logic to verify the
+    // reliable way to test s3 (aws test_util requires custom logic to verify the
     // body stream which itself can have bug)
     async fn test_real_s3_storage() {
         use tikv_util::time::Limiter;
@@ -1055,6 +1069,7 @@ mod tests {
                     "N2VcI4Emg0Nm7fDzGBMJvguHHUxLGpjfwt2y4+vJ".to_owned(),
                 )
                 .unwrap(),
+                session_token: None,
             }),
             force_path_style: true,
             ..Config::default(bucket)

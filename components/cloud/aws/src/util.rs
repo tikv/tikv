@@ -1,19 +1,21 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{error::Error as StdError, io};
 
+use ::aws_smithy_runtime_api::client::orchestrator::HttpResponse;
 use aws_config::{
     default_provider::credentials::DefaultCredentialsChain,
     environment::EnvironmentVariableRegionProvider,
     meta::region::{self, ProvideRegion, RegionProviderChain},
     profile::ProfileFileRegionProvider,
     web_identity_token::WebIdentityTokenCredentialsProvider,
-    ConfigLoader,
+    ConfigLoader, Region,
 };
 use aws_credential_types::provider::{error::CredentialsError, ProvideCredentials};
-use aws_smithy_client::{bounds::SmithyConnector, hyper_ext, SdkError};
-use aws_types::region::Region;
+use aws_sdk_s3::config::HttpClient;
+use aws_smithy_runtime::client::http::hyper_014::HyperClientBuilder;
 use cloud::metrics;
 use futures::{executor::block_on, Future, TryFutureExt};
+use hyper::Client;
 use tikv_util::{
     stream::{retry_ext, RetryError, RetryExt},
     warn,
@@ -24,6 +26,9 @@ const READ_BUF_SIZE: usize = 1024 * 1024 * 2;
 const AWS_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
 
 const DEFAULT_REGION: &str = "us-east-1";
+
+pub(crate) type SdkError<E, R = HttpResponse> =
+    ::aws_smithy_runtime_api::client::result::SdkError<E, R>;
 
 struct CredentialsErrorWrapper(CredentialsError);
 
@@ -46,14 +51,13 @@ impl RetryError for CredentialsErrorWrapper {
     }
 }
 
-pub fn new_http_conn() -> impl SmithyConnector + 'static {
-    hyper_ext::Builder::default()
-        .hyper_builder({
-            let mut builder = hyper::Client::builder();
-            builder.http1_read_buf_exact_size(READ_BUF_SIZE);
-            builder
-        })
-        .build(aws_smithy_client::conns::https())
+pub fn new_http_client() -> impl HttpClient + 'static {
+    let mut hyper_builder = Client::builder();
+    hyper_builder.http1_read_buf_exact_size(READ_BUF_SIZE);
+
+    HyperClientBuilder::new()
+        .hyper_builder(hyper_builder)
+        .build_https()
 }
 
 pub fn new_credentials_provider() -> DefaultCredentialsProvider {
@@ -65,8 +69,8 @@ pub fn is_retryable<T>(error: &SdkError<T>) -> bool {
         SdkError::TimeoutError(_) => true,
         SdkError::DispatchFailure(_) => true,
         SdkError::ResponseError(resp_err) => {
-            let code = resp_err.raw().http().status();
-            code.is_server_error() || code == http::StatusCode::REQUEST_TIMEOUT
+            let code = resp_err.raw().status();
+            code.is_server_error() || code.as_u16() == http::StatusCode::REQUEST_TIMEOUT.as_u16()
         }
         _ => false,
     }
