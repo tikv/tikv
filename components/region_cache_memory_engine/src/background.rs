@@ -784,6 +784,7 @@ impl Filter {
         // They are below the safe point, so we can delete them directly now.
         if v_type == ValueType::Deletion {
             if let Some(cache_skiplist_delete_key) = self.cached_skiplist_delete_key.take() {
+                let guard = &epoch::pin();
                 self.write_cf_handle
                     .remove(&InternalBytes::from_vec(cache_skiplist_delete_key), guard)
             }
