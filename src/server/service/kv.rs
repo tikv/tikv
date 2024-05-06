@@ -2769,6 +2769,7 @@ mod tests {
                 GetHealthFeedbackResponse::default(),
             ));
             resp.responses.push(resp_item);
+            resp.request_ids.push(1);
             resp
         };
         resp = resp_with_request_health_feedback();
@@ -2816,6 +2817,7 @@ mod tests {
         test_reporter.set_raftstore_slow_score(80.);
         resp = resp_with_request_health_feedback();
         resp.responses.push(resp.responses[0].clone());
+        resp.request_ids.push(2);
         a.attach_if_needed(&mut resp);
         assert!(resp.has_health_feedback());
         assert_eq!(resp.get_health_feedback().get_store_id(), 1);
