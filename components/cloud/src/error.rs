@@ -123,10 +123,6 @@ pub struct OtherError {
 }
 
 impl OtherError {
-    pub fn new(retryable: bool, err: Box<dyn error::Error + Sync + Send>) -> Self {
-        Self { retryable, err }
-    }
-
     pub fn from_box(err: Box<dyn error::Error + Sync + Send>) -> Self {
         Self {
             retryable: false,

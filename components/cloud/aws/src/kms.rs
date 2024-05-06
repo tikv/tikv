@@ -122,41 +122,16 @@ impl KmsProvider for AwsKms {
     }
 }
 
-// aws-sdk errors Display implementation just gives the cause message and
-// discards the type. This is really bad when the cause message is empty!
-// Use Debug instead: this will show both
-pub struct FixSdkErrorDisplay<E: std::fmt::Debug + std::error::Error + Send + Sync + 'static>(
-    SdkError<E>,
-);
-impl<E: std::error::Error + Send + Sync + 'static> std::fmt::Debug for FixSdkErrorDisplay<E> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.0)
-    }
-}
-impl<E: std::error::Error + Send + Sync + 'static> std::fmt::Display for FixSdkErrorDisplay<E> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.0)
-    }
-}
-impl<E: std::error::Error + Send + Sync + 'static> std::error::Error for FixSdkErrorDisplay<E> {}
-
 fn classify_generate_data_key_error(err: SdkError<GenerateDataKeyError>) -> Error {
     if let SdkError::ServiceError(service_err) = &err {
         match &service_err.err() {
             GenerateDataKeyError::NotFoundException(_) => Error::ApiNotFound(err.into()),
             GenerateDataKeyError::InvalidKeyUsageException(_) => {
-                // Error::KmsError(KmsError::Other(err.into()))
-                Error::KmsError(KmsError::Other(OtherError::new(
-                    is_retryable(&err),
-                    FixSdkErrorDisplay(err).into(),
-                )))
+                Error::KmsError(KmsError::Other(OtherError::from_box(err.into())))
             }
             GenerateDataKeyError::DependencyTimeoutException(_) => Error::ApiTimeout(err.into()),
             GenerateDataKeyError::KmsInternalException(_) => Error::ApiInternal(err.into()),
-            _ => Error::KmsError(KmsError::Other(OtherError::new(
-                is_retryable(&err),
-                FixSdkErrorDisplay(err).into(),
-            ))),
+            _ => Error::KmsError(KmsError::Other(OtherError::from_box(err.into()))),
         }
     } else {
         classify_error(err)
@@ -171,10 +146,7 @@ fn classify_decrypt_error(err: SdkError<DecryptError>) -> Error {
             }
             DecryptError::DependencyTimeoutException(_) => Error::ApiTimeout(err.into()),
             DecryptError::KmsInternalException(_) => Error::ApiInternal(err.into()),
-            _ => Error::KmsError(KmsError::Other(OtherError::new(
-                is_retryable(&err),
-                FixSdkErrorDisplay(err).into(),
-            ))),
+            _ => Error::KmsError(KmsError::Other(OtherError::from_box(err.into()))),
         }
     } else {
         classify_error(err)
@@ -184,24 +156,18 @@ fn classify_decrypt_error(err: SdkError<DecryptError>) -> Error {
 fn classify_error<E: std::error::Error + Send + Sync + 'static>(err: SdkError<E>) -> Error {
     match &err {
         SdkError::DispatchFailure(dispatch_failure) => {
-            if let Some(connector_err) = dispatch_failure.as_connector_error() {
-                if let Some(src_err) = std::error::Error::source(connector_err) {
-                    if src_err.is::<CredentialsError>() {
-                        Error::ApiAuthentication(err.into())
-                    } else {
-                        Error::ApiTimeout(err.into())
-                    }
-                } else {
-                    Error::ApiTimeout(err.into())
-                }
+            let maybe_credentials_err = dispatch_failure
+                .as_connector_error()
+                .and_then(|connector_err| std::error::Error::source(connector_err))
+                .filter(|src_err| src_err.is::<CredentialsError>());
+            if maybe_credentials_err.is_some() {
+                Error::ApiAuthentication(err.into())
             } else {
                 Error::ApiTimeout(err.into())
             }
         }
         e if is_retryable(e) => Error::ApiInternal(err.into()),
-        _ => Error::KmsError(KmsError::Other(OtherError::from_box(
-            FixSdkErrorDisplay(err).into(),
-        ))),
+        _ => Error::KmsError(KmsError::Other(OtherError::from_box(err.into()))),
     }
 }
 
