@@ -221,13 +221,13 @@ impl MemoryQuota {
 
     pub fn alloc(&self, bytes: usize) -> Result<(), MemoryQuotaExceeded> {
         let capacity = self.capacity.load(Ordering::Relaxed) as isize;
-        let bytes = bytes as isize;
         let in_use_bytes = self.in_use.load(Ordering::Relaxed);
-        if in_use_bytes + bytes > capacity {
+        if bytes > capacity.saturating_sub(in_use_bytes) as usize {
             return Err(MemoryQuotaExceeded);
         }
-        let new_in_use_bytes = self.in_use.fetch_add(bytes, Ordering::Relaxed) + bytes;
-        if new_in_use_bytes > capacity {
+        let bytes = bytes as isize;
+        let new_in_use_bytes = self.in_use.fetch_add(bytes, Ordering::Relaxed);
+        if bytes > capacity - new_in_use_bytes {
             self.in_use.fetch_sub(bytes, Ordering::Relaxed);
             return Err(MemoryQuotaExceeded);
         }
