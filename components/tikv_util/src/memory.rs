@@ -235,7 +235,10 @@ impl MemoryQuota {
     }
 
     pub fn free(&self, bytes: usize) {
-        let bytes = bytes as isize;
+        // Alloc memory higher than isize::MAX must fail because it exceeds the maxinum
+        // capacity, but we still try to handle the overflow here to avoid
+        // caller's misuse.
+        let bytes = std::cmp::min(bytes, isize::MAX as usize) as isize;
         let new_in_use_bytes = self.in_use.fetch_sub(bytes, Ordering::Relaxed) - bytes;
         if new_in_use_bytes < 0 {
             // handle overflow.
@@ -368,6 +371,11 @@ mod tests {
         assert_eq!(quota.in_use(), 12);
         drop(allocated2);
         assert_eq!(quota.in_use(), 4);
+
+        // test out of range alloc and free.
+        assert!(quota.alloc(usize::MAX).is_err());
+        quota.free(isize::MAX as usize + 100);
+        assert_eq!(quota.in_use.load(Ordering::Relaxed), 0);
     }
 
     #[test]
