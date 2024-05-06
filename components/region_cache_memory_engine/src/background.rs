@@ -780,10 +780,13 @@ impl Filter {
 
         // Just like what rocksdb compaction filter does, we does not hanlde internal
         // keys(different MVCC versions of the same user key stands for different keys)
-        // that have been deleted in terms of CompactionFilter. But we need to delete
-        // them anyway. They are below the safe point, so we can delete them directly
-        // now.
+        // that have been deleted as a tombstone. But we need to delete them anyway.
+        // They are below the safe point, so we can delete them directly now.
         if v_type == ValueType::Deletion {
+            if let Some(cache_skiplist_delete_key) = self.cached_skiplist_delete_key.take() {
+                self.write_cf_handle
+                    .remove(&InternalBytes::from_vec(cache_skiplist_delete_key), guard)
+            }
             self.cached_skiplist_delete_key = Some(key.to_vec());
             return Ok(());
         }
