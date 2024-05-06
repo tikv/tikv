@@ -778,10 +778,10 @@ impl Filter {
             return Ok(());
         }
 
-        // Just like what rocksdb compaction filter does, we does not hanlde internal
-        // keys(different MVCC versions of the same user key stands for different keys)
-        // that have been deleted as a tombstone. But we need to delete them anyway.
-        // They are below the safe point, so we can delete them directly now.
+        // Just like what rocksdb compaction filter does, we do not handle internal
+        // keys (representing different MVCC versions of the same user key) that have
+        // been marked as tombstones. However, these keys need to be deleted. 
+        // Since they are below the safe point, we can safely delete them directly now.
         if v_type == ValueType::Deletion {
             if let Some(cache_skiplist_delete_key) = self.cached_skiplist_delete_key.take() {
                 let guard = &epoch::pin();
