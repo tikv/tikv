@@ -84,7 +84,7 @@
 # max-backups = 0
 
 [memory]
-## Whether enable the heap profiling which may have a bit performance overhead about 2% for the
+## Whether enables the heap profiling which may have a bit performance overhead about 2% for the
 ## default sample rate.
 # enable-heap-profiling = true
 
@@ -94,6 +94,10 @@
 ## The default sample interval is 512 KB. It only accepts power of two, otherwise it will be
 ## rounded up to the next power of two.
 # profiling-sample-per-bytes = "512KB"
+
+## Whether allocates the exclusive arena for threads.
+## When disabled, the metric of memory usage for each thread would be unavailable.
+# enable-thread-exclusive-arena = true
 
 ## Configurations for the single thread pool serving read requests.
 [readpool.unified]
