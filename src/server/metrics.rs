@@ -65,7 +65,7 @@ make_auto_flush_static_metric! {
         batch_commands,
         kv_flush,
         kv_buffer_batch_get,
-        request_health_feedback,
+        get_health_feedback,
     }
 
     pub label_enum GcCommandKind {

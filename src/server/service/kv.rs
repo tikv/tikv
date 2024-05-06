@@ -1042,7 +1042,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64);
             // TODO: per thread load is more reasonable for batching.
             r.set_transport_layer_load(grpc_thread_load.total_load() as u64);
+
             health_feedback_attacher.attach_if_needed(&mut r);
+
             if let Some(err @ Error::ClusterIDMisMatch { .. }) = item.server_err {
                 let e = RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, err.to_string());
                 GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Err(GrpcError::RpcFailure(e))
@@ -1207,6 +1209,31 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         .map(|_| ());
         ctx.spawn(task);
     }
+
+    fn get_health_feedback(
+        &mut self,
+        ctx: RpcContext<'_>,
+        request: GetHealthFeedbackRequest,
+        sink: UnarySink<GetHealthFeedbackResponse>,
+    ) {
+        reject_if_cluster_id_mismatch!(request, self, ctx, sink);
+        let attacher = HealthFeedbackAttacher::new(
+            self.store_id,
+            self.health_controller.clone(),
+            self.health_feedback_seq.clone(),
+            self.health_feedback_interval,
+        );
+
+        let mut resp = GetHealthFeedbackResponse::default();
+        resp.set_health_feedback(attacher.gen_health_feedback_pb());
+        let task = sink
+            .success(resp)
+            .map_err(|e| {
+                warn!("get_health_feedback failed"; "err" => ?e);
+            })
+            .map(|_| ());
+        ctx.spawn(task);
+    }
 }
 
 fn response_batch_commands_request<F, T>(
@@ -1361,6 +1388,15 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         .map_err(|e| {GRPC_MSG_FAIL_COUNTER.coprocessor.inc(); e});
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::coprocessor, source, resource_group_priority);
                 },
+                Some(batch_commands_request::request::Cmd::GetHealthFeedback(req)) => {
+                    handle_cluster_id_mismatch!(cluster_id, req);
+                    let begin_instant = Instant::now();
+                    let source = req.get_context().get_request_source().to_owned();
+                    // The response is empty at this place, and will be filled when collected to
+                    // the batch response.
+                    let resp = std::future::ready(Ok(GetHealthFeedbackResponse::default()).map(oneof!(batch_commands_response::response::Cmd::GetHealthFeedback)));
+                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::get_health_feedback, source, ResourcePriority::unknown);
+                },
                 Some(batch_commands_request::request::Cmd::Empty(req)) => {
                     let begin_instant = Instant::now();
                     let resp = future_handle_empty(req)
@@ -1431,7 +1467,6 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
         RawCoprocessor, future_raw_coprocessor(copr_v2, storage), coprocessor;
         PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
         PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
-        RequestHealthFeedback, future_request_health_feedback(), request_health_feedback;
     }
 
     Ok(())
@@ -1504,14 +1539,6 @@ async fn future_handle_empty(
             .await;
     }
     Ok(res)
-}
-
-fn future_request_health_feedback(
-    _req: RequestHealthFeedbackRequest,
-) -> impl Future<Output = ServerResult<RequestHealthFeedbackResponse>> {
-    // This function is simply noop. Attaching health feedback info will be done
-    // when generating the batch response in batch_commands stream.
-    std::future::ready(Ok(RequestHealthFeedbackResponse::default()))
 }
 
 fn future_get<E: Engine, L: LockManager, F: KvFormat>(
@@ -2584,29 +2611,28 @@ impl HealthFeedbackAttacher {
         }
     }
 
-    fn has_request_health_feedback(resp: &BatchCommandsResponse) -> bool {
-        for response in resp.get_responses().iter().map(|r| &r.cmd) {
-            if matches!(
-                response,
-                Some(BatchCommandsResponse_Response_oneof_cmd::RequestHealthFeedback(_))
-            ) {
-                return true;
+    fn attach_if_needed(&mut self, resp: &mut BatchCommandsResponse) {
+        let mut requested_feedback = None;
+
+        for r in resp.responses.iter_mut().map(|r| &mut r.cmd) {
+            if let Some(BatchCommandsResponse_Response_oneof_cmd::GetHealthFeedback(r)) = r {
+                if requested_feedback.is_none() {
+                    requested_feedback = Some(self.gen_health_feedback_pb());
+                }
+                r.set_health_feedback(requested_feedback.clone().unwrap());
             }
         }
-        false
-    }
 
-    fn attach_if_needed(&mut self, resp: &mut BatchCommandsResponse) {
-        // When the health feedback info is explicitly requested, ignore the configured
-        // feedback interval.
-        let is_explicitly_requested = Self::has_request_health_feedback(resp);
-        let feedback_interval = if is_explicitly_requested {
-            Duration::from_millis(0)
-        } else {
-            match self.feedback_interval {
-                Some(i) => i,
-                None => return,
-            }
+        // If there's any explicit request for health feedback information, attach it
+        // to the BatchCommandsResponse no matter how it's configured.
+        if let Some(feedback) = requested_feedback {
+            self.attach_with(resp, Instant::now_coarse(), feedback);
+            return;
+        }
+
+        let feedback_interval = match self.feedback_interval {
+            Some(i) => i,
+            None => return,
         };
 
         let now = Instant::now_coarse();
@@ -2621,11 +2647,25 @@ impl HealthFeedbackAttacher {
     }
 
     fn attach(&mut self, resp: &mut BatchCommandsResponse, now: Instant) {
+        self.attach_with(resp, now, self.gen_health_feedback_pb())
+    }
+
+    fn attach_with(
+        &mut self,
+        resp: &mut BatchCommandsResponse,
+        now: Instant,
+        health_feedback_pb: HealthFeedback,
+    ) {
         self.last_feedback_time = Some(now);
-        let feedback = resp.mut_health_feedback();
+        resp.set_health_feedback(health_feedback_pb);
+    }
+
+    fn gen_health_feedback_pb(&self) -> HealthFeedback {
+        let mut feedback = HealthFeedback::default();
         feedback.set_store_id(self.store_id);
         feedback.set_feedback_seq_no(self.seq.fetch_add(1, Ordering::Relaxed));
         feedback.set_slow_score(self.health_controller.get_raftstore_slow_score() as i32);
+        feedback
     }
 }
 
@@ -2721,15 +2761,13 @@ mod tests {
         assert_eq!(resp.get_health_feedback().get_slow_score(), 50);
 
         // Do not skip if feedback info is explicitly requested, i.e.
-        // `RequestHealthFeedback` request is received from the client.
+        // `GetHealthFeedback` request is received from the client.
         let resp_with_request_health_feedback = || {
             let mut resp = BatchCommandsResponse::default();
             let mut resp_item = BatchCommandsResponseResponse::default();
-            resp_item.cmd = Some(
-                BatchCommandsResponse_Response_oneof_cmd::RequestHealthFeedback(
-                    RequestHealthFeedbackResponse::default(),
-                ),
-            );
+            resp_item.cmd = Some(BatchCommandsResponse_Response_oneof_cmd::GetHealthFeedback(
+                GetHealthFeedbackResponse::default(),
+            ));
             resp.responses.push(resp_item);
             resp
         };
@@ -2739,6 +2777,21 @@ mod tests {
         assert_eq!(resp.get_health_feedback().get_store_id(), 1);
         assert_eq!(resp.get_health_feedback().get_feedback_seq_no(), 3);
         assert_eq!(resp.get_health_feedback().get_slow_score(), 50);
+        // And the `GetHealthFeedbackResponse` will also be filled with the feedback
+        // info.
+        fn get_feedback_in_response(resp: &BatchCommandsResponseResponse) -> &HealthFeedback {
+            match resp.cmd {
+                Some(BatchCommandsResponse_Response_oneof_cmd::GetHealthFeedback(ref f)) => {
+                    assert!(!f.has_region_error());
+                    f.get_health_feedback()
+                }
+                _ => panic!("unexpected response body: {:?}", resp),
+            }
+        }
+        assert_eq!(
+            get_feedback_in_response(&resp.get_responses()[0]),
+            resp.get_health_feedback()
+        );
 
         // If requested, it attaches the feedback info even `feedback_interval` is not
         // given, which means never attaching.
@@ -2753,5 +2806,28 @@ mod tests {
         assert_eq!(resp.get_health_feedback().get_store_id(), 1);
         assert_eq!(resp.get_health_feedback().get_feedback_seq_no(), 4);
         assert_eq!(resp.get_health_feedback().get_slow_score(), 50);
+        assert_eq!(
+            get_feedback_in_response(&resp.get_responses()[0]),
+            resp.get_health_feedback()
+        );
+
+        // It also works when there are multiple `GetHealthFeedbackResponse` in the
+        // batch, and each single `GetHealthFeedback` call gets the same result.
+        test_reporter.set_raftstore_slow_score(80.);
+        resp = resp_with_request_health_feedback();
+        resp.responses.push(resp.responses[0].clone());
+        a.attach_if_needed(&mut resp);
+        assert!(resp.has_health_feedback());
+        assert_eq!(resp.get_health_feedback().get_store_id(), 1);
+        assert_eq!(resp.get_health_feedback().get_feedback_seq_no(), 5);
+        assert_eq!(resp.get_health_feedback().get_slow_score(), 80);
+        for i in 0..2 {
+            assert_eq!(
+                get_feedback_in_response(&resp.get_responses()[i]),
+                resp.get_health_feedback(),
+                "{}-th response in BatchCommandsResponse mismatches",
+                i
+            );
+        }
     }
 }
