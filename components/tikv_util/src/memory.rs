@@ -211,7 +211,12 @@ impl MemoryQuota {
         self.capacity.load(Ordering::Relaxed)
     }
 
-    pub fn set_capacity(&self, capacity: usize) {
+    pub fn set_capacity(&self, mut capacity: usize) {
+        // Value bigger than isize::MAX just means unlimited,
+        // so replace it with isize::MAX to avoid overflow.
+        if capacity > isize::MAX as usize {
+            capacity = isize::MAX as usize;
+        }
         self.capacity.store(capacity, Ordering::Relaxed);
     }
 
