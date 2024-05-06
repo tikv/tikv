@@ -97,7 +97,7 @@
 
 ## Whether allocates the exclusive arena for threads.
 ## When disabled, the metric of memory usage for each thread would be unavailable.
-# enable-thread-exclusive-arena = true,
+# enable-thread-exclusive-arena = true
 
 ## Configurations for the single thread pool serving read requests.
 [readpool.unified]
