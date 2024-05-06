@@ -80,6 +80,7 @@ fn test_serde_custom_tikv_config() {
     value.memory_usage_high_water = 0.65;
     value.memory.enable_heap_profiling = false;
     value.memory.profiling_sample_per_bytes = ReadableSize::mb(1);
+    value.memory.enable_thread_exclusive_arena = false;
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.
         addr: "example.com:443".to_owned(),
