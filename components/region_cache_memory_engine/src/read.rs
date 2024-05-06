@@ -595,6 +595,7 @@ mod tests {
             construct_key, construct_user_key, construct_value, decode_key, encode_key,
             encode_seek_key, InternalBytes, ValueType,
         },
+        perf_context::PERF_CONTEXT,
         RangeCacheEngineConfig, RangeCacheEngineOptions, RangeCacheMemoryEngine,
     };
 
@@ -1817,5 +1818,57 @@ mod tests {
         }
         assert_eq!(8, collector.internal_delete_skipped_count());
         assert_eq!(10, collector.internal_key_skipped_count());
+    }
+
+    #[test]
+    fn test_read_flow_metrics() {
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        )));
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(range.clone());
+
+        {
+            let mut core = engine.core.write();
+            core.range_manager.set_safe_point(&range, 5);
+            let sl = core.engine.data[cf_to_id("write")].clone();
+
+            put_key_val(&sl, "a", "val", 10, 5);
+            put_key_val(&sl, "b", "vall", 10, 5);
+            put_key_val(&sl, "c", "valll", 10, 5);
+            put_key_val(&sl, "d", "vallll", 10, 5);
+        }
+
+        let snapshot = engine.snapshot(range.clone(), u64::MAX, 100).unwrap();
+        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().get_read_bytes), 0);
+        let key = construct_mvcc_key("a", 10);
+        snapshot.get_value_cf("write", &key).unwrap();
+        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().get_read_bytes), 3);
+        let key = construct_mvcc_key("b", 10);
+        snapshot.get_value_cf("write", &key).unwrap();
+        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().get_read_bytes), 7);
+        let key = construct_mvcc_key("c", 10);
+        snapshot.get_value_cf("write", &key).unwrap();
+        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().get_read_bytes), 12);
+        let key = construct_mvcc_key("d", 10);
+        snapshot.get_value_cf("write", &key).unwrap();
+        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().get_read_bytes), 18);
+
+        let mut iter_opt = IterOptions::default();
+        iter_opt.set_upper_bound(&range.end, 0);
+        iter_opt.set_lower_bound(&range.start, 0);
+        let mut iter = snapshot.iterator_opt("write", iter_opt).unwrap();
+        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 0);
+        iter.seek_to_first().unwrap();
+        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 12);
+        let key = construct_mvcc_key("b", 10);
+        iter.seek(&key).unwrap();
+        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 25);
+        let key = construct_mvcc_key("c", 10);
+        iter.seek(&key).unwrap();
+        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 39);
+        let key = construct_mvcc_key("d", 10);
+        iter.seek(&key).unwrap();
+        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 54);
     }
 }

@@ -40,7 +40,7 @@ pub struct PerfContext {
 macro_rules! perf_counter_add {
     ($metric:ident, $value:expr) => {
         PERF_CONTEXT.with(|perf_context| {
-            perf_context.borrow_mut().$metric += 1;
+            perf_context.borrow_mut().$metric += $value;
         });
     };
 }
