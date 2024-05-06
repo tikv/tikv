@@ -1998,11 +1998,13 @@ impl RaftEngineConfig {
             // better performance and reduce the IO overhead.
             // Meanwhile, the batch_compression_threshold cannot be modified dynamically if
             // the threads count of async-io are changed manually.
-            info!(
-                "raft-engine.batch-compression-threshold {} should be adpative to the size of async-io. Set it to {} instead.",
-                cur_batch_compression_thd, adaptive_batch_comp_thd,
-            );
             self.mut_config().batch_compression_threshold = adaptive_batch_comp_thd;
+            if raft_store.store_io_pool_size > 0 {
+                warn!(
+                    "raft-engine.batch-compression-threshold {} should be adpative to the size of async-io. Set it to {} instead.",
+                    cur_batch_compression_thd, adaptive_batch_comp_thd,
+                );
+            }
         }
     }
 
