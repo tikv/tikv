@@ -19,7 +19,8 @@ use std::{cmp::Ordering, ops::Deref, sync::Arc, time::Duration};
 
 use futures::future::BoxFuture;
 use kvproto::{
-    metapb, pdpb,
+    metapb,
+    pdpb::{self, UpdateServiceGcSafePointResponse},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
     resource_manager::TokenBucketsRequest,
 };
@@ -540,4 +541,17 @@ pub fn take_peer_address(store: &mut metapb::Store) -> String {
     } else {
         store.take_address()
     }
+}
+
+fn check_update_service_safe_point_resp(
+    resp: &UpdateServiceGcSafePointResponse,
+    required_safepoint: u64,
+) -> Result<()> {
+    if resp.min_safe_point > required_safepoint {
+        return Err(Error::UnsafeServiceGcSafePoint {
+            requested: required_safepoint.into(),
+            current_minimal: resp.min_safe_point.into(),
+        });
+    }
+    Ok(())
 }
