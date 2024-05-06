@@ -31,6 +31,7 @@ use grpcio::Environment;
 use hybrid_engine::HybridEngine;
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
+use raftstore::coprocessor::RegionInfoProvider;
 use region_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheMemoryEngine};
 use security::SecurityManager;
 use tikv::{
@@ -704,6 +705,7 @@ pub trait KvEngineBuilder: KvEngine {
         range_cache_engine_config: Arc<VersionTrack<RangeCacheEngineConfig>>,
         disk_engine: RocksEngine,
         pd_client: Option<Arc<RpcClient>>,
+        region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self;
 }
 
@@ -712,6 +714,7 @@ impl KvEngineBuilder for RocksEngine {
         _range_cache_engine_config: Arc<VersionTrack<RangeCacheEngineConfig>>,
         disk_engine: RocksEngine,
         _pd_client: Option<Arc<RpcClient>>,
+        _region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
         disk_engine
     }
@@ -722,9 +725,13 @@ impl KvEngineBuilder for HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
         range_cache_engine_config: Arc<VersionTrack<RangeCacheEngineConfig>>,
         disk_engine: RocksEngine,
         pd_client: Option<Arc<RpcClient>>,
+        region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
         // todo(SpadeA): add config for it
-        let mut memory_engine = RangeCacheMemoryEngine::new(range_cache_engine_config);
+        let mut memory_engine = RangeCacheMemoryEngine::with_region_info_provider(
+            range_cache_engine_config,
+            region_info_provider,
+        );
         memory_engine.set_disk_engine(disk_engine.clone());
         if let Some(pd_client) = pd_client.as_ref() {
             memory_engine.start_hint_service(

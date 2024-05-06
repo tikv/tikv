@@ -255,7 +255,10 @@ impl RangeCacheMemoryEngine {
         RangeCacheMemoryEngine::with_region_info_provider(config, None)
     }
 
-    pub fn with_region_info_provider(config: Arc<VersionTrack<RangeCacheEngineConfig>>, region_info_provider: Option<Arc<dyn RegionInfoProvider>>) -> Self {
+    pub fn with_region_info_provider(
+        config: Arc<VersionTrack<RangeCacheEngineConfig>>,
+        region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
+    ) -> Self {
         info!("init range cache memory engine";);
         let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
         let skiplist_engine = { core.read().engine().clone() };

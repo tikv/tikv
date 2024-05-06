@@ -241,15 +241,24 @@ impl BgWorkManager {
     ) -> (JoinHandle<()>, Sender<bool>) {
         let (tx, rx) = bounded(0);
         let h = std::thread::spawn(move || {
-            let ticker = tick(gc_interval);
+            let gc_ticker = tick(gc_interval);
+            let load_evict_ticker = tick(gc_interval * 2); // TODO (afeinberg): Use a real value.
             loop {
                 select! {
-                    recv(ticker) -> _ => {
+                    recv(gc_ticker) -> _ => {
                         let safe_point = TimeStamp::physical_now() - gc_interval.as_millis() as u64;
                         let safe_point = TimeStamp::compose(safe_point, 0).into_inner();
                         if let Err(e) = scheduler.schedule(BackgroundTask::Gc(GcTask {safe_point})) {
                             error!(
                                 "schedule range cache engine gc failed";
+                                "err" => ?e,
+                            );
+                        }
+                    },
+                    recv(load_evict_ticker) -> _ => {
+                        if let Err(e) = scheduler.schedule(BackgroundTask::TopRegionsLoadEvict) {
+                            error!(
+                                "schedule load evict failed";
                                 "err" => ?e,
                             );
                         }
@@ -313,11 +322,7 @@ impl RangeStatsManager {
             ret
         };
         if prev_top_regions.is_empty() {
-            ranges_added_out.extend(
-                curr_top_regions
-                     .values() 
-                     .map(CacheRange::from_region)
-            );
+            ranges_added_out.extend(curr_top_regions.values().map(CacheRange::from_region));
             return;
         }
         let added_ranges = curr_top_regions
@@ -521,6 +526,9 @@ impl BackgroundRunnerCore {
     }
 
     fn top_regions_load_evict(&mut self) {
+        if self.range_stats_manager.is_none() {
+            return;
+        }
         let mut ranges_to_add = Vec::<CacheRange>::with_capacity(NUM_REGIONS_FOR_CACHE / 2);
         let mut ranges_to_remove = Vec::<CacheRange>::with_capacity(NUM_REGIONS_FOR_CACHE / 2);
         self.range_stats_manager
