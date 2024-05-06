@@ -27,6 +27,7 @@ mod write_batch;
 
 pub use background::{BackgroundRunner, GcTask};
 pub use engine::RangeCacheMemoryEngine;
+pub use metrics::flush_range_cache_engine_statistics;
 pub use range_manager::RangeCacheStatus;
 pub use statistics::Statistics as RangeCacheMemoryEngineStatistics;
 pub use write_batch::RangeCacheWriteBatch;
@@ -111,16 +112,9 @@ pub struct RangeCacheEngineOptions {
 
 impl RangeCacheEngineOptions {
     pub fn new(config: Arc<VersionTrack<RangeCacheEngineConfig>>) -> RangeCacheEngineOptions {
-        if config.value().enabled {
-            RangeCacheEngineOptions {
-                config,
-                statistics: Some(Arc::default()),
-            }
-        } else {
-            RangeCacheEngineOptions {
-                config,
-                statistics: None,
-            }
+        RangeCacheEngineOptions {
+            config,
+            statistics: Some(Arc::default()),
         }
     }
 

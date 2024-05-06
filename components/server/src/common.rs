@@ -32,7 +32,8 @@ use hybrid_engine::HybridEngine;
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
 use region_cache_memory_engine::{
-    RangeCacheEngineOptions, RangeCacheMemoryEngine, RangeCacheMemoryEngineStatistics,
+    flush_range_cache_engine_statistics, RangeCacheEngineOptions, RangeCacheMemoryEngine,
+    RangeCacheMemoryEngineStatistics,
 };
 use security::SecurityManager;
 use tikv::{
@@ -902,7 +903,9 @@ impl<EK: KvEngine, ER: RaftEngine> EngineMetricsManager<EK, ER> {
         if let Some(s) = self.raft_statistics.as_ref() {
             flush_engine_statistics(s, "raft", false);
         }
-        if let Some(s) = self.range_cache_engine_statistics.as_ref() {}
+        if let Some(s) = self.range_cache_engine_statistics.as_ref() {
+            flush_range_cache_engine_statistics(s);
+        }
         if now.saturating_duration_since(self.last_reset) >= DEFAULT_ENGINE_METRICS_RESET_INTERVAL {
             if let Some(s) = self.kv_statistics.as_ref() {
                 s.reset();

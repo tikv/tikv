@@ -76,6 +76,8 @@ fn physical_core_id() -> i32 {
     }
 }
 
+pub const ENGINE_TICKER_TYPES: &[Tickers] = &[Tickers::BytesRead, Tickers::IterBytesRead];
+
 #[repr(u32)]
 #[derive(Copy, Clone)]
 pub enum Tickers {
@@ -108,6 +110,8 @@ impl StatisticsData {
 
 #[derive(Default)]
 pub struct Statistics {
+    // Synchronizes anything that operates across other cores' local data,
+    // such that operations like `get_and_reset_ticker_count` can be performed atomically.
     _aggregate_lock: Mutex<()>,
     per_core_stats: CoreLocalArray<CachePadded<StatisticsData>>,
 }
@@ -143,6 +147,38 @@ impl Statistics {
 
 #[cfg(test)]
 pub mod tests {
+    use std::{sync::Arc, time::Duration};
+
+    use super::{Statistics, Tickers};
+
     #[test]
-    fn test_core_local() {}
+    fn test_core_local() {
+        let statistics = Arc::new(Statistics::default());
+        std::thread::scope(|s| {
+            for _ in 0..4 {
+                let statistics_clone = statistics.clone();
+                s.spawn(move || {
+                    statistics_clone.record_ticker(Tickers::BytesRead, 100);
+                    statistics_clone.record_ticker(Tickers::IterBytesRead, 200);
+                    // sleep a while to make the next spwan use another core as much as possible
+                    std::thread::sleep(Duration::from_millis(100));
+                });
+            }
+        });
+        let read_bytes = statistics.get_ticker_count(Tickers::BytesRead);
+        assert_eq!(read_bytes, 400);
+        assert_eq!(
+            statistics.get_and_reset_ticker_count(Tickers::BytesRead),
+            400
+        );
+        assert_eq!(statistics.get_ticker_count(Tickers::BytesRead), 0);
+
+        let iter_bytes = statistics.get_ticker_count(Tickers::IterBytesRead);
+        assert_eq!(iter_bytes, 800);
+        assert_eq!(
+            statistics.get_and_reset_ticker_count(Tickers::IterBytesRead),
+            800
+        );
+        assert_eq!(statistics.get_ticker_count(Tickers::IterBytesRead), 0);
+    }
 }
