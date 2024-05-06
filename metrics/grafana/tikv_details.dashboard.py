@@ -490,6 +490,13 @@ Full""",
                         ),
                         legend_format=r"store-write-channelfull-{{instance}}",
                     ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_raftstore_process_busy",
+                            by_labels=["instance", "type"],
+                        ),
+                        legend_format=r"{{instance}}-{{type}}",
+                    ),
                 ],
             ),
             graph_panel(
@@ -4792,6 +4799,57 @@ def RocksDB() -> RowPanel:
                             label_selectors=[
                                 'db="$db"',
                                 'type="compaction_time_average"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="avg",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Compaction Job Size(files)",
+                description="How many sst files are compacted in a compaction job",
+                yaxes=yaxes(left_format=UNITS.SHORT, log_base=2),
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_num_files_in_single_compaction",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="compaction_job_size_max"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="max",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_num_files_in_single_compaction",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="compaction_job_size_percentile99"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_num_files_in_single_compaction",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="compaction_job_size_percentile95"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_avg(
+                            "tikv_engine_num_files_in_single_compaction",
+                            label_selectors=[
+                                'db="$db"',
+                                'type="compaction_job_size_average"',
                             ],
                             by_labels=[],  # override default by instance.
                         ),

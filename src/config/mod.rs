@@ -4683,6 +4683,7 @@ pub enum Module {
     Rocksdb,
     Raftdb,
     RaftEngine,
+    RangeCacheEngine,
     Storage,
     Security,
     Encryption,
@@ -4714,6 +4715,7 @@ impl From<&str> for Module {
             "rocksdb" => Module::Rocksdb,
             "raftdb" => Module::Raftdb,
             "raft_engine" => Module::RaftEngine,
+            "range_cache_engine" => Module::RangeCacheEngine,
             "storage" => Module::Storage,
             "security" => Module::Security,
             "import" => Module::Import,
@@ -6908,7 +6910,6 @@ mod tests {
         cfg.raftdb.titan.max_background_gc = default_cfg.raftdb.titan.max_background_gc;
         cfg.backup.num_threads = default_cfg.backup.num_threads;
         cfg.log_backup.num_threads = default_cfg.log_backup.num_threads;
-        cfg.raft_store.cmd_batch_concurrent_ready_max_count = 1;
 
         // There is another set of config values that we can't directly compare:
         // When the default values are `None`, but are then resolved to `Some(_)` later

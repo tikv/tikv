@@ -114,11 +114,11 @@ impl Iterator for PanicEngineIterator {
 pub struct PanicEngineIterMetricsCollector;
 
 impl IterMetricsCollector for PanicEngineIterMetricsCollector {
-    fn internal_delete_skipped_count(&self) -> usize {
+    fn internal_delete_skipped_count(&self) -> u64 {
         panic!()
     }
 
-    fn internal_key_skipped_count(&self) -> usize {
+    fn internal_key_skipped_count(&self) -> u64 {
         panic!()
     }
 }

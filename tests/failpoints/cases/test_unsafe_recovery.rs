@@ -559,9 +559,7 @@ fn test_unsafe_recovery_rollback_merge() {
 fn test_unsafe_recovery_apply_before_persist() {
     let mut cluster = new_node_cluster(0, 5);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(40);
-    cluster.cfg.raft_store.cmd_batch_concurrent_ready_max_count = 0;
     cluster.cfg.raft_store.store_io_pool_size = 1;
-    cluster.cfg.raft_store.max_apply_unpersisted_log_limit = 10000;
     cluster.run();
     assert_eq!(cluster.get_node_ids().len(), 5);
 

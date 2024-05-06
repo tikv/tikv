@@ -34,6 +34,8 @@
 SHELL := bash
 ENABLE_FEATURES ?=
 
+ENABLE_FEATURES += memory-engine
+
 # Frame pointer is enabled by default. The purpose is to provide stable and
 # reliable stack backtraces (for CPU Profiling).
 #
