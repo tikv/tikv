@@ -230,7 +230,14 @@ where
                     TimeStamp::new(safepoint.saturating_sub(1)),
                     safepoint_ttl,
                 )
-                .await?;
+                .await
+                .or_else(|err| match err {
+                    pd_client::Error::UnsafeServiceGcSafePoint { .. } => {
+                        warn!("gc safe point exceeds the task checkpoint. skipping uploading"; "err" => %err);
+                        Ok(())
+                    }
+                    _ => Err(err),
+                })?;
                 meta_cli.pause(&t).await?;
                 let mut last_error = StreamBackupError::new();
                 last_error.set_error_code(code);
