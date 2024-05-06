@@ -46,6 +46,7 @@ pub type KvPair = (Vec<u8>, Value);
 /// but this information is transparent to this type, the caller must use it
 /// consistently.
 #[derive(Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[repr(transparent)]
 pub struct Key(Vec<u8>);
 
 /// Core functions for `Key`.
@@ -249,7 +250,7 @@ impl Key {
     }
 
     #[inline]
-    pub fn transumte_encoded(encoded_key: &Vec<u8>) -> &Self {
+    pub fn transmute_encoded(encoded_key: &Vec<u8>) -> &Self {
         unsafe { std::mem::transmute(encoded_key) }
     }
 }

@@ -242,7 +242,7 @@ impl Downstream {
     }
 }
 
-// In `PendingLock`,  `key` is raw format instead of encoded.
+// In `PendingLock`,  `key` is encoded.
 pub enum PendingLock {
     Track { key: Key, start_ts: MiniLock },
     Untrack { key: Key },
@@ -409,10 +409,9 @@ impl Delegate {
             _ => unreachable!(),
         };
 
+        let mut free_bytes = 0usize;
         for delta_lock in delta_locks {
-            let bytes = delta_lock.approximate_heap_size();
-            self.memory_quota.free(bytes);
-            CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
+            free_bytes += delta_lock.approximate_heap_size();
             match delta_lock {
                 PendingLock::Track { key, start_ts } => match locks.entry(key) {
                     BTreeMapEntry::Vacant(x) => {
@@ -430,12 +429,16 @@ impl Delegate {
                 },
             }
         }
+        self.memory_quota.free(free_bytes);
+        CDC_PENDING_BYTES_GAUGE.sub(free_bytes as _);
 
+        let mut alloc_bytes = 0usize;
         for key in locks.keys() {
-            let bytes = key.approximate_heap_size();
-            self.memory_quota.alloc(bytes)?;
-            CDC_PENDING_BYTES_GAUGE.add(bytes as _);
+            alloc_bytes += key.approximate_heap_size();
         }
+        self.memory_quota.alloc(alloc_bytes)?;
+        CDC_PENDING_BYTES_GAUGE.add(alloc_bytes as _);
+
         self.lock_tracker = LockTracker::Prepared { region, locks };
         Ok(())
     }
@@ -988,14 +991,20 @@ impl Delegate {
             "write" => {
                 let key = Key::from_encoded_slice(&put.key).truncate_ts().unwrap();
                 let row = rows.txns_by_key.entry(key).or_default();
-                if decode_write(put.take_key(), &put.value, &mut row.0, &mut row.1, true) {
+                if decode_write(
+                    put.take_key(),
+                    &put.value,
+                    &mut row.v,
+                    &mut row.has_value,
+                    true,
+                ) {
                     return Ok(());
                 }
 
                 if rows.is_one_pc {
-                    set_event_row_type(&mut row.0, EventLogType::Committed);
-                    let read_old_ts = TimeStamp::from(row.0.commit_ts).prev();
-                    read_old_value(&mut row.0, read_old_ts)?;
+                    set_event_row_type(&mut row.v, EventLogType::Committed);
+                    let read_old_ts = TimeStamp::from(row.v.commit_ts).prev();
+                    read_old_value(&mut row.v, read_old_ts)?;
                 }
             }
             "lock" => {
@@ -1005,19 +1014,20 @@ impl Delegate {
 
                 let key = Key::from_encoded_slice(&put.key);
                 let row = rows.txns_by_key.entry(key.clone()).or_default();
-                if decode_lock(put.take_key(), lock, &mut row.0, &mut row.1) {
+                if decode_lock(put.take_key(), lock, &mut row.v, &mut row.has_value) {
                     return Ok(());
                 }
 
-                row.2 = self.push_lock(key, MiniLock::new(row.0.start_ts, txn_source))?;
+                row.lock_count_modify =
+                    self.push_lock(key, MiniLock::new(row.v.start_ts, txn_source))?;
 
-                let read_old_ts = std::cmp::max(for_update_ts, row.0.start_ts.into());
-                read_old_value(&mut row.0, read_old_ts)?;
+                let read_old_ts = std::cmp::max(for_update_ts, row.v.start_ts.into());
+                read_old_value(&mut row.v, read_old_ts)?;
             }
             "" | "default" => {
                 let key = Key::from_encoded(put.take_key()).truncate_ts().unwrap();
                 let row = rows.txns_by_key.entry(key).or_default();
-                decode_default(put.take_value(), &mut row.0, &mut row.1);
+                decode_default(put.take_value(), &mut row.v, &mut row.has_value);
             }
             other => panic!("invalid cf {}", other),
         }
@@ -1029,7 +1039,7 @@ impl Delegate {
             "lock" => {
                 if self.pop_lock(Key::from_encoded_slice(&delete.key))? != 0 {
                     let key = Key::from_encoded(delete.take_key());
-                    rows.txns_by_key.get_mut(&key).unwrap().2 -= 1;
+                    rows.txns_by_key.get_mut(&key).unwrap().lock_count_modify -= 1;
                 }
             }
             "" | "default" | "write" => {}
@@ -1114,17 +1124,29 @@ impl Delegate {
 #[derive(Default)]
 struct RowsBuilder {
     // map[Key]->(row, has_value, lock_count_modify)
-    txns_by_key: HashMap<Key, (EventRow, bool, isize)>,
+    txns_by_key: HashMap<Key, RowInBuilding>,
 
     raws: Vec<EventRow>,
 
     is_one_pc: bool,
 }
 
+#[derive(Default)]
+struct RowInBuilding {
+    v: EventRow,
+    has_value: bool,
+    lock_count_modify: isize,
+}
+
 impl RowsBuilder {
     fn finish_build(self) -> (Vec<EventRow>, Vec<(EventRow, isize)>) {
         let mut txns = Vec::with_capacity(self.txns_by_key.len());
-        for (v, has_value, lock_count_modify) in self.txns_by_key.into_values() {
+        for RowInBuilding {
+            v,
+            has_value,
+            lock_count_modify,
+        } in self.txns_by_key.into_values()
+        {
             if v.r_type == EventLogType::Prewrite && v.op_type == EventRowOpType::Put && !has_value
             {
                 // It's possible that a prewrite command only contains lock but without
@@ -1330,15 +1352,13 @@ impl ObservedRange {
     }
 
     fn to_range(&self) -> (Bound<&Key>, Bound<&Key>) {
-        unsafe {
-            let start = Bound::Included(std::mem::transmute(&self.start_key_encoded));
-            let end = if self.end_key_encoded.is_empty() {
-                Bound::Unbounded
-            } else {
-                Bound::Excluded(std::mem::transmute(&self.end_key_encoded))
-            };
-            (start, end)
-        }
+        let start = Bound::Included(Key::transmute_encoded(&self.start_key_encoded));
+        let end = if self.end_key_encoded.is_empty() {
+            Bound::Unbounded
+        } else {
+            Bound::Excluded(Key::transmute_encoded(&self.end_key_encoded))
+        };
+        (start, end)
     }
 }
 

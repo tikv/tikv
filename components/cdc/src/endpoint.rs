@@ -2266,7 +2266,6 @@ mod tests {
                 other => panic!("unknown event {:?}", other),
             }
         } else {
-            println!("event: {:?}", cdc_event.0);
             panic!("unknown cdc event {:?}", cdc_event);
         }
     }
