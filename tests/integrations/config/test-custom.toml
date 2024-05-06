@@ -18,6 +18,7 @@ max-days = 3
 [memory]
 enable-heap-profiling = false
 profiling-sample-per-bytes = "1MB"
+enable-thread-exclusive-arena = false
 
 [readpool.unified]
 min-thread-count = 5
