@@ -993,6 +993,7 @@ fn test_raft_engine_compression_thd() {
         cfg.raft_engine.config().batch_compression_threshold,
         RaftEngineReadableSize::kb(64)
     );
+    cfg.raft_engine.customized = true;
     cfg.validate().unwrap();
     assert_eq!(
         cfg.raft_engine.config().batch_compression_threshold,
@@ -1011,6 +1012,7 @@ fn test_raft_engine_compression_thd() {
         cfg.raft_engine.config().batch_compression_threshold,
         RaftEngineReadableSize::kb(64)
     );
+    cfg.raft_engine.customized = false;
     cfg.validate().unwrap();
     assert_eq!(
         cfg.raft_engine.config().batch_compression_threshold,
@@ -1026,6 +1028,7 @@ fn test_raft_engine_compression_thd() {
         cfg.raft_engine.config().batch_compression_threshold,
         RaftEngineReadableSize::kb(8)
     );
+    cfg.raft_engine.customized = false;
     cfg.validate().unwrap();
     assert_eq!(
         cfg.raft_engine.config().batch_compression_threshold,

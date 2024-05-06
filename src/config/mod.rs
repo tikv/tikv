@@ -1962,6 +1962,8 @@ impl RaftDbConfig {
 #[serde(default, rename_all = "kebab-case")]
 pub struct RaftEngineConfig {
     pub enable: bool,
+    #[serde(skip)]
+    pub customized: bool,
     #[serde(flatten)]
     config: RawRaftEngineConfig,
 }
@@ -1970,6 +1972,7 @@ impl Default for RaftEngineConfig {
     fn default() -> Self {
         Self {
             enable: true,
+            customized: false,
             config: RawRaftEngineConfig::default(),
         }
     }
@@ -1998,12 +2001,12 @@ impl RaftEngineConfig {
             // better performance and reduce the IO overhead.
             // Meanwhile, the batch_compression_threshold cannot be modified dynamically if
             // the threads count of async-io are changed manually.
-            self.mut_config().batch_compression_threshold = adaptive_batch_comp_thd;
-            if raft_store.store_io_pool_size > 0 {
+            if !self.customized && raft_store.store_io_pool_size > 0 {
                 warn!(
                     "raft-engine.batch-compression-threshold {} should be adpative to the size of async-io. Set it to {} instead.",
                     cur_batch_compression_thd, adaptive_batch_comp_thd,
                 );
+                self.mut_config().batch_compression_threshold = adaptive_batch_comp_thd;
             }
         }
     }
@@ -4313,6 +4316,10 @@ impl TikvConfig {
             <TikvConfig as serde::Deserialize>::deserialize(&mut deserializer)
         }?;
         deserializer.end()?;
+        // Currently, it only takes whether the configuration
+        // batch-compression-threshold of RaftEngine are set manually
+        // into consideration to determine whether the RaftEngine is customized.
+        cfg.raft_engine.customized = s.contains("batch-compression-threshold");
         cfg.cfg_path = path.display().to_string();
         Ok(cfg)
     }
