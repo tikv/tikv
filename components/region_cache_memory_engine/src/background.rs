@@ -688,7 +688,7 @@ impl RunnableWithTimer for BackgroundRunner {
     }
 
     fn get_interval(&self) -> Duration {
-        Duration::from_secs(10)
+        Duration::from_millis(500)
     }
 }
 

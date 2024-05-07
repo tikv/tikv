@@ -320,7 +320,7 @@ def Cluster() -> RowPanel:
                             "tikv_range_cache_memory_engine_flow",
                             label_selectors=['type=~"bytes_read|iter_bytes_read"'],
                         ),
-                        legend_format=r"{{instance}}-read",
+                        legend_format=r"{{instance}}-range-cache-engine-read",
                     ),
                 ],
             ),
@@ -4113,6 +4113,18 @@ def RangeCacheMemoryEngine() -> RowPanel:
                             by_labels=["type"],
                         ),
                         legend_format="{{type}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Pending Range Count",
+                description="The pending range count the range cache memory engine",
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_range_cache_range_cache_count",
+                            by_labels=["instance"],
+                        ),
                     ),
                 ],
             ),
