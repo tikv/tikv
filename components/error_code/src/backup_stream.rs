@@ -52,6 +52,10 @@ define_error_codes! {
         "Error happened during executing gRPC",
         "This error is often relative to the network, please check the network connection and network config, say, TLS config."
     ),
+    ENCRYPTION => ("Encryption",
+        "Error happened during interacting with the encryption library.",
+        "This is an internal error, please ask the community for help."
+    ),
 
     OTHER => ("Unknown",
         "Some random error happens.",
