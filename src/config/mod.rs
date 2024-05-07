@@ -3257,8 +3257,8 @@ impl ConfigManager for LogConfigManager {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct MemoryConfig {
-    // Whether enable the heap profiling which may have a bit performance overhead about 2% for the
-    // default sample rate.
+    // Whether enables the heap profiling which may have a bit performance overhead about 2% for
+    // the default sample rate.
     pub enable_heap_profiling: bool,
 
     // Average interval between allocation samples, as measured in bytes of allocation activity.
@@ -3267,6 +3267,11 @@ pub struct MemoryConfig {
     // The default sample interval is 512 KB. It only accepts power of two, otherwise it will be
     // rounded up to the next power of two.
     pub profiling_sample_per_bytes: ReadableSize,
+
+    // Whether allocates the exclusive arena for threads.
+    // When disabled, the metric of memory usage for each thread would be unavailable.
+    #[online_config(skip)]
+    pub enable_thread_exclusive_arena: bool,
 }
 
 impl Default for MemoryConfig {
@@ -3274,6 +3279,7 @@ impl Default for MemoryConfig {
         Self {
             enable_heap_profiling: true,
             profiling_sample_per_bytes: ReadableSize::kb(512),
+            enable_thread_exclusive_arena: true,
         }
     }
 }
@@ -3287,6 +3293,7 @@ impl MemoryConfig {
             }
             tikv_alloc::set_prof_sample(self.profiling_sample_per_bytes.0).unwrap();
         }
+        tikv_alloc::set_thread_exclusive_arena(self.enable_thread_exclusive_arena);
     }
 }
 
@@ -4683,6 +4690,7 @@ pub enum Module {
     Rocksdb,
     Raftdb,
     RaftEngine,
+    RangeCacheEngine,
     Storage,
     Security,
     Encryption,
@@ -4714,6 +4722,7 @@ impl From<&str> for Module {
             "rocksdb" => Module::Rocksdb,
             "raftdb" => Module::Raftdb,
             "raft_engine" => Module::RaftEngine,
+            "range_cache_engine" => Module::RangeCacheEngine,
             "storage" => Module::Storage,
             "security" => Module::Security,
             "import" => Module::Import,
@@ -6908,7 +6917,6 @@ mod tests {
         cfg.raftdb.titan.max_background_gc = default_cfg.raftdb.titan.max_background_gc;
         cfg.backup.num_threads = default_cfg.backup.num_threads;
         cfg.log_backup.num_threads = default_cfg.log_backup.num_threads;
-        cfg.raft_store.cmd_batch_concurrent_ready_max_count = 1;
 
         // There is another set of config values that we can't directly compare:
         // When the default values are `None`, but are then resolved to `Some(_)` later
