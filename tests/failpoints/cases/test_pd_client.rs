@@ -1,6 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cell::RefCell,
     sync::{mpsc, Arc},
     thread,
     time::Duration,
@@ -239,13 +240,17 @@ fn test_retry() {
 
 #[test]
 fn test_update_service_gc_safe_point() {
-    let (_server, mut client) = new_test_server_and_client(ReadableDuration::secs(100));
-
-    let mut update_gc_safepoint = |x| {
-        block_on(client.update_service_safe_point("test".to_owned(), x, Duration::from_secs(1)))
+    let (_server, client) = new_test_server_and_client(ReadableDuration::secs(100));
+    let cli = RefCell::new(client);
+    let update_gc_safepoint = |x| {
+        block_on(cli.borrow_mut().update_service_safe_point(
+            "test".to_owned(),
+            x,
+            Duration::from_secs(1),
+        ))
     };
-    let mut clear_gc_safepoint = || {
-        block_on(client.update_service_safe_point(
+    let clear_gc_safepoint = || {
+        block_on(cli.borrow_mut().update_service_safe_point(
             "test".to_owned(),
             TimeStamp::max(),
             Duration::from_secs(0),
