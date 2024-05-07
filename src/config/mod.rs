@@ -1990,24 +1990,25 @@ impl RaftEngineConfig {
     }
 
     fn optimize_for(&mut self, raft_store: &RaftstoreConfig, raft_kv_v2: bool) {
-        if !raft_kv_v2 {
-            let cur_batch_compression_thd = self.config().batch_compression_threshold;
-            let adaptive_batch_comp_thd = RaftEngineReadableSize(std::cmp::max(
-                cur_batch_compression_thd.0 / (raft_store.store_io_pool_size + 1) as u64,
-                RaftEngineReadableSize::kb(4).0,
-            ));
-            // As the async-io is enabled by default (raftstore.store_io_pool_size == 1),
-            // testing records shows that using 4kb as the default value can achieve
-            // better performance and reduce the IO overhead.
-            // Meanwhile, the batch_compression_threshold cannot be modified dynamically if
-            // the threads count of async-io are changed manually.
-            if !self.customized && raft_store.store_io_pool_size > 0 {
-                warn!(
-                    "raft-engine.batch-compression-threshold {} should be adpative to the size of async-io. Set it to {} instead.",
-                    cur_batch_compression_thd, adaptive_batch_comp_thd,
-                );
-                self.mut_config().batch_compression_threshold = adaptive_batch_comp_thd;
-            }
+        if raft_kv_v2 {
+            return;
+        }
+        let cur_batch_compression_thd = self.config().batch_compression_threshold;
+        let adaptive_batch_comp_thd = RaftEngineReadableSize(std::cmp::max(
+            cur_batch_compression_thd.0 / (raft_store.store_io_pool_size + 1) as u64,
+            RaftEngineReadableSize::kb(4).0,
+        ));
+        // As the async-io is enabled by default (raftstore.store_io_pool_size == 1),
+        // testing records shows that using 4kb as the default value can achieve
+        // better performance and reduce the IO overhead.
+        // Meanwhile, the batch_compression_threshold cannot be modified dynamically if
+        // the threads count of async-io are changed manually.
+        if !self.customized && raft_store.store_io_pool_size > 0 {
+            warn!(
+                "raft-engine.batch-compression-threshold {} should be adpative to the size of async-io. Set it to {} instead.",
+                cur_batch_compression_thd, adaptive_batch_comp_thd,
+            );
+            self.mut_config().batch_compression_threshold = adaptive_batch_comp_thd;
         }
     }
 
