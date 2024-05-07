@@ -780,8 +780,8 @@ impl Filter {
 
         // Just like what rocksdb compaction filter does, we do not handle internal
         // keys (representing different MVCC versions of the same user key) that have
-        // been marked as tombstones. However, these keys need to be deleted. 
-        // Since they are below the safe point, we can safely delete them directly now.
+        // been marked as tombstones. However, these keys need to be deleted. Since they
+        // are below the safe point, we can safely delete them directly now.
         if v_type == ValueType::Deletion {
             if let Some(cache_skiplist_delete_key) = self.cached_skiplist_delete_key.take() {
                 let guard = &epoch::pin();
@@ -1055,7 +1055,7 @@ pub mod tests {
         Arc::new(MemoryController::new(config, skip_engine))
     }
 
-    fn encode_key_for_filter(key: &[u8], ts: TimeStamp) -> InternalBytes {
+    fn encode_raw_key_for_filter(key: &[u8], ts: TimeStamp) -> InternalBytes {
         let key = Key::from_raw(key);
         encoding_for_filter(key.as_encoded(), ts)
     }
@@ -1168,22 +1168,22 @@ pub mod tests {
         assert_eq!(2, element_count(&write));
         assert_eq!(2, element_count(&default));
 
-        let key = encode_key_for_filter(b"key1", TimeStamp::new(15));
+        let key = encode_raw_key_for_filter(b"key1", TimeStamp::new(15));
         assert!(key_exist(&write, &key, guard));
 
-        let key = encode_key_for_filter(b"key2", TimeStamp::new(35));
+        let key = encode_raw_key_for_filter(b"key2", TimeStamp::new(35));
         assert!(key_exist(&write, &key, guard));
 
-        let key = encode_key_for_filter(b"key3", TimeStamp::new(35));
+        let key = encode_raw_key_for_filter(b"key3", TimeStamp::new(35));
         assert!(!key_exist(&write, &key, guard));
 
-        let key = encode_key_for_filter(b"key1", TimeStamp::new(10));
+        let key = encode_raw_key_for_filter(b"key1", TimeStamp::new(10));
         assert!(key_exist(&default, &key, guard));
 
-        let key = encode_key_for_filter(b"key2", TimeStamp::new(30));
+        let key = encode_raw_key_for_filter(b"key2", TimeStamp::new(30));
         assert!(key_exist(&default, &key, guard));
 
-        let key = encode_key_for_filter(b"key3", TimeStamp::new(30));
+        let key = encode_raw_key_for_filter(b"key3", TimeStamp::new(30));
         assert!(!key_exist(&default, &key, guard));
     }
 
