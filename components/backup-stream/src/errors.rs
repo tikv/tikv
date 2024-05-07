@@ -5,6 +5,7 @@ use std::{
     result::Result as StdResult,
 };
 
+use encryption::Error as EncryptionError;
 use error_code::ErrorCodeExt;
 use grpcio::Error as GrpcError;
 use kvproto::{errorpb::Error as StoreError, metapb::*};
@@ -44,7 +45,8 @@ pub enum Error {
     RaftRequest(StoreError),
     #[error("Error from raftstore: {0}")]
     RaftStore(#[from] RaftStoreError),
-
+    #[error("Error when encrypting content")]
+    Encryption(#[from] EncryptionError),
     #[error("{context}: {inner_error}")]
     Contextual {
         context: String,
@@ -72,6 +74,7 @@ impl ErrorCodeExt for Error {
             Error::ObserveCanceled(..) => OBSERVE_CANCELED,
             Error::OutOfQuota { .. } => OUT_OF_QUOTA,
             Error::Grpc(_) => GRPC,
+            Error::Encryption(_) => ENCRYPTION,
         }
     }
 }

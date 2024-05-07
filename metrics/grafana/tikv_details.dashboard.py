@@ -8628,7 +8628,7 @@ def BackupLog() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_log_backup_interal_actor_acting_duration_sec_count",
+                            "tikv_log_backup_internal_actor_acting_duration_sec_count",
                             by_labels=["message"],
                         ),
                     )
@@ -8642,7 +8642,7 @@ def BackupLog() -> RowPanel:
                     target(
                         expr=expr_histogram_quantile(
                             0.99,
-                            "tikv_log_backup_interal_actor_acting_duration_sec",
+                            "tikv_log_backup_internal_actor_acting_duration_sec",
                             by_labels=["message"],
                         ),
                         legend_format="{{message}}",
@@ -8657,7 +8657,7 @@ def BackupLog() -> RowPanel:
                     target(
                         expr=expr_histogram_quantile(
                             0.9,
-                            "tikv_log_backup_interal_actor_acting_duration_sec",
+                            "tikv_log_backup_internal_actor_acting_duration_sec",
                             by_labels=["message"],
                         ),
                         legend_format="{{message}}",
@@ -8708,6 +8708,18 @@ def BackupLog() -> RowPanel:
                         expr=expr_sum_rate(
                             "tikv_log_backup_initial_scan_reason",
                             by_labels=["reason"],
+                        ),
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Initial Scanning Task Status",
+                description="The task status of initial scanning.",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_log_backup_pending_initial_scan",
+                            by_labels=["stage"],
                         ),
                     )
                 ],
