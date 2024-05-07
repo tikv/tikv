@@ -337,7 +337,7 @@ impl RangeCacheMemoryEngine {
                     // and push the rest back to `pending_range` so that each range only schedules
                     // load task of its own.
                     Some((idx, r.split_off(range)))
-                } else if range.overlaps(r) {
+                } else if range.contains_range(r) {
                     // Pending range `range` does not contains the applying range `r` but overlap
                     // with it, which means the pending range is out dated, we remove it directly.
                     info!(
