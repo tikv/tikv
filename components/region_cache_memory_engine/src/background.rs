@@ -790,8 +790,7 @@ impl Filter {
             }
             self.cached_skiplist_delete_key = Some(key.to_vec());
             return Ok(());
-        }
-        if let Some(ref cache_skiplist_delete_key) = self.cached_skiplist_delete_key {
+        } else if let Some(ref cache_skiplist_delete_key) = self.cached_skiplist_delete_key {
             let InternalKey {
                 user_key: cache_skiplist_delete_user_key,
                 ..
