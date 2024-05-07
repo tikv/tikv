@@ -47007,12 +47007,28 @@
           "steppedLine": false,
           "targets": [
             {
+<<<<<<< HEAD
               "exemplar": true,
               "expr": "sum(rate(tikv_log_backup_interal_actor_acting_duration_sec_count{instance=~\"$instance\"}[$__rate_interval])) by (message)",
               "interval": "",
               "legendFormat": "{{ message }}",
               "queryType": "randomWalk",
               "refId": "A"
+=======
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_log_backup_internal_actor_acting_duration_sec_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (message) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{message}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_log_backup_internal_actor_acting_duration_sec_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (message) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+>>>>>>> c36886a936 (metrics: fix the typo of metrics (#16931))
             }
           ],
           "thresholds": [],
@@ -47109,12 +47125,28 @@
           "steppedLine": false,
           "targets": [
             {
+<<<<<<< HEAD
               "exemplar": true,
               "expr": "sum(histogram_quantile(0.99, rate(tikv_log_backup_interal_actor_acting_duration_sec_bucket{instance=~\"$instance\"}[10m]))) by (message)",
               "interval": "",
               "legendFormat": "{{ message }}",
               "queryType": "randomWalk",
               "refId": "A"
+=======
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_log_backup_internal_actor_acting_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (message, le) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{message}}",
+              "metric": "",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_log_backup_internal_actor_acting_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (message, le) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+>>>>>>> c36886a936 (metrics: fix the typo of metrics (#16931))
             }
           ],
           "thresholds": [],
@@ -47205,12 +47237,28 @@
           "steppedLine": false,
           "targets": [
             {
+<<<<<<< HEAD
               "exemplar": true,
               "expr": "sum(histogram_quantile(0.9, rate(tikv_log_backup_interal_actor_acting_duration_sec_bucket{instance=~\"$instance\"}[10m]))) by (message)",
               "interval": "",
               "legendFormat": "{{ message }}",
               "queryType": "randomWalk",
               "refId": "A"
+=======
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.9,(\n    sum(rate(\n    tikv_log_backup_internal_actor_acting_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (message, le) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{message}}",
+              "metric": "",
+              "query": "histogram_quantile(0.9,(\n    sum(rate(\n    tikv_log_backup_internal_actor_acting_duration_sec_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (message, le) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+>>>>>>> c36886a936 (metrics: fix the typo of metrics (#16931))
             }
           ],
           "thresholds": [],
