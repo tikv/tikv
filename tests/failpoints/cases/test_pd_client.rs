@@ -13,6 +13,7 @@ use pd_client::{PdClientV2, RegionInfo, RpcClientV2};
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
 use tikv_util::config::ReadableDuration;
+use txn_types::TimeStamp;
 
 fn new_test_server_and_client(
     update_interval: ReadableDuration,
@@ -243,6 +244,13 @@ fn test_update_service_gc_safe_point() {
     let mut update_gc_safepoint = |x| {
         block_on(client.update_service_safe_point("test".to_owned(), x, Duration::from_secs(1)))
     };
+    let mut clear_gc_safepoint = || {
+        block_on(client.update_service_safe_point(
+            "test".to_owned(),
+            TimeStamp::max(),
+            Duration::from_secs(0),
+        ))
+    };
 
     #[track_caller]
     fn assert_is_unsafe_safepoint(res: pd_client::Result<()>, current_min: u64, safe_point: u64) {
@@ -261,4 +269,6 @@ fn test_update_service_gc_safe_point() {
     assert_is_unsafe_safepoint(update_gc_safepoint(41.into()), 42, 41);
     update_gc_safepoint(43.into()).unwrap();
     assert_is_unsafe_safepoint(update_gc_safepoint(42.into()), 43, 42);
+    clear_gc_safepoint().unwrap();
+    update_gc_safepoint(41.into()).unwrap();
 }

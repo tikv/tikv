@@ -372,7 +372,9 @@ impl PdMocker for Service {
         let val = self
             .service_gc_safepoint
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| {
-                if v > req.safe_point {
+                if req.get_ttl() == 0 {
+                    Some(0)
+                } else if v > req.safe_point {
                     None
                 } else {
                     Some(req.safe_point)
