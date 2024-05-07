@@ -30,7 +30,7 @@ As a distributed system, there are some planned operations may happen, like roll
 
 ### Stable Latency Under High Data Density Scenario
 
-Some customers' data volumne of single TiKV cluster reach as large as 500TB, and each TiKV node carries more than 4TB data. These large clusters experienced some latency jitter issues, those issues caused by reasons like too many regions in a single TiKV node, background jobs cause resrouces competition, large compaction jobs, impact of large RocksDB instance's global mutex, etc. We are going to elinimate or mitigate these latency jitter issues, and provide stable latency in such high data density scenario.
+Some customers' data volume of single TiKV cluster reach as large as 500TB, and each TiKV node carries more than 4TB data. These large clusters experienced some latency jitter issues, those issues caused by reasons like too many regions in a single TiKV node, background jobs cause resources competition, large compaction jobs, impact of large RocksDB instance's global mutex, etc. We are going to eliminate or mitigate these latency jitter issues, and provide stable latency in such high data density scenario.
 
 ## Comprehensive Memory Management
 
