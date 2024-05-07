@@ -39,7 +39,6 @@ hex = "0.4"
 thiserror = "1.0"
 online_config = { workspace = true }
 libc = "0.2"
-raw-cpuid = "10.2"
 rand = "0.8"
 
 [dev-dependencies]

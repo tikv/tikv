@@ -4608,7 +4608,6 @@ dependencies = [
  "prometheus",
  "prometheus-static-metric",
  "rand 0.8.5",
- "raw-cpuid",
  "security",
  "serde",
  "serde_derive",
