@@ -223,7 +223,7 @@ impl MemoryQuota {
         self.capacity.load(Ordering::Relaxed)
     }
 
-    pub fn set_capacity(&self, mut capacity: usize) {
+    pub fn set_capacity(&self, capacity: usize) {
         let capacity = Self::adjust_capacity(capacity);
         self.capacity.store(capacity, Ordering::Relaxed);
     }
