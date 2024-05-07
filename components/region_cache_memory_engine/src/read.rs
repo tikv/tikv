@@ -602,11 +602,16 @@ mod tests {
 
     use bytes::{BufMut, Bytes};
     use crossbeam::epoch;
+    use engine_rocks::{
+        raw::DBStatisticsTickerType, util::new_engine_opt, RocksDbOptions, RocksStatistics,
+    };
     use engine_traits::{
         CacheRange, FailedReason, IterMetricsCollector, IterOptions, Iterable, Iterator,
-        MetricsExt, Peekable, RangeCacheEngine, ReadOptions,
+        MetricsExt, Mutable, Peekable, RangeCacheEngine, ReadOptions, WriteBatch, WriteBatchExt,
+        CF_DEFAULT, CF_LOCK, CF_WRITE,
     };
     use skiplist_rs::SkipList;
+    use tempfile::Builder;
     use tikv_util::config::VersionTrack;
 
     use super::RangeCacheIterator;
@@ -617,6 +622,7 @@ mod tests {
             encode_seek_key, InternalBytes, ValueType,
         },
         perf_context::PERF_CONTEXT,
+        statistics::Tickers,
         RangeCacheEngineConfig, RangeCacheEngineOptions, RangeCacheMemoryEngine,
     };
 
@@ -1860,44 +1866,94 @@ mod tests {
             put_key_val(&sl, "d", "vallll", 10, 5);
         }
 
+        // Also write data to rocksdb for verification
+        let path = Builder::new().prefix("temp").tempdir().unwrap();
+        let mut db_opts = RocksDbOptions::default();
+        let rocks_statistics = RocksStatistics::new_titan();
+        db_opts.set_statistics(&rocks_statistics);
+        let cf_opts = [CF_DEFAULT, CF_LOCK, CF_WRITE]
+            .iter()
+            .map(|name| (*name, Default::default()))
+            .collect();
+        let rocks_engine = new_engine_opt(path.path().to_str().unwrap(), db_opts, cf_opts).unwrap();
+        {
+            let mut wb = rocks_engine.write_batch();
+            let key = construct_mvcc_key("a", 10);
+            wb.put_cf("write", &key, b"val").unwrap();
+            let key = construct_mvcc_key("b", 10);
+            wb.put_cf("write", &key, b"vall").unwrap();
+            let key = construct_mvcc_key("c", 10);
+            wb.put_cf("write", &key, b"valll").unwrap();
+            let key = construct_mvcc_key("d", 10);
+            wb.put_cf("write", &key, b"vallll").unwrap();
+            let _ = wb.write();
+        }
+
+        let statistics = engine.statistics();
         let snapshot = engine.snapshot(range.clone(), u64::MAX, 100).unwrap();
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().get_read_bytes), 0);
         let key = construct_mvcc_key("a", 10);
         snapshot.get_value_cf("write", &key).unwrap();
+        rocks_engine.get_value_cf("write", &key).unwrap();
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().get_read_bytes), 3);
         let key = construct_mvcc_key("b", 10);
         snapshot.get_value_cf("write", &key).unwrap();
+        rocks_engine.get_value_cf("write", &key).unwrap();
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().get_read_bytes), 7);
         let key = construct_mvcc_key("c", 10);
         snapshot.get_value_cf("write", &key).unwrap();
+        rocks_engine.get_value_cf("write", &key).unwrap();
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().get_read_bytes), 12);
         let key = construct_mvcc_key("d", 10);
         snapshot.get_value_cf("write", &key).unwrap();
+        rocks_engine.get_value_cf("write", &key).unwrap();
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().get_read_bytes), 18);
+        assert_eq!(statistics.get_ticker_count(Tickers::BytesRead), 18);
+        assert_eq!(
+            rocks_statistics.get_and_reset_ticker_count(DBStatisticsTickerType::BytesRead),
+            statistics.get_and_reset_ticker_count(Tickers::BytesRead)
+        );
 
         let mut iter_opt = IterOptions::default();
         iter_opt.set_upper_bound(&range.end, 0);
         iter_opt.set_lower_bound(&range.start, 0);
+        let mut rocks_iter = rocks_engine
+            .iterator_opt("write", iter_opt.clone())
+            .unwrap();
         let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 0);
         iter.seek_to_first().unwrap();
+        rocks_iter.seek_to_first().unwrap();
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 12);
         let key = construct_mvcc_key("b", 10);
         iter.seek(&key).unwrap();
+        rocks_iter.seek(&key).unwrap();
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 25);
         iter.next().unwrap();
+        rocks_iter.next().unwrap();
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 39);
         iter.next().unwrap();
+        rocks_iter.next().unwrap();
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 54);
 
-        let mut iter = snapshot.iterator_opt("write", iter_opt).unwrap();
         iter.seek_to_last().unwrap();
+        rocks_iter.seek_to_last().unwrap();
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 69);
         iter.prev().unwrap();
+        rocks_iter.prev().unwrap();
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 83);
         iter.prev().unwrap();
+        rocks_iter.prev().unwrap();
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 96);
         iter.prev().unwrap();
+        rocks_iter.prev().unwrap();
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 108);
+        drop(rocks_iter);
+        drop(iter);
+        assert_eq!(statistics.get_ticker_count(Tickers::IterBytesRead), 108);
+        assert_eq!(
+            rocks_statistics.get_and_reset_ticker_count(DBStatisticsTickerType::IterBytesRead),
+            statistics.get_and_reset_ticker_count(Tickers::IterBytesRead)
+        );
     }
 }
