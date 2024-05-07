@@ -68,11 +68,7 @@ fn physical_core_id() -> i32 {
     }
     #[cfg(not(all(target_arch = "x86_64", target_os = "linux")))]
     {
-        let cpu_id = raw_cpuid::CpuId::new();
-        cpu_id
-            .get_feature_info()
-            .map(|info| info.initial_local_apic_id() as i32)
-            .unwrap_or(-1)
+        -1
     }
 }
 
