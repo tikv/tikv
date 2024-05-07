@@ -1353,6 +1353,9 @@ impl<E: KvEngine> SstImporter<E> {
             Ok(Some(final_range))
         } else {
             // nothing is written: prevents finishing the SST at all.
+            // also delete the empty sst file that is created when creating sst_writer
+            drop(sst_writer);
+            let _ = file_system::remove_file(&path.save);
             Ok(None)
         }
     }
@@ -2768,6 +2771,9 @@ mod tests {
             Limiter::new(f64::INFINITY),
             db,
         );
+
+        let path = importer.dir.join_for_write(&meta).unwrap();
+        assert!(!file_system::file_exists(path.save));
 
         match result {
             Ok(None) => {}
