@@ -145,6 +145,18 @@ impl Statistics {
     }
 }
 
+// LocalStatistics contain Statistics counters that will be aggregated per
+// each iterator instance and then will be sent to the global statistics when
+// the iterator is destroyed.
+//
+// The purpose of this approach is to avoid perf regression happening
+// when multiple threads bump the atomic counters from a DBIter::Next().
+#[derive(Default)]
+pub(crate) struct LocalStatistics {
+    // Map to Tickers::IterBytesRead
+    pub(crate) bytes_read: u64,
+}
+
 #[cfg(test)]
 pub mod tests {
     use std::{sync::Arc, time::Duration};

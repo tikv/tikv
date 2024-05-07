@@ -331,19 +331,19 @@ impl RangeCacheMemoryEngine {
             .pending_ranges
             .iter()
             .enumerate()
-            .find_map(|(idx, r)| {
-                if r.contains_range(range) {
+            .find_map(|(idx, pending_range)| {
+                if pending_range.contains_range(range) {
                     // The `range` may be a proper subset of `r` and we should split it in this case
                     // and push the rest back to `pending_range` so that each range only schedules
                     // load task of its own.
-                    Some((idx, r.split_off(range)))
-                } else if range.overlaps(r) {
+                    Some((idx, pending_range.split_off(range)))
+                } else if range.overlaps(pending_range) {
                     // Pending range `range` does not contains the applying range `r` but overlap
                     // with it, which means the pending range is out dated, we remove it directly.
                     info!(
                         "out of date pending ranges";
                         "applying_range" => ?range,
-                        "pending_range" => ?r,
+                        "pending_range" => ?pending_range,
                     );
                     overlapped = true;
                     Some((idx, (None, None)))

@@ -24,7 +24,7 @@ use crate::{
     },
     perf_context::PERF_CONTEXT,
     perf_counter_add,
-    statistics::{Statistics, Tickers},
+    statistics::{LocalStatistics, Statistics, Tickers},
     RangeCacheMemoryEngine,
 };
 
@@ -147,6 +147,7 @@ impl Iterable for RangeCacheSnapshot {
             direction: Direction::Uninit,
             statistics: self.engine.statistics(),
             prefix_extractor,
+            local_stats: LocalStatistics::default(),
         })
     }
 }
@@ -236,6 +237,14 @@ pub struct RangeCacheIterator {
     direction: Direction,
 
     statistics: Arc<Statistics>,
+    local_stats: LocalStatistics,
+}
+
+impl Drop for RangeCacheIterator {
+    fn drop(&mut self) {
+        self.statistics
+            .record_ticker(Tickers::IterBytesRead, self.local_stats.bytes_read);
+    }
 }
 
 impl RangeCacheIterator {
@@ -426,6 +435,14 @@ impl Iterator for RangeCacheIterator {
         if self.valid {
             self.find_next_visible_key(true, guard);
         }
+
+        if self.valid {
+            // Updating stats and perf context counters
+            let read_bytes = (self.key().len() + self.value().len()) as u64;
+            self.local_stats.bytes_read += read_bytes;
+            perf_counter_add!(iter_read_bytes, read_bytes);
+        }
+
         Ok(self.valid)
     }
 
@@ -434,6 +451,14 @@ impl Iterator for RangeCacheIterator {
         assert!(self.direction == Direction::Backward);
         let guard = &epoch::pin();
         self.prev_internal(guard);
+
+        if self.valid {
+            // Updating stats and perf context counters
+            let read_bytes = (self.key().len() + self.value().len()) as u64;
+            self.local_stats.bytes_read += read_bytes;
+            perf_counter_add!(iter_read_bytes, read_bytes);
+        }
+
         Ok(self.valid)
     }
 
@@ -452,16 +477,14 @@ impl Iterator for RangeCacheIterator {
 
         let seek_key = encode_seek_key(seek_key, self.sequence_number);
         self.seek_internal(&seek_key);
-        if !self.valid {
-            return Ok(false);
+        if self.valid {
+            // Updating stats and perf context counters
+            let read_bytes = (self.key().len() + self.value().len()) as u64;
+            self.local_stats.bytes_read += read_bytes;
+            perf_counter_add!(iter_read_bytes, read_bytes);
         }
 
-        // Updating stats and perf context counters
-        let read_bytes = (self.key().len() + self.value().len()) as u64;
-        self.statistics
-            .record_ticker(Tickers::IterBytesRead, read_bytes);
-        perf_counter_add!(iter_read_bytes, read_bytes);
-        Ok(true)
+        Ok(self.valid)
     }
 
     fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
@@ -478,16 +501,14 @@ impl Iterator for RangeCacheIterator {
         };
 
         self.seek_for_prev_internal(&seek_key);
-        if !self.valid {
-            return Ok(false);
+        if self.valid {
+            // Updating stats and perf context counters
+            let read_bytes = (self.key().len() + self.value().len()) as u64;
+            self.local_stats.bytes_read += read_bytes;
+            perf_counter_add!(iter_read_bytes, read_bytes);
         }
 
-        // Updating stats and perf context counters
-        let read_bytes = (self.key().len() + self.value().len()) as u64;
-        self.statistics
-            .record_ticker(Tickers::IterBytesRead, read_bytes);
-        perf_counter_add!(iter_read_bytes, read_bytes);
-        Ok(true)
+        Ok(self.valid)
     }
 
     fn seek_to_first(&mut self) -> Result<bool> {
@@ -496,16 +517,14 @@ impl Iterator for RangeCacheIterator {
         let seek_key = encode_seek_key(&self.lower_bound, self.sequence_number);
         self.seek_internal(&seek_key);
 
-        if !self.valid {
-            return Ok(false);
+        if self.valid {
+            // Updating stats and perf context counters
+            let read_bytes = (self.key().len() + self.value().len()) as u64;
+            self.local_stats.bytes_read += read_bytes;
+            perf_counter_add!(iter_read_bytes, read_bytes);
         }
 
-        // Updating stats and perf context counters
-        let read_bytes = (self.key().len() + self.value().len()) as u64;
-        self.statistics
-            .record_ticker(Tickers::IterBytesRead, read_bytes);
-        perf_counter_add!(iter_read_bytes, read_bytes);
-        Ok(true)
+        Ok(self.valid)
     }
 
     fn seek_to_last(&mut self) -> Result<bool> {
@@ -518,12 +537,14 @@ impl Iterator for RangeCacheIterator {
             return Ok(false);
         }
 
-        // Updating stats and perf context counters
-        let read_bytes = (self.key().len() + self.value().len()) as u64;
-        self.statistics
-            .record_ticker(Tickers::IterBytesRead, read_bytes);
-        perf_counter_add!(iter_read_bytes, read_bytes);
-        Ok(true)
+        if self.valid {
+            // Updating stats and perf context counters
+            let read_bytes = (self.key().len() + self.value().len()) as u64;
+            self.local_stats.bytes_read += read_bytes;
+            perf_counter_add!(iter_read_bytes, read_bytes);
+        }
+
+        Ok(self.valid)
     }
 
     fn valid(&self) -> Result<bool> {
@@ -1857,18 +1878,26 @@ mod tests {
         let mut iter_opt = IterOptions::default();
         iter_opt.set_upper_bound(&range.end, 0);
         iter_opt.set_lower_bound(&range.start, 0);
-        let mut iter = snapshot.iterator_opt("write", iter_opt).unwrap();
+        let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 0);
         iter.seek_to_first().unwrap();
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 12);
         let key = construct_mvcc_key("b", 10);
         iter.seek(&key).unwrap();
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 25);
-        let key = construct_mvcc_key("c", 10);
-        iter.seek(&key).unwrap();
+        iter.next().unwrap();
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 39);
-        let key = construct_mvcc_key("d", 10);
-        iter.seek(&key).unwrap();
+        iter.next().unwrap();
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 54);
+
+        let mut iter = snapshot.iterator_opt("write", iter_opt).unwrap();
+        iter.seek_to_last().unwrap();
+        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 69);
+        iter.prev().unwrap();
+        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 83);
+        iter.prev().unwrap();
+        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 96);
+        iter.prev().unwrap();
+        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 108);
     }
 }
