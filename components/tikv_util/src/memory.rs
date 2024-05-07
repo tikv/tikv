@@ -16,6 +16,15 @@ use kvproto::{
     raft_cmdpb::{self, RaftCmdRequest, ReadIndexRequest},
 };
 
+// The maxinum memory size in byte for a single `alloc` or `alloc_force`.
+// We set this hard limit to avoid the `in_use` counter overflow that may
+// lead to undefined behavior.
+// When passes a higher value, the result will depend on the called function:
+// - alloc. Return an error.
+// - alloc_force. Ignore this call and do nothing.
+// - free. Ignore this call and do nothing.
+const MAX_MEMORY_ALLOC_SIZE: usize = 1 << 48;
+
 /// Transmute vec from one type to the other type.
 ///
 /// # Safety
@@ -181,16 +190,19 @@ impl Drop for OwnedAllocated {
 }
 
 impl MemoryQuota {
-    pub fn new(mut capacity: usize) -> MemoryQuota {
-        // Value bigger than isize::MAX just means unlimited,
-        // so replace it with isize::MAX to avoid overflow.
-        if capacity > isize::MAX as usize {
-            capacity = isize::MAX as usize;
-        }
+    pub fn new(capacity: usize) -> MemoryQuota {
+        let capacity = Self::adjust_capacity(capacity);
         MemoryQuota {
             in_use: AtomicIsize::new(0),
             capacity: AtomicUsize::new(capacity),
         }
+    }
+
+    #[inline]
+    fn adjust_capacity(capacity: usize) -> usize {
+        // Value bigger than isize::MAX just means unlimited,
+        // so replace it with isize::MAX to avoid overflow.
+        std::cmp::min(capacity, isize::MAX as usize)
     }
 
     #[inline]
@@ -212,22 +224,21 @@ impl MemoryQuota {
     }
 
     pub fn set_capacity(&self, mut capacity: usize) {
-        // Value bigger than isize::MAX just means unlimited,
-        // so replace it with isize::MAX to avoid overflow.
-        if capacity > isize::MAX as usize {
-            capacity = isize::MAX as usize;
-        }
+        let capacity = Self::adjust_capacity(capacity);
         self.capacity.store(capacity, Ordering::Relaxed);
     }
 
     pub fn alloc_force(&self, bytes: usize) {
+        if bytes > MAX_MEMORY_ALLOC_SIZE {
+            return;
+        }
         self.in_use.fetch_add(bytes as isize, Ordering::Relaxed);
     }
 
     pub fn alloc(&self, bytes: usize) -> Result<(), MemoryQuotaExceeded> {
         let capacity = self.capacity.load(Ordering::Relaxed) as isize;
         let in_use_bytes = self.in_use.load(Ordering::Relaxed);
-        if bytes > capacity.saturating_sub(in_use_bytes) as usize {
+        if bytes > capacity.saturating_sub(in_use_bytes) as usize || bytes > MAX_MEMORY_ALLOC_SIZE {
             return Err(MemoryQuotaExceeded);
         }
         let bytes = bytes as isize;
@@ -240,10 +251,12 @@ impl MemoryQuota {
     }
 
     pub fn free(&self, bytes: usize) {
-        // Alloc memory higher than isize::MAX must fail because it exceeds the maxinum
-        // capacity, but we still try to handle the overflow here to avoid
-        // caller's misuse.
-        let bytes = std::cmp::min(bytes, isize::MAX as usize) as isize;
+        // bytes higher than `MAX_MEMORY_ALLOC_SIZE` means the memory is acquired with
+        // `alloc_force`, so also ignore the `free` call.
+        if bytes > MAX_MEMORY_ALLOC_SIZE {
+            return;
+        }
+        let bytes = bytes as isize;
         let new_in_use_bytes = self.in_use.fetch_sub(bytes, Ordering::Relaxed) - bytes;
         if new_in_use_bytes < 0 {
             // handle overflow.
@@ -378,9 +391,14 @@ mod tests {
         assert_eq!(quota.in_use(), 4);
 
         // test out of range alloc and free.
-        assert!(quota.alloc(usize::MAX).is_err());
-        quota.free(isize::MAX as usize + 100);
-        assert_eq!(quota.in_use.load(Ordering::Relaxed), 0);
+        assert!(quota.alloc(MAX_MEMORY_ALLOC_SIZE * 2).is_err());
+
+        // in_use should not change after force_alloc with extreme big value.
+        let in_use = quota.in_use();
+        assert!(in_use > 0);
+        quota.alloc_force(MAX_MEMORY_ALLOC_SIZE * 2);
+        quota.free(MAX_MEMORY_ALLOC_SIZE * 2);
+        assert_eq!(quota.in_use(), in_use);
     }
 
     #[test]
