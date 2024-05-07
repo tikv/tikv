@@ -68,11 +68,7 @@ fn physical_core_id() -> i32 {
     }
     #[cfg(not(all(target_arch = "x86_64", target_os = "linux")))]
     {
-        let cpu_id = raw_cpuid::CpuId::new();
-        cpu_id
-            .get_feature_info()
-            .map(|info| info.initial_local_apic_id() as i32)
-            .unwrap_or(-1)
+        -1
     }
 }
 
@@ -143,6 +139,18 @@ impl Statistics {
             .iter()
             .fold(0, |acc, stats| acc + stats.exchange(ticker_type, 0))
     }
+}
+
+// LocalStatistics contain Statistics counters that will be aggregated per
+// each iterator instance and then will be sent to the global statistics when
+// the iterator is destroyed.
+//
+// The purpose of this approach is to avoid perf regression happening
+// when multiple threads bump the atomic counters from a DBIter::Next().
+#[derive(Default)]
+pub(crate) struct LocalStatistics {
+    // Map to Tickers::IterBytesRead
+    pub(crate) bytes_read: u64,
 }
 
 #[cfg(test)]

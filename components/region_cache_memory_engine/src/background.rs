@@ -29,8 +29,8 @@ use crate::{
     keys::{decode_key, encode_key, encoding_for_filter, InternalBytes, InternalKey, ValueType},
     memory_controller::{MemoryController, MemoryUsage},
     metrics::{
-        GC_FILTERED_STATIC, RANGE_CACHE_MEMORY_USAGE, RANGE_GC_TIME_HISTOGRAM,
-        RANGE_LOAD_TIME_HISTOGRAM,
+        GC_FILTERED_STATIC, RANGE_CACHE_MEMORY_USAGE, RANGE_CACHE_PENDING_RANGE_COUNT,
+        RANGE_GC_TIME_HISTOGRAM, RANGE_LOAD_TIME_HISTOGRAM,
     },
     range_manager::LoadFailedReason,
     region_label::{
@@ -683,6 +683,8 @@ impl RunnableWithTimer for BackgroundRunner {
     fn on_timeout(&mut self) {
         let mem_usage = self.core.memory_controller.mem_usage();
         RANGE_CACHE_MEMORY_USAGE.set(mem_usage as i64);
+        let count = self.core.engine.read().range_manager.pending_ranges.len();
+        RANGE_CACHE_PENDING_RANGE_COUNT.set(count as i64);
     }
 
     fn get_interval(&self) -> Duration {
@@ -1195,7 +1197,9 @@ pub mod tests {
 
     #[test]
     fn test_filter_with_delete() {
-        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        )));
         let memory_controller = engine.memory_controller();
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());

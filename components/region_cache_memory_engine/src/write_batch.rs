@@ -7,14 +7,20 @@ use engine_traits::{
     CacheRange, Mutable, RangeCacheEngine, Result, WriteBatch, WriteBatchExt, WriteOptions,
     CF_DEFAULT,
 };
-use tikv_util::{box_err, config::ReadableSize, debug, error, info, time::Instant, warn};
+use tikv_util::{
+    box_err,
+    config::ReadableSize,
+    debug, error, info,
+    time::{Duration, Instant},
+    warn,
+};
 
 use crate::{
     background::BackgroundTask,
     engine::{cf_to_id, id_to_cf, is_lock_cf, SkiplistEngine, SkiplistHandle},
     keys::{encode_key, encode_seek_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
     memory_controller::{MemoryController, MemoryUsage},
-    metrics::WRITE_DURATION_HISTOGRAM,
+    metrics::{PREPARE_FOR_APPLY_DURATION_HISTOGRAM, WRITE_DURATION_HISTOGRAM},
     range_manager::{RangeCacheStatus, RangeManager},
     RangeCacheMemoryEngine,
 };
@@ -48,6 +54,8 @@ pub struct RangeCacheWriteBatch {
     current_range: Option<CacheRange>,
     // the ranges that reaches the hard limit and need to be evicted
     ranges_to_evict: BTreeSet<CacheRange>,
+
+    prepare_duration: Duration,
 }
 
 impl std::fmt::Debug for RangeCacheWriteBatch {
@@ -73,6 +81,7 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
             memory_usage_reach_hard_limit: false,
             current_range: None,
             ranges_to_evict: BTreeSet::default(),
+            prepare_duration: Duration::default(),
         }
     }
 }
@@ -91,6 +100,7 @@ impl RangeCacheWriteBatch {
             memory_usage_reach_hard_limit: false,
             current_range: None,
             ranges_to_evict: BTreeSet::default(),
+            prepare_duration: Duration::default(),
         }
     }
 
@@ -137,6 +147,9 @@ impl RangeCacheWriteBatch {
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
         }
+
+        let dur = std::mem::take(&mut self.prepare_duration);
+        PREPARE_FOR_APPLY_DURATION_HISTOGRAM.observe(dur.as_secs_f64());
 
         res
     }
@@ -512,9 +525,11 @@ impl WriteBatch for RangeCacheWriteBatch {
     }
 
     fn prepare_for_range(&mut self, range: CacheRange) {
+        let time = Instant::now();
         self.set_range_cache_status(self.engine.prepare_for_apply(&range));
         self.memory_usage_reach_hard_limit = false;
         self.current_range = Some(range);
+        self.prepare_duration += time.saturating_elapsed();
     }
 }
 

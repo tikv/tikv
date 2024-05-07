@@ -315,6 +315,13 @@ def Cluster() -> RowPanel:
                         ),
                         legend_format=r"{{instance}}-read",
                     ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_range_cache_memory_engine_flow",
+                            label_selectors=['type=~"bytes_read|iter_bytes_read"'],
+                        ),
+                        legend_format=r"{{instance}}-read",
+                    ),
                 ],
             ),
         ]
@@ -4169,6 +4176,18 @@ def RangeCacheMemoryEngine() -> RowPanel:
             metric="tikv_range_cache_engine_write_duration_seconds",
         )
     )
+    layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Prepare for apply duration",
+            heatmap_description="The time consumed of prepare for apply in range cache engine",
+            graph_title="99% Range cache engine prepare for apply duration per server",
+            graph_description="The time consumed of prepare for apply in range cache engine per TiKV instance",
+            graph_by_labels=["instance"],
+            graph_hides=["count", "avg"],
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_range_cache_engine_prepare_for_apply_duration_seconds",
+        )
+    )
     return layout.row_panel
 
 
@@ -7699,7 +7718,7 @@ def Memory() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Newly Allocated Bytes by Thread",
+                title="Allocated Bytes Rate per Thread",
                 description=None,
                 yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 targets=[
@@ -7713,7 +7732,7 @@ def Memory() -> RowPanel:
                 ],
             ),
             graph_panel(
-                title="Recently Released Bytes by Thread",
+                title="Released Bytes Rate per Thread",
                 description=None,
                 yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 targets=[
@@ -7723,6 +7742,36 @@ def Memory() -> RowPanel:
                             label_selectors=['type="dealloc"'],
                             by_labels=["thread_name"],
                         ),
+                    )
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Mapped Allocation per Thread",
+                description=None,
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_allocator_thread_stats",
+                            label_selectors=['type="mapped"'],
+                            by_labels=["thread_name"],
+                        )
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Arena Count",
+                description=None,
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_allocator_arena_count",
+                            by_labels=["instance"],
+                        )
                     )
                 ],
             ),
@@ -8592,7 +8641,7 @@ def BackupLog() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_log_backup_interal_actor_acting_duration_sec_count",
+                            "tikv_log_backup_internal_actor_acting_duration_sec_count",
                             by_labels=["message"],
                         ),
                     )
@@ -8606,7 +8655,7 @@ def BackupLog() -> RowPanel:
                     target(
                         expr=expr_histogram_quantile(
                             0.99,
-                            "tikv_log_backup_interal_actor_acting_duration_sec",
+                            "tikv_log_backup_internal_actor_acting_duration_sec",
                             by_labels=["message"],
                         ),
                         legend_format="{{message}}",
@@ -8621,7 +8670,7 @@ def BackupLog() -> RowPanel:
                     target(
                         expr=expr_histogram_quantile(
                             0.9,
-                            "tikv_log_backup_interal_actor_acting_duration_sec",
+                            "tikv_log_backup_internal_actor_acting_duration_sec",
                             by_labels=["message"],
                         ),
                         legend_format="{{message}}",

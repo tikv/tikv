@@ -15,7 +15,6 @@ mod test_life;
 mod test_merge;
 mod test_multi;
 mod test_prevote;
-mod test_region_cache;
 mod test_region_change_observer;
 mod test_region_heartbeat;
 mod test_region_info_accessor;
