@@ -1195,8 +1195,8 @@ pub mod tests {
 
     #[test]
     fn test_filter_with_delete() {
-        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
-            RangeCacheEngineConfig::config_for_test(),
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let memory_controller = engine.memory_controller();
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
