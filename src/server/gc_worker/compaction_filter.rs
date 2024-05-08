@@ -225,11 +225,9 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             is_all_ks_not_init_gc_sp = ks_meta_service.is_all_keyspace_level_gc_have_not_inited()
         }
 
-        println!("[test-yjy]create_compaction_filter");
         if safe_point == 0 && is_all_ks_not_init_gc_sp {
             // Safe point has not been initialized yet.
             debug!("skip gc in compaction filter because of no safe point");
-            println!("[test-yjy]skip gc in compaction filter because of no safe point");
             return None;
         }
 
@@ -281,7 +279,6 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             GC_COMPACTION_FILTER_SKIP
                 .with_label_values(&[STAT_TXN_KEYMODE])
                 .inc();
-            println!("[test-yjy]txn check_need_gc skip");
             return None;
         }
 
@@ -491,20 +488,10 @@ impl WriteCompactionFilter {
     ) -> Result<CompactionFilterDecision, String> {
         let (mvcc_key_prefix, commit_ts) = split_ts(key)?;
 
-        info!(
-            "[test-yjy]do_filter key:{:?},self.safe_point:{}",
-            keys::origin_key(key),
-            self.safe_point
-        );
         // `keyspace_meta_service` will be None when run Api V1 ut.
         if let Some(keyspace_meta_service) = self.keyspace_meta_service.as_ref() {
             self.safe_point = keyspace_meta_service
                 .get_gc_safe_point_by_key(self.safe_point, keys::origin_key(key));
-            info!(
-                "[test-yjy]get_gc_safe_point_by_key key:{:?},self.safe_point:{}",
-                keys::origin_key(key),
-                self.safe_point
-            );
         }
 
         if commit_ts > self.safe_point || value_type != CompactionFilterValueType::Value {
@@ -802,8 +789,6 @@ pub fn check_need_gc(
     context: &CompactionFilterContext,
     keyspace_meta_service: Arc<Option<KeyspaceMetaService>>,
 ) -> bool {
-    info!("[test-yjy] check_need_gc");
-    println!("[test-yjy] check_need_gc println");
     let check_props = |props: &MvccProperties| -> (bool, bool /* skip_more_checks */) {
         // Disable GC directly once the config is negative or +inf.
         // Disabling GC is useful in some abnormal scenarios where the transaction model
@@ -832,10 +817,6 @@ pub fn check_need_gc(
                 "props.min_ts" => %props.min_ts,
                 "global_gc_safe_point" => %safe_point,
                 "any_ks_gc_sp_ge_than_props_min_ts" =>%any_ks_gc_sp_ge_than_props_min_ts,
-            );
-            println!(
-                "[test-yjy] props.min_ts > safe_point ,safe_point:{}",
-                safe_point
             );
             return (false, false);
         }
@@ -986,10 +967,6 @@ pub mod test_utils {
                 callbacks_on_drop: self.callbacks_on_drop.clone(),
                 keyspace_meta_service: self.keyspace_meta_service.clone(),
             });
-            println!(
-                "[test-yjy]prepare_gc is has ks meta:{}",
-                self.keyspace_meta_service.clone().is_some()
-            );
         }
 
         pub fn post_gc(&mut self) {

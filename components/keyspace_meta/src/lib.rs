@@ -11,6 +11,9 @@ use tikv_util::worker::Worker;
 pub mod service;
 pub use service::{KeyspaceLevelGCWatchService, KeyspaceMetaService};
 
+pub use service::KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE;
+pub use service::GC_MGMT_TYPE_KEYSPACE_LEVEL_GC;
+
 use crate::service::KeyspaceMetaWatchService;
 
 pub fn start_periodic_keyspace_level_gc_watcher(

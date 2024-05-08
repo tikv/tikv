@@ -14,8 +14,9 @@ use serde::{Deserialize, Serialize};
 use tikv_util::{debug, error, info, timer::GLOBAL_TIMER_HANDLE};
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(1); // to consistent with pd_client
-const KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE: &str = "gc_management_type";
-const GC_MGMT_TYPE_GLOBAL_GC: &str = "global_gc";
+pub const KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE: &str = "gc_management_type";
+pub const GC_MGMT_TYPE_GLOBAL_GC: &str = "global_gc";
+pub const GC_MGMT_TYPE_KEYSPACE_LEVEL_GC: &str= "keyspace_level_gc";
 
 #[derive(Clone)]
 pub struct KeyspaceLevelGCWatchService {

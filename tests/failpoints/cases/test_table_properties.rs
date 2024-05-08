@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 use api_version::{ApiV2, KvFormat, RawValue};
 use dashmap::DashMap;
 use engine_rocks::RocksEngine;
-use engine_traits::{MiscExt, CF_DEFAULT};
+use engine_traits::{MiscExt, CF_DEFAULT, CF_WRITE};
 use keyspace_meta::KeyspaceMetaService;
 use kvproto::{
     keyspacepb,
@@ -26,6 +26,7 @@ use tikv::{
         Engine,
     },
 };
+use tikv::server::gc_worker::STAT_TXN_KEYMODE;
 use txn_types::{Key, TimeStamp};
 
 pub fn make_key(key: &[u8], ts: u64) -> Vec<u8> {
@@ -132,8 +133,8 @@ fn make_keyspace_meta_service() -> Arc<Option<KeyspaceMetaService>> {
 
     let mut keyspace_config = HashMap::new();
     keyspace_config.insert(
-        "gc_management_type".to_string(),
-        "keyspace_level_gc".to_string(),
+        keyspace_meta::KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE.to_string(),
+        keyspace_meta::GC_MGMT_TYPE_KEYSPACE_LEVEL_GC.to_string(),
     );
     let keyspace_1_meta = keyspacepb::KeyspaceMeta {
         id: 1,
@@ -206,7 +207,11 @@ fn test_keyspace_meta_service() {
 }
 
 #[test]
-fn test_check_need_gc_by_keyspace_level_gc() {
+fn test_check_skip_compaction_filter() {
+    test_check_skip_compaction_filter_by_kv_mode(true);
+    test_check_skip_compaction_filter_by_kv_mode(false);
+}
+fn test_check_skip_compaction_filter_by_kv_mode(is_rawkv :bool) {
     GC_COMPACTION_FILTER_PERFORM.reset();
     GC_COMPACTION_FILTER_SKIP.reset();
 
@@ -224,36 +229,50 @@ fn test_check_need_gc_by_keyspace_level_gc() {
     let mut gc_runner = TestGcRunner::new(0);
     gc_runner.keyspace_meta_service = make_keyspace_meta_service().clone();
 
-    do_write_keyspace_data(&engine, false, 5);
+    make_keyspace_data(&engine, false, 5,is_rawkv);
 
-    // Check init value
+    let mut metrics_label=STAT_TXN_KEYMODE;
+    if is_rawkv {
+        metrics_label=STAT_RAW_KEYMODE;
+    }
+
+    // Haven't call gc_runner yet, check the initial metrics values is 0.
+    // If there are any GC safe point is inited, GC_COMPACTION_FILTER_PERFORM will not 0.
     assert_eq!(
         GC_COMPACTION_FILTER_PERFORM
-            .with_label_values(&[STAT_RAW_KEYMODE])
+            .with_label_values(&[metrics_label])
             .get(),
         0
     );
+    // If check_need_gc return false, it will skip GC, GC_COMPACTION_FILTER_SKIP will not 0.
     assert_eq!(
         GC_COMPACTION_FILTER_SKIP
-            .with_label_values(&[STAT_RAW_KEYMODE])
+            .with_label_values(&[metrics_label])
             .get(),
         0
     );
 
-    gc_runner.safe_point(0).gc_raw(&raw_engine);
+    // Call GC runner as global GC safe point is 0.
+    if is_rawkv{
+        gc_runner.safe_point(0).gc_raw(&raw_engine);
+    }else{
+        gc_runner.safe_point(0).gc(&raw_engine);
+    }
 
-    // skip compaction filter
+    // Although global GC safe point is 0, but keyspace_id(1) GC safe point=60,
+    // so is_all_ks_not_init_gc_sp is == false,
+    // then GC_COMPACTION_FILTER_PERFORM + 1.
     assert_eq!(
         GC_COMPACTION_FILTER_PERFORM
-            .with_label_values(&[STAT_RAW_KEYMODE])
+            .with_label_values(&[metrics_label])
             .get(),
         1
     );
-    // global GC safe point = 0, keyspace_id(1) gc safe point=60
-    // then check_need_gc return false.
+    // Global GC safe point = 0, keyspace_id(1) GC safe point=60
+    // then check_need_gc return false, so GC_COMPACTION_FILTER_SKIP + 1.
     assert_eq!(
         GC_COMPACTION_FILTER_SKIP
-            .with_label_values(&[STAT_RAW_KEYMODE])
+            .with_label_values(&[metrics_label])
             .get(),
         1
     );
@@ -263,12 +282,18 @@ fn do_write<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
     make_data(engine, is_delete, op_nums);
 }
 
-fn do_write_keyspace_data<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
-    make_keyspace_data(engine, is_delete, op_nums);
-}
+fn make_keyspace_data<E: Engine>(engine: &E, is_delete: bool, op_nums: u64, is_rawkv: bool) {
 
-fn make_keyspace_data<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
-    let user_key = vec![b'r', 0, 0, 1, 1, 2, 3];
+    let mut data_prefix=api_version::api_v2::TIDB_TABLE_KEY_PREFIX;
+    if is_rawkv {
+        data_prefix=api_version::api_v2::RAW_KEY_PREFIX;
+    }
+    let mut test_cf=CF_WRITE;
+    if is_rawkv {
+        test_cf=CF_DEFAULT;
+    }
+
+    let user_key = vec![data_prefix, 0, 0, 1, 1, 2, 3];
 
     let mut test_raws = vec![];
     let start_mvcc = 70;
@@ -291,7 +316,7 @@ fn make_keyspace_data<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
                 }),
             )
         })
-        .map(|(k, v)| Modify::Put(CF_DEFAULT, Key::from_encoded_slice(k.as_slice()), v))
+        .map(|(k, v)| Modify::Put(test_cf, Key::from_encoded_slice(k.as_slice()), v))
         .collect();
 
     let ctx = Context {
