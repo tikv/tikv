@@ -19,14 +19,13 @@ use tikv::{
             test_utils::rocksdb_level_files, GC_COMPACTION_FILTER_PERFORM,
             GC_COMPACTION_FILTER_SKIP,
         },
-        TestGcRunner, STAT_RAW_KEYMODE,
+        TestGcRunner, STAT_RAW_KEYMODE, STAT_TXN_KEYMODE,
     },
     storage::{
         kv::{Modify, TestEngineBuilder, WriteData},
         Engine,
     },
 };
-use tikv::server::gc_worker::STAT_TXN_KEYMODE;
 use txn_types::{Key, TimeStamp};
 
 pub fn make_key(key: &[u8], ts: u64) -> Vec<u8> {
@@ -211,7 +210,7 @@ fn test_check_skip_compaction_filter() {
     test_check_skip_compaction_filter_by_kv_mode(true);
     test_check_skip_compaction_filter_by_kv_mode(false);
 }
-fn test_check_skip_compaction_filter_by_kv_mode(is_rawkv :bool) {
+fn test_check_skip_compaction_filter_by_kv_mode(is_rawkv: bool) {
     GC_COMPACTION_FILTER_PERFORM.reset();
     GC_COMPACTION_FILTER_SKIP.reset();
 
@@ -229,22 +228,24 @@ fn test_check_skip_compaction_filter_by_kv_mode(is_rawkv :bool) {
     let mut gc_runner = TestGcRunner::new(0);
     gc_runner.keyspace_meta_service = make_keyspace_meta_service().clone();
 
-    make_keyspace_data(&engine, false, 5,is_rawkv);
+    make_keyspace_data(&engine, false, 5, is_rawkv);
 
-    let mut metrics_label=STAT_TXN_KEYMODE;
+    let mut metrics_label = STAT_TXN_KEYMODE;
     if is_rawkv {
-        metrics_label=STAT_RAW_KEYMODE;
+        metrics_label = STAT_RAW_KEYMODE;
     }
 
     // Haven't call gc_runner yet, check the initial metrics values is 0.
-    // If there are any GC safe point is inited, GC_COMPACTION_FILTER_PERFORM will not 0.
+    // If there are any GC safe point is inited, GC_COMPACTION_FILTER_PERFORM will
+    // not 0.
     assert_eq!(
         GC_COMPACTION_FILTER_PERFORM
             .with_label_values(&[metrics_label])
             .get(),
         0
     );
-    // If check_need_gc return false, it will skip GC, GC_COMPACTION_FILTER_SKIP will not 0.
+    // If check_need_gc return false, it will skip GC, GC_COMPACTION_FILTER_SKIP
+    // will not 0.
     assert_eq!(
         GC_COMPACTION_FILTER_SKIP
             .with_label_values(&[metrics_label])
@@ -253,9 +254,9 @@ fn test_check_skip_compaction_filter_by_kv_mode(is_rawkv :bool) {
     );
 
     // Call GC runner as global GC safe point is 0.
-    if is_rawkv{
+    if is_rawkv {
         gc_runner.safe_point(0).gc_raw(&raw_engine);
-    }else{
+    } else {
         gc_runner.safe_point(0).gc(&raw_engine);
     }
 
@@ -283,14 +284,13 @@ fn do_write<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
 }
 
 fn make_keyspace_data<E: Engine>(engine: &E, is_delete: bool, op_nums: u64, is_rawkv: bool) {
-
-    let mut data_prefix=api_version::api_v2::TIDB_TABLE_KEY_PREFIX;
+    let mut data_prefix = api_version::api_v2::TIDB_TABLE_KEY_PREFIX;
     if is_rawkv {
-        data_prefix=api_version::api_v2::RAW_KEY_PREFIX;
+        data_prefix = api_version::api_v2::RAW_KEY_PREFIX;
     }
-    let mut test_cf=CF_WRITE;
+    let mut test_cf = CF_WRITE;
     if is_rawkv {
-        test_cf=CF_DEFAULT;
+        test_cf = CF_DEFAULT;
     }
 
     let user_key = vec![data_prefix, 0, 0, 1, 1, 2, 3];

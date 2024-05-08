@@ -16,7 +16,7 @@ use tikv_util::{debug, error, info, timer::GLOBAL_TIMER_HANDLE};
 const RETRY_INTERVAL: Duration = Duration::from_secs(1); // to consistent with pd_client
 pub const KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE: &str = "gc_management_type";
 pub const GC_MGMT_TYPE_GLOBAL_GC: &str = "global_gc";
-pub const GC_MGMT_TYPE_KEYSPACE_LEVEL_GC: &str= "keyspace_level_gc";
+pub const GC_MGMT_TYPE_KEYSPACE_LEVEL_GC: &str = "keyspace_level_gc";
 
 #[derive(Clone)]
 pub struct KeyspaceLevelGCWatchService {
@@ -344,7 +344,6 @@ impl KeyspaceMetaService {
         let keyspace_id_opt = ApiV2::get_u32_keyspace_id_by_key(key);
         match keyspace_id_opt {
             Some(keyspace_id) => {
-
                 // API V2 with keyspace.
                 let keyspace_gc_safe_point_opt = self.keyspace_level_gc_map.get(&keyspace_id);
                 match keyspace_gc_safe_point_opt {
@@ -368,10 +367,11 @@ impl KeyspaceMetaService {
                             safe_point
                         } else {
                             // It is not certain to use global gc directly here,
-                            // Maybe can not get keyspace meta, or can not get keyspace level gc safe
-                            // point here, may be gc safe point of this
-                            // keyspace hasn't been calculated or watched yet.
-                            // Just return 0, because we can't give an unsafe value greater than 0 yet.
+                            // Maybe can not get keyspace meta, or can not get keyspace level gc
+                            // safe point here, may be gc safe point of
+                            // this keyspace hasn't been calculated or
+                            // watched yet. Just return 0, because we
+                            // can't give an unsafe value greater than 0 yet.
                             debug!("[keyspace meta service] keyspace don't use global GC");
                             0
                         }
@@ -380,7 +380,9 @@ impl KeyspaceMetaService {
             }
             None => {
                 // Api V1
-                debug!("[keyspace meta service] the key is in API V1 mode, use global GC directly.");
+                debug!(
+                    "[keyspace meta service] the key is in API V1 mode, use global GC directly."
+                );
                 safe_point
             }
         }

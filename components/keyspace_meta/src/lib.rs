@@ -9,10 +9,10 @@ use pd_client::RpcClient;
 use tikv_util::worker::Worker;
 
 pub mod service;
-pub use service::{KeyspaceLevelGCWatchService, KeyspaceMetaService};
-
-pub use service::KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE;
-pub use service::GC_MGMT_TYPE_KEYSPACE_LEVEL_GC;
+pub use service::{
+    KeyspaceLevelGCWatchService, KeyspaceMetaService, GC_MGMT_TYPE_KEYSPACE_LEVEL_GC,
+    KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE,
+};
 
 use crate::service::KeyspaceMetaWatchService;
 

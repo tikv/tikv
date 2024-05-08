@@ -1574,16 +1574,16 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             vec![(
                 match &start_key {
                     Some(k) => {
-                        debug!("scan_lock start_key:{:?}",start_key);
+                        debug!("scan_lock start_key:{:?}", start_key);
                         k.as_encoded().to_vec()
-                    },
+                    }
                     None => vec![],
                 },
                 match &end_key {
                     Some(k) => {
-                        debug!("scan_lock end_key:{:?}",end_key);
+                        debug!("scan_lock end_key:{:?}", end_key);
                         k.as_encoded().to_vec()
-                    },
+                    }
                     None => vec![],
                 },
             )],

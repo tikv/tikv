@@ -484,7 +484,7 @@ dependencies = [
  "concurrency_manager",
  "crossbeam",
  "crossbeam-channel",
- "dashmap",
+ "dashmap 5.2.0",
  "encryption",
  "engine_panic",
  "engine_rocks",
