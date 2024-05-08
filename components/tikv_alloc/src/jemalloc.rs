@@ -335,14 +335,14 @@ mod profiling {
     static ENABLE_THREAD_EXCLUSIVE_ARENA: AtomicBool = AtomicBool::new(false);
 
     // C string should end with a '\0'.
-    const PROF_ACTIVE: &[u8] = c"prof.active";
-    const PROF_DUMP: &[u8] = c"prof.dump";
-    const PROF_RESET: &[u8] = c"prof.reset";
-    const PROF_SAMPLE: &[u8] = c"prof.lg_sample";
-    const OPT_PROF: &[u8] = c"opt.prof";
-    const ARENAS_CREATE: &[u8] = c"arenas.create";
-    const THREAD_ARENA: &[u8] = c"thread.arena";
-    const BACKGROUND_THREAD: &[u8] = c"background_thread";
+    const PROF_ACTIVE: &[u8] = b"prof.active\0";
+    const PROF_DUMP: &[u8] = b"prof.dump\0";
+    const PROF_RESET: &[u8] = b"prof.reset\0";
+    const PROF_SAMPLE: &[u8] = b"prof.lg_sample\0";
+    const OPT_PROF: &[u8] = b"opt.prof\0";
+    const ARENAS_CREATE: &[u8] = b"arenas.create\0";
+    const THREAD_ARENA: &[u8] = b"thread.arena\0";
+    const BACKGROUND_THREAD: &[u8] = b"background_thread\0";
 
     pub fn set_thread_exclusive_arena(enable: bool) {
         ENABLE_THREAD_EXCLUSIVE_ARENA.store(enable, Ordering::Relaxed);
