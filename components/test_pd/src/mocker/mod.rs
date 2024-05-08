@@ -167,4 +167,11 @@ pub trait PdMocker {
         });
         None
     }
+
+    fn update_service_gc_safe_point(
+        &self,
+        _: &UpdateServiceGcSafePointRequest,
+    ) -> Option<Result<UpdateServiceGcSafePointResponse>> {
+        None
+    }
 }
