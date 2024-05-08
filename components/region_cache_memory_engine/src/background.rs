@@ -790,7 +790,7 @@ impl Filter {
                 // Reaching here in two cases:
                 // 1. There are two ValueType::Deletion in the same user key.
                 // 2. Two consecutive ValueType::Deletion of different user keys.
-                // In either case, we can delete the previous one directly.
+                // In either cases, we can delete the previous one directly.
                 let guard = &epoch::pin();
                 self.write_cf_handle
                     .remove(&InternalBytes::from_vec(cache_skiplist_delete_key), guard)
