@@ -230,7 +230,7 @@ impl MemoryQuota {
 
     pub fn alloc_force(&self, bytes: usize) {
         if bytes > MAX_MEMORY_ALLOC_SIZE {
-            warn!("ignore oversized force alloce"; "bytes" => bytes);
+            warn!("bytes size exceeds the max memory alloc size, force alloc is ignored"; "bytes" => bytes);
             return;
         }
         self.in_use.fetch_add(bytes as isize, Ordering::Relaxed);
@@ -255,12 +255,14 @@ impl MemoryQuota {
         // bytes higher than `MAX_MEMORY_ALLOC_SIZE` means the memory is acquired with
         // `alloc_force`, so also ignore the `free` call.
         if bytes > MAX_MEMORY_ALLOC_SIZE {
+            warn!("bytes size exceeds the max memory alloc size, free is ignored"; "bytes" => bytes);
             return;
         }
         let bytes = bytes as isize;
         let new_in_use_bytes = self.in_use.fetch_sub(bytes, Ordering::Relaxed) - bytes;
         if new_in_use_bytes < 0 {
-            // handle overflow.
+            // handle overflow. This is just a conservative operation trying to minimize the
+            // impact in extreme scenario.
             self.in_use
                 .fetch_add(std::cmp::min(-new_in_use_bytes, bytes), Ordering::Relaxed);
         }
