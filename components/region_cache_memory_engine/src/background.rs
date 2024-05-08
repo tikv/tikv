@@ -608,8 +608,9 @@ impl BackgroundRunner {
             .thread_count(1)
             .create();
         let gc_range_remote = delete_range_worker.remote();
+        let num_regions_to_cache = memory_controller.soft_limit_threshold() / 96_000_000;
         let range_stats_manager =
-            region_info_provider.map(|r_i_p| RangeStatsManager::new(NUM_REGIONS_FOR_CACHE, r_i_p));
+            region_info_provider.map(|r_i_p| RangeStatsManager::new(num_regions_to_cache, r_i_p));
         Self {
             core: BackgroundRunnerCore {
                 engine,
