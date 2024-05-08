@@ -3,17 +3,30 @@
 use collections::HashSet;
 use mur3::murmurhash3_x64_128;
 
-/// `FmSketch` is used to count the approximate number of distinct
-/// elements in multiset.
-/// Refer:[Flajolet-Martin](https://en.wikipedia.org/wiki/Flajolet%E2%80%93Martin_algorithm)
+/// FMSketch (Flajolet–Martin Sketch) is a probabilistic data structure used for
+/// estimating the number of distinct elements in a stream. It uses a hash
+/// function to map each element to a binary number and counts the number of
+/// trailing zeroes in each hashed value. The maximum number of trailing zeroes
+/// observed gives an estimate of the logarithm of the number of distinct
+/// elements. This approach allows the FM sketch to handle large streams of data
+/// in a memory-efficient way.
+///
+/// See https://en.wikipedia.org/wiki/Flajolet%E2%80%93Martin_algorithm
 #[derive(Clone)]
 pub struct FmSketch {
+    /// A binary mask used to track the maximum number of trailing zeroes in the
+    /// hashed values.
     mask: u64,
+    /// The maximum size of the hashset. If the size exceeds this value, the
+    /// mask size will be doubled and some hashed values will be removed
+    /// from the hashset.
     max_size: usize,
+    /// A set to store unique hashed values.
     hash_set: HashSet<u64>,
 }
 
 impl FmSketch {
+    /// Creates a new FmSketch with the given maximum size.
     pub fn new(max_size: usize) -> FmSketch {
         FmSketch {
             mask: 0,
@@ -28,10 +41,20 @@ impl FmSketch {
     }
 
     pub fn insert_hash_value(&mut self, hash_val: u64) {
+        // If the hashed value is already in the sketch (determined by bitwise AND with
+        // the mask), return without inserting. This is because the number of
+        // trailing zeroes in the hashed value is less than or equal to the mask value.
         if (hash_val & self.mask) != 0 {
             return;
         }
+        // Put the hashed value into the hashset.
         self.hash_set.insert(hash_val);
+        // If the count of unique hashed values exceeds the maximum size,
+        // double the mask size and remove any hashed values from the hashset that are
+        // now within the mask. This is to ensure that the mask value is always
+        // a power of two minus one (i.e., a binary number of the form 111...),
+        // which allows us to quickly check the number of trailing zeroes in a hashed
+        // value by performing a bitwise AND operation with the mask.
         if self.hash_set.len() > self.max_size {
             let mask = (self.mask << 1) | 1;
             self.hash_set.retain(|&x| x & mask == 0);
@@ -100,7 +123,7 @@ mod tests {
         }
     }
 
-    pub fn build_fmsketch(values: &[Datum], max_size: usize) -> Result<FmSketch> {
+    fn build_fmsketch(values: &[Datum], max_size: usize) -> Result<FmSketch> {
         let mut s = FmSketch::new(max_size);
         for value in values {
             let bytes = datum::encode_value(&mut EvalContext::default(), from_ref(value))?;
@@ -112,6 +135,11 @@ mod tests {
     impl FmSketch {
         // ndv returns the approximate number of distinct elements
         pub fn ndv(&self) -> u64 {
+            // The size of the mask (incremented by one) is 2^r, where r is the maximum
+            // number of trailing zeroes observed in the hashed values.
+            // The count of unique hashed values is the number of unique elements in the
+            // hashset. This estimation method is based on the Flajolet-Martin
+            // algorithm for estimating the number of distinct elements in a stream.
             (self.mask + 1) * (self.hash_set.len() as u64)
         }
     }
