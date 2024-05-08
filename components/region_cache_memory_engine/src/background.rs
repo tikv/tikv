@@ -683,8 +683,20 @@ impl RunnableWithTimer for BackgroundRunner {
     fn on_timeout(&mut self) {
         let mem_usage = self.core.memory_controller.mem_usage();
         RANGE_CACHE_MEMORY_USAGE.set(mem_usage as i64);
-        let count = self.core.engine.read().range_manager.pending_ranges.len();
-        RANGE_CACHE_PENDING_RANGE_COUNT.set(count as i64);
+        let core = self.core.engine.read();
+        let pending = core.range_manager.pending_ranges.len();
+        let cached = core.range_manager.ranges().len();
+        let loading = core.range_manager.pending_ranges_loading_data.len();
+        drop(core);
+        RANGE_CACHE_PENDING_RANGE_COUNT
+            .with_label_values(&["pending_range"])
+            .set(pending as i64);
+        RANGE_CACHE_PENDING_RANGE_COUNT
+            .with_label_values(&["cached_range"])
+            .set(cached as i64);
+        RANGE_CACHE_PENDING_RANGE_COUNT
+            .with_label_values(&["loading_range"])
+            .set(loading as i64);
     }
 
     fn get_interval(&self) -> Duration {

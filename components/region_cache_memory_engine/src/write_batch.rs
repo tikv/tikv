@@ -55,7 +55,14 @@ pub struct RangeCacheWriteBatch {
     // the ranges that reaches the hard limit and need to be evicted
     ranges_to_evict: BTreeSet<CacheRange>,
 
+    prepare_apply: Duration,
+    prepare_apply_exit_time: Duration,
     prepare_duration: Duration,
+    before_lock_wait: Duration,
+    before_pending: Duration,
+    iterating_pending: Duration,
+    upgrade_wait: Duration,
+    post_iterating: Duration,
 }
 
 impl std::fmt::Debug for RangeCacheWriteBatch {
@@ -81,7 +88,14 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
             memory_usage_reach_hard_limit: false,
             current_range: None,
             ranges_to_evict: BTreeSet::default(),
+            prepare_apply: Duration::default(),
             prepare_duration: Duration::default(),
+            before_lock_wait: Duration::default(),
+            before_pending: Duration::default(),
+            iterating_pending: Duration::default(),
+            prepare_apply_exit_time: Duration::default(),
+            upgrade_wait: Duration::default(),
+            post_iterating: Duration::default(),
         }
     }
 }
@@ -101,6 +115,13 @@ impl RangeCacheWriteBatch {
             current_range: None,
             ranges_to_evict: BTreeSet::default(),
             prepare_duration: Duration::default(),
+            before_lock_wait: Duration::default(),
+            before_pending: Duration::default(),
+            iterating_pending: Duration::default(),
+            prepare_apply: Duration::default(),
+            prepare_apply_exit_time: Duration::default(),
+            upgrade_wait: Duration::default(),
+            post_iterating: Duration::default(),
         }
     }
 
@@ -148,8 +169,38 @@ impl RangeCacheWriteBatch {
             }
         }
 
+        let dur = std::mem::take(&mut self.before_lock_wait);
+        PREPARE_FOR_APPLY_DURATION_HISTOGRAM
+            .with_label_values(&["before_lock_wait"])
+            .observe(dur.as_secs_f64());
+        let dur = std::mem::take(&mut self.prepare_apply_exit_time);
+        PREPARE_FOR_APPLY_DURATION_HISTOGRAM
+            .with_label_values(&["prepare_apply_exit_time"])
+            .observe(dur.as_secs_f64());
         let dur = std::mem::take(&mut self.prepare_duration);
-        PREPARE_FOR_APPLY_DURATION_HISTOGRAM.observe(dur.as_secs_f64());
+        PREPARE_FOR_APPLY_DURATION_HISTOGRAM
+            .with_label_values(&["prepare_duration"])
+            .observe(dur.as_secs_f64());
+        let dur = std::mem::take(&mut self.prepare_apply);
+        PREPARE_FOR_APPLY_DURATION_HISTOGRAM
+            .with_label_values(&["prepare_apply"])
+            .observe(dur.as_secs_f64());
+        let dur = std::mem::take(&mut self.before_pending);
+        PREPARE_FOR_APPLY_DURATION_HISTOGRAM
+            .with_label_values(&["before_pending"])
+            .observe(dur.as_secs_f64());
+        let dur = std::mem::take(&mut self.iterating_pending);
+        PREPARE_FOR_APPLY_DURATION_HISTOGRAM
+            .with_label_values(&["iterating_pending"])
+            .observe(dur.as_secs_f64());
+        let dur = std::mem::take(&mut self.upgrade_wait);
+        PREPARE_FOR_APPLY_DURATION_HISTOGRAM
+            .with_label_values(&["upgrade_wait"])
+            .observe(dur.as_secs_f64());
+        let dur = std::mem::take(&mut self.post_iterating);
+        PREPARE_FOR_APPLY_DURATION_HISTOGRAM
+            .with_label_values(&["post_iterating"])
+            .observe(dur.as_secs_f64());
 
         res
     }
@@ -526,10 +577,44 @@ impl WriteBatch for RangeCacheWriteBatch {
 
     fn prepare_for_range(&mut self, range: CacheRange) {
         let time = Instant::now();
-        self.set_range_cache_status(self.engine.prepare_for_apply(&range));
+        let (
+            status,
+            (
+                (exit_time, idx),
+                before_lock_wait,
+                before_pending,
+                iterating_pending,
+                upgrade_wait,
+                post_iterating,
+            ),
+        ) = self.engine.prepare_for_apply(&range);
+        let time2 = Instant::now();
+        self.set_range_cache_status(status);
         self.memory_usage_reach_hard_limit = false;
         self.current_range = Some(range);
+
+        let exit_time = time2.saturating_duration_since(exit_time);
+        if exit_time > Duration::from_micros(500) {
+            info!(
+                "slow prepare for apply";
+                "exit_time" => ?exit_time,
+                "idx" => idx,
+            );
+        }
+        self.prepare_apply_exit_time += exit_time;
         self.prepare_duration += time.saturating_elapsed();
+        self.prepare_apply += time2.saturating_duration_since(time);
+        self.before_lock_wait += before_lock_wait;
+        self.before_pending += before_pending;
+        if let Some(dur) = iterating_pending {
+            self.iterating_pending += dur;
+        }
+        if let Some(dur) = upgrade_wait {
+            self.upgrade_wait += dur;
+        }
+        if let Some(dur) = post_iterating {
+            self.post_iterating += dur;
+        }
     }
 }
 

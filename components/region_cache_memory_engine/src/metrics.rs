@@ -69,15 +69,17 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
-    pub static ref PREPARE_FOR_APPLY_DURATION_HISTOGRAM: Histogram = register_histogram!(
+    pub static ref PREPARE_FOR_APPLY_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
         "tikv_range_cache_engine_prepare_for_apply_duration_seconds",
         "Bucketed histogram of prepare for apply duration in range cache engine.",
+        &["type"],
         exponential_buckets(0.00001, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref RANGE_CACHE_PENDING_RANGE_COUNT: IntGauge = register_int_gauge!(
-        "tikv_range_cache_range_cache_count",
-        "The pending range count of the range cache engine",
+    pub static ref RANGE_CACHE_PENDING_RANGE_COUNT: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_range_cache_ranges_count",
+        "The range count of the range cache engine",
+        &["type"]
     )
     .unwrap();
 }
