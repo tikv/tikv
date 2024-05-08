@@ -1778,7 +1778,7 @@ mod tests {
             }
             let diff = cfg.diff(&updated_cfg);
 
-            assert_eq!(ep.sink_memory_quota.capacity(), usize::MAX);
+            assert_eq!(ep.sink_memory_quota.capacity(), isize::MAX as usize);
             ep.run(Task::ChangeConfig(diff));
             assert_eq!(ep.config.sink_memory_quota, ReadableSize::mb(1024));
             assert_eq!(
