@@ -782,8 +782,15 @@ impl Filter {
         // keys (representing different MVCC versions of the same user key) that have
         // been marked as tombstones. However, these keys need to be deleted. Since they
         // are below the safe point, we can safely delete them directly now.
+        // For each user key, we cache the first ValueType::Deletion and delete all the
+        // older internal keys of the same user keys. The cached ValueType::Delete is
+        // deleted at last to avoid these older keys visible.
         if v_type == ValueType::Deletion {
             if let Some(cache_skiplist_delete_key) = self.cached_skiplist_delete_key.take() {
+                // Reaching here in two cases:
+                // 1. There are two ValueType::Deletion in the same user key.
+                // 2. Two consecutive ValueType::Deletion of different user keys.
+                // In either case, we can delete the previous one directly.
                 let guard = &epoch::pin();
                 self.write_cf_handle
                     .remove(&InternalBytes::from_vec(cache_skiplist_delete_key), guard)
