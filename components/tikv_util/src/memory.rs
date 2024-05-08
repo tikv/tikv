@@ -230,6 +230,7 @@ impl MemoryQuota {
 
     pub fn alloc_force(&self, bytes: usize) {
         if bytes > MAX_MEMORY_ALLOC_SIZE {
+            warn!("ignore oversized force alloce"; "bytes" => bytes);
             return;
         }
         self.in_use.fetch_add(bytes as isize, Ordering::Relaxed);
