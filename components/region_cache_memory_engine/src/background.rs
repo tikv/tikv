@@ -535,11 +535,13 @@ impl BackgroundRunnerCore {
             .as_ref()
             .unwrap()
             .collect_changed_ranges(&mut ranges_to_add, &mut ranges_to_remove);
+        info!("load_evict"; "ranges_to_add" => ?&ranges_to_add, "ranges_to_remove" => ?&ranges_to_remove);
         for cache_range in ranges_to_add {
             let mut core = self.engine.write();
             let _ = core.mut_range_manager().load_range(cache_range);
         }
         for evict_range in ranges_to_remove {
+            // TODO: check when last loaded, do not evict unless there is a miniminum time.
             let mut core = self.engine.write();
             let _ = core.mut_range_manager().evict_range(&evict_range);
         }
