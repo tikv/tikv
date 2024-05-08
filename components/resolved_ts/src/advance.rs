@@ -46,7 +46,7 @@ use tokio::{
 };
 use txn_types::TimeStamp;
 
-use crate::{endpoint::Task, metrics::*};
+use crate::{endpoint::Task, metrics::*, TsSource};
 
 pub(crate) const DEFAULT_CHECK_LEADER_TIMEOUT_DURATION: Duration = Duration::from_secs(5); // 5s
 const DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL: usize = 2;
@@ -59,7 +59,7 @@ pub struct AdvanceTsWorker {
     scheduler: Scheduler<Task>,
     /// The concurrency manager for transactions. It's needed for CDC to check
     /// locks when calculating resolved_ts.
-    concurrency_manager: ConcurrencyManager,
+    pub(crate) concurrency_manager: ConcurrencyManager,
 
     // cache the last pd tso, used to approximate the next timestamp w/o an actual TSO RPC
     pub(crate) last_pd_tso: Arc<std::sync::Mutex<Option<(TimeStamp, Instant)>>>,
@@ -115,15 +115,17 @@ impl AdvanceTsWorker {
             if let Ok(mut last_pd_tso) = last_pd_tso.try_lock() {
                 *last_pd_tso = Some((min_ts, Instant::now()));
             }
+            let mut ts_source = TsSource::PdTso;
 
             // Sync with concurrency manager so that it can work correctly when
             // optimizations like async commit is enabled.
             // Note: This step must be done before scheduling `Task::MinTs` task, and the
             // resolver must be checked in or after `Task::MinTs`' execution.
             cm.update_max_ts(min_ts);
-            if let Some(min_mem_lock_ts) = cm.global_min_lock_ts() {
+            if let Some((min_mem_lock_ts, lock)) = cm.global_min_lock() {
                 if min_mem_lock_ts < min_ts {
                     min_ts = min_mem_lock_ts;
+                    ts_source = TsSource::MemoryLock(lock);
                 }
             }
 
@@ -134,6 +136,7 @@ impl AdvanceTsWorker {
                 if let Err(e) = scheduler.schedule(Task::ResolvedTsAdvanced {
                     regions,
                     ts: min_ts,
+                    ts_source,
                 }) {
                     info!("failed to schedule advance event"; "err" => ?e);
                 }

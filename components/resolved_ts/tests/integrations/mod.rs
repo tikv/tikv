@@ -2,11 +2,12 @@
 
 #[path = "../mod.rs"]
 mod testsuite;
-use std::time::Duration;
+use std::{sync::mpsc::channel, time::Duration};
 
 use futures::executor::block_on;
 use kvproto::{kvrpcpb::*, metapb::RegionEpoch};
 use pd_client::PdClient;
+use resolved_ts::Task;
 use tempfile::Builder;
 use test_raftstore::{sleep_ms, IsolationFilterFactory};
 use test_sst_importer::*;
@@ -167,6 +168,95 @@ fn test_store_partitioned() {
         }
         sleep_ms(100);
     }
+
+    suite.stop();
+}
+
+#[test]
+fn test_change_log_memory_quota_exceeded() {
+    let mut suite = TestSuite::new(1);
+    let region = suite.cluster.get_region(&[]);
+
+    suite.must_get_rts_ge(
+        region.id,
+        block_on(suite.cluster.pd_client.get_tso()).unwrap(),
+    );
+
+    // Set a small memory quota to trigger memory quota exceeded.
+    suite.must_change_memory_quota(1, 1);
+    let (k, v) = (b"k1", b"v");
+    let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.key = k.to_vec();
+    mutation.value = v.to_vec();
+    suite.must_kv_prewrite(region.id, vec![mutation], k.to_vec(), start_ts, false);
+
+    // Resolved ts should not advance.
+    let (tx, rx) = channel();
+    suite.must_schedule_task(
+        1,
+        Task::GetDiagnosisInfo {
+            region_id: 1,
+            log_locks: false,
+            min_start_ts: u64::MAX,
+            callback: Box::new(move |res| {
+                tx.send(res).unwrap();
+            }),
+        },
+    );
+    let res = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(res.unwrap().1, 0, "{:?}", res);
+
+    suite.stop();
+}
+
+#[test]
+fn test_scan_log_memory_quota_exceeded() {
+    let mut suite = TestSuite::new(1);
+    let region = suite.cluster.get_region(&[]);
+
+    suite.must_get_rts_ge(
+        region.id,
+        block_on(suite.cluster.pd_client.get_tso()).unwrap(),
+    );
+
+    let (k, v) = (b"k1", b"v");
+    let start_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.key = k.to_vec();
+    mutation.value = v.to_vec();
+    suite.must_kv_prewrite(region.id, vec![mutation], k.to_vec(), start_ts, false);
+
+    // Set a small memory quota to trigger memory quota exceeded.
+    suite.must_change_memory_quota(1, 1);
+    // Split region
+    suite.cluster.must_split(&region, k);
+
+    let r1 = suite.cluster.get_region(&[]);
+    let r2 = suite.cluster.get_region(k);
+    let current_ts = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+    // Wait for scan log.
+    sleep_ms(500);
+    // Resolved ts of region1 should be advanced
+    suite.must_get_rts_ge(r1.id, current_ts);
+
+    // Resolved ts should not advance.
+    let (tx, rx) = channel();
+    suite.must_schedule_task(
+        r2.id,
+        Task::GetDiagnosisInfo {
+            region_id: r2.id,
+            log_locks: false,
+            min_start_ts: u64::MAX,
+            callback: Box::new(move |res| {
+                tx.send(res).unwrap();
+            }),
+        },
+    );
+    let res = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(res.unwrap().1, 0, "{:?}", res);
 
     suite.stop();
 }

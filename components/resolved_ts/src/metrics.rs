@@ -38,7 +38,7 @@ lazy_static! {
     .unwrap();
     pub static ref RTS_MIN_RESOLVED_TS_GAP: IntGauge = register_int_gauge!(
         "tikv_resolved_ts_min_resolved_ts_gap_millis",
-        "The minimal (non-zero) resolved ts gap for observed regions"
+        "The gap between now() and the minimal (non-zero) resolved ts"
     )
     .unwrap();
     pub static ref RTS_RESOLVED_FAIL_ADVANCE_VEC: IntCounterVec = register_int_counter_vec!(
@@ -69,19 +69,29 @@ lazy_static! {
         "The minimal (non-zero) resolved ts for observed regions"
     )
     .unwrap();
-    pub static ref RTS_MIN_SAFE_TS_REGION: IntGauge = register_int_gauge!(
-        "tikv_resolved_ts_min_safe_ts_region",
-        "The region which has minimal safe ts"
+    pub static ref RTS_MIN_FOLLOWER_SAFE_TS_REGION: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_min_follower_safe_ts_region",
+        "The region id of the follower that has minimal safe ts"
     )
     .unwrap();
-    pub static ref RTS_MIN_SAFE_TS: IntGauge = register_int_gauge!(
-        "tikv_resolved_ts_min_safe_ts",
-        "The minimal (non-zero) safe ts for observed regions"
+    pub static ref RTS_MIN_FOLLOWER_SAFE_TS: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_min_follower_safe_ts",
+        "The minimal (non-zero) safe ts for followers"
     )
     .unwrap();
-    pub static ref RTS_MIN_SAFE_TS_GAP: IntGauge = register_int_gauge!(
-        "tikv_resolved_ts_min_safe_ts_gap_millis",
-        "The minimal (non-zero) safe ts gap for observed regions"
+    pub static ref RTS_MIN_FOLLOWER_SAFE_TS_GAP: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_min_follower_safe_ts_gap_millis",
+        "The gap between now() and the minimal (non-zero) safe ts for followers"
+    )
+    .unwrap();
+    pub static ref RTS_MIN_LEADER_DUATION_TO_LAST_UPDATE_SAFE_TS: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_leader_min_resolved_ts_duration_to_last_update_safe_ts",
+        "The duration since last update_safe_ts() called by resolved-ts routine in the leader with min resolved ts. -1 denotes None."
+    )
+    .unwrap();
+    pub static ref RTS_MIN_FOLLOWER_SAFE_TS_DURATION_TO_LAST_CONSUME_LEADER: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_min_follower_safe_ts_duration_to_last_consume_leader",
+        "The duration since last check_leader() in the follower region with min safe ts. -1 denotes None."
     )
     .unwrap();
     pub static ref RTS_ZERO_RESOLVED_TS: IntGauge = register_int_gauge!(
@@ -91,6 +101,11 @@ lazy_static! {
     .unwrap();
     pub static ref RTS_LOCK_HEAP_BYTES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_resolved_ts_lock_heap_bytes",
+        "Total bytes in memory of resolved-ts observed regions's lock heap"
+    )
+    .unwrap();
+    pub static ref RTS_LOCK_QUOTA_IN_USE_BYTES_GAUGE: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_memory_quota_in_use_bytes",
         "Total bytes in memory of resolved-ts observed regions's lock heap"
     )
     .unwrap();
@@ -115,7 +130,17 @@ lazy_static! {
     .unwrap();
     pub static ref RTS_MIN_LEADER_RESOLVED_TS_REGION: IntGauge = register_int_gauge!(
         "tikv_resolved_ts_min_leader_resolved_ts_region",
-        "The region which its leader peer has minimal resolved ts"
+        "The region whose leader peer has minimal resolved ts"
+    )
+    .unwrap();
+    pub static ref RTS_MIN_LEADER_RESOLVED_TS_REGION_MIN_LOCK_TS: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_min_leader_resolved_ts_region_min_lock_ts",
+        "The minimal lock ts for the region whose leader peer has minimal resolved ts. 0 means no lock. -1 means no region found."
+    )
+    .unwrap();
+    pub static ref CONCURRENCY_MANAGER_MIN_LOCK_TS: IntGauge = register_int_gauge!(
+        "tikv_concurrency_manager_min_lock_ts",
+        "The minimal lock ts in concurrency manager. 0 means no lock."
     )
     .unwrap();
     pub static ref RTS_MIN_LEADER_RESOLVED_TS: IntGauge = register_int_gauge!(
@@ -125,7 +150,35 @@ lazy_static! {
     .unwrap();
     pub static ref RTS_MIN_LEADER_RESOLVED_TS_GAP: IntGauge = register_int_gauge!(
         "tikv_resolved_ts_min_leader_resolved_ts_gap_millis",
-        "The minimal (non-zero) resolved ts gap for observe leader peers"
+        "The gap between now() and the minimal (non-zero) resolved ts for leader peers"
+    )
+    .unwrap();
+
+    // for min_follower_resolved_ts
+    pub static ref RTS_MIN_FOLLOWER_RESOLVED_TS_REGION: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_min_follower_resolved_ts_region",
+        "The region id of the follower has minimal resolved ts"
+    )
+    .unwrap();
+    pub static ref RTS_MIN_FOLLOWER_RESOLVED_TS: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_min_follower_resolved_ts",
+        "The minimal (non-zero) resolved ts for follower regions"
+    )
+    .unwrap();
+    pub static ref RTS_MIN_FOLLOWER_RESOLVED_TS_GAP: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_min_follower_resolved_ts_gap_millis",
+        "The max gap of now() and the minimal (non-zero) resolved ts for follower regions"
+    )
+    .unwrap();
+    pub static ref RTS_MIN_FOLLOWER_RESOLVED_TS_DURATION_TO_LAST_CONSUME_LEADER: IntGauge = register_int_gauge!(
+        "tikv_resolved_ts_min_follower_resolved_ts_duration_to_last_consume_leader",
+        "The duration since last check_leader() in the follower region with min resolved ts. -1 denotes None."
+    )
+    .unwrap();
+    pub static ref RTS_INITIAL_SCAN_BACKOFF_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_resolved_ts_initial_scan_backoff_duration_seconds",
+        "Bucketed histogram of resolved-ts initial scan backoff duration",
+        exponential_buckets(0.1, 2.0, 16).unwrap(),
     )
     .unwrap();
 }

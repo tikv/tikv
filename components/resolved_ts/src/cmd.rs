@@ -143,7 +143,8 @@ pub(crate) fn decode_write(key: &[u8], value: &[u8], is_apply: bool) -> Option<W
     // gc_fence exists.
     if is_apply && write.gc_fence.is_some() {
         // `gc_fence` is set means the write record has been rewritten.
-        // Currently the only case is writing overlapped_rollback. And in this case
+        // Currently the only case is writing overlapped_rollback. And in this case we
+        // can safely ignore the writing operation.
         assert!(write.has_overlapped_rollback);
         assert_ne!(write.write_type, WriteType::Rollback);
         return None;
@@ -334,8 +335,14 @@ mod tests {
         must_prewrite_put(&mut engine, b"k1", &[b'v'; 512], b"k1", 4);
         must_commit(&mut engine, b"k1", 4, 5);
 
-        must_prewrite_put(&mut engine, b"k1", b"v3", b"k1", 5);
+        must_prewrite_put(&mut engine, b"k1", b"v3", b"pk", 5);
         must_rollback(&mut engine, b"k1", 5, false);
+
+        must_prewrite_put(&mut engine, b"k1", b"v4", b"k1", 6);
+        must_commit(&mut engine, b"k1", 6, 7);
+
+        must_prewrite_put(&mut engine, b"k1", b"v5", b"k1", 7);
+        must_rollback(&mut engine, b"k1", 7, true);
 
         let k1 = Key::from_raw(b"k1");
         let rows: Vec<_> = engine
@@ -398,6 +405,26 @@ mod tests {
                 commit_ts: None,
                 write_type: WriteType::Rollback,
             },
+            ChangeRow::Prewrite {
+                key: k1.clone(),
+                start_ts: 6.into(),
+                value: Some(b"v4".to_vec()),
+                lock_type: LockType::Put,
+            },
+            ChangeRow::Commit {
+                key: k1.clone(),
+                start_ts: Some(6.into()),
+                commit_ts: Some(7.into()),
+                write_type: WriteType::Put,
+            },
+            ChangeRow::Prewrite {
+                key: k1.clone(),
+                start_ts: 7.into(),
+                value: Some(b"v5".to_vec()),
+                lock_type: LockType::Put,
+            },
+            // Rollback of the txn@start_ts=7 will be missing as overlapped rollback is not
+            // hanlded.
         ];
         assert_eq!(rows, expected);
 

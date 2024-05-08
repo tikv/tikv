@@ -810,10 +810,21 @@ where
             return Ok(None);
         }
 
-        // Check witness
-        if find_peer_by_id(&delegate.region, delegate.peer_id).map_or(true, |p| p.is_witness) {
-            TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.witness.inc());
-            return Err(Error::RecoveryInProgress(region_id));
+        match find_peer_by_id(&delegate.region, delegate.peer_id) {
+            // Check witness
+            Some(peer) => {
+                if peer.is_witness {
+                    TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.witness.inc());
+                    return Err(Error::RecoveryInProgress(region_id));
+                }
+            }
+            // This (rarely) happen in witness disabled clusters while the conf change applied but
+            // region not removed. We shouldn't return `IsWitness` here because our client back off
+            // for a long time while encountering that.
+            None => {
+                TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().reject_reason.no_region.inc());
+                return Err(Error::RegionNotFound(region_id));
+            }
         }
 
         // Check whether the region is in the flashback state and the local read could

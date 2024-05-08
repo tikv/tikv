@@ -5,18 +5,13 @@ publish = false
 version = "0.0.1"
 
 [dependencies]
+crossbeam-skiplist = "0.1"
 fail = "0.5"
 kvproto = { workspace = true }
 parking_lot = "0.12"
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["macros", "sync", "time"] }
 txn_types = { workspace = true }
-
-# FIXME: switch to the crates.io version after crossbeam-skiplist is released
-[dependencies.crossbeam-skiplist]
-git = "https://github.com/tikv/crossbeam.git"
-branch = "tikv-5.0"
-package = "crossbeam-skiplist" 
 
 [dev-dependencies]
 criterion = "0.3"

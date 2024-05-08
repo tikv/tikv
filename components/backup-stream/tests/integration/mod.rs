@@ -27,21 +27,20 @@ mod all {
 
     #[test]
     fn with_split() {
-        let mut suite = super::SuiteBuilder::new_named("with_split").build();
-        run_async_test(async {
+        let mut suite = SuiteBuilder::new_named("with_split").build();
+        let (round1, round2) = run_async_test(async {
             let round1 = suite.write_records(0, 128, 1).await;
             suite.must_split(&make_split_key_at_record(1, 42));
             suite.must_register_task(1, "test_with_split");
             let round2 = suite.write_records(256, 128, 1).await;
-            suite.force_flush_files("test_with_split");
-            suite.wait_for_flush();
-            suite
-                .check_for_write_records(
-                    suite.flushed_files.path(),
-                    round1.union(&round2).map(Vec::as_slice),
-                )
-                .await;
+            (round1, round2)
         });
+        suite.force_flush_files("test_with_split");
+        suite.wait_for_flush();
+        suite.check_for_write_records(
+            suite.flushed_files.path(),
+            round1.union(&round2).map(Vec::as_slice),
+        );
         suite.cluster.shutdown();
     }
 
@@ -62,8 +61,8 @@ mod all {
     ///   scanning get the snapshot.
     #[test]
     fn with_split_txn() {
-        let mut suite = super::SuiteBuilder::new_named("split_txn").build();
-        run_async_test(async {
+        let mut suite = SuiteBuilder::new_named("split_txn").build();
+        let (commit_ts, start_ts, keys) = run_async_test(async {
             let start_ts = suite.cluster.pd_client.get_tso().await.unwrap();
             let keys = (1..1960).map(|i| make_record_key(1, i)).collect::<Vec<_>>();
             suite.must_kv_prewrite(
@@ -76,26 +75,25 @@ mod all {
                 start_ts,
             );
             let commit_ts = suite.cluster.pd_client.get_tso().await.unwrap();
-            suite.commit_keys(keys[1913..].to_vec(), start_ts, commit_ts);
-            suite.must_register_task(1, "test_split_txn");
-            suite.commit_keys(keys[..1913].to_vec(), start_ts, commit_ts);
-            suite.force_flush_files("test_split_txn");
-            suite.wait_for_flush();
-            let keys_encoded = keys
-                .iter()
-                .map(|v| {
-                    Key::from_raw(v.as_slice())
-                        .append_ts(commit_ts)
-                        .into_encoded()
-                })
-                .collect::<Vec<_>>();
-            suite
-                .check_for_write_records(
-                    suite.flushed_files.path(),
-                    keys_encoded.iter().map(Vec::as_slice),
-                )
-                .await;
+            (commit_ts, start_ts, keys)
         });
+        suite.commit_keys(keys[1913..].to_vec(), start_ts, commit_ts);
+        suite.must_register_task(1, "test_split_txn");
+        suite.commit_keys(keys[..1913].to_vec(), start_ts, commit_ts);
+        suite.force_flush_files("test_split_txn");
+        suite.wait_for_flush();
+        let keys_encoded = keys
+            .iter()
+            .map(|v| {
+                Key::from_raw(v.as_slice())
+                    .append_ts(commit_ts)
+                    .into_encoded()
+            })
+            .collect::<Vec<_>>();
+        suite.check_for_write_records(
+            suite.flushed_files.path(),
+            keys_encoded.iter().map(Vec::as_slice),
+        );
         suite.cluster.shutdown();
     }
 
@@ -111,10 +109,10 @@ mod all {
         let round2 = run_async_test(suite.write_records(256, 128, 1));
         suite.force_flush_files("test_leader_down");
         suite.wait_for_flush();
-        run_async_test(suite.check_for_write_records(
+        suite.check_for_write_records(
             suite.flushed_files.path(),
             round1.union(&round2).map(Vec::as_slice),
-        ));
+        );
         suite.cluster.shutdown();
     }
 
@@ -166,7 +164,7 @@ mod all {
         let err = run_async_test(
             suite
                 .get_meta_cli()
-                .get_last_error("test_fatal_error", *victim),
+                .get_last_error_of("test_fatal_error", *victim),
         )
         .unwrap()
         .unwrap();
@@ -352,10 +350,10 @@ mod all {
         }
         assert_eq!(items.last().unwrap().end_key, Vec::<u8>::default());
 
-        run_async_test(suite.check_for_write_records(
+        suite.check_for_write_records(
             suite.flushed_files.path(),
             round1.union(&round2).map(|x| x.as_slice()),
-        ));
+        );
     }
 
     #[test]
@@ -378,19 +376,19 @@ mod all {
             .schedule(Task::ForceFlush("r".to_owned()))
             .unwrap();
         suite.sync();
-        std::thread::sleep(Duration::from_secs(1));
-        run_async_test(suite.check_for_write_records(
+        std::thread::sleep(Duration::from_secs(2));
+        suite.check_for_write_records(
             suite.flushed_files.path(),
             round1.iter().map(|x| x.as_slice()),
-        ));
+        );
         assert!(suite.global_checkpoint() > 256);
         suite.force_flush_files("r");
         suite.wait_for_flush();
         assert!(suite.global_checkpoint() > 512);
-        run_async_test(suite.check_for_write_records(
+        suite.check_for_write_records(
             suite.flushed_files.path(),
             round1.union(&round2).map(|x| x.as_slice()),
-        ));
+        );
     }
 
     #[test]
@@ -432,9 +430,9 @@ mod all {
             ts,
             cps
         );
-        run_async_test(suite.check_for_write_records(
+        suite.check_for_write_records(
             suite.flushed_files.path(),
             round1.iter().map(|k| k.as_slice()),
-        ))
+        )
     }
 }

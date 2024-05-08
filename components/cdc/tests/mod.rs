@@ -6,7 +6,7 @@ use std::{
 };
 
 use causal_ts::CausalTsProvider;
-use cdc::{recv_timeout, CdcObserver, Delegate, FeatureGate, MemoryQuota, Task, Validate};
+use cdc::{recv_timeout, CdcObserver, Delegate, FeatureGate, Task, Validate};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
@@ -25,6 +25,7 @@ use test_raftstore::*;
 use tikv::{config::CdcConfig, server::DEFAULT_CLUSTER_ID};
 use tikv_util::{
     config::ReadableDuration,
+    memory::MemoryQuota,
     worker::{LazyWorker, Runnable},
     HandyRwLock,
 };
@@ -137,6 +138,7 @@ impl TestSuiteBuilder {
         let count = cluster.count;
         let pd_cli = cluster.pd_client.clone();
         let mut endpoints = HashMap::default();
+        let mut quotas = HashMap::default();
         let mut obs = HashMap::default();
         let mut concurrency_managers = HashMap::default();
         // Hack! node id are generated from 1..count+1.
@@ -146,15 +148,14 @@ impl TestSuiteBuilder {
             let mut sim = cluster.sim.wl();
 
             // Register cdc service to gRPC server.
+            let memory_quota = Arc::new(MemoryQuota::new(memory_quota));
+            let memory_quota_ = memory_quota.clone();
             let scheduler = worker.scheduler();
             sim.pending_services
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
-                    create_change_data(cdc::Service::new(
-                        scheduler.clone(),
-                        MemoryQuota::new(memory_quota),
-                    ))
+                    create_change_data(cdc::Service::new(scheduler.clone(), memory_quota_.clone()))
                 }));
             sim.txn_extra_schedulers.insert(
                 id,
@@ -169,6 +170,7 @@ impl TestSuiteBuilder {
                 },
             ));
             endpoints.insert(id, worker);
+            quotas.insert(id, memory_quota);
         }
 
         runner(&mut cluster);
@@ -192,7 +194,7 @@ impl TestSuiteBuilder {
                 cm.clone(),
                 env,
                 sim.security_mgr.clone(),
-                MemoryQuota::new(usize::MAX),
+                quotas[id].clone(),
                 sim.get_causal_ts_provider(*id),
             );
             let mut updated_cfg = cfg.clone();

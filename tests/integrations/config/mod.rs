@@ -194,6 +194,8 @@ fn test_serde_custom_tikv_config() {
         region_compact_check_step: 1_234,
         region_compact_min_tombstones: 999,
         region_compact_tombstones_percent: 33,
+        region_compact_min_redundant_rows: 999,
+        region_compact_redundant_rows_percent: 33,
         pd_heartbeat_tick_interval: ReadableDuration::minutes(12),
         pd_store_heartbeat_tick_interval: ReadableDuration::secs(12),
         notify_capacity: 12_345,
@@ -313,6 +315,7 @@ fn test_serde_custom_tikv_config() {
         enable_pipelined_write: false,
         enable_multi_batch_write: true,
         enable_unordered_write: true,
+        track_and_verify_wals_in_manifest: false,
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
@@ -779,6 +782,7 @@ fn test_serde_custom_tikv_config() {
         initial_scan_pending_memory_quota: ReadableSize::kb(2),
         initial_scan_rate_limit: ReadableSize::mb(3),
         min_ts_interval: ReadableDuration::secs(2),
+        ..Default::default()
     };
     value.import = ImportConfig {
         num_threads: 123,
@@ -793,6 +797,7 @@ fn test_serde_custom_tikv_config() {
         max_write_bytes_per_sec: ReadableSize::mb(10),
         enable_compaction_filter: false,
         compaction_filter_skip_version_check: true,
+        num_threads: 2,
     };
     value.pessimistic_txn = PessimisticTxnConfig {
         wait_for_lock_timeout: ReadableDuration::millis(10),
@@ -807,6 +812,7 @@ fn test_serde_custom_tikv_config() {
         incremental_scan_threads: 3,
         incremental_scan_concurrency: 4,
         incremental_scan_speed_limit: ReadableSize(7),
+        incremental_fetch_speed_limit: ReadableSize(8),
         incremental_scan_ts_filter_ratio: 0.7,
         tso_worker_threads: 2,
         old_value_cache_memory_quota: ReadableSize::mb(14),
@@ -816,6 +822,8 @@ fn test_serde_custom_tikv_config() {
         enable: true,
         advance_ts_interval: ReadableDuration::secs(5),
         scan_lock_pool_size: 1,
+        memory_quota: ReadableSize::mb(1),
+        incremental_scan_concurrency: 7,
     };
     value.causal_ts = CausalTsConfig {
         renew_interval: ReadableDuration::millis(100),

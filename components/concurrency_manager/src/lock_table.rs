@@ -115,6 +115,14 @@ impl LockTable {
         }
     }
 
+    pub fn for_each_kv(&self, mut f: impl FnMut(&Key, Arc<KeyHandle>)) {
+        for entry in self.0.iter() {
+            if let Some(handle) = entry.value().upgrade() {
+                f(entry.key(), handle);
+            }
+        }
+    }
+
     /// Removes the key and its key handle from the map.
     pub fn remove(&self, key: &Key) {
         self.0.remove(key);

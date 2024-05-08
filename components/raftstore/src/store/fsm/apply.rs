@@ -244,6 +244,7 @@ pub enum ExecResult<S> {
         regions: Vec<Region>,
         derived: Region,
         new_split_regions: HashMap<u64, NewSplitPeer>,
+        share_source_region_size: bool,
     },
     PrepareMerge {
         region: Region,
@@ -516,7 +517,8 @@ where
                 delegate.unfinished_write_seqno.push(seqno);
             }
             self.prepare_for(delegate);
-            delegate.last_flush_applied_index = delegate.apply_state.get_applied_index()
+            delegate.last_flush_applied_index = delegate.apply_state.get_applied_index();
+            delegate.has_pending_ssts = false;
         }
         self.kv_wb_last_bytes = self.kv_wb().data_size() as u64;
         self.kv_wb_last_keys = self.kv_wb().count() as u64;
@@ -624,9 +626,7 @@ where
         results: VecDeque<ExecResult<EK::Snapshot>>,
     ) {
         if self.host.pre_persist(&delegate.region, true, None) {
-            if !delegate.pending_remove {
-                delegate.maybe_write_apply_state(self);
-            }
+            delegate.maybe_write_apply_state(self);
             self.commit_opt(delegate, false);
         } else {
             debug!("do not persist when finish_for";
@@ -755,7 +755,7 @@ pub fn notify_stale_req_with_msg(term: u64, msg: String, cb: impl ErrorCallback)
 }
 
 /// Checks if a write is needed to be issued before handling the command.
-fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
+fn should_write_to_engine(has_pending_writes: bool, cmd: &RaftCmdRequest) -> bool {
     if cmd.has_admin_request() {
         match cmd.get_admin_request().get_cmd_type() {
             // ComputeHash require an up to date snapshot.
@@ -773,7 +773,7 @@ fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
         if req.has_delete_range() {
             return true;
         }
-        if req.has_ingest_sst() {
+        if req.has_ingest_sst() && has_pending_writes {
             return true;
         }
     }
@@ -1004,6 +1004,8 @@ where
     buckets: Option<BucketStat>,
 
     unfinished_write_seqno: Vec<SequenceNumber>,
+
+    has_pending_ssts: bool,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -1037,6 +1039,7 @@ where
             trace: ApplyMemoryTrace::default(),
             buckets: None,
             unfinished_write_seqno: vec![],
+            has_pending_ssts: false,
         }
     }
 
@@ -1170,9 +1173,15 @@ where
                 if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
                     self.priority = Priority::Low;
                 }
+                if self.has_pending_ssts {
+                    // we are in low priority handler and to avoid overlapped ssts with same region
+                    // just return Yield
+                    return ApplyResult::Yield;
+                }
                 let mut has_unflushed_data =
                     self.last_flush_applied_index != self.apply_state.get_applied_index();
-                if (has_unflushed_data && should_write_to_engine(&cmd)
+                if (has_unflushed_data
+                    && should_write_to_engine(!apply_ctx.kv_wb().is_empty(), &cmd)
                     || apply_ctx.kv_wb().should_write_to_engine())
                     && apply_ctx.host.pre_persist(&self.region, false, Some(&cmd))
                 {
@@ -1918,6 +1927,7 @@ where
         match ctx.importer.validate(sst) {
             Ok(meta_info) => {
                 ctx.pending_ssts.push(meta_info.clone());
+                self.has_pending_ssts = true;
                 ssts.push(meta_info)
             }
             Err(e) => {
@@ -1926,7 +1936,6 @@ where
                 panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
             }
         };
-
         Ok(())
     }
 }
@@ -2436,6 +2445,9 @@ where
         admin_req
             .mut_splits()
             .set_right_derive(split.get_right_derive());
+        admin_req
+            .mut_split()
+            .set_share_source_region_size(split.get_share_source_region_size());
         admin_req.mut_splits().mut_requests().push(split);
         // This method is executed only when there are unapplied entries after being
         // restarted. So there will be no callback, it's OK to return a response
@@ -2480,6 +2492,7 @@ where
         derived.mut_region_epoch().set_version(new_version);
 
         let right_derive = split_reqs.get_right_derive();
+        let share_source_region_size = split_reqs.get_share_source_region_size();
         let mut regions = Vec::with_capacity(new_region_cnt + 1);
         // Note that the split requests only contain ids for new regions, so we need
         // to handle new regions and old region separately.
@@ -2644,6 +2657,7 @@ where
                 regions,
                 derived,
                 new_split_regions,
+                share_source_region_size,
             }),
         ))
     }
@@ -3731,6 +3745,7 @@ where
     /// Handles peer destroy. When a peer is destroyed, the corresponding apply
     /// delegate should be removed too.
     fn handle_destroy(&mut self, ctx: &mut ApplyContext<EK>, d: Destroy) {
+        fail_point!("on_apply_handle_destroy");
         assert_eq!(d.region_id, self.delegate.region_id());
         if d.merge_from_snapshot {
             assert_eq!(self.delegate.stopped, false);
@@ -4077,7 +4092,9 @@ where
             self.delegate.clear_all_commands_as_stale();
         }
         let mut event = TraceEvent::default();
-        self.delegate.update_memory_trace(&mut event);
+        if let Some(e) = self.delegate.trace.reset(ApplyMemoryTrace::default()) {
+            event = event + e;
+        }
         MEMTRACE_APPLYS.trace(event);
     }
 }
@@ -4244,6 +4261,7 @@ where
         self.apply_ctx.flush();
         for fsm in fsms.iter_mut().flatten() {
             fsm.delegate.last_flush_applied_index = fsm.delegate.apply_state.get_applied_index();
+            fsm.delegate.has_pending_ssts = false;
             fsm.delegate.update_memory_trace(&mut self.trace_event);
         }
         MEMTRACE_APPLYS.trace(mem::take(&mut self.trace_event));
@@ -4761,7 +4779,7 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        assert_eq!(should_write_to_engine(&cmd), true);
+        assert_eq!(should_write_to_engine(true, &cmd), true);
         assert_eq!(should_sync_log(&cmd), true);
 
         // Normal command
@@ -4775,7 +4793,17 @@ mod tests {
         let mut req = RaftCmdRequest::default();
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::ComputeHash);
-        assert_eq!(should_write_to_engine(&req), true);
+        assert_eq!(should_write_to_engine(true, &req), true);
+        assert_eq!(should_write_to_engine(false, &req), true);
+
+        // DeleteRange command
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::DeleteRange);
+        req.set_delete_range(DeleteRangeRequest::default());
+        let mut cmd = RaftCmdRequest::default();
+        cmd.mut_requests().push(req);
+        assert_eq!(should_write_to_engine(true, &cmd), true);
+        assert_eq!(should_write_to_engine(false, &cmd), true);
 
         // IngestSst command
         let mut req = Request::default();
@@ -4783,7 +4811,8 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        assert_eq!(should_write_to_engine(&cmd), true);
+        assert_eq!(should_write_to_engine(true, &cmd), true);
+        assert_eq!(should_write_to_engine(false, &cmd), false);
     }
 
     #[test]
@@ -5095,6 +5124,21 @@ mod tests {
         )
     }
 
+    fn cb_conf_change<S: Snapshot>(
+        idx: u64,
+        term: u64,
+        tx: Sender<RaftCmdResponse>,
+    ) -> Proposal<Callback<S>> {
+        proposal(
+            true,
+            idx,
+            term,
+            Callback::write(Box::new(move |resp: WriteResponse| {
+                tx.send(resp.response).unwrap();
+            })),
+        )
+    }
+
     struct EntryBuilder {
         entry: Entry,
         req: RaftCmdRequest,
@@ -5218,6 +5262,14 @@ mod tests {
             let mut req = AdminRequest::default();
             req.set_cmd_type(AdminCmdType::ComputeHash);
             req.mut_compute_hash().set_context(context);
+            self.req.set_admin_request(req);
+            self
+        }
+
+        fn conf_change(mut self, changes: Vec<ChangePeerRequest>) -> EntryBuilder {
+            let mut req = AdminRequest::default();
+            req.set_cmd_type(AdminCmdType::ChangePeerV2);
+            req.mut_change_peer_v2().set_changes(changes.into());
             self.req.set_admin_request(req);
             self
         }
@@ -5669,7 +5721,7 @@ mod tests {
         // nomral put command, so the first apple_res.exec_res should be empty.
         let apply_res = fetch_apply_res(&rx);
         assert!(apply_res.exec_res.is_empty());
-        // The region was rescheduled low-priority becasuee of ingest command,
+        // The region was rescheduled low-priority because of ingest command,
         // only put entry has been applied;
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_term, 3);
@@ -5963,9 +6015,12 @@ mod tests {
             assert!(!resp.get_header().has_error(), "{:?}", resp);
         }
         let mut res = fetch_apply_res(&rx);
-        // There may be one or two ApplyRes which depends on whether these two apply
-        // msgs are batched together.
-        if res.apply_state.get_applied_index() == 3 {
+        // There are five entries [put, ingest, put, ingest, put] in one region.
+        // so the apply results should be notified at index 2/4.
+        if res.apply_state.get_applied_index() == 2 {
+            res = fetch_apply_res(&rx);
+        }
+        if res.apply_state.get_applied_index() == 4 {
             res = fetch_apply_res(&rx);
         }
         assert_eq!(res.apply_state.get_applied_index(), 5);
@@ -6225,6 +6280,7 @@ mod tests {
             regions,
             derived: _,
             new_split_regions: _,
+            share_source_region_size: _,
         } = apply_res.exec_res.front().unwrap()
         {
             let r8 = regions.get(0).unwrap();
@@ -6783,6 +6839,125 @@ mod tests {
             },
         );
         rx.recv_timeout(Duration::from_millis(500)).unwrap();
+
+        system.shutdown();
+    }
+
+    // When a peer is removed, it is necessary to update its apply state because
+    // this peer may be simultaneously taking a snapshot. An outdated apply state
+    // invalidates the coprocessor cache assumption (apply state must match data
+    // in the snapshot) and potentially lead to a violation of linearizability
+    // (returning stale cache).
+    #[test]
+    fn test_conf_change_remove_node_update_apply_state() {
+        let (_path, engine) = create_tmp_engine("test-delegate");
+        let (_import_dir, importer) = create_tmp_importer("test-delegate");
+        let peer_id = 3;
+        let mut reg = Registration {
+            id: peer_id,
+            term: 1,
+            ..Default::default()
+        };
+        reg.region.set_id(1);
+        reg.region.set_end_key(b"k5".to_vec());
+        reg.region.mut_region_epoch().set_version(3);
+        let peers = vec![new_peer(2, 3), new_peer(4, 5), new_learner_peer(6, 7)];
+        reg.region.set_peers(peers.into());
+        let (tx, apply_res_rx) = mpsc::channel();
+        let sender = Box::new(TestNotifier { tx });
+        let coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
+        let (region_scheduler, _) = dummy_scheduler();
+        let cfg = Arc::new(VersionTrack::new(Config::default()));
+        let (router, mut system) = create_apply_batch_system(&cfg.value());
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let builder = super::Builder::<KvTestEngine> {
+            tag: "test-store".to_owned(),
+            cfg,
+            sender,
+            importer,
+            region_scheduler,
+            coprocessor_host,
+            engine: engine.clone(),
+            router: router.clone(),
+            store_id: 2,
+            pending_create_peers,
+        };
+        system.spawn("test-conf-change".to_owned(), builder);
+
+        router.schedule_task(1, Msg::Registration(reg.dup()));
+
+        let mut index_id = 1;
+        let epoch = reg.region.get_region_epoch().to_owned();
+
+        // Write some data.
+        let (capture_tx, capture_rx) = mpsc::channel();
+        let put_entry = EntryBuilder::new(index_id, 1)
+            .put(b"k1", b"v1")
+            .epoch(epoch.get_conf_ver(), epoch.get_version())
+            .build();
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                1,
+                vec![put_entry],
+                vec![cb(index_id, 1, capture_tx)],
+            )),
+        );
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+        let initial_state: RaftApplyState = engine
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
+            .unwrap()
+            .unwrap();
+        assert_ne!(initial_state.get_applied_index(), 0);
+        match apply_res_rx.recv_timeout(Duration::from_secs(3)) {
+            Ok(PeerMsg::ApplyRes {
+                res: TaskRes::Apply(apply_res),
+            }) => assert_eq!(apply_res.apply_state, initial_state),
+            e => panic!("unexpected result: {:?}", e),
+        }
+        index_id += 1;
+
+        // Remove itself.
+        let (capture_tx, capture_rx) = mpsc::channel();
+        let mut remove_node = ChangePeerRequest::default();
+        remove_node.set_change_type(ConfChangeType::RemoveNode);
+        remove_node.set_peer(new_peer(2, 3));
+        let conf_change = EntryBuilder::new(index_id, 1)
+            .conf_change(vec![remove_node])
+            .epoch(epoch.get_conf_ver(), epoch.get_version())
+            .build();
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                1,
+                vec![conf_change],
+                vec![cb_conf_change(index_id, 1, capture_tx)],
+            )),
+        );
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+
+        let apply_state: RaftApplyState = engine
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
+            .unwrap()
+            .unwrap();
+        match apply_res_rx.recv_timeout(Duration::from_secs(3)) {
+            Ok(PeerMsg::ApplyRes {
+                res: TaskRes::Apply(apply_res),
+            }) => assert_eq!(apply_res.apply_state, apply_state),
+            e => panic!("unexpected result: {:?}", e),
+        }
+        assert!(
+            apply_state.get_applied_index() > initial_state.get_applied_index(),
+            "\n{:?}\n{:?}",
+            apply_state,
+            initial_state
+        );
 
         system.shutdown();
     }

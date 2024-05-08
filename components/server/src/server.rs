@@ -34,7 +34,7 @@ use backup_stream::{
     observer::BackupStreamObserver,
 };
 use causal_ts::CausalTsProviderImpl;
-use cdc::{CdcConfigManager, MemoryQuota};
+use cdc::CdcConfigManager;
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
@@ -118,6 +118,7 @@ use tikv_util::{
     check_environment_variables,
     config::{ensure_dir_exist, RaftDataStateMachine, VersionTrack},
     math::MovingAvgU32,
+    memory::MemoryQuota,
     metrics::INSTANCE_BACKEND_CPU_QUOTA,
     mpsc as TikvMpsc,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
@@ -290,7 +291,7 @@ struct Servers<EK: KvEngine, ER: RaftEngine, F: KvFormat> {
     node: Node<RpcClient, EK, ER>,
     importer: Arc<SstImporter>,
     cdc_scheduler: tikv_util::worker::Scheduler<cdc::Task>,
-    cdc_memory_quota: MemoryQuota,
+    cdc_memory_quota: Arc<MemoryQuota>,
     rsmeter_pubsub_service: resource_metering::PubSubService,
     backup_stream_scheduler: Option<tikv_util::worker::Scheduler<backup_stream::Task>>,
     debugger: Debugger<ER, RaftKv<EK, ServerRaftStoreRouter<EK, ER>>, LockManager, F>,
@@ -313,10 +314,14 @@ where
             SecurityManager::new(&config.security)
                 .unwrap_or_else(|e| fatal!("failed to create security manager: {}", e)),
         );
+        let props = tikv_util::thread_group::current_properties();
         let env = Arc::new(
             EnvBuilder::new()
                 .cq_count(config.server.grpc_concurrency)
                 .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
+                .after_start(move || {
+                    tikv_util::thread_group::set_properties(props.clone());
+                })
                 .build(),
         );
         let pd_client =
@@ -1173,7 +1178,7 @@ where
         }
 
         // Start CDC.
-        let cdc_memory_quota = MemoryQuota::new(self.config.cdc.sink_memory_quota.0 as _);
+        let cdc_memory_quota = Arc::new(MemoryQuota::new(self.config.cdc.sink_memory_quota.0 as _));
         let cdc_endpoint = cdc::Endpoint::new(
             self.config.server.cluster_id,
             &self.config.cdc,
@@ -1731,8 +1736,18 @@ where
         }
     }
 
+    fn prepare_stop(&self) {
+        if let Some(engines) = self.engines.as_ref() {
+            // Disable manul compaction jobs before shutting down the engines. And it
+            // will stop the compaction thread in advance, so it won't block the
+            // cleanup thread when exiting.
+            let _ = engines.engines.kv.disable_manual_compaction();
+        }
+    }
+
     fn stop(self) {
         tikv_util::thread_group::mark_shutdown();
+        self.prepare_stop();
         let mut servers = self.servers.unwrap();
         servers
             .server

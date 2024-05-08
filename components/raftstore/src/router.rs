@@ -1,5 +1,7 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::{Arc, Mutex};
+
 // #[PerformanceCriticalPath]
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine, Snapshot};
@@ -134,6 +136,16 @@ impl<EK: KvEngine> CasualRouter<EK> for RaftStoreBlackHole {
 impl<EK: KvEngine> SignificantRouter<EK> for RaftStoreBlackHole {
     fn significant_send(&self, _: u64, _: SignificantMsg<EK::Snapshot>) -> RaftStoreResult<()> {
         Ok(())
+    }
+}
+
+impl<EK: KvEngine, R: SignificantRouter<EK>> SignificantRouter<EK> for Arc<Mutex<R>> {
+    fn significant_send(
+        &self,
+        region_id: u64,
+        msg: SignificantMsg<EK::Snapshot>,
+    ) -> RaftStoreResult<()> {
+        self.lock().unwrap().significant_send(region_id, msg)
     }
 }
 

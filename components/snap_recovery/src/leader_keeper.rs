@@ -9,18 +9,17 @@ use std::{
 
 use engine_traits::KvEngine;
 use futures::compat::Future01CompatExt;
-use itertools::Itertools;
 use raftstore::{
     errors::{Error, Result},
     store::{Callback, CasualMessage, CasualRouter, SignificantMsg, SignificantRouter},
 };
 use tikv_util::{future::paired_future_callback, timer::GLOBAL_TIMER_HANDLE};
 
-pub struct LeaderKeeper<EK, Router> {
+pub struct LeaderKeeper<'a, EK, Router: 'a> {
     router: Router,
     not_leader: HashSet<u64>,
 
-    _ek: PhantomData<EK>,
+    _ek: PhantomData<&'a EK>,
 }
 
 #[derive(Default)]
@@ -51,10 +50,10 @@ impl std::fmt::Debug for StepResult {
     }
 }
 
-impl<EK, Router> LeaderKeeper<EK, Router>
+impl<'a, EK, Router> LeaderKeeper<'a, EK, Router>
 where
     EK: KvEngine,
-    Router: CasualRouter<EK> + SignificantRouter<EK> + 'static,
+    Router: CasualRouter<EK> + SignificantRouter<EK> + 'a,
 {
     pub fn new(router: Router, to_keep: impl IntoIterator<Item = u64>) -> Self {
         Self {
@@ -85,8 +84,9 @@ where
         const CONCURRENCY: usize = 256;
         let r = Mutex::new(StepResult::default());
         let success = Mutex::new(HashSet::new());
-        for batch in &self.not_leader.iter().chunks(CONCURRENCY) {
-            let tasks = batch.map(|region_id| async {
+        let regions = self.not_leader.iter().copied().collect::<Vec<_>>();
+        for batch in regions.as_slice().chunks(CONCURRENCY) {
+            let tasks = batch.iter().map(|region_id| async {
                 match self.check_leader(*region_id).await {
                     Ok(_) => {
                         success.lock().unwrap().insert(*region_id);
@@ -150,7 +150,7 @@ mod test {
         leaders: RefCell<HashSet<u64>>,
     }
 
-    impl<EK, Router> LeaderKeeper<EK, Router> {
+    impl<'a, EK, Router> LeaderKeeper<'a, EK, Router> {
         fn mut_router(&mut self) -> &mut Router {
             &mut self.router
         }

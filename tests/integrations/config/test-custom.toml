@@ -167,6 +167,8 @@ clean-stale-peer-delay = "0s"
 region-compact-check-step = 1234
 region-compact-min-tombstones = 999
 region-compact-tombstones-percent = 33
+region-compact-min-redundant-rows = 999
+region-compact-redundant-rows-percent = 33
 pd-heartbeat-tick-interval = "12m"
 pd-store-heartbeat-tick-interval = "12s"
 snap-mgr-gc-tick-interval = "12m"
@@ -659,6 +661,7 @@ batch-keys = 256
 max-write-bytes-per-sec = "10MB"
 enable-compaction-filter = false
 compaction-filter-skip-version-check = true
+num-threads = 2
 
 [pessimistic-txn]
 enabled = false # test backward compatibility
@@ -674,6 +677,7 @@ hibernate-regions-compatible = false
 incremental-scan-threads = 3
 incremental-scan-concurrency = 4
 incremental-scan-speed-limit = 7
+incremental-fetch-speed-limit = 8
 incremental-scan-ts-filter-ratio = 0.7
 tso-worker-threads = 2
 old-value-cache-memory-quota = "14MB"
@@ -683,6 +687,8 @@ sink-memory-quota = "7MB"
 enable = true
 advance-ts-interval = "5s"
 scan-lock-pool-size = 1
+memory-quota = "1MB"
+incremental-scan-concurrency = 7
 
 [split]
 detect-times = 10

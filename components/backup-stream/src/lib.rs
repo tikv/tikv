@@ -10,7 +10,7 @@ mod endpoint;
 pub mod errors;
 mod event_loader;
 pub mod metadata;
-pub(crate) mod metrics;
+pub mod metrics;
 pub mod observer;
 pub mod router;
 mod service;
