@@ -3721,7 +3721,7 @@ mod tests {
         assert_eq!(ctx.warnings.warning_cnt, 1);
         assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
 
-        // Truncate cases 
+        // Truncate cases
         let truncate_cases: Vec<(&[u8], Decimal)> = vec![
             (
                 b"123.45.",
