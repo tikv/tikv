@@ -15,7 +15,7 @@ use tikv_util::{debug, error, info, timer::GLOBAL_TIMER_HANDLE};
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(1); // to consistent with pd_client
 const KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE: &str = "gc_management_type";
-const GC_MGMT_TYPE_KEYSPACE_LEVEL_GC: &str = "keyspace_level_gc";
+const GC_MGMT_TYPE_GLOBAL_GC: &str = "global_gc";
 
 #[derive(Clone)]
 pub struct KeyspaceLevelGCWatchService {
@@ -35,7 +35,7 @@ struct KeyspaceLevelGCJson {
 }
 
 impl KeyspaceLevelGCWatchService {
-    /// Constructs a new `Service` with `ResourceGroupManager` and a
+    /// Constructs a new `Service` with `KeyspaceLevelGCWatchService` and a
     /// `RpcClient`.
     pub fn new(
         pd_client: Arc<RpcClient>,
@@ -53,8 +53,7 @@ impl KeyspaceLevelGCWatchService {
     }
 
     pub async fn watch_keyspace_gc(&mut self) {
-        info!("[test-yjy]watch_keyspace_gc");
-        // Firstly, load all resource groups as of now.
+        // Firstly, load all keyspace level gc safe point as of now.
         self.reload_all_keyspace_level_gc().await;
         let keyspace_level_gc_prefix = self.get_keyspcace_level_gc_prefix();
 
@@ -76,40 +75,36 @@ impl KeyspaceLevelGCWatchService {
                         let events = resp.get_events();
                         events.iter().for_each(|event| match event.get_type() {
                             EventEventType::Put => {
-                                info!("[test-yjy]EventEventType::Put01");
                                 match serde_json::from_slice::<KeyspaceLevelGCJson>(
                                     event.get_kv().get_value(),
                                 ) {
                                     Ok(keyspace_level_gc_json) => {
                                         self.keyspace_level_gc_map.insert(keyspace_level_gc_json.keyspace_id, keyspace_level_gc_json.safe_point);
-                                        info!("[test-yjy]EventEventType::Put02-01 {},{}",keyspace_level_gc_json.keyspace_id,keyspace_level_gc_json.safe_point);
+                                        debug!("[keyspace level gc watch service] update keyspace_level_gc_map keyspace-id:{},keyspace-level-gc-safe-point{}",keyspace_level_gc_json.keyspace_id,keyspace_level_gc_json.safe_point);
                                     },
-                                    Err(e) => error!("parse put keyspace level gc event failed";  "err" => ?e),
+                                    Err(e) => error!("[keyspace level gc watch service] parse put keyspace level gc event failed";  "err" => ?e),
                                 }
                             }
                             EventEventType::Delete => {
-                                info!("[test-yjy]EventEventType::Delete01");
                                 match serde_json::from_slice::<KeyspaceLevelGCJson>(
                                     event.get_kv().get_value(),
                                 ) {
-                                    Ok(keyspace_level_gc) => {
-                                        self.keyspace_level_gc_map.remove(&keyspace_level_gc.keyspace_id);
-                                        info!("[test-yjy]EventEventType::Put02-01");
+                                    Ok(keyspace_level_gc_json) => {
+                                        self.keyspace_level_gc_map.remove(&keyspace_level_gc_json.keyspace_id);
+                                        debug!("[keyspace level gc watch service] remove entry from  keyspace_level_gc_map keyspace-id:{},keyspace-level-gc-safe-point{}",keyspace_level_gc_json.keyspace_id,keyspace_level_gc_json.safe_point);
                                     },
-                                    Err(e) => error!("parse delete keyspace level gc event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
+                                    Err(e) => error!("[keyspace level gc watch service] parse delete keyspace level gc event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
                                 }
                             }});
                     }
                     Err(PdError::DataCompacted(msg)) => {
-                        error!("required revision has been compacted"; "err" => ?msg);
-                        // self.reload_all_resource_groups().await;
-                        info!("[test-yjy] PdError::DataCompacted");
+                        error!("[keyspace level gc watch service] required revision has been compacted"; "err" => ?msg);
                         self.reload_all_keyspace_level_gc().await;
                         cancel.abort();
                         continue 'outer;
                     }
                     Err(err) => {
-                        error!("failed to watch resource groups"; "err" => ?err);
+                        error!("[keyspace level gc watch service] failed to watch keyspace level gc safe point"; "err" => ?err);
                         let _ = GLOBAL_TIMER_HANDLE
                             .delay(std::time::Instant::now() + RETRY_INTERVAL)
                             .compat()
@@ -144,8 +139,9 @@ impl KeyspaceLevelGCWatchService {
                         ) {
                             Ok(keyspace_level_gc_json) => {
                                 self.keyspace_level_gc_map.insert(keyspace_level_gc_json.keyspace_id, keyspace_level_gc_json.safe_point);
-                                info!("[test-yjy]EventEventType::Put02-01 {},{}",keyspace_level_gc_json.keyspace_id,keyspace_level_gc_json.safe_point);},
-                            Err(e) => error!("parse put keyspace level gc event failed"; "name" => ?g.get_key(), "err" => ?e),
+                                debug!("[keyspace level gc watch service] update keyspace_level_gc_map keyspace-id:{},keyspace-level-gc-safe-point{}",keyspace_level_gc_json.keyspace_id,keyspace_level_gc_json.safe_point);
+                            },
+                            Err(e) => error!("[keyspace level gc watch service] parse put keyspace level gc event failed"; "name" => ?g.get_key(), "err" => ?e),
                         }
                     });
 
@@ -153,7 +149,7 @@ impl KeyspaceLevelGCWatchService {
                     return;
                 }
                 Err(err) => {
-                    error!("failed to get meta storage's keyspace level gc"; "err" => ?err);
+                    error!("[keyspace level gc watch service] failed to get meta storage's keyspace level gc"; "err" => ?err);
                     let _ = GLOBAL_TIMER_HANDLE
                         .delay(std::time::Instant::now() + RETRY_INTERVAL)
                         .compat()
@@ -192,7 +188,6 @@ impl KeyspaceMetaWatchService {
     }
 
     pub async fn watch_keyspace_meta(&mut self) {
-        info!("[test-yjy]watch_keyspace_meta");
         // Firstly, load all resource groups as of now.
         self.reload_all_keyspace_meta().await;
         let keyspace_meta_prefix = self.get_keyspace_meta_prefix();
@@ -215,37 +210,33 @@ impl KeyspaceMetaWatchService {
                         let events = resp.get_events();
                         events.iter().for_each(|event| match event.get_type() {
                             EventEventType::Put => {
-                                info!("[test-yjy]EventEventType::Put01");
                                 match protobuf::parse_from_bytes::<KeyspaceMeta>(event.get_kv().get_value()) {
                                     Ok(keyspace_meta) => {
                                         self.keyspace_id_meta_map.insert(keyspace_meta.id, keyspace_meta.clone());
-                                        info!("[test-yjy] watch_keyspace_meta EventEventType::Put02-01 {},{:?}",keyspace_meta.id,keyspace_meta);
+                                        debug!("[keyspace meta service] update keyspace_id_meta_map keyspace-id:{},keyspace-meta{:?}",keyspace_meta.id,keyspace_meta);
                                     }
-                                    Err(e) => error!("parse put resource group event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
+                                    Err(e) => error!("[keyspace meta service] parse put keyspace meta event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
                                 }
 
                             }
                             EventEventType::Delete => {
-                                info!("[test-yjy]EventEventType::Delete01");
                                 match protobuf::parse_from_bytes::<KeyspaceMeta>(event.get_kv().get_value()) {
                                     Ok(keyspace_meta) => {
                                         self.keyspace_id_meta_map.remove(&keyspace_meta.id);
-                                        info!("[test-yjy] watch_keyspace_meta EventEventType::delete-01 {},{:?}",keyspace_meta.id,keyspace_meta);
+                                        debug!("[keyspace meta watch service] remove entry from keyspace_id_meta_map cache keyspace-id:{},keyspace-meta{:?}",keyspace_meta.id,keyspace_meta);
                                     }
-                                    Err(e) => error!("parse put resource group event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
+                                    Err(e) => error!("[keyspace meta service] parse delete keyspace meta event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
                                 }
                             }});
                     }
                     Err(PdError::DataCompacted(msg)) => {
-                        error!("required revision has been compacted"; "err" => ?msg);
-                        // self.reload_all_resource_groups().await;
-                        info!("[test-yjy] PdError::DataCompacted");
+                        error!("[keyspace meta watch service] required revision has been compacted"; "err" => ?msg);
                         self.reload_all_keyspace_meta().await;
                         cancel.abort();
                         continue 'outer;
                     }
                     Err(err) => {
-                        error!("failed to watch resource groups"; "err" => ?err);
+                        error!("[keyspace meta watch service] failed to watch keyspace meta"; "err" => ?err);
                         let _ = GLOBAL_TIMER_HANDLE
                             .delay(std::time::Instant::now() + RETRY_INTERVAL)
                             .compat()
@@ -278,9 +269,9 @@ impl KeyspaceMetaWatchService {
                         match protobuf::parse_from_bytes::<KeyspaceMeta>(g.get_value()) {
                             Ok(keyspace_meta) => {
                                 self.keyspace_id_meta_map.insert(keyspace_meta.id, keyspace_meta.clone());
-                                info!("[test-yjy] watch_keyspace_meta EventEventType::Put02-01 {},{:?}",keyspace_meta.id,keyspace_meta);
+                                info!("[keyspace meta watch service] watch_keyspace_meta EventEventType::Put02-01 {},{:?}",keyspace_meta.id,keyspace_meta);
                             }
-                            Err(e) => error!("parse keyspace meta failed"; "name" => ?g.get_key(), "err" => ?e),
+                            Err(e) => error!("[keyspace meta watch service] parse keyspace meta failed"; "name" => ?g.get_key(), "err" => ?e),
                         }
                     });
 
@@ -288,7 +279,7 @@ impl KeyspaceMetaWatchService {
                     return;
                 }
                 Err(err) => {
-                    error!("failed to get meta storage's keyspace meta"; "err" => ?err);
+                    error!("[keyspace meta watch service] failed to get meta storage's keyspace meta"; "err" => ?err);
                     let _ = GLOBAL_TIMER_HANDLE
                         .delay(std::time::Instant::now() + RETRY_INTERVAL)
                         .compat()
@@ -324,7 +315,7 @@ impl KeyspaceMetaService {
             None => {
                 // We haven't got this keyspace meta yet, it will be updated by
                 // KeyspaceMetaWatchService. So we can't use global GC safe
-                // point directly.
+                // point directly. It should return false here.
                 false
             }
             Some(keyspace_meta) => {
@@ -332,18 +323,16 @@ impl KeyspaceMetaService {
                     keyspace_meta.config.get(KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE);
                 match ks_gc_management_type {
                     None => {
-                        // Keyspace meta config doesn't set 'keyspace_level_gc'.
+                        // Keyspace meta config doesn't set 'gc_management_type'.
+                        // The default value of 'gc_management_type' is 'global_gc'.
                         // It should use global GC safe point directly.
                         true
                     }
                     Some(gc_management_type) => {
-                        if gc_management_type == GC_MGMT_TYPE_KEYSPACE_LEVEL_GC {
-                            // The keyspace meta has already set "gc_management_type" =
-                            // "keyspace_level_gc". We should use
-                            // keyspace level GC safe point.
-                            return false;
+                        if gc_management_type == GC_MGMT_TYPE_GLOBAL_GC {
+                            return true;
                         }
-                        true
+                        false
                     }
                 }
             }
@@ -354,16 +343,14 @@ impl KeyspaceMetaService {
         let keyspace_id_opt = ApiV2::get_u32_keyspace_id_by_key(key);
         match keyspace_id_opt {
             Some(keyspace_id) => {
-                info!(
-                    "[test-yjy]get_gc_safe_point_by_key keyspace_id:{}",
-                    keyspace_id
-                );
+
                 // API V2 with keyspace.
                 let keyspace_gc_safe_point_opt = self.keyspace_level_gc_map.get(&keyspace_id);
                 match keyspace_gc_safe_point_opt {
                     Some(keyspace_id_2_safe_point) => {
-                        info!(
-                            "[test-yjy]get_gc_safe_point_by_key can get gc safepoint:{}",
+                        debug!(
+                            "[keyspace meta service] keyspace id:{}, can get keyspace level gc safe point:{}",
+                            keyspace_id,
                             *keyspace_id_2_safe_point.value()
                         );
                         // If we can get the keyspace level GC safe point of this keyspace id,
@@ -371,19 +358,20 @@ impl KeyspaceMetaService {
                         *keyspace_id_2_safe_point.value()
                     }
                     None => {
-                        // Can't get keyspace level GC safe point.
+                        // Can't get keyspace level GC safe point from keyspace_level_gc_map.
                         let is_keyspace_use_global_gc_safe_point =
                             self.is_keyspace_use_global_gc_safe_point(keyspace_id);
                         if is_keyspace_use_global_gc_safe_point {
-                            // keyspace don't enable keyspace level gc.
-                            info!("[test-yjy]get_gc_safe_point_by_key none 01");
+                            // keyspace use global GC.
+                            debug!("[keyspace meta service] keyspace use global GC");
                             safe_point
                         } else {
-                            // If keyspace meta enable keyspace level gc,
-                            // but can not get keyspace meta, or can not get keyspace level gc safe
+                            // It is not certain to use global gc directly here,
+                            // Maybe can not get keyspace meta, or can not get keyspace level gc safe
                             // point here, may be gc safe point of this
-                            // keyspace hasn't been calculated yet.
-                            info!("[test-yjy]get_gc_safe_point_by_key none 02");
+                            // keyspace hasn't been calculated or watched yet.
+                            // Just return 0, because we can't give an unsafe value greater than 0 yet.
+                            debug!("[keyspace meta service] keyspace don't use global GC");
                             0
                         }
                     }
@@ -391,7 +379,7 @@ impl KeyspaceMetaService {
             }
             None => {
                 // Api V1
-                info!("[test-yjy]get_gc_safe_point_by_key none 03");
+                debug!("[keyspace meta service] the key is in API V1 mode, use global GC directly.");
                 safe_point
             }
         }
@@ -400,11 +388,9 @@ impl KeyspaceMetaService {
     pub fn is_all_keyspace_level_gc_have_not_inited(&self) -> bool {
         for kv in self.keyspace_level_gc_map.iter() {
             if *kv.value() > 0 {
-                info!("[test-yjy]is_all_keyspace_level_gc_have_not_inited return false");
                 return false;
             }
         }
-        info!("[test-yjy]is_all_keyspace_level_gc_have_not_inited return true");
         true
     }
 
@@ -417,7 +403,7 @@ impl KeyspaceMetaService {
             }
         }
         debug!(
-            "max ts of all keyspace level gc safe point:{}",
+            "[keyspace meta service] max ts of all keyspace level GC safe point:{}",
             max_ks_gc_sp
         );
         max_ks_gc_sp
