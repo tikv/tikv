@@ -320,7 +320,7 @@ def Cluster() -> RowPanel:
                             "tikv_range_cache_memory_engine_flow",
                             label_selectors=['type=~"bytes_read|iter_bytes_read"'],
                         ),
-                        legend_format=r"{{instance}}-range-cache-engine-read",
+                        legend_format=r"{{instance}}-range-cache-engine-read-",
                     ),
                 ],
             ),
