@@ -484,10 +484,10 @@ pub fn set_panic_hook(panic_abort: bool, data_dir: &str) {
     //           597ad44b131132f17ed76bf94ac489274dd16c7f/\
     //           src/symbolize/libbacktrace.rs#L126-L159
     // Caching is slow, spawn it in another thread to speed up.
-    // thread::Builder::new()
-    // .name(thd_name!("backtrace-loader"))
-    // .spawn_wrapper(::backtrace::Backtrace::new)
-    // .unwrap();
+    thread::Builder::new()
+        .name(thd_name!("backtrace-loader"))
+        .spawn_wrapper(::backtrace::Backtrace::new)
+        .unwrap();
 
     let data_dir = data_dir.to_string();
 

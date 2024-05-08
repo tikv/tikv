@@ -403,7 +403,7 @@ opt-level = 1
 
 [profile.dev]
 opt-level = 0
-debug = 2
+debug = 0
 codegen-units = 4
 lto = false
 incremental = true
