@@ -339,7 +339,7 @@ impl RangeCacheMemoryEngine {
         let mut post_iterating = None;
 
         let now0 = Instant::now();
-        let core = self.core.upgradable_read();
+        let core = self.core.read();
         let now1 = Instant::now();
         before_lock_wait = now1.saturating_duration_since(now0);
         let range_manager = core.range_manager();
@@ -427,7 +427,8 @@ impl RangeCacheMemoryEngine {
         {
             let now3 = Instant::now();
             iterating_pending = Some(now3.saturating_duration_since(now2));
-            let mut core = RwLockUpgradableReadGuard::upgrade(core);
+            drop(core);
+            let mut core = self.core.write();
             let now4 = Instant::now();
             upgrade_wait = Some(now4.saturating_duration_since(now3));
 
