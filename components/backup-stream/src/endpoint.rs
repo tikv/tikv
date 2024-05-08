@@ -1113,6 +1113,42 @@ fn create_tokio_runtime(thread_count: usize, thread_name: &str) -> TokioResult<R
         .build()
 }
 
+<<<<<<< HEAD
+=======
+pub enum BackupStreamResolver<RT, EK> {
+    // for raftstore-v1, we use LeadershipResolver to check leadership of a region.
+    V1(LeadershipResolver),
+    // for raftstore-v2, it has less regions. we use CDCHandler to check leadership of a region.
+    V2(RT, PhantomData<EK>),
+    #[cfg(test)]
+    // for some test cases, it is OK to don't check leader.
+    Nop,
+}
+
+impl<RT, EK> BackupStreamResolver<RT, EK>
+where
+    RT: CdcHandle<EK> + 'static,
+    EK: KvEngine,
+{
+    pub async fn resolve(
+        &mut self,
+        regions: Vec<u64>,
+        min_ts: TimeStamp,
+        timeout: Option<Duration>,
+    ) -> Vec<u64> {
+        match self {
+            BackupStreamResolver::V1(x) => x.resolve(regions, min_ts, timeout).await,
+            BackupStreamResolver::V2(x, _) => {
+                let x = x.clone();
+                resolve_by_raft(regions, min_ts, x).await
+            }
+            #[cfg(test)]
+            BackupStreamResolver::Nop => regions,
+        }
+    }
+}
+
+>>>>>>> e106c8dd72 (resolved_ts: use smaller timeout when do check_leader (#16000) (#16943))
 #[derive(Debug)]
 pub enum RegionSet {
     /// The universal set.
