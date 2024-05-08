@@ -823,15 +823,18 @@ impl AutoSplitController {
                 .or_insert_with(|| Recorder::new(detect_times));
             recorder.update_peer(&region_infos[0].peer);
             recorder.update_cpu_usage(cpu_usage);
+            let key_ranges =  vec![];
             if let Some(hottest_key_range) = hottest_key_range {
                 recorder.update_hottest_key_range(hottest_key_range);
+                key_ranges = vec![hottest_key_range];
+            } else {
+                key_ranges = sample(
+                    self.cfg.sample_num,
+                    region_infos,
+                    RegionInfo::get_key_ranges_mut,
+                );
             }
 
-            let key_ranges = sample(
-                self.cfg.sample_num,
-                region_infos,
-                RegionInfo::get_key_ranges_mut,
-            );
             if key_ranges.is_empty() {
                 LOAD_BASE_SPLIT_EVENT.empty_statistical_key.inc();
                 continue;
@@ -851,6 +854,8 @@ impl AutoSplitController {
                         "qps" => qps,
                         "byte" => byte,
                         "cpu_usage" => cpu_usage,
+                        "start_key" => log_wrappers::Value::key(&key_ranges.as_ref().unwrap().start_key),
+                        "end_key" => log_wrappers::Value::key(&key_ranges.as_ref().unwrap().end_key),
                     );
                     self.recorders.remove(&region_id);
                 } else if is_unified_read_pool_busy && is_region_busy {
