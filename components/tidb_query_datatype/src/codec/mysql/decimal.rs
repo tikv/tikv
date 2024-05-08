@@ -1686,14 +1686,8 @@ impl Decimal {
                         res => res,
                     };
                 }
-            } else {
-                if bs[end_idx..]
-                    .iter()
-                    .position(|c| !c.is_ascii_whitespace())
-                    .is_some()
-                {
-                    d = Res::Truncated(d.unwrap());
-                }
+            } else if bs[end_idx..].iter().any(|c| !c.is_ascii_whitespace()) {
+                d = Res::Truncated(d.unwrap());
             }
         }
         if d.word_buf.iter().all(|c| *c == 0) {
