@@ -8707,6 +8707,18 @@ def BackupLog() -> RowPanel:
                 ],
             ),
             graph_panel(
+                title="Initial Scanning Task Status",
+                description="The task status of initial scanning.",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_log_backup_pending_initial_scan",
+                            by_labels=["stage"],
+                        ),
+                    )
+                ],
+            ),
+            graph_panel(
                 title="Region Checkpoint Key Putting",
                 description="",
                 yaxes=yaxes(left_format=UNITS.COUNTS_PER_SEC),
