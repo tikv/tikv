@@ -117,7 +117,7 @@ fn test_check_need_gc() {
     );
 }
 
-fn make_keyspace_meta_service() -> Arc<Option<KeyspaceLevelGCService>> {
+fn make_keyspace_level_gc_service() -> Arc<Option<KeyspaceLevelGCService>> {
     // Init keyspace level gc cache.
     let ks_gc_map = DashMap::new();
     // make data ts < props.min_ts
@@ -169,17 +169,17 @@ fn make_keyspace_meta_service() -> Arc<Option<KeyspaceLevelGCService>> {
 }
 
 #[test]
-fn test_keyspace_meta_service() {
+fn test_keyspace_level_gc_service() {
     // Make empty cache in keyspace_meta_service.
-    let keyspace_meta_service = Arc::new(Some(KeyspaceLevelGCService::new(
+    let keyspace_level_gc_service = Arc::new(Some(KeyspaceLevelGCService::new(
         Arc::clone(&Default::default()),
         Arc::clone(&Default::default()),
     )));
 
     // Case 1: If there is no keyspace level gc in cache, then
     // is_all_keyspace_level_gc_have_not_initialized return true.
-    assert_eq!(true, keyspace_meta_service.is_some());
-    if let Some(ref ks_meta_service) = *keyspace_meta_service {
+    assert_eq!(true, keyspace_level_gc_service.is_some());
+    if let Some(ref ks_meta_service) = *keyspace_level_gc_service {
         let is_all_keyspace_level_gc_have_not_initialized =
             ks_meta_service.is_all_keyspace_level_gc_have_not_initialized();
         assert_eq!(true, is_all_keyspace_level_gc_have_not_initialized);
@@ -187,10 +187,10 @@ fn test_keyspace_meta_service() {
 
     // Case 2: If there have any keyspace level gc in cache, then
     // is_all_keyspace_level_gc_have_not_initialized return false.
-    let keyspace_meta_service = make_keyspace_meta_service();
+    let keyspace_level_gc_service = make_keyspace_level_gc_service();
+    assert_eq!(true, keyspace_level_gc_service.is_some());
 
-    assert_eq!(true, keyspace_meta_service.is_some());
-    if let Some(ref ks_meta_service) = *keyspace_meta_service {
+    if let Some(ref ks_meta_service) = *keyspace_level_gc_service {
         let is_all_keyspace_level_gc_have_not_initialized =
             ks_meta_service.is_all_keyspace_level_gc_have_not_initialized();
         assert_eq!(false, is_all_keyspace_level_gc_have_not_initialized);
@@ -198,7 +198,7 @@ fn test_keyspace_meta_service() {
 
     // Case 3: Check get_max_ts_of_all_ks_gc_safe_point will return max(all keyspace
     // level gc safe point).
-    if let Some(ref ks_meta_service) = *keyspace_meta_service {
+    if let Some(ref ks_meta_service) = *keyspace_level_gc_service {
         let max_ts_of_all_ks_gc_safe_point = ks_meta_service.get_max_ts_of_all_ks_gc_safe_point();
         assert_eq!(69, max_ts_of_all_ks_gc_safe_point);
     }
@@ -225,7 +225,7 @@ fn test_check_skip_gc_with_ks_level_gc_by_kv_mode(is_rawkv: bool) {
     let raw_engine = engine.get_rocksdb();
 
     let mut gc_runner = TestGcRunner::new(0);
-    gc_runner.keyspace_meta_service = make_keyspace_meta_service().clone();
+    gc_runner.keyspace_meta_service = make_keyspace_level_gc_service().clone();
 
     do_write(&engine, false, 5, is_rawkv);
 
@@ -275,11 +275,6 @@ fn test_check_skip_gc_with_ks_level_gc_by_kv_mode(is_rawkv: bool) {
         1
     );
 }
-
-// fn do_write<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
-//     //make_data(engine, is_delete, op_nums);
-//     make_keyspace_data(engine, is_delete, op_nums, true)
-// }
 
 fn do_write<E: Engine>(engine: &E, is_delete: bool, op_nums: u64, is_rawkv: bool) {
     let mut data_prefix = api_version::api_v2::TIDB_TABLE_KEY_PREFIX;
