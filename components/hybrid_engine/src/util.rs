@@ -5,7 +5,7 @@ use std::sync::Arc;
 use engine_rocks::{util::new_engine, RocksEngine};
 use engine_traits::{Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use region_cache_memory_engine::{
-    RangeCacheEngineConfig, RangeCacheEngineOptions, RangeCacheMemoryEngine,
+    RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
 };
 use tempfile::{Builder, TempDir};
 use tikv_util::config::VersionTrack;
@@ -43,7 +43,7 @@ where
         path.path().to_str().unwrap(),
         &[CF_DEFAULT, CF_LOCK, CF_WRITE],
     )?;
-    let memory_engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+    let memory_engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
         VersionTrack::new(config),
     )));
     configure_memory_engine_fn(&memory_engine);

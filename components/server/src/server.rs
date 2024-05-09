@@ -74,7 +74,7 @@ use raftstore::{
     RaftRouterCompactedEventSender,
 };
 use region_cache_memory_engine::{
-    config::RangeCacheConfigManager, RangeCacheEngineOptions, RangeCacheMemoryEngine,
+    config::RangeCacheConfigManager, RangeCacheEngineContext, RangeCacheMemoryEngine,
     RangeCacheMemoryEngineStatistics,
 };
 use resolved_ts::{LeadershipResolver, Task};
@@ -1677,7 +1677,7 @@ where
             self.core.config.range_cache_engine.clone(),
         ));
         let range_cache_engine_options =
-            RangeCacheEngineOptions::new(range_cache_engine_config.clone());
+            RangeCacheEngineContext::new(range_cache_engine_config.clone());
         let range_cache_engine_statistics = range_cache_engine_options.statistics();
         let kv_engine: EK = KvEngineBuilder::build(
             range_cache_engine_options,
@@ -1686,7 +1686,7 @@ where
         );
         let range_cache_config_manager = RangeCacheConfigManager(range_cache_engine_config);
         self.kv_statistics = Some(factory.rocks_statistics());
-        self.range_cache_engine_statistics = range_cache_engine_statistics;
+        self.range_cache_engine_statistics = Some(range_cache_engine_statistics);
         let engines = Engines::new(kv_engine, raft_engine);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();

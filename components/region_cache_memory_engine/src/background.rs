@@ -916,7 +916,7 @@ pub mod tests {
             tests::{add_region_label_rule, new_region_label_rule, new_test_server_and_client},
         },
         write_batch::RangeCacheWriteBatchEntry,
-        RangeCacheEngineConfig, RangeCacheEngineOptions, RangeCacheMemoryEngine,
+        RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
     };
 
     fn put_data(
@@ -1195,7 +1195,7 @@ pub mod tests {
 
     #[test]
     fn test_filter_with_delete() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let memory_controller = engine.memory_controller();
@@ -1286,7 +1286,7 @@ pub mod tests {
 
     #[test]
     fn test_gc() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let memory_controller = engine.memory_controller();
@@ -1373,7 +1373,7 @@ pub mod tests {
 
     #[test]
     fn test_snapshot_block_gc() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let memory_controller = engine.memory_controller();
@@ -1486,7 +1486,7 @@ pub mod tests {
     fn test_gc_worker() {
         let mut config = RangeCacheEngineConfig::config_for_test();
         config.gc_interval = ReadableDuration(Duration::from_secs(1));
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(config),
         )));
         let memory_controller = engine.memory_controller();
@@ -1577,7 +1577,7 @@ pub mod tests {
 
     #[test]
     fn test_background_worker_load() {
-        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let path = Builder::new().prefix("test_load").tempdir().unwrap();
@@ -1658,7 +1658,7 @@ pub mod tests {
 
     #[test]
     fn test_ranges_for_gc() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let memory_controller = engine.memory_controller();
@@ -1687,7 +1687,7 @@ pub mod tests {
     // 4. Verify that only the labeled key range has been loaded.
     #[test]
     fn test_load_from_pd_hint_service() {
-        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let path = Builder::new()
@@ -1772,7 +1772,7 @@ pub mod tests {
         config.soft_limit_threshold = Some(ReadableSize(1000));
         config.hard_limit_threshold = Some(ReadableSize(1500));
         let config = Arc::new(VersionTrack::new(config));
-        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(config));
+        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(config));
         let path = Builder::new()
             .prefix("test_snapshot_load_reaching_limit")
             .tempdir()
@@ -1879,7 +1879,7 @@ pub mod tests {
         config.soft_limit_threshold = Some(ReadableSize(1000));
         config.hard_limit_threshold = Some(ReadableSize(1500));
         let config = Arc::new(VersionTrack::new(config));
-        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(config.clone()));
+        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(config.clone()));
         let path = Builder::new()
             .prefix("test_snapshot_load_reaching_limit")
             .tempdir()

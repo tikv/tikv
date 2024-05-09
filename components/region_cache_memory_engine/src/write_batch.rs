@@ -569,7 +569,7 @@ mod tests {
     use super::*;
     use crate::{
         background::flush_epoch, config::RangeCacheConfigManager, RangeCacheEngineConfig,
-        RangeCacheEngineOptions,
+        RangeCacheEngineContext,
     };
 
     // We should not use skiplist.get directly as we only cares keys without
@@ -589,7 +589,7 @@ mod tests {
 
     #[test]
     fn test_write_to_skiplist() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -611,7 +611,7 @@ mod tests {
 
     #[test]
     fn test_savepoints() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -638,7 +638,7 @@ mod tests {
 
     #[test]
     fn test_put_write_clear_delete_put_write() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -674,7 +674,7 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
         let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let r1 = CacheRange::new(b"k01".to_vec(), b"k05".to_vec());
@@ -798,7 +798,7 @@ mod tests {
         config.soft_limit_threshold = Some(ReadableSize(500));
         config.hard_limit_threshold = Some(ReadableSize(1000));
         config.enabled = true;
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(config),
         )));
         let r1 = CacheRange::new(b"kk00".to_vec(), b"kk10".to_vec());
@@ -884,7 +884,7 @@ mod tests {
 
     #[test]
     fn test_delete_lock_cf() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -943,7 +943,7 @@ mod tests {
         config.hard_limit_threshold = Some(ReadableSize(u64::MAX));
         config.enabled = true;
         let config = Arc::new(VersionTrack::new(config));
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(config.clone()));
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(config.clone()));
         let r1 = CacheRange::new(b"kk00".to_vec(), b"kk10".to_vec());
         let r2 = CacheRange::new(b"kk10".to_vec(), b"kk20".to_vec());
         for r in [&r1, &r2] {

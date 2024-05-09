@@ -105,20 +105,20 @@ impl RangeCacheEngineConfig {
     }
 }
 
-pub struct RangeCacheEngineOptions {
+pub struct RangeCacheEngineContext {
     config: Arc<VersionTrack<RangeCacheEngineConfig>>,
-    statistics: Option<Arc<RangeCacheMemoryEngineStatistics>>,
+    statistics: Arc<RangeCacheMemoryEngineStatistics>,
 }
 
-impl RangeCacheEngineOptions {
-    pub fn new(config: Arc<VersionTrack<RangeCacheEngineConfig>>) -> RangeCacheEngineOptions {
-        RangeCacheEngineOptions {
+impl RangeCacheEngineContext {
+    pub fn new(config: Arc<VersionTrack<RangeCacheEngineConfig>>) -> RangeCacheEngineContext {
+        RangeCacheEngineContext {
             config,
-            statistics: Some(Arc::default()),
+            statistics: Arc::default(),
         }
     }
 
-    pub fn statistics(&self) -> Option<Arc<RangeCacheMemoryEngineStatistics>> {
+    pub fn statistics(&self) -> Arc<RangeCacheMemoryEngineStatistics> {
         self.statistics.clone()
     }
 }

@@ -32,7 +32,7 @@ use hybrid_engine::HybridEngine;
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
 use region_cache_memory_engine::{
-    flush_range_cache_engine_statistics, RangeCacheEngineOptions, RangeCacheMemoryEngine,
+    flush_range_cache_engine_statistics, RangeCacheEngineContext, RangeCacheMemoryEngine,
     RangeCacheMemoryEngineStatistics,
 };
 use security::SecurityManager;
@@ -704,7 +704,7 @@ impl<T: fmt::Display + Send + 'static> Stop for LazyWorker<T> {
 
 pub trait KvEngineBuilder: KvEngine {
     fn build(
-        range_cache_engine_config: RangeCacheEngineOptions,
+        range_cache_engine_config: RangeCacheEngineContext,
         disk_engine: RocksEngine,
         pd_client: Option<Arc<RpcClient>>,
     ) -> Self;
@@ -712,7 +712,7 @@ pub trait KvEngineBuilder: KvEngine {
 
 impl KvEngineBuilder for RocksEngine {
     fn build(
-        _range_cache_engine_config: RangeCacheEngineOptions,
+        _range_cache_engine_config: RangeCacheEngineContext,
         disk_engine: RocksEngine,
         _pd_client: Option<Arc<RpcClient>>,
     ) -> Self {
@@ -722,7 +722,7 @@ impl KvEngineBuilder for RocksEngine {
 
 impl KvEngineBuilder for HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
     fn build(
-        range_cache_engine_config: RangeCacheEngineOptions,
+        range_cache_engine_config: RangeCacheEngineContext,
         disk_engine: RocksEngine,
         pd_client: Option<Arc<RpcClient>>,
     ) -> Self {

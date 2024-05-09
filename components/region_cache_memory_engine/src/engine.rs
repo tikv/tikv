@@ -30,7 +30,7 @@ use crate::{
     read::{RangeCacheIterator, RangeCacheSnapshot},
     statistics::Statistics,
     write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
-    RangeCacheEngineConfig, RangeCacheEngineOptions,
+    RangeCacheEngineConfig, RangeCacheEngineContext,
 };
 
 pub(crate) const CF_DEFAULT_USIZE: usize = 0;
@@ -252,12 +252,12 @@ pub struct RangeCacheMemoryEngine {
 }
 
 impl RangeCacheMemoryEngine {
-    pub fn new(options: RangeCacheEngineOptions) -> Self {
+    pub fn new(options: RangeCacheEngineContext) -> Self {
         info!("init range cache memory engine";);
         let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
         let skiplist_engine = { core.read().engine().clone() };
 
-        let RangeCacheEngineOptions { config, statistics } = options;
+        let RangeCacheEngineContext { config, statistics } = options;
         assert!(config.value().enabled);
         let memory_controller = Arc::new(MemoryController::new(config.clone(), skiplist_engine));
 
@@ -272,7 +272,7 @@ impl RangeCacheMemoryEngine {
             rocks_engine: None,
             bg_work_manager,
             memory_controller,
-            statistics: statistics.unwrap(),
+            statistics,
             config,
         }
     }
@@ -507,11 +507,11 @@ pub mod tests {
     use engine_traits::CacheRange;
     use tikv_util::config::VersionTrack;
 
-    use crate::{RangeCacheEngineConfig, RangeCacheEngineOptions, RangeCacheMemoryEngine};
+    use crate::{RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine};
 
     #[test]
     fn test_overlap_with_pending() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range1 = CacheRange::new(b"k1".to_vec(), b"k3".to_vec());
