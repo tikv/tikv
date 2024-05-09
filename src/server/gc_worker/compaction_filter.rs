@@ -21,7 +21,7 @@ use engine_rocks::{
 };
 use engine_traits::{KvEngine, MiscExt, MvccProperties, WriteBatch, WriteOptions};
 use file_system::{IoType, WithIoType};
-use keyspace_meta::KeyspaceMetaService;
+use keyspace_meta::KeyspaceLevelGCService;
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
 use raftstore::coprocessor::RegionInfoProvider;
@@ -60,7 +60,7 @@ pub struct GcContext {
     #[cfg(any(test, feature = "failpoints"))]
     callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
 
-    pub(crate) keyspace_meta_service: Arc<Option<KeyspaceMetaService>>,
+    pub(crate) keyspace_meta_service: Arc<Option<KeyspaceLevelGCService>>,
 }
 
 // Give all orphan versions an ID to log them.
@@ -152,7 +152,7 @@ where
         feature_gate: FeatureGate,
         gc_scheduler: Scheduler<GcTask<EK>>,
         region_info_provider: Arc<dyn RegionInfoProvider>,
-        keyspace_meta_service: Arc<Option<KeyspaceMetaService>>,
+        keyspace_meta_service: Arc<Option<KeyspaceLevelGCService>>,
     );
 }
 
@@ -168,7 +168,7 @@ where
         _feature_gate: FeatureGate,
         _gc_scheduler: Scheduler<GcTask<EK>>,
         _region_info_provider: Arc<dyn RegionInfoProvider>,
-        _keyspace_meta_service: Arc<Option<KeyspaceMetaService>>,
+        _keyspace_meta_service: Arc<Option<KeyspaceLevelGCService>>,
     ) {
         info!("Compaction filter is not supported for this engine.");
     }
@@ -183,7 +183,7 @@ impl CompactionFilterInitializer<RocksEngine> for Option<RocksEngine> {
         feature_gate: FeatureGate,
         gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         region_info_provider: Arc<dyn RegionInfoProvider>,
-        keyspace_meta_service: Arc<Option<KeyspaceMetaService>>,
+        keyspace_meta_service: Arc<Option<KeyspaceLevelGCService>>,
     ) {
         info!("initialize GC context for compaction filter");
         let mut gc_context = GC_CONTEXT.lock().unwrap();
@@ -222,7 +222,8 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
 
         let mut is_all_ks_not_init_gc_sp = true;
         if let Some(ref ks_meta_service) = *keyspace_meta_service {
-            is_all_ks_not_init_gc_sp = ks_meta_service.is_all_keyspace_level_gc_have_not_inited()
+            is_all_ks_not_init_gc_sp =
+                ks_meta_service.is_all_keyspace_level_gc_have_not_initialized()
         }
 
         if safe_point == 0 && is_all_ks_not_init_gc_sp {
@@ -381,7 +382,7 @@ pub struct WriteCompactionFilter {
     #[cfg(any(test, feature = "failpoints"))]
     callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
 
-    keyspace_meta_service: Arc<Option<KeyspaceMetaService>>,
+    keyspace_meta_service: Arc<Option<KeyspaceLevelGCService>>,
 }
 
 impl WriteCompactionFilter {
@@ -391,12 +392,13 @@ impl WriteCompactionFilter {
         context: &CompactionFilterContext,
         gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         regions_provider: (u64, Arc<dyn RegionInfoProvider>),
-        keyspace_meta_service: Arc<Option<KeyspaceMetaService>>,
+        keyspace_meta_service: Arc<Option<KeyspaceLevelGCService>>,
     ) -> Self {
         // Safe point must have been initialized.
         let mut is_all_ks_not_init_gc_sp = true;
         if let Some(ref ks_meta_service) = *keyspace_meta_service {
-            is_all_ks_not_init_gc_sp = ks_meta_service.is_all_keyspace_level_gc_have_not_inited()
+            is_all_ks_not_init_gc_sp =
+                ks_meta_service.is_all_keyspace_level_gc_have_not_initialized()
         }
         assert!(safe_point > 0 || !is_all_ks_not_init_gc_sp);
         debug!("gc in compaction filter"; "safe_point" => safe_point);
@@ -787,7 +789,7 @@ pub fn check_need_gc(
     safe_point: TimeStamp,
     ratio_threshold: f64,
     context: &CompactionFilterContext,
-    keyspace_meta_service: Arc<Option<KeyspaceMetaService>>,
+    keyspace_meta_service: Arc<Option<KeyspaceLevelGCService>>,
 ) -> bool {
     let check_props = |props: &MvccProperties| -> (bool, bool /* skip_more_checks */) {
         // Disable GC directly once the config is negative or +inf.
@@ -911,7 +913,7 @@ pub mod test_utils {
         pub gc_scheduler: Scheduler<GcTask<RocksEngine>>,
         pub gc_receiver: ReceiverWrapper<GcTask<RocksEngine>>,
         pub(super) callbacks_on_drop: Vec<Arc<dyn Fn(&WriteCompactionFilter) + Send + Sync>>,
-        pub keyspace_meta_service: Arc<Option<KeyspaceMetaService>>,
+        pub keyspace_meta_service: Arc<Option<KeyspaceLevelGCService>>,
     }
 
     impl<'a> TestGcRunner<'a> {

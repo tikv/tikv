@@ -10,7 +10,7 @@ use tikv_util::worker::Worker;
 
 pub mod service;
 pub use service::{
-    KeyspaceLevelGCWatchService, KeyspaceMetaService, GC_MGMT_TYPE_KEYSPACE_LEVEL_GC,
+    KeyspaceLevelGCService, KeyspaceLevelGCWatchService, GC_MGMT_TYPE_KEYSPACE_LEVEL_GC,
     KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE,
 };
 
@@ -25,7 +25,9 @@ pub fn start_periodic_keyspace_level_gc_watcher(
         KeyspaceLevelGCWatchService::new(pd_client, keyspace_level_gc_cache);
     // spawn a task to watch all keyspace level gc update.
     bg_worker.spawn_async_task(async move {
-        keyspace_level_gc_watch_service.watch_keyspace_gc().await;
+        keyspace_level_gc_watch_service
+            .watch_keyspace_level_gc()
+            .await;
     });
 }
 

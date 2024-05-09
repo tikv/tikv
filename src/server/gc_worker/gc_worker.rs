@@ -22,7 +22,7 @@ use engine_traits::{
 };
 use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
-use keyspace_meta::KeyspaceMetaService;
+use keyspace_meta::KeyspaceLevelGCService;
 use kvproto::{kvrpcpb::Context, metapb::Region};
 use pd_client::{FeatureGate, PdClient};
 use raftstore::coprocessor::RegionInfoProvider;
@@ -1240,7 +1240,7 @@ impl<E: Engine> GcWorker<E> {
         &self,
         cfg: AutoGcConfig<S, R>,
         safe_point: Arc<AtomicU64>,
-        keyspace_meta_service: Arc<Option<KeyspaceMetaService>>,
+        keyspace_meta_service: Arc<Option<KeyspaceLevelGCService>>,
     ) -> Result<()> {
         assert!(
             cfg.self_store_id > 0,

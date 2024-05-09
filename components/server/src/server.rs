@@ -44,7 +44,7 @@ use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use health_controller::HealthController;
 use hybrid_engine::HybridEngine;
-use keyspace_meta::service::KeyspaceMetaService;
+use keyspace_meta::service::KeyspaceLevelGCService;
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
@@ -1020,7 +1020,7 @@ where
             &self.core.background_worker,
             Arc::clone(&keyspace_level_gc_cache),
         );
-        let keyspace_meta_service = Arc::new(Some(KeyspaceMetaService::new(
+        let keyspace_meta_service = Arc::new(Some(KeyspaceLevelGCService::new(
             Arc::clone(&keyspace_level_gc_cache),
             Arc::clone(&keyspace_id_meta_map),
         )));

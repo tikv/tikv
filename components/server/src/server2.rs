@@ -41,7 +41,7 @@ use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetrics
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use health_controller::HealthController;
-use keyspace_meta::KeyspaceMetaService;
+use keyspace_meta::KeyspaceLevelGCService;
 use kvproto::{
     brpb::create_backup, cdcpb_grpc::create_change_data, deadlock::create_deadlock,
     debugpb_grpc::create_debug, diagnosticspb::create_diagnostics,
@@ -856,7 +856,7 @@ where
             Arc::clone(&keyspace_level_gc_cache),
         );
 
-        let keyspace_meta_service = Arc::new(Some(KeyspaceMetaService::new(
+        let keyspace_meta_service = Arc::new(Some(KeyspaceLevelGCService::new(
             Arc::clone(&keyspace_level_gc_cache),
             Arc::clone(&keyspace_id_meta_map),
         )));

@@ -15,7 +15,7 @@ use engine_rocks::{
     RocksEngine,
 };
 use engine_traits::{raw_ttl::ttl_current_ts, MiscExt};
-use keyspace_meta::KeyspaceMetaService;
+use keyspace_meta::KeyspaceLevelGCService;
 use prometheus::local::LocalHistogramVec;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::worker::{ScheduleError, Scheduler};
@@ -61,7 +61,8 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
 
         let mut is_all_ks_not_init_gc_sp = true;
         if let Some(ref ks_meta_service) = *keyspace_meta_service {
-            is_all_ks_not_init_gc_sp = ks_meta_service.is_all_keyspace_level_gc_have_not_inited()
+            is_all_ks_not_init_gc_sp =
+                ks_meta_service.is_all_keyspace_level_gc_have_not_initialized()
         }
 
         if safe_point == 0 && is_all_ks_not_init_gc_sp {
@@ -192,12 +193,13 @@ impl RawCompactionFilter {
         ts: u64,
         context: &CompactionFilterContext,
         regions_provider: (u64, Arc<dyn RegionInfoProvider>),
-        keyspace_meta_service: Arc<Option<KeyspaceMetaService>>,
+        keyspace_meta_service: Arc<Option<KeyspaceLevelGCService>>,
     ) -> Self {
         // Safe point must have been initialized.
         let mut is_all_ks_not_init_gc_sp = true;
         if let Some(ref ks_meta_service) = *keyspace_meta_service {
-            is_all_ks_not_init_gc_sp = ks_meta_service.is_all_keyspace_level_gc_have_not_inited()
+            is_all_ks_not_init_gc_sp =
+                ks_meta_service.is_all_keyspace_level_gc_have_not_initialized()
         }
         assert!(safe_point > 0 || !is_all_ks_not_init_gc_sp);
         debug!("gc in compaction filter"; "safe_point" => safe_point);

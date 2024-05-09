@@ -6,7 +6,7 @@ use api_version::{ApiV2, KvFormat, RawValue};
 use dashmap::DashMap;
 use engine_rocks::RocksEngine;
 use engine_traits::{MiscExt, CF_DEFAULT, CF_WRITE};
-use keyspace_meta::KeyspaceMetaService;
+use keyspace_meta::KeyspaceLevelGCService;
 use kvproto::{
     keyspacepb,
     kvrpcpb::{Context, *},
@@ -118,7 +118,7 @@ fn test_check_need_gc() {
     );
 }
 
-fn make_keyspace_meta_service() -> Arc<Option<KeyspaceMetaService>> {
+fn make_keyspace_meta_service() -> Arc<Option<KeyspaceLevelGCService>> {
     // Init keyspace level gc cache.
     let ks_gc_map = DashMap::new();
     // make data ts < props.min_ts
@@ -163,7 +163,7 @@ fn make_keyspace_meta_service() -> Arc<Option<KeyspaceMetaService>> {
 
     let keyspace_id_meta_cache = Arc::new(keyspace_id_meta_map);
 
-    Arc::new(Some(KeyspaceMetaService::new(
+    Arc::new(Some(KeyspaceLevelGCService::new(
         Arc::clone(&keyspace_level_gc_cache),
         Arc::clone(&keyspace_id_meta_cache),
     )))
@@ -172,29 +172,29 @@ fn make_keyspace_meta_service() -> Arc<Option<KeyspaceMetaService>> {
 #[test]
 fn test_keyspace_meta_service() {
     // Make empty cache in keyspace_meta_service.
-    let keyspace_meta_service = Arc::new(Some(KeyspaceMetaService::new(
+    let keyspace_meta_service = Arc::new(Some(KeyspaceLevelGCService::new(
         Arc::clone(&Default::default()),
         Arc::clone(&Default::default()),
     )));
 
     // Case 1: If there is no keyspace level gc in cache, then
-    // is_all_keyspace_level_gc_have_not_inited return true.
+    // is_all_keyspace_level_gc_have_not_initialized return true.
     assert_eq!(true, keyspace_meta_service.is_some());
     if let Some(ref ks_meta_service) = *keyspace_meta_service {
-        let is_all_keyspace_level_gc_have_not_inited =
-            ks_meta_service.is_all_keyspace_level_gc_have_not_inited();
-        assert_eq!(true, is_all_keyspace_level_gc_have_not_inited);
+        let is_all_keyspace_level_gc_have_not_initialized =
+            ks_meta_service.is_all_keyspace_level_gc_have_not_initialized();
+        assert_eq!(true, is_all_keyspace_level_gc_have_not_initialized);
     }
 
     // Case 2: If there have any keyspace level gc in cache, then
-    // is_all_keyspace_level_gc_have_not_inited return false.
+    // is_all_keyspace_level_gc_have_not_initialized return false.
     let keyspace_meta_service = make_keyspace_meta_service();
 
     assert_eq!(true, keyspace_meta_service.is_some());
     if let Some(ref ks_meta_service) = *keyspace_meta_service {
-        let is_all_keyspace_level_gc_have_not_inited =
-            ks_meta_service.is_all_keyspace_level_gc_have_not_inited();
-        assert_eq!(false, is_all_keyspace_level_gc_have_not_inited);
+        let is_all_keyspace_level_gc_have_not_initialized =
+            ks_meta_service.is_all_keyspace_level_gc_have_not_initialized();
+        assert_eq!(false, is_all_keyspace_level_gc_have_not_initialized);
     }
 
     // Case 3: Check get_max_ts_of_all_ks_gc_safe_point will return max(all keyspace
@@ -236,8 +236,8 @@ fn test_check_skip_compaction_filter_by_kv_mode(is_rawkv: bool) {
     }
 
     // Haven't call gc_runner yet, check the initial metrics values is 0.
-    // If there are any GC safe point is inited, GC_COMPACTION_FILTER_PERFORM will
-    // not 0.
+    // If there are any GC safe point is initialized, GC_COMPACTION_FILTER_PERFORM
+    // will not 0.
     assert_eq!(
         GC_COMPACTION_FILTER_PERFORM
             .with_label_values(&[metrics_label])
