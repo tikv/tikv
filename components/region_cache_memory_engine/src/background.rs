@@ -5,7 +5,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Display,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
     thread::JoinHandle,
@@ -290,9 +290,10 @@ struct BackgroundRunnerCore {
     range_stats_manager: Option<RangeStatsManager>,
 }
 
+// TODO (afeinberg): Core should just hold Arc<RangeStatsMananger>,
 #[derive(Clone)]
 struct RangeStatsManager {
-    num_regions: usize,
+    num_regions: Arc<AtomicUsize>,
     info_provider: Arc<dyn RegionInfoProvider>,
     prev_top_regions: Arc<Mutex<BTreeMap<u64, Region>>>,
     checking_top_regions: Arc<AtomicBool>,
@@ -301,7 +302,7 @@ struct RangeStatsManager {
 impl RangeStatsManager {
     pub fn new(num_regions: usize, info_provider: Arc<dyn RegionInfoProvider>) -> Self {
         RangeStatsManager {
-            num_regions,
+            num_regions: Arc::new(AtomicUsize::new(num_regions)),
             info_provider,
             prev_top_regions: Arc::new(Mutex::new(BTreeMap::new())),
             checking_top_regions: Arc::new(AtomicBool::new(false)),
@@ -316,12 +317,12 @@ impl RangeStatsManager {
         self.checking_top_regions.load(Ordering::Relaxed)
     }
 
-    pub(crate) fn set_num_regions(&mut self, v: usize) {
-        self.num_regions = v;
+    pub(crate) fn set_num_regions(&self, v: usize) {
+        self.num_regions.store(v, Ordering::Relaxed);
     }
 
     pub fn num_regions(&self) -> usize {
-        self.num_regions
+        self.num_regions.load(Ordering::Relaxed)
     }
 
     pub fn collect_changed_ranges(
@@ -329,11 +330,11 @@ impl RangeStatsManager {
         ranges_added_out: &mut Vec<CacheRange>,
         ranges_removed_out: &mut Vec<CacheRange>,
     ) {
-        info!("collect_changed_ranges"; "num_regions" => self.num_regions);
+        info!("collect_changed_ranges"; "num_regions" => self.num_regions());
         // TODO (afeinberg): Error handling here.
         let curr_top_regions = self
             .info_provider
-            .get_top_regions(self.num_regions)
+            .get_top_regions(self.num_regions())
             .unwrap()
             .iter()
             .map(|r| (r.id, r.clone()))
@@ -553,7 +554,7 @@ impl BackgroundRunnerCore {
         if self.range_stats_manager.is_none() {
             return;
         }
-        let range_stats_manager = self.range_stats_manager.as_mut().unwrap();
+        let range_stats_manager = self.range_stats_manager.as_ref().unwrap();
         if range_stats_manager.checking_top_regions() {
             return;
         }
@@ -596,18 +597,18 @@ impl BackgroundRunnerCore {
         let mut ranges_to_remove = Vec::<CacheRange>::with_capacity(256);
         range_stats_manager.collect_changed_ranges(&mut ranges_to_add, &mut ranges_to_remove);
         info!("load_evict"; "ranges_to_add" => ?&ranges_to_add, "ranges_to_remove" => ?&ranges_to_remove);
-        for cache_range in ranges_to_add {
-            let mut core = self.engine.write();
-            if let Err(e) = core.mut_range_manager().load_range(cache_range.clone()) {
-                error!("error loading range"; "cache_range" => ?&cache_range, "err" => ?e);
-            }
-        }
         for evict_range in ranges_to_remove {
             // TODO (afeinberg): check when last loaded, do not evict unless range has been
             // cached for a minimum time.
             let mut core = self.engine.write();
             if !core.mut_range_manager().evict_range(&evict_range) {
                 error!("fail to evict range"; "evict_range" => ?&evict_range);
+            }
+        }
+        for cache_range in ranges_to_add {
+            let mut core = self.engine.write();
+            if let Err(e) = core.mut_range_manager().load_range(cache_range.clone()) {
+                error!("error loading range"; "cache_range" => ?&cache_range, "err" => ?e);
             }
         }
         range_stats_manager.set_checking_top_regions(false);
