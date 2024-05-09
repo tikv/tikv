@@ -47,6 +47,12 @@ lazy_static! {
         exponential_buckets(0.00001, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref RANGE_CACHE_COUNT: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_range_cache_count",
+        "The range counts of each type.",
+        &["type"]
+    )
+    .unwrap();
 }
 
 lazy_static! {
