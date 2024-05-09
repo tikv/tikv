@@ -302,7 +302,7 @@ impl Clone for RangeStatsManager {
             num_regions: self.num_regions,
             info_provider: self.info_provider.clone(),
             prev_top_regions: self.prev_top_regions.clone(),
-            checking_top_regions: AtomicBoolean::new(
+            checking_top_regions: AtomicBool::new(
                 self.checking_top_regions.load(Ordering::Relaxed),
             ),
         }
@@ -332,7 +332,7 @@ impl RangeStatsManager {
         ranges_added_out: &mut Vec<CacheRange>,
         ranges_removed_out: &mut Vec<CacheRange>,
     ) {
-        info!("collect_changed_ranges", "num_regions" => num_regions);
+        info!("collect_changed_ranges"; "num_regions" => self.num_regions);
         // TODO (afeinberg): Error handling here.
         let curr_top_regions = self
             .info_provider
@@ -564,10 +564,7 @@ impl BackgroundRunnerCore {
 
         let mut ranges_to_add = Vec::<CacheRange>::with_capacity(256);
         let mut ranges_to_remove = Vec::<CacheRange>::with_capacity(256);
-        self.range_stats_manager
-            .as_ref()
-            .unwrap()
-            .collect_changed_ranges(&mut ranges_to_add, &mut ranges_to_remove);
+        range_stats_manager.collect_changed_ranges(&mut ranges_to_add, &mut ranges_to_remove);
         info!("load_evict"; "ranges_to_add" => ?&ranges_to_add, "ranges_to_remove" => ?&ranges_to_remove);
         for cache_range in ranges_to_add {
             let mut core = self.engine.write();
@@ -579,7 +576,7 @@ impl BackgroundRunnerCore {
             let _ = core.mut_range_manager().evict_range(&evict_range);
         }
         range_stats_manager.set_checking_top_regions(false);
-        info("load_evict complete");
+        info!("load_evict complete");
     }
 }
 
@@ -621,7 +618,7 @@ impl Drop for BackgroundRunner {
     }
 }
 
-//pub const NUM_REGIONS_FOR_CACHE: usize = 1000;
+// pub const NUM_REGIONS_FOR_CACHE: usize = 1000;
 impl BackgroundRunner {
     pub fn new(
         engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
