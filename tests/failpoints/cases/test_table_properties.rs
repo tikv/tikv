@@ -36,7 +36,6 @@ pub fn make_key(key: &[u8], ts: u64) -> Vec<u8> {
 
 #[test]
 fn test_check_need_gc() {
-    info!("aaaaa");
     GC_COMPACTION_FILTER_PERFORM.reset();
     GC_COMPACTION_FILTER_SKIP.reset();
 
@@ -52,7 +51,7 @@ fn test_check_need_gc() {
     let raw_engine = engine.get_rocksdb();
     let mut gc_runner = TestGcRunner::new(0);
 
-    do_write(&engine, false, 5);
+    do_write(&engine, false, 5, true);
 
     // Check init value
     assert_eq!(
@@ -89,12 +88,12 @@ fn test_check_need_gc() {
 
     // TEST 2: props.num_versions as f64 > props.num_rows as f64 * ratio_threshold
     // return true.
-    do_write(&engine, false, 5);
+    do_write(&engine, false, 5, true);
     engine.get_rocksdb().flush_cfs(&[], true).unwrap();
 
     do_gc(&raw_engine, 2, &mut gc_runner, &dir);
 
-    do_write(&engine, false, 5);
+    do_write(&engine, false, 5, true);
     engine.get_rocksdb().flush_cfs(&[], true).unwrap();
 
     // Set ratio_threshold, let (props.num_versions as f64 > props.num_rows as
@@ -206,11 +205,11 @@ fn test_keyspace_meta_service() {
 }
 
 #[test]
-fn test_check_skip_compaction_filter() {
-    test_check_skip_compaction_filter_by_kv_mode(true);
-    test_check_skip_compaction_filter_by_kv_mode(false);
+fn test_check_skip_gc_with_ks_level_gc() {
+    test_check_skip_gc_with_ks_level_gc_by_kv_mode(true);
+    test_check_skip_gc_with_ks_level_gc_by_kv_mode(false);
 }
-fn test_check_skip_compaction_filter_by_kv_mode(is_rawkv: bool) {
+fn test_check_skip_gc_with_ks_level_gc_by_kv_mode(is_rawkv: bool) {
     GC_COMPACTION_FILTER_PERFORM.reset();
     GC_COMPACTION_FILTER_SKIP.reset();
 
@@ -228,16 +227,14 @@ fn test_check_skip_compaction_filter_by_kv_mode(is_rawkv: bool) {
     let mut gc_runner = TestGcRunner::new(0);
     gc_runner.keyspace_meta_service = make_keyspace_meta_service().clone();
 
-    make_keyspace_data(&engine, false, 5, is_rawkv);
+    do_write(&engine, false, 5, is_rawkv);
 
     let mut metrics_label = STAT_TXN_KEYMODE;
     if is_rawkv {
         metrics_label = STAT_RAW_KEYMODE;
     }
 
-    // Haven't call gc_runner yet, check the initial metrics values is 0.
-    // If there are any GC safe point is initialized, GC_COMPACTION_FILTER_PERFORM
-    // will not 0.
+    // It Hasn't called gc_runner yet, check the initial metrics value is 0.
     assert_eq!(
         GC_COMPACTION_FILTER_PERFORM
             .with_label_values(&[metrics_label])
@@ -279,11 +276,12 @@ fn test_check_skip_compaction_filter_by_kv_mode(is_rawkv: bool) {
     );
 }
 
-fn do_write<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
-    make_data(engine, is_delete, op_nums);
-}
+// fn do_write<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
+//     //make_data(engine, is_delete, op_nums);
+//     make_keyspace_data(engine, is_delete, op_nums, true)
+// }
 
-fn make_keyspace_data<E: Engine>(engine: &E, is_delete: bool, op_nums: u64, is_rawkv: bool) {
+fn do_write<E: Engine>(engine: &E, is_delete: bool, op_nums: u64, is_rawkv: bool) {
     let mut data_prefix = api_version::api_v2::TIDB_TABLE_KEY_PREFIX;
     if is_rawkv {
         data_prefix = api_version::api_v2::RAW_KEY_PREFIX;
@@ -293,6 +291,7 @@ fn make_keyspace_data<E: Engine>(engine: &E, is_delete: bool, op_nums: u64, is_r
         test_cf = CF_DEFAULT;
     }
 
+    // make data as keyspace id = 1.
     let user_key = vec![data_prefix, 0, 0, 1, 1, 2, 3];
 
     let mut test_raws = vec![];
@@ -398,7 +397,7 @@ fn test_skip_gc_by_check() {
     let raw_engine = engine.get_rocksdb();
     let mut gc_runner = TestGcRunner::new(0);
 
-    do_write(&engine, false, 5);
+    do_write(&engine, false, 5, true);
     engine.get_rocksdb().flush_cfs(&[], true).unwrap();
 
     // The min_mvcc_ts ts > gc safepoint, check_need_gc return false, don't call
@@ -421,12 +420,12 @@ fn test_skip_gc_by_check() {
 
     // TEST 2:When is_bottommost_level = false,
     // write data to level2
-    do_write(&engine, false, 5);
+    do_write(&engine, false, 5, true);
     engine.get_rocksdb().flush_cfs(&[], true).unwrap();
 
     do_gc(&raw_engine, 2, &mut gc_runner, &dir);
 
-    do_write(&engine, false, 5);
+    do_write(&engine, false, 5, true);
     engine.get_rocksdb().flush_cfs(&[], true).unwrap();
 
     // Set ratio_threshold, let (props.num_versions as f64 > props.num_rows as

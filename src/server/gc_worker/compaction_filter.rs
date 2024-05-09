@@ -957,7 +957,6 @@ pub mod test_utils {
             };
 
             let mut gc_context_opt = GC_CONTEXT.lock().unwrap();
-
             *gc_context_opt = Some(GcContext {
                 db: Some(engine.clone()),
                 store_id: 1,
