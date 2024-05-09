@@ -91,11 +91,11 @@ impl SnapshotMiscExt for PanicSnapshot {
 pub struct PanicSnapshotIterMetricsCollector;
 
 impl IterMetricsCollector for PanicSnapshotIterMetricsCollector {
-    fn internal_delete_skipped_count(&self) -> usize {
+    fn internal_delete_skipped_count(&self) -> u64 {
         panic!()
     }
 
-    fn internal_key_skipped_count(&self) -> usize {
+    fn internal_key_skipped_count(&self) -> u64 {
         panic!()
     }
 }
