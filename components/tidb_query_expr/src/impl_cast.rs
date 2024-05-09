@@ -728,12 +728,13 @@ mod ryu_strconv {
         let mut b = ryu::Buffer::new();
         let str = {
             let str = b.format(f);
-            match str {
-                "NaN" => return "NaN".to_owned(),
-                "inf" => return "+Inf".to_owned(),
-                "-inf" => return "-Inf".to_owned(),
-                _ => {}
-            };
+            if str == "NaN" {
+                return "NaN".to_owned();
+            } else if str == "-inf" {
+                return "-Inf".to_owned();
+            } else if str == "inf" {
+                return "+Inf".to_owned();
+            }
             // remove tail zeros
             let ss: &[u8] = str.as_bytes();
             let mut new_str = str;
@@ -4625,6 +4626,17 @@ mod tests {
 
             for (val, s) in &cs {
                 assert_eq!(*s, ryu_strconv::format_float(*val));
+            }
+
+            let cs: Vec<(f32, String)> = vec![
+                (f32::NAN, "NaN".to_string()),
+                (f32::INFINITY, "inf".to_string()),
+                (-f32::INFINITY, "-inf".to_string()),
+            ];
+
+            for (val, s) in &cs {
+                let mut b = ryu::Buffer::new();
+                assert_eq!(*s, b.format(*val));
             }
 
             assert_eq!(
