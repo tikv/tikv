@@ -289,24 +289,12 @@ struct BackgroundRunnerCore {
     range_stats_manager: Option<RangeStatsManager>,
 }
 
+#[derive(Clone)]
 struct RangeStatsManager {
     num_regions: usize,
     info_provider: Arc<dyn RegionInfoProvider>,
     prev_top_regions: Arc<Mutex<BTreeMap<u64, Region>>>,
-    checking_top_regions: AtomicBool,
-}
-
-impl Clone for RangeStatsManager {
-    fn clone(&self) -> Self {
-        RangeStatsManager {
-            num_regions: self.num_regions,
-            info_provider: self.info_provider.clone(),
-            prev_top_regions: self.prev_top_regions.clone(),
-            checking_top_regions: AtomicBool::new(
-                self.checking_top_regions.load(Ordering::Relaxed),
-            ),
-        }
-    }
+    checking_top_regions: Arc<AtomicBool>,
 }
 
 impl RangeStatsManager {
@@ -315,7 +303,7 @@ impl RangeStatsManager {
             num_regions,
             info_provider,
             prev_top_regions: Arc::new(Mutex::new(BTreeMap::new())),
-            checking_top_regions: AtomicBool::new(false),
+            checking_top_regions: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -325,6 +313,14 @@ impl RangeStatsManager {
 
     pub fn checking_top_regions(&self) -> bool {
         self.checking_top_regions.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn set_num_regions(&mut self, v: usize) {
+        self.num_regions = v;
+    }
+
+    pub fn num_regions(&self) -> usize {
+        self.num_regions
     }
 
     pub fn collect_changed_ranges(
@@ -556,11 +552,40 @@ impl BackgroundRunnerCore {
         if self.range_stats_manager.is_none() {
             return;
         }
-        let range_stats_manager = self.range_stats_manager.as_ref().unwrap();
+        let range_stats_manager = self.range_stats_manager.as_mut().unwrap();
         if range_stats_manager.checking_top_regions() {
             return;
         }
         range_stats_manager.set_checking_top_regions(true);
+
+        let curr_memory_usage = self.memory_controller.mem_usage();
+        let threshold = self.memory_controller.soft_limit_threshold();
+
+        if curr_memory_usage < threshold {
+            let room_to_grow = threshold - curr_memory_usage;
+            if room_to_grow > EXPECTED_AVERAGE_REGION_SIZE * 3 / 2 {
+                let curr_num_regions = range_stats_manager.num_regions();
+                let next_num_regions =
+                    curr_num_regions + room_to_grow / EXPECTED_AVERAGE_REGION_SIZE;
+                info!("increasing number of top regions to cache";
+                    "from" => curr_num_regions,
+                    "to" => next_num_regions,
+                );
+                range_stats_manager.set_num_regions(next_num_regions);
+            }
+        } else if curr_memory_usage > threshold {
+            let to_shrink_by = curr_memory_usage - threshold;
+            if to_shrink_by >= EXPECTED_AVERAGE_REGION_SIZE {
+                let curr_num_regions = range_stats_manager.num_regions();
+                let next_num_regions =
+                    curr_num_regions - to_shrink_by / EXPECTED_AVERAGE_REGION_SIZE;
+                info!("decreasing number of top regions to cache";
+                    "from" => curr_num_regions,
+                    "to" => next_num_regions,
+                );
+                range_stats_manager.set_num_regions(next_num_regions);
+            }
+        }
 
         let mut ranges_to_add = Vec::<CacheRange>::with_capacity(256);
         let mut ranges_to_remove = Vec::<CacheRange>::with_capacity(256);
@@ -618,7 +643,10 @@ impl Drop for BackgroundRunner {
     }
 }
 
-// pub const NUM_REGIONS_FOR_CACHE: usize = 1000;
+// The expected average region size: used to estimate the number of top regions
+// to cache.
+pub const EXPECTED_AVERAGE_REGION_SIZE: usize = 96_000_000;
+
 impl BackgroundRunner {
     pub fn new(
         engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
@@ -640,7 +668,8 @@ impl BackgroundRunner {
             .thread_count(1)
             .create();
         let gc_range_remote = delete_range_worker.remote();
-        let num_regions_to_cache = memory_controller.soft_limit_threshold() / 96_000_000;
+        let num_regions_to_cache =
+            memory_controller.soft_limit_threshold() / EXPECTED_AVERAGE_REGION_SIZE;
         let range_stats_manager =
             region_info_provider.map(|r_i_p| RangeStatsManager::new(num_regions_to_cache, r_i_p));
         Self {
