@@ -200,12 +200,12 @@ impl<I: Iterator, F: KvFormat> Iterator for RawEncodeIterator<I, F> {
 pub struct RawEncodeIterMetricsCollector;
 
 impl IterMetricsCollector for RawEncodeIterMetricsCollector {
-    fn internal_delete_skipped_count(&self) -> usize {
-        PerfContext::get().internal_delete_skipped_count() as usize
+    fn internal_delete_skipped_count(&self) -> u64 {
+        PerfContext::get().internal_delete_skipped_count()
     }
 
-    fn internal_key_skipped_count(&self) -> usize {
-        PerfContext::get().internal_key_skipped_count() as usize
+    fn internal_key_skipped_count(&self) -> u64 {
+        PerfContext::get().internal_key_skipped_count()
     }
 }
 
