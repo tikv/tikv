@@ -1637,7 +1637,7 @@ mod tests {
                 .push_param(f)
                 .push_param(t)
                 .evaluate::<Bytes>(ScalarFuncSig::Conv);
-            assert!(got.is_err());
+            got.unwrap_err();
         }
     }
 
