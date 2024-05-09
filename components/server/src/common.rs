@@ -712,9 +712,9 @@ pub trait KvEngineBuilder: KvEngine {
 
 impl KvEngineBuilder for RocksEngine {
     fn build(
-        range_cache_engine_context: RangeCacheEngineContext,
+        _: RangeCacheEngineContext,
         disk_engine: RocksEngine,
-        _pd_client: Option<Arc<RpcClient>>,
+        _: Option<Arc<RpcClient>>,
     ) -> Self {
         disk_engine
     }
