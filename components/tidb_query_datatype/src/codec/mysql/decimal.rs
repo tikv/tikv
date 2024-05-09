@@ -2413,20 +2413,12 @@ mod tests {
     use super::*;
     use super::{DEFAULT_DIV_FRAC_INCR, WORD_BUF_LEN};
 
-<<<<<<< HEAD
-    use crate::codec::error::ERR_DATA_OUT_OF_RANGE;
+    use crate::codec::error::*;
     use crate::expr::{EvalConfig, Flag};
     use std::cmp::Ordering;
     use std::collections::hash_map::DefaultHasher;
 
     use std::sync::Arc;
-=======
-    use super::{DEFAULT_DIV_FRAC_INCR, WORD_BUF_LEN, *};
-    use crate::{
-        codec::error::*,
-        expr::{EvalConfig, Flag},
-    };
->>>>>>> 7c81b15a81 (expression: fix a `cast_string_to_decimal` truncate bug (#16963))
 
     #[test]
     fn test_from_i64() {
