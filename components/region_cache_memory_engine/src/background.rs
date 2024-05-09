@@ -1,6 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cmp,
     collections::{BTreeMap, BTreeSet},
     fmt::Display,
     sync::{
@@ -561,31 +562,35 @@ impl BackgroundRunnerCore {
         let curr_memory_usage = self.memory_controller.mem_usage();
         let threshold = self.memory_controller.soft_limit_threshold();
 
-        if curr_memory_usage < threshold {
-            let room_to_grow = threshold - curr_memory_usage;
-            if room_to_grow > EXPECTED_AVERAGE_REGION_SIZE * 3 / 2 {
-                let curr_num_regions = range_stats_manager.num_regions();
-                let next_num_regions =
-                    curr_num_regions + room_to_grow / EXPECTED_AVERAGE_REGION_SIZE;
-                info!("increasing number of top regions to cache";
-                    "from" => curr_num_regions,
-                    "to" => next_num_regions,
-                );
-                range_stats_manager.set_num_regions(next_num_regions);
+        match curr_memory_usage.cmp(&threshold) {
+            cmp::Ordering::Less => {
+                let room_to_grow = threshold - curr_memory_usage;
+                if room_to_grow > EXPECTED_AVERAGE_REGION_SIZE * 3 / 2 {
+                    let curr_num_regions = range_stats_manager.num_regions();
+                    let next_num_regions =
+                        curr_num_regions + room_to_grow / EXPECTED_AVERAGE_REGION_SIZE;
+                    info!("increasing number of top regions to cache";
+                        "from" => curr_num_regions,
+                        "to" => next_num_regions,
+                    );
+                    range_stats_manager.set_num_regions(next_num_regions);
+                }
             }
-        } else if curr_memory_usage > threshold {
-            let to_shrink_by = curr_memory_usage - threshold;
-            if to_shrink_by >= EXPECTED_AVERAGE_REGION_SIZE {
-                let curr_num_regions = range_stats_manager.num_regions();
-                let next_num_regions =
-                    curr_num_regions - to_shrink_by / EXPECTED_AVERAGE_REGION_SIZE;
-                info!("decreasing number of top regions to cache";
-                    "from" => curr_num_regions,
-                    "to" => next_num_regions,
-                );
-                range_stats_manager.set_num_regions(next_num_regions);
+            cmp::Ordering::Greater => {
+                let to_shrink_by = curr_memory_usage - threshold;
+                if to_shrink_by >= EXPECTED_AVERAGE_REGION_SIZE {
+                    let curr_num_regions = range_stats_manager.num_regions();
+                    let next_num_regions =
+                        curr_num_regions - to_shrink_by / EXPECTED_AVERAGE_REGION_SIZE;
+                    info!("decreasing number of top regions to cache";
+                        "from" => curr_num_regions,
+                        "to" => next_num_regions,
+                    );
+                    range_stats_manager.set_num_regions(next_num_regions);
+                }
             }
-        }
+            _ => (),
+        };
 
         let mut ranges_to_add = Vec::<CacheRange>::with_capacity(256);
         let mut ranges_to_remove = Vec::<CacheRange>::with_capacity(256);
@@ -593,12 +598,17 @@ impl BackgroundRunnerCore {
         info!("load_evict"; "ranges_to_add" => ?&ranges_to_add, "ranges_to_remove" => ?&ranges_to_remove);
         for cache_range in ranges_to_add {
             let mut core = self.engine.write();
-            let _ = core.mut_range_manager().load_range(cache_range);
+            if let Err(e) = core.mut_range_manager().load_range(cache_range.clone()) {
+                error!("error loading range"; "cache_range" => ?&cache_range, "err" => ?e);
+            }
         }
         for evict_range in ranges_to_remove {
-            // TODO: check when last loaded, do not evict unless there is a miniminum time.
+            // TODO (afeinberg): check when last loaded, do not evict unless range has been
+            // cached for a minimum time.
             let mut core = self.engine.write();
-            let _ = core.mut_range_manager().evict_range(&evict_range);
+            if !core.mut_range_manager().evict_range(&evict_range) {
+                error!("fail to evict range"; "evict_range" => ?&evict_range);
+            }
         }
         range_stats_manager.set_checking_top_regions(false);
         info!("load_evict complete");
