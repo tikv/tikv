@@ -291,6 +291,8 @@ impl RangeCacheIterator {
         self.iter.seek(key, guard);
         if self.iter.valid() {
             self.find_next_visible_key(false, guard);
+        } else {
+            self.valid = false;
         }
         Ok(self.valid)
     }
@@ -299,6 +301,7 @@ impl RangeCacheIterator {
         let guard = &epoch::pin();
         self.iter.seek_for_prev(key, guard);
         self.prev_internal(guard);
+        self.valid = self.iter.valid();
 
         Ok(self.valid)
     }
@@ -395,11 +398,13 @@ impl RangeCacheIterator {
 impl Iterator for RangeCacheIterator {
     fn key(&self) -> &[u8] {
         assert!(self.valid);
+        assert!(self.iter.valid());
         &self.saved_user_key
     }
 
     fn value(&self) -> &[u8] {
         assert!(self.valid);
+        assert!(self.iter.valid());
         if let Some(saved_value) = self.saved_value.as_ref() {
             saved_value.as_slice()
         } else {
@@ -417,6 +422,9 @@ impl Iterator for RangeCacheIterator {
         if self.valid {
             self.find_next_visible_key(true, guard);
         }
+        if self.valid {
+            assert!(self.iter.valid());
+        }
         Ok(self.valid)
     }
 
@@ -425,6 +433,9 @@ impl Iterator for RangeCacheIterator {
         assert!(self.direction == Direction::Backward);
         let guard = &epoch::pin();
         self.prev_internal(guard);
+        if self.valid {
+            assert!(self.iter.valid());
+        }
         Ok(self.valid)
     }
 
@@ -442,7 +453,11 @@ impl Iterator for RangeCacheIterator {
         };
 
         let seek_key = encode_seek_key(seek_key, self.sequence_number);
-        self.seek_internal(&seek_key)
+        let ret = self.seek_internal(&seek_key);
+        if self.valid {
+            assert!(self.iter.valid());
+        }
+        ret
     }
 
     fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
@@ -458,24 +473,39 @@ impl Iterator for RangeCacheIterator {
             encode_seek_for_prev_key(key, 0)
         };
 
-        self.seek_for_prev_internal(&seek_key)
+        let ret = self.seek_for_prev_internal(&seek_key);
+        if self.valid {
+            assert!(self.iter.valid());
+        }
+        ret
     }
 
     fn seek_to_first(&mut self) -> Result<bool> {
         assert!(self.prefix_extractor.is_none());
         self.direction = Direction::Forward;
         let seek_key = encode_seek_key(&self.lower_bound, self.sequence_number);
-        self.seek_internal(&seek_key)
+        let ret = self.seek_internal(&seek_key);
+        if self.valid {
+            assert!(self.iter.valid());
+        }
+        ret
     }
 
     fn seek_to_last(&mut self) -> Result<bool> {
         assert!(self.prefix_extractor.is_none());
         self.direction = Direction::Backward;
         let seek_key = encode_seek_for_prev_key(&self.upper_bound, u64::MAX);
-        self.seek_for_prev_internal(&seek_key)
+        let ret = self.seek_for_prev_internal(&seek_key);
+        if self.valid {
+            assert!(self.iter.valid());
+        }
+        ret
     }
 
     fn valid(&self) -> Result<bool> {
+        if self.valid {
+            assert!(self.iter.valid());
+        }
         Ok(self.valid)
     }
 }

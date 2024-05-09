@@ -3942,6 +3942,9 @@ impl TikvConfig {
         self.resource_metering.validate()?;
         self.quota.validate()?;
         self.causal_ts.validate()?;
+        self.range_cache_engine.enabled = true;
+        self.range_cache_engine.soft_limit_threshold = Some(ReadableSize::gb(2));
+        self.range_cache_engine.hard_limit_threshold = Some(ReadableSize::gb(3));
         self.range_cache_engine.validate()?;
 
         // Validate feature TTL with Titan configuration.
