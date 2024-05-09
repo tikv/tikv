@@ -3,7 +3,10 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Display,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     thread::JoinHandle,
     time::Duration,
 };
@@ -286,11 +289,24 @@ struct BackgroundRunnerCore {
     range_stats_manager: Option<RangeStatsManager>,
 }
 
-#[derive(Clone)]
 struct RangeStatsManager {
     num_regions: usize,
     info_provider: Arc<dyn RegionInfoProvider>,
     prev_top_regions: Arc<Mutex<BTreeMap<u64, Region>>>,
+    checking_top_regions: AtomicBool,
+}
+
+impl Clone for RangeStatsManager {
+    fn clone(&self) -> Self {
+        RangeStatsManager {
+            num_regions: self.num_regions,
+            info_provider: self.info_provider.clone(),
+            prev_top_regions: self.prev_top_regions.clone(),
+            checking_top_regions: AtomicBoolean::new(
+                self.checking_top_regions.load(Ordering::Relaxed),
+            ),
+        }
+    }
 }
 
 impl RangeStatsManager {
@@ -299,7 +315,16 @@ impl RangeStatsManager {
             num_regions,
             info_provider,
             prev_top_regions: Arc::new(Mutex::new(BTreeMap::new())),
+            checking_top_regions: AtomicBool::new(false),
         }
+    }
+
+    pub fn set_checking_top_regions(&self, v: bool) {
+        self.checking_top_regions.store(v, Ordering::Relaxed);
+    }
+
+    pub fn checking_top_regions(&self) -> bool {
+        self.checking_top_regions.load(Ordering::Relaxed)
     }
 
     pub fn collect_changed_ranges(
@@ -307,6 +332,8 @@ impl RangeStatsManager {
         ranges_added_out: &mut Vec<CacheRange>,
         ranges_removed_out: &mut Vec<CacheRange>,
     ) {
+        info!("collect_changed_ranges", "num_regions" => num_regions);
+        // TODO (afeinberg): Error handling here.
         let curr_top_regions = self
             .info_provider
             .get_top_regions(self.num_regions)
@@ -529,8 +556,14 @@ impl BackgroundRunnerCore {
         if self.range_stats_manager.is_none() {
             return;
         }
-        let mut ranges_to_add = Vec::<CacheRange>::with_capacity(NUM_REGIONS_FOR_CACHE / 2);
-        let mut ranges_to_remove = Vec::<CacheRange>::with_capacity(NUM_REGIONS_FOR_CACHE / 2);
+        let range_stats_manager = self.range_stats_manager.as_ref().unwrap();
+        if range_stats_manager.checking_top_regions() {
+            return;
+        }
+        range_stats_manager.set_checking_top_regions(true);
+
+        let mut ranges_to_add = Vec::<CacheRange>::with_capacity(256);
+        let mut ranges_to_remove = Vec::<CacheRange>::with_capacity(256);
         self.range_stats_manager
             .as_ref()
             .unwrap()
@@ -545,6 +578,8 @@ impl BackgroundRunnerCore {
             let mut core = self.engine.write();
             let _ = core.mut_range_manager().evict_range(&evict_range);
         }
+        range_stats_manager.set_checking_top_regions(false);
+        info("load_evict complete");
     }
 }
 
@@ -1377,7 +1412,7 @@ pub mod tests {
         iter_opts.set_lower_bound(&range.start, 0);
         iter_opts.set_upper_bound(&range.end, 0);
 
-        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
+        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone(), None);
         worker.core.gc_range(&range, 40);
 
         let mut iter = snap.iterator_opt("write", iter_opts).unwrap();
