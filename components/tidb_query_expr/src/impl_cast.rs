@@ -747,8 +747,7 @@ mod ryu_strconv {
         };
 
         let ss: &[u8] = str.as_bytes();
-        let mut has_efmt = false;
-        let mut exp10 = 0i32;
+        let mut exp_pos = -1i32;
         let neg = ss[0] == b'-';
         let (mut bg, mut ed) = (0usize, ss.len());
         if neg {
@@ -763,9 +762,7 @@ mod ryu_strconv {
         // check whether have in exp format already
         for i in 0..ss.len() {
             if ss[i] == b'e' {
-                has_efmt = true;
-                exp10 = str[i + 1..].parse().unwrap();
-                ed = i;
+                exp_pos = i as i32;
                 break;
             }
         }
@@ -773,13 +770,20 @@ mod ryu_strconv {
         // check whether need exp format
         let is_exp_format = f.is_exp_format();
         if is_exp_format {
-            if has_efmt {
+            if exp_pos >= 0 {
                 return str.to_owned();
             }
         } else {
-            if !has_efmt {
-                return str[..ed].to_owned();
+            if exp_pos < 0 {
+                return str.to_owned();
             }
+        }
+
+        let mut exp10 = 0i32;
+
+        if exp_pos >= 0 {
+            exp10 = str[exp_pos as usize + 1..].parse().unwrap();
+            ed = exp_pos as usize;
         }
 
         let (mut int_bg, mut int_ed) = (bg, ed);
