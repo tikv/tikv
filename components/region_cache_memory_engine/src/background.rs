@@ -621,7 +621,7 @@ impl Drop for BackgroundRunner {
     }
 }
 
-pub const NUM_REGIONS_FOR_CACHE: usize = 1000;
+//pub const NUM_REGIONS_FOR_CACHE: usize = 1000;
 impl BackgroundRunner {
     pub fn new(
         engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
