@@ -1008,14 +1008,16 @@ where
         // `MultiRaftServer::start`.
         let safe_point = Arc::new(AtomicU64::new(0));
 
-        // Init keyspace level GC cache, keyspace meta cache and keyspace level GC service.
+        // Init keyspace level GC cache, keyspace meta cache and keyspace level GC
+        // service.
         let keyspace_id_to_meta_map = Arc::new(Default::default());
         keyspace_meta::start_periodic_keyspace_meta_watcher(
             self.pd_client.clone(),
             &self.core.background_worker,
             Arc::clone(&keyspace_id_to_meta_map),
         );
-        let keyspace_id_to_keyspace_level_gc_map: Arc<DashMap<u32, u64>> = Arc::new(Default::default());
+        let keyspace_id_to_keyspace_level_gc_map: Arc<DashMap<u32, u64>> =
+            Arc::new(Default::default());
         keyspace_meta::start_periodic_keyspace_level_gc_watcher(
             self.pd_client.clone(),
             &self.core.background_worker,

@@ -932,7 +932,7 @@ pub mod test_utils {
                 gc_scheduler,
                 gc_receiver,
                 callbacks_on_drop: vec![],
-                keyspace_level_gc_service: keyspace_level_gc_service,
+                keyspace_level_gc_service,
             }
         }
     }
