@@ -1008,21 +1008,22 @@ where
         // `MultiRaftServer::start`.
         let safe_point = Arc::new(AtomicU64::new(0));
 
-        let keyspace_id_meta_map = Arc::new(Default::default());
+        // Init keyspace level GC cache, keyspace meta cache and keyspace level GC service.
+        let keyspace_id_to_meta_map = Arc::new(Default::default());
         keyspace_meta::start_periodic_keyspace_meta_watcher(
             self.pd_client.clone(),
             &self.core.background_worker,
-            Arc::clone(&keyspace_id_meta_map),
+            Arc::clone(&keyspace_id_to_meta_map),
         );
-        let keyspace_level_gc_cache: Arc<DashMap<u32, u64>> = Arc::new(Default::default());
+        let keyspace_id_to_keyspace_level_gc_map: Arc<DashMap<u32, u64>> = Arc::new(Default::default());
         keyspace_meta::start_periodic_keyspace_level_gc_watcher(
             self.pd_client.clone(),
             &self.core.background_worker,
-            Arc::clone(&keyspace_level_gc_cache),
+            Arc::clone(&keyspace_id_to_keyspace_level_gc_map),
         );
         let keyspace_level_gc_service = Arc::new(Some(KeyspaceLevelGCService::new(
-            Arc::clone(&keyspace_level_gc_cache),
-            Arc::clone(&keyspace_id_meta_map),
+            Arc::clone(&keyspace_id_to_keyspace_level_gc_map),
+            Arc::clone(&keyspace_id_to_meta_map),
         )));
 
         let observer = match self.core.config.coprocessor.consistency_check_method {

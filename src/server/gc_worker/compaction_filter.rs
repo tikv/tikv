@@ -265,7 +265,6 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
             debug!("skip gc in compaction filter because it's not allowed");
             return None;
         }
-
         drop(gc_context_option);
         GC_COMPACTION_FILTER_PERFORM
             .with_label_values(&[STAT_TXN_KEYMODE])
@@ -490,6 +489,7 @@ impl WriteCompactionFilter {
     ) -> Result<CompactionFilterDecision, String> {
         let (mvcc_key_prefix, commit_ts) = split_ts(key)?;
 
+        assert!(self.keyspace_level_gc_service.is_some());
         // `keyspace_level_gc_service` will be None when run Api V1 ut.
         if let Some(keyspace_level_gc_service) = self.keyspace_level_gc_service.as_ref() {
             self.safe_point = keyspace_level_gc_service
@@ -919,7 +919,10 @@ pub mod test_utils {
     impl<'a> TestGcRunner<'a> {
         pub fn new(safe_point: u64) -> Self {
             let (gc_scheduler, gc_receiver) = dummy_scheduler();
-
+            let keyspace_level_gc_service = Arc::new(Some(KeyspaceLevelGCService::new(
+                Arc::clone(&Default::default()),
+                Arc::clone(&Default::default()),
+            )));
             TestGcRunner {
                 safe_point,
                 ratio_threshold: None,
@@ -929,7 +932,7 @@ pub mod test_utils {
                 gc_scheduler,
                 gc_receiver,
                 callbacks_on_drop: vec![],
-                keyspace_level_gc_service: Arc::new(None),
+                keyspace_level_gc_service: keyspace_level_gc_service,
             }
         }
     }

@@ -456,11 +456,13 @@ mod tests {
     }
 
     #[test]
-    fn test_get_u32_keyspace_id() {
+    fn test_get_u32_keyspace_id_by_key() {
         let cases = vec![
             (vec![b'x', 0, 0, 1], Some(1)),
             (vec![b'r', 0, 0, 1], Some(1)),
             (vec![b'x', 1, 2, 3, 4, 5], Some(0x10203)),
+            (vec![b'm', 0, 0, 1], None), // It's not API V2 key, so expect return None.
+            (vec![b't', 0, 0, 1], None), // It's not API V2 key, so expect return None.
         ];
 
         for (key, expected) in cases.into_iter() {
