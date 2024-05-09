@@ -443,6 +443,7 @@ impl Iterator for RangeCacheIterator {
         perf_counter_add!(internal_key_skipped_count, 1);
         self.valid = self.iter.valid();
         if self.valid {
+            // self.valid can be changed after this
             self.find_next_visible_key(true, guard);
         }
 
