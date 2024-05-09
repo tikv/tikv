@@ -14,6 +14,7 @@ use engine_traits::{
     CacheRange, FailedReason, IterOptions, Iterable, KvEngine, RangeCacheEngine, Result,
     CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
+use keys::{DATA_MAX_KEY, DATA_MIN_KEY};
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
 use skiplist_rs::{
     base::{Entry, OwnedIter},
@@ -263,13 +264,20 @@ impl RangeCacheMemoryEngine {
             memory_controller.clone(),
         ));
 
-        Self {
+        let engine = Self {
             core,
             rocks_engine: None,
             bg_work_manager,
             memory_controller,
             config,
-        }
+        };
+        engine
+            .load_range(CacheRange::new(
+                DATA_MIN_KEY.to_vec(),
+                DATA_MAX_KEY.to_vec(),
+            ))
+            .unwrap();
+        engine
     }
 
     pub fn new_range(&self, range: CacheRange) {
