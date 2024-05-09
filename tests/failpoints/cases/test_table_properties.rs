@@ -322,42 +322,6 @@ fn do_write<E: Engine>(engine: &E, is_delete: bool, op_nums: u64, is_rawkv: bool
     engine.write(&ctx, batch).unwrap();
 }
 
-fn make_data<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
-    let user_key = b"r\0aaaaaaaaaaa";
-
-    let mut test_raws = vec![];
-    let start_mvcc = 70;
-
-    let mut i = 0;
-    while i < op_nums {
-        test_raws.push((user_key, start_mvcc + i, is_delete));
-        i += 1;
-    }
-
-    let modifies = test_raws
-        .into_iter()
-        .map(|(key, ts, is_delete)| {
-            (
-                make_key(key, ts),
-                ApiV2::encode_raw_value(RawValue {
-                    user_value: &[0; 1024][..],
-                    expire_ts: Some(TimeStamp::max().into_inner()),
-                    is_delete,
-                }),
-            )
-        })
-        .map(|(k, v)| Modify::Put(CF_DEFAULT, Key::from_encoded_slice(k.as_slice()), v))
-        .collect();
-
-    let ctx = Context {
-        api_version: ApiVersion::V2,
-        ..Default::default()
-    };
-
-    let batch = WriteData::from_modifies(modifies);
-    engine.write(&ctx, batch).unwrap();
-}
-
 fn do_gc(
     raw_engine: &RocksEngine,
     target_level: usize,
