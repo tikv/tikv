@@ -131,8 +131,11 @@ fn get_cast_fn_rpn_meta(
             }
         }
         (EvalType::Real, EvalType::Bytes) => {
-            if FieldTypeAccessor::tp(from_field_type) == FieldTypeTp::Float {
+            let tp = FieldTypeAccessor::tp(from_field_type);
+            if tp == FieldTypeTp::Float {
                 cast_float_real_as_string_fn_meta()
+            } else if tp == FieldTypeTp::Double {
+                cast_double_real_as_string_fn_meta()
             } else {
                 cast_any_as_string_fn_meta::<Real>()
             }
@@ -693,6 +696,239 @@ fn cast_uint_as_string(
     }
 }
 
+mod ryu_strconv {
+
+    pub trait FloatExpFormat: ryu::Float {
+        fn is_exp_format(&self) -> bool;
+    }
+    impl FloatExpFormat for f32 {
+        fn is_exp_format(&self) -> bool {
+            const EXP_FORMAT_BIG: f32 = 1e15;
+            const EXP_FORMAT_SMALL: f32 = 1e-15;
+
+            let abs = self.abs();
+            return (abs) >= EXP_FORMAT_BIG || ((abs) != 0.0 && (abs) < EXP_FORMAT_SMALL);
+        }
+    }
+    impl FloatExpFormat for f64 {
+        fn is_exp_format(&self) -> bool {
+            const EXP_FORMAT_BIG: f64 = 1e15;
+            const EXP_FORMAT_SMALL: f64 = 1e-15;
+
+            let abs = self.abs();
+            return (abs) >= EXP_FORMAT_BIG || ((abs) != 0.0 && (abs) < EXP_FORMAT_SMALL);
+        }
+    }
+
+    pub fn format_float<F: FloatExpFormat>(f: F) -> String {
+        let mut b = ryu::Buffer::new();
+        let str = {
+            let str = b.format(f);
+            match str {
+                "NaN" => return "NaN".to_owned(),
+                "inf" => return "+Inf".to_owned(),
+                "-inf" => return "-Inf".to_owned(),
+                _ => {}
+            };
+            // remove tail zeros
+            let ss: &[u8] = str.as_bytes();
+            let mut new_str = str;
+            if ss.len() >= 2 {
+                let i = ss.len() - 2;
+                if ss[i] == b'.' && ss[i + 1] == b'0' {
+                    new_str = &str[..i];
+                }
+            };
+            new_str
+        };
+
+        let ss: &[u8] = str.as_bytes();
+        let mut has_efmt = false;
+        let mut exp10 = 0i32;
+        let neg = ss[0] == b'-';
+        let (mut bg, mut ed) = (0usize, ss.len());
+        if neg {
+            bg += 1;
+        }
+
+        // return zero
+        if ed - bg == 1 && ss[bg] == b'0' {
+            return str.to_owned();
+        }
+
+        // check whether have in exp format already
+        for i in 0..ss.len() {
+            if ss[i] == b'e' {
+                has_efmt = true;
+                exp10 = str[i + 1..].parse().unwrap();
+                ed = i;
+                break;
+            }
+        }
+
+        // check whether need exp format
+        let is_exp_format = f.is_exp_format();
+        if is_exp_format {
+            if has_efmt {
+                return str.to_owned();
+            }
+        } else {
+            if !has_efmt {
+                return str[..ed].to_owned();
+            }
+        }
+
+        let (mut int_bg, mut int_ed) = (bg, ed);
+        let (mut float_bg, float_ed) = (ed, ed);
+
+        for i in bg..ed {
+            if ss[i] == b'.' {
+                int_ed = i;
+                float_bg = i + 1;
+                break;
+            }
+        }
+
+        if int_ed - int_bg > 1 {
+            exp10 += (int_ed - (int_bg + 1)) as i32;
+        } else {
+            if ss[int_bg] == b'0' {
+                int_bg += 1;
+
+                let mut new_float_bg = float_bg;
+                for i in float_bg..float_ed {
+                    exp10 -= 1;
+                    if ss[i] != b'0' {
+                        new_float_bg = i;
+                        break;
+                    }
+                }
+                float_bg = new_float_bg;
+            }
+        }
+
+        {
+            let mut t = Buff::new();
+            if neg {
+                t.put_neg();
+            }
+
+            if is_exp_format {
+                if int_ed > int_bg {
+                    t.put(ss[int_bg]);
+                    int_bg += 1;
+                    t.put_dot();
+                    t.put_slice(&ss[int_bg..int_ed]);
+                    t.put_slice(&ss[float_bg..float_ed]);
+                } else {
+                    t.put(ss[float_bg]);
+                    float_bg += 1;
+                    t.put_dot();
+                    t.put_slice(&ss[float_bg..float_ed]);
+                }
+                t.trim_tail_zero();
+                t.trim();
+                t.put_exp10(exp10);
+            } else {
+                if exp10 < 0 {
+                    exp10 = -exp10;
+                    t.put_zero();
+                    t.put_dot();
+                    exp10 -= 1;
+
+                    while exp10 != 0 {
+                        t.put_zero();
+                        exp10 -= 1;
+                    }
+                    t.put_slice(&ss[int_bg..int_ed]);
+                    t.put_slice(&ss[float_bg..float_ed]);
+                } else {
+                    debug_assert_eq!(int_ed - int_bg, 1);
+                    t.put_slice(&ss[int_bg..int_ed]);
+                    if exp10 < (float_ed - float_bg) as i32 {
+                        t.put_slice(&ss[float_bg..float_bg + exp10 as usize]);
+                        t.put_dot();
+                        float_bg += exp10 as usize;
+                        t.put_slice(&ss[float_bg..float_ed]);
+                    } else {
+                        t.put_slice(&ss[float_bg..float_ed]);
+                        exp10 -= (float_ed - float_bg) as i32;
+                        while exp10 != 0 {
+                            t.put_zero();
+                            exp10 -= 1;
+                        }
+                    }
+                }
+            }
+
+            return t.to_string();
+        }
+    }
+
+    struct Buff {
+        buff: [u8; 35],
+        size: usize,
+    }
+
+    impl Buff {
+        fn new() -> Self {
+            Self {
+                buff: [0u8; 35],
+                size: 0,
+            }
+        }
+        fn trim(&mut self) {
+            if self.buff[self.size - 1] == b'.' {
+                self.size -= 1;
+            }
+        }
+        fn trim_tail_zero(&mut self) {
+            while self.size > 0 && self.buff[self.size - 1] == b'0' {
+                self.size -= 1;
+            }
+        }
+        fn put_slice(&mut self, s: &[u8]) {
+            self.buff[self.size..self.size + s.len()].copy_from_slice(s);
+            self.size += s.len();
+        }
+        fn put(&mut self, c: u8) {
+            self.buff[self.size] = c;
+            self.size += 1;
+        }
+        fn put_zero(&mut self) {
+            self.put(b'0')
+        }
+        fn put_dot(&mut self) {
+            self.put(b'.')
+        }
+        fn put_neg(&mut self) {
+            self.put(b'-')
+        }
+        fn to_string(&self) -> String {
+            return String::from_utf8(self.buff[..self.size].to_vec()).unwrap();
+        }
+        fn put_exp10(&mut self, mut e10: i32) {
+            self.put(b'e');
+            let mut str_e10: [u8; 5] = [0; 5];
+            let mut str_e10_size = 0;
+            if e10 < 0 {
+                e10 = -e10;
+                self.put_neg();
+            }
+            while e10 != 0 {
+                str_e10[str_e10_size] = (e10 % 10 + (b'0' as i32)) as u8;
+                str_e10_size += 1;
+                e10 /= 10;
+            }
+            let mut p = str_e10_size as i32 - 1;
+            while p >= 0 {
+                self.put(str_e10[p as usize]);
+                p -= 1;
+            }
+        }
+    }
+}
+
 #[rpn_fn(nullable, capture = [ctx, extra])]
 #[inline]
 fn cast_float_real_as_string(
@@ -704,7 +940,24 @@ fn cast_float_real_as_string(
         None => Ok(None),
         Some(val) => {
             let val = val.into_inner() as f32;
-            let val = val.to_string().into_bytes();
+            let val = ryu_strconv::format_float(val).into_bytes();
+            cast_as_string_helper(ctx, extra, val)
+        }
+    }
+}
+
+#[rpn_fn(nullable, capture = [ctx, extra])]
+#[inline]
+fn cast_double_real_as_string(
+    ctx: &mut EvalContext,
+    extra: &RpnFnCallExtra,
+    val: Option<&Real>,
+) -> Result<Option<Bytes>> {
+    match val {
+        None => Ok(None),
+        Some(val) => {
+            let val = val.into_inner() as f64;
+            let val = ryu_strconv::format_float(val).into_bytes();
             cast_as_string_helper(ctx, extra, val)
         }
     }
@@ -4214,37 +4467,189 @@ mod tests {
     }
 
     #[test]
-    fn test_float_real_as_string() {
-        test_none_with_ctx_and_extra(cast_float_real_as_string);
+    fn test_real_as_string() {
+        {
+            test_none_with_ctx_and_extra(cast_float_real_as_string);
 
-        let cs: Vec<(f32, Vec<u8>, String)> = vec![
-            (
-                f32::MAX,
-                f32::MAX.to_string().into_bytes(),
-                f32::MAX.to_string(),
-            ),
-            (1.0f32, 1.0f32.to_string().into_bytes(), 1.0f32.to_string()),
-            (
-                1.1113f32,
-                1.1113f32.to_string().into_bytes(),
-                1.1113f32.to_string(),
-            ),
-            (0.1f32, 0.1f32.to_string().into_bytes(), 0.1f32.to_string()),
-        ];
+            let cs: Vec<(f32, String)> = vec![
+                (f32::NAN, "NaN".to_string()),
+                (f32::INFINITY, "+Inf".to_string()),
+                (-f32::INFINITY, "-Inf".to_string()),
+            ];
 
-        let ref_cs = helper_get_cs_ref(&cs);
+            for (val, s) in &cs {
+                assert_eq!(*s, ryu_strconv::format_float(*val));
+            }
 
-        test_as_string_helper(
-            ref_cs,
-            |ctx, extra, val| {
-                cast_float_real_as_string(
-                    ctx,
-                    extra,
-                    val.map(|x| Real::new(f64::from(*x)).unwrap()).as_ref(),
-                )
-            },
-            "cast_float_real_as_string",
-        );
+            assert_eq!(
+                4474.7812f64.to_string(),
+                ryu_strconv::format_float(4474.7812f64)
+            );
+
+            assert_eq!(4474.7812f32.to_string(), "4474.7813".to_string());
+
+            assert_eq!(
+                "4474.7812".to_string(),
+                ryu_strconv::format_float(4474.7812f32)
+            );
+
+            let cs: Vec<(f32, Vec<u8>, String)> = vec![
+                (1e15, "1e15".to_string().into_bytes(), "1e15".to_string()),
+                (-1e15, "-1e15".to_string().into_bytes(), "-1e15".to_string()),
+                (
+                    9.99999e14,
+                    "999999000000000".to_string().into_bytes(),
+                    "999999000000000".to_string(),
+                ),
+                (
+                    -9.99999e14,
+                    "-999999000000000".to_string().into_bytes(),
+                    "-999999000000000".to_string(),
+                ),
+                (
+                    1e15 - 1.0,
+                    "1e15".to_string().into_bytes(),
+                    "1e15".to_string(),
+                ),
+                (
+                    f32::MIN,
+                    "-3.4028235e38".to_string().into_bytes(),
+                    "-3.4028235e38".to_string(),
+                ),
+                (
+                    f32::MAX,
+                    "3.4028235e38".to_string().into_bytes(),
+                    "3.4028235e38".to_string(),
+                ),
+                (
+                    f32::MIN_POSITIVE,
+                    "1.1754944e-38".to_string().into_bytes(),
+                    "1.1754944e-38".to_string(),
+                ),
+                (-00000.0, "-0".to_string().into_bytes(), "-0".to_string()),
+                (00000.0, "0".to_string().into_bytes(), "0".to_string()),
+                (1.0f32, "1".to_string().into_bytes(), "1".to_string()),
+                (
+                    -123456789123000.0f32,
+                    "-123456790000000".to_string().into_bytes(),
+                    "-123456790000000".to_string(),
+                ),
+                (
+                    1e-15f32,
+                    "0.000000000000001".to_string().into_bytes(),
+                    "0.000000000000001".to_string(),
+                ),
+                (
+                    9.9999e-16f32,
+                    "9.9999e-16".to_string().into_bytes(),
+                    "9.9999e-16".to_string(),
+                ),
+                (
+                    1.23456789123000e-9,
+                    "0.0000000012345679".to_string().into_bytes(),
+                    "0.0000000012345679".to_string(),
+                ),
+            ];
+
+            let ref_cs = helper_get_cs_ref(&cs);
+
+            test_as_string_helper(
+                ref_cs,
+                |ctx, extra, val| {
+                    cast_float_real_as_string(
+                        ctx,
+                        extra,
+                        val.map(|x| Real::new(f64::from(*x)).unwrap()).as_ref(),
+                    )
+                },
+                "cast_float_real_as_string",
+            );
+        }
+        {
+            test_none_with_ctx_and_extra(cast_double_real_as_string);
+
+            let cs: Vec<(f64, String)> = vec![
+                (f64::NAN, "NaN".to_string()),
+                (f64::INFINITY, "+Inf".to_string()),
+                (-f64::INFINITY, "-Inf".to_string()),
+            ];
+
+            for (val, s) in &cs {
+                assert_eq!(*s, ryu_strconv::format_float(*val));
+            }
+
+            let cs: Vec<(f64, Vec<u8>, String)> = vec![
+                (1e15, "1e15".to_string().into_bytes(), "1e15".to_string()),
+                (-1e15, "-1e15".to_string().into_bytes(), "-1e15".to_string()),
+                (
+                    9.99999e14,
+                    "999999000000000".to_string().into_bytes(),
+                    "999999000000000".to_string(),
+                ),
+                (
+                    -9.99999e14,
+                    "-999999000000000".to_string().into_bytes(),
+                    "-999999000000000".to_string(),
+                ),
+                (
+                    1e15 - 1.0,
+                    "999999999999999".to_string().into_bytes(),
+                    "999999999999999".to_string(),
+                ),
+                (
+                    f64::MIN,
+                    "-1.7976931348623157e308".to_string().into_bytes(),
+                    "-1.7976931348623157e308".to_string(),
+                ),
+                (
+                    f64::MAX,
+                    "1.7976931348623157e308".to_string().into_bytes(),
+                    "1.7976931348623157e308".to_string(),
+                ),
+                (
+                    f64::MIN_POSITIVE,
+                    "2.2250738585072014e-308".to_string().into_bytes(),
+                    "2.2250738585072014e-308".to_string(),
+                ),
+                (-00000.0, "-0".to_string().into_bytes(), "-0".to_string()),
+                (00000.0, "0".to_string().into_bytes(), "0".to_string()),
+                (1.0, "1".to_string().into_bytes(), "1".to_string()),
+                (
+                    -123456789123000.0,
+                    "-123456789123000".to_string().into_bytes(),
+                    "-123456789123000".to_string(),
+                ),
+                (
+                    1e-15,
+                    "0.000000000000001".to_string().into_bytes(),
+                    "0.000000000000001".to_string(),
+                ),
+                (
+                    9.9999e-16,
+                    "9.9999e-16".to_string().into_bytes(),
+                    "9.9999e-16".to_string(),
+                ),
+                (
+                    1.23456789123000e-9,
+                    "0.00000000123456789123".to_string().into_bytes(),
+                    "0.00000000123456789123".to_string(),
+                ),
+            ];
+
+            let ref_cs = helper_get_cs_ref(&cs);
+
+            test_as_string_helper(
+                ref_cs,
+                |ctx, extra, val| {
+                    cast_double_real_as_string(
+                        ctx,
+                        extra,
+                        val.map(|x| Real::new(f64::from(*x)).unwrap()).as_ref(),
+                    )
+                },
+                "cast_double_real_as_string",
+            );
+        }
     }
 
     #[test]
