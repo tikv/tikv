@@ -25927,7 +25927,7 @@
           },
           "gridPos": {
             "h": 7,
-            "w": 24,
+            "w": 12,
             "x": 0,
             "y": 28
           },
@@ -26033,6 +26033,207 @@
             "align": false,
             "alignLevel": 0
           }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The compression ratio per write",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 28
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 188,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [
+            {
+              "alias": "count",
+              "bars": false,
+              "dashLength": 1,
+              "dashes": true,
+              "fill": 2,
+              "fillBelowTo": null,
+              "lines": true,
+              "spaceLength": 1,
+              "transform": "negative-Y",
+              "yaxis": 2,
+              "zindex": -3
+            },
+            {
+              "alias": "avg",
+              "bars": false,
+              "fill": 7,
+              "fillBelowTo": null,
+              "lines": true,
+              "yaxis": 1,
+              "zindex": 0
+            }
+          ],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    raft_engine_write_compression_ratio_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "99.99%",
+              "metric": "",
+              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    raft_engine_write_compression_ratio_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    raft_engine_write_compression_ratio_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "99%",
+              "metric": "",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    raft_engine_write_compression_ratio_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "(sum(rate(\n    raft_engine_write_compression_ratio_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))   / sum(rate(\n    raft_engine_write_compression_ratio_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  )",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "avg",
+              "metric": "",
+              "query": "(sum(rate(\n    raft_engine_write_compression_ratio_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))   / sum(rate(\n    raft_engine_write_compression_ratio_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  )",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    raft_engine_write_compression_ratio_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "count",
+              "metric": "",
+              "query": "sum(rate(\n    raft_engine_write_compression_ratio_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Write Compression Ratio",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
         }
       ],
       "repeat": null,
@@ -26069,7 +26270,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-      "id": 188,
+      "id": 189,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -26108,7 +26309,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 189,
+          "id": 190,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -26301,7 +26502,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 190,
+          "id": 191,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -26479,7 +26680,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 191,
+          "id": 192,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -26687,7 +26888,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 192,
+          "id": 193,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -26865,7 +27066,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 193,
+          "id": 194,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -27028,7 +27229,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 194,
+          "id": 195,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -27206,7 +27407,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 195,
+          "id": 196,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -27339,7 +27540,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 196,
+          "id": 197,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -27517,7 +27718,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 197,
+          "id": 198,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -27650,7 +27851,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 198,
+          "id": 199,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -27828,7 +28029,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 199,
+          "id": 200,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -27961,7 +28162,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 200,
+          "id": 201,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -28112,6 +28313,187 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
+<<<<<<< HEAD
+=======
+          "description": "How many sst files are compacted in a compaction job",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 8,
+            "x": 16,
+            "y": 35
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 202,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "max((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"compaction_job_size_max\"}\n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "max",
+              "metric": "",
+              "query": "max((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"compaction_job_size_max\"}\n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "avg((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"compaction_job_size_percentile99\"}\n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "99%",
+              "metric": "",
+              "query": "avg((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"compaction_job_size_percentile99\"}\n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "avg((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"compaction_job_size_percentile95\"}\n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "95%",
+              "metric": "",
+              "query": "avg((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"compaction_job_size_percentile95\"}\n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "avg((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"compaction_job_size_average\"}\n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "avg",
+              "metric": "",
+              "query": "avg((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"compaction_job_size_average\"}\n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Compaction Job Size(files)",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 2,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "description": "The time consumed when reading SST files",
           "editable": true,
           "error": false,
@@ -28139,7 +28521,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 201,
+=======
+          "id": 203,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -28317,7 +28703,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 202,
+=======
+          "id": 204,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -28450,7 +28840,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 203,
+=======
+          "id": 205,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -28583,7 +28977,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 204,
+=======
+          "id": 206,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -28716,7 +29114,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 205,
+=======
+          "id": 207,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -28939,7 +29341,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 206,
+=======
+          "id": 208,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -29132,7 +29538,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 207,
+=======
+          "id": 209,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -29295,7 +29705,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 208,
+=======
+          "id": 210,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -29488,7 +29902,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 209,
+=======
+          "id": 211,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -29636,7 +30054,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 210,
+=======
+          "id": 212,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -29769,7 +30191,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 211,
+=======
+          "id": 213,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -29917,7 +30343,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 212,
+=======
+          "id": 214,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -30095,7 +30525,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 213,
+=======
+          "id": 215,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -30258,7 +30692,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 214,
+=======
+          "id": 216,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -30436,7 +30874,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 215,
+=======
+          "id": 217,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -30569,7 +31011,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 216,
+=======
+          "id": 218,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -30702,7 +31148,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 217,
+=======
+          "id": 219,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -30835,7 +31285,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 218,
+=======
+          "id": 220,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -30968,7 +31422,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 219,
+=======
+          "id": 221,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -31101,7 +31559,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 220,
+=======
+          "id": 222,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -31234,7 +31696,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 221,
+=======
+          "id": 223,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -31367,7 +31833,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 222,
+=======
+          "id": 224,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -31568,7 +32038,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 223,
+=======
+          "id": 225,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -31701,7 +32175,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 224,
+=======
+          "id": 226,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -31886,7 +32364,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 225,
+=======
+          "id": 227,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -31983,7 +32465,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 226,
+=======
+          "id": 228,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -32119,7 +32605,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 227,
+=======
+      "id": 229,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -32158,7 +32648,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 228,
+=======
+          "id": 230,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -32306,7 +32800,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 229,
+=======
+          "id": 231,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -32454,7 +32952,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 230,
+=======
+          "id": 232,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -32587,7 +33089,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 231,
+=======
+          "id": 233,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -32720,7 +33226,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 232,
+=======
+          "id": 234,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -32898,7 +33408,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 233,
+=======
+          "id": 235,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -33076,7 +33590,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 234,
+=======
+          "id": 236,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -33254,7 +33772,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 235,
+=======
+          "id": 237,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -33387,7 +33909,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 236,
+=======
+          "id": 238,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -33565,7 +34091,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 237,
+=======
+          "id": 239,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -33698,7 +34228,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 238,
+=======
+          "id": 240,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -33861,7 +34395,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 239,
+=======
+          "id": 241,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -34039,7 +34577,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 240,
+=======
+          "id": 242,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -34217,7 +34759,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 241,
+=======
+          "id": 243,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -34395,7 +34941,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 242,
+=======
+          "id": 244,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -34528,7 +35078,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 243,
+=======
+          "id": 245,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -34706,7 +35260,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 244,
+=======
+          "id": 246,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -34839,7 +35397,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 245,
+=======
+          "id": 247,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -35017,7 +35579,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 246,
+=======
+          "id": 248,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -35150,7 +35716,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 247,
+=======
+          "id": 249,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -35283,7 +35853,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 248,
+=======
+          "id": 250,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -35461,7 +36035,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 249,
+=======
+          "id": 251,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -35639,7 +36217,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 250,
+=======
+          "id": 252,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -35772,7 +36354,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 251,
+=======
+          "id": 253,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -35950,7 +36536,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 252,
+=======
+          "id": 254,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -36083,7 +36673,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 253,
+=======
+          "id": 255,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -36261,7 +36855,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 254,
+=======
+          "id": 256,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -36397,7 +36995,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 255,
+=======
+      "id": 257,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -36436,7 +37038,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 256,
+=======
+          "id": 258,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -36569,7 +37175,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 257,
+=======
+          "id": 259,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -36675,6 +37285,142 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
+<<<<<<< HEAD
+=======
+          "description": "The memory usage of the range cache memory engine",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 7
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 260,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "avg((\n    tikv_range_cache_memory_usage_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}",
+              "metric": "",
+              "query": "avg((\n    tikv_range_cache_memory_usage_bytes\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Memory Usage",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "bytes",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "description": "Rang cache engine garbage collection information",
           "editable": true,
           "error": false,
@@ -36702,7 +37448,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 258,
+=======
+          "id": 261,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -36802,6 +37552,522 @@
             "align": false,
             "alignLevel": 0
           }
+<<<<<<< HEAD
+=======
+        },
+        {
+          "cacheTimeout": null,
+          "cards": {
+            "cardPadding": null,
+            "cardRound": null
+          },
+          "color": {
+            "cardColor": "#b4ff00",
+            "colorScale": "sqrt",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "max": null,
+            "min": null,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The handle duration of range load",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 14
+          },
+          "heatmap": {},
+          "height": null,
+          "hideTimeOverride": false,
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 262,
+          "interval": null,
+          "legend": {
+            "show": false
+          },
+          "links": [],
+          "maxDataPoints": 512,
+          "maxPerRow": null,
+          "minSpan": null,
+          "options": {},
+          "repeat": null,
+          "repeatDirection": null,
+          "reverseYBuckets": false,
+          "span": null,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_range_load_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "format": "heatmap",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{le}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_range_load_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Range load duration",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "showHistogram": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "heatmap",
+          "xAxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": 1,
+            "format": "s",
+            "label": null,
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true
+          },
+          "yBucketBound": "upper",
+          "yBucketNumber": null,
+          "yBucketSize": null
+        },
+        {
+          "cacheTimeout": null,
+          "cards": {
+            "cardPadding": null,
+            "cardRound": null
+          },
+          "color": {
+            "cardColor": "#b4ff00",
+            "colorScale": "sqrt",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "max": null,
+            "min": null,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The handle duration of range gc",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 14
+          },
+          "heatmap": {},
+          "height": null,
+          "hideTimeOverride": false,
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 263,
+          "interval": null,
+          "legend": {
+            "show": false
+          },
+          "links": [],
+          "maxDataPoints": 512,
+          "maxPerRow": null,
+          "minSpan": null,
+          "options": {},
+          "repeat": null,
+          "repeatDirection": null,
+          "reverseYBuckets": false,
+          "span": null,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_range_gc_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "format": "heatmap",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{le}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_range_gc_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Range gc duration",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "showHistogram": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "heatmap",
+          "xAxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": 1,
+            "format": "s",
+            "label": null,
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true
+          },
+          "yBucketBound": "upper",
+          "yBucketNumber": null,
+          "yBucketSize": null
+        },
+        {
+          "cacheTimeout": null,
+          "cards": {
+            "cardPadding": null,
+            "cardRound": null
+          },
+          "color": {
+            "cardColor": "#b4ff00",
+            "colorScale": "sqrt",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "max": null,
+            "min": null,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The time consumed of write in range cache engine",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 21
+          },
+          "heatmap": {},
+          "height": null,
+          "hideTimeOverride": false,
+          "hideZeroBuckets": true,
+          "highlightCards": true,
+          "id": 264,
+          "interval": null,
+          "legend": {
+            "show": false
+          },
+          "links": [],
+          "maxDataPoints": 512,
+          "maxPerRow": null,
+          "minSpan": null,
+          "options": {},
+          "repeat": null,
+          "repeatDirection": null,
+          "reverseYBuckets": false,
+          "span": null,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_range_cache_engine_write_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "format": "heatmap",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{le}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_range_cache_engine_write_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (le) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Write duration",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "showHistogram": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "heatmap",
+          "xAxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": 1,
+            "format": "s",
+            "label": null,
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true
+          },
+          "yBucketBound": "upper",
+          "yBucketNumber": null,
+          "yBucketSize": null
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "The time consumed of write in range cache engine per TiKV instance",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 21
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 265,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [
+            {
+              "alias": "count",
+              "bars": false,
+              "dashLength": 1,
+              "dashes": true,
+              "fill": 2,
+              "fillBelowTo": null,
+              "lines": true,
+              "spaceLength": 1,
+              "transform": "negative-Y",
+              "yaxis": 2,
+              "zindex": -3
+            },
+            {
+              "alias": "avg",
+              "bars": false,
+              "fill": 7,
+              "fillBelowTo": null,
+              "lines": true,
+              "yaxis": 1,
+              "zindex": 0
+            }
+          ],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_range_cache_engine_write_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, le) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "99.99%-{{instance}}",
+              "metric": "",
+              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_range_cache_engine_write_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, le) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_range_cache_engine_write_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, le) \n    \n    \n))  ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "99%-{{instance}}",
+              "metric": "",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_range_cache_engine_write_duration_seconds_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance, le) \n    \n    \n))  ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "(sum(rate(\n    tikv_range_cache_engine_write_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance)  / sum(rate(\n    tikv_range_cache_engine_write_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) )",
+              "format": "time_series",
+              "hide": true,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "avg-{{instance}}",
+              "metric": "",
+              "query": "(sum(rate(\n    tikv_range_cache_engine_write_duration_seconds_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance)  / sum(rate(\n    tikv_range_cache_engine_write_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) )",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_range_cache_engine_write_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
+              "format": "time_series",
+              "hide": true,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "count-{{instance}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_range_cache_engine_write_duration_seconds_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (instance) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "99% Range cache engine write duration per server",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "s",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
         }
       ],
       "repeat": null,
@@ -36838,7 +38104,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 259,
+=======
+      "id": 266,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -36877,7 +38147,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 260,
+=======
+          "id": 267,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -37025,7 +38299,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 261,
+=======
+          "id": 268,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -37165,7 +38443,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 262,
+=======
+          "id": 269,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -37262,7 +38544,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 263,
+=======
+          "id": 270,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -37395,7 +38681,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 264,
+=======
+          "id": 271,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -37528,7 +38818,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 265,
+=======
+          "id": 272,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -37706,7 +39000,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 266,
+=======
+          "id": 273,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -37869,7 +39167,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 267,
+=======
+          "id": 274,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -38017,7 +39319,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 268,
+=======
+          "id": 275,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -38150,7 +39456,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 269,
+=======
+          "id": 276,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -38286,7 +39596,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 270,
+=======
+      "id": 277,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -38325,7 +39639,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 271,
+=======
+          "id": 278,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -38473,7 +39791,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 272,
+=======
+          "id": 279,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -38606,7 +39928,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 273,
+=======
+          "id": 280,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -38739,7 +40065,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 274,
+=======
+          "id": 281,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -38872,7 +40202,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 275,
+=======
+          "id": 282,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -39005,7 +40339,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 276,
+=======
+          "id": 283,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -39160,7 +40498,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 277,
+=======
+          "id": 284,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -39260,7 +40602,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 278,
+=======
+      "id": 285,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -39299,7 +40645,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 279,
+=======
+          "id": 286,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -39447,7 +40797,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 280,
+=======
+          "id": 287,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -39648,7 +41002,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 281,
+=======
+          "id": 288,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -39849,7 +41207,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 282,
+=======
+          "id": 289,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -40050,7 +41412,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 283,
+=======
+          "id": 290,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -40251,7 +41617,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 284,
+=======
+          "id": 291,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -40384,7 +41754,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 285,
+=======
+          "id": 292,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -40517,7 +41891,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 286,
+=======
+          "id": 293,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -40650,7 +42028,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 287,
+=======
+          "id": 294,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -40783,7 +42165,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 288,
+=======
+          "id": 295,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -40991,7 +42377,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 289,
+=======
+          "id": 296,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -41091,7 +42481,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 290,
+=======
+      "id": 297,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -41137,7 +42531,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 291,
+=======
+          "id": 298,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -41234,7 +42632,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 292,
+=======
+          "id": 299,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -41435,7 +42837,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 293,
+=======
+          "id": 300,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -41568,7 +42974,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 294,
+=======
+          "id": 301,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -41701,7 +43111,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 295,
+=======
+          "id": 302,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -41834,7 +43248,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 296,
+=======
+          "id": 303,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -42035,7 +43453,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 297,
+=======
+          "id": 304,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -42168,7 +43590,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 298,
+=======
+          "id": 305,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -42304,7 +43730,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 299,
+=======
+      "id": 306,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -42343,7 +43773,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 300,
+=======
+          "id": 307,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -42544,7 +43978,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 301,
+=======
+          "id": 308,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -42745,7 +44183,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 302,
+=======
+          "id": 309,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -42946,7 +44388,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 303,
+=======
+          "id": 310,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -43147,7 +44593,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 304,
+=======
+          "id": 311,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -43280,7 +44730,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 305,
+=======
+          "id": 312,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -43413,7 +44867,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 306,
+=======
+          "id": 313,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -43546,7 +45004,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 307,
+=======
+          "id": 314,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -43679,7 +45141,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 308,
+=======
+          "id": 315,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -43812,7 +45278,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 309,
+=======
+          "id": 316,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -43952,7 +45422,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 310,
+=======
+          "id": 317,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -44049,7 +45523,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 311,
+=======
+          "id": 318,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -44253,7 +45731,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 312,
+=======
+      "id": 319,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -44292,7 +45774,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 313,
+=======
+          "id": 320,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -44425,7 +45911,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 314,
+=======
+          "id": 321,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -44558,7 +46048,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 315,
+=======
+          "id": 322,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -44698,7 +46192,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 316,
+=======
+          "id": 323,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -44795,7 +46293,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 317,
+=======
+          "id": 324,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -44996,7 +46498,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 318,
+=======
+          "id": 325,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -45197,7 +46703,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 319,
+=======
+          "id": 326,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -45401,7 +46911,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 320,
+=======
+      "id": 327,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -45440,7 +46954,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 321,
+=======
+          "id": 328,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -45618,7 +47136,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 322,
+=======
+          "id": 329,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -45819,7 +47341,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 323,
+=======
+          "id": 330,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -45952,7 +47478,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 324,
+=======
+          "id": 331,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -46085,7 +47615,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 325,
+=======
+          "id": 332,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -46218,7 +47752,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 326,
+=======
+          "id": 333,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -46351,7 +47889,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 327,
+=======
+          "id": 334,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -46484,7 +48026,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 328,
+=======
+          "id": 335,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -46613,7 +48159,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 329,
+=======
+          "id": 336,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -46688,7 +48238,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 330,
+=======
+          "id": 337,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -46767,7 +48321,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 331,
+=======
+          "id": 338,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -47020,7 +48578,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 332,
+=======
+          "id": 339,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -47153,7 +48715,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 333,
+=======
+          "id": 340,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -47289,7 +48855,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 334,
+=======
+      "id": 341,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -47328,7 +48898,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 335,
+=======
+          "id": 342,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -47476,7 +49050,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 336,
+=======
+          "id": 343,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -47609,7 +49187,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 337,
+=======
+          "id": 344,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -47810,7 +49392,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 338,
+=======
+          "id": 345,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -47958,7 +49544,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 339,
+=======
+          "id": 346,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48159,7 +49749,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 340,
+=======
+          "id": 347,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48292,7 +49886,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 341,
+=======
+          "id": 348,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48425,7 +50023,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 342,
+=======
+          "id": 349,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48558,7 +50160,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 343,
+=======
+          "id": 350,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48691,7 +50297,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 344,
+=======
+          "id": 351,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48831,7 +50441,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 345,
+=======
+          "id": 352,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -48928,7 +50542,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 346,
+=======
+          "id": 353,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49132,7 +50750,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 347,
+=======
+      "id": 354,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -49171,7 +50793,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 348,
+=======
+          "id": 355,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49304,7 +50930,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 349,
+=======
+          "id": 356,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49437,7 +51067,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 350,
+=======
+          "id": 357,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49570,7 +51204,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 351,
+=======
+          "id": 358,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49706,7 +51344,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 352,
+=======
+      "id": 359,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -49745,7 +51387,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 353,
+=======
+          "id": 360,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49878,7 +51524,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 354,
+=======
+          "id": 361,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50011,7 +51661,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 355,
+=======
+          "id": 362,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50159,7 +51813,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 356,
+=======
+          "id": 363,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50292,7 +51950,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 357,
+=======
+          "id": 364,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50425,7 +52087,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 358,
+=======
+          "id": 365,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50558,7 +52224,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 359,
+=======
+          "id": 366,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50694,7 +52364,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 360,
+=======
+      "id": 367,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -50733,7 +52407,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 361,
+=======
+          "id": 368,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50866,7 +52544,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 362,
+=======
+          "id": 369,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50999,7 +52681,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 363,
+=======
+          "id": 370,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51132,7 +52818,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 364,
+=======
+          "id": 371,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51265,7 +52955,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 365,
+=======
+          "id": 372,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51398,7 +53092,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 366,
+=======
+          "id": 373,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51534,7 +53232,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 367,
+=======
+      "id": 374,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -51573,7 +53275,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 368,
+=======
+          "id": 375,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51706,7 +53412,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 369,
+=======
+          "id": 376,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51839,7 +53549,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 370,
+=======
+          "id": 377,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51972,7 +53686,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 371,
+=======
+          "id": 378,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52135,7 +53853,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 372,
+=======
+          "id": 379,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52268,7 +53990,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 373,
+=======
+          "id": 380,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52401,7 +54127,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 374,
+=======
+          "id": 381,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52549,7 +54279,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 375,
+=======
+          "id": 382,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52700,7 +54434,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 376,
+=======
+      "id": 383,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -52739,7 +54477,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 377,
+=======
+          "id": 384,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52872,7 +54614,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 378,
+=======
+          "id": 385,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53005,7 +54751,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 379,
+=======
+          "id": 386,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53138,7 +54888,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 380,
+=======
+          "id": 387,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53271,7 +55025,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 381,
+=======
+          "id": 388,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53404,7 +55162,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 382,
+=======
+          "id": 389,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53537,7 +55299,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 383,
+=======
+          "id": 390,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53670,7 +55436,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 384,
+=======
+          "id": 391,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53803,7 +55573,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 385,
+=======
+          "id": 392,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53943,7 +55717,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 386,
+=======
+          "id": 393,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -54040,7 +55818,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 387,
+=======
+          "id": 394,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54173,7 +55955,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 388,
+=======
+          "id": 395,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54321,7 +56107,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 389,
+=======
+          "id": 396,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54469,7 +56259,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 390,
+=======
+          "id": 397,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54609,7 +56403,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 391,
+=======
+          "id": 398,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -54706,7 +56504,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 392,
+=======
+          "id": 399,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54839,7 +56641,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 393,
+=======
+          "id": 400,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54975,7 +56781,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 394,
+=======
+      "id": 401,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -55014,7 +56824,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 395,
+=======
+          "id": 402,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55147,7 +56961,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 396,
+=======
+          "id": 403,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55310,7 +57128,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 397,
+=======
+          "id": 404,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55458,7 +57280,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 398,
+=======
+          "id": 405,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55591,7 +57417,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 399,
+=======
+          "id": 406,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55731,7 +57561,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 400,
+=======
+          "id": 407,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -55835,7 +57669,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 401,
+=======
+          "id": 408,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -55939,7 +57777,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 402,
+=======
+          "id": 409,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -56036,7 +57878,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 403,
+=======
+          "id": 410,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56176,7 +58022,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 404,
+=======
+          "id": 411,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -56280,7 +58130,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 405,
+=======
+          "id": 412,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -56384,7 +58238,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 406,
+=======
+          "id": 413,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -56481,7 +58339,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 407,
+=======
+          "id": 414,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56614,7 +58476,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 408,
+=======
+          "id": 415,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56747,7 +58613,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 409,
+=======
+          "id": 416,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56887,7 +58757,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 410,
+=======
+          "id": 417,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -56984,7 +58858,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 411,
+=======
+          "id": 418,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57120,7 +58998,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 412,
+=======
+      "id": 419,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -57159,7 +59041,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 413,
+=======
+          "id": 420,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57322,7 +59208,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 414,
+=======
+          "id": 421,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57455,7 +59345,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 415,
+=======
+          "id": 422,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57595,7 +59489,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 416,
+=======
+          "id": 423,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -57699,7 +59597,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 417,
+=======
+          "id": 424,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -57796,7 +59698,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 418,
+=======
+          "id": 425,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57951,7 +59857,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 419,
+=======
+          "id": 426,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -58055,7 +59965,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 420,
+=======
+          "id": 427,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -58159,7 +60073,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 421,
+=======
+          "id": 428,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -58256,7 +60174,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 422,
+=======
+          "id": 429,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58426,7 +60348,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 423,
+=======
+          "id": 430,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -58523,7 +60449,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 424,
+=======
+          "id": 431,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58724,7 +60654,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 425,
+=======
+          "id": 432,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58925,7 +60859,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 426,
+=======
+          "id": 433,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59058,7 +60996,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 427,
+=======
+          "id": 434,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59221,7 +61163,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 428,
+=======
+          "id": 435,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59354,7 +61300,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 429,
+=======
+          "id": 436,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59487,7 +61437,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 430,
+=======
+          "id": 437,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59688,7 +61642,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 431,
+=======
+          "id": 438,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59821,7 +61779,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 432,
+=======
+          "id": 439,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59961,7 +61923,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 433,
+=======
+          "id": 440,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -60065,7 +62031,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 434,
+=======
+          "id": 441,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -60169,7 +62139,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 435,
+=======
+          "id": 442,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -60273,7 +62247,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 436,
+=======
+          "id": 443,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -60377,7 +62355,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 437,
+=======
+          "id": 444,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -60481,7 +62463,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 438,
+=======
+          "id": 445,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -60585,7 +62571,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 439,
+=======
+          "id": 446,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -60682,7 +62672,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 440,
+=======
+          "id": 447,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60830,7 +62824,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 441,
+=======
+          "id": 448,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60963,7 +62961,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 442,
+=======
+          "id": 449,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61096,7 +63098,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 443,
+=======
+          "id": 450,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61244,7 +63250,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 444,
+=======
+          "id": 451,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61380,7 +63390,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 445,
+=======
+      "id": 452,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -61431,7 +63445,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 446,
+=======
+          "id": 453,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -61527,7 +63545,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 447,
+=======
+          "id": 454,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -61602,7 +63624,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 448,
+=======
+          "id": 455,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -61677,7 +63703,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 449,
+=======
+          "id": 456,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -61752,7 +63782,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 450,
+=======
+          "id": 457,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -61827,7 +63861,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 451,
+=======
+          "id": 458,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -61902,7 +63940,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 452,
+=======
+          "id": 459,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -61977,7 +64019,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 453,
+=======
+          "id": 460,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -62056,7 +64102,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 454,
+=======
+          "id": 461,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62189,7 +64239,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 455,
+=======
+          "id": 462,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62322,7 +64376,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 456,
+=======
+          "id": 463,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62455,7 +64513,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 457,
+=======
+          "id": 464,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62588,7 +64650,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 458,
+=======
+          "id": 465,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62721,7 +64787,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 459,
+=======
+          "id": 466,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62869,7 +64939,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 460,
+=======
+          "id": 467,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63002,7 +65076,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 461,
+=======
+          "id": 468,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63135,7 +65213,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 462,
+=======
+          "id": 469,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63301,7 +65383,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 463,
+=======
+          "id": 470,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -63405,7 +65491,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 464,
+=======
+          "id": 471,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -63509,7 +65599,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 465,
+=======
+          "id": 472,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -63613,7 +65707,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 466,
+=======
+          "id": 473,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -63717,7 +65815,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 467,
+=======
+          "id": 474,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -63821,7 +65923,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 468,
+=======
+          "id": 475,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -63925,7 +66031,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 469,
+=======
+          "id": 476,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -64029,7 +66139,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 470,
+=======
+          "id": 477,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -64126,7 +66240,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 471,
+=======
+          "id": 478,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64259,7 +66377,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 472,
+=======
+          "id": 479,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64392,7 +66514,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 473,
+=======
+          "id": 480,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64525,7 +66651,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 474,
+=======
+          "id": 481,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64658,7 +66788,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 475,
+=======
+          "id": 482,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64791,7 +66925,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 476,
+=======
+          "id": 483,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64897,6 +67035,142 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
+<<<<<<< HEAD
+=======
+          "description": "The task status of initial scanning.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 8,
+            "x": 8,
+            "y": 70
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 484,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_log_backup_pending_initial_scan\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (stage) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{stage}}",
+              "metric": "",
+              "query": "sum((\n    tikv_log_backup_pending_initial_scan\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (stage) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Initial Scanning Task Status",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "description": "",
           "editable": true,
           "error": false,
@@ -64924,7 +67198,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 477,
+=======
+          "id": 485,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65064,7 +67342,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 478,
+=======
+          "id": 486,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -65168,7 +67450,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 479,
+=======
+          "id": 487,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "legend": {
             "show": false
@@ -65265,7 +67551,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 480,
+=======
+          "id": 488,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65398,7 +67688,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 481,
+=======
+          "id": 489,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65531,7 +67825,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 482,
+=======
+          "id": 490,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65664,7 +67962,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 483,
+=======
+          "id": 491,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65797,7 +68099,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 484,
+=======
+          "id": 492,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65930,7 +68236,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 485,
+=======
+          "id": 493,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66066,7 +68376,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 486,
+=======
+      "id": 494,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -66105,7 +68419,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 487,
+=======
+          "id": 495,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66253,7 +68571,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 488,
+=======
+          "id": 496,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66386,7 +68708,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 489,
+=======
+          "id": 497,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66519,7 +68845,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 490,
+=======
+          "id": 498,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66655,7 +68985,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 491,
+=======
+      "id": 499,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -66694,7 +69028,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 492,
+=======
+          "id": 500,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66827,7 +69165,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 493,
+=======
+          "id": 501,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66960,7 +69302,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 494,
+=======
+          "id": 502,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67093,7 +69439,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 495,
+=======
+          "id": 503,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67193,6 +69543,275 @@
             "align": false,
             "alignLevel": 0
           }
+<<<<<<< HEAD
+=======
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": null,
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 0,
+            "y": 14
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 504,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_allocator_thread_stats\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"mapped\"}\n    \n)) by (thread_name) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{thread_name}}",
+              "metric": "",
+              "query": "sum((\n    tikv_allocator_thread_stats\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",type=\"mapped\"}\n    \n)) by (thread_name) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Mapped Allocation per Thread",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "bytes",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": null,
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 12,
+            "x": 12,
+            "y": 14
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 505,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_allocator_arena_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}",
+              "metric": "",
+              "query": "sum((\n    tikv_allocator_arena_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Arena Count",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
         }
       ],
       "repeat": null,
@@ -67229,7 +69848,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 496,
+=======
+      "id": 506,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -67268,7 +69891,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 497,
+=======
+          "id": 507,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67469,7 +70096,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 498,
+=======
+          "id": 508,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67605,7 +70236,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 499,
+=======
+      "id": 509,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -67644,7 +70279,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 500,
+=======
+          "id": 510,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67777,7 +70416,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 501,
+=======
+          "id": 511,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67910,7 +70553,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 502,
+=======
+          "id": 512,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68043,7 +70690,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 503,
+=======
+          "id": 513,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68176,7 +70827,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 504,
+=======
+          "id": 514,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68324,7 +70979,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 505,
+=======
+          "id": 515,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68528,7 +71187,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 506,
+=======
+      "id": 516,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -68567,7 +71230,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 507,
+=======
+          "id": 517,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68700,7 +71367,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 508,
+=======
+          "id": 518,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68833,7 +71504,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 509,
+=======
+          "id": 519,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68966,7 +71641,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 510,
+=======
+          "id": 520,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69099,7 +71778,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 511,
+=======
+          "id": 521,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69296,7 +71979,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 512,
+=======
+          "id": 522,
+>>>>>>> 6f5c6428b5 (raft-engine: reduce the threshold of compression and add related metrics on it. (#16906))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
