@@ -234,7 +234,14 @@ where
                     TimeStamp::new(safepoint.saturating_sub(1)),
                     safepoint_ttl,
                 )
-                .await?;
+                .await
+                .or_else(|err| match err {
+                    pd_client::Error::UnsafeServiceGcSafePoint { .. } => {
+                        warn!("gc safe point exceeds the task checkpoint. skipping uploading"; "err" => %err);
+                        Ok(())
+                    }
+                    _ => Err(err),
+                })?;
                 meta_cli.pause(&t).await?;
                 let mut last_error = StreamBackupError::new();
                 last_error.set_error_code(code);
@@ -1162,9 +1169,14 @@ where
     RT: CdcHandle<EK> + 'static,
     EK: KvEngine,
 {
-    pub async fn resolve(&mut self, regions: Vec<u64>, min_ts: TimeStamp) -> Vec<u64> {
+    pub async fn resolve(
+        &mut self,
+        regions: Vec<u64>,
+        min_ts: TimeStamp,
+        timeout: Option<Duration>,
+    ) -> Vec<u64> {
         match self {
-            BackupStreamResolver::V1(x) => x.resolve(regions, min_ts).await,
+            BackupStreamResolver::V1(x) => x.resolve(regions, min_ts, timeout).await,
             BackupStreamResolver::V2(x, _) => {
                 let x = x.clone();
                 resolve_by_raft(regions, min_ts, x).await
