@@ -951,6 +951,7 @@ impl PdClient for RpcClient {
         req.set_service_id(name.into());
         req.set_ttl(ttl.as_secs() as _);
         req.set_safe_point(safe_point.into_inner());
+        let req_for_check = req.clone();
         let executor = move |client: &Client, r: pdpb::UpdateServiceGcSafePointRequest| {
             let handler = {
                 let inner = client.inner.rl();
@@ -964,13 +965,14 @@ impl PdClient for RpcClient {
                         )
                     })
             };
+            let req = req_for_check.clone();
             Box::pin(async move {
                 let resp = handler.await?;
                 PD_REQUEST_HISTOGRAM_VEC
                     .update_service_safe_point
                     .observe(timer.saturating_elapsed_secs());
                 check_resp_header(resp.get_header())?;
-                crate::check_update_service_safe_point_resp(&resp, safe_point.into_inner())?;
+                crate::check_update_service_safe_point_resp(&resp, &req)?;
                 Ok(())
             }) as PdFuture<_>
         };
