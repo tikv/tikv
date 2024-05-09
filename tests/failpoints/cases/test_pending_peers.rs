@@ -1,7 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
+use crossbeam::channel;
+use kvproto::raft_serverpb::RaftMessage;
+use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv_util::{config::*, time::Instant};
 
@@ -151,30 +154,73 @@ fn test_on_check_busy_on_apply_peers() {
     must_get_equal(&cluster.get_engine(2), b"k2", b"v2");
 
     // Restart peer 1003 and make it busy for applying pending logs.
-    fail::cfg("on_handle_apply_1003", "return").unwrap();
+    fail::cfg("on_handle_apply_1003", "pause").unwrap();
+    // Case 1: check the leader committed index comes from MsgAppend and
+    // MsgReadIndexResp is valid.
+    let (read_tx, read_rx) = channel::unbounded::<RaftMessage>();
+    let (append_tx, append_rx) = channel::unbounded::<RaftMessage>();
+    cluster.add_send_filter_on_node(
+        1,
+        Box::new(
+            RegionPacketFilter::new(r1, 1)
+                .direction(Direction::Send)
+                .msg_type(MessageType::MsgReadIndexResp)
+                .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
+                    read_tx.send(msg.clone()).unwrap();
+                })),
+        ),
+    );
+    cluster.add_send_filter_on_node(
+        1,
+        Box::new(
+            RegionPacketFilter::new(r1, 1)
+                .direction(Direction::Send)
+                .msg_type(MessageType::MsgAppend)
+                .set_msg_callback(Arc::new(move |msg: &RaftMessage| {
+                    append_tx.send(msg.clone()).unwrap();
+                })),
+        ),
+    );
+    let leader_apply_state = cluster.apply_state(r1, 1);
     cluster.run_node(3).unwrap();
+    let append_msg = append_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(
+        append_msg.get_message().get_commit(),
+        leader_apply_state.applied_index
+    );
+    let read_msg = read_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(
+        read_msg.get_message().get_index(),
+        leader_apply_state.applied_index
+    );
+    cluster.clear_send_filter_on_node(1);
+
+    // Case 2: completed regions < target count.
     let after_apply_stat = cluster.apply_state(r1, 3);
     assert!(after_apply_stat.applied_index == before_apply_stat.applied_index);
-
-    // Case 1: completed regions < target count.
-    fail::cfg("on_mock_store_completed_target_count", "return").unwrap();
     sleep_ms(100);
     cluster.must_send_store_heartbeat(3);
     sleep_ms(100);
     let stats = cluster.pd_client.get_store_stats(3).unwrap();
     assert!(stats.is_busy);
-    fail::remove("on_mock_store_completed_target_count");
     sleep_ms(100);
 
-    // Case 2: completed_apply_peers_count > completed_target_count but
-    //        there exists no busy peers.
+    // Case 3: completed_apply_peers_count > completed_target_count but
+    //        there exists busy peers.
+    fail::cfg("on_mock_store_completed_target_count", "return").unwrap();
     cluster.must_send_store_heartbeat(3);
     sleep_ms(100);
     let stats = cluster.pd_client.get_store_stats(3).unwrap();
-    assert!(!stats.is_busy);
-
+    assert!(stats.is_busy);
+    fail::remove("on_mock_store_completed_target_count");
     // After peer 1003 is recovered, store also should not be marked with busy.
     fail::remove("on_handle_apply_1003");
+    sleep_ms(100);
+    must_get_equal(&cluster.get_engine(3), b"k2", b"v2");
+    sleep_ms(100);
+    let after_apply_stat = cluster.apply_state(r1, 3);
+    assert!(after_apply_stat.applied_index > before_apply_stat.applied_index);
+    cluster.must_send_store_heartbeat(3);
     sleep_ms(100);
     let stats = cluster.pd_client.get_store_stats(3).unwrap();
     assert!(!stats.is_busy);
