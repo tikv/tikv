@@ -34,6 +34,7 @@ time = { workspace = true }
 tipb = { workspace = true }
 twoway = "0.2.0"
 uuid = { version = "0.8.1", features = ["v4"] }
+ryu = "1.0"
 
 [dev-dependencies]
 bstr = "0.2.8"
