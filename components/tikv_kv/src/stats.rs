@@ -45,7 +45,7 @@ pub struct StatsCollector<'a, T: IterMetricsCollector> {
 
 impl<'a, T: IterMetricsCollector> StatsCollector<'a, T> {
     pub fn new(collector: T, kind: StatsKind, stats: &'a mut CfStatistics) -> Self {
-        let internal_tombstone = collector.internal_delete_skipped_count();
+        let internal_tombstone = collector.internal_delete_skipped_count() as usize;
         StatsCollector {
             collector,
             stats,
@@ -61,7 +61,7 @@ impl<T: IterMetricsCollector> Drop for StatsCollector<'_, T> {
         self.stats.raw_value_tombstone +=
             RAW_VALUE_TOMBSTONE.with(|m| *m.borrow()) - self.raw_value_tombstone;
         let internal_tombstone =
-            self.collector.internal_delete_skipped_count() - self.internal_tombstone;
+            self.collector.internal_delete_skipped_count() as usize - self.internal_tombstone;
         match self.kind {
             StatsKind::Next => {
                 self.stats.next += 1;
