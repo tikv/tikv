@@ -579,16 +579,15 @@ impl BackgroundRunnerCore {
             }
             cmp::Ordering::Greater => {
                 let to_shrink_by = curr_memory_usage - threshold;
-                if to_shrink_by >= EXPECTED_AVERAGE_REGION_SIZE {
-                    let curr_num_regions = range_stats_manager.num_regions();
-                    let next_num_regions =
-                        curr_num_regions - to_shrink_by / EXPECTED_AVERAGE_REGION_SIZE;
-                    info!("decreasing number of top regions to cache";
-                        "from" => curr_num_regions,
-                        "to" => next_num_regions,
-                    );
-                    range_stats_manager.set_num_regions(next_num_regions);
-                }
+                let curr_num_regions = range_stats_manager.num_regions();
+                let next_num_regions = curr_num_regions
+                    .checked_sub(1.max(to_shrink_by / EXPECTED_AVERAGE_REGION_SIZE))
+                    .unwrap_or(1);
+                info!("decreasing number of top regions to cache";
+                    "from" => curr_num_regions,
+                    "to" => next_num_regions,
+                );
+                range_stats_manager.set_num_regions(next_num_regions);
             }
             _ => (),
         };
