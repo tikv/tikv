@@ -57,10 +57,10 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
         let current = ttl_current_ts();
         let safe_point = gc_context.safe_point.load(Ordering::Relaxed);
 
-        let keyspace_meta_service = gc_context.keyspace_meta_service.clone();
+        let keyspace_level_gc_service = gc_context.keyspace_level_gc_service.clone();
 
         let mut is_all_ks_not_init_gc_sp = true;
-        if let Some(ref ks_meta_service) = *keyspace_meta_service {
+        if let Some(ref ks_meta_service) = *keyspace_level_gc_service {
             is_all_ks_not_init_gc_sp =
                 ks_meta_service.is_all_keyspace_level_gc_have_not_initialized()
         }
@@ -100,7 +100,7 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
             safe_point.into(),
             ratio_threshold,
             context,
-            keyspace_meta_service.clone(),
+            keyspace_level_gc_service.clone(),
         ) {
             debug!("skip gc in compaction filter because it's not necessary");
             GC_COMPACTION_FILTER_SKIP
@@ -115,7 +115,7 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
             current,
             context,
             (store_id, region_info_provider),
-            keyspace_meta_service,
+            keyspace_level_gc_service,
         );
         let name = CString::new("raw_compaction_filter").unwrap();
         Some((name, filter))
@@ -193,11 +193,11 @@ impl RawCompactionFilter {
         ts: u64,
         context: &CompactionFilterContext,
         regions_provider: (u64, Arc<dyn RegionInfoProvider>),
-        keyspace_meta_service: Arc<Option<KeyspaceLevelGCService>>,
+        keyspace_level_gc_service: Arc<Option<KeyspaceLevelGCService>>,
     ) -> Self {
         // Safe point must have been initialized.
         let mut is_all_ks_not_init_gc_sp = true;
-        if let Some(ref ks_meta_service) = *keyspace_meta_service {
+        if let Some(ref ks_meta_service) = *keyspace_level_gc_service {
             is_all_ks_not_init_gc_sp =
                 ks_meta_service.is_all_keyspace_level_gc_have_not_initialized()
         }

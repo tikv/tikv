@@ -170,7 +170,7 @@ fn make_keyspace_level_gc_service() -> Arc<Option<KeyspaceLevelGCService>> {
 
 #[test]
 fn test_keyspace_level_gc_service() {
-    // Make empty cache in keyspace_meta_service.
+    // Make empty cache in keyspace_level_gc_service.
     let keyspace_level_gc_service = Arc::new(Some(KeyspaceLevelGCService::new(
         Arc::clone(&Default::default()),
         Arc::clone(&Default::default()),
@@ -225,7 +225,7 @@ fn test_check_skip_gc_with_ks_level_gc_by_kv_mode(is_rawkv: bool) {
     let raw_engine = engine.get_rocksdb();
 
     let mut gc_runner = TestGcRunner::new(0);
-    gc_runner.keyspace_meta_service = make_keyspace_level_gc_service().clone();
+    gc_runner.keyspace_level_gc_service = make_keyspace_level_gc_service().clone();
 
     do_write(&engine, false, 5, is_rawkv);
 

@@ -856,7 +856,7 @@ where
             Arc::clone(&keyspace_level_gc_cache),
         );
 
-        let keyspace_meta_service = Arc::new(Some(KeyspaceLevelGCService::new(
+        let keyspace_level_gc_service = Arc::new(Some(KeyspaceLevelGCService::new(
             Arc::clone(&keyspace_level_gc_cache),
             Arc::clone(&keyspace_id_meta_map),
         )));
@@ -921,7 +921,7 @@ where
         if let Err(e) = gc_worker.start_auto_gc(
             auto_gc_config,
             safe_point,
-            Arc::clone(&keyspace_meta_service),
+            Arc::clone(&keyspace_level_gc_service),
         ) {
             fatal!("failed to start auto_gc on storage, error: {}", e);
         }

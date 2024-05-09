@@ -1240,7 +1240,7 @@ impl<E: Engine> GcWorker<E> {
         &self,
         cfg: AutoGcConfig<S, R>,
         safe_point: Arc<AtomicU64>,
-        keyspace_meta_service: Arc<Option<KeyspaceLevelGCService>>,
+        keyspace_level_gc_service: Arc<Option<KeyspaceLevelGCService>>,
     ) -> Result<()> {
         assert!(
             cfg.self_store_id > 0,
@@ -1255,7 +1255,7 @@ impl<E: Engine> GcWorker<E> {
             self.feature_gate.clone(),
             self.scheduler(),
             Arc::new(cfg.region_info_provider.clone()),
-            keyspace_meta_service,
+            keyspace_level_gc_service,
         );
 
         let mut handle = self.gc_manager_handle.lock().unwrap();
