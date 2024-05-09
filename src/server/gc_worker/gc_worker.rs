@@ -1170,6 +1170,7 @@ where
 
     gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
     feature_gate: FeatureGate,
+    keyspace_level_gc_service: Arc<Option<KeyspaceLevelGCService>>,
 }
 
 impl<E: Engine> Clone for GcWorker<E> {
@@ -1187,6 +1188,7 @@ impl<E: Engine> Clone for GcWorker<E> {
             gc_manager_handle: self.gc_manager_handle.clone(),
             feature_gate: self.feature_gate.clone(),
             region_info_provider: self.region_info_provider.clone(),
+            keyspace_level_gc_service: Arc::clone(&self.keyspace_level_gc_service),
         }
     }
 }
@@ -1214,6 +1216,7 @@ impl<E: Engine> GcWorker<E> {
         cfg: GcConfig,
         feature_gate: FeatureGate,
         region_info_provider: Arc<dyn RegionInfoProvider>,
+        keyspace_level_gc_service: Arc<Option<KeyspaceLevelGCService>>,
     ) -> Self {
         let worker_builder = WorkerBuilder::new("gc-worker")
             .pending_capacity(GC_MAX_PENDING_TASKS)
@@ -1233,6 +1236,7 @@ impl<E: Engine> GcWorker<E> {
             gc_manager_handle: Arc::new(Mutex::new(None)),
             feature_gate,
             region_info_provider,
+            keyspace_level_gc_service,
         }
     }
 
@@ -1240,7 +1244,6 @@ impl<E: Engine> GcWorker<E> {
         &self,
         cfg: AutoGcConfig<S, R>,
         safe_point: Arc<AtomicU64>,
-        keyspace_level_gc_service: Arc<Option<KeyspaceLevelGCService>>,
     ) -> Result<()> {
         assert!(
             cfg.self_store_id > 0,
@@ -1255,7 +1258,7 @@ impl<E: Engine> GcWorker<E> {
             self.feature_gate.clone(),
             self.scheduler(),
             Arc::new(cfg.region_info_provider.clone()),
-            keyspace_level_gc_service,
+            Arc::clone(&self.keyspace_level_gc_service),
         );
 
         let mut handle = self.gc_manager_handle.lock().unwrap();
@@ -1702,6 +1705,7 @@ mod tests {
             gc_config,
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![region1, region2])),
+            Arc::new(Some(KeyspaceLevelGCService::default())),
         );
         gc_worker.start(store_id).unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
@@ -1880,6 +1884,7 @@ mod tests {
             gc_config,
             feature_gate,
             Arc::new(ri_provider.clone()),
+            Arc::new(Some(KeyspaceLevelGCService::default())),
         );
         gc_worker.start(store_id).unwrap();
 
@@ -1907,9 +1912,7 @@ mod tests {
 
         let auto_gc_cfg = AutoGcConfig::new(sp_provider, ri_provider, 1);
         let safe_point = Arc::new(AtomicU64::new(0));
-        gc_worker
-            .start_auto_gc(auto_gc_cfg, safe_point, Arc::new(None))
-            .unwrap();
+        gc_worker.start_auto_gc(auto_gc_cfg, safe_point).unwrap();
         host.on_region_changed(&r1, RegionChangeEvent::Create, StateRole::Leader);
         host.on_region_changed(&r2, RegionChangeEvent::Create, StateRole::Leader);
         host.on_region_changed(&r3, RegionChangeEvent::Create, StateRole::Leader);
@@ -2276,6 +2279,7 @@ mod tests {
             gc_config,
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![region.clone()])),
+            Arc::new(Some(KeyspaceLevelGCService::default())),
         );
 
         // Before starting gc_worker, fill the scheduler to full.
@@ -2838,6 +2842,7 @@ mod tests {
             gc_config,
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![])),
+            Arc::new(Some(KeyspaceLevelGCService::default())),
         );
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("num_threads"), ConfigValue::Usize(5));

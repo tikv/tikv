@@ -8,6 +8,7 @@ use std::{
 use api_version::{ApiV1, KvFormat};
 use collections::HashMap;
 use futures::executor::block_on;
+use keyspace_meta::KeyspaceLevelGCService;
 use kvproto::{
     kvrpcpb::{ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest},
     metapb,
@@ -124,6 +125,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
             config,
             Default::default(),
             Arc::new(MockRegionInfoProvider::new(Vec::new())),
+            Arc::new(Some(KeyspaceLevelGCService::default())),
         );
         gc_worker.start(store_id)?;
         Ok(Self {
@@ -137,7 +139,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
         cfg: AutoGcConfig<S, R>,
     ) {
         self.gc_worker
-            .start_auto_gc(cfg, Arc::new(AtomicU64::new(0)), Arc::new(None))
+            .start_auto_gc(cfg, Arc::new(AtomicU64::new(0)))
             .unwrap();
     }
 

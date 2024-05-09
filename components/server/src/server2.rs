@@ -402,6 +402,26 @@ where
     }
 
     fn init_gc_worker(&mut self) -> GcWorker<RaftKv2<RocksEngine, ER>> {
+        // Init services of keyspace.
+        let keyspace_id_meta_map = Arc::new(Default::default());
+        keyspace_meta::start_periodic_keyspace_meta_watcher(
+            self.pd_client.clone(),
+            &self.core.background_worker,
+            Arc::clone(&keyspace_id_meta_map),
+        );
+
+        let keyspace_level_gc_cache = Arc::new(Default::default());
+        keyspace_meta::start_periodic_keyspace_level_gc_watcher(
+            self.pd_client.clone(),
+            &self.core.background_worker,
+            Arc::clone(&keyspace_level_gc_cache),
+        );
+
+        let keyspace_level_gc_service = Arc::new(Some(KeyspaceLevelGCService::new(
+            Arc::clone(&keyspace_level_gc_cache),
+            Arc::clone(&keyspace_id_meta_map),
+        )));
+
         let engines = self.engines.as_ref().unwrap();
         let gc_worker = GcWorker::new(
             engines.engine.clone(),
@@ -409,6 +429,7 @@ where
             self.core.config.gc.clone(),
             self.pd_client.feature_gate().clone(),
             Arc::new(self.region_info_accessor.clone().unwrap()),
+            Arc::clone(&keyspace_level_gc_service),
         );
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
@@ -842,24 +863,6 @@ where
 
         // `ConsistencyCheckObserver` must be registered before `Node::start`.
         let safe_point = Arc::new(AtomicU64::new(0));
-        let keyspace_id_meta_map = Arc::new(Default::default());
-        keyspace_meta::start_periodic_keyspace_meta_watcher(
-            self.pd_client.clone(),
-            &self.core.background_worker,
-            Arc::clone(&keyspace_id_meta_map),
-        );
-
-        let keyspace_level_gc_cache = Arc::new(Default::default());
-        keyspace_meta::start_periodic_keyspace_level_gc_watcher(
-            self.pd_client.clone(),
-            &self.core.background_worker,
-            Arc::clone(&keyspace_level_gc_cache),
-        );
-
-        let keyspace_level_gc_service = Arc::new(Some(KeyspaceLevelGCService::new(
-            Arc::clone(&keyspace_level_gc_cache),
-            Arc::clone(&keyspace_id_meta_map),
-        )));
 
         let observer = match self.core.config.coprocessor.consistency_check_method {
             ConsistencyCheckMethod::Mvcc => BoxConsistencyCheckObserver::new(
@@ -918,11 +921,7 @@ where
         gc_worker
             .start(store_id)
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
-        if let Err(e) = gc_worker.start_auto_gc(
-            auto_gc_config,
-            safe_point,
-            Arc::clone(&keyspace_level_gc_service),
-        ) {
+        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point) {
             fatal!("failed to start auto_gc on storage, error: {}", e);
         }
 

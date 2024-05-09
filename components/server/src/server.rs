@@ -30,7 +30,6 @@ use backup_stream::{
 use causal_ts::CausalTsProviderImpl;
 use cdc::CdcConfigManager;
 use concurrency_manager::ConcurrencyManager;
-use dashmap::DashMap;
 use engine_rocks::{
     from_rocks_compression_type, RocksCompactedEvent, RocksEngine, RocksStatistics,
 };
@@ -529,6 +528,27 @@ where
     }
 
     fn init_gc_worker(&mut self) -> GcWorker<RaftKv<EK, ServerRaftStoreRouter<EK, ER>>> {
+        // Init keyspace level GC cache, keyspace meta cache and keyspace level GC
+        // service.
+        let keyspace_id_meta_map = Arc::new(Default::default());
+        keyspace_meta::start_periodic_keyspace_meta_watcher(
+            self.pd_client.clone(),
+            &self.core.background_worker,
+            Arc::clone(&keyspace_id_meta_map),
+        );
+
+        let keyspace_level_gc_cache = Arc::new(Default::default());
+        keyspace_meta::start_periodic_keyspace_level_gc_watcher(
+            self.pd_client.clone(),
+            &self.core.background_worker,
+            Arc::clone(&keyspace_level_gc_cache),
+        );
+
+        let keyspace_level_gc_service = Arc::new(Some(KeyspaceLevelGCService::new(
+            Arc::clone(&keyspace_level_gc_cache),
+            Arc::clone(&keyspace_id_meta_map),
+        )));
+
         let engines = self.engines.as_ref().unwrap();
         let gc_worker = GcWorker::new(
             engines.engine.clone(),
@@ -536,6 +556,7 @@ where
             self.core.config.gc.clone(),
             self.pd_client.feature_gate().clone(),
             Arc::new(self.region_info_accessor.clone()),
+            keyspace_level_gc_service,
         );
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
@@ -1008,26 +1029,6 @@ where
         // `MultiRaftServer::start`.
         let safe_point = Arc::new(AtomicU64::new(0));
 
-        // Init keyspace level GC cache, keyspace meta cache and keyspace level GC
-        // service.
-        let keyspace_id_to_meta_map = Arc::new(Default::default());
-        keyspace_meta::start_periodic_keyspace_meta_watcher(
-            self.pd_client.clone(),
-            &self.core.background_worker,
-            Arc::clone(&keyspace_id_to_meta_map),
-        );
-        let keyspace_id_to_keyspace_level_gc_map: Arc<DashMap<u32, u64>> =
-            Arc::new(Default::default());
-        keyspace_meta::start_periodic_keyspace_level_gc_watcher(
-            self.pd_client.clone(),
-            &self.core.background_worker,
-            Arc::clone(&keyspace_id_to_keyspace_level_gc_map),
-        );
-        let keyspace_level_gc_service = Arc::new(Some(KeyspaceLevelGCService::new(
-            Arc::clone(&keyspace_id_to_keyspace_level_gc_map),
-            Arc::clone(&keyspace_id_to_meta_map),
-        )));
-
         let observer = match self.core.config.coprocessor.consistency_check_method {
             ConsistencyCheckMethod::Mvcc => BoxConsistencyCheckObserver::new(
                 MvccConsistencyCheckObserver::new(safe_point.clone()),
@@ -1072,11 +1073,7 @@ where
         gc_worker
             .start(raft_server.id())
             .unwrap_or_else(|e| fatal!("failed to start gc worker: {}", e));
-        if let Err(e) = gc_worker.start_auto_gc(
-            auto_gc_config,
-            safe_point,
-            Arc::clone(&keyspace_level_gc_service),
-        ) {
+        if let Err(e) = gc_worker.start_auto_gc(auto_gc_config, safe_point) {
             fatal!("failed to start auto_gc on storage, error: {}", e);
         }
 

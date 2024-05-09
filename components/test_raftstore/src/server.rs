@@ -19,6 +19,7 @@ use engine_traits::{Engines, KvEngine, SnapshotContext};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use health_controller::HealthController;
+use keyspace_meta::KeyspaceLevelGCService;
 use kvproto::{
     deadlock::create_deadlock,
     debugpb::{create_debug, DebugClient},
@@ -349,6 +350,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
             cfg.gc.clone(),
             Default::default(),
             Arc::new(region_info_accessor.clone()),
+            Arc::new(Some(KeyspaceLevelGCService::default())),
         );
         gc_worker.start(node_id).unwrap();
 

@@ -303,7 +303,7 @@ impl KeyspaceMetaWatchService {
 // and through the keyspace id information in the key,
 // combine the keyspace meta with the keyspace level GC cache
 // to return the GC safe point for the keyspace.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct KeyspaceLevelGCService {
     keyspace_level_gc_map: Arc<DashMap<u32, u64>>,
     keyspace_id_meta_map: Arc<DashMap<u32, KeyspaceMeta>>,
