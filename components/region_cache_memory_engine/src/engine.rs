@@ -330,12 +330,14 @@ impl RangeCacheMemoryEngine {
             Option<Duration>,
             Option<Duration>,
             Option<Duration>,
+            Option<Duration>,
         ),
     ) {
         let mut before_lock_wait;
         let mut before_pending;
         let mut iterating_pending = None;
         let mut upgrade_wait = None;
+        let mut release_lock = None;
         let mut post_iterating = None;
 
         let now0 = Instant::now();
@@ -360,6 +362,7 @@ impl RangeCacheMemoryEngine {
                     before_pending,
                     iterating_pending,
                     upgrade_wait,
+                    release_lock,
                     post_iterating,
                 ),
             );
@@ -381,6 +384,7 @@ impl RangeCacheMemoryEngine {
                     before_pending,
                     iterating_pending,
                     upgrade_wait,
+                    release_lock,
                     post_iterating,
                 ),
             );
@@ -442,6 +446,7 @@ impl RangeCacheMemoryEngine {
                         before_pending,
                         iterating_pending,
                         upgrade_wait,
+                        release_lock,
                         post_iterating,
                     ),
                 );
@@ -493,19 +498,25 @@ impl RangeCacheMemoryEngine {
                     before_pending,
                     iterating_pending,
                     upgrade_wait,
+                    release_lock,
                     post_iterating,
                 ),
             );
         }
 
+        drop(core);
+        let now3 = Instant::now();
+        release_lock = Some(now3.saturating_duration_since(now2));
+
         (
             RangeCacheStatus::NotInCache,
             (
-                (now2, 4),
+                (now3, 4),
                 before_lock_wait,
                 before_pending,
                 iterating_pending,
                 upgrade_wait,
+                release_lock,
                 post_iterating,
             ),
         )

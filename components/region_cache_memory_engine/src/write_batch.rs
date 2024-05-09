@@ -63,6 +63,7 @@ pub struct RangeCacheWriteBatch {
     iterating_pending: Duration,
     upgrade_wait: Duration,
     post_iterating: Duration,
+    release_lock: Duration,
 }
 
 impl std::fmt::Debug for RangeCacheWriteBatch {
@@ -96,6 +97,7 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
             prepare_apply_exit_time: Duration::default(),
             upgrade_wait: Duration::default(),
             post_iterating: Duration::default(),
+            release_lock: Duration::default(),
         }
     }
 }
@@ -122,6 +124,7 @@ impl RangeCacheWriteBatch {
             prepare_apply_exit_time: Duration::default(),
             upgrade_wait: Duration::default(),
             post_iterating: Duration::default(),
+            release_lock: Duration::default(),
         }
     }
 
@@ -181,10 +184,10 @@ impl RangeCacheWriteBatch {
         PREPARE_FOR_APPLY_DURATION_HISTOGRAM
             .with_label_values(&["prepare_duration"])
             .observe(dur.as_secs_f64());
-        let dur = std::mem::take(&mut self.prepare_apply);
-        PREPARE_FOR_APPLY_DURATION_HISTOGRAM
-            .with_label_values(&["prepare_apply"])
-            .observe(dur.as_secs_f64());
+        // let dur = std::mem::take(&mut self.prepare_apply);
+        // PREPARE_FOR_APPLY_DURATION_HISTOGRAM
+        //     .with_label_values(&["prepare_apply"])
+        //     .observe(dur.as_secs_f64());
         let dur = std::mem::take(&mut self.before_pending);
         PREPARE_FOR_APPLY_DURATION_HISTOGRAM
             .with_label_values(&["before_pending"])
@@ -196,6 +199,10 @@ impl RangeCacheWriteBatch {
         let dur = std::mem::take(&mut self.upgrade_wait);
         PREPARE_FOR_APPLY_DURATION_HISTOGRAM
             .with_label_values(&["upgrade_wait"])
+            .observe(dur.as_secs_f64());
+        let dur = std::mem::take(&mut self.release_lock);
+        PREPARE_FOR_APPLY_DURATION_HISTOGRAM
+            .with_label_values(&["release_lock"])
             .observe(dur.as_secs_f64());
         let dur = std::mem::take(&mut self.post_iterating);
         PREPARE_FOR_APPLY_DURATION_HISTOGRAM
@@ -585,6 +592,7 @@ impl WriteBatch for RangeCacheWriteBatch {
                 before_pending,
                 iterating_pending,
                 upgrade_wait,
+                release_lock,
                 post_iterating,
             ),
         ) = self.engine.prepare_for_apply(&range);
@@ -614,6 +622,9 @@ impl WriteBatch for RangeCacheWriteBatch {
         }
         if let Some(dur) = post_iterating {
             self.post_iterating += dur;
+        }
+        if let Some(dur) = release_lock {
+            self.release_lock += dur;
         }
     }
 }
