@@ -6007,6 +6007,12 @@ def RaftEngine() -> RowPanel:
                     ),
                 ],
             ),
+            graph_panel_histogram_quantiles(
+                title="Write Compression Ratio",
+                description="The compression ratio per write",
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
+                metric="raft_engine_write_compression_ratio",
+            ),
         ]
     )
     return layout.row_panel

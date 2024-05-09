@@ -17,7 +17,9 @@ use engine_traits::PerfLevel;
 use file_system::{IoPriority, IoRateLimitMode};
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
-use raft_log_engine::{ReadableSize as RaftEngineReadableSize, RecoveryMode};
+use raft_log_engine::{
+    RaftEngineConfig as RawRaftEngineConfig, ReadableSize as RaftEngineReadableSize, RecoveryMode,
+};
 use raftstore::{
     coprocessor::{Config as CopConfig, ConsistencyCheckMethod},
     store::Config as RaftstoreConfig,
@@ -977,4 +979,74 @@ engine = "partitioned-raft-kv"
     let old_cfg: TikvConfig = toml::from_str(old_content).unwrap();
     let new_cfg: TikvConfig = toml::from_str(new_content).unwrap();
     assert_eq_debug(&old_cfg, &new_cfg);
+}
+
+#[test]
+fn test_raft_engine_compression_thd() {
+    let default_batch_compression_threshold =
+        RawRaftEngineConfig::default().batch_compression_threshold;
+    let disable_async_io_content = r#"
+        [raftstore]
+        store-io-pool-size = 0
+
+        [raft-engine]
+        batch-compression-threshold = "64KB"
+    "#;
+    let mut cfg: TikvConfig = toml::from_str(disable_async_io_content).unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        RaftEngineReadableSize::kb(64)
+    );
+    cfg.validate().unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        RaftEngineReadableSize::kb(64)
+    );
+
+    let async_io_content = r#"
+        [raftstore]
+        store-io-pool-size = 3
+
+        [raft-engine]
+        batch-compression-threshold = "64KB"
+    "#;
+    cfg = toml::from_str(async_io_content).unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        RaftEngineReadableSize::kb(64)
+    );
+    cfg.validate().unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        RaftEngineReadableSize::kb(64)
+    );
+
+    let async_io_content = r#"
+        [raftstore]
+        store-io-pool-size = 5
+    "#;
+    cfg = toml::from_str(async_io_content).unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        default_batch_compression_threshold
+    );
+    cfg.validate().unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        RaftEngineReadableSize::kb(4)
+    );
+    let disable_async_io_content = r#"
+        [raftstore]
+        store-io-pool-size = 0
+    "#;
+    let mut cfg: TikvConfig = toml::from_str(disable_async_io_content).unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        default_batch_compression_threshold
+    );
+    cfg.validate().unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        default_batch_compression_threshold
+    );
 }
