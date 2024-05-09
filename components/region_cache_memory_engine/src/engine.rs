@@ -252,12 +252,12 @@ pub struct RangeCacheMemoryEngine {
 }
 
 impl RangeCacheMemoryEngine {
-    pub fn new(options: RangeCacheEngineContext) -> Self {
+    pub fn new(range_cache_engine_context: RangeCacheEngineContext) -> Self {
         info!("init range cache memory engine";);
         let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
         let skiplist_engine = { core.read().engine().clone() };
 
-        let RangeCacheEngineContext { config, statistics } = options;
+        let RangeCacheEngineContext { config, statistics } = range_cache_engine_context;
         assert!(config.value().enabled);
         let memory_controller = Arc::new(MemoryController::new(config.clone(), skiplist_engine));
 

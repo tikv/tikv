@@ -1676,11 +1676,11 @@ where
         let range_cache_engine_config = Arc::new(VersionTrack::new(
             self.core.config.range_cache_engine.clone(),
         ));
-        let range_cache_engine_options =
+        let range_cache_engine_context =
             RangeCacheEngineContext::new(range_cache_engine_config.clone());
-        let range_cache_engine_statistics = range_cache_engine_options.statistics();
+        let range_cache_engine_statistics = range_cache_engine_context.statistics();
         let kv_engine: EK = KvEngineBuilder::build(
-            range_cache_engine_options,
+            range_cache_engine_context,
             disk_engine.clone(),
             Some(self.pd_client.clone()),
         );
