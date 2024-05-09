@@ -408,6 +408,16 @@ impl RangeCacheIterator {
             self.iter.prev(guard);
         }
     }
+
+    #[inline]
+    fn collects_stats(&mut self) {
+        if self.valid {
+            // Updating stats and perf context counters
+            let read_bytes = (self.key().len() + self.value().len()) as u64;
+            self.local_stats.bytes_read += read_bytes;
+            perf_counter_add!(iter_read_bytes, read_bytes);
+        }
+    }
 }
 
 impl Iterator for RangeCacheIterator {
@@ -436,12 +446,7 @@ impl Iterator for RangeCacheIterator {
             self.find_next_visible_key(true, guard);
         }
 
-        if self.valid {
-            // Updating stats and perf context counters
-            let read_bytes = (self.key().len() + self.value().len()) as u64;
-            self.local_stats.bytes_read += read_bytes;
-            perf_counter_add!(iter_read_bytes, read_bytes);
-        }
+        self.collects_stats();
 
         Ok(self.valid)
     }
@@ -452,12 +457,7 @@ impl Iterator for RangeCacheIterator {
         let guard = &epoch::pin();
         self.prev_internal(guard);
 
-        if self.valid {
-            // Updating stats and perf context counters
-            let read_bytes = (self.key().len() + self.value().len()) as u64;
-            self.local_stats.bytes_read += read_bytes;
-            perf_counter_add!(iter_read_bytes, read_bytes);
-        }
+        self.collects_stats();
 
         Ok(self.valid)
     }
@@ -477,12 +477,7 @@ impl Iterator for RangeCacheIterator {
 
         let seek_key = encode_seek_key(seek_key, self.sequence_number);
         self.seek_internal(&seek_key);
-        if self.valid {
-            // Updating stats and perf context counters
-            let read_bytes = (self.key().len() + self.value().len()) as u64;
-            self.local_stats.bytes_read += read_bytes;
-            perf_counter_add!(iter_read_bytes, read_bytes);
-        }
+        self.collects_stats();
 
         Ok(self.valid)
     }
@@ -501,12 +496,7 @@ impl Iterator for RangeCacheIterator {
         };
 
         self.seek_for_prev_internal(&seek_key);
-        if self.valid {
-            // Updating stats and perf context counters
-            let read_bytes = (self.key().len() + self.value().len()) as u64;
-            self.local_stats.bytes_read += read_bytes;
-            perf_counter_add!(iter_read_bytes, read_bytes);
-        }
+        self.collects_stats();
 
         Ok(self.valid)
     }
@@ -517,12 +507,7 @@ impl Iterator for RangeCacheIterator {
         let seek_key = encode_seek_key(&self.lower_bound, self.sequence_number);
         self.seek_internal(&seek_key);
 
-        if self.valid {
-            // Updating stats and perf context counters
-            let read_bytes = (self.key().len() + self.value().len()) as u64;
-            self.local_stats.bytes_read += read_bytes;
-            perf_counter_add!(iter_read_bytes, read_bytes);
-        }
+        self.collects_stats();
 
         Ok(self.valid)
     }
@@ -537,12 +522,7 @@ impl Iterator for RangeCacheIterator {
             return Ok(false);
         }
 
-        if self.valid {
-            // Updating stats and perf context counters
-            let read_bytes = (self.key().len() + self.value().len()) as u64;
-            self.local_stats.bytes_read += read_bytes;
-            perf_counter_add!(iter_read_bytes, read_bytes);
-        }
+        self.collects_stats();
 
         Ok(self.valid)
     }
