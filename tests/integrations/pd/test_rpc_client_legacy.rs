@@ -699,6 +699,13 @@ fn test_update_service_gc_safepoint() {
     let update_gc_safepoint = |x| {
         block_on(client.update_service_safe_point("test".to_owned(), x, Duration::from_secs(1)))
     };
+    let clear_gc_safepoint = || {
+        block_on(client.update_service_safe_point(
+            "test".to_owned(),
+            TimeStamp::max(),
+            Duration::from_secs(0),
+        ))
+    };
 
     #[track_caller]
     fn assert_is_unsafe_safepoint(res: pd_client::Result<()>, current_min: u64, safe_point: u64) {
@@ -717,4 +724,6 @@ fn test_update_service_gc_safepoint() {
     assert_is_unsafe_safepoint(update_gc_safepoint(41.into()), 42, 41);
     update_gc_safepoint(43.into()).unwrap();
     assert_is_unsafe_safepoint(update_gc_safepoint(42.into()), 43, 42);
+    clear_gc_safepoint().unwrap();
+    update_gc_safepoint(41.into()).unwrap();
 }
