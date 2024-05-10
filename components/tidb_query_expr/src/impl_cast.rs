@@ -4712,7 +4712,7 @@ mod tests {
                     cast_float_real_as_string(
                         ctx,
                         extra,
-                        val.map(|x| Real::new(*x).unwrap()).as_ref(),
+                        val.map(|x| Real::new((*x).into()).unwrap()).as_ref(),
                     )
                 },
                 "cast_float_real_as_string",
