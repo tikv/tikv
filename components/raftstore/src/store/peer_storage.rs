@@ -795,8 +795,9 @@ where
                 } else if s == JOB_STATUS_CANCELLED {
                     SnapState::ApplyAborted
                 } else if s == JOB_STATUS_FAILED {
-                    // TODO: cleanup region and treat it as tombstone.
-                    panic!("{} applying snapshot failed", self.tag,);
+                    // Cleanup region and treat it as tombstone.
+                    warn!("{} applying snapshot failed", self.tag,);
+                    SnapState::ApplyAborted
                 } else {
                     return CheckApplyingSnapStatus::Applying;
                 }
@@ -2029,8 +2030,8 @@ pub mod tests {
         s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
             JOB_STATUS_FAILED,
         ))));
-        let res = panic_hook::recover_safe(|| s.cancel_applying_snap());
-        res.unwrap_err();
+        assert!(s.cancel_applying_snap());
+        assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
     }
 
     #[test]
@@ -2079,8 +2080,8 @@ pub mod tests {
         s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
             JOB_STATUS_FAILED,
         ))));
-        let res = panic_hook::recover_safe(|| s.check_applying_snap());
-        res.unwrap_err();
+        assert!(s.cancel_applying_snap());
+        assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
     }
 
     #[test]

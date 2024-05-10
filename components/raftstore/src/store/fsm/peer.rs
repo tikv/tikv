@@ -1269,6 +1269,11 @@ where
                 let _ = self.fsm.peer.raft_group.campaign();
                 self.fsm.has_ready = true;
             }
+            CasualMessage::ForceDestroyPeer { peer_id } => {
+                if self.fsm.peer.peer_id() == peer_id {
+                    self.maybe_destroy();
+                }
+            }
         }
     }
 

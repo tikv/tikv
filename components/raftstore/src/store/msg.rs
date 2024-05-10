@@ -645,6 +645,10 @@ pub enum CasualMessage<EK: KvEngine> {
 
     // Trigger raft to campaign which is used after exiting force leader
     Campaign,
+
+    ForceDestroyPeer {
+        peer_id: u64,
+    },
 }
 
 impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
@@ -712,6 +716,9 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             CasualMessage::RenewLease => write!(fmt, "RenewLease"),
             CasualMessage::SnapshotApplied => write!(fmt, "SnapshotApplied"),
             CasualMessage::Campaign => write!(fmt, "Campaign"),
+            CasualMessage::ForceDestroyPeer { peer_id } => {
+                write!(fmt, "ForceDestroyPeer(peer_id={})", peer_id)
+            }
         }
     }
 }

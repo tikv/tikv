@@ -538,8 +538,27 @@ where
             }
             Err(e) => {
                 error!(%e; "failed to apply snap!!!");
+                self.coprocessor_host
+                    .cancel_apply_snapshot(region_id, peer_id);
                 status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
                 SNAP_COUNTER.apply.fail.inc();
+                // As the snapshot failed, it should be cleared and the related peer should be
+                // destroyed.
+                if let Ok(apply_state) = self.apply_state(region_id) {
+                    let term = apply_state.get_truncated_state().get_term();
+                    let idx = apply_state.get_truncated_state().get_index();
+                    let snap_key = SnapKey::new(region_id, term, idx);
+                    let _ = self.router.send(
+                        region_id,
+                        CasualMessage::GcSnap {
+                            snaps: vec![(snap_key, false)],
+                        },
+                    );
+                }
+                let _ = self
+                    .router
+                    .send(region_id, CasualMessage::ForceDestroyPeer { peer_id });
+                return;
             }
         }
 
