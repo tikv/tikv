@@ -554,6 +554,13 @@ where
                             snaps: vec![(snap_key, false)],
                         },
                     );
+                    info!(
+                        "clear snapshot data";
+                        "region_id" => region_id,
+                        "peer_id" => peer_id,
+                        "term" => term,
+                        "index" => idx,
+                    );
                 }
                 let _ = self
                     .router
