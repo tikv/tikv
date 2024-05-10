@@ -223,7 +223,7 @@ pub fn run_tikv(
 
     dispatch_api_version!(config.storage.api_version(), {
         if !config.raft_engine.enable {
-            if cfg!(feature = "memory-engine") && config.range_cache_engine.enabled {
+            if cfg!(feature = "memory-engine") {
                 run_impl::<HybridEngine<RocksEngine, RangeCacheMemoryEngine>, RocksEngine, API>(
                     config,
                     service_event_tx,
@@ -237,7 +237,7 @@ pub fn run_tikv(
                 )
             }
         } else {
-            if cfg!(feature = "memory-engine") && config.range_cache_engine.enabled {
+            if cfg!(feature = "memory-engine") {
                 run_impl::<HybridEngine<RocksEngine, RangeCacheMemoryEngine>, RaftLogEngine, API>(
                     config,
                     service_event_tx,
