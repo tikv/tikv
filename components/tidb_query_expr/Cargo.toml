@@ -22,6 +22,7 @@ num-traits = "0.2"
 openssl = { workspace = true }
 protobuf = "2"
 regex = "1.1"
+ryu = "1.0"
 safemem = { version = "0.3", default-features = false }
 serde = "1.0"
 serde_json = "1.0"
@@ -34,7 +35,6 @@ time = { workspace = true }
 tipb = { workspace = true }
 twoway = "0.2.0"
 uuid = { version = "0.8.1", features = ["v4"] }
-ryu = "1.0"
 
 [dev-dependencies]
 bstr = "0.2.8"
