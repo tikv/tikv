@@ -711,7 +711,7 @@ mod ryu_strconv {
             const EXP_FORMAT_SMALL: f32 = 1e-15;
 
             let abs = self.abs();
-            return (abs) >= EXP_FORMAT_BIG || ((abs) != 0.0 && (abs) < EXP_FORMAT_SMALL);
+            (abs) >= EXP_FORMAT_BIG || ((abs) != 0.0 && (abs) < EXP_FORMAT_SMALL)
         }
     }
     impl FloatExpFormat for f64 {
@@ -720,7 +720,7 @@ mod ryu_strconv {
             const EXP_FORMAT_SMALL: f64 = 1e-15;
 
             let abs = self.abs();
-            return (abs) >= EXP_FORMAT_BIG || ((abs) != 0.0 && (abs) < EXP_FORMAT_SMALL);
+            (abs) >= EXP_FORMAT_BIG || ((abs) != 0.0 && (abs) < EXP_FORMAT_SMALL)
         }
     }
 
@@ -774,10 +774,8 @@ mod ryu_strconv {
             if exp_pos >= 0 {
                 return str.to_owned();
             }
-        } else {
-            if exp_pos < 0 {
-                return str.to_owned();
-            }
+        } else if exp_pos < 0 {
+            return str.to_owned();
         }
 
         let mut exp10 = 0i32;
@@ -800,20 +798,18 @@ mod ryu_strconv {
 
         if int_ed - int_bg > 1 {
             exp10 += (int_ed - (int_bg + 1)) as i32;
-        } else {
-            if ss[int_bg] == b'0' {
-                int_bg += 1;
+        } else if ss[int_bg] == b'0' {
+            int_bg += 1;
 
-                let mut new_float_bg = float_bg;
-                for i in float_bg..float_ed {
-                    exp10 -= 1;
-                    if ss[i] != b'0' {
-                        new_float_bg = i;
-                        break;
-                    }
+            let mut new_float_bg = float_bg;
+            for i in float_bg..float_ed {
+                exp10 -= 1;
+                if ss[i] != b'0' {
+                    new_float_bg = i;
+                    break;
                 }
-                float_bg = new_float_bg;
             }
+            float_bg = new_float_bg;
         }
 
         {
@@ -838,39 +834,37 @@ mod ryu_strconv {
                 t.trim_tail_zero();
                 t.trim();
                 t.put_exp10(exp10);
-            } else {
-                if exp10 < 0 {
-                    exp10 = -exp10;
-                    t.put_zero();
-                    t.put_dot();
-                    exp10 -= 1;
+            } else if exp10 < 0 {
+                exp10 = -exp10;
+                t.put_zero();
+                t.put_dot();
+                exp10 -= 1;
 
+                while exp10 != 0 {
+                    t.put_zero();
+                    exp10 -= 1;
+                }
+                t.put_slice(&ss[int_bg..int_ed]);
+                t.put_slice(&ss[float_bg..float_ed]);
+            } else {
+                debug_assert_eq!(int_ed - int_bg, 1);
+                t.put_slice(&ss[int_bg..int_ed]);
+                if exp10 < (float_ed - float_bg) as i32 {
+                    t.put_slice(&ss[float_bg..float_bg + exp10 as usize]);
+                    t.put_dot();
+                    float_bg += exp10 as usize;
+                    t.put_slice(&ss[float_bg..float_ed]);
+                } else {
+                    t.put_slice(&ss[float_bg..float_ed]);
+                    exp10 -= (float_ed - float_bg) as i32;
                     while exp10 != 0 {
                         t.put_zero();
                         exp10 -= 1;
                     }
-                    t.put_slice(&ss[int_bg..int_ed]);
-                    t.put_slice(&ss[float_bg..float_ed]);
-                } else {
-                    debug_assert_eq!(int_ed - int_bg, 1);
-                    t.put_slice(&ss[int_bg..int_ed]);
-                    if exp10 < (float_ed - float_bg) as i32 {
-                        t.put_slice(&ss[float_bg..float_bg + exp10 as usize]);
-                        t.put_dot();
-                        float_bg += exp10 as usize;
-                        t.put_slice(&ss[float_bg..float_ed]);
-                    } else {
-                        t.put_slice(&ss[float_bg..float_ed]);
-                        exp10 -= (float_ed - float_bg) as i32;
-                        while exp10 != 0 {
-                            t.put_zero();
-                            exp10 -= 1;
-                        }
-                    }
                 }
             }
 
-            return t.to_string();
+            t.into_string()
         }
     }
 
@@ -913,8 +907,8 @@ mod ryu_strconv {
         fn put_neg(&mut self) {
             self.put(b'-')
         }
-        fn to_string(&self) -> String {
-            return String::from_utf8(self.buff[..self.size].to_vec()).unwrap();
+        fn into_string(self) -> String {
+            String::from_utf8(self.buff[..self.size].to_vec()).unwrap()
         }
         fn put_exp10(&mut self, mut e10: i32) {
             self.put(b'e');
@@ -965,7 +959,7 @@ fn cast_double_real_as_string(
     match val {
         None => Ok(None),
         Some(val) => {
-            let val = val.into_inner() as f64;
+            let val = val.into_inner();
             let val = ryu_strconv::format_float(val).into_bytes();
             cast_as_string_helper(ctx, extra, val)
         }
@@ -4704,7 +4698,7 @@ mod tests {
                     "9.9999e-16".to_string(),
                 ),
                 (
-                    1.23456789123000e-9,
+                    1.23456789123000e-9f64 as f32,
                     "0.0000000012345679".to_string().into_bytes(),
                     "0.0000000012345679".to_string(),
                 ),
@@ -4718,7 +4712,7 @@ mod tests {
                     cast_float_real_as_string(
                         ctx,
                         extra,
-                        val.map(|x| Real::new(f64::from(*x)).unwrap()).as_ref(),
+                        val.map(|x| Real::new(*x).unwrap()).as_ref(),
                     )
                 },
                 "cast_float_real_as_string",
