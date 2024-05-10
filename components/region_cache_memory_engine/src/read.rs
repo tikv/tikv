@@ -824,12 +824,14 @@ mod tests {
 
         let key = construct_mvcc_key("b", 10);
         iter.seek(&key).unwrap();
+        assert_eq!(iter.value(), b"val");
         let key = construct_mvcc_key("d", 10);
         iter.seek(&key).unwrap();
         assert!(!iter.valid().unwrap());
 
         let key = construct_mvcc_key("b", 10);
         iter.seek_for_prev(&key).unwrap();
+        assert_eq!(iter.value(), b"val");
         let key = construct_mvcc_key("a", 10);
         iter.seek_for_prev(&key).unwrap();
         assert!(!iter.valid().unwrap());
