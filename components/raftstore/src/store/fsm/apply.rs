@@ -570,8 +570,19 @@ where
         delegate: &mut ApplyDelegate<EK>,
         results: VecDeque<ExecResult<EK::Snapshot>>,
     ) {
+<<<<<<< HEAD
         if !delegate.pending_remove {
             delegate.write_apply_state(self.kv_wb_mut());
+=======
+        if self.host.pre_persist(&delegate.region, true, None) {
+            delegate.maybe_write_apply_state(self);
+            self.commit_opt(delegate, false);
+        } else {
+            debug!("do not persist when finish_for";
+                "region" => ?delegate.region,
+                "tag" => &delegate.tag,
+            );
+>>>>>>> 9711e316e3 (raftstore: update apply state even if peer is removed (#16060))
         }
         self.commit_opt(delegate, false);
         self.apply_res.push(ApplyRes {
@@ -4671,6 +4682,21 @@ mod tests {
         )
     }
 
+    fn cb_conf_change<S: Snapshot>(
+        idx: u64,
+        term: u64,
+        tx: Sender<RaftCmdResponse>,
+    ) -> Proposal<Callback<S>> {
+        proposal(
+            true,
+            idx,
+            term,
+            Callback::write(Box::new(move |resp: WriteResponse| {
+                tx.send(resp.response).unwrap();
+            })),
+        )
+    }
+
     struct EntryBuilder {
         entry: Entry,
         req: RaftCmdRequest,
@@ -4773,6 +4799,42 @@ mod tests {
             self
         }
 
+<<<<<<< HEAD
+=======
+        fn prepare_merge(mut self, target: metapb::Region) -> EntryBuilder {
+            let mut request = AdminRequest::default();
+            request.set_cmd_type(AdminCmdType::PrepareMerge);
+            request.mut_prepare_merge().set_target(target);
+            self.req.set_admin_request(request);
+            self
+        }
+
+        fn compact_log(mut self, index: u64, term: u64) -> EntryBuilder {
+            let mut req = AdminRequest::default();
+            req.set_cmd_type(AdminCmdType::CompactLog);
+            req.mut_compact_log().set_compact_index(index);
+            req.mut_compact_log().set_compact_term(term);
+            self.req.set_admin_request(req);
+            self
+        }
+
+        fn compute_hash(mut self, context: Vec<u8>) -> EntryBuilder {
+            let mut req = AdminRequest::default();
+            req.set_cmd_type(AdminCmdType::ComputeHash);
+            req.mut_compute_hash().set_context(context);
+            self.req.set_admin_request(req);
+            self
+        }
+
+        fn conf_change(mut self, changes: Vec<ChangePeerRequest>) -> EntryBuilder {
+            let mut req = AdminRequest::default();
+            req.set_cmd_type(AdminCmdType::ChangePeerV2);
+            req.mut_change_peer_v2().set_changes(changes.into());
+            self.req.set_admin_request(req);
+            self
+        }
+
+>>>>>>> 9711e316e3 (raftstore: update apply state even if peer is removed (#16060))
         fn build(mut self) -> Entry {
             self.entry
                 .set_data(self.req.write_to_bytes().unwrap().into());
@@ -5846,6 +5908,125 @@ mod tests {
             },
         );
         rx.recv_timeout(Duration::from_millis(500)).unwrap();
+
+        system.shutdown();
+    }
+
+    // When a peer is removed, it is necessary to update its apply state because
+    // this peer may be simultaneously taking a snapshot. An outdated apply state
+    // invalidates the coprocessor cache assumption (apply state must match data
+    // in the snapshot) and potentially lead to a violation of linearizability
+    // (returning stale cache).
+    #[test]
+    fn test_conf_change_remove_node_update_apply_state() {
+        let (_path, engine) = create_tmp_engine("test-delegate");
+        let (_import_dir, importer) = create_tmp_importer("test-delegate");
+        let peer_id = 3;
+        let mut reg = Registration {
+            id: peer_id,
+            term: 1,
+            ..Default::default()
+        };
+        reg.region.set_id(1);
+        reg.region.set_end_key(b"k5".to_vec());
+        reg.region.mut_region_epoch().set_version(3);
+        let peers = vec![new_peer(2, 3), new_peer(4, 5), new_learner_peer(6, 7)];
+        reg.region.set_peers(peers.into());
+        let (tx, apply_res_rx) = mpsc::channel();
+        let sender = Box::new(TestNotifier { tx });
+        let coprocessor_host = CoprocessorHost::<KvTestEngine>::default();
+        let (region_scheduler, _) = dummy_scheduler();
+        let cfg = Arc::new(VersionTrack::new(Config::default()));
+        let (router, mut system) = create_apply_batch_system(&cfg.value(), None);
+        let pending_create_peers = Arc::new(Mutex::new(HashMap::default()));
+        let builder = super::Builder::<KvTestEngine> {
+            tag: "test-store".to_owned(),
+            cfg,
+            sender,
+            importer,
+            region_scheduler,
+            coprocessor_host,
+            engine: engine.clone(),
+            router: router.clone(),
+            store_id: 2,
+            pending_create_peers,
+        };
+        system.spawn("test-conf-change".to_owned(), builder);
+
+        router.schedule_task(1, Msg::Registration(reg.dup()));
+
+        let mut index_id = 1;
+        let epoch = reg.region.get_region_epoch().to_owned();
+
+        // Write some data.
+        let (capture_tx, capture_rx) = mpsc::channel();
+        let put_entry = EntryBuilder::new(index_id, 1)
+            .put(b"k1", b"v1")
+            .epoch(epoch.get_conf_ver(), epoch.get_version())
+            .build();
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                1,
+                vec![put_entry],
+                vec![cb(index_id, 1, capture_tx)],
+            )),
+        );
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+        let initial_state: RaftApplyState = engine
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
+            .unwrap()
+            .unwrap();
+        assert_ne!(initial_state.get_applied_index(), 0);
+        match apply_res_rx.recv_timeout(Duration::from_secs(3)) {
+            Ok(PeerMsg::ApplyRes {
+                res: TaskRes::Apply(apply_res),
+            }) => assert_eq!(apply_res.apply_state, initial_state),
+            e => panic!("unexpected result: {:?}", e),
+        }
+        index_id += 1;
+
+        // Remove itself.
+        let (capture_tx, capture_rx) = mpsc::channel();
+        let mut remove_node = ChangePeerRequest::default();
+        remove_node.set_change_type(ConfChangeType::RemoveNode);
+        remove_node.set_peer(new_peer(2, 3));
+        let conf_change = EntryBuilder::new(index_id, 1)
+            .conf_change(vec![remove_node])
+            .epoch(epoch.get_conf_ver(), epoch.get_version())
+            .build();
+        router.schedule_task(
+            1,
+            Msg::apply(apply(
+                peer_id,
+                1,
+                1,
+                vec![conf_change],
+                vec![cb_conf_change(index_id, 1, capture_tx)],
+            )),
+        );
+        let resp = capture_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(!resp.get_header().has_error(), "{:?}", resp);
+
+        let apply_state: RaftApplyState = engine
+            .get_msg_cf(CF_RAFT, &keys::apply_state_key(1))
+            .unwrap()
+            .unwrap();
+        match apply_res_rx.recv_timeout(Duration::from_secs(3)) {
+            Ok(PeerMsg::ApplyRes {
+                res: TaskRes::Apply(apply_res),
+            }) => assert_eq!(apply_res.apply_state, apply_state),
+            e => panic!("unexpected result: {:?}", e),
+        }
+        assert!(
+            apply_state.get_applied_index() > initial_state.get_applied_index(),
+            "\n{:?}\n{:?}",
+            apply_state,
+            initial_state
+        );
 
         system.shutdown();
     }
