@@ -36,7 +36,7 @@ use raftstore::{router::CdcRaftRouter, RegionInfoAccessor};
 use resolved_ts::LeadershipResolver;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
-use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
+use test_raftstore::{new_server_cluster, Cluster, Config, ServerCluster};
 use test_util::retry;
 use tikv::config::BackupStreamConfig;
 use tikv_util::{
@@ -125,6 +125,7 @@ pub struct SuiteBuilder {
     nodes: usize,
     metastore_error: Box<dyn Fn(&str) -> Result<()> + Send + Sync>,
     cfg: Box<dyn FnOnce(&mut BackupStreamConfig)>,
+    cluster_cfg: Box<dyn FnOnce(&mut Config)>,
 }
 
 impl SuiteBuilder {
@@ -136,6 +137,7 @@ impl SuiteBuilder {
             cfg: Box::new(|cfg| {
                 cfg.enable = true;
             }),
+            cluster_cfg: Box::new(|_| {}),
         }
     }
 
@@ -163,16 +165,28 @@ impl SuiteBuilder {
         self
     }
 
+    #[allow(dead_code)]
+    pub fn cluster_cfg(mut self, f: impl FnOnce(&mut Config) + 'static) -> Self {
+        let old_f = self.cluster_cfg;
+        self.cluster_cfg = Box::new(move |cfg| {
+            old_f(cfg);
+            f(cfg);
+        });
+        self
+    }
+
     pub fn build(self) -> Suite {
         let Self {
             name: case,
             nodes: n,
             metastore_error,
             cfg: cfg_f,
+            cluster_cfg: ccfg_f,
         } = self;
 
         info!("start test"; "case" => %case, "nodes" => %n);
-        let cluster = new_server_cluster(42, n);
+        let mut cluster = new_server_cluster(42, n);
+        ccfg_f(&mut cluster.cfg);
         let mut suite = Suite {
             endpoints: Default::default(),
             meta_store: ErrorStore {
@@ -258,7 +272,7 @@ pub struct Suite {
     // The place to make services live as long as suite.
     servers: Vec<Server>,
 
-    temp_files: TempDir,
+    pub temp_files: TempDir,
     pub flushed_files: TempDir,
     case_name: String,
 }
@@ -390,7 +404,7 @@ impl Suite {
             cluster.pd_client.clone(),
             cm,
             BackupStreamResolver::V1(resolver),
-            sim.importers[id].da,
+            sim.encryption.clone(),
         );
         worker.start(endpoint);
     }
@@ -471,10 +485,10 @@ impl Suite {
         for_table: i64,
     ) -> HashSet<Vec<u8>> {
         let mut inserted = HashSet::default();
-        for ts in (from..(from + n)).map(|x| x * 2) {
-            let ts = ts as u64;
-            let key = make_record_key(for_table, ts);
-            let value = if ts % 4 == 0 {
+        for sn in (from..(from + n)).map(|x| x * 2) {
+            let sn = sn as u64;
+            let key = make_record_key(for_table, sn);
+            let value = if sn % 4 == 0 {
                 Self::PROMISED_SHORT_VALUE.to_vec()
             } else {
                 Self::PROMISED_LONG_VALUE.to_vec()
@@ -488,7 +502,7 @@ impl Suite {
             self.must_kv_commit(region, vec![key.clone()], start_ts, commit_ts);
             inserted.insert(make_encoded_record_key(
                 for_table,
-                ts,
+                sn,
                 commit_ts.into_inner(),
             ));
         }
