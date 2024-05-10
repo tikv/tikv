@@ -821,11 +821,11 @@ mod tests {
     pub struct MockRangeSnapIterMetricsCollector;
 
     impl IterMetricsCollector for MockRangeSnapIterMetricsCollector {
-        fn internal_delete_skipped_count(&self) -> usize {
+        fn internal_delete_skipped_count(&self) -> u64 {
             0
         }
 
-        fn internal_key_skipped_count(&self) -> usize {
+        fn internal_key_skipped_count(&self) -> u64 {
             0
         }
     }
