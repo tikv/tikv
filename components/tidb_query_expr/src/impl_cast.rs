@@ -4654,7 +4654,7 @@ mod tests {
                     cast_double_real_as_string(
                         ctx,
                         extra,
-                        val.map(|x| Real::new(f64::from(*x)).unwrap()).as_ref(),
+                        val.map(|x| Real::new(*x).unwrap()).as_ref(),
                     )
                 },
                 "cast_double_real_as_string",
