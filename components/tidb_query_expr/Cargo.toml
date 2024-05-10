@@ -21,6 +21,7 @@ openssl = { version = "0.10" }
 protobuf = "2"
 rand = "0.8.3"
 regex = "1.1"
+ryu = "1.0"
 safemem = { version = "0.3", default-features = false }
 serde = "1.0"
 serde_json = "1.0"
@@ -33,7 +34,6 @@ time = "0.1"
 tipb = { workspace = true }
 twoway = "0.2.0"
 uuid = { version = "0.8.1", features = ["v4"] }
-ryu = "1.0"
 
 [dev-dependencies]
 bstr = "0.2.8"
