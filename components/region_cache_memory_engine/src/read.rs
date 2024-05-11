@@ -244,6 +244,24 @@ impl Drop for RangeCacheIterator {
     fn drop(&mut self) {
         self.statistics
             .record_ticker(Tickers::IterBytesRead, self.local_stats.bytes_read);
+        self.statistics
+            .record_ticker(Tickers::NumberDbSeek, self.local_stats.number_db_seek);
+        self.statistics.record_ticker(
+            Tickers::NumberDbSeekFound,
+            self.local_stats.number_db_seek_found,
+        );
+        self.statistics
+            .record_ticker(Tickers::NumberDbNext, self.local_stats.number_db_next);
+        self.statistics.record_ticker(
+            Tickers::NumberDbNextFound,
+            self.local_stats.number_db_next_found,
+        );
+        self.statistics
+            .record_ticker(Tickers::NumberDbPrev, self.local_stats.number_db_prev);
+        self.statistics.record_ticker(
+            Tickers::NumberDbPrevFound,
+            self.local_stats.number_db_prev_found,
+        );
     }
 }
 
@@ -310,6 +328,7 @@ impl RangeCacheIterator {
     fn seek_internal(&mut self, key: &InternalBytes) {
         let guard = &epoch::pin();
         self.iter.seek(key, guard);
+        self.local_stats.number_db_seek += 1;
         if self.iter.valid() {
             self.find_next_visible_key(false, guard);
         }
@@ -318,6 +337,7 @@ impl RangeCacheIterator {
     fn seek_for_prev_internal(&mut self, key: &InternalBytes) {
         let guard = &epoch::pin();
         self.iter.seek_for_prev(key, guard);
+        self.local_stats.number_db_seek += 1;
         self.prev_internal(guard);
     }
 
@@ -410,13 +430,11 @@ impl RangeCacheIterator {
     }
 
     #[inline]
-    fn collects_stats(&mut self) {
-        if self.valid {
-            // Updating stats and perf context counters
-            let read_bytes = (self.key().len() + self.value().len()) as u64;
-            self.local_stats.bytes_read += read_bytes;
-            perf_counter_add!(iter_read_bytes, read_bytes);
-        }
+    fn collects_read_flow_stats(&mut self) {
+        // Updating stats and perf context counters
+        let read_bytes = (self.key().len() + self.value().len()) as u64;
+        self.local_stats.bytes_read += read_bytes;
+        perf_counter_add!(iter_read_bytes, read_bytes);
     }
 }
 
@@ -440,14 +458,20 @@ impl Iterator for RangeCacheIterator {
         assert!(self.direction == Direction::Forward);
         let guard = &epoch::pin();
         self.iter.next(guard);
+
         perf_counter_add!(internal_key_skipped_count, 1);
+        self.local_stats.number_db_next += 1;
+
         self.valid = self.iter.valid();
         if self.valid {
             // self.valid can be changed after this
             self.find_next_visible_key(true, guard);
         }
 
-        self.collects_stats();
+        if self.valid {
+            self.local_stats.number_db_next_found += 1;
+            self.collects_read_flow_stats();
+        }
 
         Ok(self.valid)
     }
@@ -458,7 +482,11 @@ impl Iterator for RangeCacheIterator {
         let guard = &epoch::pin();
         self.prev_internal(guard);
 
-        self.collects_stats();
+        self.local_stats.number_db_prev += 1;
+        if self.valid {
+            self.local_stats.number_db_prev_found += 1;
+            self.collects_read_flow_stats();
+        }
 
         Ok(self.valid)
     }
@@ -478,7 +506,10 @@ impl Iterator for RangeCacheIterator {
 
         let seek_key = encode_seek_key(seek_key, self.sequence_number);
         self.seek_internal(&seek_key);
-        self.collects_stats();
+        if self.valid {
+            self.collects_read_flow_stats();
+            self.local_stats.number_db_seek_found += 1;
+        }
 
         Ok(self.valid)
     }
@@ -497,7 +528,10 @@ impl Iterator for RangeCacheIterator {
         };
 
         self.seek_for_prev_internal(&seek_key);
-        self.collects_stats();
+        if self.valid {
+            self.collects_read_flow_stats();
+            self.local_stats.number_db_seek_found += 1;
+        }
 
         Ok(self.valid)
     }
@@ -508,7 +542,10 @@ impl Iterator for RangeCacheIterator {
         let seek_key = encode_seek_key(&self.lower_bound, self.sequence_number);
         self.seek_internal(&seek_key);
 
-        self.collects_stats();
+        if self.valid {
+            self.collects_read_flow_stats();
+            self.local_stats.number_db_seek_found += 1;
+        }
 
         Ok(self.valid)
     }
@@ -523,7 +560,10 @@ impl Iterator for RangeCacheIterator {
             return Ok(false);
         }
 
-        self.collects_stats();
+        if self.valid {
+            self.collects_read_flow_stats();
+            self.local_stats.number_db_seek_found += 1;
+        }
 
         Ok(self.valid)
     }
