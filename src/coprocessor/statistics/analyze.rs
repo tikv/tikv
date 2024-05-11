@@ -535,8 +535,6 @@ pub(crate) struct SampleBuilder<S: Snapshot, F: KvFormat> {
     max_fm_sketch_size: usize,
     cm_sketch_depth: usize,
     cm_sketch_width: usize,
-    stats_version: AnalyzeVersion,
-    top_n_size: usize,
     columns_info: Vec<tipb::ColumnInfo>,
     analyze_common_handle: bool,
     common_handle_col_ids: Vec<i64>,
@@ -574,16 +572,6 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
             max_sample_size: req.get_sample_size() as usize,
             cm_sketch_depth: req.get_cmsketch_depth() as usize,
             cm_sketch_width: req.get_cmsketch_width() as usize,
-            stats_version: common_handle_req.as_ref().map_or_else(
-                || AnalyzeVersion::V1,
-                |req| match req.has_version() {
-                    true => req.get_version().into(),
-                    _ => AnalyzeVersion::V1,
-                },
-            ),
-            top_n_size: common_handle_req
-                .as_ref()
-                .map_or_else(|| 0_usize, |req| req.get_top_n_size() as usize),
             common_handle_col_ids: common_handle_ids,
             columns_info,
             analyze_common_handle: common_handle_req.is_some(),
