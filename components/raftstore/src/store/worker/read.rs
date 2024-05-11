@@ -30,7 +30,7 @@ use tikv_util::{
 };
 use time::Timespec;
 use tracker::GLOBAL_TRACKERS;
-use txn_types::TimeStamp;
+use txn_types::{TimeStamp, WriteBatchFlags};
 
 use super::metrics::*;
 use crate::{
@@ -929,74 +929,155 @@ where
         cmd.callback.set_result(read_resp);
     }
 
+    /// Try to handle the read request using local read, if the leader is valid
+    /// the read response is returned, otherwise None is returned.
+    fn try_local_leader_read(
+        &mut self,
+        req: &RaftCmdRequest,
+        delegate: &mut CachedReadDelegate<E>,
+        read_id: Option<ThreadReadId>,
+        snap_updated: &mut bool,
+        last_valid_ts: Timespec,
+    ) -> Option<ReadResponse<E::Snapshot>> {
+        let mut local_read_ctx = LocalReadContext::new(&mut self.snap_cache, read_id);
+
+        (*snap_updated) =
+            local_read_ctx.maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
+
+        let snapshot_ts = local_read_ctx.snapshot_ts().unwrap();
+        if !delegate.is_in_leader_lease(snapshot_ts) {
+            return None;
+        }
+
+        let region = Arc::clone(&delegate.region);
+        let mut response = delegate.execute(req, &region, None, Some(local_read_ctx));
+        if let Some(snap) = response.snapshot.as_mut() {
+            snap.bucket_meta = delegate.bucket_meta.clone();
+        }
+        // Try renew lease in advance
+        delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
+        Some(response)
+    }
+
+    /// Try to handle the stale read request, if the read_ts < safe_ts the read
+    /// response is returned, otherwise the raft command response with
+    /// `DataIsNotReady` error is returned.
+    fn try_local_stale_read(
+        &mut self,
+        req: &RaftCmdRequest,
+        delegate: &mut CachedReadDelegate<E>,
+        snap_updated: &mut bool,
+        last_valid_ts: Timespec,
+    ) -> std::result::Result<ReadResponse<E::Snapshot>, RaftCmdResponse> {
+        let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
+        delegate.check_stale_read_safe(read_ts)?;
+
+        // Stale read does not use cache, so we pass None for read_id
+        let mut local_read_ctx = LocalReadContext::new(&mut self.snap_cache, None);
+        (*snap_updated) =
+            local_read_ctx.maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
+
+        let region = Arc::clone(&delegate.region);
+        // Getting the snapshot
+        let mut response = delegate.execute(req, &region, None, Some(local_read_ctx));
+        if let Some(snap) = response.snapshot.as_mut() {
+            snap.bucket_meta = delegate.bucket_meta.clone();
+        }
+        // Double check in case `safe_ts` change after the first check and before
+        // getting snapshot
+        delegate.check_stale_read_safe(read_ts)?;
+
+        TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_stale_read_requests.inc());
+        Ok(response)
+    }
+
     pub fn propose_raft_command(
         &mut self,
         read_id: Option<ThreadReadId>,
-        req: RaftCmdRequest,
+        mut req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) {
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => {
-                let snap_updated;
+                let mut snap_updated = false;
                 let last_valid_ts = delegate.last_valid_ts;
                 let mut response = match policy {
                     // Leader can read local if and only if it is in lease.
                     RequestPolicy::ReadLocal => {
-                        let mut local_read_ctx =
-                            LocalReadContext::new(&mut self.snap_cache, read_id);
-
-                        snap_updated = local_read_ctx
-                            .maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
-
-                        let snapshot_ts = local_read_ctx.snapshot_ts().unwrap();
-                        if !delegate.is_in_leader_lease(snapshot_ts) {
+                        if let Some(read_resp) = self.try_local_leader_read(
+                            &req,
+                            &mut delegate,
+                            read_id,
+                            &mut snap_updated,
+                            last_valid_ts,
+                        ) {
+                            read_resp
+                        } else {
                             fail_point!("localreader_before_redirect", |_| {});
                             // Forward to raftstore.
                             self.redirect(RaftCommand::new(req, cb));
                             return;
                         }
-
-                        let region = Arc::clone(&delegate.region);
-                        let response = delegate.execute(&req, &region, None, Some(local_read_ctx));
-
-                        // Try renew lease in advance
-                        delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
-                        response
                     }
                     // Replica can serve stale read if and only if its `safe_ts` >= `read_ts`
                     RequestPolicy::StaleRead => {
-                        let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
-                        if let Err(resp) = delegate.check_stale_read_safe(read_ts) {
-                            cb.set_result(ReadResponse {
-                                response: resp,
-                                snapshot: None,
-                                txn_extra_op: TxnExtraOp::Noop,
-                            });
-                            return;
+                        match self.try_local_stale_read(
+                            &req,
+                            &mut delegate,
+                            &mut snap_updated,
+                            last_valid_ts,
+                        ) {
+                            Ok(read_resp) => read_resp,
+                            Err(err_resp) => {
+                                // It's safe to change the header of the `RaftCmdRequest`, as it
+                                // would not affect the `SnapCtx` used in upper layer like.
+                                let unset_stale_flag = req.get_header().get_flags()
+                                    & (!WriteBatchFlags::STALE_READ.bits());
+                                req.mut_header().set_flags(unset_stale_flag);
+                                let mut inspector = Inspector {
+                                    delegate: &delegate,
+                                };
+                                // The read request could be handled using snapshot read if the
+                                // local peer is a valid leader.
+                                let allow_fallback_leader_read = inspector
+                                    .inspect(&req)
+                                    .map_or(false, |r| r == RequestPolicy::ReadLocal);
+                                if !allow_fallback_leader_read {
+                                    cb.set_result(ReadResponse {
+                                        response: err_resp,
+                                        snapshot: None,
+                                        txn_extra_op: TxnExtraOp::Noop,
+                                    });
+                                    return;
+                                }
+                                if let Some(read_resp) = self.try_local_leader_read(
+                                    &req,
+                                    &mut delegate,
+                                    None,
+                                    &mut snap_updated,
+                                    last_valid_ts,
+                                ) {
+                                    TLS_LOCAL_READ_METRICS.with(|m| {
+                                        m.borrow_mut()
+                                            .local_executed_stale_read_fallback_success_requests
+                                            .inc()
+                                    });
+                                    read_resp
+                                } else {
+                                    TLS_LOCAL_READ_METRICS.with(|m| {
+                                        m.borrow_mut()
+                                            .local_executed_stale_read_fallback_failure_requests
+                                            .inc()
+                                    });
+                                    cb.set_result(ReadResponse {
+                                        response: err_resp,
+                                        snapshot: None,
+                                        txn_extra_op: TxnExtraOp::Noop,
+                                    });
+                                    return;
+                                }
+                            }
                         }
-
-                        // Stale read does not use cache, so we pass None for read_id
-                        let mut local_read_ctx = LocalReadContext::new(&mut self.snap_cache, None);
-                        snap_updated = local_read_ctx
-                            .maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
-
-                        let region = Arc::clone(&delegate.region);
-                        // Getting the snapshot
-                        let response = delegate.execute(&req, &region, None, Some(local_read_ctx));
-
-                        // Double check in case `safe_ts` change after the first check and before
-                        // getting snapshot
-                        if let Err(resp) = delegate.check_stale_read_safe(read_ts) {
-                            cb.set_result(ReadResponse {
-                                response: resp,
-                                snapshot: None,
-                                txn_extra_op: TxnExtraOp::Noop,
-                            });
-                            return;
-                        }
-                        TLS_LOCAL_READ_METRICS
-                            .with(|m| m.borrow_mut().local_executed_stale_read_requests.inc());
-                        response
                     }
                     _ => unreachable!(),
                 };

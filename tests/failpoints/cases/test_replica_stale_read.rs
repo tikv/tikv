@@ -288,9 +288,11 @@ fn test_update_resoved_ts_before_apply_index() {
     sleep_ms(100);
 
     // The leader can't handle stale read with `commit_ts2` because its `safe_ts`
-    // can't update due to its `apply_index` not update
+    // can't update due to its `apply_index` not update.
+    // The request would be handled as a snapshot read on the valid leader peer
+    // after fallback.
     let resp = leader_client.kv_read(b"key1".to_vec(), commit_ts2);
-    assert!(resp.get_region_error().has_data_is_not_ready(),);
+    assert_eq!(resp.get_value(), b"value2");
     // The follower can't handle stale read with `commit_ts2` because it don't
     // have enough data
     let resp = follower_client2.kv_read(b"key1".to_vec(), commit_ts2);
@@ -669,8 +671,7 @@ fn test_stale_read_future_ts_not_update_max_ts() {
 
     // Perform stale read with a future ts should return error
     let read_ts = get_tso(&pd_client) + 10000000;
-    let resp = leader_client.kv_read(b"key1".to_vec(), read_ts);
-    assert!(resp.get_region_error().has_data_is_not_ready());
+    leader_client.must_kv_read_equal(b"key1".to_vec(), b"value1".to_vec(), read_ts);
 
     // The `max_ts` should not updated by the stale read request, so we can prewrite
     // and commit `async_commit` transaction with a ts that smaller than the
@@ -687,10 +688,10 @@ fn test_stale_read_future_ts_not_update_max_ts() {
     leader_client.must_kv_commit(vec![b"key2".to_vec()], prewrite_ts, commit_ts);
     leader_client.must_kv_read_equal(b"key2".to_vec(), b"value1".to_vec(), get_tso(&pd_client));
 
-    // Perform stale read with a future ts should return error
+    // Perform stale read with a future ts, the stale read could be processed
+    // falling back to snapshot read on the leader peer.
     let read_ts = get_tso(&pd_client) + 10000000;
-    let resp = leader_client.kv_read(b"key1".to_vec(), read_ts);
-    assert!(resp.get_region_error().has_data_is_not_ready());
+    leader_client.must_kv_read_equal(b"key2".to_vec(), b"value1".to_vec(), read_ts);
 
     // The `max_ts` should not updated by the stale read request, so 1pc transaction
     // with a ts that smaller than the `read_ts` should not be fallbacked to 2pc

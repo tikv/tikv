@@ -916,16 +916,42 @@ pub fn try_kv_prewrite_with(
     client: &TikvClient,
     ctx: Context,
     muts: Vec<Mutation>,
+    pessimistic_actions: Vec<PrewriteRequestPessimisticAction>,
     pk: Vec<u8>,
     ts: u64,
     for_update_ts: u64,
     use_async_commit: bool,
     try_one_pc: bool,
 ) -> PrewriteResponse {
+    try_kv_prewrite_with_impl(
+        client,
+        ctx,
+        muts,
+        pessimistic_actions,
+        pk,
+        ts,
+        for_update_ts,
+        use_async_commit,
+        try_one_pc,
+    )
+        .unwrap()
+}
+
+pub fn try_kv_prewrite_with_impl(
+    client: &TikvClient,
+    ctx: Context,
+    muts: Vec<Mutation>,
+    pessimistic_actions: Vec<PrewriteRequestPessimisticAction>,
+    pk: Vec<u8>,
+    ts: u64,
+    for_update_ts: u64,
+    use_async_commit: bool,
+    try_one_pc: bool,
+) -> grpcio::Result<PrewriteResponse> {
     let mut prewrite_req = PrewriteRequest::default();
     prewrite_req.set_context(ctx);
     if for_update_ts != 0 {
-        prewrite_req.pessimistic_actions = vec![DoPessimisticCheck; muts.len()];
+        prewrite_req.pessimistic_actions = pessimistic_actions;
     }
     prewrite_req.set_mutations(muts.into_iter().collect());
     prewrite_req.primary_lock = pk;
@@ -935,7 +961,7 @@ pub fn try_kv_prewrite_with(
     prewrite_req.min_commit_ts = prewrite_req.start_version + 1;
     prewrite_req.use_async_commit = use_async_commit;
     prewrite_req.try_one_pc = try_one_pc;
-    client.kv_prewrite(&prewrite_req).unwrap()
+    client.kv_prewrite(&prewrite_req)
 }
 
 pub fn try_kv_prewrite(
@@ -945,7 +971,7 @@ pub fn try_kv_prewrite(
     pk: Vec<u8>,
     ts: u64,
 ) -> PrewriteResponse {
-    try_kv_prewrite_with(client, ctx, muts, pk, ts, 0, false, false)
+    try_kv_prewrite_with(client, ctx, muts, vec![], pk, ts, 0, false, false)
 }
 
 pub fn try_kv_prewrite_pessimistic(
@@ -955,7 +981,7 @@ pub fn try_kv_prewrite_pessimistic(
     pk: Vec<u8>,
     ts: u64,
 ) -> PrewriteResponse {
-    try_kv_prewrite_with(client, ctx, muts, pk, ts, ts, false, false)
+    try_kv_prewrite_with(client, ctx, muts, vec![], pk, ts, ts, false, false)
 }
 
 pub fn must_kv_prewrite(
