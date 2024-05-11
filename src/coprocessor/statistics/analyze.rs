@@ -534,6 +534,8 @@ pub(crate) struct SampleBuilder<S: Snapshot, F: KvFormat> {
     cm_sketch_depth: usize,
     cm_sketch_width: usize,
     columns_info: Vec<tipb::ColumnInfo>,
+    // NOTE: The field is currently used only when mixed analyze requests are received,
+    // which happens exclusively when the statistics version is 1.
     analyze_common_handle: bool,
     common_handle_col_ids: Vec<i64>,
 }
