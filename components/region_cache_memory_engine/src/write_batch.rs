@@ -200,7 +200,7 @@ impl RangeCacheWriteBatch {
         PREPARE_FOR_APPLY_DURATION_HISTOGRAM
             .with_label_values(&["upgrade_wait"])
             .observe(dur.as_secs_f64());
-        let dur = std::mem::take(&mut self.release_lock);
+        let dur = std::mem::take(&mut self.release_lock);   
         PREPARE_FOR_APPLY_DURATION_HISTOGRAM
             .with_label_values(&["release_lock"])
             .observe(dur.as_secs_f64());

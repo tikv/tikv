@@ -687,6 +687,7 @@ impl RunnableWithTimer for BackgroundRunner {
         let pending = core.range_manager.pending_ranges.len();
         let cached = core.range_manager.ranges().len();
         let loading = core.range_manager.pending_ranges_loading_data.len();
+        let evictions = core.range_manager.get_and_reset_range_evictions();
         drop(core);
         RANGE_CACHE_PENDING_RANGE_COUNT
             .with_label_values(&["pending_range"])
@@ -697,6 +698,9 @@ impl RunnableWithTimer for BackgroundRunner {
         RANGE_CACHE_PENDING_RANGE_COUNT
             .with_label_values(&["loading_range"])
             .set(loading as i64);
+        RANGE_CACHE_PENDING_RANGE_COUNT
+            .with_label_values(&["range_evictions"])
+            .set(evictions as i64);
     }
 
     fn get_interval(&self) -> Duration {

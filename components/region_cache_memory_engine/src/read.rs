@@ -311,6 +311,8 @@ impl RangeCacheIterator {
         self.iter.seek(key, guard);
         if self.iter.valid() {
             self.find_next_visible_key(false, guard);
+        } else {
+            self.valid = false;
         }
     }
 
@@ -318,6 +320,7 @@ impl RangeCacheIterator {
         let guard = &epoch::pin();
         self.iter.seek_for_prev(key, guard);
         self.prev_internal(guard);
+        self.valid = self.iter.valid();
     }
 
     fn prev_internal(&mut self, guard: &epoch::Guard) {
