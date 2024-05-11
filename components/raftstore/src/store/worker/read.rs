@@ -1627,6 +1627,8 @@ mod tests {
         read_progress.update_safe_ts(1, 1);
         assert_eq!(read_progress.safe_ts(), 1);
 
+        // Expire lease manually to avoid local retry on leader peer.
+        lease.expire();
         let data = {
             let mut d = [0u8; 8];
             (&mut d[..]).encode_u64(2).unwrap();
@@ -1783,13 +1785,14 @@ mod tests {
         assert_eq!(kv_engine.path(), tablet.path());
     }
 
-    fn prepare_read_delegate(
+    fn prepare_read_delegate_with_lease(
         store_id: u64,
         region_id: u64,
         term: u64,
         pr_ids: Vec<u64>,
         region_epoch: RegionEpoch,
         store_meta: Arc<Mutex<StoreMeta>>,
+        max_lease: Duration,
     ) {
         let mut region = metapb::Region::default();
         region.set_id(region_id);
@@ -1798,7 +1801,7 @@ mod tests {
 
         let leader = prs[0].clone();
         region.set_region_epoch(region_epoch);
-        let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250)); // 1s is long enough.
+        let mut lease = Lease::new(max_lease, Duration::milliseconds(250)); // 1s is long enough.
         let read_progress = Arc::new(RegionReadProgress::new(&region, 1, 1, 1));
 
         // Register region
@@ -1824,6 +1827,25 @@ mod tests {
             };
             meta.readers.insert(region_id, read_delegate);
         }
+    }
+
+    fn prepare_read_delegate(
+        store_id: u64,
+        region_id: u64,
+        term: u64,
+        pr_ids: Vec<u64>,
+        region_epoch: RegionEpoch,
+        store_meta: Arc<Mutex<StoreMeta>>,
+    ) {
+        prepare_read_delegate_with_lease(
+            store_id,
+            region_id,
+            term,
+            pr_ids,
+            region_epoch,
+            store_meta,
+            Duration::seconds(1),
+        )
     }
 
     #[test]
@@ -2191,5 +2213,124 @@ mod tests {
         thread::sleep(std::time::Duration::from_millis(500)); // Prevent lost notify.
         must_not_redirect(&mut reader, &rx, task);
         notify_rx.recv().unwrap();
+    }
+
+    #[test]
+    fn test_stale_read_local_leader_fallback() {
+        let store_id = 2;
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
+        let (_tmp, mut reader, rx) = new_reader(
+            "test-stale-local-leader-fallback",
+            store_id,
+            store_meta.clone(),
+        );
+        reader.kv_engine.put(b"key", b"value").unwrap();
+
+        let epoch13 = {
+            let mut ep = metapb::RegionEpoch::default();
+            ep.set_conf_ver(1);
+            ep.set_version(3);
+            ep
+        };
+        let term6 = 6;
+
+        // Register region1.
+        let pr_ids1 = vec![2, 3, 4];
+        let prs1 = new_peers(store_id, pr_ids1.clone());
+        // Ensure the leader lease is long enough so the fallback would work.
+        prepare_read_delegate_with_lease(
+            store_id,
+            1,
+            term6,
+            pr_ids1.clone(),
+            epoch13.clone(),
+            store_meta.clone(),
+            Duration::seconds(10),
+        );
+        let leader1 = prs1[0].clone();
+
+        // Local read.
+        let mut cmd = RaftCmdRequest::default();
+        let mut header = RaftRequestHeader::default();
+        header.set_region_id(1);
+        header.set_peer(leader1);
+        header.set_region_epoch(epoch13.clone());
+        header.set_term(term6);
+        header.set_flags(header.get_flags() | WriteBatchFlags::STALE_READ.bits());
+        cmd.set_header(header.clone());
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::Snap);
+        cmd.set_requests(vec![req].into());
+
+        // A peer can serve read_ts < safe_ts.
+        let safe_ts = TimeStamp::compose(2, 0);
+        {
+            let mut meta = store_meta.lock().unwrap();
+            let delegate = meta.readers.get_mut(&1).unwrap();
+            delegate
+                .read_progress
+                .update_safe_ts(1, safe_ts.into_inner());
+            assert_eq!(delegate.read_progress.safe_ts(), safe_ts.into_inner());
+        }
+        let read_ts_1 = TimeStamp::compose(1, 0);
+        let mut data = [0u8; 8];
+        (&mut data[..]).encode_u64(read_ts_1.into_inner()).unwrap();
+        header.set_flag_data(data.into());
+        cmd.set_header(header.clone());
+        let (snap_tx, snap_rx) = channel();
+        let task = RaftCommand::<KvTestSnapshot>::new(
+            cmd.clone(),
+            Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
+                snap_tx.send(resp).unwrap();
+            })),
+        );
+        must_not_redirect(&mut reader, &rx, task);
+        snap_rx.recv().unwrap().snapshot.unwrap();
+
+        // When read_ts > safe_ts, the leader peer could still serve if its lease is
+        // valid.
+        let read_ts_2 = TimeStamp::compose(safe_ts.physical() + 201, 0);
+        let mut data = [0u8; 8];
+        (&mut data[..]).encode_u64(read_ts_2.into_inner()).unwrap();
+        header.set_flag_data(data.into());
+        cmd.set_header(header.clone());
+        let (snap_tx, snap_rx) = channel();
+        let task = RaftCommand::<KvTestSnapshot>::new(
+            cmd.clone(),
+            Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
+                snap_tx.send(resp).unwrap();
+            })),
+        );
+        must_not_redirect(&mut reader, &rx, task);
+        snap_rx.recv().unwrap().snapshot.unwrap();
+
+        // The fallback would not happen if the lease is not valid.
+        prepare_read_delegate_with_lease(
+            store_id,
+            1,
+            term6,
+            pr_ids1,
+            epoch13,
+            store_meta,
+            Duration::milliseconds(1),
+        );
+        thread::sleep(std::time::Duration::from_millis(50));
+        let (snap_tx, snap_rx) = channel();
+        let task2 = RaftCommand::<KvTestSnapshot>::new(
+            cmd.clone(),
+            Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
+                snap_tx.send(resp).unwrap();
+            })),
+        );
+        must_not_redirect(&mut reader, &rx, task2);
+        assert!(
+            snap_rx
+                .recv()
+                .unwrap()
+                .response
+                .get_header()
+                .get_error()
+                .has_data_is_not_ready()
+        );
     }
 }
