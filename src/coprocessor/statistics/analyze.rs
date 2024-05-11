@@ -26,9 +26,7 @@ use tipb::{self, AnalyzeColumnsReq};
 
 use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
 use crate::{
-    coprocessor::{
-        dag::TikvStorage, statistics::analyze_context::AnalyzeVersion, MEMTRACE_ANALYZE, *,
-    },
+    coprocessor::{dag::TikvStorage, MEMTRACE_ANALYZE, *},
     storage::{Snapshot, SnapshotStore},
 };
 
