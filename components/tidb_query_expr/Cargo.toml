@@ -23,11 +23,25 @@ num-traits = "0.2"
 openssl = { version = "0.10" }
 protobuf = "2"
 regex = "1.1"
+<<<<<<< HEAD
 tidb_query_codegen = { path = "../tidb_query_codegen" }
 tidb_query_datatype = { path = "../tidb_query_datatype", default-features = false }
 tidb_query_common = { path = "../tidb_query_common", default-features = false }
 tikv_util = { path = "../tikv_util", default-features = false }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
+=======
+ryu = "1.0"
+safemem = { version = "0.3", default-features = false }
+serde = "1.0"
+serde_json = "1.0"
+static_assertions = { version = "1.0", features = ["nightly"] }
+tidb_query_codegen = { workspace = true }
+tidb_query_common = { workspace = true }
+tidb_query_datatype = { workspace = true }
+tikv_util = { workspace = true }
+time = { workspace = true }
+tipb = { workspace = true }
+>>>>>>> 7fb3666428 (expression: fix casting REAL type to STRING type (#16975))
 twoway = "0.2.0"
 uuid = { version = "0.8.1", features = ["v4"] }
 static_assertions = { version = "1.0", features = ["nightly"] }
