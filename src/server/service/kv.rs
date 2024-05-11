@@ -3,6 +3,7 @@
 // #[PerformanceCriticalPath]: TiKV gRPC APIs implementation
 use std::{
     mem,
+    ops::Deref,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -2218,8 +2219,23 @@ fn future_copr<E: Engine>(
     peer: Option<String>,
     req: Request,
 ) -> impl Future<Output = ServerResult<MemoryTraceGuard<Response>>> {
+    let start_ts = req.start_ts;
+    info!(
+        "future_cop";
+        "region_id" => req.get_context().region_id,
+        "start_ts" => start_ts,
+    );
     let ret = copr.parse_and_handle_unary_request(req, peer);
-    async move { Ok(ret.await) }
+    async move {
+        let resp = ret.await;
+        let res = resp.deref();
+        info!(
+            "Coprocessor response";
+            "start_ts" => start_ts,
+            "response" => ?res,
+        );
+        Ok(resp)
+    }
 }
 
 fn future_raw_coprocessor<E: Engine, L: LockManager, F: KvFormat>(

@@ -249,6 +249,7 @@ pub struct WriteData {
     pub deadline: Option<Deadline>,
     pub disk_full_opt: DiskFullOpt,
     pub avoid_batch: bool,
+    pub cid: Option<u64>,
 }
 
 impl WriteData {
@@ -259,6 +260,7 @@ impl WriteData {
             deadline: None,
             disk_full_opt: DiskFullOpt::NotAllowedOnFull,
             avoid_batch: false,
+            cid: None,
         }
     }
 

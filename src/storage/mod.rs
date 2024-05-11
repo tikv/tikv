@@ -600,6 +600,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         key: Key,
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Option<Value>, KvGetStatistics)>> {
+        info!("storage.get";
+            "key" => %key,
+            "start_ts" => start_ts,
+            "region_id" => ctx.get_region_id(),
+            "peer" => ?ctx.get_peer(),
+            "replica_read" => ctx.get_replica_read(),
+            "resolved_locks" => ?ctx.get_resolved_locks(),
+            "committed_locks" => ?ctx.get_committed_locks(),
+        );
         let stage_begin_ts = Instant::now();
         let deadline = Self::get_deadline(&ctx);
         const CMD: CommandKind = CommandKind::get;
@@ -3308,6 +3317,9 @@ fn prepare_snap_ctx<'a>(
     concurrency_manager: &ConcurrencyManager,
     cmd: CommandKind,
 ) -> Result<SnapContext<'a>> {
+    let keys_debug: Vec<_> = keys.clone().into_iter().collect();
+    info!("prepare_snap_ctx"; "cmd" => ?cmd, "start_ts" => start_ts, "stale_read" => pb_ctx.get_stale_read(),
+        "isolation_level" => ?pb_ctx.get_isolation_level(), "bypass_locks" => ?bypass_locks, "keys" => ?keys_debug);
     // Update max_ts and check the in-memory lock table before getting the snapshot
     if !pb_ctx.get_stale_read() {
         concurrency_manager.update_max_ts(start_ts);

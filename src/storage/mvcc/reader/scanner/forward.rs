@@ -331,6 +331,15 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     return Ok(false);
                 }
                 let key_commit_ts = Key::decode_ts_from(current_key)?;
+
+                info!(
+                    "on move_write_cursor_to_ts";
+                    "user_key" => log_wrappers::hex_encode_upper(user_key.as_encoded().as_slice()),
+                    "current_key" => log_wrappers::hex_encode_upper(current_key),
+                    "scanner_ts" => self.cfg.ts,
+                    "current_key_commit_ts" => key_commit_ts,
+                );
+
                 if key_commit_ts <= self.cfg.ts {
                     // Founded, don't need to seek again.
                     return Ok(true);
@@ -437,11 +446,24 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
         statistics: &mut Statistics,
     ) -> Result<HandleRes<Self::Output>> {
         let value: Option<Value> = loop {
-            let write = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
+            let val = cursors.write.value(&mut statistics.write);
+            let write = WriteRef::parse(val)?;
 
             if !write.check_gc_fence_as_latest_version(cfg.ts) {
                 break None;
             }
+
+            let current_key = cursors.write.key(&mut statistics.write);
+            let key_commit_ts = Key::decode_ts_from(current_key)?;
+            info!(
+                "on handle_write";
+                "user_key" => log_wrappers::hex_encode_upper(current_user_key.as_encoded().as_slice()),
+                "current_key" => log_wrappers::hex_encode_upper(current_key),
+                "scanner_ts" => cfg.ts,
+                "current_key_commit_ts" => key_commit_ts,
+                "write" => ?write,
+                "write_val" => log_wrappers::hex_encode_upper(val),
+            );
 
             match write.write_type {
                 WriteType::Put => {

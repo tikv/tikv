@@ -119,6 +119,7 @@ impl<E: Engine> Endpoint<E> {
     }
 
     fn check_memory_locks(&self, req_ctx: &ReqContext) -> Result<()> {
+        info!("cop check memory locks"; "req_ctx" => ?req_ctx);
         let start_ts = req_ctx.txn_start_ts;
         if !req_ctx.context.get_stale_read() {
             self.concurrency_manager.update_max_ts(start_ts);
@@ -438,6 +439,7 @@ impl<E: Engine> Endpoint<E> {
             err.set_bucket_version_not_match(bucket_not_match);
             return Err(Error::Region(err));
         }
+        info!("cop handle_unary_request_impl snapshot got"; "req_ctx" => ?tracker.req_ctx);
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
         tracker.req_ctx.deadline.check()?;
@@ -476,7 +478,8 @@ impl<E: Engine> Endpoint<E> {
         tracker.collect_storage_statistics(storage_stats);
         let (exec_details, exec_details_v2) = tracker.get_exec_details();
         tracker.on_finish_all_items();
-
+        info!("cop handle finish"; "return_rows" => exec_summary.num_produced_rows,  "req_ctx" => ?tracker.req_ctx);
+        
         let mut resp = match result {
             Ok(resp) => {
                 COPR_RESP_SIZE.inc_by(resp.data.len() as u64);

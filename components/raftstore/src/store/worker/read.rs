@@ -23,7 +23,7 @@ use kvproto::{
 use pd_client::BucketMeta;
 use tikv_util::{
     codec::number::decode_u64,
-    debug, error,
+    debug, error, info,
     lru::LruCache,
     store::find_peer_by_id,
     time::{monotonic_raw_now, ThreadReadId},
@@ -151,6 +151,11 @@ pub trait ReadExecutor {
                         let mut res = ReadIndexResponse::default();
                         res.set_read_index(read_index);
                         resp.set_read_index(res);
+                        info!("*** read_index response";
+                            "req.start_ts" => req.get_read_index().get_start_ts(),
+                            "req.key_ranges" => ?req.get_read_index().get_key_ranges(),
+                            "read_index" => read_index
+                        );
                     } else {
                         panic!("[region {}] can not get readindex", region.get_id());
                     }
@@ -1064,6 +1069,15 @@ where
     ) {
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => {
+                req.get_requests()
+                    .iter()
+                    .filter(|r| r.has_read_index())
+                    .for_each(|r| {
+                        info!("*** using local reader";
+                            "start_ts" => r.get_read_index().get_start_ts(),
+                            "key_ranges" => ?r.get_read_index().get_key_ranges(),
+                        );
+                    });
                 if let Some(ref mut ctx) = snap_ctx {
                     ctx.set_range(CacheRange::from_region(&delegate.region))
                 }
@@ -1174,7 +1188,18 @@ where
                 cb.set_result(response);
             }
             // Forward to raftstore.
-            Ok(None) => self.redirect(RaftCommand::new(req, cb)),
+            Ok(None) => {
+                req.get_requests()
+                    .iter()
+                    .filter(|r| r.has_read_index())
+                    .for_each(|r| {
+                        info!("*** redirecting to raftstore";
+                            "start_ts" => r.get_read_index().get_start_ts(),
+                            "key_ranges" => ?r.get_read_index().get_key_ranges(),
+                        );
+                    });
+                self.redirect(RaftCommand::new(req, cb))
+            }
             Err(e) => {
                 let mut response = cmd_resp::new_error(e);
                 if let Some(delegate) = self

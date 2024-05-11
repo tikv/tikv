@@ -1240,6 +1240,7 @@ where
                         simple_write_decoder.to_raft_cmd_request()
                     }
                 };
+
                 if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
                     self.priority = Priority::Low;
                 }
@@ -1762,6 +1763,13 @@ where
             }
         );
 
+        let flag_data = req.get_header().get_flag_data();
+        let start_ts = if flag_data.len() == 8 {
+            u64::from_le_bytes(flag_data.try_into().unwrap())
+        } else {
+            0
+        };
+
         let requests = req.get_requests();
 
         let mut ranges = vec![];
@@ -1769,12 +1777,16 @@ where
         for req in requests {
             let cmd_type = req.get_cmd_type();
             match cmd_type {
-                CmdType::Put => self.handle_put(ctx, req),
-                CmdType::Delete => self.handle_delete(ctx, req),
-                CmdType::DeleteRange => {
-                    self.handle_delete_range(&ctx.engine, req, &mut ranges, ctx.use_delete_range)
-                }
-                CmdType::IngestSst => self.handle_ingest_sst(ctx, req, &mut ssts),
+                CmdType::Put => self.handle_put(ctx, req, start_ts),
+                CmdType::Delete => self.handle_delete(ctx, req, start_ts),
+                CmdType::DeleteRange => self.handle_delete_range(
+                    &ctx.engine,
+                    req,
+                    &mut ranges,
+                    ctx.use_delete_range,
+                    start_ts,
+                ),
+                CmdType::IngestSst => self.handle_ingest_sst(ctx, req, &mut ssts, start_ts),
                 // Readonly commands are handled in raftstore directly.
                 // Don't panic here in case there are old entries need to be applied.
                 // It's also safe to skip them here, because a restart must have happened,
@@ -1827,10 +1839,27 @@ impl<EK> ApplyDelegate<EK>
 where
     EK: KvEngine,
 {
-    fn handle_put(&mut self, ctx: &mut ApplyContext<EK>, req: &Request) -> Result<()> {
+    fn handle_put(
+        &mut self,
+        ctx: &mut ApplyContext<EK>,
+        req: &Request,
+        start_ts: u64,
+    ) -> Result<()> {
         fail::fail_point!("on_handle_put");
         PEER_WRITE_CMD_COUNTER.put.inc();
         let (key, value) = (req.get_put().get_key(), req.get_put().get_value());
+        let cf = req.get_put().get_cf();
+
+        info!(
+            "handle put";
+            "region_id" => self.region.get_id(),
+            "cf" => ?cf,
+            "start_ts" => ?start_ts,
+            "key" => log_wrappers::hex_encode_upper(key),
+            "value" => log_wrappers::hex_encode_upper(value),
+            "index" => ctx.exec_log_index,
+        );
+
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
         if let Some(s) = self.buckets.as_mut() {
@@ -1876,9 +1905,24 @@ where
         Ok(())
     }
 
-    fn handle_delete(&mut self, ctx: &mut ApplyContext<EK>, req: &Request) -> Result<()> {
+    fn handle_delete(
+        &mut self,
+        ctx: &mut ApplyContext<EK>,
+        req: &Request,
+        start_ts: u64,
+    ) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.delete.inc();
         let key = req.get_delete().get_key();
+        let cf = req.get_put().get_cf();
+        info!(
+            "handle delete";
+            "region_id" => self.region.get_id(),
+            "cf" => ?cf,
+            "start_ts" => ?start_ts,
+            "key" => log_wrappers::hex_encode_upper(key),
+            "index" => ctx.exec_log_index,
+        );
+
         // region key range has no data prefix, so we must use origin key to check.
         util::check_key_in_region(key, &self.region)?;
         if let Some(s) = self.buckets.as_mut() {
@@ -1930,10 +1974,21 @@ where
         req: &Request,
         ranges: &mut Vec<Range>,
         use_delete_range: bool,
+        start_ts: u64,
     ) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.delete_range.inc();
         let s_key = req.get_delete_range().get_start_key();
         let e_key = req.get_delete_range().get_end_key();
+        let cf = req.get_put().get_cf();
+        info!(
+            "handle delete range";
+            "region_id" => self.region.get_id(),
+            "cf" => ?cf,
+            "start_ts" => ?start_ts,
+            "start_key" => log_wrappers::hex_encode_upper(s_key),
+            "end_key" => log_wrappers::hex_encode_upper(e_key),
+        );
+
         let notify_only = req.get_delete_range().get_notify_only();
         if !e_key.is_empty() && s_key >= e_key {
             return Err(box_err!(
@@ -2003,9 +2058,17 @@ where
         ctx: &mut ApplyContext<EK>,
         req: &Request,
         ssts: &mut Vec<SstMetaInfo>,
+        start_ts: u64,
     ) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.ingest_sst.inc();
         let sst = req.get_ingest_sst().get_sst();
+
+        info!(
+            "handle ingest sst";
+            "region_id" => self.region.get_id(),
+            "start_ts" => ?start_ts,
+            "index" => ctx.exec_log_index,
+        );
 
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
             error!(?e;

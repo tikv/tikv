@@ -4081,6 +4081,13 @@ where
             .filter(|req| req.has_read_index())
             .map(|req| req.take_read_index());
         let (id, dropped) = self.propose_read_index(request.as_ref());
+        info!(
+            "*** propose read index";
+            "start_ts" => ?request.as_ref().map(|r| r.get_start_ts()),
+            "is_leader" => self.is_leader(),
+            "uuid" => ?id,
+            "dropped" => dropped,
+        );
         if dropped && self.is_leader() {
             // The message gets dropped silently, can't be handled anymore.
             apply::notify_stale_req(self.term(), cb);
