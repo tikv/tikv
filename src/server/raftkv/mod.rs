@@ -484,8 +484,6 @@ where
             Ok(())
         })();
 
-        let cid = batch.cid;
-
         ASYNC_REQUESTS_COUNTER_VEC.write.all.inc();
         let begin_instant = Instant::now_coarse();
 

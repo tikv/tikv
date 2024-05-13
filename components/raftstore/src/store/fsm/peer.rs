@@ -2418,11 +2418,11 @@ where
         fail_point!("on_apply_res", |_| {});
         match res {
             ApplyTaskRes::Apply(mut res) => {
-                debug!(
+                info!(
                     "async apply finish";
                     "region_id" => self.region_id(),
                     "peer_id" => self.fsm.peer_id(),
-                    "res" => ?res,
+                    "res" => ?res.apply_state,
                 );
                 if self.fsm.peer.wait_data {
                     return;
