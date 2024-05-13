@@ -180,7 +180,7 @@ fn test_keyspace_level_gc_service() {
         Arc::clone(&Default::default()),
     )));
 
-    // Case 1: If there is no keyspace level gc in cache, then
+    // Case 1: If there is no keyspace level GC in cache, then
     // is_all_keyspace_level_gc_have_not_initialized return true.
     assert_eq!(true, keyspace_level_gc_service.is_some());
     if let Some(ref ks_meta_service) = *keyspace_level_gc_service {
@@ -189,7 +189,7 @@ fn test_keyspace_level_gc_service() {
         assert_eq!(true, is_all_keyspace_level_gc_have_not_initialized);
     }
 
-    // Case 2: If there have any keyspace level gc in cache, then
+    // Case 2: If there have any keyspace level GC in cache, then
     // is_all_keyspace_level_gc_have_not_initialized return false.
     let keyspace_level_gc_service = make_keyspace_level_gc_service();
     assert_eq!(true, keyspace_level_gc_service.is_some());
@@ -201,7 +201,7 @@ fn test_keyspace_level_gc_service() {
     }
 
     // Case 3: Check get_max_ts_of_all_ks_gc_safe_point will return max(all keyspace
-    // level gc safe point).
+    // level GC safe point).
     if let Some(ref ks_meta_service) = *keyspace_level_gc_service {
         let max_ts_of_all_ks_gc_safe_point = ks_meta_service.get_max_ts_of_all_ks_gc_safe_point();
         assert_eq!(69, max_ts_of_all_ks_gc_safe_point);
