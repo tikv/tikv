@@ -360,14 +360,11 @@ impl RangeCacheWriteBatchEntry {
         guard: &epoch::Guard,
     ) -> Result<()> {
         let handle = skiplist_engine.cf_handle(id_to_cf(self.cf));
-        if is_lock_cf(self.cf) && matches!(self.inner, WriteBatchEntryInternal::Deletion) {
-            self.delete_in_lock_cf(seq, &handle, guard);
-        } else {
-            let (mut key, mut value) = self.encode(seq);
-            key.set_memory_controller(memory_controller.clone());
-            value.set_memory_controller(memory_controller);
-            handle.insert(key, value, guard);
-        }
+
+        let (mut key, mut value) = self.encode(seq);
+        key.set_memory_controller(memory_controller.clone());
+        value.set_memory_controller(memory_controller);
+        handle.insert(key, value, guard);
 
         Ok(())
     }
