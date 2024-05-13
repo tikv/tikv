@@ -1234,6 +1234,8 @@ impl TitanDbConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     #[online_config(skip)]
     #[deprecated = "Rocksdb log is replaced by tikv log. Please use `log.file` to config log."]
     pub info_log_level: RocksLogLevel,
@@ -1261,12 +1263,18 @@ pub struct DbConfig {
     #[online_config(skip)]
     pub stats_dump_period: Option<ReadableDuration>,
     pub compaction_readahead_size: ReadableSize,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     #[online_config(skip)]
     #[deprecated = "Rocksdb log is replaced by tikv log. Please use `log.file` to config log."]
     pub info_log_max_size: ReadableSize,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     #[online_config(skip)]
     #[deprecated = "Rocksdb log is replaced with tikv log. Please use `log.file` to config log."]
     pub info_log_roll_time: ReadableDuration,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     #[online_config(skip)]
     #[deprecated = "Rocksdb log is replaced with tikv log. Please use `log.file` to config log."]
     pub info_log_keep_log_file_num: u64,
@@ -1818,17 +1826,25 @@ pub struct RaftDbConfig {
     #[online_config(skip)]
     pub stats_dump_period: ReadableDuration,
     pub compaction_readahead_size: ReadableSize,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     #[online_config(skip)]
     #[deprecated = "Rocksdb log is replaced by tikv log. Please use `log.file` to config log."]
     pub info_log_max_size: ReadableSize,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     #[online_config(skip)]
     #[deprecated = "Rocksdb log is replaced by tikv log. Please use `log.file` to config log."]
     pub info_log_roll_time: ReadableDuration,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     #[online_config(skip)]
     #[deprecated = "Rocksdb log is replaced by tikv log. Please use `log.file` to config log."]
     pub info_log_keep_log_file_num: u64,
     #[online_config(skip)]
     pub info_log_dir: String,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     #[online_config(skip)]
     #[deprecated = "Rocksdb log is replaced by tikv log. Please use `log.file` to config log."]
     pub info_log_level: RocksLogLevel,
