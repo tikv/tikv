@@ -1007,6 +1007,13 @@ where
     ) -> Option<ReadResponse<E::Snapshot>> {
         let mut local_read_ctx = LocalReadContext::new(&mut self.snap_cache, read_id);
 
+        if snap_ctx.is_some() {
+            // When `snap_ctx` is some, it means we want to acquire the range cache engine
+            // snapshot which cannot be used across different regions. So we don't use
+            // cache.
+            local_read_ctx.read_id.take();
+        }
+
         (*snap_updated) = local_read_ctx.maybe_update_snapshot(
             delegate.get_tablet(),
             snap_ctx.clone(),
