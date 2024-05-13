@@ -102,6 +102,7 @@ impl<S: Snapshot, F: KvFormat> AnalyzeContext<S, F> {
 
     // Handle mixed request, it would build histograms for common handle and columns
     // by scan table rows once.
+    // NOTE: Mixed requests are only sent when the statistics version is set to 1.
     async fn handle_mixed(builder: &mut SampleBuilder<S, F>) -> Result<Vec<u8>> {
         let (col_res, idx_res) = builder.collect_columns_stats().await?;
 
