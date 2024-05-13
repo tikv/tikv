@@ -117,26 +117,19 @@ fn test_check_need_gc() {
     );
 }
 
+// make_keyspace_level_gc_service is used to construct the required keyspace
+// metas, mappings, and keyspace level GC service.
 fn make_keyspace_level_gc_service() -> Arc<Option<KeyspaceLevelGCService>> {
-    // Init keyspace level gc cache.
-    let ks_gc_map = DashMap::new();
-    // make data ts < props.min_ts
-    ks_gc_map.insert(1_u32, 60_u64);
-    ks_gc_map.insert(2_u32, 69_u64);
-
-    let keyspace_level_gc_cache = Arc::new(ks_gc_map);
-
-    // Init keyspace meta cache.
-    let keyspace_id_meta_map = DashMap::new();
-
     let mut keyspace_config = HashMap::new();
     keyspace_config.insert(
         keyspace_meta::KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE.to_string(),
         keyspace_meta::GC_MGMT_TYPE_KEYSPACE_LEVEL_GC.to_string(),
     );
+
+    // Init keyspace_1 and keyspace_2.
     let keyspace_1_meta = keyspacepb::KeyspaceMeta {
         id: 1,
-        name: "test_keyspace".to_string(),
+        name: "test_keyspace_1".to_string(),
         state: Default::default(),
         created_at: 0,
         state_changed_at: 0,
@@ -147,7 +140,7 @@ fn make_keyspace_level_gc_service() -> Arc<Option<KeyspaceLevelGCService>> {
 
     let keyspace_2_meta = keyspacepb::KeyspaceMeta {
         id: 2,
-        name: "test_keyspace".to_string(),
+        name: "test_keyspace_2".to_string(),
         state: Default::default(),
         created_at: 0,
         state_changed_at: 0,
@@ -156,9 +149,20 @@ fn make_keyspace_level_gc_service() -> Arc<Option<KeyspaceLevelGCService>> {
         cached_size: Default::default(),
     };
 
+    // Init keyspace level GC cache.
+    let keyspace_level_gc_map = DashMap::new();
+    // make data ts < props.min_ts
+    keyspace_level_gc_map.insert(1_u32, 60_u64);
+    keyspace_level_gc_map.insert(2_u32, 69_u64);
+
+    let keyspace_level_gc_cache = Arc::new(keyspace_level_gc_map);
+
+    // Init keyspace meta cache.
+    let keyspace_id_meta_map = DashMap::new();
+
     // Make data ts < props.min_ts( props.min_ts = 70).
-    keyspace_id_meta_map.insert(1_u32, keyspace_1_meta);
-    keyspace_id_meta_map.insert(2_u32, keyspace_2_meta);
+    keyspace_id_meta_map.insert(keyspace_1_meta.id, keyspace_1_meta);
+    keyspace_id_meta_map.insert(keyspace_2_meta.id, keyspace_2_meta);
 
     let keyspace_id_meta_cache = Arc::new(keyspace_id_meta_map);
 

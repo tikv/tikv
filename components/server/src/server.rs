@@ -534,7 +534,7 @@ where
 
     fn init_gc_worker(&mut self) -> GcWorker<RaftKv<EK, ServerRaftStoreRouter<EK, ER>>> {
         // Init keyspace level GC cache, keyspace meta cache and keyspace level GC
-        // service.
+        // services.
         let keyspace_id_meta_map = Arc::new(Default::default());
         keyspace_meta::start_periodic_keyspace_meta_watcher(
             self.pd_client.clone(),
@@ -1033,7 +1033,6 @@ where
         // `ConsistencyCheckObserver` must be registered before
         // `MultiRaftServer::start`.
         let safe_point = Arc::new(AtomicU64::new(0));
-
         let observer = match self.core.config.coprocessor.consistency_check_method {
             ConsistencyCheckMethod::Mvcc => BoxConsistencyCheckObserver::new(
                 MvccConsistencyCheckObserver::new(safe_point.clone()),

@@ -452,7 +452,6 @@ impl<EK: KvEngine> ServerCluster<EK> {
         let concurrency_manager = ConcurrencyManager::new(latest_ts);
 
         let (tx, _rx) = std::sync::mpsc::channel();
-
         let mut gc_worker = GcWorker::new(
             raft_kv_v2.clone(),
             tx,

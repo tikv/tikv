@@ -489,7 +489,6 @@ impl WriteCompactionFilter {
     ) -> Result<CompactionFilterDecision, String> {
         let (mvcc_key_prefix, commit_ts) = split_ts(key)?;
 
-        assert!(self.keyspace_level_gc_service.is_some());
         // `keyspace_level_gc_service` will be None when run Api V1 ut.
         if let Some(keyspace_level_gc_service) = self.keyspace_level_gc_service.as_ref() {
             self.safe_point = keyspace_level_gc_service
