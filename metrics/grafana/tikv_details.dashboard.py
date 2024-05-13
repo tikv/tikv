@@ -315,6 +315,13 @@ def Cluster() -> RowPanel:
                         ),
                         legend_format=r"{{instance}}-read",
                     ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_range_cache_memory_engine_flow",
+                            label_selectors=['type=~"bytes_read|iter_bytes_read"'],
+                        ),
+                        legend_format=r"{{instance}}-range-cache-engine-read-",
+                    ),
                 ],
             ),
         ]
@@ -6006,6 +6013,12 @@ def RaftEngine() -> RowPanel:
                         ),
                     ),
                 ],
+            ),
+            graph_panel_histogram_quantiles(
+                title="Write Compression Ratio",
+                description="The compression ratio per write",
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
+                metric="raft_engine_write_compression_ratio",
             ),
         ]
     )
