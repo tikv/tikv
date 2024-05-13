@@ -1243,7 +1243,7 @@ impl<E: Engine> GcWorker<E> {
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
         &self,
         cfg: AutoGcConfig<S, R>,
-        safe_point: Arc<AtomicU64>,
+        safe_point: Arc<AtomicU64>, // Store safe point here.
     ) -> Result<()> {
         assert!(
             cfg.self_store_id > 0,

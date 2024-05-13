@@ -57,10 +57,9 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
         let current = ttl_current_ts();
         let safe_point = gc_context.safe_point.load(Ordering::Relaxed);
 
-        // If there is no any keyspace watched keyspace level GC, it should also skip gc
-        // in compaction filter.
+        // If there is no initialized keyspace level GC, it should also skip GC in
+        // compaction filter.
         let keyspace_level_gc_service = gc_context.keyspace_level_gc_service.clone();
-
         let mut is_all_ks_not_init_gc_sp = true;
         if let Some(ref ks_meta_service) = *keyspace_level_gc_service {
             is_all_ks_not_init_gc_sp =

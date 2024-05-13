@@ -218,8 +218,10 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         };
 
         let safe_point = gc_context.safe_point.load(Ordering::Relaxed);
-        let keyspace_level_gc_service = gc_context.keyspace_level_gc_service.clone();
 
+        // If there is no initialized keyspace level GC, it should also skip GC in
+        // compaction filter.
+        let keyspace_level_gc_service = gc_context.keyspace_level_gc_service.clone();
         let mut is_all_ks_not_init_gc_sp = true;
         if let Some(ref ks_meta_service) = *keyspace_level_gc_service {
             is_all_ks_not_init_gc_sp =
@@ -489,7 +491,6 @@ impl WriteCompactionFilter {
     ) -> Result<CompactionFilterDecision, String> {
         let (mvcc_key_prefix, commit_ts) = split_ts(key)?;
 
-        // `keyspace_level_gc_service` will be None when run Api V1 ut.
         if let Some(keyspace_level_gc_service) = self.keyspace_level_gc_service.as_ref() {
             self.safe_point = keyspace_level_gc_service
                 .get_gc_safe_point_by_key(self.safe_point, keys::origin_key(key));
@@ -800,7 +801,7 @@ pub fn check_need_gc(
             return (false, false);
         }
 
-        // Check is there any keyspace level gc safe point >= props.min_ts, the
+        // Check is there any keyspace level GC safe point >= props.min_ts, the
         // following check should proceed.
         let mut any_ks_gc_sp_ge_than_props_min_ts = false;
         if let Some(ref ks_meta_service) = *keyspace_level_gc_service {
