@@ -1235,6 +1235,7 @@ impl TitanDbConfig {
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
     #[online_config(skip)]
+    #[deprecated = "Rocksdb log is replaced by tikv log. Please use `log.file` to config log."]
     pub info_log_level: RocksLogLevel,
     #[serde(with = "rocks_config::recovery_mode_serde")]
     #[online_config(skip)]
@@ -1261,10 +1262,13 @@ pub struct DbConfig {
     pub stats_dump_period: Option<ReadableDuration>,
     pub compaction_readahead_size: ReadableSize,
     #[online_config(skip)]
+    #[deprecated = "Rocksdb log is replaced by tikv log. Please use `log.file` to config log."]
     pub info_log_max_size: ReadableSize,
     #[online_config(skip)]
+    #[deprecated = "Rocksdb log is replaced with tikv log. Please use `log.file` to config log."]
     pub info_log_roll_time: ReadableDuration,
     #[online_config(skip)]
+    #[deprecated = "Rocksdb log is replaced with tikv log. Please use `log.file` to config log."]
     pub info_log_keep_log_file_num: u64,
     #[online_config(skip)]
     pub info_log_dir: String,
@@ -1504,9 +1508,6 @@ impl DbConfig {
             self.stats_dump_period.unwrap_or_default().as_secs() as usize
         );
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
-        opts.set_max_log_file_size(self.info_log_max_size.0);
-        opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
-        opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
         opts.set_bytes_per_sync(self.bytes_per_sync.0);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0);
         opts.set_max_subcompactions(self.max_sub_compactions);
@@ -1531,7 +1532,6 @@ impl DbConfig {
         if for_engine == EngineType::RaftKv {
             opts.set_info_log(RocksdbLogger);
         }
-        opts.set_info_log_level(self.info_log_level.into());
         if let Some(true) = self.titan.enabled {
             opts.set_titandb_options(&self.titan.build_opts());
         }
@@ -1819,14 +1819,18 @@ pub struct RaftDbConfig {
     pub stats_dump_period: ReadableDuration,
     pub compaction_readahead_size: ReadableSize,
     #[online_config(skip)]
+    #[deprecated = "Rocksdb log is replaced by tikv log. Please use `log.file` to config log."]
     pub info_log_max_size: ReadableSize,
     #[online_config(skip)]
+    #[deprecated = "Rocksdb log is replaced by tikv log. Please use `log.file` to config log."]
     pub info_log_roll_time: ReadableDuration,
     #[online_config(skip)]
+    #[deprecated = "Rocksdb log is replaced by tikv log. Please use `log.file` to config log."]
     pub info_log_keep_log_file_num: u64,
     #[online_config(skip)]
     pub info_log_dir: String,
     #[online_config(skip)]
+    #[deprecated = "Rocksdb log is replaced by tikv log. Please use `log.file` to config log."]
     pub info_log_level: RocksLogLevel,
     pub max_sub_compactions: u32,
     pub writable_file_max_buffer_size: ReadableSize,
@@ -1911,11 +1915,7 @@ impl RaftDbConfig {
         }
         opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
-        opts.set_max_log_file_size(self.info_log_max_size.0);
-        opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
-        opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
         opts.set_info_log(RaftDbLogger);
-        opts.set_info_log_level(self.info_log_level.into());
         opts.set_max_subcompactions(self.max_sub_compactions);
         opts.set_writable_file_max_buffer_size(self.writable_file_max_buffer_size.0 as i32);
         opts.set_use_direct_io_for_flush_and_compaction(
