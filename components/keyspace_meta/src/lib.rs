@@ -19,10 +19,10 @@ use crate::service::KeyspaceMetaWatchService;
 pub fn start_periodic_keyspace_level_gc_watcher(
     pd_client: Arc<RpcClient>,
     bg_worker: &Worker,
-    keyspace_level_gc_cache: Arc<DashMap<u32, u64>>,
+    keyspace_level_gc_map: Arc<DashMap<u32, u64>>,
 ) {
     let mut keyspace_level_gc_watch_service =
-        KeyspaceLevelGCWatchService::new(pd_client, keyspace_level_gc_cache);
+        KeyspaceLevelGCWatchService::new(pd_client, keyspace_level_gc_map);
     // spawn a task to watch all keyspace level gc update.
     bg_worker.spawn_async_task(async move {
         keyspace_level_gc_watch_service

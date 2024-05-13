@@ -413,15 +413,15 @@ where
             Arc::clone(&keyspace_id_meta_map),
         );
 
-        let keyspace_level_gc_cache = Arc::new(Default::default());
+        let keyspace_level_gc_map = Arc::new(Default::default());
         keyspace_meta::start_periodic_keyspace_level_gc_watcher(
             self.pd_client.clone(),
             &self.core.background_worker,
-            Arc::clone(&keyspace_level_gc_cache),
+            Arc::clone(&keyspace_level_gc_map),
         );
 
         let keyspace_level_gc_service = Arc::new(Some(KeyspaceLevelGCService::new(
-            Arc::clone(&keyspace_level_gc_cache),
+            Arc::clone(&keyspace_level_gc_map),
             Arc::clone(&keyspace_id_meta_map),
         )));
 

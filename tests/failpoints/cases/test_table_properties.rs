@@ -155,9 +155,9 @@ fn make_keyspace_level_gc_service() -> Arc<Option<KeyspaceLevelGCService>> {
     keyspace_level_gc_map.insert(1_u32, 60_u64);
     keyspace_level_gc_map.insert(2_u32, 69_u64);
 
-    let keyspace_level_gc_cache = Arc::new(keyspace_level_gc_map);
+    let keyspace_level_gc_map = Arc::new(keyspace_level_gc_map);
 
-    // Init keyspace meta cache.
+    // Init the mapping from keyspace id to keyspace meta.
     let keyspace_id_meta_map = DashMap::new();
 
     // Make data ts < props.min_ts( props.min_ts = 70).
@@ -167,7 +167,7 @@ fn make_keyspace_level_gc_service() -> Arc<Option<KeyspaceLevelGCService>> {
     let keyspace_id_meta_cache = Arc::new(keyspace_id_meta_map);
 
     Arc::new(Some(KeyspaceLevelGCService::new(
-        Arc::clone(&keyspace_level_gc_cache),
+        Arc::clone(&keyspace_level_gc_map),
         Arc::clone(&keyspace_id_meta_cache),
     )))
 }
