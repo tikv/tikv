@@ -9,6 +9,7 @@ use std::{
 use api_version::{ApiV2, KvFormat, RawValue};
 use engine_rocks::{raw::FlushOptions, util::get_cf_handle, RocksEngine};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
+use keyspace_meta::KeyspaceLevelGCService;
 use kvproto::{
     kvrpcpb::*,
     metapb::{Peer, Region},
