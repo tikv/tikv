@@ -142,6 +142,8 @@ pub struct RawCompactionFilter {
     filtered_hist: LocalHistogramVec,
 
     encountered_errors: bool,
+
+    keyspace_level_gc_service: Arc<Option<KeyspaceLevelGCService>>,
 }
 
 thread_local! {
@@ -222,6 +224,8 @@ impl RawCompactionFilter {
             filtered_hist: GC_DELETE_VERSIONS_HISTOGRAM.local(),
 
             encountered_errors: false,
+
+            keyspace_level_gc_service,
         }
     }
 
@@ -235,6 +239,11 @@ impl RawCompactionFilter {
     ) -> Result<CompactionFilterDecision, String> {
         if !key.starts_with(keys::DATA_PREFIX_KEY) {
             return Ok(CompactionFilterDecision::Keep);
+        }
+
+        if let Some(keyspace_level_gc_service) = self.keyspace_level_gc_service.as_ref() {
+            self.safe_point = keyspace_level_gc_service
+                .get_gc_safe_point_by_key(self.safe_point, keys::origin_key(key));
         }
 
         // If the key mode is not KeyMode::Raw or value_type is not
