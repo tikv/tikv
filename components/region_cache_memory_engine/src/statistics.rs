@@ -72,7 +72,16 @@ fn physical_core_id() -> i32 {
     }
 }
 
-pub const ENGINE_TICKER_TYPES: &[Tickers] = &[Tickers::BytesRead, Tickers::IterBytesRead];
+pub const ENGINE_TICKER_TYPES: &[Tickers] = &[
+    Tickers::BytesRead,
+    Tickers::IterBytesRead,
+    Tickers::NumberDbSeek,
+    Tickers::NumberDbSeekFound,
+    Tickers::NumberDbNext,
+    Tickers::NumberDbNextFound,
+    Tickers::NumberDbPrev,
+    Tickers::NumberDbPrevFound,
+];
 
 #[repr(u32)]
 #[derive(Copy, Clone)]
