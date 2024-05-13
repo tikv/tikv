@@ -1,5 +1,1 @@
-<<<<<<< HEAD
-02e1bdd2220cf05926cc84b1f846da575073f16e500bfab6a9be8d71362cd150  ./metrics/grafana/tikv_details.json
-=======
-213b5ee761dd2971d1512c969f1c586af6fc00c0ae91305f75f16535f80bd36b  ./metrics/grafana/tikv_details.json
->>>>>>> 88099c95a3 (tikv_alloc: Add per thread memory usage (#16255))
+062b2e4f7d24f23967cd378efd78c8ba5277a4855d6733585ca12b081fb7b3c5  ./metrics/grafana/tikv_details.json

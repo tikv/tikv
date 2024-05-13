@@ -67427,7 +67427,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 502,
+          "id": 497,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67560,7 +67560,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-          "id": 503,
+          "id": 498,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67696,11 +67696,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 497,
-=======
-      "id": 504,
->>>>>>> 88099c95a3 (tikv_alloc: Add per thread memory usage (#16255))
+      "id": 499,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -67739,11 +67735,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 498,
-=======
-          "id": 505,
->>>>>>> 88099c95a3 (tikv_alloc: Add per thread memory usage (#16255))
+          "id": 500,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67944,11 +67936,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 499,
-=======
-          "id": 506,
->>>>>>> 88099c95a3 (tikv_alloc: Add per thread memory usage (#16255))
+          "id": 501,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68084,11 +68072,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 500,
-=======
-      "id": 507,
->>>>>>> 88099c95a3 (tikv_alloc: Add per thread memory usage (#16255))
+      "id": 502,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -68127,11 +68111,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 501,
-=======
-          "id": 508,
->>>>>>> 88099c95a3 (tikv_alloc: Add per thread memory usage (#16255))
+          "id": 503,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68264,11 +68244,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 502,
-=======
-          "id": 509,
->>>>>>> 88099c95a3 (tikv_alloc: Add per thread memory usage (#16255))
+          "id": 504,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68401,11 +68377,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 503,
-=======
-          "id": 510,
->>>>>>> 88099c95a3 (tikv_alloc: Add per thread memory usage (#16255))
+          "id": 505,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68538,11 +68510,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 504,
-=======
-          "id": 511,
->>>>>>> 88099c95a3 (tikv_alloc: Add per thread memory usage (#16255))
+          "id": 506,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68675,11 +68643,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 505,
-=======
-          "id": 512,
->>>>>>> 88099c95a3 (tikv_alloc: Add per thread memory usage (#16255))
+          "id": 507,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68827,11 +68791,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 506,
-=======
-          "id": 513,
->>>>>>> 88099c95a3 (tikv_alloc: Add per thread memory usage (#16255))
+          "id": 508,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69035,11 +68995,7 @@
       },
       "height": null,
       "hideTimeOverride": false,
-<<<<<<< HEAD
-      "id": 507,
-=======
-      "id": 514,
->>>>>>> 88099c95a3 (tikv_alloc: Add per thread memory usage (#16255))
+      "id": 509,
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -69078,11 +69034,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 508,
-=======
-          "id": 515,
->>>>>>> 88099c95a3 (tikv_alloc: Add per thread memory usage (#16255))
+          "id": 510,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69215,11 +69167,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 509,
-=======
-          "id": 516,
->>>>>>> 88099c95a3 (tikv_alloc: Add per thread memory usage (#16255))
+          "id": 511,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69352,11 +69300,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 510,
-=======
-          "id": 517,
->>>>>>> 88099c95a3 (tikv_alloc: Add per thread memory usage (#16255))
+          "id": 512,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69489,11 +69433,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 511,
-=======
-          "id": 518,
->>>>>>> 88099c95a3 (tikv_alloc: Add per thread memory usage (#16255))
+          "id": 513,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69626,11 +69566,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 512,
-=======
-          "id": 519,
->>>>>>> 88099c95a3 (tikv_alloc: Add per thread memory usage (#16255))
+          "id": 514,
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69827,11 +69763,7 @@
           },
           "height": null,
           "hideTimeOverride": false,
-<<<<<<< HEAD
-          "id": 513,
-=======
-          "id": 520,
->>>>>>> 88099c95a3 (tikv_alloc: Add per thread memory usage (#16255))
+          "id": 515,
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
