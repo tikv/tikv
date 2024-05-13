@@ -325,6 +325,57 @@ impl RangeStatsManager {
         self.num_regions.load(Ordering::Relaxed)
     }
 
+    pub fn collect_candidates_for_eviction(&self, ranges_out: &mut Vec<(CacheRange, usize)>) {
+        let all_regions = self.info_provider.get_top_regions(0).unwrap();
+        ranges_out.extend(
+            all_regions
+                .iter()
+                .map(|r| (CacheRange::from_region(r), r.cached_size.get() as usize)),
+        );
+    }
+
+    pub fn handle_range_evicted(&self, evicted_range: &CacheRange) {
+        // TODO (afeinberg): This is inefficient.
+        let _ = self
+            .info_provider
+            .find_region_by_key(&evicted_range.start)
+            .map(|region| {
+                let _ = self.prev_top_regions.lock().remove(&region.get_id());
+            });
+    }
+
+    pub fn adjust_num_regions(&self, curr_memory_usage: usize, threshold: usize) {
+        match curr_memory_usage.cmp(&threshold) {
+            cmp::Ordering::Less => {
+                let room_to_grow = threshold - curr_memory_usage;
+                if room_to_grow > EXPECTED_AVERAGE_REGION_SIZE * 3 {
+                    let curr_num_regions = self.num_regions();
+                    let next_num_regions =
+                        curr_num_regions + room_to_grow / (EXPECTED_AVERAGE_REGION_SIZE * 3);
+                    info!("increasing number of top regions to cache";
+                        "from" => curr_num_regions,
+                        "to" => next_num_regions,
+                    );
+                    self.set_num_regions(next_num_regions);
+                }
+            }
+            cmp::Ordering::Greater => {
+                let to_shrink_by = curr_memory_usage - threshold;
+                let curr_num_regions = self.num_regions();
+                let next_num_regions = curr_num_regions
+                    .checked_sub(1.max(to_shrink_by / EXPECTED_AVERAGE_REGION_SIZE))
+                    .unwrap_or(1)
+                    .max(1);
+                info!("decreasing number of top regions to cache";
+                    "from" => curr_num_regions,
+                    "to" => next_num_regions,
+                );
+                self.set_num_regions(next_num_regions);
+            }
+            _ => (),
+        };
+    }
+
     pub fn collect_changed_ranges(
         &self,
         ranges_added_out: &mut Vec<CacheRange>,
@@ -550,7 +601,38 @@ impl BackgroundRunnerCore {
         flush_epoch();
     }
 
-    fn top_regions_load_evict(&mut self) {
+    fn evict_on_soft_limit_reached(&mut self) {
+        if self.range_stats_manager.is_none() {
+            return;
+        }
+        let range_stats_manager = self.range_stats_manager.as_ref().unwrap();
+        let to_shrink_by = self
+            .memory_controller
+            .mem_usage()
+            .checked_sub(self.memory_controller.soft_limit_threshold());
+        if to_shrink_by.is_none() {
+            return;
+        }
+        let mut remaining = to_shrink_by.unwrap();
+        let mut ranges_to_evict = Vec::<(CacheRange, usize)>::with_capacity(256);
+        range_stats_manager.collect_candidates_for_eviction(&mut ranges_to_evict);
+        let ranges_to_evict = ranges_to_evict
+            .iter()
+            .filter(|(range, _)| self.engine.read().range_manager().contains_range(range))
+            .rev();
+        for (range, approx_size) in ranges_to_evict {
+            if remaining == 0 {
+                break;
+            }
+            if self.engine.write().mut_range_manager().evict_range(range) {
+                info!("evict on soft limit reached"; "range" => ?&range, "approx_size" => approx_size, "remaining" => remaining);
+                remaining = remaining.checked_sub(*approx_size).unwrap_or_default();
+                range_stats_manager.handle_range_evicted(range);
+            }
+        }
+    }
+
+    fn top_regions_load_evict(&self) {
         if self.range_stats_manager.is_none() {
             return;
         }
@@ -562,35 +644,7 @@ impl BackgroundRunnerCore {
 
         let curr_memory_usage = self.memory_controller.mem_usage();
         let threshold = self.memory_controller.soft_limit_threshold();
-
-        match curr_memory_usage.cmp(&threshold) {
-            cmp::Ordering::Less => {
-                let room_to_grow = threshold - curr_memory_usage;
-                if room_to_grow > EXPECTED_AVERAGE_REGION_SIZE * 3 / 2 {
-                    let curr_num_regions = range_stats_manager.num_regions();
-                    let next_num_regions =
-                        curr_num_regions + room_to_grow / EXPECTED_AVERAGE_REGION_SIZE;
-                    info!("increasing number of top regions to cache";
-                        "from" => curr_num_regions,
-                        "to" => next_num_regions,
-                    );
-                    range_stats_manager.set_num_regions(next_num_regions);
-                }
-            }
-            cmp::Ordering::Greater => {
-                let to_shrink_by = curr_memory_usage - threshold;
-                let curr_num_regions = range_stats_manager.num_regions();
-                let next_num_regions = curr_num_regions
-                    .checked_sub(1.max(to_shrink_by / EXPECTED_AVERAGE_REGION_SIZE))
-                    .unwrap_or(1);
-                info!("decreasing number of top regions to cache";
-                    "from" => curr_num_regions,
-                    "to" => next_num_regions,
-                );
-                range_stats_manager.set_num_regions(next_num_regions);
-            }
-            _ => (),
-        };
+        range_stats_manager.adjust_num_regions(curr_memory_usage, threshold);
 
         let mut ranges_to_add = Vec::<CacheRange>::with_capacity(256);
         let mut ranges_to_remove = Vec::<CacheRange>::with_capacity(256);
@@ -834,7 +888,7 @@ impl Runnable for BackgroundRunner {
                     "mem_usage(MB)" => ReadableSize(mem_usage as u64).as_mb()
                 );
                 if mem_usage > self.core.memory_controller.soft_limit_threshold() {
-                    // todo: select ranges to evict
+                    self.core.evict_on_soft_limit_reached();
                 }
                 self.core.memory_controller.set_memory_checking(false);
             }
@@ -843,10 +897,7 @@ impl Runnable for BackgroundRunner {
                 let f = async move { core.delete_ranges(&ranges) };
                 self.delete_range_remote.spawn(f);
             }
-            BackgroundTask::TopRegionsLoadEvict => {
-                let mut core = self.core.clone();
-                core.top_regions_load_evict()
-            }
+            BackgroundTask::TopRegionsLoadEvict => self.core.top_regions_load_evict(),
         }
     }
 }
