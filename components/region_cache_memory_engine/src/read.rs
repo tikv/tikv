@@ -262,6 +262,7 @@ impl Drop for RangeCacheIterator {
             Tickers::NumberDbPrevFound,
             self.local_stats.number_db_prev_found,
         );
+        perf_counter_add!(iter_read_bytes, self.local_stats.bytes_read);
     }
 }
 
@@ -428,14 +429,6 @@ impl RangeCacheIterator {
             self.iter.prev(guard);
         }
     }
-
-    #[inline]
-    fn collects_read_flow_stats(&mut self) {
-        // Updating stats and perf context counters
-        let read_bytes = (self.key().len() + self.value().len()) as u64;
-        self.local_stats.bytes_read += read_bytes;
-        perf_counter_add!(iter_read_bytes, read_bytes);
-    }
 }
 
 impl Iterator for RangeCacheIterator {
@@ -470,7 +463,7 @@ impl Iterator for RangeCacheIterator {
 
         if self.valid {
             self.local_stats.number_db_next_found += 1;
-            self.collects_read_flow_stats();
+            self.local_stats.bytes_read += (self.key().len() + self.value().len()) as u64;
         }
 
         Ok(self.valid)
@@ -485,7 +478,7 @@ impl Iterator for RangeCacheIterator {
         self.local_stats.number_db_prev += 1;
         if self.valid {
             self.local_stats.number_db_prev_found += 1;
-            self.collects_read_flow_stats();
+            self.local_stats.bytes_read += (self.key().len() + self.value().len()) as u64;
         }
 
         Ok(self.valid)
@@ -507,7 +500,7 @@ impl Iterator for RangeCacheIterator {
         let seek_key = encode_seek_key(seek_key, self.sequence_number);
         self.seek_internal(&seek_key);
         if self.valid {
-            self.collects_read_flow_stats();
+            self.local_stats.bytes_read += (self.key().len() + self.value().len()) as u64;
             self.local_stats.number_db_seek_found += 1;
         }
 
@@ -529,7 +522,7 @@ impl Iterator for RangeCacheIterator {
 
         self.seek_for_prev_internal(&seek_key);
         if self.valid {
-            self.collects_read_flow_stats();
+            self.local_stats.bytes_read += (self.key().len() + self.value().len()) as u64;
             self.local_stats.number_db_seek_found += 1;
         }
 
@@ -543,7 +536,7 @@ impl Iterator for RangeCacheIterator {
         self.seek_internal(&seek_key);
 
         if self.valid {
-            self.collects_read_flow_stats();
+            self.local_stats.bytes_read += (self.key().len() + self.value().len()) as u64;
             self.local_stats.number_db_seek_found += 1;
         }
 
@@ -561,7 +554,7 @@ impl Iterator for RangeCacheIterator {
         }
 
         if self.valid {
-            self.collects_read_flow_stats();
+            self.local_stats.bytes_read += (self.key().len() + self.value().len()) as u64;
             self.local_stats.number_db_seek_found += 1;
         }
 
@@ -1945,30 +1938,29 @@ mod tests {
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 0);
         iter.seek_to_first().unwrap();
         rocks_iter.seek_to_first().unwrap();
-        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 12);
         let key = construct_mvcc_key("b", 10);
         iter.seek(&key).unwrap();
         rocks_iter.seek(&key).unwrap();
-        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 25);
         iter.next().unwrap();
         rocks_iter.next().unwrap();
-        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 39);
         iter.next().unwrap();
         rocks_iter.next().unwrap();
+        drop(iter);
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 54);
+        assert_eq!(2, statistics.get_ticker_count(Tickers::NumberDbSeek));
+        assert_eq!(2, statistics.get_ticker_count(Tickers::NumberDbSeekFound));
+        assert_eq!(2, statistics.get_ticker_count(Tickers::NumberDbNext));
+        assert_eq!(2, statistics.get_ticker_count(Tickers::NumberDbNextFound));
 
+        let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
         iter.seek_to_last().unwrap();
         rocks_iter.seek_to_last().unwrap();
-        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 69);
         iter.prev().unwrap();
         rocks_iter.prev().unwrap();
-        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 83);
         iter.prev().unwrap();
         rocks_iter.prev().unwrap();
-        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 96);
         iter.prev().unwrap();
         rocks_iter.prev().unwrap();
-        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 108);
         drop(rocks_iter);
         drop(iter);
         assert_eq!(statistics.get_ticker_count(Tickers::IterBytesRead), 108);
@@ -1976,5 +1968,10 @@ mod tests {
             rocks_statistics.get_and_reset_ticker_count(DBStatisticsTickerType::IterBytesRead),
             statistics.get_and_reset_ticker_count(Tickers::IterBytesRead)
         );
+        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 108);
+        assert_eq!(3, statistics.get_ticker_count(Tickers::NumberDbSeek));
+        assert_eq!(3, statistics.get_ticker_count(Tickers::NumberDbSeekFound));
+        assert_eq!(3, statistics.get_ticker_count(Tickers::NumberDbPrev));
+        assert_eq!(3, statistics.get_ticker_count(Tickers::NumberDbPrevFound));
     }
 }
