@@ -1876,6 +1876,7 @@ impl Default for RaftDbConfig {
             max_background_gc: bg_job_limits.max_titan_background_gc as i32,
             ..Default::default()
         };
+        #[allow(deprecated)]
         RaftDbConfig {
             wal_recovery_mode: DBRecoveryMode::PointInTime,
             wal_dir: "".to_owned(),
