@@ -330,7 +330,7 @@ impl RangeStatsManager {
         ranges_out.extend(
             all_regions
                 .iter()
-                .map(|r| (CacheRange::from_region(r), r.cached_size.get() as usize)),
+                .map(|r| (CacheRange::from_region(r), 45_000_000usize)),
         );
     }
 
@@ -603,6 +603,7 @@ impl BackgroundRunnerCore {
 
     fn evict_on_soft_limit_reached(&mut self) {
         if self.range_stats_manager.is_none() {
+            warn!("range stats manager is not initialized, cannot evict on soft limit reached");
             return;
         }
         let range_stats_manager = self.range_stats_manager.as_ref().unwrap();
