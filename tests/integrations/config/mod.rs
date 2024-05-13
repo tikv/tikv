@@ -312,10 +312,14 @@ fn test_serde_custom_tikv_config() {
         enable_statistics: true,
         stats_dump_period: Some(ReadableDuration::minutes(12)),
         compaction_readahead_size: ReadableSize::kb(1),
-        info_log_max_size: ReadableSize::kb(1),
-        info_log_roll_time: ReadableDuration::secs(12),
-        info_log_keep_log_file_num: 1000,
+        #[allow(deprecated)]
+        info_log_max_size: ReadableSize::gb(1),
+        #[allow(deprecated)]
+        info_log_roll_time: ReadableDuration::secs(0),
+        #[allow(deprecated)]
+        info_log_keep_log_file_num: 10,
         info_log_dir: "/var".to_owned(),
+        #[allow(deprecated)]
         info_log_level: LogLevel::Info,
         rate_bytes_per_sec: ReadableSize::kb(1),
         rate_limiter_refill_period: ReadableDuration::millis(10),
@@ -623,6 +627,7 @@ fn test_serde_custom_tikv_config() {
         ..Default::default()
     };
     value.raftdb = RaftDbConfig {
+        #[allow(deprecated)]
         info_log_level: LogLevel::Info,
         wal_recovery_mode: DBRecoveryMode::SkipAnyCorruptedRecords,
         wal_dir: "/var".to_owned(),
@@ -637,9 +642,12 @@ fn test_serde_custom_tikv_config() {
         enable_statistics: true,
         stats_dump_period: ReadableDuration::minutes(12),
         compaction_readahead_size: ReadableSize::kb(1),
-        info_log_max_size: ReadableSize::kb(1),
-        info_log_roll_time: ReadableDuration::secs(1),
-        info_log_keep_log_file_num: 1000,
+        #[allow(deprecated)]
+        info_log_max_size: ReadableSize::gb(1),
+        #[allow(deprecated)]
+        info_log_roll_time: ReadableDuration::secs(0),
+        #[allow(deprecated)]
+        info_log_keep_log_file_num: 10,
         info_log_dir: "/var".to_owned(),
         max_sub_compactions: 12,
         writable_file_max_buffer_size: ReadableSize::mb(12),
