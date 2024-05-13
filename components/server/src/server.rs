@@ -73,7 +73,10 @@ use raftstore::{
     },
     RaftRouterCompactedEventSender,
 };
-use region_cache_memory_engine::RangeCacheMemoryEngine;
+use region_cache_memory_engine::{
+    config::RangeCacheConfigManager, RangeCacheEngineContext, RangeCacheMemoryEngine,
+    RangeCacheMemoryEngineStatistics,
+};
 use resolved_ts::{LeadershipResolver, Task};
 use resource_control::ResourceGroupManager;
 use security::SecurityManager;
@@ -276,6 +279,7 @@ where
     snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     engines: Option<TikvEngines<EK, ER>>,
     kv_statistics: Option<Arc<RocksStatistics>>,
+    range_cache_engine_statistics: Option<Arc<RangeCacheMemoryEngineStatistics>>,
     raft_statistics: Option<Arc<RocksStatistics>>,
     servers: Option<Servers<EK, ER, F>>,
     region_info_accessor: RegionInfoAccessor,
@@ -340,6 +344,7 @@ where
 
                     // SAFETY: we will call `remove_thread_memory_accessor` at before_stop.
                     unsafe { add_thread_memory_accessor() };
+                    tikv_alloc::thread_allocate_exclusive_arena().unwrap();
                 })
                 .before_stop(|| {
                     remove_thread_memory_accessor();
@@ -484,6 +489,7 @@ where
             snap_mgr: None,
             engines: None,
             kv_statistics: None,
+            range_cache_engine_statistics: None,
             raft_statistics: None,
             servers: None,
             region_info_accessor,
@@ -1323,6 +1329,7 @@ where
         let mut engine_metrics = EngineMetricsManager::<RocksEngine, ER>::new(
             self.tablet_registry.clone().unwrap(),
             self.kv_statistics.clone(),
+            self.range_cache_engine_statistics.clone(),
             self.core.config.rocksdb.titan.enabled.map_or(false, |v| v),
             self.engines.as_ref().unwrap().engines.raft.clone(),
             self.raft_statistics.clone(),
@@ -1666,12 +1673,20 @@ where
         let disk_engine = factory
             .create_shared_db(&self.core.store_path)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
+        let range_cache_engine_config = Arc::new(VersionTrack::new(
+            self.core.config.range_cache_engine.clone(),
+        ));
+        let range_cache_engine_context =
+            RangeCacheEngineContext::new(range_cache_engine_config.clone());
+        let range_cache_engine_statistics = range_cache_engine_context.statistics();
         let kv_engine: EK = KvEngineBuilder::build(
-            &self.core.config.range_cache_engine,
+            range_cache_engine_context,
             disk_engine.clone(),
             Some(self.pd_client.clone()),
         );
+        let range_cache_config_manager = RangeCacheConfigManager(range_cache_engine_config);
         self.kv_statistics = Some(factory.rocks_statistics());
+        self.range_cache_engine_statistics = Some(range_cache_engine_statistics);
         let engines = Engines::new(kv_engine, raft_engine);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();
@@ -1682,6 +1697,10 @@ where
                 disk_engine.clone(),
                 DbType::Kv,
             )),
+        );
+        cfg_controller.register(
+            tikv::config::Module::RangeCacheEngine,
+            Box::new(range_cache_config_manager),
         );
         let reg = TabletRegistry::new(
             Box::new(SingletonFactory::new(disk_engine)),

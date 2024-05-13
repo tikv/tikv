@@ -50,7 +50,7 @@ use raftstore::{
     RaftRouterCompactedEventSender, Result,
 };
 use rand::{seq::SliceRandom, RngCore};
-use region_cache_memory_engine::RangeCacheMemoryEngine;
+use region_cache_memory_engine::{RangeCacheEngineContext, RangeCacheMemoryEngine};
 use server::common::{ConfiguredRaftEngine, KvEngineBuilder};
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
@@ -717,7 +717,9 @@ where
     }
     let factory = builder.build();
     let disk_engine = factory.create_shared_db(dir.path()).unwrap();
-    let kv_engine: EK = KvEngineBuilder::build(&cfg.tikv.range_cache_engine, disk_engine, None);
+    let config = Arc::new(VersionTrack::new(cfg.tikv.range_cache_engine.clone()));
+    let kv_engine: EK =
+        KvEngineBuilder::build(RangeCacheEngineContext::new(config), disk_engine, None);
     let engines = Engines::new(kv_engine, raft_engine);
     (
         engines,

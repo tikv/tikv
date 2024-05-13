@@ -43,6 +43,10 @@ pub trait RangeCacheEngine:
 
     type RangeHintService: RangeHintService;
     fn start_hint_service(&self, range_hint_service: Self::RangeHintService);
+
+    fn enabled(&self) -> bool {
+        false
+    }
 }
 
 /// A service that should run in the background to retrieve and apply cache
@@ -53,11 +57,17 @@ pub trait RangeCacheEngine:
 /// as it continues to evolve to handle eviction, using stats.
 pub trait RangeHintService: Send + Sync {}
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Eq)]
 pub struct CacheRange {
     pub start: Vec<u8>,
     pub end: Vec<u8>,
     pub tag: String,
+}
+
+impl PartialEq for CacheRange {
+    fn eq(&self, other: &Self) -> bool {
+        self.start == other.start && self.end == other.end
+    }
 }
 
 impl Debug for CacheRange {
@@ -152,5 +162,45 @@ impl CacheRange {
         };
 
         (left, right)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cmp::Ordering;
+
+    use crate::CacheRange;
+
+    #[test]
+    fn test_cache_range_eq() {
+        let r1 = CacheRange::new(b"k1".to_vec(), b"k2".to_vec());
+        let mut r2 = CacheRange::new(b"k1".to_vec(), b"k2".to_vec());
+        r2.tag = "Something".to_string();
+        assert_eq!(r1, r2);
+    }
+
+    #[test]
+    fn test_cache_range_partial_cmp() {
+        let r1 = CacheRange::new(b"k1".to_vec(), b"k2".to_vec());
+        let r2 = CacheRange::new(b"k2".to_vec(), b"k3".to_vec());
+        let r3 = CacheRange::new(b"k2".to_vec(), b"k4".to_vec());
+        assert_eq!(r1.partial_cmp(&r2).unwrap(), Ordering::Less);
+        assert_eq!(r2.partial_cmp(&r1).unwrap(), Ordering::Greater);
+        assert!(r2.partial_cmp(&r3).is_none());
+    }
+
+    #[test]
+    fn test_split_off() {
+        let r1 = CacheRange::new(b"k1".to_vec(), b"k6".to_vec());
+        let r2 = CacheRange::new(b"k2".to_vec(), b"k4".to_vec());
+
+        let r3 = CacheRange::new(b"k1".to_vec(), b"k2".to_vec());
+        let r4 = CacheRange::new(b"k4".to_vec(), b"k6".to_vec());
+
+        let (left, right) = r1.split_off(&r1);
+        assert!(left.is_none() && right.is_none());
+        let (left, right) = r1.split_off(&r2);
+        assert_eq!(left.unwrap(), r3);
+        assert_eq!(right.unwrap(), r4);
     }
 }

@@ -237,12 +237,12 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
 pub struct RawMvccIterMetricsCollector;
 
 impl IterMetricsCollector for RawMvccIterMetricsCollector {
-    fn internal_delete_skipped_count(&self) -> usize {
-        PerfContext::get().internal_delete_skipped_count() as usize
+    fn internal_delete_skipped_count(&self) -> u64 {
+        PerfContext::get().internal_delete_skipped_count()
     }
 
-    fn internal_key_skipped_count(&self) -> usize {
-        PerfContext::get().internal_key_skipped_count() as usize
+    fn internal_key_skipped_count(&self) -> u64 {
+        PerfContext::get().internal_key_skipped_count()
     }
 }
 

@@ -728,14 +728,20 @@ struct Filter {
 
     // When deleting some keys, the latest one should be deleted at last to avoid the older
     // version appears.
-    cached_delete_key: Option<Vec<u8>>,
+    cached_mvcc_delete_key: Option<Vec<u8>>,
+    cached_skiplist_delete_key: Option<Vec<u8>>,
 
     metrics: FilterMetrics,
 }
 
 impl Drop for Filter {
     fn drop(&mut self) {
-        if let Some(cached_delete_key) = self.cached_delete_key.take() {
+        if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
+            let guard = &epoch::pin();
+            self.write_cf_handle
+                .remove(&InternalBytes::from_vec(cached_delete_key), guard);
+        }
+        if let Some(cached_delete_key) = self.cached_skiplist_delete_key.take() {
             let guard = &epoch::pin();
             self.write_cf_handle
                 .remove(&InternalBytes::from_vec(cached_delete_key), guard);
@@ -754,7 +760,8 @@ impl Filter {
             default_cf_handle,
             write_cf_handle,
             mvcc_key_prefix: vec![],
-            cached_delete_key: None,
+            cached_mvcc_delete_key: None,
+            cached_skiplist_delete_key: None,
             remove_older: false,
             metrics: FilterMetrics::default(),
         }
@@ -762,11 +769,50 @@ impl Filter {
 
     fn filter(&mut self, key: &Bytes, value: &Bytes) -> Result<(), String> {
         self.metrics.total += 1;
-        let InternalKey { user_key, .. } = decode_key(key);
+        let InternalKey {
+            user_key, v_type, ..
+        } = decode_key(key);
 
         let (mvcc_key_prefix, commit_ts) = split_ts(user_key)?;
         if commit_ts > self.safe_point {
             return Ok(());
+        }
+
+        // Just like what rocksdb compaction filter does, we do not handle internal
+        // keys (representing different MVCC versions of the same user key) that have
+        // been marked as tombstones. However, these keys need to be deleted. Since they
+        // are below the safe point, we can safely delete them directly now.
+        // For each user key, we cache the first ValueType::Deletion and delete all the
+        // older internal keys of the same user keys. The cached ValueType::Delete is
+        // deleted at last to avoid these older keys visible.
+        if v_type == ValueType::Deletion {
+            if let Some(cache_skiplist_delete_key) = self.cached_skiplist_delete_key.take() {
+                // Reaching here in two cases:
+                // 1. There are two ValueType::Deletion in the same user key.
+                // 2. Two consecutive ValueType::Deletion of different user keys.
+                // In either cases, we can delete the previous one directly.
+                let guard = &epoch::pin();
+                self.write_cf_handle
+                    .remove(&InternalBytes::from_vec(cache_skiplist_delete_key), guard)
+            }
+            self.cached_skiplist_delete_key = Some(key.to_vec());
+            return Ok(());
+        } else if let Some(ref cache_skiplist_delete_key) = self.cached_skiplist_delete_key {
+            let InternalKey {
+                user_key: cache_skiplist_delete_user_key,
+                ..
+            } = decode_key(cache_skiplist_delete_key);
+            let guard = &epoch::pin();
+            if cache_skiplist_delete_user_key == user_key {
+                self.write_cf_handle
+                    .remove(&InternalBytes::from_bytes(key.clone()), guard);
+                return Ok(());
+            } else {
+                self.write_cf_handle.remove(
+                    &InternalBytes::from_vec(self.cached_skiplist_delete_key.take().unwrap()),
+                    guard,
+                )
+            }
         }
 
         let guard = &epoch::pin();
@@ -776,7 +822,7 @@ impl Filter {
             self.mvcc_key_prefix.clear();
             self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
             self.remove_older = false;
-            if let Some(cached_delete_key) = self.cached_delete_key.take() {
+            if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
                 self.write_cf_handle
                     .remove(&InternalBytes::from_vec(cached_delete_key), guard);
             }
@@ -798,7 +844,7 @@ impl Filter {
                     // The first mvcc type below safe point is the mvcc delete. We should delay to
                     // remove it until all the followings with the same user key have been deleted
                     // to avoid older version apper.
-                    self.cached_delete_key = Some(key.to_vec());
+                    self.cached_mvcc_delete_key = Some(key.to_vec());
                 }
             }
         }
@@ -849,14 +895,16 @@ pub mod tests {
         CF_LOCK, CF_WRITE, DATA_CFS,
     };
     use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
+    use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use pd_client::PdClient;
     use tempfile::Builder;
-    use tikv_util::config::{ReadableDuration, ReadableSize};
+    use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use super::{Filter, PdRangeHintService};
     use crate::{
         background::BackgroundRunner,
+        config::RangeCacheConfigManager,
         engine::{SkiplistEngine, SkiplistHandle},
         keys::{
             construct_key, construct_user_key, construct_value, encode_key, encode_seek_key,
@@ -868,7 +916,7 @@ pub mod tests {
             tests::{add_region_label_rule, new_region_label_rule, new_test_server_and_client},
         },
         write_batch::RangeCacheWriteBatchEntry,
-        RangeCacheEngineConfig, RangeCacheMemoryEngine,
+        RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
     };
 
     fn put_data(
@@ -1006,7 +1054,16 @@ pub mod tests {
     }
 
     fn dummy_controller(skip_engine: SkiplistEngine) -> Arc<MemoryController> {
-        Arc::new(MemoryController::new(usize::MAX, usize::MAX, skip_engine))
+        let mut config = RangeCacheEngineConfig::config_for_test();
+        config.soft_limit_threshold = Some(ReadableSize(u64::MAX));
+        config.hard_limit_threshold = Some(ReadableSize(u64::MAX));
+        let config = Arc::new(VersionTrack::new(config));
+        Arc::new(MemoryController::new(config, skip_engine))
+    }
+
+    fn encode_raw_key_for_filter(key: &[u8], ts: TimeStamp) -> InternalBytes {
+        let key = Key::from_raw(key);
+        encoding_for_filter(key.as_encoded(), ts)
     }
 
     #[test]
@@ -1117,33 +1174,121 @@ pub mod tests {
         assert_eq!(2, element_count(&write));
         assert_eq!(2, element_count(&default));
 
-        let encode_key = |key, ts| {
-            let key = Key::from_raw(key);
-            encoding_for_filter(key.as_encoded(), ts)
-        };
-
-        let key = encode_key(b"key1", TimeStamp::new(15));
+        let key = encode_raw_key_for_filter(b"key1", TimeStamp::new(15));
         assert!(key_exist(&write, &key, guard));
 
-        let key = encode_key(b"key2", TimeStamp::new(35));
+        let key = encode_raw_key_for_filter(b"key2", TimeStamp::new(35));
         assert!(key_exist(&write, &key, guard));
 
-        let key = encode_key(b"key3", TimeStamp::new(35));
+        let key = encode_raw_key_for_filter(b"key3", TimeStamp::new(35));
         assert!(!key_exist(&write, &key, guard));
 
-        let key = encode_key(b"key1", TimeStamp::new(10));
+        let key = encode_raw_key_for_filter(b"key1", TimeStamp::new(10));
         assert!(key_exist(&default, &key, guard));
 
-        let key = encode_key(b"key2", TimeStamp::new(30));
+        let key = encode_raw_key_for_filter(b"key2", TimeStamp::new(30));
         assert!(key_exist(&default, &key, guard));
 
-        let key = encode_key(b"key3", TimeStamp::new(30));
+        let key = encode_raw_key_for_filter(b"key3", TimeStamp::new(30));
         assert!(!key_exist(&default, &key, guard));
     }
 
     #[test]
+    fn test_filter_with_delete() {
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        )));
+        let memory_controller = engine.memory_controller();
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(range.clone());
+        let (write, default) = {
+            let skiplist_engine = engine.core().write().engine();
+            (
+                skiplist_engine.cf_handle(CF_WRITE),
+                skiplist_engine.cf_handle(CF_DEFAULT),
+            )
+        };
+
+        put_data(
+            b"key1",
+            b"value11",
+            10,
+            15,
+            10,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+
+        // Delete the above key
+        let guard = &epoch::pin();
+        let raw_write_k = Key::from_raw(b"key1")
+            .append_ts(TimeStamp::new(15))
+            .into_encoded();
+        let mut write_k = encode_key(&raw_write_k, 15, ValueType::Deletion);
+        write_k.set_memory_controller(memory_controller.clone());
+        let mut val = InternalBytes::from_vec(b"".to_vec());
+        val.set_memory_controller(memory_controller.clone());
+        write.insert(write_k, val, guard);
+
+        put_data(
+            b"key2",
+            b"value22",
+            20,
+            25,
+            14,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+
+        // Delete the above key
+        let raw_write_k = Key::from_raw(b"key2")
+            .append_ts(TimeStamp::new(25))
+            .into_encoded();
+        let mut write_k = encode_key(&raw_write_k, 15, ValueType::Deletion);
+        write_k.set_memory_controller(memory_controller.clone());
+        let mut val = InternalBytes::from_vec(b"".to_vec());
+        val.set_memory_controller(memory_controller.clone());
+        write.insert(write_k, val, guard);
+
+        put_data(
+            b"key2",
+            b"value23",
+            30,
+            35,
+            16,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        delete_data(b"key2", 40, 18, &write, memory_controller.clone());
+
+        let snap = engine.snapshot(range.clone(), u64::MAX, u64::MAX).unwrap();
+        let mut iter_opts = IterOptions::default();
+        iter_opts.set_lower_bound(&range.start, 0);
+        iter_opts.set_upper_bound(&range.end, 0);
+
+        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
+        worker.core.gc_range(&range, 40);
+
+        let mut iter = snap.iterator_opt("write", iter_opts).unwrap();
+        iter.seek_to_first().unwrap();
+        assert!(!iter.valid().unwrap());
+
+        let mut iter = write.iterator();
+        iter.seek_to_first(guard);
+        assert!(!iter.valid());
+    }
+
+    #[test]
     fn test_gc() {
-        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        )));
         let memory_controller = engine.memory_controller();
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
@@ -1228,7 +1373,9 @@ pub mod tests {
 
     #[test]
     fn test_snapshot_block_gc() {
-        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        )));
         let memory_controller = engine.memory_controller();
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
@@ -1339,7 +1486,9 @@ pub mod tests {
     fn test_gc_worker() {
         let mut config = RangeCacheEngineConfig::config_for_test();
         config.gc_interval = ReadableDuration(Duration::from_secs(1));
-        let engine = RangeCacheMemoryEngine::new(&config);
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+            VersionTrack::new(config),
+        )));
         let memory_controller = engine.memory_controller();
         let (write, default) = {
             let mut core = engine.core.write();
@@ -1428,7 +1577,9 @@ pub mod tests {
 
     #[test]
     fn test_background_worker_load() {
-        let mut engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
+        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        )));
         let path = Builder::new().prefix("test_load").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
         let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
@@ -1507,7 +1658,9 @@ pub mod tests {
 
     #[test]
     fn test_ranges_for_gc() {
-        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        )));
         let memory_controller = engine.memory_controller();
         let r1 = CacheRange::new(b"a".to_vec(), b"b".to_vec());
         let r2 = CacheRange::new(b"b".to_vec(), b"c".to_vec());
@@ -1534,7 +1687,9 @@ pub mod tests {
     // 4. Verify that only the labeled key range has been loaded.
     #[test]
     fn test_load_from_pd_hint_service() {
-        let mut engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
+        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        )));
         let path = Builder::new()
             .prefix("test_load_from_pd_hint_service")
             .tempdir()
@@ -1616,7 +1771,8 @@ pub mod tests {
         let mut config = RangeCacheEngineConfig::config_for_test();
         config.soft_limit_threshold = Some(ReadableSize(1000));
         config.hard_limit_threshold = Some(ReadableSize(1500));
-        let mut engine = RangeCacheMemoryEngine::new(&config);
+        let config = Arc::new(VersionTrack::new(config));
+        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(config));
         let path = Builder::new()
             .prefix("test_snapshot_load_reaching_limit")
             .tempdir()
@@ -1715,5 +1871,105 @@ pub mod tests {
         verify(range3, true, 3);
         verify(range4, false, 0);
         assert_eq!(mem_controller.mem_usage(), 1260);
+    }
+
+    #[test]
+    fn test_soft_hard_limit_change() {
+        let mut config = RangeCacheEngineConfig::config_for_test();
+        config.soft_limit_threshold = Some(ReadableSize(1000));
+        config.hard_limit_threshold = Some(ReadableSize(1500));
+        let config = Arc::new(VersionTrack::new(config));
+        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(config.clone()));
+        let path = Builder::new()
+            .prefix("test_snapshot_load_reaching_limit")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+        engine.set_disk_engine(rocks_engine.clone());
+        let mem_controller = engine.memory_controller();
+
+        let range1 = CacheRange::new(construct_user_key(1), construct_user_key(3));
+        // Memory for one put is 17(key) + 3(val) + 8(Seqno) + 16(Memory controller in
+        // key and val) + 96(Node overhead) = 140
+        let key = construct_key(1, 10);
+        rocks_engine.put_cf(CF_DEFAULT, &key, b"val").unwrap();
+        rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
+        rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
+
+        let key = construct_key(2, 10);
+        rocks_engine.put_cf(CF_DEFAULT, &key, b"val").unwrap();
+        rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
+        rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
+        // After loading range1, the memory usage should be 140*6=840
+        engine.load_range(range1.clone()).unwrap();
+        engine.prepare_for_apply(&range1);
+
+        let range2 = CacheRange::new(construct_user_key(3), construct_user_key(5));
+        let key = construct_key(3, 10);
+        rocks_engine.put_cf(CF_DEFAULT, &key, b"val").unwrap();
+        rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
+        rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
+
+        let key = construct_key(4, 10);
+        rocks_engine.put_cf(CF_DEFAULT, &key, b"val").unwrap();
+        rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
+        rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
+        // 840*2 > hard limit 1500, so the load will fail and the loaded keys should be
+        // removed. However now we change the memory quota to 2000, so the range2 can be
+        // cached.
+        let mut config_manager = RangeCacheConfigManager(config.clone());
+        let mut config_change = ConfigChange::new();
+        config_change.insert(
+            String::from("hard_limit_threshold"),
+            ConfigValue::Size(2000),
+        );
+        config_manager.dispatch(config_change).unwrap();
+        assert_eq!(config.value().hard_limit_threshold(), 2000);
+
+        engine.load_range(range2.clone()).unwrap();
+        engine.prepare_for_apply(&range2);
+
+        // ensure all ranges are finshed
+        {
+            let mut count = 0;
+            while count < 20 {
+                {
+                    let core = engine.core.read();
+                    let range_manager = core.range_manager();
+                    if range_manager.pending_ranges.is_empty()
+                        && range_manager.pending_ranges_loading_data.is_empty()
+                    {
+                        break;
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(100));
+                count += 1;
+            }
+        }
+
+        let verify = |range: CacheRange, exist, expect_count| {
+            if exist {
+                let snap = engine.snapshot(range.clone(), 10, u64::MAX).unwrap();
+                let mut count = 0;
+                for cf in DATA_CFS {
+                    let mut iter = IterOptions::default();
+                    iter.set_lower_bound(&range.start, 0);
+                    iter.set_upper_bound(&range.end, 0);
+                    let mut iter = snap.iterator_opt(cf, iter).unwrap();
+                    let _ = iter.seek_to_first();
+                    while iter.valid().unwrap() {
+                        let _ = iter.next();
+                        count += 1;
+                    }
+                }
+                assert_eq!(count, expect_count);
+            } else {
+                engine.snapshot(range, 10, 10).unwrap_err();
+            }
+        };
+        verify(range1, true, 6);
+        verify(range2, true, 6);
+        assert_eq!(mem_controller.mem_usage(), 1680);
     }
 }

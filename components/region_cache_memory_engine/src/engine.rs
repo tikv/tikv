@@ -20,7 +20,7 @@ use skiplist_rs::{
     SkipList,
 };
 use slog_global::error;
-use tikv_util::info;
+use tikv_util::{config::VersionTrack, info};
 
 use crate::{
     background::{BackgroundTask, BgWorkManager, PdRangeHintService},
@@ -28,8 +28,9 @@ use crate::{
     memory_controller::MemoryController,
     range_manager::{LoadFailedReason, RangeCacheStatus, RangeManager},
     read::{RangeCacheIterator, RangeCacheSnapshot},
+    statistics::Statistics,
     write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
-    RangeCacheEngineConfig,
+    RangeCacheEngineConfig, RangeCacheEngineContext,
 };
 
 pub(crate) const CF_DEFAULT_USIZE: usize = 0;
@@ -246,23 +247,23 @@ pub struct RangeCacheMemoryEngine {
     pub(crate) rocks_engine: Option<RocksEngine>,
     bg_work_manager: Arc<BgWorkManager>,
     memory_controller: Arc<MemoryController>,
+    statistics: Arc<Statistics>,
+    config: Arc<VersionTrack<RangeCacheEngineConfig>>,
 }
 
 impl RangeCacheMemoryEngine {
-    pub fn new(config: &RangeCacheEngineConfig) -> Self {
+    pub fn new(range_cache_engine_context: RangeCacheEngineContext) -> Self {
         info!("init range cache memory engine";);
         let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
         let skiplist_engine = { core.read().engine().clone() };
 
-        let memory_controller = Arc::new(MemoryController::new(
-            config.soft_limit_threshold(),
-            config.hard_limit_threshold(),
-            skiplist_engine,
-        ));
+        let RangeCacheEngineContext { config, statistics } = range_cache_engine_context;
+        assert!(config.value().enabled);
+        let memory_controller = Arc::new(MemoryController::new(config.clone(), skiplist_engine));
 
         let bg_work_manager = Arc::new(BgWorkManager::new(
             core.clone(),
-            config.gc_interval.0,
+            config.value().gc_interval.0,
             memory_controller.clone(),
         ));
 
@@ -271,6 +272,8 @@ impl RangeCacheMemoryEngine {
             rocks_engine: None,
             bg_work_manager,
             memory_controller,
+            statistics,
+            config,
         }
     }
 
@@ -328,19 +331,19 @@ impl RangeCacheMemoryEngine {
             .pending_ranges
             .iter()
             .enumerate()
-            .find_map(|(idx, r)| {
-                if r.contains_range(range) {
+            .find_map(|(idx, pending_range)| {
+                if pending_range.contains_range(range) {
                     // The `range` may be a proper subset of `r` and we should split it in this case
                     // and push the rest back to `pending_range` so that each range only schedules
                     // load task of its own.
-                    Some((idx, r.split_off(range)))
-                } else if range.overlaps(r) {
+                    Some((idx, pending_range.split_off(range)))
+                } else if range.overlaps(pending_range) {
                     // Pending range `range` does not contains the applying range `r` but overlap
                     // with it, which means the pending range is out dated, we remove it directly.
                     info!(
                         "out of date pending ranges";
                         "applying_range" => ?range,
-                        "pending_range" => ?r,
+                        "pending_range" => ?pending_range,
                     );
                     overlapped = true;
                     Some((idx, (None, None)))
@@ -437,6 +440,10 @@ impl RangeCacheMemoryEngine {
     pub(crate) fn memory_controller(&self) -> Arc<MemoryController> {
         self.memory_controller.clone()
     }
+
+    pub(crate) fn statistics(&self) -> Arc<Statistics> {
+        self.statistics.clone()
+    }
 }
 
 impl RangeCacheMemoryEngine {
@@ -478,6 +485,10 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
         let core = self.core.read();
         core.range_manager().get_range_for_key(key)
     }
+
+    fn enabled(&self) -> bool {
+        self.config.value().enabled
+    }
 }
 
 impl Iterable for RangeCacheMemoryEngine {
@@ -491,13 +502,18 @@ impl Iterable for RangeCacheMemoryEngine {
 
 #[cfg(test)]
 pub mod tests {
-    use engine_traits::CacheRange;
+    use std::sync::Arc;
 
-    use crate::{RangeCacheEngineConfig, RangeCacheMemoryEngine};
+    use engine_traits::CacheRange;
+    use tikv_util::config::VersionTrack;
+
+    use crate::{RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine};
 
     #[test]
     fn test_overlap_with_pending() {
-        let engine = RangeCacheMemoryEngine::new(&RangeCacheEngineConfig::config_for_test());
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        )));
         let range1 = CacheRange::new(b"k1".to_vec(), b"k3".to_vec());
         engine.load_range(range1).unwrap();
 
