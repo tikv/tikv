@@ -183,9 +183,9 @@ fn test_keyspace_level_gc_service() {
     // Case 1: If there is no keyspace level GC in cache, then
     // is_all_keyspace_level_gc_have_not_initialized return true.
     assert_eq!(true, keyspace_level_gc_service.is_some());
-    if let Some(ref ks_meta_service) = *keyspace_level_gc_service {
+    if let Some(ref keyspace_level_gc_service) = *keyspace_level_gc_service {
         let is_all_keyspace_level_gc_have_not_initialized =
-            ks_meta_service.is_all_keyspace_level_gc_have_not_initialized();
+            keyspace_level_gc_service.is_all_keyspace_level_gc_have_not_initialized();
         assert_eq!(true, is_all_keyspace_level_gc_have_not_initialized);
     }
 
@@ -194,16 +194,17 @@ fn test_keyspace_level_gc_service() {
     let keyspace_level_gc_service = make_keyspace_level_gc_service();
     assert_eq!(true, keyspace_level_gc_service.is_some());
 
-    if let Some(ref ks_meta_service) = *keyspace_level_gc_service {
+    if let Some(ref keyspace_level_gc_service) = *keyspace_level_gc_service {
         let is_all_keyspace_level_gc_have_not_initialized =
-            ks_meta_service.is_all_keyspace_level_gc_have_not_initialized();
+            keyspace_level_gc_service.is_all_keyspace_level_gc_have_not_initialized();
         assert_eq!(false, is_all_keyspace_level_gc_have_not_initialized);
     }
 
     // Case 3: Check get_max_ts_of_all_ks_gc_safe_point will return max(all keyspace
     // level GC safe point).
-    if let Some(ref ks_meta_service) = *keyspace_level_gc_service {
-        let max_ts_of_all_ks_gc_safe_point = ks_meta_service.get_max_ts_of_all_ks_gc_safe_point();
+    if let Some(ref keyspace_level_gc_service) = *keyspace_level_gc_service {
+        let max_ts_of_all_ks_gc_safe_point =
+            keyspace_level_gc_service.get_max_ts_of_all_ks_gc_safe_point();
         assert_eq!(69, max_ts_of_all_ks_gc_safe_point);
     }
 }

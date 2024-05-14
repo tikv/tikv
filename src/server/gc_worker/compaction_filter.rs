@@ -223,9 +223,9 @@ impl CompactionFilterFactory for WriteCompactionFilterFactory {
         // compaction filter.
         let keyspace_level_gc_service = gc_context.keyspace_level_gc_service.clone();
         let mut is_all_ks_not_init_gc_sp = true;
-        if let Some(ref ks_meta_service) = *keyspace_level_gc_service {
+        if let Some(ref keyspace_level_gc_service) = *keyspace_level_gc_service {
             is_all_ks_not_init_gc_sp =
-                ks_meta_service.is_all_keyspace_level_gc_have_not_initialized()
+                keyspace_level_gc_service.is_all_keyspace_level_gc_have_not_initialized()
         }
 
         if safe_point == 0 && is_all_ks_not_init_gc_sp {
@@ -397,9 +397,9 @@ impl WriteCompactionFilter {
     ) -> Self {
         // Safe point must have been initialized.
         let mut is_all_ks_not_init_gc_sp = true;
-        if let Some(ref ks_meta_service) = *keyspace_level_gc_service {
+        if let Some(ref keyspace_level_gc_service) = *keyspace_level_gc_service {
             is_all_ks_not_init_gc_sp =
-                ks_meta_service.is_all_keyspace_level_gc_have_not_initialized()
+                keyspace_level_gc_service.is_all_keyspace_level_gc_have_not_initialized()
         }
         assert!(safe_point > 0 || !is_all_ks_not_init_gc_sp);
         debug!("gc in compaction filter"; "safe_point" => safe_point);
@@ -492,6 +492,7 @@ impl WriteCompactionFilter {
         let (mvcc_key_prefix, commit_ts) = split_ts(key)?;
 
         if let Some(keyspace_level_gc_service) = self.keyspace_level_gc_service.as_ref() {
+            println!("[test-yjy] compaction_filter do_filter");
             self.safe_point = keyspace_level_gc_service
                 .get_gc_safe_point_by_key(self.safe_point, keys::origin_key(key));
         }
@@ -804,8 +805,8 @@ pub fn check_need_gc(
         // Check is there any keyspace level GC safe point >= props.min_ts, the
         // following check should proceed.
         let mut any_ks_gc_sp_ge_than_props_min_ts = false;
-        if let Some(ref ks_meta_service) = *keyspace_level_gc_service {
-            let max_all_ks_gc_sp = ks_meta_service.get_max_ts_of_all_ks_gc_safe_point();
+        if let Some(ref keyspace_level_gc_service) = *keyspace_level_gc_service {
+            let max_all_ks_gc_sp = keyspace_level_gc_service.get_max_ts_of_all_ks_gc_safe_point();
             debug!("check props.min_ts and max ts of all keyspace level gc safe point";
                 "props.min_ts" => %props.min_ts,
                 "max_gc_sp_of_all_ks" => %max_all_ks_gc_sp,

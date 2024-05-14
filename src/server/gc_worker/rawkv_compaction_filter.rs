@@ -61,9 +61,9 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
         // compaction filter.
         let keyspace_level_gc_service = gc_context.keyspace_level_gc_service.clone();
         let mut is_all_ks_not_init_gc_sp = true;
-        if let Some(ref ks_meta_service) = *keyspace_level_gc_service {
+        if let Some(ref keyspace_level_gc_service) = *keyspace_level_gc_service {
             is_all_ks_not_init_gc_sp =
-                ks_meta_service.is_all_keyspace_level_gc_have_not_initialized()
+                keyspace_level_gc_service.is_all_keyspace_level_gc_have_not_initialized()
         }
 
         if safe_point == 0 && is_all_ks_not_init_gc_sp {
@@ -200,9 +200,9 @@ impl RawCompactionFilter {
     ) -> Self {
         // Safe point must have been initialized.
         let mut is_all_ks_not_init_gc_sp = true;
-        if let Some(ref ks_meta_service) = *keyspace_level_gc_service {
+        if let Some(ref keyspace_level_gc_service) = *keyspace_level_gc_service {
             is_all_ks_not_init_gc_sp =
-                ks_meta_service.is_all_keyspace_level_gc_have_not_initialized()
+                keyspace_level_gc_service.is_all_keyspace_level_gc_have_not_initialized()
         }
         assert!(safe_point > 0 || !is_all_ks_not_init_gc_sp);
         debug!("gc in compaction filter"; "safe_point" => safe_point);
@@ -242,6 +242,7 @@ impl RawCompactionFilter {
         }
 
         if let Some(keyspace_level_gc_service) = self.keyspace_level_gc_service.as_ref() {
+            println!("[test-yjy] rawkv compaction_filter do_filter");
             self.safe_point = keyspace_level_gc_service
                 .get_gc_safe_point_by_key(self.safe_point, keys::origin_key(key));
         }

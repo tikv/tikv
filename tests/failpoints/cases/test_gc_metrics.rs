@@ -292,7 +292,7 @@ fn test_raw_gc_keys_handled() {
         GcConfig::default(),
         feature_gate,
         Arc::new(MockRegionInfoProvider::new(vec![])),
-        Arc::new(Some(KeyspaceLevelGCService::default())),
+        Arc::new(None),
     );
     gc_worker.start(store_id).unwrap();
 
