@@ -20,11 +20,7 @@ use skiplist_rs::{
     SkipList,
 };
 use slog_global::error;
-use tikv_util::{
-    config::VersionTrack,
-    info,
-    time::{Duration, Instant},
-};
+use tikv_util::{config::VersionTrack, info};
 
 use crate::{
     background::{BackgroundTask, BgWorkManager, PdRangeHintService},
@@ -318,87 +314,14 @@ impl RangeCacheMemoryEngine {
 
     // It handles the pending range and check whether to buffer write for this
     // range.
-    pub(crate) fn prepare_for_apply(
-        &self,
-        range: &CacheRange,
-    ) -> (
-        RangeCacheStatus,
-        (
-            (Instant, u64),
-            Duration,
-            Duration,
-            Option<Duration>,
-            Option<Duration>,
-            Option<Duration>,
-            Option<Duration>,
-        ),
-    ) {
-        let before_lock_wait;
-        let before_pending;
-        let iterating_pending = None;
-        let mut upgrade_wait = None;
-        let mut release_lock = None;
-        let mut post_iterating = None;
-
-        let now0 = Instant::now();
+    pub(crate) fn prepare_for_apply(&self, range: &CacheRange) -> RangeCacheStatus {
         let core = self.core.upgradable_read();
-        let now1 = Instant::now();
-        before_lock_wait = now1.saturating_duration_since(now0);
         let range_manager = core.range_manager();
         if range_manager.pending_ranges_in_loading_contains(range) {
-            before_pending = now1.saturating_elapsed();
-            if before_pending > Duration::from_micros(500) {
-                info!(
-                    "slow prepare for apply";
-                    "pending_loading_range" => range_manager.pending_ranges_loading_data.len(),
-                    "before_pending" => ?before_pending,
-                );
-            }
-            return (
-                RangeCacheStatus::Loading,
-                (
-                    (now1, 0),
-                    before_lock_wait,
-                    before_pending,
-                    iterating_pending,
-                    upgrade_wait,
-                    release_lock,
-                    post_iterating,
-                ),
-            );
+            return RangeCacheStatus::Loading;
         }
         if range_manager.contains_range(range) {
-            before_pending = now1.saturating_elapsed();
-            if before_pending > Duration::from_micros(500) {
-                info!(
-                    "slow prepare for apply";
-                    "ranges" => range_manager.ranges().len(),
-                    "before_pending" => ?before_pending,
-                );
-            }
-            return (
-                RangeCacheStatus::Cached,
-                (
-                    (now1, 1),
-                    before_lock_wait,
-                    before_pending,
-                    iterating_pending,
-                    upgrade_wait,
-                    release_lock,
-                    post_iterating,
-                ),
-            );
-        }
-        let now2 = Instant::now();
-        before_pending = now2.saturating_duration_since(now1);
-
-        if before_pending > Duration::from_micros(500) {
-            info!(
-                "slow prepare for apply";
-                "pending_loading_range" => range_manager.pending_ranges_loading_data.len(),
-                "ranges" => range_manager.ranges().len(),
-                "before_pending" => ?before_pending,
-            );
+            return RangeCacheStatus::Cached;
         }
 
         let mut overlapped = false;
@@ -408,19 +331,19 @@ impl RangeCacheMemoryEngine {
             .pending_ranges
             .iter()
             .enumerate()
-            .find_map(|(idx, pending_range)| {
-                if pending_range.contains_range(range) {
+            .find_map(|(idx, r)| {
+                if r.contains_range(range) {
                     // The `range` may be a proper subset of `r` and we should split it in this case
                     // and push the rest back to `pending_range` so that each range only schedules
                     // load task of its own.
-                    Some((idx, pending_range.split_off(range)))
-                } else if range.contains_range(pending_range) {
+                    Some((idx, r.split_off(range)))
+                } else if range.overlaps(r) {
                     // Pending range `range` does not contains the applying range `r` but overlap
                     // with it, which means the pending range is out dated, we remove it directly.
                     info!(
                         "out of date pending ranges";
                         "applying_range" => ?range,
-                        "pending_range" => ?pending_range,
+                        "pending_range" => ?r,
                     );
                     overlapped = true;
                     Some((idx, (None, None)))
@@ -429,27 +352,11 @@ impl RangeCacheMemoryEngine {
                 }
             })
         {
-            let now3 = Instant::now();
-            let core = RwLockUpgradableReadGuard::upgrade(core);
-            drop(core);
-            let mut core = self.core.write();
-            let now4 = Instant::now();
-            upgrade_wait = Some(now4.saturating_duration_since(now3));
+            let mut core = RwLockUpgradableReadGuard::upgrade(core);
 
             if overlapped {
                 core.mut_range_manager().pending_ranges.swap_remove(idx);
-                return (
-                    RangeCacheStatus::NotInCache,
-                    (
-                        (now4, 2),
-                        before_lock_wait,
-                        before_pending,
-                        iterating_pending,
-                        upgrade_wait,
-                        release_lock,
-                        post_iterating,
-                    ),
-                );
+                return RangeCacheStatus::NotInCache;
             }
 
             let range_manager = core.mut_range_manager();
@@ -486,40 +393,12 @@ impl RangeCacheMemoryEngine {
                 );
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
-            let now5 = Instant::now();
-            post_iterating = Some(now5.saturating_duration_since(now4));
             // We have scheduled the range to loading data, so the writes of the range
             // should be buffered
-            return (
-                RangeCacheStatus::Loading,
-                (
-                    (now5, 3),
-                    before_lock_wait,
-                    before_pending,
-                    iterating_pending,
-                    upgrade_wait,
-                    release_lock,
-                    post_iterating,
-                ),
-            );
+            return RangeCacheStatus::Loading;
         }
 
-        drop(core);
-        let now3 = Instant::now();
-        release_lock = Some(now3.saturating_duration_since(now2));
-
-        (
-            RangeCacheStatus::NotInCache,
-            (
-                (now3, 4),
-                before_lock_wait,
-                before_pending,
-                iterating_pending,
-                upgrade_wait,
-                release_lock,
-                post_iterating,
-            ),
-        )
+        RangeCacheStatus::NotInCache
     }
 
     // The writes in `handle_pending_range_in_loading_buffer` indicating the ranges
