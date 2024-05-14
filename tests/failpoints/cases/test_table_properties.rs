@@ -1,12 +1,9 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-
 use api_version::{ApiV2, KvFormat, RawValue};
 use engine_rocks::RocksEngine;
 use engine_traits::{MiscExt, CF_DEFAULT, CF_WRITE};
-use kvproto::{
-    kvrpcpb::{Context, *},
-};
+use kvproto::kvrpcpb::{Context, *};
 use tempfile::TempDir;
 use tikv::{
     config::DbConfig,
