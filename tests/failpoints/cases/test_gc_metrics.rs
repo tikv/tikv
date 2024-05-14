@@ -1,19 +1,17 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::HashMap,
     sync::{atomic::AtomicU64, mpsc, Arc},
     thread,
     time::Duration,
 };
 
 use api_version::{ApiV2, KvFormat, RawValue};
-use dashmap::DashMap;
 use engine_rocks::{raw::FlushOptions, util::get_cf_handle, RocksEngine};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
+use keys::DATA_PREFIX_KEY;
 use keyspace_meta::KeyspaceLevelGCService;
 use kvproto::{
-    keyspacepb,
     kvrpcpb::*,
     metapb::{Peer, Region},
 };
@@ -33,6 +31,7 @@ use tikv::{
             GC_COMPACTION_FILTER_MVCC_DELETION_MET, GC_COMPACTION_FILTER_PERFORM,
             GC_COMPACTION_FILTER_SKIP,
         },
+        make_combined_key, make_keypsace_txnkv_mvcc_key_no_ts, make_keyspace_level_gc_service,
         rawkv_compaction_filter::make_key,
         AutoGcConfig, GcConfig, GcWorker, MockSafePointProvider, PrefixedEngine, TestGcRunner,
         STAT_RAW_KEYMODE, STAT_TXN_KEYMODE,
@@ -129,6 +128,70 @@ fn test_txn_mvcc_filtered() {
         1
     );
 
+    MVCC_VERSIONS_HISTOGRAM.reset();
+    GC_COMPACTION_FILTERED.reset();
+}
+
+#[test]
+fn test_txn_mvcc_filtered_with_keyspace_level_gc() {
+    let combined_vec = Vec::from(DATA_PREFIX_KEY);
+    let user_key = b"key";
+    // b"zkey"
+    let api_v1_mvcc_key = make_combined_key(combined_vec, user_key.to_vec());
+    test_txn_mvcc_filtered_by_keyspace(None, api_v1_mvcc_key);
+    let keyspace_txnkv_mvcc_key = make_keypsace_txnkv_mvcc_key_no_ts(1, user_key.to_vec());
+    test_txn_mvcc_filtered_by_keyspace(Some(1), keyspace_txnkv_mvcc_key);
+}
+fn test_txn_mvcc_filtered_by_keyspace(keyspace_id: Option<u32>, key: Vec<u8>) {
+    MVCC_VERSIONS_HISTOGRAM.reset();
+    GC_COMPACTION_FILTERED.reset();
+
+    let mut engine = TestEngineBuilder::new().build().unwrap();
+    let raw_engine = engine.get_rocksdb();
+    let value = vec![b'v'; 512];
+    let mut gc_runner = TestGcRunner::new(0);
+    gc_runner.keyspace_level_gc_service = make_keyspace_level_gc_service().clone();
+
+    // GC can't delete keys after the given safe point.
+    must_prewrite_put(&mut engine, key.as_slice(), &value, key.as_slice(), 100);
+    must_commit(&mut engine, key.as_slice(), 100, 110);
+
+    gc_runner
+        .update_gc_safe_point(keyspace_id, 50)
+        .gc(&raw_engine);
+    must_get(&mut engine, key.as_slice(), 110, &value);
+
+    // GC can't delete keys before the safe ponit if they are latest versions.
+    gc_runner
+        .update_gc_safe_point(keyspace_id, 200)
+        .gc(&raw_engine);
+    must_get(&mut engine, key.as_slice(), 110, &value);
+
+    must_prewrite_put(&mut engine, key.as_slice(), &value, key.as_slice(), 120);
+    must_commit(&mut engine, key.as_slice(), 120, 130);
+
+    // GC can't delete the latest version before the safe ponit.
+    gc_runner
+        .update_gc_safe_point(keyspace_id, 115)
+        .gc(&raw_engine);
+    must_get(&mut engine, key.as_slice(), 110, &value);
+
+    // GC a version will also delete the key on default CF.
+    gc_runner
+        .update_gc_safe_point(keyspace_id, 200)
+        .gc(&raw_engine);
+    assert_eq!(
+        MVCC_VERSIONS_HISTOGRAM
+            .with_label_values(&[STAT_TXN_KEYMODE])
+            .get_sample_sum(),
+        4_f64
+    );
+    assert_eq!(
+        GC_COMPACTION_FILTERED
+            .with_label_values(&[STAT_TXN_KEYMODE])
+            .get(),
+        1
+    );
     MVCC_VERSIONS_HISTOGRAM.reset();
     GC_COMPACTION_FILTERED.reset();
 }
@@ -377,61 +440,6 @@ fn test_raw_gc_keys_handled() {
 
     GC_COMPACTION_FILTER_MVCC_DELETION_MET.reset();
     GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.reset();
-}
-
-// make_keyspace_level_gc_service is used to construct the required keyspace
-// metas, mappings, and keyspace level GC service.
-fn make_keyspace_level_gc_service() -> Arc<Option<KeyspaceLevelGCService>> {
-    let mut keyspace_config = HashMap::new();
-    keyspace_config.insert(
-        keyspace_meta::KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE.to_string(),
-        keyspace_meta::GC_MGMT_TYPE_KEYSPACE_LEVEL_GC.to_string(),
-    );
-
-    // Init keyspace_1 and keyspace_2.
-    let keyspace_1_meta = keyspacepb::KeyspaceMeta {
-        id: 1,
-        name: "test_keyspace_1".to_string(),
-        state: Default::default(),
-        created_at: 0,
-        state_changed_at: 0,
-        config: keyspace_config.clone(),
-        unknown_fields: Default::default(),
-        cached_size: Default::default(),
-    };
-
-    let keyspace_2_meta = keyspacepb::KeyspaceMeta {
-        id: 2,
-        name: "test_keyspace_2".to_string(),
-        state: Default::default(),
-        created_at: 0,
-        state_changed_at: 0,
-        config: keyspace_config,
-        unknown_fields: Default::default(),
-        cached_size: Default::default(),
-    };
-
-    // Init keyspace level GC cache.
-    let keyspace_level_gc_map = DashMap::new();
-    // make data ts < props.min_ts
-    keyspace_level_gc_map.insert(1_u32, 60_u64);
-    keyspace_level_gc_map.insert(2_u32, 69_u64);
-
-    let keyspace_level_gc_map = Arc::new(keyspace_level_gc_map);
-
-    // Init the mapping from keyspace id to keyspace meta.
-    let keyspace_id_meta_map = DashMap::new();
-
-    // Make data ts < props.min_ts( props.min_ts = 70).
-    keyspace_id_meta_map.insert(keyspace_1_meta.id, keyspace_1_meta);
-    keyspace_id_meta_map.insert(keyspace_2_meta.id, keyspace_2_meta);
-
-    let keyspace_id_meta_cache = Arc::new(keyspace_id_meta_map);
-
-    Arc::new(Some(KeyspaceLevelGCService::new(
-        Arc::clone(&keyspace_level_gc_map),
-        Arc::clone(&keyspace_id_meta_cache),
-    )))
 }
 
 #[test]

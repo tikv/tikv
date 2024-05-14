@@ -869,12 +869,18 @@ pub fn check_need_gc(
 #[allow(dead_code)] // Some interfaces are not used with different compile options.
 #[cfg(any(test, feature = "failpoints"))]
 pub mod test_utils {
+    use std::collections::HashMap;
+
+    use api_version::{ApiV2, KeyMode};
+    use dashmap::DashMap;
     use engine_rocks::{
         raw::{CompactOptions, CompactionOptions},
         util::get_cf_handle,
         RocksEngine,
     };
     use engine_traits::{SyncMutable, CF_DEFAULT, CF_WRITE};
+    use keys::DATA_PREFIX_KEY;
+    use kvproto::keyspacepb;
     use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
     use tikv_util::{
         config::VersionTrack,
@@ -937,6 +943,22 @@ pub mod test_utils {
     impl<'a> TestGcRunner<'a> {
         pub fn safe_point(&mut self, sp: u64) -> &mut Self {
             self.safe_point = sp;
+            self
+        }
+
+        pub fn update_gc_safe_point(&mut self, keyspace_id: Option<u32>, sp: u64) -> &mut Self {
+            if let Some(ks_id) = keyspace_id.as_ref() {
+                if self.keyspace_level_gc_service.is_none() {
+                    self.keyspace_level_gc_service =
+                        Arc::new(Some(KeyspaceLevelGCService::default()));
+                }
+
+                if let Some(ref keyspace_level_gc_service) = *self.keyspace_level_gc_service {
+                    keyspace_level_gc_service.update_keyspace_level_gc_map(*ks_id, sp);
+                }
+            } else {
+                self.safe_point(sp);
+            }
             self
         }
 
@@ -1017,6 +1039,85 @@ pub mod test_utils {
                 .unwrap();
             self.post_gc();
         }
+    }
+
+    // make_keyspace_level_gc_service is used to construct the required keyspace
+    // metas, mappings, and keyspace level GC service.
+    pub fn make_keyspace_level_gc_service() -> Arc<Option<KeyspaceLevelGCService>> {
+        let mut keyspace_config = HashMap::new();
+        keyspace_config.insert(
+            keyspace_meta::KEYSPACE_CONFIG_KEY_GC_MGMT_TYPE.to_string(),
+            keyspace_meta::GC_MGMT_TYPE_KEYSPACE_LEVEL_GC.to_string(),
+        );
+
+        // Init keyspace_1 and keyspace_2.
+        let keyspace_1_meta = keyspacepb::KeyspaceMeta {
+            id: 1,
+            name: "test_keyspace_1".to_string(),
+            state: Default::default(),
+            created_at: 0,
+            state_changed_at: 0,
+            config: keyspace_config.clone(),
+            unknown_fields: Default::default(),
+            cached_size: Default::default(),
+        };
+
+        let keyspace_2_meta = keyspacepb::KeyspaceMeta {
+            id: 2,
+            name: "test_keyspace_2".to_string(),
+            state: Default::default(),
+            created_at: 0,
+            state_changed_at: 0,
+            config: Default::default(),
+            unknown_fields: Default::default(),
+            cached_size: Default::default(),
+        };
+
+        // Init keyspace level GC cache.
+        let keyspace_level_gc_map = DashMap::new();
+        // make data ts < props.min_ts
+        keyspace_level_gc_map.insert(1_u32, 60_u64);
+
+        let keyspace_level_gc_map = Arc::new(keyspace_level_gc_map);
+
+        // Init the mapping from keyspace id to keyspace meta.
+        let keyspace_id_meta_map = DashMap::new();
+
+        // Make data ts < props.min_ts( props.min_ts = 70).
+        keyspace_id_meta_map.insert(keyspace_1_meta.id, keyspace_1_meta);
+        keyspace_id_meta_map.insert(keyspace_2_meta.id, keyspace_2_meta);
+
+        let keyspace_id_meta_cache = Arc::new(keyspace_id_meta_map);
+
+        Arc::new(Some(KeyspaceLevelGCService::new(
+            Arc::clone(&keyspace_level_gc_map),
+            Arc::clone(&keyspace_id_meta_cache),
+        )))
+    }
+
+    pub fn make_keypsace_txnkv_mvcc_key_no_ts(keyspace_id: u32, user_key: Vec<u8>) -> Vec<u8> {
+        let mut combined_vec = Vec::from(DATA_PREFIX_KEY);
+        combined_vec.extend_from_slice(&make_keyspace_user_key(
+            KeyMode::Txn,
+            keyspace_id,
+            user_key,
+        ));
+        combined_vec
+    }
+
+    pub fn make_keyspace_user_key(
+        key_mode: KeyMode,
+        keyspace_id: u32,
+        user_key: Vec<u8>,
+    ) -> Vec<u8> {
+        let mut combined_vec: Vec<u8> = ApiV2::get_keyspace_prefix(key_mode, keyspace_id);
+        combined_vec.extend_from_slice(&user_key);
+        combined_vec
+    }
+
+    pub fn make_combined_key(mut a: Vec<u8>, b: Vec<u8>) -> Vec<u8> {
+        a.extend_from_slice(&b);
+        a
     }
 
     pub fn rocksdb_level_files(engine: &RocksEngine, cf: &str) -> Vec<Vec<String>> {

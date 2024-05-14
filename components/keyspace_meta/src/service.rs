@@ -444,4 +444,11 @@ impl KeyspaceLevelGCService {
         );
         max_ks_level_gc_sp
     }
+
+    // update_keyspace_level_gc_map is used for ut to directly update the keyspace
+    // level GC.
+    pub fn update_keyspace_level_gc_map(&self, keyspace_id: u32, gc_safe_point: u64) {
+        self.keyspace_level_gc_map
+            .insert(keyspace_id, gc_safe_point);
+    }
 }

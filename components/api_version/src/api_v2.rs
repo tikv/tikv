@@ -268,6 +268,28 @@ impl ApiV2 {
         }
     }
 
+    pub fn get_keyspace_prefix(key_mode: KeyMode, keyspace_id: u32) -> Vec<u8> {
+        let keyspace_id_bytes = keyspace_id.to_be_bytes();
+
+        match key_mode {
+            KeyMode::Raw => {
+                let mut prefix = Vec::with_capacity(4);
+                prefix.push(RAW_KEY_PREFIX);
+                prefix.extend_from_slice(&keyspace_id_bytes[1..4]);
+                prefix
+            }
+            KeyMode::Txn => {
+                let mut prefix = Vec::with_capacity(4);
+                prefix.push(TXN_KEY_PREFIX);
+                prefix.extend_from_slice(&keyspace_id_bytes[1..4]);
+                prefix
+            }
+            KeyMode::Tidb | KeyMode::Unknown => {
+                vec![]
+            }
+        }
+    }
+
     pub const ENCODED_LOGICAL_DELETE: [u8; 1] = [ValueMeta::DELETE_FLAG.bits];
 }
 
@@ -306,7 +328,7 @@ fn decode_raw_key_timestamp(encoded_key: &Key, with_ts: bool) -> Result<Option<T
 mod tests {
     use txn_types::{Key, TimeStamp};
 
-    use crate::{ApiV2, KvFormat, RawValue};
+    use crate::{ApiV2, KeyMode, KvFormat, RawValue};
 
     #[test]
     fn test_key_decode_err() {
@@ -469,5 +491,13 @@ mod tests {
         for (key, expected) in cases.into_iter() {
             assert_eq!(ApiV2::get_u32_keyspace_id_by_key(&key), expected);
         }
+    }
+
+    #[test]
+    fn test_get_keyspace_prefix() {
+        let txn_prefix = ApiV2::get_keyspace_prefix(KeyMode::Txn, 1);
+        assert_eq!(txn_prefix, vec![b'x', 0, 0, 1]);
+        let txn_prefix = ApiV2::get_keyspace_prefix(KeyMode::Raw, 1);
+        assert_eq!(txn_prefix, vec![b'r', 0, 0, 1]);
     }
 }
