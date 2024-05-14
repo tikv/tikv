@@ -30,7 +30,7 @@ use tikv_util::{
 };
 use time::Timespec;
 use tracker::GLOBAL_TRACKERS;
-use txn_types::TimeStamp;
+use txn_types::{TimeStamp, WriteBatchFlags};
 
 use super::metrics::*;
 use crate::{
@@ -929,74 +929,151 @@ where
         cmd.callback.set_result(read_resp);
     }
 
+    /// Try to handle the read request using local read, if the leader is valid
+    /// the read response is returned, otherwise None is returned.
+    fn try_local_leader_read(
+        &mut self,
+        req: &RaftCmdRequest,
+        delegate: &mut CachedReadDelegate<E>,
+        read_id: Option<ThreadReadId>,
+        snap_updated: &mut bool,
+        last_valid_ts: Timespec,
+    ) -> Option<ReadResponse<E::Snapshot>> {
+        let mut local_read_ctx = LocalReadContext::new(&mut self.snap_cache, read_id);
+
+        (*snap_updated) =
+            local_read_ctx.maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
+
+        let snapshot_ts = local_read_ctx.snapshot_ts().unwrap();
+        if !delegate.is_in_leader_lease(snapshot_ts) {
+            return None;
+        }
+
+        let region = Arc::clone(&delegate.region);
+        let response = delegate.execute(req, &region, None, Some(local_read_ctx));
+
+        // Try renew lease in advance
+        delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
+        Some(response)
+    }
+
+    /// Try to handle the stale read request, if the read_ts < safe_ts the read
+    /// response is returned, otherwise the raft command response with
+    /// `DataIsNotReady` error is returned.
+    fn try_local_stale_read(
+        &mut self,
+        req: &RaftCmdRequest,
+        delegate: &mut CachedReadDelegate<E>,
+        snap_updated: &mut bool,
+        last_valid_ts: Timespec,
+    ) -> std::result::Result<ReadResponse<E::Snapshot>, RaftCmdResponse> {
+        let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
+        delegate.check_stale_read_safe(read_ts)?;
+
+        // Stale read does not use cache, so we pass None for read_id
+        let mut local_read_ctx = LocalReadContext::new(&mut self.snap_cache, None);
+        (*snap_updated) =
+            local_read_ctx.maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
+
+        let region = Arc::clone(&delegate.region);
+        // Getting the snapshot
+        let response = delegate.execute(req, &region, None, Some(local_read_ctx));
+
+        // Double check in case `safe_ts` change after the first check and before
+        // getting snapshot
+        delegate.check_stale_read_safe(read_ts)?;
+
+        TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().local_executed_stale_read_requests.inc());
+        Ok(response)
+    }
+
     pub fn propose_raft_command(
         &mut self,
         read_id: Option<ThreadReadId>,
-        req: RaftCmdRequest,
+        mut req: RaftCmdRequest,
         cb: Callback<E::Snapshot>,
     ) {
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => {
-                let snap_updated;
+                let mut snap_updated = false;
                 let last_valid_ts = delegate.last_valid_ts;
                 let mut response = match policy {
                     // Leader can read local if and only if it is in lease.
                     RequestPolicy::ReadLocal => {
-                        let mut local_read_ctx =
-                            LocalReadContext::new(&mut self.snap_cache, read_id);
-
-                        snap_updated = local_read_ctx
-                            .maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
-
-                        let snapshot_ts = local_read_ctx.snapshot_ts().unwrap();
-                        if !delegate.is_in_leader_lease(snapshot_ts) {
+                        if let Some(read_resp) = self.try_local_leader_read(
+                            &req,
+                            &mut delegate,
+                            read_id,
+                            &mut snap_updated,
+                            last_valid_ts,
+                        ) {
+                            read_resp
+                        } else {
                             fail_point!("localreader_before_redirect", |_| {});
                             // Forward to raftstore.
                             self.redirect(RaftCommand::new(req, cb));
                             return;
                         }
-
-                        let region = Arc::clone(&delegate.region);
-                        let response = delegate.execute(&req, &region, None, Some(local_read_ctx));
-
-                        // Try renew lease in advance
-                        delegate.maybe_renew_lease_advance(&self.router, snapshot_ts);
-                        response
                     }
                     // Replica can serve stale read if and only if its `safe_ts` >= `read_ts`
                     RequestPolicy::StaleRead => {
-                        let read_ts = decode_u64(&mut req.get_header().get_flag_data()).unwrap();
-                        if let Err(resp) = delegate.check_stale_read_safe(read_ts) {
-                            cb.set_result(ReadResponse {
-                                response: resp,
-                                snapshot: None,
-                                txn_extra_op: TxnExtraOp::Noop,
-                            });
-                            return;
+                        match self.try_local_stale_read(
+                            &req,
+                            &mut delegate,
+                            &mut snap_updated,
+                            last_valid_ts,
+                        ) {
+                            Ok(read_resp) => read_resp,
+                            Err(err_resp) => {
+                                // It's safe to change the header of the `RaftCmdRequest`, as it
+                                // would not affect the `SnapCtx` used in upper layer like.
+                                let unset_stale_flag = req.get_header().get_flags()
+                                    & (!WriteBatchFlags::STALE_READ.bits());
+                                req.mut_header().set_flags(unset_stale_flag);
+                                let mut inspector = Inspector {
+                                    delegate: &delegate,
+                                };
+                                // The read request could be handled using snapshot read if the
+                                // local peer is a valid leader.
+                                let allow_fallback_leader_read = inspector
+                                    .inspect(&req)
+                                    .map_or(false, |r| r == RequestPolicy::ReadLocal);
+                                if !allow_fallback_leader_read {
+                                    cb.set_result(ReadResponse {
+                                        response: err_resp,
+                                        snapshot: None,
+                                        txn_extra_op: TxnExtraOp::Noop,
+                                    });
+                                    return;
+                                }
+                                if let Some(read_resp) = self.try_local_leader_read(
+                                    &req,
+                                    &mut delegate,
+                                    None,
+                                    &mut snap_updated,
+                                    last_valid_ts,
+                                ) {
+                                    TLS_LOCAL_READ_METRICS.with(|m| {
+                                        m.borrow_mut()
+                                            .local_executed_stale_read_fallback_success_requests
+                                            .inc()
+                                    });
+                                    read_resp
+                                } else {
+                                    TLS_LOCAL_READ_METRICS.with(|m| {
+                                        m.borrow_mut()
+                                            .local_executed_stale_read_fallback_failure_requests
+                                            .inc()
+                                    });
+                                    cb.set_result(ReadResponse {
+                                        response: err_resp,
+                                        snapshot: None,
+                                        txn_extra_op: TxnExtraOp::Noop,
+                                    });
+                                    return;
+                                }
+                            }
                         }
-
-                        // Stale read does not use cache, so we pass None for read_id
-                        let mut local_read_ctx = LocalReadContext::new(&mut self.snap_cache, None);
-                        snap_updated = local_read_ctx
-                            .maybe_update_snapshot(delegate.get_tablet(), last_valid_ts);
-
-                        let region = Arc::clone(&delegate.region);
-                        // Getting the snapshot
-                        let response = delegate.execute(&req, &region, None, Some(local_read_ctx));
-
-                        // Double check in case `safe_ts` change after the first check and before
-                        // getting snapshot
-                        if let Err(resp) = delegate.check_stale_read_safe(read_ts) {
-                            cb.set_result(ReadResponse {
-                                response: resp,
-                                snapshot: None,
-                                txn_extra_op: TxnExtraOp::Noop,
-                            });
-                            return;
-                        }
-                        TLS_LOCAL_READ_METRICS
-                            .with(|m| m.borrow_mut().local_executed_stale_read_requests.inc());
-                        response
                     }
                     _ => unreachable!(),
                 };
@@ -1546,6 +1623,8 @@ mod tests {
         read_progress.update_safe_ts(1, 1);
         assert_eq!(read_progress.safe_ts(), 1);
 
+        // Expire lease manually to avoid local retry on leader peer.
+        lease.expire();
         let data = {
             let mut d = [0u8; 8];
             (&mut d[..]).encode_u64(2).unwrap();
@@ -1702,13 +1781,14 @@ mod tests {
         assert_eq!(kv_engine.path(), tablet.path());
     }
 
-    fn prepare_read_delegate(
+    fn prepare_read_delegate_with_lease(
         store_id: u64,
         region_id: u64,
         term: u64,
         pr_ids: Vec<u64>,
         region_epoch: RegionEpoch,
         store_meta: Arc<Mutex<StoreMeta>>,
+        max_lease: Duration,
     ) {
         let mut region = metapb::Region::default();
         region.set_id(region_id);
@@ -1717,7 +1797,7 @@ mod tests {
 
         let leader = prs[0].clone();
         region.set_region_epoch(region_epoch);
-        let mut lease = Lease::new(Duration::seconds(1), Duration::milliseconds(250)); // 1s is long enough.
+        let mut lease = Lease::new(max_lease, Duration::milliseconds(250)); // 1s is long enough.
         let read_progress = Arc::new(RegionReadProgress::new(&region, 1, 1, 1));
 
         // Register region
@@ -1743,6 +1823,25 @@ mod tests {
             };
             meta.readers.insert(region_id, read_delegate);
         }
+    }
+
+    fn prepare_read_delegate(
+        store_id: u64,
+        region_id: u64,
+        term: u64,
+        pr_ids: Vec<u64>,
+        region_epoch: RegionEpoch,
+        store_meta: Arc<Mutex<StoreMeta>>,
+    ) {
+        prepare_read_delegate_with_lease(
+            store_id,
+            region_id,
+            term,
+            pr_ids,
+            region_epoch,
+            store_meta,
+            Duration::seconds(1),
+        )
     }
 
     #[test]
@@ -2110,5 +2209,124 @@ mod tests {
         thread::sleep(std::time::Duration::from_millis(500)); // Prevent lost notify.
         must_not_redirect(&mut reader, &rx, task);
         notify_rx.recv().unwrap();
+    }
+
+    #[test]
+    fn test_stale_read_local_leader_fallback() {
+        let store_id = 2;
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
+        let (_tmp, mut reader, rx) = new_reader(
+            "test-stale-local-leader-fallback",
+            store_id,
+            store_meta.clone(),
+        );
+        reader.kv_engine.put(b"key", b"value").unwrap();
+
+        let epoch13 = {
+            let mut ep = metapb::RegionEpoch::default();
+            ep.set_conf_ver(1);
+            ep.set_version(3);
+            ep
+        };
+        let term6 = 6;
+
+        // Register region1.
+        let pr_ids1 = vec![2, 3, 4];
+        let prs1 = new_peers(store_id, pr_ids1.clone());
+        // Ensure the leader lease is long enough so the fallback would work.
+        prepare_read_delegate_with_lease(
+            store_id,
+            1,
+            term6,
+            pr_ids1.clone(),
+            epoch13.clone(),
+            store_meta.clone(),
+            Duration::seconds(10),
+        );
+        let leader1 = prs1[0].clone();
+
+        // Local read.
+        let mut cmd = RaftCmdRequest::default();
+        let mut header = RaftRequestHeader::default();
+        header.set_region_id(1);
+        header.set_peer(leader1);
+        header.set_region_epoch(epoch13.clone());
+        header.set_term(term6);
+        header.set_flags(header.get_flags() | WriteBatchFlags::STALE_READ.bits());
+        cmd.set_header(header.clone());
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::Snap);
+        cmd.set_requests(vec![req].into());
+
+        // A peer can serve read_ts < safe_ts.
+        let safe_ts = TimeStamp::compose(2, 0);
+        {
+            let mut meta = store_meta.lock().unwrap();
+            let delegate = meta.readers.get_mut(&1).unwrap();
+            delegate
+                .read_progress
+                .update_safe_ts(1, safe_ts.into_inner());
+            assert_eq!(delegate.read_progress.safe_ts(), safe_ts.into_inner());
+        }
+        let read_ts_1 = TimeStamp::compose(1, 0);
+        let mut data = [0u8; 8];
+        (&mut data[..]).encode_u64(read_ts_1.into_inner()).unwrap();
+        header.set_flag_data(data.into());
+        cmd.set_header(header.clone());
+        let (snap_tx, snap_rx) = channel();
+        let task = RaftCommand::<KvTestSnapshot>::new(
+            cmd.clone(),
+            Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
+                snap_tx.send(resp).unwrap();
+            })),
+        );
+        must_not_redirect(&mut reader, &rx, task);
+        snap_rx.recv().unwrap().snapshot.unwrap();
+
+        // When read_ts > safe_ts, the leader peer could still serve if its lease is
+        // valid.
+        let read_ts_2 = TimeStamp::compose(safe_ts.physical() + 201, 0);
+        let mut data = [0u8; 8];
+        (&mut data[..]).encode_u64(read_ts_2.into_inner()).unwrap();
+        header.set_flag_data(data.into());
+        cmd.set_header(header.clone());
+        let (snap_tx, snap_rx) = channel();
+        let task = RaftCommand::<KvTestSnapshot>::new(
+            cmd.clone(),
+            Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
+                snap_tx.send(resp).unwrap();
+            })),
+        );
+        must_not_redirect(&mut reader, &rx, task);
+        snap_rx.recv().unwrap().snapshot.unwrap();
+
+        // The fallback would not happen if the lease is not valid.
+        prepare_read_delegate_with_lease(
+            store_id,
+            1,
+            term6,
+            pr_ids1,
+            epoch13,
+            store_meta,
+            Duration::milliseconds(1),
+        );
+        thread::sleep(std::time::Duration::from_millis(50));
+        let (snap_tx, snap_rx) = channel();
+        let task2 = RaftCommand::<KvTestSnapshot>::new(
+            cmd.clone(),
+            Callback::read(Box::new(move |resp: ReadResponse<KvTestSnapshot>| {
+                snap_tx.send(resp).unwrap();
+            })),
+        );
+        must_not_redirect(&mut reader, &rx, task2);
+        assert!(
+            snap_rx
+                .recv()
+                .unwrap()
+                .response
+                .get_header()
+                .get_error()
+                .has_data_is_not_ready()
+        );
     }
 }
