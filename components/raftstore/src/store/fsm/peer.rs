@@ -107,9 +107,8 @@ use crate::{
             ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
         },
         CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
-        ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback,
-        ReadIndexContext, ReadTask, SignificantMsg, SnapKey, StoreMsg, WriteCallback,
-        RAFT_INIT_LOG_INDEX,
+        ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback, ReadTask,
+        SignificantMsg, SnapKey, StoreMsg, WriteCallback, RAFT_INIT_LOG_INDEX,
     },
     Error, Result,
 };
@@ -769,6 +768,9 @@ where
             }
             self.fsm.batch_req_builder.request = Some(cmd);
         }
+        // Update the state whether the peer is pending on applying raft
+        // logs if necesssary.
+        self.on_check_peer_complete_apply_logs();
     }
 
     /// Flushes all pending raft commands for immediate execution.
@@ -2240,17 +2242,6 @@ where
             self.fsm.peer.mut_store().flush_entry_cache_metrics();
             return;
         }
-
-        // Update the state whether the peer is pending on applying raft
-        // logs if necesssary.
-        self.on_check_peer_complete_apply_logs();
-
-        // If the peer is busy on apply and missing the last leader committed index,
-        // it should propose a read index to check whether its lag is behind the leader.
-        // It won't generate flooding fetching messages. This proposal will only be sent
-        // out before it gets response and updates the `last_leader_committed_index`.
-        self.try_to_fetch_committed_index();
-
         // When having pending snapshot, if election timeout is met, it can't pass
         // the pending conf change check because first index has been updated to
         // a value that is larger than last index.
@@ -2670,22 +2661,6 @@ where
             return Ok(());
         }
 
-        // If this peer is restarting, it may lose some logs, so it should update
-        // the `last_leader_committed_idx` with the commited index of the first
-        // `MsgAppend`` message or the committed index in `MsgReadIndexResp` it received
-        // from leader.
-        if self.fsm.peer.needs_update_last_leader_committed_idx()
-            && (MessageType::MsgAppend == msg_type || MessageType::MsgReadIndexResp == msg_type)
-        {
-            let committed_index = cmp::max(
-                msg.get_message().get_commit(), // from MsgAppend
-                msg.get_message().get_index(),  // from MsgReadIndexResp
-            );
-            self.fsm
-                .peer
-                .update_last_leader_committed_idx(committed_index);
-        }
-
         if msg.has_extra_msg() {
             self.on_extra_message(msg);
             return Ok(());
@@ -2727,7 +2702,7 @@ where
         } else {
             // This can be a message that sent when it's still a follower. Nevertheleast,
             // it's meaningless to continue to handle the request as callbacks are cleared.
-            if msg_type == MessageType::MsgReadIndex
+            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
                 && self.fsm.peer.is_leader()
                 && (msg.get_message().get_from() == raft::INVALID_ID
                     || msg.get_message().get_from() == self.fsm.peer_id())
@@ -3902,9 +3877,6 @@ where
 
         // Ensure this peer is removed in the pending apply list.
         meta.busy_apply_peers.remove(&self.fsm.peer_id());
-        if let Some(count) = meta.completed_apply_peers_count.as_mut() {
-            *count += 1;
-        }
 
         if meta.atomic_snap_regions.contains_key(&self.region_id()) {
             drop(meta);
@@ -6707,33 +6679,6 @@ where
         self.schedule_tick(PeerTick::ReportBuckets)
     }
 
-    /// Check whether the peer should send a request to fetch the committed
-    /// index from the leader.
-    fn try_to_fetch_committed_index(&mut self) {
-        // Already completed, skip.
-        if !self.fsm.peer.needs_update_last_leader_committed_idx() || self.fsm.peer.is_leader() {
-            return;
-        }
-        // Construct a MsgReadIndex message and send it to the leader to
-        // fetch the latest committed index of this raft group.
-        let leader_id = self.fsm.peer.leader_id();
-        if leader_id == raft::INVALID_ID {
-            // The leader is unknown, so we can't fetch the committed index.
-            return;
-        }
-        let rctx = ReadIndexContext {
-            id: uuid::Uuid::new_v4(),
-            request: None,
-            locked: None,
-        };
-        self.fsm.peer.raft_group.read_index(rctx.to_bytes());
-        debug!(
-            "try to fetch committed index from leader";
-            "region_id" => self.region_id(),
-            "peer_id" => self.fsm.peer_id()
-        );
-    }
-
     /// Check whether the peer is pending on applying raft logs.
     ///
     /// If busy, the peer will be recorded, until the pending logs are
@@ -6746,21 +6691,8 @@ where
         }
 
         let peer_id = self.fsm.peer.peer_id();
-        // No need to check the applying state if the peer is leader.
-        if self.fsm.peer.is_leader() {
-            self.fsm.peer.busy_on_apply = None;
-            // Clear it from recoding list and update the counter, to avoid
-            // missing it when the peer is changed to leader.
-            let mut meta = self.ctx.store_meta.lock().unwrap();
-            meta.busy_apply_peers.remove(&peer_id);
-            if let Some(count) = meta.completed_apply_peers_count.as_mut() {
-                *count += 1;
-            }
-            return;
-        }
-
         let applied_idx = self.fsm.peer.get_store().applied_index();
-        let mut last_idx = self.fsm.peer.get_store().last_index();
+        let last_idx = self.fsm.peer.get_store().last_index();
         // If the peer is newly added or created, no need to check the apply status.
         if last_idx <= RAFT_INIT_LOG_INDEX {
             self.fsm.peer.busy_on_apply = None;
@@ -6770,23 +6702,9 @@ where
             if let Some(count) = meta.completed_apply_peers_count.as_mut() {
                 *count += 1;
             }
-            debug!(
-                "no need to check initialized peer";
-                "last_commit_idx" => last_idx,
-                "last_applied_idx" => applied_idx,
-                "region_id" => self.fsm.region_id(),
-                "peer_id" => peer_id,
-            );
             return;
         }
         assert!(self.fsm.peer.busy_on_apply.is_some());
-
-        // This peer is restarted and the last leader commit index is not set, so
-        // it use `u64::MAX` as the last commit index to make it wait for the update
-        // of the `last_leader_committed_idx` until the `last_leader_committed_idx` has
-        // been updated.
-        last_idx = self.fsm.peer.last_leader_committed_idx.unwrap_or(u64::MAX);
-
         // If the peer has large unapplied logs, this peer should be recorded until
         // the lag is less than the given threshold.
         if last_idx >= applied_idx + self.ctx.cfg.leader_transfer_max_log_lag {

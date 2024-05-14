@@ -917,10 +917,6 @@ where
     /// * `Some(false)` => initial state, not be recorded.
     /// * `Some(true)` => busy on apply, and already recorded.
     pub busy_on_apply: Option<bool>,
-    /// The index of last commited idx in the leader. It's used to check whether
-    /// this peer has raft log gaps and whether should be marked busy on
-    /// apply.
-    pub last_leader_committed_idx: Option<u64>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1071,7 +1067,6 @@ where
             unsafe_recovery_state: None,
             snapshot_recovery_state: None,
             busy_on_apply: Some(false),
-            last_leader_committed_idx: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -5326,37 +5321,6 @@ where
                 self.snapshot_recovery_state = None;
             }
         }
-    }
-
-    pub fn update_last_leader_committed_idx(&mut self, committed_index: u64) {
-        if self.is_leader() {
-            // Ignore.
-            return;
-        }
-
-        let local_committed_index = self.get_store().commit_index();
-        if committed_index < local_committed_index {
-            warn!(
-                "stale committed index";
-                "region_id" => self.region().get_id(),
-                "peer_id" => self.peer_id(),
-                "last_committed_index" => committed_index,
-                "local_index" => local_committed_index,
-            );
-        } else {
-            self.last_leader_committed_idx = Some(committed_index);
-            debug!(
-                "update last committed index from leader";
-                "region_id" => self.region().get_id(),
-                "peer_id" => self.peer_id(),
-                "last_committed_index" => committed_index,
-                "local_index" => local_committed_index,
-            );
-        }
-    }
-
-    pub fn needs_update_last_leader_committed_idx(&self) -> bool {
-        self.busy_on_apply.is_some() && self.last_leader_committed_idx.is_none()
     }
 }
 

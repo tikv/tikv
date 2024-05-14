@@ -2747,12 +2747,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         busy_apply_peers_count: u64,
         completed_apply_peers_count: Option<u64>,
     ) -> bool {
-        STORE_BUSY_ON_APPLY_REGIONS_GAUGE_VEC
-            .busy_apply_peers
-            .set(busy_apply_peers_count as i64);
-        STORE_BUSY_ON_APPLY_REGIONS_GAUGE_VEC
-            .completed_apply_peers
-            .set(completed_apply_peers_count.unwrap_or_default() as i64);
         // No need to check busy status if there are no regions.
         if completed_apply_peers_count.is_none() || region_count == 0 {
             return false;
@@ -2769,7 +2763,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         // regarded as the candidate for balancing leaders.
         if during_starting_stage {
             let completed_target_count = (|| {
-                fail_point!("on_mock_store_completed_target_count", |_| 0);
+                fail_point!("on_mock_store_completed_target_count", |_| 100);
                 std::cmp::max(
                     1,
                     STORE_CHECK_COMPLETE_APPLY_REGIONS_PERCENT * region_count / 100,
@@ -2778,22 +2772,12 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             // If the number of regions on completing applying logs does not occupy the
             // majority of regions, the store is regarded as busy.
             if completed_apply_peers_count < completed_target_count {
-                debug!("check store is busy on apply";
-                    "region_count" => region_count,
-                    "completed_apply_peers_count" => completed_apply_peers_count,
-                    "completed_target_count" => completed_target_count);
                 true
             } else {
                 let pending_target_count = std::cmp::min(
                     self.ctx.cfg.min_pending_apply_region_count,
                     region_count.saturating_sub(completed_target_count),
                 );
-                debug!("check store is busy on apply, has pending peers";
-                    "region_count" => region_count,
-                    "completed_apply_peers_count" => completed_apply_peers_count,
-                    "completed_target_count" => completed_target_count,
-                    "pending_target_count" => pending_target_count,
-                    "busy_apply_peers_count" => busy_apply_peers_count);
                 pending_target_count > 0 && busy_apply_peers_count >= pending_target_count
             }
         } else {
@@ -2863,7 +2847,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         if !busy_on_apply && completed_apply_peers_count.is_some() {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.completed_apply_peers_count = None;
-            meta.busy_apply_peers.clear();
         }
         let store_is_busy = self
             .ctx
@@ -2872,12 +2855,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
             .is_busy
             .swap(false, Ordering::Relaxed);
         stats.set_is_busy(store_is_busy || busy_on_apply);
-        STORE_PROCESS_BUSY_GAUGE_VEC
-            .applystore_busy
-            .set(busy_on_apply as i64);
-        STORE_PROCESS_BUSY_GAUGE_VEC
-            .raftstore_busy
-            .set(store_is_busy as i64);
 
         let mut query_stats = QueryStats::default();
         query_stats.set_put(
