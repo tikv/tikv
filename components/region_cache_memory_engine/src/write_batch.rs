@@ -361,11 +361,6 @@ impl RangeCacheWriteBatchEntry {
     ) -> Result<()> {
         let handle = skiplist_engine.cf_handle(id_to_cf(self.cf));
 
-        info!(
-            "write to memory";
-            "entry" => ?self,
-        );
-
         if is_lock_cf(self.cf) && matches!(self.inner, WriteBatchEntryInternal::Deletion) {
             self.delete_in_lock_cf(seq, &handle, guard);
         } else {
@@ -374,6 +369,11 @@ impl RangeCacheWriteBatchEntry {
             value.set_memory_controller(memory_controller);
             handle.insert(key, value, guard);
         }
+
+        info!(
+            "write to memory";
+            "entry" => ?self,
+        );
 
         Ok(())
     }
