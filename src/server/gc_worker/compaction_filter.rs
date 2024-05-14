@@ -920,10 +920,6 @@ pub mod test_utils {
     impl<'a> TestGcRunner<'a> {
         pub fn new(safe_point: u64) -> Self {
             let (gc_scheduler, gc_receiver) = dummy_scheduler();
-            let keyspace_level_gc_service = Arc::new(Some(KeyspaceLevelGCService::new(
-                Arc::clone(&Default::default()),
-                Arc::clone(&Default::default()),
-            )));
             TestGcRunner {
                 safe_point,
                 ratio_threshold: None,
@@ -933,7 +929,7 @@ pub mod test_utils {
                 gc_scheduler,
                 gc_receiver,
                 callbacks_on_drop: vec![],
-                keyspace_level_gc_service,
+                keyspace_level_gc_service: Arc::new(None),
             }
         }
     }
