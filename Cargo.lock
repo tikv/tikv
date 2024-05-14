@@ -307,7 +307,7 @@ dependencies = [
  "tikv_util",
  "tokio",
  "url",
- "uuid 0.8.2",
+ "uuid 1.6.1",
 ]
 
 [[package]]
@@ -575,7 +575,7 @@ dependencies = [
  "tonic",
  "txn_types",
  "url",
- "uuid 0.8.2",
+ "uuid 1.6.1",
  "walkdir",
  "yatp",
 ]
@@ -1404,7 +1404,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bef552e6f588e446098f6ba40d89ac146c8c7b64aade83c051ee00bb5d2bc18d"
 dependencies = [
- "uuid 1.2.1",
+ "uuid 1.6.1",
 ]
 
 [[package]]
@@ -4435,7 +4435,7 @@ dependencies = [
  "tokio",
  "tracker",
  "txn_types",
- "uuid 0.8.2",
+ "uuid 1.6.1",
  "yatp",
 ]
 
@@ -5619,7 +5619,7 @@ dependencies = [
  "tikv_util",
  "tokio",
  "txn_types",
- "uuid 0.8.2",
+ "uuid 1.6.1",
 ]
 
 [[package]]
@@ -5746,7 +5746,7 @@ dependencies = [
  "debugid",
  "memmap2",
  "stable_deref_trait",
- "uuid 1.2.1",
+ "uuid 1.6.1",
 ]
 
 [[package]]
@@ -6033,7 +6033,7 @@ dependencies = [
  "engine_traits",
  "keys",
  "kvproto",
- "uuid 0.8.2",
+ "uuid 1.6.1",
 ]
 
 [[package]]
@@ -6154,7 +6154,7 @@ dependencies = [
  "toml",
  "tracker",
  "txn_types",
- "uuid 0.8.2",
+ "uuid 1.6.1",
 ]
 
 [[package]]
@@ -6351,7 +6351,7 @@ dependencies = [
  "tipb",
  "tipb_helper",
  "twoway",
- "uuid 0.8.2",
+ "uuid 1.6.1",
 ]
 
 [[package]]
@@ -6476,7 +6476,7 @@ dependencies = [
  "tracker",
  "txn_types",
  "url",
- "uuid 0.8.2",
+ "uuid 1.6.1",
  "walkdir",
  "yatp",
  "zipf",
@@ -7144,14 +7144,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc5cf98d8186244414c848017f0e2676b3fcb46807f6668a97dfe67359a3c4b7"
 dependencies = [
  "getrandom 0.2.3",
- "serde",
 ]
 
 [[package]]
 name = "uuid"
-version = "1.2.1"
+version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "feb41e78f93363bb2df8b0e86a2ca30eed7806ea16ea0c790d757cf93f79be83"
+checksum = "5e395fcf16a7a3d8127ec99782007af141946b4795001f876d54fb0d55978560"
+dependencies = [
+ "atomic",
+ "getrandom 0.2.3",
+ "serde",
+]
 
 [[package]]
 name = "valgrind_request"

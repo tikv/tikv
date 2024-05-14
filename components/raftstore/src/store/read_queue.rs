@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::{cmp, collections::VecDeque, mem, u64, usize};
+use std::{cmp, collections::VecDeque, mem, time::Duration, u64, usize};
 
 use collections::HashMap;
 use kvproto::{
@@ -397,6 +397,21 @@ impl ReadIndexContext {
             }
         }
         Ok(res)
+    }
+
+    pub fn get_ts_from_id(bytes: &[u8]) -> Option<Duration> {
+        if bytes.len() < UUID_LEN {
+            None
+        } else {
+            Uuid::from_slice(&bytes[..UUID_LEN])
+                .ok()
+                .filter(|id| id.get_version_num() == 7)
+                .and_then(|id| id.get_timestamp())
+                .map(|ts| {
+                    let (secs, nanos) = ts.to_unix();
+                    Duration::new(secs, nanos)
+                })
+        }
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {

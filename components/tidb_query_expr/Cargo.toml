@@ -32,7 +32,7 @@ tikv_util = { workspace = true }
 time = "0.1"
 tipb = { workspace = true }
 twoway = "0.2.0"
-uuid = { version = "0.8.1", features = ["v4"] }
+uuid = { version = "1.6.1", features = ["serde", "v4", "v7"] }
 
 [dev-dependencies]
 bstr = "0.2.8"

@@ -68,7 +68,10 @@ use tikv_util::{
 use time::{Duration as TimeDuration, Timespec};
 use tracker::GLOBAL_TRACKERS;
 use txn_types::{TimeStamp, WriteBatchFlags};
-use uuid::Uuid;
+use uuid::{
+    timestamp::{context::NoContext, Timestamp},
+    Uuid,
+};
 
 use super::{
     cmd_resp,
@@ -581,7 +584,7 @@ pub fn propose_read_index<T: raft::Storage>(
     let last_pending_read_count = raft_group.raft.pending_read_count();
     let last_ready_read_count = raft_group.raft.ready_read_count();
 
-    let id = Uuid::new_v4();
+    let id = Uuid::new_v7(Timestamp::now(NoContext));
     raft_group.read_index(ReadIndexContext::fields_to_bytes(id, request, locked));
 
     let pending_read_count = raft_group.raft.pending_read_count();
