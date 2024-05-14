@@ -19,7 +19,6 @@ use futures::{executor::block_on, future::BoxFuture, Future};
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
 use grpcio_health::HealthService;
 use health_controller::HealthController;
-use keyspace_meta::KeyspaceLevelGCService;
 use kvproto::{
     deadlock_grpc::create_deadlock,
     debugpb_grpc::{create_debug, DebugClient},
@@ -458,7 +457,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             cfg.gc.clone(),
             Default::default(),
             Arc::new(region_info_accessor.clone()),
-            Arc::new(Some(KeyspaceLevelGCService::default())),
+            Arc::new(None),
         );
         gc_worker.start(node_id).unwrap();
 

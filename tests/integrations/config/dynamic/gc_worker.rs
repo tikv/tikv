@@ -5,7 +5,6 @@ use std::{
     time::Duration,
 };
 
-use keyspace_meta::KeyspaceLevelGCService;
 use raftstore::coprocessor::region_info_accessor::MockRegionInfoProvider;
 use tikv::{
     config::{ConfigController, Module, TikvConfig},
@@ -35,7 +34,7 @@ fn setup_cfg_controller(
         cfg.gc.clone(),
         Default::default(),
         Arc::new(MockRegionInfoProvider::new(Vec::new())),
-        Arc::new(Some(KeyspaceLevelGCService::default())),
+        Arc::new(None),
     );
     gc_worker.start(0).unwrap();
 

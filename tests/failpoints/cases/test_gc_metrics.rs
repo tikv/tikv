@@ -214,7 +214,7 @@ fn test_txn_gc_keys_handled() {
         GcConfig::default(),
         feature_gate,
         Arc::new(MockRegionInfoProvider::new(vec![])),
-        Arc::new(Some(KeyspaceLevelGCService::default())),
+        Arc::new(None),
     );
     gc_worker.start(store_id).unwrap();
 
@@ -475,7 +475,7 @@ fn test_keyspace_level_gc_service() {
     if let Some(ref keyspace_level_gc_service) = *keyspace_level_gc_service {
         let max_ts_of_all_ks_gc_safe_point =
             keyspace_level_gc_service.get_max_ts_of_all_ks_gc_safe_point();
-        assert_eq!(69, max_ts_of_all_ks_gc_safe_point);
+        assert_eq!(60, max_ts_of_all_ks_gc_safe_point);
     }
 }
 

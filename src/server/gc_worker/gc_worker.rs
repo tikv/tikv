@@ -1705,7 +1705,7 @@ mod tests {
             gc_config,
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![region1, region2])),
-            Arc::new(Some(KeyspaceLevelGCService::default())),
+            Arc::new(None),
         );
         gc_worker.start(store_id).unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
@@ -1884,7 +1884,7 @@ mod tests {
             gc_config,
             feature_gate,
             Arc::new(ri_provider.clone()),
-            Arc::new(Some(KeyspaceLevelGCService::default())),
+            Arc::new(None),
         );
         gc_worker.start(store_id).unwrap();
 
@@ -2279,7 +2279,7 @@ mod tests {
             gc_config,
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![region.clone()])),
-            Arc::new(Some(KeyspaceLevelGCService::default())),
+            Arc::new(None),
         );
 
         // Before starting gc_worker, fill the scheduler to full.
@@ -2842,7 +2842,7 @@ mod tests {
             gc_config,
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![])),
-            Arc::new(Some(KeyspaceLevelGCService::default())),
+            Arc::new(None),
         );
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("num_threads"), ConfigValue::Usize(5));

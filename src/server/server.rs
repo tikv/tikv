@@ -526,7 +526,6 @@ mod tests {
 
     use engine_rocks::RocksSnapshot;
     use grpcio::EnvBuilder;
-    use keyspace_meta::KeyspaceLevelGCService;
     use kvproto::raft_serverpb::RaftMessage;
     use raftstore::{
         coprocessor::region_info_accessor::MockRegionInfoProvider,
@@ -627,7 +626,7 @@ mod tests {
             Default::default(),
             Default::default(),
             Arc::new(MockRegionInfoProvider::new(Vec::new())),
-            Arc::new(Some(KeyspaceLevelGCService::default())),
+            Arc::new(None),
         );
         gc_worker.start(mock_store_id).unwrap();
 
