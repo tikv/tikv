@@ -332,6 +332,8 @@ impl RangeCacheIterator {
         self.local_stats.number_db_seek += 1;
         if self.iter.valid() {
             self.find_next_visible_key(false, guard);
+        } else {
+            self.valid = false;
         }
     }
 
@@ -828,6 +830,44 @@ mod tests {
         if ended {
             assert!(!iter.valid().unwrap());
         }
+    }
+
+    #[test]
+    fn test_seek() {
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        )));
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(range.clone());
+
+        {
+            let mut core = engine.core.write();
+            core.range_manager.set_safe_point(&range, 5);
+            let sl = core.engine.data[cf_to_id("write")].clone();
+
+            put_key_val(&sl, "b", "val", 10, 5);
+            put_key_val(&sl, "c", "vall", 10, 5);
+        }
+
+        let snapshot = engine.snapshot(range.clone(), u64::MAX, 100).unwrap();
+        let mut iter_opt = IterOptions::default();
+        iter_opt.set_upper_bound(&range.end, 0);
+        iter_opt.set_lower_bound(&range.start, 0);
+        let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+
+        let key = construct_mvcc_key("b", 10);
+        iter.seek(&key).unwrap();
+        assert_eq!(iter.value(), b"val");
+        let key = construct_mvcc_key("d", 10);
+        iter.seek(&key).unwrap();
+        assert!(!iter.valid().unwrap());
+
+        let key = construct_mvcc_key("b", 10);
+        iter.seek_for_prev(&key).unwrap();
+        assert_eq!(iter.value(), b"val");
+        let key = construct_mvcc_key("a", 10);
+        iter.seek_for_prev(&key).unwrap();
+        assert!(!iter.valid().unwrap());
     }
 
     #[test]
