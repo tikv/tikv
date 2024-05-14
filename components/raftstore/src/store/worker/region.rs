@@ -521,10 +521,11 @@ where
 
         let start = Instant::now();
 
-        match self.apply_snap(region_id, peer_id, Arc::clone(&status)) {
+        let tombstone = match self.apply_snap(region_id, peer_id, Arc::clone(&status)) {
             Ok(()) => {
                 status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
                 SNAP_COUNTER.apply.success.inc();
+                false
             }
             Err(Error::Abort) => {
                 warn!("applying snapshot is aborted"; "region_id" => region_id);
@@ -535,6 +536,8 @@ where
                     JOB_STATUS_CANCELLING
                 );
                 SNAP_COUNTER.apply.abort.inc();
+                // The snapshot is applied abort, it's not necessary to tombstone the peer.
+                false
             }
             Err(e) => {
                 error!(%e; "failed to apply snap!!!");
@@ -543,7 +546,7 @@ where
                 status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
                 SNAP_COUNTER.apply.fail.inc();
                 // As the snapshot failed, it should be cleared and the related peer should be
-                // destroyed.
+                // marked tombstone.
                 if let Ok(apply_state) = self.apply_state(region_id) {
                     let term = apply_state.get_truncated_state().get_term();
                     let idx = apply_state.get_truncated_state().get_index();
@@ -562,17 +565,17 @@ where
                         "index" => idx,
                     );
                 }
-                let _ = self
-                    .router
-                    .send(region_id, CasualMessage::ForceDestroyPeer { peer_id });
-                return;
+                true
             }
-        }
+        };
 
         SNAP_HISTOGRAM
             .apply
             .observe(start.saturating_elapsed_secs());
-        let _ = self.router.send(region_id, CasualMessage::SnapshotApplied);
+        let _ = self.router.send(
+            region_id,
+            CasualMessage::SnapshotApplied { peer_id, tombstone },
+        );
     }
 
     /// Tries to clean up files in pending ranges overlapping with the given
@@ -1301,7 +1304,7 @@ pub(crate) mod tests {
         let wait_apply_finish = |ids: &[u64]| {
             for id in ids {
                 match receiver.recv_timeout(Duration::from_secs(5)) {
-                    Ok((region_id, CasualMessage::SnapshotApplied)) => {
+                    Ok((region_id, CasualMessage::SnapshotApplied { .. })) => {
                         assert_eq!(region_id, *id);
                     }
                     msg => panic!("expected {} SnapshotApplied, but got {:?}", id, msg),

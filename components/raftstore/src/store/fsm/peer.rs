@@ -1259,24 +1259,21 @@ where
                 let raft_msg = self.fsm.peer.build_raft_messages(self.ctx, vec![msg]);
                 self.fsm.peer.send_raft_messages(self.ctx, raft_msg);
             }
-            CasualMessage::SnapshotApplied => {
+            CasualMessage::SnapshotApplied { peer_id, tombstone } => {
                 self.fsm.has_ready = true;
-                if self.fsm.peer.should_destroy_after_apply_snapshot() {
+                let apply_snap_failed =
+                    tombstone && self.fsm.peer.peer_id() == peer_id && !self.fsm.peer.is_leader();
+                if apply_snap_failed || self.fsm.peer.should_destroy_after_apply_snapshot() {
+                    info!(
+                        "destroy peer due to failure on applying snapshots or manually cancel";
+                        "peer_id" => peer_id,
+                    );
                     self.maybe_destroy();
                 }
             }
             CasualMessage::Campaign => {
                 let _ = self.fsm.peer.raft_group.campaign();
                 self.fsm.has_ready = true;
-            }
-            CasualMessage::ForceDestroyPeer { peer_id } => {
-                if self.fsm.peer.peer_id() == peer_id {
-                    info!(
-                        "destroy peer due to failure on applying snapshots";
-                        "peer_id" => peer_id,
-                    );
-                    self.maybe_destroy();
-                }
             }
         }
     }
