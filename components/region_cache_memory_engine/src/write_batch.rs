@@ -361,6 +361,11 @@ impl RangeCacheWriteBatchEntry {
     ) -> Result<()> {
         let handle = skiplist_engine.cf_handle(id_to_cf(self.cf));
 
+        info!(
+            "write to memory";
+            "entry" => ?self,
+        );
+
         let (mut key, mut value) = self.encode(seq);
         key.set_memory_controller(memory_controller.clone());
         value.set_memory_controller(memory_controller);
