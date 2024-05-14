@@ -65,7 +65,7 @@ lazy_static! {
     .unwrap();
     pub static ref RANGE_CACHE_COUNT: IntGaugeVec = register_int_gauge_vec!(
         "tikv_range_cache_count",
-        "The range counts of each type.",
+        "The count of each type on range cache.",
         &["type"]
     )
     .unwrap();
