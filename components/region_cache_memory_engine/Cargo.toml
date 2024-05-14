@@ -36,6 +36,10 @@ prometheus = { version = "0.13", default-features = false, features = ["nightly"
 prometheus-static-metric = "0.5"
 lazy_static = "1.4.0"
 hex = "0.4"
+thiserror = "1.0"
+online_config = { workspace = true }
+libc = "0.2"
+rand = "0.8"
 
 [dev-dependencies]
 tempfile = "3.0"

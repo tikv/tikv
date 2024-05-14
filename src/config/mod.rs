@@ -58,6 +58,7 @@ use raftstore::{
     coprocessor::{Config as CopConfig, RegionInfoAccessor},
     store::{CompactionGuardGeneratorFactory, Config as RaftstoreConfig, SplitConfig},
 };
+use region_cache_memory_engine::RangeCacheEngineConfig;
 use resource_control::Config as ResourceControlConfig;
 use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
@@ -1985,6 +1986,34 @@ impl RaftEngineConfig {
         Ok(())
     }
 
+    fn optimize_for(&mut self, raft_store: &RaftstoreConfig, raft_kv_v2: bool) {
+        if raft_kv_v2 {
+            return;
+        }
+        let default_config = RawRaftEngineConfig::default();
+        let cur_batch_compression_thd = self.config().batch_compression_threshold;
+        // Currently, it only takes whether the configuration
+        // batch-compression-threshold of RaftEngine are set manually
+        // into consideration to determine whether the RaftEngine is customized.
+        let customized = cur_batch_compression_thd != default_config.batch_compression_threshold;
+        // As the async-io is enabled by default (raftstore.store_io_pool_size == 1),
+        // testing records shows that using 4kb as the default value can achieve
+        // better performance and reduce the IO overhead.
+        // Meanwhile, the batch_compression_threshold cannot be modified dynamically if
+        // the threads count of async-io are changed manually.
+        if !customized && raft_store.store_io_pool_size > 0 {
+            let adaptive_batch_comp_thd = RaftEngineReadableSize(std::cmp::max(
+                cur_batch_compression_thd.0 / (raft_store.store_io_pool_size + 1) as u64,
+                RaftEngineReadableSize::kb(4).0,
+            ));
+            self.mut_config().batch_compression_threshold = adaptive_batch_comp_thd;
+            warn!(
+                "raft-engine.batch-compression-threshold {} should be adpative to the size of async-io. Set it to {} instead.",
+                cur_batch_compression_thd, adaptive_batch_comp_thd,
+            );
+        }
+    }
+
     pub fn config(&self) -> RawRaftEngineConfig {
         self.config.clone()
     }
@@ -3256,8 +3285,8 @@ impl ConfigManager for LogConfigManager {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct MemoryConfig {
-    // Whether enable the heap profiling which may have a bit performance overhead about 2% for the
-    // default sample rate.
+    // Whether enables the heap profiling which may have a bit performance overhead about 2% for
+    // the default sample rate.
     pub enable_heap_profiling: bool,
 
     // Average interval between allocation samples, as measured in bytes of allocation activity.
@@ -3266,6 +3295,11 @@ pub struct MemoryConfig {
     // The default sample interval is 512 KB. It only accepts power of two, otherwise it will be
     // rounded up to the next power of two.
     pub profiling_sample_per_bytes: ReadableSize,
+
+    // Whether allocates the exclusive arena for threads.
+    // When disabled, the metric of memory usage for each thread would be unavailable.
+    #[online_config(skip)]
+    pub enable_thread_exclusive_arena: bool,
 }
 
 impl Default for MemoryConfig {
@@ -3273,6 +3307,7 @@ impl Default for MemoryConfig {
         Self {
             enable_heap_profiling: true,
             profiling_sample_per_bytes: ReadableSize::kb(512),
+            enable_thread_exclusive_arena: true,
         }
     }
 }
@@ -3286,6 +3321,7 @@ impl MemoryConfig {
             }
             tikv_alloc::set_prof_sample(self.profiling_sample_per_bytes.0).unwrap();
         }
+        tikv_alloc::set_thread_exclusive_arena(self.enable_thread_exclusive_arena);
     }
 }
 
@@ -3409,9 +3445,6 @@ pub struct TikvConfig {
     #[online_config(skip)]
     pub memory_usage_high_water: f64,
 
-    // Memory quota used for in-memory engine. 0 means not enable it.
-    pub region_cache_memory_limit: ReadableSize,
-
     #[online_config(submodule)]
     pub log: LogConfig,
 
@@ -3492,6 +3525,9 @@ pub struct TikvConfig {
 
     #[online_config(submodule)]
     pub resource_control: ResourceControlConfig,
+
+    #[online_config(submodule)]
+    pub range_cache_engine: RangeCacheEngineConfig,
 }
 
 impl Default for TikvConfig {
@@ -3511,7 +3547,6 @@ impl Default for TikvConfig {
             abort_on_panic: false,
             memory_usage_limit: None,
             memory_usage_high_water: 0.9,
-            region_cache_memory_limit: ReadableSize::mb(0),
             log: LogConfig::default(),
             memory: MemoryConfig::default(),
             quota: QuotaConfig::default(),
@@ -3538,6 +3573,7 @@ impl Default for TikvConfig {
             log_backup: BackupStreamConfig::default(),
             causal_ts: CausalTsConfig::default(),
             resource_control: ResourceControlConfig::default(),
+            range_cache_engine: RangeCacheEngineConfig::default(),
         }
     }
 }
@@ -3686,6 +3722,8 @@ impl TikvConfig {
         if self.storage.engine == EngineType::RaftKv2 {
             self.raft_store.store_io_pool_size = cmp::max(self.raft_store.store_io_pool_size, 1);
         }
+        self.raft_engine
+            .optimize_for(&self.raft_store, self.storage.engine == EngineType::RaftKv2);
         if self.storage.block_cache.capacity.is_none() {
             let total_mem = SysQuota::memory_limit_in_bytes();
             let capacity = if self.storage.engine == EngineType::RaftKv2 {
@@ -3904,6 +3942,7 @@ impl TikvConfig {
         self.resource_metering.validate()?;
         self.quota.validate()?;
         self.causal_ts.validate()?;
+        self.range_cache_engine.validate()?;
 
         // Validate feature TTL with Titan configuration.
         if matches!(self.rocksdb.titan.enabled, Some(true)) && self.storage.enable_ttl {
@@ -4681,6 +4720,7 @@ pub enum Module {
     Rocksdb,
     Raftdb,
     RaftEngine,
+    RangeCacheEngine,
     Storage,
     Security,
     Encryption,
@@ -4712,6 +4752,7 @@ impl From<&str> for Module {
             "rocksdb" => Module::Rocksdb,
             "raftdb" => Module::Raftdb,
             "raft_engine" => Module::RaftEngine,
+            "range_cache_engine" => Module::RangeCacheEngine,
             "storage" => Module::Storage,
             "security" => Module::Security,
             "import" => Module::Import,
@@ -6948,7 +6989,6 @@ mod tests {
         cfg.raftdb.titan.max_background_gc = default_cfg.raftdb.titan.max_background_gc;
         cfg.backup.num_threads = default_cfg.backup.num_threads;
         cfg.log_backup.num_threads = default_cfg.log_backup.num_threads;
-        cfg.raft_store.cmd_batch_concurrent_ready_max_count = 1;
 
         // There is another set of config values that we can't directly compare:
         // When the default values are `None`, but are then resolved to `Some(_)` later
@@ -6964,6 +7004,14 @@ mod tests {
         default_cfg
             .raft_store
             .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
+        default_cfg.raft_engine.optimize_for(
+            &default_cfg.raft_store,
+            default_cfg.storage.engine == EngineType::RaftKv2,
+        );
+        assert_eq!(
+            default_cfg.raft_engine.config().batch_compression_threshold,
+            RaftEngineReadableSize::kb(4)
+        );
         default_cfg.security.redact_info_log = Some(false);
         default_cfg.coprocessor.region_max_size = Some(default_cfg.coprocessor.region_max_size());
         default_cfg.coprocessor.region_max_keys = Some(default_cfg.coprocessor.region_max_keys());
@@ -7056,6 +7104,10 @@ mod tests {
 
         cfg.coprocessor
             .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
+        cfg.raft_engine.optimize_for(
+            &cfg.raft_store,
+            default_cfg.storage.engine == EngineType::RaftKv2,
+        );
 
         assert_eq_debug(&cfg, &default_cfg);
     }

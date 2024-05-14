@@ -10,6 +10,7 @@ use std::{
 use online_config::{ConfigChange, OnlineConfig};
 use raftstore::store::Config as RaftstoreConfig;
 use tikv::config::*;
+use tikv_util::config::ReadableSize;
 
 fn change(name: &str, value: &str) -> HashMap<String, String> {
     let mut m = HashMap::new();
@@ -29,6 +30,28 @@ fn test_update_config() {
         .update(change("raftstore.raft-log-gc-threshold", "2000"))
         .unwrap();
     cfg.raft_store.raft_log_gc_threshold = 2000;
+    assert_eq!(cfg_controller.get_current(), cfg);
+
+    let mut range_cache_config_change = HashMap::new();
+    range_cache_config_change.insert("range_cache_engine.enabled".to_owned(), "true".to_owned());
+    range_cache_config_change.insert(
+        "range_cache_engine.soft-limit-threshold".to_owned(),
+        "10GB".to_owned(),
+    );
+    range_cache_config_change.insert(
+        "range_cache_engine.hard-limit-threshold".to_owned(),
+        "15GB".to_owned(),
+    );
+    cfg_controller.update(range_cache_config_change).unwrap();
+    cfg.range_cache_engine.enabled = true;
+    cfg.range_cache_engine.soft_limit_threshold = Some(ReadableSize::gb(10));
+    cfg.range_cache_engine.hard_limit_threshold = Some(ReadableSize::gb(15));
+    assert_eq!(cfg_controller.get_current(), cfg);
+
+    cfg_controller
+        .update(change("range_cache_engine.soft-limit-threshold", "11GB"))
+        .unwrap();
+    cfg.range_cache_engine.soft_limit_threshold = Some(ReadableSize::gb(11));
     assert_eq!(cfg_controller.get_current(), cfg);
 
     // update not support config

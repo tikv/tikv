@@ -122,10 +122,7 @@ fn test_node_async_fetch() {
 fn test_persist_delay_block_log_compaction() {
     let mut cluster = new_node_cluster(0, 3);
 
-    cluster.cfg.raft_store.cmd_batch_concurrent_ready_max_count = 0;
     cluster.cfg.raft_store.store_io_pool_size = 1;
-    cluster.cfg.raft_store.max_apply_unpersisted_log_limit = 10000;
-
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(100000);
     cluster.cfg.raft_store.raft_log_gc_threshold = 50;
     cluster.cfg.raft_store.raft_log_gc_size_limit = Some(ReadableSize::mb(20));

@@ -70,40 +70,45 @@ fn json_modify(args: &[ScalarValueRef], mt: ModifyType) -> Result<Option<Json>> 
 #[inline]
 fn json_array_append(args: &[ScalarValueRef]) -> Result<Option<Json>> {
     assert!(args.len() >= 2);
+    // Returns None if Base is None
+    if args[0].to_owned().is_none() {
+        return Ok(None);
+    }
     // base Json argument
     let base: Option<JsonRef> = args[0].as_json();
-    let base = base.map_or(Json::none(), |json| Ok(json.to_owned()))?;
-
-    let buf_size = args.len() / 2;
-
-    let mut path_expr_list = Vec::with_capacity(buf_size);
-    let mut values = Vec::with_capacity(buf_size);
+    let mut base = base.map_or(Json::none(), |json| Ok(json.to_owned()))?;
 
     for chunk in args[1..].chunks(2) {
         let path: Option<BytesRef> = chunk[0].as_bytes();
         let value: Option<JsonRef> = chunk[1].as_json();
-
-        path_expr_list.push(try_opt!(parse_json_path(path)));
 
         let value = value
             .as_ref()
             .map_or(Json::none(), |json| Ok(json.to_owned()))?;
         // extract the element from the path, then merge the value into the element
         // 1. extrace the element from the path
-        let tmp_path_expr_list = vec![path_expr_list.last().unwrap().to_owned()];
-        let element = base.as_ref().extract(&tmp_path_expr_list)?;
-        // change element to JsonRef
-        let element_ref = element.as_ref().map(|e| e.as_ref());
+        let tmp_path_expr_list = vec![try_opt!(parse_json_path(path))];
+        let element: Option<Json> = base.as_ref().extract(&tmp_path_expr_list)?;
         // 2. merge the value into the element
-        let tmp_values: Vec<JsonRef> = vec![element_ref.unwrap(), value.as_ref()];
-
-        values.push(Json::merge(tmp_values)?);
+        if let Some(elem) = element {
+            // if both elem and value are json object, wrap elem into a vector
+            if elem.get_type() == JsonType::Object && value.get_type() == JsonType::Object {
+                let array_json: Json = Json::from_array(vec![elem.clone()])?;
+                let tmp_values = vec![array_json.as_ref(), value.as_ref()];
+                let tmp_value = Json::merge(tmp_values)?;
+                base =
+                    base.as_ref()
+                        .modify(&tmp_path_expr_list, vec![tmp_value], ModifyType::Set)?;
+            } else {
+                let tmp_values = vec![elem.as_ref(), value.as_ref()];
+                let tmp_value = Json::merge(tmp_values)?;
+                base =
+                    base.as_ref()
+                        .modify(&tmp_path_expr_list, vec![tmp_value], ModifyType::Set)?;
+            }
+        }
     }
-    Ok(Some(base.as_ref().modify(
-        &path_expr_list,
-        values,
-        ModifyType::Set,
-    )?))
+    Ok(Some(base))
 }
 
 /// validate the arguments are `(Option<JsonRef>, &[(Option<Bytes>,
@@ -196,6 +201,56 @@ pub fn json_merge(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
         }
     }
     Ok(Some(Json::merge(jsons)?))
+}
+
+// `json_merge_patch` is the implementation for JSON_MERGE_PATCH in mysql
+// <https://dev.mysql.com/doc/refman/8.3/en/json-modification-functions.html#function_json-merge-patch>
+//
+// The json_merge_patch rules are listed as following:
+// 1. If the first argument is not an object, the result of the merge is the
+//    same as if an empty object had been merged with the second argument.
+// 2. If the second argument is not an object, the result of the merge is the
+//    second argument.
+// 3. If both arguments are objects, the result of the merge is an object with
+//    the following members: 3.1. All members of the first object which do not
+//    have a corresponding member with the same key in the second object. 3.2.
+//    All members of the second object which do not have a corresponding key in
+//    the first object, and whose value is not the JSON null literal. 3.3. All
+//    members with a key that exists in both the first and the second object,
+//    and whose value in the second object is not the JSON null literal. The
+//    values of these members are the results of recursively merging the value
+//    in the first object with the value in the second object.
+// See `MergePatchBinaryJSON()` in TiDB
+// `pkg/types/json_binary_functions.go`
+// arguments of json_merge_patch should not be less than 2.
+#[rpn_fn(nullable, varg, min_args = 2)]
+#[inline]
+pub fn json_merge_patch(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
+    let mut jsons: Vec<Option<JsonRef>> = vec![];
+    let mut index = 0;
+    // according to the implements of RFC7396
+    // when the last item is not object
+    // we can return the last item directly
+    for i in (0..=args.len() - 1).rev() {
+        if args[i].is_none() || args[i].unwrap().get_type() != JsonType::Object {
+            index = i;
+            break;
+        }
+    }
+
+    if args[index].is_none() {
+        return Ok(None);
+    }
+
+    jsons.extend(&args[index..]);
+    let mut target = jsons[0].unwrap().to_owned();
+
+    if jsons.len() > 1 {
+        for i in 1..jsons.len() {
+            target = Json::merge_patch(target.as_ref(), jsons[i].unwrap())?;
+        }
+    }
+    Ok(Some(target.to_owned()))
 }
 
 #[rpn_fn(writer)]
@@ -1507,22 +1562,114 @@ mod tests {
     #[test]
     fn test_json_array_append() {
         let cases: Vec<(Vec<ScalarValue>, _)> = vec![
+            // use exact testcase from TiDB repo
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": 1, "b": [2, 3], "c": 4}"#).unwrap()).into(),
+                    Some(b"$.d".to_vec()).into(),
+                    Some(Json::from_str(r#""z""#).unwrap()).into(),
+                ],
+                Some(r#"{"a": 1, "b": [2, 3], "c": 4}"#.parse().unwrap()),
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": 1, "b": [2, 3], "c": 4}"#).unwrap()).into(),
+                    Some(b"$".to_vec()).into(),
+                    Some(Json::from_str(r#""w""#).unwrap()).into(),
+                ],
+                Some(r#"[{"a": 1, "b": [2, 3], "c": 4}, "w"]"#.parse().unwrap()),
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": 1, "b": [2, 3], "c": 4}"#).unwrap()).into(),
+                    Some(b"$".to_vec()).into(),
+                    None::<Json>.into(),
+                ],
+                Some(r#"[{"a": 1, "b": [2, 3], "c": 4}, null]"#.parse().unwrap()),
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": 1}"#).unwrap()).into(),
+                    Some(b"$".to_vec()).into(),
+                    Some(Json::from_str(r#"{"b": 2}"#).unwrap()).into(),
+                ],
+                Some(r#"[{"a": 1}, {"b": 2}]"#.parse().unwrap()),
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": 1}"#).unwrap()).into(),
+                    Some(b"$".to_vec()).into(),
+                    Some(Json::from_str(r#"{"b": 2}"#).unwrap()).into(),
+                ],
+                Some(r#"[{"a": 1}, {"b": 2}]"#.parse().unwrap()),
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": 1}"#).unwrap()).into(),
+                    Some(b"$.a".to_vec()).into(),
+                    Some(Json::from_str(r#"{"b": 2}"#).unwrap()).into(),
+                ],
+                Some(r#"{"a": [1, {"b": 2}]}"#.parse().unwrap()),
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": 1}"#).unwrap()).into(),
+                    Some(b"$.a".to_vec()).into(),
+                    Some(Json::from_str(r#"{"b": 2}"#).unwrap()).into(),
+                    Some(b"$.a[1]".to_vec()).into(),
+                    Some(Json::from_str(r#"{"b": 2}"#).unwrap()).into(),
+                ],
+                Some(r#"{"a": [1, [{"b": 2}, {"b": 2}]]}"#.parse().unwrap()),
+            ),
             (
                 vec![
                     None::<Json>.into(),
-                    None::<Bytes>.into(),
+                    Some(b"$".to_vec()).into(),
                     None::<Json>.into(),
                 ],
                 None::<Json>,
             ),
             (
                 vec![
-                    Some(Json::from_i64(9).unwrap()).into(),
+                    None::<Json>.into(),
                     Some(b"$".to_vec()).into(),
-                    Some(Json::from_u64(3).unwrap()).into(),
+                    Some(Json::from_str(r#""a""#).unwrap()).into(),
                 ],
-                Some(r#"[9,3]"#.parse().unwrap()),
+                None::<Json>,
             ),
+            (
+                vec![
+                    Some(Json::from_str(r#"null"#).unwrap()).into(),
+                    Some(b"$".to_vec()).into(),
+                    None::<Json>.into(),
+                ],
+                Some(r#"[null, null]"#.parse().unwrap()),
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"[]"#).unwrap()).into(),
+                    Some(b"$".to_vec()).into(),
+                    None::<Json>.into(),
+                ],
+                Some(r#"[null]"#.parse().unwrap()),
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"{}"#).unwrap()).into(),
+                    Some(b"$".to_vec()).into(),
+                    None::<Json>.into(),
+                ],
+                Some(r#"[{}, null]"#.parse().unwrap()),
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": 1, "b": [2, 3], "c": 4}"#).unwrap()).into(),
+                    None::<Bytes>.into(),
+                    None::<Json>.into(),
+                ],
+                None::<Json>,
+            ),
+            // Following tests come from MySQL doc.
             (
                 vec![
                     Some(Json::from_str(r#"["a", ["b", "c"], "d"]"#).unwrap()).into(),
@@ -1547,6 +1694,51 @@ mod tests {
                 ],
                 Some(r#"["a", [["b", 3], "c"], "d"]"#.parse().unwrap()),
             ),
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": 1, "b": [2, 3], "c": 4}"#).unwrap()).into(),
+                    Some(b"$.b".to_vec()).into(),
+                    Some(Json::from_str(r#""x""#).unwrap()).into(),
+                ],
+                Some(r#"{"a": 1, "b": [2, 3, "x"], "c": 4}"#.parse().unwrap()),
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"{"a": 1, "b": [2, 3], "c": 4}"#).unwrap()).into(),
+                    Some(b"$.c".to_vec()).into(),
+                    Some(Json::from_str(r#""y""#).unwrap()).into(),
+                ],
+                Some(r#"{"a": 1, "b": [2, 3], "c": [4, "y"]}"#.parse().unwrap()),
+            ),
+            // Following tests come from MySQL test.
+            (
+                vec![
+                    Some(Json::from_str(r#"[1,2,3, {"a":[4,5,6]}]"#).unwrap()).into(),
+                    Some(b"$".to_vec()).into(),
+                    Some(Json::from_u64(7).unwrap()).into(),
+                ],
+                Some(r#"[1, 2, 3, {"a": [4, 5, 6]}, 7]"#.parse().unwrap()),
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"[1,2,3, {"a":[4,5,6]}]"#).unwrap()).into(),
+                    Some(b"$".to_vec()).into(),
+                    Some(Json::from_u64(7).unwrap()).into(),
+                    Some(b"$[3].a".to_vec()).into(),
+                    Some(Json::from_f64(3.15).unwrap()).into(),
+                ],
+                Some(r#"[1, 2, 3, {"a": [4, 5, 6, 3.15]}, 7]"#.parse().unwrap()),
+            ),
+            (
+                vec![
+                    Some(Json::from_str(r#"[1,2,3, {"a":[4,5,6]}]"#).unwrap()).into(),
+                    Some(b"$".to_vec()).into(),
+                    Some(Json::from_u64(7).unwrap()).into(),
+                    Some(b"$[3].b".to_vec()).into(),
+                    Some(Json::from_u64(8).unwrap()).into(),
+                ],
+                Some(r#"[1, 2, 3, {"a": [4, 5, 6]}, 7]"#.parse().unwrap()),
+            ),
         ];
         for (args, expect_output) in cases {
             let output: Option<Json> = RpnFnScalarEvaluator::new()
@@ -1554,6 +1746,318 @@ mod tests {
                 .evaluate(ScalarFuncSig::JsonArrayAppendSig)
                 .unwrap();
             assert_eq!(output, expect_output, "{:?}", args);
+        }
+    }
+
+    #[test]
+    fn test_json_merge_patch() {
+        let cases = vec![
+            // RFC 7396 document: https://datatracker.ietf.org/doc/html/rfc7396
+            // RFC 7396 Example Test Cases
+            (
+                vec![Some(r#"{"a":"b"}"#), Some(r#"{"a":"c"}"#)],
+                Some(r#"{"a": "c"}"#),
+            ),
+            (
+                vec![Some(r#"{"a":"b"}"#), Some(r#"{"b":"c"}"#)],
+                Some(r#"{"a": "b","b": "c"}"#),
+            ),
+            (
+                vec![Some(r#"{"a":"b"}"#), Some(r#"{"a":null}"#)],
+                Some(r#"{}"#),
+            ),
+            (
+                vec![Some(r#"{"a":"b", "b":"c"}"#), Some(r#"{"a":null}"#)],
+                Some(r#"{"b": "c"}"#),
+            ),
+            (
+                vec![Some(r#"{"a":["b"]}"#), Some(r#"{"a":"c"}"#)],
+                Some(r#"{"a": "c"}"#),
+            ),
+            (
+                vec![Some(r#"{"a":"c"}"#), Some(r#"{"a":["b"]}"#)],
+                Some(r#"{"a": ["b"]}"#),
+            ),
+            (
+                vec![
+                    Some(r#"{"a":{"b":"c"}}"#),
+                    Some(r#"{"a":{"b":"d","c":null}}"#),
+                ],
+                Some(r#"{"a": {"b": "d"}}"#),
+            ),
+            (
+                vec![Some(r#"{"a":[{"b":"c"}]}"#), Some(r#"{"a": [1]}"#)],
+                Some(r#"{"a": [1]}"#),
+            ),
+            (
+                vec![Some(r#"["a","b"]"#), Some(r#"["c","d"]"#)],
+                Some(r#"["c", "d"]"#),
+            ),
+            (
+                vec![Some(r#"{"a":"b"}"#), Some(r#"["c"]"#)],
+                Some(r#"["c"]"#),
+            ),
+            (
+                vec![Some(r#"{"a":"foo"}"#), Some(r#"null"#)],
+                Some(r#"null"#),
+            ),
+            (
+                vec![Some(r#"{"a":"foo"}"#), Some(r#""bar""#)],
+                Some(r#""bar""#),
+            ),
+            (
+                vec![Some(r#"{"e":null}"#), Some(r#"{"a":1}"#)],
+                Some(r#"{"e": null,"a": 1}"#),
+            ),
+            (
+                vec![Some(r#"[1,2]"#), Some(r#"{"a":"b","c":null}"#)],
+                Some(r#"{"a":"b"}"#),
+            ),
+            (
+                vec![Some(r#"{}"#), Some(r#"{"a":{"bb":{"ccc":null}}}"#)],
+                Some(r#"{"a":{"bb": {}}}"#),
+            ),
+            // RFC 7396 Example Document
+            (
+                vec![
+                    Some(
+                        r#"{"title":"Goodbye!","author":{"givenName":"John","familyName":"Doe"},"tags":["example","sample"],"content":"This will be unchanged"}"#,
+                    ),
+                    Some(
+                        r#"{"title":"Hello!","phoneNumber":"+01-123-456-7890","author":{"familyName":null},"tags":["example"]}"#,
+                    ),
+                ],
+                Some(
+                    r#"{"title":"Hello!","author":{"givenName":"John"},"tags":["example"],"content":"This will be unchanged","phoneNumber":"+01-123-456-7890"}"#,
+                ),
+            ),
+            // From mysql Example Test Cases
+            (
+                vec![
+                    None,
+                    Some(r#"null"#),
+                    Some(r#"[1,2,3]"#),
+                    Some(r#"{"a":1}"#),
+                ],
+                Some(r#"{"a": 1}"#),
+            ),
+            (
+                vec![
+                    Some(r#"null"#),
+                    None,
+                    Some(r#"[1,2,3]"#),
+                    Some(r#"{"a":1}"#),
+                ],
+                Some(r#"{"a": 1}"#),
+            ),
+            (
+                vec![
+                    Some(r#"null"#),
+                    Some(r#"[1,2,3]"#),
+                    None,
+                    Some(r#"{"a":1}"#),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(r#"null"#),
+                    Some(r#"[1,2,3]"#),
+                    Some(r#"{"a":1}"#),
+                    None,
+                ],
+                None,
+            ),
+            (
+                vec![
+                    None,
+                    Some(r#"null"#),
+                    Some(r#"{"a":1}"#),
+                    Some(r#"[1,2,3]"#),
+                ],
+                Some(r#"[1,2,3]"#),
+            ),
+            (
+                vec![
+                    Some(r#"null"#),
+                    None,
+                    Some(r#"{"a":1}"#),
+                    Some(r#"[1,2,3]"#),
+                ],
+                Some(r#"[1,2,3]"#),
+            ),
+            (
+                vec![
+                    Some(r#"null"#),
+                    Some(r#"{"a":1}"#),
+                    None,
+                    Some(r#"[1,2,3]"#),
+                ],
+                Some(r#"[1,2,3]"#),
+            ),
+            (
+                vec![
+                    Some(r#"null"#),
+                    Some(r#"{"a":1}"#),
+                    Some(r#"[1,2,3]"#),
+                    None,
+                ],
+                None,
+            ),
+            (
+                vec![None, Some(r#"null"#), Some(r#"{"a":1}"#), Some(r#"true"#)],
+                Some(r#"true"#),
+            ),
+            (
+                vec![Some(r#"null"#), None, Some(r#"{"a":1}"#), Some(r#"true"#)],
+                Some(r#"true"#),
+            ),
+            (
+                vec![Some(r#"null"#), Some(r#"{"a":1}"#), None, Some(r#"true"#)],
+                Some(r#"true"#),
+            ),
+            (
+                vec![Some(r#"null"#), Some(r#"{"a":1}"#), Some(r#"true"#), None],
+                None,
+            ),
+            // non-object last item
+            (
+                vec![
+                    Some("true"),
+                    Some("false"),
+                    Some("[]"),
+                    Some("{}"),
+                    Some("null"),
+                ],
+                Some("null"),
+            ),
+            (
+                vec![
+                    Some("false"),
+                    Some("[]"),
+                    Some("{}"),
+                    Some("null"),
+                    Some("true"),
+                ],
+                Some("true"),
+            ),
+            (
+                vec![
+                    Some("true"),
+                    Some("[]"),
+                    Some("{}"),
+                    Some("null"),
+                    Some("false"),
+                ],
+                Some("false"),
+            ),
+            (
+                vec![
+                    Some("true"),
+                    Some("false"),
+                    Some("{}"),
+                    Some("null"),
+                    Some("[]"),
+                ],
+                Some("[]"),
+            ),
+            (
+                vec![
+                    Some("true"),
+                    Some("false"),
+                    Some("{}"),
+                    Some("null"),
+                    Some("1"),
+                ],
+                Some("1"),
+            ),
+            (
+                vec![
+                    Some("true"),
+                    Some("false"),
+                    Some("{}"),
+                    Some("null"),
+                    Some("1.8"),
+                ],
+                Some("1.8"),
+            ),
+            (
+                vec![
+                    Some("true"),
+                    Some("false"),
+                    Some("{}"),
+                    Some("null"),
+                    Some("112"),
+                ],
+                Some("112"),
+            ),
+            (vec![Some(r#"{"a":"foo"}"#), None], None),
+            (vec![None, Some(r#"{"a":"foo"}"#)], None),
+            (
+                vec![Some(r#"{"a":"foo"}"#), Some(r#"false"#)],
+                Some(r#"false"#),
+            ),
+            (vec![Some(r#"{"a":"foo"}"#), Some(r#"123"#)], Some(r#"123"#)),
+            (
+                vec![Some(r#"{"a":"foo"}"#), Some(r#"123.1"#)],
+                Some(r#"123.1"#),
+            ),
+            (
+                vec![Some(r#"{"a":"foo"}"#), Some(r#"[1,2,3]"#)],
+                Some(r#"[1,2,3]"#),
+            ),
+            (
+                vec![Some(r#"null"#), Some(r#"{"a":1}"#)],
+                Some(r#"{"a":1}"#),
+            ),
+            (vec![Some(r#"{"a":1}"#), Some(r#"null"#)], Some(r#"null"#)),
+            (
+                vec![
+                    Some(r#"{"a":"foo"}"#),
+                    Some(r#"{"a":null}"#),
+                    Some(r#"{"b":"123"}"#),
+                    Some(r#"{"c":1}"#),
+                ],
+                Some(r#"{"b":"123","c":1}"#),
+            ),
+            (
+                vec![
+                    Some(r#"{"a":"foo"}"#),
+                    Some(r#"{"a":null}"#),
+                    Some(r#"{"c":1}"#),
+                ],
+                Some(r#"{"c":1}"#),
+            ),
+            (
+                vec![
+                    Some(r#"{"a":"foo"}"#),
+                    Some(r#"{"a":null}"#),
+                    Some(r#"true"#),
+                ],
+                Some(r#"true"#),
+            ),
+            (
+                vec![
+                    Some(r#"{"a":"foo"}"#),
+                    Some(r#"{"d":1}"#),
+                    Some(r#"{"a":{"bb":{"ccc":null}}}"#),
+                ],
+                Some(r#"{"a":{"bb":{}},"d":1}"#),
+            ),
+        ];
+
+        for (vargs, expected) in cases {
+            let vargs: Vec<Option<Json>> = vargs
+                .into_iter()
+                .map(|input| input.map(|s| Json::from_str(s).unwrap()))
+                .collect::<Vec<_>>();
+            let expected = expected.map(|s| Json::from_str(s).unwrap());
+
+            let output = RpnFnScalarEvaluator::new()
+                .push_params(vargs.clone())
+                .evaluate(ScalarFuncSig::JsonMergePatchSig)
+                .unwrap();
+            assert_eq!(output, expected, "{:?}", vargs);
         }
     }
 }

@@ -1296,9 +1296,11 @@ mod tests {
     use hybrid_engine::{HybridEngine, HybridEngineSnapshot};
     use keys::DATA_PREFIX;
     use kvproto::{metapb::RegionEpoch, raft_cmdpb::*};
-    use region_cache_memory_engine::{EngineConfig, RangeCacheMemoryEngine};
+    use region_cache_memory_engine::{
+        RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
+    };
     use tempfile::{Builder, TempDir};
-    use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
+    use tikv_util::{codec::number::NumberEncoder, config::VersionTrack, time::monotonic_raw_now};
     use time::Duration;
     use txn_types::WriteBatchFlags;
 
@@ -2470,7 +2472,7 @@ mod tests {
         path: &str,
         store_id: u64,
         store_meta: Arc<Mutex<StoreMeta>>,
-        engine_config: EngineConfig,
+        engine_config: RangeCacheEngineConfig,
     ) -> (
         TempDir,
         LocalReader<HybridTestEnigne, HybridEngineMockRouter>,
@@ -2481,7 +2483,8 @@ mod tests {
         let disk_engine =
             engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
         let (ch, rx, _) = HybridEngineMockRouter::new();
-        let memory_engine = RangeCacheMemoryEngine::new(engine_config);
+        let config = Arc::new(VersionTrack::new(engine_config));
+        let memory_engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(config));
         let engine = HybridEngine::new(disk_engine, memory_engine.clone());
         let mut reader = LocalReader::new(
             engine.clone(),
@@ -2520,7 +2523,7 @@ mod tests {
             "test-local-hybrid-engine-reader",
             store_id,
             store_meta.clone(),
-            EngineConfig::config_for_test(),
+            RangeCacheEngineConfig::config_for_test(),
         );
 
         // set up region so we can acquire snapshot from local reader
