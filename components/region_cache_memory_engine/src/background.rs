@@ -533,6 +533,7 @@ impl Runnable for BackgroundRunner {
     fn run(&mut self, task: Self::Task) {
         match task {
             BackgroundTask::Gc(t) => {
+                return;
                 info!(
                     "start a new round of gc for range cache engine";
                     "safe_point" => t.safe_point,
