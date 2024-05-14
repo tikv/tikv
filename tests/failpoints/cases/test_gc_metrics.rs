@@ -1,18 +1,22 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    collections::HashMap,
     sync::{atomic::AtomicU64, mpsc, Arc},
     thread,
     time::Duration,
 };
-use std::collections::HashMap;
-use dashmap::DashMap;
 
 use api_version::{ApiV2, KvFormat, RawValue};
+use dashmap::DashMap;
 use engine_rocks::{raw::FlushOptions, util::get_cf_handle, RocksEngine};
 use engine_traits::{CF_DEFAULT, CF_WRITE};
 use keyspace_meta::KeyspaceLevelGCService;
-use kvproto::{keyspacepb, kvrpcpb::*, metapb::{Peer, Region}};
+use kvproto::{
+    keyspacepb,
+    kvrpcpb::*,
+    metapb::{Peer, Region},
+};
 use pd_client::FeatureGate;
 use raft::StateRole;
 use raftstore::{
@@ -21,7 +25,6 @@ use raftstore::{
     },
     RegionInfoAccessor,
 };
-use crate::cases::test_table_properties::do_write;
 use tikv::{
     config::DbConfig,
     server::gc_worker::{
@@ -42,6 +45,8 @@ use tikv::{
     },
 };
 use txn_types::{Key, TimeStamp};
+
+use crate::cases::test_table_properties::do_write;
 
 #[test]
 fn test_txn_create_compaction_filter() {
@@ -373,7 +378,6 @@ fn test_raw_gc_keys_handled() {
     GC_COMPACTION_FILTER_MVCC_DELETION_MET.reset();
     GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.reset();
 }
-
 
 // make_keyspace_level_gc_service is used to construct the required keyspace
 // metas, mappings, and keyspace level GC service.

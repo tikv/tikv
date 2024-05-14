@@ -117,7 +117,6 @@ fn test_check_need_gc() {
     );
 }
 
-
 pub fn do_write<E: Engine>(engine: &E, is_delete: bool, op_nums: u64, is_rawkv: bool) {
     let mut data_prefix = api_version::api_v2::TIDB_TABLE_KEY_PREFIX;
     if is_rawkv {
