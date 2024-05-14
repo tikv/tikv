@@ -72,13 +72,28 @@ fn physical_core_id() -> i32 {
     }
 }
 
-pub const ENGINE_TICKER_TYPES: &[Tickers] = &[Tickers::BytesRead, Tickers::IterBytesRead];
+pub const ENGINE_TICKER_TYPES: &[Tickers] = &[
+    Tickers::BytesRead,
+    Tickers::IterBytesRead,
+    Tickers::NumberDbSeek,
+    Tickers::NumberDbSeekFound,
+    Tickers::NumberDbNext,
+    Tickers::NumberDbNextFound,
+    Tickers::NumberDbPrev,
+    Tickers::NumberDbPrevFound,
+];
 
 #[repr(u32)]
 #[derive(Copy, Clone)]
 pub enum Tickers {
     BytesRead = 0,
     IterBytesRead,
+    NumberDbSeek,
+    NumberDbSeekFound,
+    NumberDbNext,
+    NumberDbNextFound,
+    NumberDbPrev,
+    NumberDbPrevFound,
     TickerEnumMax,
 }
 
@@ -151,6 +166,18 @@ impl Statistics {
 pub(crate) struct LocalStatistics {
     // Map to Tickers::IterBytesRead
     pub(crate) bytes_read: u64,
+    // Map to Tickers::NumberDbSeek
+    pub(crate) number_db_seek: u64,
+    // Map to Tickers::NumberDbSeekFound
+    pub(crate) number_db_seek_found: u64,
+    // Map to Tickers::NumberDbNext
+    pub(crate) number_db_next: u64,
+    // Map to Tickers::NumberDbNextFound
+    pub(crate) number_db_next_found: u64,
+    // Map to Tickers::NumberDbPrev
+    pub(crate) number_db_prev: u64,
+    // Map to Tickers::NumberDbPrevFound
+    pub(crate) number_db_prev_found: u64,
 }
 
 #[cfg(test)]
