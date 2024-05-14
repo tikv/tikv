@@ -1,14 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::HashMap, sync::Arc};
 
 use api_version::{ApiV2, KvFormat, RawValue};
-use dashmap::DashMap;
 use engine_rocks::RocksEngine;
 use engine_traits::{MiscExt, CF_DEFAULT, CF_WRITE};
-use keyspace_meta::KeyspaceLevelGCService;
 use kvproto::{
-    keyspacepb,
     kvrpcpb::{Context, *},
 };
 use tempfile::TempDir;
@@ -19,7 +15,7 @@ use tikv::{
             test_utils::rocksdb_level_files, GC_COMPACTION_FILTER_PERFORM,
             GC_COMPACTION_FILTER_SKIP,
         },
-        TestGcRunner, STAT_RAW_KEYMODE, STAT_TXN_KEYMODE,
+        TestGcRunner, STAT_RAW_KEYMODE,
     },
     storage::{
         kv::{Modify, TestEngineBuilder, WriteData},
