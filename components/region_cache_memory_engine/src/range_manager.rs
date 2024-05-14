@@ -3,7 +3,10 @@
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     result,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use engine_rocks::RocksSnapshot;
@@ -144,6 +147,7 @@ pub struct RangeManager {
     pub(crate) pending_ranges_loading_data: VecDeque<(CacheRange, Arc<RocksSnapshot>, bool)>,
 
     ranges_in_gc: BTreeSet<CacheRange>,
+    range_evictions: AtomicU64,
 }
 
 impl RangeManager {
@@ -314,7 +318,7 @@ impl RangeManager {
             "range_start" => log_wrappers::Value(&evict_range.start),
             "range_end" => log_wrappers::Value(&evict_range.end),
         );
-
+        self.range_evictions.fetch_add(1, Ordering::Relaxed);
         let meta = self.ranges.remove(&range_key).unwrap();
         let (left_range, right_range) = range_key.split_off(evict_range);
         assert!((left_range.is_some() || right_range.is_some()) || &range_key == evict_range);
@@ -376,6 +380,10 @@ impl RangeManager {
         }
         self.pending_ranges.push(cache_range);
         Ok(())
+    }
+
+    pub fn get_and_reset_range_evictions(&self) -> u64 {
+        self.range_evictions.swap(0, Ordering::Relaxed)
     }
 }
 

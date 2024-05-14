@@ -29,7 +29,7 @@ use crate::{
     keys::{decode_key, encode_key, encoding_for_filter, InternalBytes, InternalKey, ValueType},
     memory_controller::{MemoryController, MemoryUsage},
     metrics::{
-        GC_FILTERED_STATIC, RANGE_CACHE_MEMORY_USAGE, RANGE_GC_TIME_HISTOGRAM,
+        GC_FILTERED_STATIC, RANGE_CACHE_COUNT, RANGE_CACHE_MEMORY_USAGE, RANGE_GC_TIME_HISTOGRAM,
         RANGE_LOAD_TIME_HISTOGRAM,
     },
     range_manager::LoadFailedReason,
@@ -679,10 +679,29 @@ impl RunnableWithTimer for BackgroundRunner {
     fn on_timeout(&mut self) {
         let mem_usage = self.core.memory_controller.mem_usage();
         RANGE_CACHE_MEMORY_USAGE.set(mem_usage as i64);
+
+        let core = self.core.engine.read();
+        let pending = core.range_manager.pending_ranges.len();
+        let cached = core.range_manager.ranges().len();
+        let loading = core.range_manager.pending_ranges_loading_data.len();
+        let evictions = core.range_manager.get_and_reset_range_evictions();
+        drop(core);
+        RANGE_CACHE_COUNT
+            .with_label_values(&["pending_range"])
+            .set(pending as i64);
+        RANGE_CACHE_COUNT
+            .with_label_values(&["cached_range"])
+            .set(cached as i64);
+        RANGE_CACHE_COUNT
+            .with_label_values(&["loading_range"])
+            .set(loading as i64);
+        RANGE_CACHE_COUNT
+            .with_label_values(&["range_evictions"])
+            .set(evictions as i64);
     }
 
     fn get_interval(&self) -> Duration {
-        Duration::from_secs(10)
+        Duration::from_secs(1)
     }
 }
 
