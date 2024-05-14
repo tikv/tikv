@@ -69,6 +69,12 @@ lazy_static! {
         exponential_buckets(0.00001, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref RANGE_CACHE_COUNT: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_range_cache_count",
+        "The count of each type on range cache.",
+        &["type"]
+    )
+    .unwrap();
     pub static ref IN_MEMORY_ENGINE_FLOW: IntCounterVec = register_int_counter_vec!(
         "tikv_range_cache_memory_engine_flow",
         "Bytes and keys of read/written of range cache memory engine",

@@ -4116,6 +4116,19 @@ def RangeCacheMemoryEngine() -> RowPanel:
                     ),
                 ],
             ),
+            graph_panel(
+                title="Range Count",
+                description="The count of different types of range",
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_range_cache_count",
+                            by_labels=["instance", "type"],
+                        ),
+                        legend_format="{{instance}}--{{type}}",
+                    ),
+                ],
+            ),
         ]
     )
     layout.row(
