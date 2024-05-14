@@ -35,6 +35,7 @@ pub const ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE80_FILE: &str =
     "rocksdb.titandb.num-discardable-ratio-le80-file";
 pub const ROCKSDB_TITANDB_DISCARDABLE_RATIO_LE100_FILE: &str =
     "rocksdb.titandb.num-discardable-ratio-le100-file";
+pub const ROCKSDB_TITANDB_HOLE_PUNCHABLE_BLOCKS: &str = "rocksdb.titandb.num-hole-punchable-blocks";
 
 pub const ROCKSDB_CFSTATS: &str = "rocksdb.cfstats";
 pub const ROCKSDB_IOSTALL_KEY: &[&str] = &[

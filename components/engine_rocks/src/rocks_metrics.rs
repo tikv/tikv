@@ -932,6 +932,7 @@ struct CfStats {
     blob_file_discardable_ratio_le50: Option<u64>,
     blob_file_discardable_ratio_le80: Option<u64>,
     blob_file_discardable_ratio_le100: Option<u64>,
+    num_hole_punchable_blocks: Option<u64>,
     levels: Vec<CfLevelStats>,
 }
 
@@ -1039,6 +1040,9 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
                 *cf_stats
                     .blob_file_discardable_ratio_le100
                     .get_or_insert_default() += v;
+            }
+            if let Some(v) = db.get_property_int_cf(handle, ROCKSDB_TITANDB_HOLE_PUNCHABLE_BLOCKS) {
+                *cf_stats.num_hole_punchable_blocks.get_or_insert_default() += v;
             }
             // Level stats.
             let opts = db.get_options_cf(handle);
@@ -1204,6 +1208,11 @@ impl StatisticsReporter<RocksEngine> for RocksStatisticsReporter {
                     .with_label_values(&[&self.name, cf, "le100"])
                     .set(v as i64);
             }
+            if let Some(v) = cf_stats.num_hole_punchable_blocks {
+                STORE_ENGINE_TITANDB_NUM_HOLE_PUNCHABLE_BLOCKS_VEC
+                    .with_label_values(&[&self.name, cf])
+                    .set(v as i64);
+            }
         }
 
         if let Some(v) = self.db_stats.num_snapshots {
@@ -1346,6 +1355,11 @@ lazy_static! {
         "tikv_engine_titandb_blob_file_discardable_ratio",
         "Size of obsolete blob file",
         &["db", "cf", "ratio"]
+    ).unwrap();
+    pub static ref STORE_ENGINE_TITANDB_NUM_HOLE_PUNCHABLE_BLOCKS_VEC: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_engine_titandb_num_hole_punchable_blocks",
+        "Number of hole_punchable_blocks",
+        &["db", "cf"]
     ).unwrap();
 }
 
