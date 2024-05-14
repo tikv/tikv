@@ -352,6 +352,7 @@ impl BackgroundRunnerCore {
             "below_safe_point_unique_keys" => filter.metrics.unique_key,
             "below_safe_point_version" => filter.metrics.versions,
             "below_safe_point_delete_version" => filter.metrics.delete_versions,
+            "current_safe_point" => safe_ts,
         );
 
         std::mem::take(&mut filter.metrics)
@@ -792,8 +793,13 @@ impl Filter {
                 // 2. Two consecutive ValueType::Deletion of different user keys.
                 // In either cases, we can delete the previous one directly.
                 let guard = &epoch::pin();
-                self.write_cf_handle
-                    .remove(&InternalBytes::from_vec(cache_skiplist_delete_key), guard)
+                let key = InternalBytes::from_vec(cache_skiplist_delete_key);
+                self.write_cf_handle.remove(&key, guard);
+                info!(
+                    "delete in memory due to gc";
+                    "key" => log_wrappers::Value(key.as_bytes()),
+                    "cf" => "write",
+                );
             }
             self.cached_skiplist_delete_key = Some(key.to_vec());
             return Ok(());
@@ -806,12 +812,20 @@ impl Filter {
             if cache_skiplist_delete_user_key == user_key {
                 self.write_cf_handle
                     .remove(&InternalBytes::from_bytes(key.clone()), guard);
+                info!(
+                    "delete in memory due to gc";
+                    "key" => log_wrappers::Value(&key),
+                    "cf" => "write",
+                );
                 return Ok(());
             } else {
-                self.write_cf_handle.remove(
-                    &InternalBytes::from_vec(self.cached_skiplist_delete_key.take().unwrap()),
-                    guard,
-                )
+                let key = InternalBytes::from_vec(self.cached_skiplist_delete_key.take().unwrap());
+                self.write_cf_handle.remove(&key, guard);
+                info!(
+                    "delete in memory due to gc";
+                    "key" => log_wrappers::Value(key.as_bytes()),
+                    "cf" => "write",
+                );
             }
         }
 
@@ -823,8 +837,13 @@ impl Filter {
             self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
             self.remove_older = false;
             if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
-                self.write_cf_handle
-                    .remove(&InternalBytes::from_vec(cached_delete_key), guard);
+                let key = InternalBytes::from_vec(cached_delete_key);
+                self.write_cf_handle.remove(&key, guard);
+                info!(
+                    "delete in memory due to gc";
+                    "key" => log_wrappers::Value(key.as_bytes()),
+                    "cf" => "write",
+                );
             }
         }
 
@@ -853,8 +872,13 @@ impl Filter {
             return Ok(());
         }
         self.metrics.filtered += 1;
-        self.write_cf_handle
-            .remove(&InternalBytes::from_bytes(key.clone()), guard);
+        let key = InternalBytes::from_bytes(key.clone());
+        self.write_cf_handle.remove(&key, guard);
+        info!(
+            "delete in memory due to gc";
+            "key" => log_wrappers::Value(key.as_bytes()),
+            "cf" => "write",
+        );
         self.handle_filtered_write(write, guard)?;
 
         Ok(())
@@ -877,6 +901,11 @@ impl Filter {
             iter.seek(&default_key, guard);
             while iter.valid() && iter.key().same_user_key_with(&default_key) {
                 self.default_cf_handle.remove(iter.key(), guard);
+                info!(
+                    "delete in memory due to gc";
+                    "key" => log_wrappers::Value(iter.key().as_bytes()),
+                    "cf" => "default",
+                );
                 iter.next(guard);
             }
         }

@@ -366,12 +366,19 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
         }
         self.statistics.write.over_seek_bound += 1;
 
+        let seek_key = user_key.clone().append_ts(self.cfg.ts);
+        info!(
+            "on move_write_cursor_to_ts for seek";
+            "seek_key" => log_wrappers::hex_encode_upper(seek_key.as_encoded().as_slice()),
+            "user_key" => log_wrappers::hex_encode_upper(user_key.as_encoded().as_slice()),
+            "scanner_ts" => self.cfg.ts,
+        );
+
         // `user_key` must have reserved space here, so its clone has reserved space
         // too. So no reallocation happens in `append_ts`.
-        self.cursors.write.seek(
-            &user_key.clone().append_ts(self.cfg.ts),
-            &mut self.statistics.write,
-        )?;
+        self.cursors
+            .write
+            .seek(&seek_key, &mut self.statistics.write)?;
         if !self.cursors.write.valid()? {
             // Key space ended.
             return Ok(false);

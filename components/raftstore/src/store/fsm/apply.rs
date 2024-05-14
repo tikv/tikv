@@ -1913,7 +1913,7 @@ where
     ) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.delete.inc();
         let key = req.get_delete().get_key();
-        let cf = req.get_put().get_cf();
+        let cf = req.get_delete().get_cf();
         info!(
             "handle delete";
             "region_id" => self.region.get_id(),
