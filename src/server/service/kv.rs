@@ -2762,7 +2762,7 @@ mod tests {
 
         // Do not skip if feedback info is explicitly requested, i.e.
         // `GetHealthFeedback` request is received from the client.
-        let resp_with_request_health_feedback = || {
+        let resp_with_get_health_feedback = || {
             let mut resp = BatchCommandsResponse::default();
             let mut resp_item = BatchCommandsResponseResponse::default();
             resp_item.cmd = Some(BatchCommandsResponse_Response_oneof_cmd::GetHealthFeedback(
@@ -2772,7 +2772,7 @@ mod tests {
             resp.request_ids.push(1);
             resp
         };
-        resp = resp_with_request_health_feedback();
+        resp = resp_with_get_health_feedback();
         a.attach_if_needed(&mut resp);
         assert!(resp.has_health_feedback());
         assert_eq!(resp.get_health_feedback().get_store_id(), 1);
@@ -2801,7 +2801,7 @@ mod tests {
         resp = BatchCommandsResponse::default();
         a.attach_if_needed(&mut resp);
         assert!(!resp.has_health_feedback());
-        resp = resp_with_request_health_feedback();
+        resp = resp_with_get_health_feedback();
         a.attach_if_needed(&mut resp);
         assert!(resp.has_health_feedback());
         assert_eq!(resp.get_health_feedback().get_store_id(), 1);
@@ -2815,7 +2815,7 @@ mod tests {
         // It also works when there are multiple `GetHealthFeedbackResponse` in the
         // batch, and each single `GetHealthFeedback` call gets the same result.
         test_reporter.set_raftstore_slow_score(80.);
-        resp = resp_with_request_health_feedback();
+        resp = resp_with_get_health_feedback();
         resp.responses.push(resp.responses[0].clone());
         resp.request_ids.push(2);
         a.attach_if_needed(&mut resp);
