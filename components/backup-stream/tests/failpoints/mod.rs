@@ -402,7 +402,7 @@ mod all {
 
     #[test]
     fn failed_to_get_task_when_pausing() {
-        let mut suite = SuiteBuilder::new_named("resume_error").nodes(1).build();
+        let suite = SuiteBuilder::new_named("resume_error").nodes(1).build();
         suite.must_register_task(1, "resume_error");
         let mcli = suite.get_meta_cli();
         run_async_test(mcli.pause("resume_error")).unwrap();
