@@ -342,6 +342,7 @@ mod profiling {
     const OPT_PROF: &[u8] = b"opt.prof\0";
     const ARENAS_CREATE: &[u8] = b"arenas.create\0";
     const THREAD_ARENA: &[u8] = b"thread.arena\0";
+    const BACKGROUND_THREAD: &[u8] = b"background_thread\0";
 
     pub fn set_thread_exclusive_arena(enable: bool) {
         ENABLE_THREAD_EXCLUSIVE_ARENA.store(enable, Ordering::Relaxed);
@@ -383,6 +384,18 @@ mod profiling {
                     index as usize,
                 ),
             );
+        }
+        Ok(())
+    }
+
+    fn enable_background_thread() -> ProfResult<()> {
+        unsafe {
+            if let Err(e) = tikv_jemalloc_ctl::raw::write(BACKGROUND_THREAD, true) {
+                return Err(ProfError::JemallocError(format!(
+                    "failed to enable background thread: {}",
+                    e
+                )));
+            }
         }
         Ok(())
     }
@@ -434,6 +447,7 @@ mod profiling {
                 )));
             }
         }
+        enable_background_thread()?;
         Ok(())
     }
 
