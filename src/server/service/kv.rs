@@ -1042,9 +1042,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64);
             // TODO: per thread load is more reasonable for batching.
             r.set_transport_layer_load(grpc_thread_load.total_load() as u64);
-
             health_feedback_attacher.attach_if_needed(&mut r);
-
             if let Some(err @ Error::ClusterIDMisMatch { .. }) = item.server_err {
                 let e = RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, err.to_string());
                 GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Err(GrpcError::RpcFailure(e))
@@ -1393,7 +1391,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     let begin_instant = Instant::now();
                     let source = req.get_context().get_request_source().to_owned();
                     // The response is empty at this place, and will be filled when collected to
-                    // the batch response.
+                    // the batch response. See `HealthFeedbackAttacher::attach_if_needed`.
                     let resp = std::future::ready(Ok(GetHealthFeedbackResponse::default()).map(oneof!(batch_commands_response::response::Cmd::GetHealthFeedback)));
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::get_health_feedback, source, ResourcePriority::unknown);
                 },
