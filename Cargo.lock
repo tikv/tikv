@@ -2915,7 +2915,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/v01dstar/rust-rocksdb?branch=punch-hole#8076ea9a9d78841589fe98ec3e1e7ade13235798"
+source = "git+https://github.com/v01dstar/rust-rocksdb?branch=punch-hole#2cad5ac17c72f8c2e4a4c763d8bed9ca8af3bd4d"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -2934,7 +2934,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/v01dstar/rust-rocksdb?branch=punch-hole#8076ea9a9d78841589fe98ec3e1e7ade13235798"
+source = "git+https://github.com/v01dstar/rust-rocksdb?branch=punch-hole#2cad5ac17c72f8c2e4a4c763d8bed9ca8af3bd4d"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4808,7 +4808,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/v01dstar/rust-rocksdb?branch=punch-hole#8076ea9a9d78841589fe98ec3e1e7ade13235798"
+source = "git+https://github.com/v01dstar/rust-rocksdb?branch=punch-hole#2cad5ac17c72f8c2e4a4c763d8bed9ca8af3bd4d"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
