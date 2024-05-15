@@ -19,7 +19,8 @@ use std::{
 use batch_system::{BasicMailbox, Fsm};
 use collections::{HashMap, HashSet};
 use engine_traits::{
-    Engines, KvEngine, RaftEngine, RaftLogBatch, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT,
+    CacheRange, Engines, KvEngine, RaftEngine, RaftLogBatch, SstMetaInfo, WriteBatchExt, CF_LOCK,
+    CF_RAFT,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -4119,6 +4120,8 @@ where
                     self.fsm.peer.remove_peer_from_cache(peer_id);
                     // We only care remove itself now.
                     if self.store_id() == store_id {
+                        let range = CacheRange::from_region(self.fsm.peer.region());
+                        self.ctx.engines.kv.evict_range(range);
                         if self.fsm.peer.peer_id() == peer_id {
                             remove_self = true;
                         } else {

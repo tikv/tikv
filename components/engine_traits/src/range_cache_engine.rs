@@ -47,6 +47,8 @@ pub trait RangeCacheEngine:
     fn enabled(&self) -> bool {
         false
     }
+
+    fn evict_range(&self, range: CacheRange);
 }
 
 /// A service that should run in the background to retrieve and apply cache
