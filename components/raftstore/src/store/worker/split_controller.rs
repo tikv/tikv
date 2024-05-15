@@ -852,7 +852,7 @@ impl AutoSplitController {
                         "qps" => qps,
                         "byte" => byte,
                         "cpu_usage" => cpu_usage,
-                        "split_key" => log_wrappers::Value::key(key.as_ref()),
+                        "split_key" => log_wrappers::Value::key(&key),
                     );
                     if recorder.hottest_key_range.is_some() {
                         info!("load base split region";
