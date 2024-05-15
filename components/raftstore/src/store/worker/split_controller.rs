@@ -841,12 +841,6 @@ impl AutoSplitController {
             if recorder.is_ready() {
                 let key = recorder.collect(&self.cfg);
                 if !key.is_empty() {
-                    split_infos.push(SplitInfo::with_split_key(
-                        region_id,
-                        recorder.peer.clone(),
-                        key,
-                    ));
-                    LOAD_BASE_SPLIT_EVENT.ready_to_split.inc();
                     info!("load base split region";
                         "region_id" => region_id,
                         "qps" => qps,
@@ -854,6 +848,12 @@ impl AutoSplitController {
                         "cpu_usage" => cpu_usage,
                         "split_key" => log_wrappers::Value::key(&key),
                     );
+                    split_infos.push(SplitInfo::with_split_key(
+                        region_id,
+                        recorder.peer.clone(),
+                        key,
+                    ));
+                    LOAD_BASE_SPLIT_EVENT.ready_to_split.inc();
                     if recorder.hottest_key_range.is_some() {
                         info!("load base split region";
                             "hot start_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().start_key),
