@@ -11,7 +11,7 @@ use std::{
         mpsc::SyncSender,
         Arc, Mutex,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
     u64, usize,
 };
 
@@ -1817,7 +1817,21 @@ where
     ) {
         let mut now = None;
         let std_now = Instant::now();
+        let now_ts = SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
         for msg in msgs {
+            let ts = msg.get_message().ts;
+            if ts > 0 && now_ts - ts > 10 {
+                warn!(
+                    "message delayed too long";
+                    "region_id" => self.region_id,
+                    "peer_id" => self.peer.get_id(),
+                    "msg_type" => ?msg.get_message().get_msg_type(),
+                    "delta" => now_ts - ts,
+                );
+            }
             let msg_type = msg.get_message().get_msg_type();
             if msg_type == MessageType::MsgSnapshot {
                 let snap_index = msg.get_message().get_snapshot().get_metadata().get_index();
@@ -1955,6 +1969,12 @@ where
 
                     resp.index = index;
                     resp.set_entries(m.take_entries());
+
+                    let ts: u64 = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u64;
+                    resp.ts = ts;
 
                     self.raft_group.raft.msgs.push(resp);
                     return Ok(());
@@ -4041,6 +4061,11 @@ where
             return false;
         }
 
+        if self.is_leader() {
+            poll_ctx.raft_metrics.read_index_source.leader.inc();
+        } else {
+            poll_ctx.raft_metrics.read_index_source.follower.inc();
+        }
         let mut read = ReadIndexRequest::with_command(id, req, cb, now);
         read.addition_request = request.map(Box::new);
         self.push_pending_read(read, self.is_leader());
