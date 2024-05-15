@@ -682,6 +682,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let begin_instant = Instant::now();
                     let stage_snap_recv_ts = begin_instant;
                     let buckets = snapshot.ext().get_buckets();
+                    let range_cache_engine_snap = snapshot.ext().range_cache_engine_snap();
                     let mut statistics = Statistics::default();
                     let result = Self::with_perf_context(CMD, || {
                         let _guard = sample.observe_cpu();
@@ -693,6 +694,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             bypass_locks,
                             access_locks,
                             false,
+                            range_cache_engine_snap,
                         );
                         snap_store
                             .get(&key, &mut statistics)
@@ -1271,6 +1273,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     let stage_snap_recv_ts = begin_instant;
                     let mut statistics = Vec::with_capacity(keys.len());
                     let buckets = snapshot.ext().get_buckets();
+                    let range_cache_engine_snap = snapshot.ext().range_cache_engine_snap();
                     let (result, stats) = Self::with_perf_context(CMD, || {
                         let _guard = sample.observe_cpu();
                         let snap_store = SnapshotStore::new(
@@ -1281,6 +1284,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                             bypass_locks,
                             access_locks,
                             false,
+                            range_cache_engine_snap,
                         );
                         let mut stats = Statistics::default();
                         let result = snap_store
@@ -1506,6 +1510,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 Self::with_perf_context(CMD, || {
                     let begin_instant = Instant::now();
                     let buckets = snapshot.ext().get_buckets();
+                    let range_cache_engine_snap = snapshot.ext().range_cache_engine_snap();
 
                     let snap_store = SnapshotStore::new(
                         snapshot,
@@ -1515,6 +1520,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         bypass_locks,
                         access_locks,
                         false,
+                        range_cache_engine_snap,
                     );
 
                     let mut scanner =

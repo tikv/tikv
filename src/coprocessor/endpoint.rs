@@ -244,6 +244,7 @@ impl<E: Engine> Endpoint<E> {
                 let quota_limiter = self.quota_limiter.clone();
                 builder = Box::new(move |snap, req_ctx| {
                     let data_version = snap.ext().get_data_version();
+                    let range_cache_snap = snap.ext().range_cache_engine_snap();
                     let store = SnapshotStore::new(
                         snap,
                         start_ts.into(),
@@ -252,6 +253,7 @@ impl<E: Engine> Endpoint<E> {
                         req_ctx.bypass_locks.clone(),
                         req_ctx.access_locks.clone(),
                         req.get_is_cache_enabled(),
+                        range_cache_snap,
                     );
                     let paging_size = match req.get_paging_size() {
                         0 => None,
@@ -479,7 +481,7 @@ impl<E: Engine> Endpoint<E> {
         let (exec_details, exec_details_v2) = tracker.get_exec_details();
         tracker.on_finish_all_items();
         info!("cop handle finish"; "return_rows" => exec_summary.num_produced_rows,  "req_ctx" => ?tracker.req_ctx);
-        
+
         let mut resp = match result {
             Ok(resp) => {
                 COPR_RESP_SIZE.inc_by(resp.data.len() as u64);

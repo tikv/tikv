@@ -61,6 +61,10 @@ impl<'a, S: Snapshot> SnapshotExt for RegionSnapshotExt<'a, S> {
     fn get_buckets(&self) -> Option<Arc<BucketMeta>> {
         self.snapshot.bucket_meta.clone()
     }
+
+    fn range_cache_engine_snap(&self) -> bool {
+        self.snapshot.get_snapshot().range_cache_engine_snap()
+    }
 }
 
 impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {

@@ -124,6 +124,7 @@ pub struct ForwardScanner<S: Snapshot, P: ScanPolicy<S>> {
     statistics: Statistics,
     scan_policy: P,
     met_newer_ts_data: NewerTsCheckState,
+    range_cache_snap: bool,
 }
 
 impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
@@ -139,6 +140,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             write: write_cursor,
             default: default_cursor,
         };
+        let range_cache_snap = cfg.range_cache_snap;
         ForwardScanner {
             met_newer_ts_data: if cfg.check_has_newer_ts_data {
                 NewerTsCheckState::NotMetYet
@@ -150,6 +152,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             statistics: Statistics::default(),
             is_started: false,
             scan_policy,
+            range_cache_snap,
         }
     }
 
@@ -338,6 +341,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     "current_key" => log_wrappers::hex_encode_upper(current_key),
                     "scanner_ts" => self.cfg.ts,
                     "current_key_commit_ts" => key_commit_ts,
+                    "range_cache_engine" => self.range_cache_snap,
                 );
 
                 if key_commit_ts <= self.cfg.ts {
@@ -372,6 +376,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             "seek_key" => log_wrappers::hex_encode_upper(seek_key.as_encoded().as_slice()),
             "user_key" => log_wrappers::hex_encode_upper(user_key.as_encoded().as_slice()),
             "scanner_ts" => self.cfg.ts,
+            "range_cache_engine" => self.range_cache_snap,
         );
 
         // `user_key` must have reserved space here, so its clone has reserved space

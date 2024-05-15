@@ -13,4 +13,7 @@ where
     Self:
         'static + Peekable + Iterable + CfNamesExt + SnapshotMiscExt + Send + Sync + Sized + Debug,
 {
+    fn range_cache_engine_snap(&self) -> bool {
+        false
+    }
 }

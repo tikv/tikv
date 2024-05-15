@@ -570,12 +570,16 @@ impl Mutable for RangeCacheWriteBatch {
         Ok(())
     }
 
-    fn delete_range(&mut self, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        let range = CacheRange::new(begin_key.to_vec(), end_key.to_vec());
+        self.engine.evict_range(&range);
+        Ok(())
     }
 
-    fn delete_range_cf(&mut self, _: &str, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        let range = CacheRange::new(begin_key.to_vec(), end_key.to_vec());
+        self.engine.evict_range(&range);
+        Ok(())
     }
 }
 

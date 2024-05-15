@@ -291,6 +291,8 @@ pub struct SnapshotStore<S: Snapshot> {
     check_has_newer_ts_data: bool,
 
     point_getter_cache: Option<PointGetter<S>>,
+
+    range_cache_snap: bool,
 }
 
 impl<S: Snapshot> Store for SnapshotStore<S> {
@@ -384,6 +386,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
             .isolation_level(self.isolation_level)
             .bypass_locks(self.bypass_locks.clone())
             .access_locks(self.access_locks.clone())
+            .range_cache_snap(self.range_cache_snap)
             .check_has_newer_ts_data(check_has_newer_ts_data)
             .build()?;
 
@@ -432,6 +435,7 @@ impl<S: Snapshot> SnapshotStore<S> {
         bypass_locks: TsSet,
         access_locks: TsSet,
         check_has_newer_ts_data: bool,
+        range_cache_snap: bool,
     ) -> Self {
         SnapshotStore {
             snapshot,
@@ -443,6 +447,7 @@ impl<S: Snapshot> SnapshotStore<S> {
             check_has_newer_ts_data,
 
             point_getter_cache: None,
+            range_cache_snap,
         }
     }
 

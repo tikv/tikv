@@ -48,6 +48,9 @@ where
     EK: KvEngine,
     EC: RangeCacheEngine,
 {
+    fn range_cache_engine_snap(&self) -> bool {
+        self.region_cache_snapshot_available()
+    }
 }
 
 impl<EK, EC> Debug for HybridEngineSnapshot<EK, EC>
