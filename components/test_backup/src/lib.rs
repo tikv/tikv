@@ -263,7 +263,7 @@ impl TestSuite {
         let mut keys = Vec::with_capacity(1024);
         // Write 50 times to include more different ts.
         let batch_size = (key_count / 50).clamp(1, 1024);
-        for _ in 0..versions {
+        for version in 0..versions {
             let mut j = 0;
             while j < key_count {
                 let start_ts = self.alloc_ts();
@@ -271,7 +271,10 @@ impl TestSuite {
                 batch.clear();
                 keys.clear();
                 for i in j..limit {
-                    let (k, v) = (format!("key_{}", i), format!("value_{}", i));
+                    let (k, v) = (
+                        format!("key_{}", i),
+                        format!("value_{}_{}pad{}", i, version, "0".repeat(1024)),
+                    );
                     keys.push(k.clone().into_bytes());
                     // Prewrite
                     let mut mutation = Mutation::default();
