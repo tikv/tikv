@@ -351,12 +351,12 @@ impl RangeStatsManager {
         self.num_regions.load(Ordering::Relaxed)
     }
 
-    pub fn collect_candidates_for_eviction(&self, ranges_out: &mut Vec<(CacheRange, usize)>) {
+    pub fn collect_candidates_for_eviction(&self, ranges_out: &mut Vec<(CacheRange, u64)>) {
         let all_regions = self.info_provider.get_top_regions(0).unwrap();
         ranges_out.extend(
             all_regions
                 .iter()
-                .map(|r| (CacheRange::from_region(r), 45_000_000usize)),
+                .map(|(r, s)| (CacheRange::from_region(r), *s)),
         );
     }
 
@@ -414,7 +414,7 @@ impl RangeStatsManager {
             .get_top_regions(self.num_regions())
             .unwrap()
             .iter()
-            .map(|r| (r.id, r.clone()))
+            .map(|(r, _)| (r.id, r.clone()))
             .collect::<BTreeMap<_, _>>();
 
         let prev_top_regions = {
@@ -648,7 +648,7 @@ impl BackgroundRunnerCore {
             return;
         }
         let mut remaining = to_shrink_by.unwrap();
-        let mut ranges_to_evict = Vec::<(CacheRange, usize)>::with_capacity(256);
+        let mut ranges_to_evict = Vec::<(CacheRange, u64)>::with_capacity(256);
         range_stats_manager.collect_candidates_for_eviction(&mut ranges_to_evict);
         let ranges_to_evict = ranges_to_evict
             .iter()
@@ -660,7 +660,9 @@ impl BackgroundRunnerCore {
             }
             if self.engine.write().mut_range_manager().evict_range(range) {
                 info!("evict on soft limit reached"; "range" => ?&range, "approx_size" => approx_size, "remaining" => remaining);
-                remaining = remaining.checked_sub(*approx_size).unwrap_or_default();
+                remaining = remaining
+                    .checked_sub(*approx_size as usize)
+                    .unwrap_or_default();
                 range_stats_manager.handle_range_evicted(range);
             }
         }

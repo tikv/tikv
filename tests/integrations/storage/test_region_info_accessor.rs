@@ -211,7 +211,7 @@ fn test_region_collection_get_top_regions() {
             .get_top_regions(10)
             .unwrap()
             .into_iter()
-            .map(|r| r.get_id())
+            .map(|(r, _)| r.get_id())
             .collect::<Vec<_>>();
 
         for region_id in &result {
@@ -228,7 +228,7 @@ fn test_region_collection_get_top_regions() {
             .get_top_regions(0)
             .unwrap()
             .into_iter()
-            .map(|r| r.get_id())
+            .map(|(r, _)| r.get_id())
             .collect::<Vec<_>>();
         all_results.extend(result.iter());
     }
