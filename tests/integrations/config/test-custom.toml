@@ -354,6 +354,7 @@ blob-run-mode = "fallback"
 level-merge = true
 range-merge = true
 max-sorted-runs = 100
+enable-punch-hole-gc = true
 
 [rocksdb.writecf]
 block-size = "12KB"

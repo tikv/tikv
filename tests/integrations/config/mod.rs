@@ -711,6 +711,7 @@ fn test_serde_custom_tikv_config() {
         },
         titan: titan_db_config,
     };
+    value.rocksdb.defaultcf.titan.enable_punch_hole_gc = true;
     value.raft_engine.enable = false;
     let raft_engine_config = value.raft_engine.mut_config();
     raft_engine_config.dir = "test-dir".to_owned();
