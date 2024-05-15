@@ -841,7 +841,8 @@ impl AutoSplitController {
             if recorder.is_ready() {
                 let key = recorder.collect(&self.cfg);
                 if !key.is_empty() {
-                    info!("load base split region";
+                    info!(
+                        "load base split region";
                         "region_id" => region_id,
                         "qps" => qps,
                         "byte" => byte,
@@ -855,7 +856,9 @@ impl AutoSplitController {
                     ));
                     LOAD_BASE_SPLIT_EVENT.ready_to_split.inc();
                     if recorder.hottest_key_range.is_some() {
-                        info!("load base split region";
+                        // debug message
+                        info!(
+                            "DEBUG : load based split : expensive range";
                             "hot start_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().start_key),
                             "hot end_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().end_key),  
                         );
