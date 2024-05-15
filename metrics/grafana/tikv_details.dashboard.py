@@ -6057,6 +6057,18 @@ def Titan() -> RowPanel:
                         ),
                         legend_format="obsolete blob file size",
                     ),
+                    target(
+                        expr=expr_operator(
+                            4096,
+                            "*",
+                            expr_sum(
+                                "tikv_engine_titandb_num_hole_punchable_blocks",
+                                label_selectors=['db="$titan_db"'],
+                                by_labels=[],  # override default by instance.
+                            ),
+                        ),
+                        legend_format="hole punchable size",
+                    ),
                 ],
             ),
         ]

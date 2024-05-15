@@ -32554,6 +32554,21 @@
               "refId": "",
               "step": 10,
               "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "(4096 * sum((\n    tikv_engine_titandb_num_hole_punchable_blocks\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$titan_db\"}\n    \n))  )",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "hole punchable size",
+              "metric": "",
+              "query": "(4096 * sum((\n    tikv_engine_titandb_num_hole_punchable_blocks\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$titan_db\"}\n    \n))  )",
+              "refId": "",
+              "step": 10,
+              "target": ""
             }
           ],
           "thresholds": [],
