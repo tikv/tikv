@@ -164,7 +164,7 @@ pub enum RegionInfoQuery {
     },
     GetTopRegions {
         count: usize,
-        callback: Callback<Vec<Region>>,
+        callback: Callback<TopRegions>,
     },
     /// Gets all contents from the collection. Only used for testing.
     DebugDump(mpsc::Sender<(RegionsMap, RegionRangesMap)>),
@@ -573,7 +573,7 @@ impl RegionCollector {
     /// region_activity. This is acceptable, as region_activity is populated
     /// by heartbeats for this node's region, so N cannot be greater than
     /// approximately `300_000``.
-    pub fn handle_get_top_regions(&mut self, count: usize, callback: Callback<Vec<Region>>) {
+    pub fn handle_get_top_regions(&mut self, count: usize, callback: Callback<TopRegions>) {
         let compare_fn = |a: &RegionActivity, b: &RegionActivity| {
             let a = a.region_stat.read_keys + a.region_stat.written_keys;
             let b = b.region_stat.read_keys + b.region_stat.written_keys;
@@ -583,16 +583,24 @@ impl RegionCollector {
             self.regions
                 .values()
                 .filter(|ri| ri.role == StateRole::Leader)
-                .map(|ri| ri.region.clone())
-                .sorted_by(|a, b| {
-                    let a = self.region_activity.get(&a.get_id());
-                    let b = self.region_activity.get(&b.get_id());
-                    match (a, b) {
-                        (None, None) => Ordering::Equal,
-                        (None, Some(_)) => Ordering::Greater,
-                        (Some(_), None) => Ordering::Less,
-                        (Some(a), Some(b)) => compare_fn(a, b),
-                    }
+                .map(|ri| {
+                    (
+                        ri.region.clone(),
+                        self.region_activity.get(&ri.region.get_id()),
+                    )
+                })
+                .sorted_by(|(_, a), (_, b)| match (a, b) {
+                    (None, None) => Ordering::Equal,
+                    (None, Some(_)) => Ordering::Greater,
+                    (Some(_), None) => Ordering::Less,
+                    (Some(a), Some(b)) => compare_fn(a, b),
+                })
+                .map(|(r, ra)| {
+                    (
+                        r,
+                        ra.map(|ra| ra.region_stat.approximate_size)
+                            .unwrap_or_default(),
+                    )
                 })
                 .collect::<Vec<_>>()
         } else {
@@ -601,7 +609,11 @@ impl RegionCollector {
                 .iter()
                 .sorted_by(|(_, activity_0), (_, activity_1)| compare_fn(activity_0, activity_1))
                 .take(count)
-                .flat_map(|(id, _)| self.regions.get(id).map(|ri| ri.region.clone()))
+                .flat_map(|(id, ac)| {
+                    self.regions
+                        .get(id)
+                        .map(|ri| (ri.region.clone(), ac.region_stat.approximate_size))
+                })
                 .collect::<Vec<_>>()
         };
         callback(top_regions)
@@ -789,6 +801,9 @@ impl RegionInfoAccessor {
     }
 }
 
+/// Top regions result: region and its approximate size.
+pub type TopRegions = Vec<(Region, u64)>;
+
 pub trait RegionInfoProvider: Send + Sync {
     /// Get a iterator of regions that contains `from` or have keys larger than
     /// `from`, and invoke the callback to process the result.
@@ -811,7 +826,7 @@ pub trait RegionInfoProvider: Send + Sync {
     fn get_regions_in_range(&self, _start_key: &[u8], _end_key: &[u8]) -> Result<Vec<Region>> {
         unimplemented!()
     }
-    fn get_top_regions(&self, _count: usize) -> Result<Vec<Region>> {
+    fn get_top_regions(&self, _count: usize) -> Result<TopRegions> {
         unimplemented!()
     }
 }
@@ -886,7 +901,7 @@ impl RegionInfoProvider for RegionInfoAccessor {
                 })
             })
     }
-    fn get_top_regions(&self, count: usize) -> Result<Vec<Region>> {
+    fn get_top_regions(&self, count: usize) -> Result<TopRegions> {
         let (tx, rx) = mpsc::channel();
         let msg = RegionInfoQuery::GetTopRegions {
             count,
@@ -987,7 +1002,7 @@ impl RegionInfoProvider for MockRegionInfoProvider {
             .ok_or(box_err!("Not found region containing {:?}", key))
     }
 
-    fn get_top_regions(&self, _count: usize) -> Result<Vec<Region>> {
+    fn get_top_regions(&self, _count: usize) -> Result<TopRegions> {
         let mut regions = Vec::new();
         let (tx, rx) = mpsc::channel();
 
@@ -995,7 +1010,7 @@ impl RegionInfoProvider for MockRegionInfoProvider {
             b"",
             Box::new(move |iter| {
                 for region_info in iter {
-                    tx.send(region_info.region.clone()).unwrap();
+                    tx.send((region_info.region.clone(), 0)).unwrap();
                 }
             }),
         )?;
