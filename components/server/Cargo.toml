@@ -54,7 +54,7 @@ file_system = { workspace = true }
 fs2 = "0.4"
 futures = "0.3"
 grpcio = { workspace = true }
-grpcio-health = { version = "0.10", default-features = false, features = ["protobuf-codec"] }
+grpcio-health = { workspace = true, default-features = false, features = ["protobuf-codec"] }
 hex = "0.4"
 keys = { workspace = true }
 kvproto = { workspace = true }

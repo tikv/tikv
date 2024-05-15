@@ -393,6 +393,13 @@ lazy_static! {
         &["type", "store_id"]
     )
     .unwrap();
+    pub static ref RAFT_CLIENT_WAIT_CONN_READY_DURATION_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
+        "tikv_server_raft_client_wait_ready_duration",
+        "Duration of wait raft client connection ready",
+        &["to"],
+        exponential_buckets(5e-5, 2.0, 22).unwrap() // 50us ~ 104s
+    )
+    .unwrap();
     pub static ref RAFT_MESSAGE_FLUSH_COUNTER: RaftMessageFlushCounterVec =
         register_static_int_counter_vec!(
             RaftMessageFlushCounterVec,
@@ -438,6 +445,18 @@ lazy_static! {
         "tikv_snapshot_limit_transport_bytes",
         "Total snapshot limit transport used",
         &["type"],
+    )
+    .unwrap();
+    pub static ref RAFT_CLIENT_EVENT_COUNTER: IntCounterVec = register_int_counter_vec!(
+        "tikv_raft_client_event_total",
+        "Total number of raft client events",
+        &["name", "addr"],
+    )
+    .unwrap();
+    pub static ref RAFT_CLIENT_EVENT_TIME_GAUGE: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_raft_client_event_time",
+        "The epoch time (in ms) of the latest raft client event",
+        &["name", "addr"]
     )
     .unwrap();
 }
