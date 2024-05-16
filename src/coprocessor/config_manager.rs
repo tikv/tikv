@@ -7,8 +7,6 @@ use std::sync::Arc;
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use tikv_util::{config::ReadableSize, memory::MemoryQuota};
 
-use super::metrics::COPR_MEMORY_QUOTA;
-
 pub(super) struct CopConfigManager {
     memory_quota: Arc<MemoryQuota>,
 }
@@ -25,7 +23,6 @@ impl ConfigManager for CopConfigManager {
             if quota != ConfigValue::None {
                 let cap: ReadableSize = quota.into();
                 self.memory_quota.set_capacity(cap.0 as _);
-                COPR_MEMORY_QUOTA.capacity.set(cap.0 as _);
             }
         }
         Ok(())

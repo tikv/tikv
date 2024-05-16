@@ -207,10 +207,6 @@ impl OwnedAllocated {
         Ok(())
     }
 
-    pub fn allocated(&self) -> usize {
-        self.allocated
-    }
-
     pub fn source(&self) -> &MemoryQuota {
         &self.from
     }

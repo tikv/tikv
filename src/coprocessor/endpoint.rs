@@ -118,7 +118,7 @@ impl<E: Engine> Endpoint<E> {
             default
         });
         let memory_quota = Arc::new(MemoryQuota::new(memory_quota_cap.0 as _));
-        COPR_MEMORY_QUOTA.capacity.set(memory_quota.capacity() as _);
+        register_coprocessor_memory_quota_metrics(memory_quota.clone());
         Self {
             read_pool,
             semaphore,
@@ -884,15 +884,7 @@ impl<E: Engine> Endpoint<E> {
         allocated_bytes += mem::size_of_val(&future);
         let mut owned_quota = OwnedAllocated::new(self.memory_quota.clone());
         owned_quota.alloc(allocated_bytes)?;
-        COPR_MEMORY_QUOTA
-            .in_use
-            .set(owned_quota.source().in_use() as _);
         let fut = future.map(move |_| {
-            let in_use = owned_quota.source().in_use();
-            let allocated = owned_quota.allocated();
-            COPR_MEMORY_QUOTA
-                .in_use
-                .set(in_use.saturating_sub(allocated) as _);
             // Release quota after handle completed.
             drop(owned_quota);
         });

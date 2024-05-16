@@ -8,6 +8,7 @@ use pd_client::BucketMeta;
 use prometheus::*;
 use prometheus_static_metric::*;
 use raftstore::store::{util::build_key_range, ReadStats};
+use tikv_util::memory::MemoryQuota;
 
 use crate::{
     server::metrics::{GcKeysCF, GcKeysDetail},
@@ -185,15 +186,6 @@ lazy_static! {
         .unwrap();
     pub static ref MEM_LOCK_CHECK_HISTOGRAM_VEC_STATIC: MemLockCheckHistogramVec =
         auto_flush_from!(MEM_LOCK_CHECK_HISTOGRAM_VEC, MemLockCheckHistogramVec);
-
-    pub static ref COPR_MEMORY_QUOTA: MemoryQuotaGauge =
-        register_static_int_gauge_vec!(
-            MemoryQuotaGauge,
-            "tikv_coprocessor_memory_quota",
-            "Statistics of in_use and capacity of coprocessor memory quota",
-            &["type"],
-        )
-        .unwrap();
 }
 
 make_static_metric! {
@@ -339,4 +331,36 @@ pub fn tls_collect_query(
         m.local_read_stats
             .add_query_num(region_id, peer, key_range, QueryKind::Coprocessor);
     });
+}
+
+pub fn register_coprocessor_memory_quota_metrics(source: Arc<MemoryQuota>) {
+    struct MemoryQuotaCollector {
+        gauges: IntGaugeVec,
+        source: Arc<MemoryQuota>,
+    }
+    impl prometheus::core::Collector for MemoryQuotaCollector {
+        fn desc(&self) -> Vec<&prometheus::core::Desc> {
+            self.gauges.desc()
+        }
+        fn collect(&self) -> Vec<prometheus::proto::MetricFamily> {
+            self.gauges
+                .with_label_values(&["capacity"])
+                .set(self.source.capacity() as _);
+            self.gauges
+                .with_label_values(&["in_use"])
+                .set(self.source.in_use() as _);
+            self.gauges.collect()
+        }
+    }
+    let gauges = IntGaugeVec::new(
+        Opts::new(
+            "tikv_coprocessor_memory_quota",
+            "Statistics of in_use and capacity of coprocessor memory quota",
+        ),
+        &["type"],
+    )
+    .unwrap();
+    prometheus::default_registry()
+        .register(Box::new(MemoryQuotaCollector { gauges, source }))
+        .unwrap();
 }
