@@ -353,7 +353,9 @@ pub fn register_coprocessor_memory_quota_metrics(source: Arc<MemoryQuota>) {
         &["type"],
     )
     .unwrap();
-    prometheus::default_registry()
-        .register(Box::new(MemoryQuotaCollector { gauges, source }))
-        .unwrap();
+    if let Err(e) =
+        prometheus::default_registry().register(Box::new(MemoryQuotaCollector { gauges, source }))
+    {
+        warn!("register memory quota metrics failed"; "error" => ?e);
+    }
 }
