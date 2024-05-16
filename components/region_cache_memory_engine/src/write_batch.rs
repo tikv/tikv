@@ -369,6 +369,7 @@ impl RangeCacheWriteBatchEntry {
         info!(
             "write to memory";
             "entry" => ?self,
+            "seqno" => seq,
         );
 
         Ok(())

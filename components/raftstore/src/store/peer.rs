@@ -4966,7 +4966,7 @@ where
         }
 
         let snap_ctx = if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data())
-            && !req.get_header().get_replica_read()
+        // && !req.get_header().get_replica_read()
         {
             Some(SnapshotContext {
                 range: Some(CacheRange::from_region(&region)),

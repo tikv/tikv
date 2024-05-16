@@ -9,7 +9,7 @@ use tikv_kv::SEEK_BOUND;
 use txn_types::{Key, LastChange, Lock, LockType, TimeStamp, TsSet, Value, WriteRef, WriteType};
 
 use crate::storage::{
-    kv::{Cursor, CursorBuilder, ScanMode, Snapshot, Statistics},
+    kv::{Cursor, CursorBuilder, ScanMode, Snapshot, SnapshotExt, Statistics},
     mvcc::{default_not_found_error, ErrorInner::WriteConflict, NewerTsCheckState, Result},
     need_check_locks,
 };
@@ -201,7 +201,7 @@ impl<S: Snapshot> PointGetter<S> {
     fn load_and_check_lock(&mut self, user_key: &Key) -> Result<Option<Lock>> {
         self.statistics.lock.get += 1;
         let lock_value = self.snapshot.get_cf(CF_LOCK, user_key)?;
-
+        let seqno = self.snapshot.sequence_number();
         if let Some(ref lock_value) = lock_value {
             let lock = Lock::parse(lock_value)?;
             if self.met_newer_ts_data == NewerTsCheckState::NotMetYet {
@@ -222,6 +222,7 @@ impl<S: Snapshot> PointGetter<S> {
                         "access" => ?self.access_locks,
                         "key" => %user_key,
                         "lock_ts" => lock.ts,
+                        "seqno" => seqno,
                     );
                     return Ok(Some(lock));
                 }

@@ -574,6 +574,7 @@ mod tests {
             construct_key, construct_user_key, construct_value, decode_key, encode_key,
             encode_seek_key, InternalBytes, ValueType,
         },
+        memory_controller::MemoryController,
         RangeCacheEngineConfig, RangeCacheMemoryEngine,
     };
 
@@ -1796,5 +1797,30 @@ mod tests {
         }
         assert_eq!(8, collector.internal_delete_skipped_count());
         assert_eq!(10, collector.internal_key_skipped_count());
+    }
+
+    #[test]
+    fn test_xxxx() {
+        let sl_engine = SkiplistEngine::new();
+        let mem_ctl = Arc::new(MemoryController::new(Arc::default(), sl_engine.clone()));
+        let handle = sl_engine.cf_handle("lock");
+        let user_key = b"7A7480000000000000FF725F728000000000FF0000060000000000FA";
+        let mut k = encode_key(user_key, 1000, ValueType::Value);
+        k.set_memory_controller(mem_ctl.clone());
+        let mut v = InternalBytes::from_vec(b"val".to_vec());
+        v.set_memory_controller(mem_ctl.clone());
+        let guard = &epoch::pin();
+        handle.insert(k, v, guard);
+        let mut k = encode_key(user_key, 1001, ValueType::Deletion);
+        k.set_memory_controller(mem_ctl.clone());
+        let mut v = InternalBytes::from_vec(b"".to_vec());
+        v.set_memory_controller(mem_ctl.clone());
+        handle.insert(k, v, guard);
+
+        let mut iter = handle.iterator();
+        let seek_key = encode_seek_key(user_key, 1001);
+        iter.seek(&seek_key, guard);
+        println!("{:?}", iter.key());
+        println!("{:?}", iter.value());
     }
 }

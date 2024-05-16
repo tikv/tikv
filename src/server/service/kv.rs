@@ -1510,6 +1510,11 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: GetRequest,
 ) -> impl Future<Output = ServerResult<GetResponse>> {
+    info!(
+        "future_get";
+        "region_id" => req.get_context().region_id,
+        "start_ts" => req.get_version(),
+    );
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
         req.get_context(),
         RequestType::KvGet,
