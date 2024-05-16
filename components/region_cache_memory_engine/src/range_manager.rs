@@ -302,6 +302,19 @@ impl RangeManager {
             .find(|&r| r.contains_range(evict_range))
             .cloned()
         else {
+            if let Some(range_key) = self
+                .ranges
+                .keys()
+                .find(|&r| r.overlaps(evict_range) || evict_range.contains_range(r))
+                .cloned()
+            {
+                info!(
+                    "evict range and overlap";
+                    "evicted_range" => ?evict_range,
+                    "overlapped_range" => ?range_key,
+                );
+                panic!();
+            }
             info!(
                 "evict a range that is not cached";
                 "range" => ?evict_range,
@@ -311,8 +324,7 @@ impl RangeManager {
 
         info!(
             "evict range in cache range engine";
-            "range_start" => log_wrappers::Value(&evict_range.start),
-            "range_end" => log_wrappers::Value(&evict_range.end),
+            "range" => ?evict_range,
         );
 
         let meta = self.ranges.remove(&range_key).unwrap();
@@ -321,10 +333,20 @@ impl RangeManager {
 
         if let Some(left_range) = left_range {
             let left_meta = RangeMeta::derive_from(self.id_allocator.allocate_id(), &meta);
+            info!(
+                "Loading range due to eviction";
+                "original_range" => ?evict_range,
+                "range" => ?left_range,
+            );
             self.ranges.insert(left_range, left_meta);
         }
 
         if let Some(right_range) = right_range {
+            info!(
+                "Loading range due to eviction";
+                "original_range" => ?evict_range,
+                "range" => ?right_range,
+            );
             let right_meta = RangeMeta::derive_from(self.id_allocator.allocate_id(), &meta);
             self.ranges.insert(right_range, right_meta);
         }

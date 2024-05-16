@@ -177,6 +177,12 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     self.cfg.lower_bound.as_ref().unwrap(),
                     &mut self.statistics.write,
                 )?;
+                info!(
+                    "on read_next";
+                    "lower_bound" => log_wrappers::Value(self.cfg.lower_bound.as_ref().unwrap().as_encoded()),
+                    "scanner_ts" => self.cfg.ts,
+                    "seek_valid" => self.cursors.write.valid().unwrap(),
+                );
                 if let Some(lock_cursor) = self.cursors.lock.as_mut() {
                     lock_cursor.seek(
                         self.cfg.lower_bound.as_ref().unwrap(),

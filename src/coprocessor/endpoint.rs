@@ -441,7 +441,7 @@ impl<E: Engine> Endpoint<E> {
             err.set_bucket_version_not_match(bucket_not_match);
             return Err(Error::Region(err));
         }
-        info!("cop handle_unary_request_impl snapshot got"; "req_ctx" => ?tracker.req_ctx);
+        info!("cop handle_unary_request_impl snapshot got"; "req_ctx" => ?tracker.req_ctx, "range_cache_snap" => snapshot.ext().range_cache_engine_snap());
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
         tracker.req_ctx.deadline.check()?;

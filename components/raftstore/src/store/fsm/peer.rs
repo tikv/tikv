@@ -4121,6 +4121,10 @@ where
                     // We only care remove itself now.
                     if self.store_id() == store_id {
                         let range = CacheRange::from_region(self.fsm.peer.region());
+                        info!(
+                            "evict range due to remove node";
+                            "range" => ?range,
+                        );
                         self.ctx.engines.kv.evict_range(range);
                         if self.fsm.peer.peer_id() == peer_id {
                             remove_self = true;

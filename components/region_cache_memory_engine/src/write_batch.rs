@@ -150,6 +150,10 @@ impl RangeCacheWriteBatch {
         let mut ranges = vec![];
         let range_manager = core.mut_range_manager();
         for r in std::mem::take(&mut self.ranges_to_evict) {
+            info!(
+                "evict range due to oom";
+                "range" => ?r,
+            );
             if range_manager.contains_range(&r) && range_manager.evict_range(&r) {
                 ranges.push(r);
                 continue;

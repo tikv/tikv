@@ -460,7 +460,12 @@ where
         let mut region_state = self.region_state(region_id)?;
         let region = region_state.get_region().clone();
 
-        self.engine.evict_range(CacheRange::from_region(&region));
+        let range = CacheRange::from_region(&region);
+        info!(
+            "evict range due to apply snap";
+            "range" => ?range,
+        );
+        self.engine.evict_range(range);
 
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
