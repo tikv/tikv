@@ -204,6 +204,7 @@ impl BgWorkManager {
     pub fn new(
         core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
         gc_interval: Duration,
+        load_evict_interval: Duration,
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
@@ -213,7 +214,8 @@ impl BgWorkManager {
 
         let scheduler_clone = scheduler.clone();
 
-        let (handle, tx) = BgWorkManager::start_tick(scheduler_clone, gc_interval);
+        let (handle, tx) =
+            BgWorkManager::start_tick(scheduler_clone, gc_interval, load_evict_interval);
 
         Self {
             worker,
@@ -242,11 +244,12 @@ impl BgWorkManager {
     fn start_tick(
         scheduler: Scheduler<BackgroundTask>,
         gc_interval: Duration,
+        load_evict_interval: Duration,
     ) -> (JoinHandle<()>, Sender<bool>) {
         let (tx, rx) = bounded(0);
         let h = std::thread::spawn(move || {
             let gc_ticker = tick(gc_interval);
-            let load_evict_ticker = tick(gc_interval * 2); // TODO (afeinberg): Use a real value.
+            let load_evict_ticker = tick(load_evict_interval); // TODO (afeinberg): Use a real value.
             loop {
                 select! {
                     recv(gc_ticker) -> _ => {
