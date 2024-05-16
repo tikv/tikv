@@ -686,7 +686,6 @@ impl AutoSplitController {
         let mut region_key_range_cpu_time_map = HashMap::new();
         cpu_stats_vec.iter().for_each(|cpu_stats| {
             cpu_stats.records.iter().for_each(|(tag, record)| {
-
                 // Calculate the Region ID -> CPU Time.
                 region_cpu_map
                     .entry(tag.region_id)
@@ -860,7 +859,7 @@ impl AutoSplitController {
                         info!(
                             "DEBUG : load based split : expensive range";
                             "hot start_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().start_key),
-                            "hot end_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().end_key),  
+                            "hot end_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().end_key),
                         );
                     }
                     self.recorders.remove(&region_id);
