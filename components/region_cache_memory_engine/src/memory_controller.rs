@@ -126,6 +126,7 @@ mod tests {
         let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig {
             enabled: true,
             gc_interval: Default::default(),
+            load_evict_interval: Default::default(),
             soft_limit_threshold: Some(ReadableSize(300)),
             hard_limit_threshold: Some(ReadableSize(500)),
         }));

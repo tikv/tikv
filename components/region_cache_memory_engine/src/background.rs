@@ -216,6 +216,7 @@ impl BgWorkManager {
         core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
         pd_client: Arc<dyn PdClient>,
         gc_interval: Duration,
+        load_evict_interval: Duration,
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
@@ -223,7 +224,8 @@ impl BgWorkManager {
         let runner = BackgroundRunner::new(core.clone(), memory_controller, region_info_provider);
         let scheduler = worker.start_with_timer("range-cache-engine-background", runner);
 
-        let (h, tx) = BgWorkManager::start_tick(scheduler.clone(), pd_client, gc_interval);
+        let (h, tx) =
+            BgWorkManager::start_tick(scheduler.clone(), pd_client, gc_interval, load_evict_interval);
 
         Self {
             worker,
@@ -253,13 +255,14 @@ impl BgWorkManager {
         scheduler: Scheduler<BackgroundTask>,
         pd_client: Arc<dyn PdClient>,
         gc_interval: Duration,
+        load_evict_interval: Duration,
     ) -> (JoinHandle<()>, Sender<bool>) {
         let (tx, rx) = bounded(0);
         // TODO: Instead of spawning a new thread, we should run this task
         //       in a shared background thread.
         let h = std::thread::spawn(move || {
             let gc_ticker = tick(gc_interval);
-            let load_evict_ticker = tick(gc_interval * 2); // TODO (afeinberg): Use a real value.
+            let load_evict_ticker = tick(load_evict_interval); // TODO (afeinberg): Use a real value.
             // 5 seconds should be long enough for getting a TSO from PD.
             let tso_timeout = std::cmp::min(gc_interval, Duration::from_secs(5));
             'LOOP: loop {

@@ -297,6 +297,7 @@ impl RangeCacheMemoryEngine {
             core.clone(),
             pd_client,
             config.value().gc_interval.0,
+            config.value().load_evict_interval.0,
             memory_controller.clone(),
             region_info_provider,
         ));
