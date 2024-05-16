@@ -29,7 +29,7 @@ use crate::{
     keys::{decode_key, encode_key, encoding_for_filter, InternalBytes, InternalKey, ValueType},
     memory_controller::{MemoryController, MemoryUsage},
     metrics::{
-        GC_FILTERED_STATIC, RANGE_CACHE_MEMORY_USAGE, RANGE_GC_TIME_HISTOGRAM,
+        GC_FILTERED_STATIC, RANGE_CACHE_COUNT, RANGE_CACHE_MEMORY_USAGE, RANGE_GC_TIME_HISTOGRAM,
         RANGE_LOAD_TIME_HISTOGRAM,
     },
     range_manager::LoadFailedReason,
@@ -679,10 +679,29 @@ impl RunnableWithTimer for BackgroundRunner {
     fn on_timeout(&mut self) {
         let mem_usage = self.core.memory_controller.mem_usage();
         RANGE_CACHE_MEMORY_USAGE.set(mem_usage as i64);
+
+        let core = self.core.engine.read();
+        let pending = core.range_manager.pending_ranges.len();
+        let cached = core.range_manager.ranges().len();
+        let loading = core.range_manager.pending_ranges_loading_data.len();
+        let evictions = core.range_manager.get_and_reset_range_evictions();
+        drop(core);
+        RANGE_CACHE_COUNT
+            .with_label_values(&["pending_range"])
+            .set(pending as i64);
+        RANGE_CACHE_COUNT
+            .with_label_values(&["cached_range"])
+            .set(cached as i64);
+        RANGE_CACHE_COUNT
+            .with_label_values(&["loading_range"])
+            .set(loading as i64);
+        RANGE_CACHE_COUNT
+            .with_label_values(&["range_evictions"])
+            .set(evictions as i64);
     }
 
     fn get_interval(&self) -> Duration {
-        Duration::from_secs(10)
+        Duration::from_secs(1)
     }
 }
 
@@ -728,14 +747,20 @@ struct Filter {
 
     // When deleting some keys, the latest one should be deleted at last to avoid the older
     // version appears.
-    cached_delete_key: Option<Vec<u8>>,
+    cached_mvcc_delete_key: Option<Vec<u8>>,
+    cached_skiplist_delete_key: Option<Vec<u8>>,
 
     metrics: FilterMetrics,
 }
 
 impl Drop for Filter {
     fn drop(&mut self) {
-        if let Some(cached_delete_key) = self.cached_delete_key.take() {
+        if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
+            let guard = &epoch::pin();
+            self.write_cf_handle
+                .remove(&InternalBytes::from_vec(cached_delete_key), guard);
+        }
+        if let Some(cached_delete_key) = self.cached_skiplist_delete_key.take() {
             let guard = &epoch::pin();
             self.write_cf_handle
                 .remove(&InternalBytes::from_vec(cached_delete_key), guard);
@@ -754,7 +779,8 @@ impl Filter {
             default_cf_handle,
             write_cf_handle,
             mvcc_key_prefix: vec![],
-            cached_delete_key: None,
+            cached_mvcc_delete_key: None,
+            cached_skiplist_delete_key: None,
             remove_older: false,
             metrics: FilterMetrics::default(),
         }
@@ -762,11 +788,50 @@ impl Filter {
 
     fn filter(&mut self, key: &Bytes, value: &Bytes) -> Result<(), String> {
         self.metrics.total += 1;
-        let InternalKey { user_key, .. } = decode_key(key);
+        let InternalKey {
+            user_key, v_type, ..
+        } = decode_key(key);
 
         let (mvcc_key_prefix, commit_ts) = split_ts(user_key)?;
         if commit_ts > self.safe_point {
             return Ok(());
+        }
+
+        // Just like what rocksdb compaction filter does, we do not handle internal
+        // keys (representing different MVCC versions of the same user key) that have
+        // been marked as tombstones. However, these keys need to be deleted. Since they
+        // are below the safe point, we can safely delete them directly now.
+        // For each user key, we cache the first ValueType::Deletion and delete all the
+        // older internal keys of the same user keys. The cached ValueType::Delete is
+        // deleted at last to avoid these older keys visible.
+        if v_type == ValueType::Deletion {
+            if let Some(cache_skiplist_delete_key) = self.cached_skiplist_delete_key.take() {
+                // Reaching here in two cases:
+                // 1. There are two ValueType::Deletion in the same user key.
+                // 2. Two consecutive ValueType::Deletion of different user keys.
+                // In either cases, we can delete the previous one directly.
+                let guard = &epoch::pin();
+                self.write_cf_handle
+                    .remove(&InternalBytes::from_vec(cache_skiplist_delete_key), guard)
+            }
+            self.cached_skiplist_delete_key = Some(key.to_vec());
+            return Ok(());
+        } else if let Some(ref cache_skiplist_delete_key) = self.cached_skiplist_delete_key {
+            let InternalKey {
+                user_key: cache_skiplist_delete_user_key,
+                ..
+            } = decode_key(cache_skiplist_delete_key);
+            let guard = &epoch::pin();
+            if cache_skiplist_delete_user_key == user_key {
+                self.write_cf_handle
+                    .remove(&InternalBytes::from_bytes(key.clone()), guard);
+                return Ok(());
+            } else {
+                self.write_cf_handle.remove(
+                    &InternalBytes::from_vec(self.cached_skiplist_delete_key.take().unwrap()),
+                    guard,
+                )
+            }
         }
 
         let guard = &epoch::pin();
@@ -776,7 +841,7 @@ impl Filter {
             self.mvcc_key_prefix.clear();
             self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
             self.remove_older = false;
-            if let Some(cached_delete_key) = self.cached_delete_key.take() {
+            if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
                 self.write_cf_handle
                     .remove(&InternalBytes::from_vec(cached_delete_key), guard);
             }
@@ -798,7 +863,7 @@ impl Filter {
                     // The first mvcc type below safe point is the mvcc delete. We should delay to
                     // remove it until all the followings with the same user key have been deleted
                     // to avoid older version apper.
-                    self.cached_delete_key = Some(key.to_vec());
+                    self.cached_mvcc_delete_key = Some(key.to_vec());
                 }
             }
         }
@@ -870,7 +935,7 @@ pub mod tests {
             tests::{add_region_label_rule, new_region_label_rule, new_test_server_and_client},
         },
         write_batch::RangeCacheWriteBatchEntry,
-        RangeCacheEngineConfig, RangeCacheMemoryEngine,
+        RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
     };
 
     fn put_data(
@@ -1015,6 +1080,11 @@ pub mod tests {
         Arc::new(MemoryController::new(config, skip_engine))
     }
 
+    fn encode_raw_key_for_filter(key: &[u8], ts: TimeStamp) -> InternalBytes {
+        let key = Key::from_raw(key);
+        encoding_for_filter(key.as_encoded(), ts)
+    }
+
     #[test]
     fn test_filter() {
         let skiplist_engine = SkiplistEngine::new();
@@ -1123,34 +1193,120 @@ pub mod tests {
         assert_eq!(2, element_count(&write));
         assert_eq!(2, element_count(&default));
 
-        let encode_key = |key, ts| {
-            let key = Key::from_raw(key);
-            encoding_for_filter(key.as_encoded(), ts)
-        };
-
-        let key = encode_key(b"key1", TimeStamp::new(15));
+        let key = encode_raw_key_for_filter(b"key1", TimeStamp::new(15));
         assert!(key_exist(&write, &key, guard));
 
-        let key = encode_key(b"key2", TimeStamp::new(35));
+        let key = encode_raw_key_for_filter(b"key2", TimeStamp::new(35));
         assert!(key_exist(&write, &key, guard));
 
-        let key = encode_key(b"key3", TimeStamp::new(35));
+        let key = encode_raw_key_for_filter(b"key3", TimeStamp::new(35));
         assert!(!key_exist(&write, &key, guard));
 
-        let key = encode_key(b"key1", TimeStamp::new(10));
+        let key = encode_raw_key_for_filter(b"key1", TimeStamp::new(10));
         assert!(key_exist(&default, &key, guard));
 
-        let key = encode_key(b"key2", TimeStamp::new(30));
+        let key = encode_raw_key_for_filter(b"key2", TimeStamp::new(30));
         assert!(key_exist(&default, &key, guard));
 
-        let key = encode_key(b"key3", TimeStamp::new(30));
+        let key = encode_raw_key_for_filter(b"key3", TimeStamp::new(30));
         assert!(!key_exist(&default, &key, guard));
     }
 
     #[test]
+    fn test_filter_with_delete() {
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        )));
+        let memory_controller = engine.memory_controller();
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(range.clone());
+        let (write, default) = {
+            let skiplist_engine = engine.core().write().engine();
+            (
+                skiplist_engine.cf_handle(CF_WRITE),
+                skiplist_engine.cf_handle(CF_DEFAULT),
+            )
+        };
+
+        put_data(
+            b"key1",
+            b"value11",
+            10,
+            15,
+            10,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+
+        // Delete the above key
+        let guard = &epoch::pin();
+        let raw_write_k = Key::from_raw(b"key1")
+            .append_ts(TimeStamp::new(15))
+            .into_encoded();
+        let mut write_k = encode_key(&raw_write_k, 15, ValueType::Deletion);
+        write_k.set_memory_controller(memory_controller.clone());
+        let mut val = InternalBytes::from_vec(b"".to_vec());
+        val.set_memory_controller(memory_controller.clone());
+        write.insert(write_k, val, guard);
+
+        put_data(
+            b"key2",
+            b"value22",
+            20,
+            25,
+            14,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+
+        // Delete the above key
+        let raw_write_k = Key::from_raw(b"key2")
+            .append_ts(TimeStamp::new(25))
+            .into_encoded();
+        let mut write_k = encode_key(&raw_write_k, 15, ValueType::Deletion);
+        write_k.set_memory_controller(memory_controller.clone());
+        let mut val = InternalBytes::from_vec(b"".to_vec());
+        val.set_memory_controller(memory_controller.clone());
+        write.insert(write_k, val, guard);
+
+        put_data(
+            b"key2",
+            b"value23",
+            30,
+            35,
+            16,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        delete_data(b"key2", 40, 18, &write, memory_controller.clone());
+
+        let snap = engine.snapshot(range.clone(), u64::MAX, u64::MAX).unwrap();
+        let mut iter_opts = IterOptions::default();
+        iter_opts.set_lower_bound(&range.start, 0);
+        iter_opts.set_upper_bound(&range.end, 0);
+
+        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
+        worker.core.gc_range(&range, 40);
+
+        let mut iter = snap.iterator_opt("write", iter_opts).unwrap();
+        iter.seek_to_first().unwrap();
+        assert!(!iter.valid().unwrap());
+
+        let mut iter = write.iterator();
+        iter.seek_to_first(guard);
+        assert!(!iter.valid());
+    }
+
+    #[test]
     fn test_gc() {
-        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
-            RangeCacheEngineConfig::config_for_test(),
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let memory_controller = engine.memory_controller();
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -1236,8 +1392,8 @@ pub mod tests {
 
     #[test]
     fn test_snapshot_block_gc() {
-        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
-            RangeCacheEngineConfig::config_for_test(),
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let memory_controller = engine.memory_controller();
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -1349,7 +1505,9 @@ pub mod tests {
     fn test_gc_worker() {
         let mut config = RangeCacheEngineConfig::config_for_test();
         config.gc_interval = ReadableDuration(Duration::from_secs(1));
-        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(config)));
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+            VersionTrack::new(config),
+        )));
         let memory_controller = engine.memory_controller();
         let (write, default) = {
             let mut core = engine.core.write();
@@ -1438,8 +1596,8 @@ pub mod tests {
 
     #[test]
     fn test_background_worker_load() {
-        let mut engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
-            RangeCacheEngineConfig::config_for_test(),
+        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let path = Builder::new().prefix("test_load").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
@@ -1519,8 +1677,8 @@ pub mod tests {
 
     #[test]
     fn test_ranges_for_gc() {
-        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
-            RangeCacheEngineConfig::config_for_test(),
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let memory_controller = engine.memory_controller();
         let r1 = CacheRange::new(b"a".to_vec(), b"b".to_vec());
@@ -1548,8 +1706,8 @@ pub mod tests {
     // 4. Verify that only the labeled key range has been loaded.
     #[test]
     fn test_load_from_pd_hint_service() {
-        let mut engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
-            RangeCacheEngineConfig::config_for_test(),
+        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let path = Builder::new()
             .prefix("test_load_from_pd_hint_service")
@@ -1633,7 +1791,7 @@ pub mod tests {
         config.soft_limit_threshold = Some(ReadableSize(1000));
         config.hard_limit_threshold = Some(ReadableSize(1500));
         let config = Arc::new(VersionTrack::new(config));
-        let mut engine = RangeCacheMemoryEngine::new(config);
+        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(config));
         let path = Builder::new()
             .prefix("test_snapshot_load_reaching_limit")
             .tempdir()
@@ -1740,7 +1898,7 @@ pub mod tests {
         config.soft_limit_threshold = Some(ReadableSize(1000));
         config.hard_limit_threshold = Some(ReadableSize(1500));
         let config = Arc::new(VersionTrack::new(config));
-        let mut engine = RangeCacheMemoryEngine::new(config.clone());
+        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(config.clone()));
         let path = Builder::new()
             .prefix("test_snapshot_load_reaching_limit")
             .tempdir()

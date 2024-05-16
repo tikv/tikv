@@ -1123,7 +1123,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             let regions =
                 if hibernate_regions_compatible && gate.can_enable(FEATURE_RESOLVED_TS_STORE) {
                     CDC_RESOLVED_TS_ADVANCE_METHOD.set(1);
-                    leader_resolver.resolve(regions, min_ts).await
+                    leader_resolver.resolve(regions, min_ts, None).await
                 } else {
                     CDC_RESOLVED_TS_ADVANCE_METHOD.set(0);
                     resolve_by_raft(regions, min_ts, cdc_handle).await
@@ -1704,7 +1704,7 @@ mod tests {
             }
             let diff = cfg.diff(&updated_cfg);
 
-            assert_eq!(ep.sink_memory_quota.capacity(), usize::MAX);
+            assert_eq!(ep.sink_memory_quota.capacity(), isize::MAX as usize);
             ep.run(Task::ChangeConfig(diff));
             assert_eq!(ep.config.sink_memory_quota, ReadableSize::mb(1024));
             assert_eq!(
