@@ -371,6 +371,7 @@ fn test_delete_files_in_range_for_titan() {
         b"",
         b"{",
         &limiter,
+        None,
     )
     .unwrap();
     build_sst_cf_file::<RocksEngine>(
@@ -381,6 +382,7 @@ fn test_delete_files_in_range_for_titan() {
         b"",
         b"{",
         &limiter,
+        None,
     )
     .unwrap();
 

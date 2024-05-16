@@ -89,6 +89,12 @@ impl From<io::Error> for Error {
     }
 }
 
+impl From<engine_traits::Error> for Error {
+    fn from(e: engine_traits::Error) -> Self {
+        Error::Other(Box::new(e))
+    }
+}
+
 pub type Result<T> = result::Result<T, Error>;
 
 impl ErrorCodeExt for Error {
@@ -689,9 +695,18 @@ impl Snapshot {
             let cf_file = &mut self.cf_files[self.cf_index];
             let path = cf_file.tmp_path.to_str().unwrap();
             let cf_stat = if plain_file_used(cf_file.cf) {
+<<<<<<< HEAD
                 let key_mgr = self.mgr.encryption_key_manager.as_ref();
                 snap_io::build_plain_cf_file::<EK>(
                     path, key_mgr, kv_snap, cf_file.cf, &begin_key, &end_key,
+=======
+                snap_io::build_plain_cf_file::<EK>(
+                    cf_file,
+                    self.mgr.encryption_key_manager.as_ref(),
+                    kv_snap,
+                    &begin_key,
+                    &end_key,
+>>>>>>> ca8c70d9a0 (raftstore: Verify checksum right after SST files are generated (#16107))
                 )?
             } else {
                 snap_io::build_sst_cf_file::<EK>(
@@ -702,6 +717,7 @@ impl Snapshot {
                     &begin_key,
                     &end_key,
                     &self.mgr.limiter,
+                    self.mgr.encryption_key_manager.clone(),
                 )?
             };
             cf_file.kv_count = cf_stat.key_count as u64;
@@ -883,6 +899,7 @@ impl Snapshot {
             file_for_recving.file.flush()?;
             file_for_recving.file.sync_all()?;
 
+<<<<<<< HEAD
             if file_for_recving.written_size != cf_file.size {
                 return Err(io::Error::new(
                     ErrorKind::Other,
@@ -895,6 +912,37 @@ impl Snapshot {
                         cf_file.size
                     ),
                 ));
+=======
+                if file_for_recving.written_size != cf_file.size[i] {
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!(
+                            "snapshot file {} for cf {} size mismatches, \
+                            real size {}, expected size {}",
+                            cf_file.path.display(),
+                            cf_file.cf,
+                            file_for_recving.written_size,
+                            cf_file.size[i]
+                        ),
+                    ));
+                }
+
+                let checksum = file_for_recving.write_digest.finalize();
+                if checksum != cf_file.checksum[i] {
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!(
+                            "snapshot file {} for cf {} checksum \
+                            mismatches, real checksum {}, expected \
+                            checksum {}",
+                            cf_file.path.display(),
+                            cf_file.cf,
+                            checksum,
+                            cf_file.checksum[i]
+                        ),
+                    ));
+                }
+>>>>>>> ca8c70d9a0 (raftstore: Verify checksum right after SST files are generated (#16107))
             }
 
             let checksum = file_for_recving.write_digest.finalize();

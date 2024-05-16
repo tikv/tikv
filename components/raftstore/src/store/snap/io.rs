@@ -9,13 +9,28 @@ use encryption::{
     Iv,
 };
 use engine_traits::{
+<<<<<<< HEAD
     CfName, EncryptionKeyManager, Error as EngineError, Iterable, KvEngine, Mutable,
     SstCompressionType, SstWriter, SstWriterBuilder, WriteBatch,
+=======
+    CfName, Error as EngineError, Iterable, KvEngine, Mutable, SstCompressionType, SstReader,
+    SstWriter, SstWriterBuilder, WriteBatch,
+>>>>>>> ca8c70d9a0 (raftstore: Verify checksum right after SST files are generated (#16107))
 };
+use fail::fail_point;
 use kvproto::encryptionpb::EncryptionMethod;
+<<<<<<< HEAD
 use tikv_util::codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder};
 use tikv_util::time::Limiter;
 use tikv_util::{box_try, debug};
+=======
+use tikv_util::{
+    box_try,
+    codec::bytes::{BytesEncoder, CompactBytesFromFileDecoder},
+    debug, error, info,
+    time::{Instant, Limiter},
+};
+>>>>>>> ca8c70d9a0 (raftstore: Verify checksum right after SST files are generated (#16107))
 
 use super::{Error, IO_LIMITER_CHUNK_SIZE};
 
@@ -107,6 +122,7 @@ pub fn build_sst_cf_file<E>(
     start_key: &[u8],
     end_key: &[u8],
     io_limiter: &Limiter,
+    key_mgr: Option<Arc<DataKeyManager>>,
 ) -> Result<BuildStatistics, Error>
 where
     E: KvEngine,
@@ -114,8 +130,90 @@ where
     let mut sst_writer = create_sst_file_writer::<E>(engine, cf, path)?;
     let mut stats = BuildStatistics::default();
     let mut remained_quota = 0;
+<<<<<<< HEAD
     box_try!(snap.scan_cf(cf, start_key, end_key, false, |key, value| {
         let entry_len = key.len() + value.len();
+=======
+    let mut file_id: usize = 0;
+    let mut path = cf_file
+        .path
+        .join(cf_file.gen_tmp_file_name(file_id))
+        .to_str()
+        .unwrap()
+        .to_string();
+    let sst_writer = RefCell::new(create_sst_file_writer::<E>(engine, cf, &path)?);
+    let mut file_length: usize = 0;
+
+    let finish_sst_writer = |sst_writer: E::SstWriter,
+                             path: String,
+                             key_mgr: Option<Arc<DataKeyManager>>|
+     -> Result<(), Error> {
+        sst_writer.finish()?;
+        (|| {
+            fail_point!("inject_sst_file_corruption", |_| {
+                static CALLED: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                if CALLED
+                    .compare_exchange(
+                        false,
+                        true,
+                        std::sync::atomic::Ordering::SeqCst,
+                        std::sync::atomic::Ordering::SeqCst,
+                    )
+                    .is_err()
+                {
+                    return;
+                }
+                // overwrite the file to break checksum
+                let mut f = OpenOptions::new().write(true).open(&path).unwrap();
+                f.write_all(b"x").unwrap();
+            });
+        })();
+
+        let sst_reader = E::SstReader::open(&path, key_mgr)?;
+        if let Err(e) = sst_reader.verify_checksum() {
+            // use sst reader to verify block checksum, it would detect corrupted SST due to
+            // memory bit-flip
+            fs::remove_file(&path)?;
+            error!(
+                "failed to pass block checksum verification";
+                "file" => path,
+                "err" => ?e,
+            );
+            return Err(io::Error::new(io::ErrorKind::InvalidData, e).into());
+        }
+        File::open(&path).and_then(|f| f.sync_all())?;
+        Ok(())
+    };
+
+    let instant = Instant::now();
+    box_try!(snap.scan(cf, start_key, end_key, false, |key, value| {
+        let entry_len = key.len() + value.len();
+        if file_length + entry_len > raw_size_per_file as usize {
+            cf_file.add_file(file_id); // add previous file
+            file_length = 0;
+            file_id += 1;
+            let prev_path = path.clone();
+            path = cf_file
+                .path
+                .join(cf_file.gen_tmp_file_name(file_id))
+                .to_str()
+                .unwrap()
+                .to_string();
+            let result = create_sst_file_writer::<E>(engine, cf, &path);
+            match result {
+                Ok(new_sst_writer) => {
+                    let old_writer = sst_writer.replace(new_sst_writer);
+                    box_try!(finish_sst_writer(old_writer, prev_path, key_mgr.clone()));
+                }
+                Err(e) => {
+                    let io_error = io::Error::new(io::ErrorKind::Other, e);
+                    return Err(io_error.into());
+                }
+            }
+        }
+
+>>>>>>> ca8c70d9a0 (raftstore: Verify checksum right after SST files are generated (#16107))
         while entry_len > remained_quota {
             // It's possible to acquire more than necessary, but let it be.
             io_limiter.blocking_consume(IO_LIMITER_CHUNK_SIZE);
@@ -132,8 +230,22 @@ where
         Ok(true)
     }));
     if stats.key_count > 0 {
+<<<<<<< HEAD
         box_try!(sst_writer.finish());
         box_try!(File::open(path).and_then(|f| f.sync_all()));
+=======
+        box_try!(finish_sst_writer(sst_writer.into_inner(), path, key_mgr));
+        cf_file.add_file(file_id);
+        info!(
+            "build_sst_cf_file_list builds {} files in cf {}. Total keys {}, total size {}. raw_size_per_file {}, total takes {:?}",
+            file_id + 1,
+            cf,
+            stats.key_count,
+            stats.total_size,
+            raw_size_per_file,
+            instant.saturating_elapsed(),
+        );
+>>>>>>> ca8c70d9a0 (raftstore: Verify checksum right after SST files are generated (#16107))
     } else {
         box_try!(fs::remove_file(path));
     }
@@ -340,10 +452,56 @@ mod tests {
     fn test_cf_build_and_apply_sst_files() {
         let db_creaters = &[open_test_empty_db, open_test_db];
         let limiter = Limiter::new(f64::INFINITY);
+<<<<<<< HEAD
         for db_creater in db_creaters {
             for db_opt in vec![None, Some(gen_db_options_with_encryption())] {
                 let dir = Builder::new().prefix("test-snap-cf-db").tempdir().unwrap();
                 let db = db_creater(dir.path(), db_opt.clone(), None).unwrap();
+=======
+        for max_file_size in max_file_sizes {
+            for db_creater in db_creaters {
+                let (_enc_dir, enc_opts) =
+                    gen_db_options_with_encryption("test_cf_build_and_apply_sst_files_enc");
+                for db_opt in vec![None, Some(enc_opts)] {
+                    let dir = Builder::new().prefix("test-snap-cf-db").tempdir().unwrap();
+                    let db = db_creater(dir.path(), db_opt.clone(), None).unwrap();
+                    let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
+                    let mut cf_file = CfFile {
+                        cf: CF_DEFAULT,
+                        path: PathBuf::from(snap_cf_dir.path().to_str().unwrap()),
+                        file_prefix: "test_sst".to_string(),
+                        file_suffix: SST_FILE_SUFFIX.to_string(),
+                        ..Default::default()
+                    };
+                    let stats = build_sst_cf_file_list::<KvTestEngine>(
+                        &mut cf_file,
+                        &db,
+                        &db.snapshot(),
+                        &keys::data_key(b"a"),
+                        &keys::data_key(b"z"),
+                        *max_file_size,
+                        &limiter,
+                        db_opt.as_ref().and_then(|opt| opt.get_key_manager()),
+                    )
+                    .unwrap();
+                    if stats.key_count == 0 {
+                        assert_eq!(cf_file.file_paths().len(), 0);
+                        assert_eq!(cf_file.clone_file_paths().len(), 0);
+                        assert_eq!(cf_file.tmp_file_paths().len(), 0);
+                        assert_eq!(cf_file.size.len(), 0);
+                        assert_eq!(cf_file.checksum.len(), 0);
+                        continue;
+                    } else {
+                        assert!(
+                            cf_file.file_paths().len() == 12 && *max_file_size < u64::MAX
+                                || cf_file.file_paths().len() == 1 && *max_file_size == u64::MAX
+                        );
+                        assert!(cf_file.clone_file_paths().len() == cf_file.file_paths().len());
+                        assert!(cf_file.tmp_file_paths().len() == cf_file.file_paths().len());
+                        assert!(cf_file.size.len() == cf_file.file_paths().len());
+                        assert!(cf_file.checksum.len() == cf_file.file_paths().len());
+                    }
+>>>>>>> ca8c70d9a0 (raftstore: Verify checksum right after SST files are generated (#16107))
 
                 let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();
                 let sst_file_path = snap_cf_dir.path().join("sst");
