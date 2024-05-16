@@ -2612,7 +2612,7 @@ impl HealthFeedbackAttacher {
     fn attach_if_needed(&mut self, resp: &mut BatchCommandsResponse) {
         let mut requested_feedback = None;
 
-        for r in resp.responses.iter_mut().map(|r| &mut r.cmd).flatten() {
+        for r in resp.responses.iter_mut().flat_map(|r| &mut r.cmd) {
             if let BatchCommandsResponse_Response_oneof_cmd::GetHealthFeedback(r) = r {
                 if requested_feedback.is_none() {
                     requested_feedback = Some(self.gen_health_feedback_pb());
