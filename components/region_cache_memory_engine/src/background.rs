@@ -16,6 +16,7 @@ use bytes::Bytes;
 use crossbeam::{
     channel::{bounded, tick, Sender},
     epoch, select,
+    sync::ShardedLock,
 };
 use engine_rocks::RocksSnapshot;
 use engine_traits::{
@@ -300,7 +301,10 @@ struct RangeStatsManager {
     info_provider: Arc<dyn RegionInfoProvider>,
     prev_top_regions: Arc<Mutex<BTreeMap<u64, Region>>>,
     checking_top_regions: Arc<AtomicBool>,
+    region_loaded_at: Arc<ShardedLock<BTreeMap<u64, Instant>>>,
 }
+
+pub const EVICT_MIN_DURATION: Duration = Duration::from_secs(60 * 3);
 
 impl RangeStatsManager {
     pub fn new(num_regions: usize, info_provider: Arc<dyn RegionInfoProvider>) -> Self {
@@ -309,6 +313,7 @@ impl RangeStatsManager {
             info_provider,
             prev_top_regions: Arc::new(Mutex::new(BTreeMap::new())),
             checking_top_regions: Arc::new(AtomicBool::new(false)),
+            region_loaded_at: Arc::new(ShardedLock::new(BTreeMap::new())),
         }
     }
 
@@ -328,13 +333,18 @@ impl RangeStatsManager {
         self.num_regions.load(Ordering::Relaxed)
     }
 
+    /// Computes an ordered list of ranges and their sizes that may be evicted.
     pub fn collect_candidates_for_eviction(&self, ranges_out: &mut Vec<(CacheRange, u64)>) {
+        // Gets all of the regions, sorted by activity.
         let all_regions = self.info_provider.get_top_regions(0).unwrap();
-        ranges_out.extend(
-            all_regions
-                .iter()
-                .map(|(r, s)| (CacheRange::from_region(r), *s)),
-        );
+        let regions_loaded = self.region_loaded_at.read().unwrap();
+        ranges_out.extend(all_regions.iter().filter_map(|(r, s)| {
+            match regions_loaded.get(&r.get_id()) {
+                // Do not evict ranges that were loaded less than `EVICT_MIN_DURATION` ago.
+                Some(&time_loaded) if Instant::now() - time_loaded < EVICT_MIN_DURATION => None,
+                _ => Some((CacheRange::from_region(r), *s)),
+            }
+        }));
     }
 
     pub fn handle_range_evicted(&self, evicted_range: &CacheRange) {
@@ -393,7 +403,12 @@ impl RangeStatsManager {
             .iter()
             .map(|(r, _)| (r.id, r.clone()))
             .collect::<BTreeMap<_, _>>();
-
+        {
+            let mut region_loaded_map = self.region_loaded_at.write().unwrap();
+            for &region_id in curr_top_regions.keys() {
+                let _ = region_loaded_map.insert(region_id, Instant::now());
+            }
+        }
         let prev_top_regions = {
             let mut mut_prev_top_regions = self.prev_top_regions.lock();
             let ret = mut_prev_top_regions.clone();
