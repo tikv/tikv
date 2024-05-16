@@ -13,7 +13,7 @@ use engine_traits::{
 };
 use skiplist_rs::{base::OwnedIter, SkipList};
 use slog_global::error;
-use tikv_util::box_err;
+use tikv_util::{box_err, info};
 
 use crate::{
     background::BackgroundTask,
@@ -183,8 +183,17 @@ impl Peekable for RangeCacheSnapshot {
             InternalKey {
                 user_key,
                 v_type: ValueType::Value,
-                ..
-            } if user_key == key => Ok(Some(RangeCacheDbVector(iter.value().clone_bytes()))),
+                sequence,
+            } if user_key == key => {
+                info!(
+                    "get_value_cf_opt in memory engine";
+                    "key" => log_wrappers::Value(key),
+                    "cf" => cf,
+                    "seqno" => self.sequence_number(),
+                    "find_seqno" => sequence,
+                );
+                Ok(Some(RangeCacheDbVector(iter.value().clone_bytes())))
+            }
             _ => Ok(None),
         }
     }
