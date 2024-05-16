@@ -24,7 +24,8 @@ grpc-raft-conn-num = 1
 # Disable stats concurrency. procinfo performs too bad without optimization,
 # disable it to save CPU for real tests.
 stats-concurrency = 0
-raft-client-backoff-step = "5ms"
+raft-client-max-backoff = "100ms"
+raft-client-initial-reconnect-backoff = "100ms"
 
 [server.labels]
 
