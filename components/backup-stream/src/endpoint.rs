@@ -722,7 +722,11 @@ where
             Err(err) => {
                 err.report(format!("failed to resume backup stream task {}", task_name));
                 let sched = self.scheduler.clone();
+<<<<<<< HEAD
                 tokio::task::spawn(async move {
+=======
+                self.pool.spawn(root!("retry_resume"; async move {
+>>>>>>> 9d0d9957b0 (log_backup: fix panic when encountered error during resuming (#17021))
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     sched
                         .schedule(Task::WatchTask(TaskOp::ResumeTask(task_name)))
