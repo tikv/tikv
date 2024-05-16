@@ -2114,4 +2114,60 @@ mod tests {
             "Coprocessor task terminated due to exceeding the deadline"
         );
     }
+
+    #[test]
+    fn test_memory_quota() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+
+        // By default, coprocessor does not return memory quota exceeded error.
+        {
+            let handler_builder = Box::new(|_, _: &_| {
+                Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed())
+            });
+
+            let mut config = ReqContext::default_for_test();
+            config.deadline = Deadline::from_now(Duration::from_millis(500));
+
+            let resp = block_on(copr.handle_unary_request(config, handler_builder)).unwrap();
+            assert!(!resp.has_region_error(), "{:?}", resp);
+        }
+
+        // Trigger memory quota exceeded error.
+        copr.memory_quota.set_capacity(1);
+        {
+            let handler_builder = Box::new(|_, _: &_| {
+                Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed())
+            });
+
+            let mut config = ReqContext::default_for_test();
+            config.deadline = Deadline::from_now(Duration::from_millis(500));
+
+            let res = block_on(copr.handle_unary_request(config, handler_builder));
+            assert!(res.is_err(), "{:?}", res);
+            let resp = make_error_response(res.unwrap_err());
+            assert_eq!(resp.get_data().len(), 0);
+            let region_err = resp.get_region_error();
+            assert!(
+                region_err
+                    .get_server_is_busy()
+                    .reason
+                    .contains("exceeding memory quota"),
+                "{:?}",
+                region_err.get_server_is_busy().reason
+            );
+        }
+    }
 }
