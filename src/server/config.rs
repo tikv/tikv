@@ -55,7 +55,7 @@ const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 const DEFAULT_ENDPOINT_MEMORY_QUOTA_RATIO: f64 = 0.125;
 
 lazy_static! {
-    pub (crate) static ref DEFAULT_ENDPOINT_MEMORY_QUOTA: ReadableSize = {
+    static ref DEFAULT_ENDPOINT_MEMORY_QUOTA: ReadableSize = {
         let total_mem = SysQuota::memory_limit_in_bytes();
         let quota = (total_mem as f64) * DEFAULT_ENDPOINT_MEMORY_QUOTA_RATIO;
         // In order to ensure that coprocessor can function properly under low
@@ -169,7 +169,7 @@ pub struct Config {
     #[serde(with = "perf_level_serde")]
     #[online_config(skip)]
     pub end_point_perf_level: PerfLevel,
-    pub end_point_memory_quota: Option<ReadableSize>,
+    pub end_point_memory_quota: ReadableSize,
     #[serde(alias = "snap-max-write-bytes-per-sec")]
     pub snap_io_max_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
@@ -281,7 +281,7 @@ impl Default for Config {
             end_point_request_max_handle_duration: None,
             end_point_max_concurrency: cmp::max(cpu_num as usize, MIN_ENDPOINT_MAX_CONCURRENCY),
             end_point_perf_level: PerfLevel::Uninitialized,
-            end_point_memory_quota: None,
+            end_point_memory_quota: *DEFAULT_ENDPOINT_MEMORY_QUOTA,
             snap_io_max_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             stats_concurrency: 1,
@@ -391,8 +391,9 @@ impl Config {
             ));
         }
 
-        if self.end_point_memory_quota.is_none() {
-            self.end_point_memory_quota = Some(*DEFAULT_ENDPOINT_MEMORY_QUOTA);
+        if self.end_point_memory_quota == *DEFAULT_ENDPOINT_MEMORY_QUOTA {
+            info!("using default coprocessor quota";
+                "quota" => ?*DEFAULT_ENDPOINT_MEMORY_QUOTA);
         }
 
         if self.max_grpc_send_msg_len <= 0 {

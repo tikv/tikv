@@ -6437,7 +6437,7 @@ mod tests {
         let quota = change.remove("end_point_memory_quota").unwrap();
         let cap: ReadableSize = quota.into();
         assert_eq!(cap, ReadableSize::mb(32));
-        cfg.server.end_point_memory_quota = Some(ReadableSize::mb(32));
+        cfg.server.end_point_memory_quota = ReadableSize::mb(32);
         assert_eq_debug(&cfg_controller.get_current(), &cfg);
     }
 

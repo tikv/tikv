@@ -197,13 +197,6 @@ make_static_metric! {
     pub struct CoprAcquireSemaphoreTypeCounterVec: IntCounter {
         "type" => AcquireSemaphoreType,
     }
-
-    pub struct MemoryQuotaGauge: IntGauge {
-        "type" =>  {
-            in_use,
-            capacity,
-        }
-    }
 }
 
 pub struct CopLocalMetrics {
