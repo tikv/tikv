@@ -42469,6 +42469,139 @@
             "align": false,
             "alignLevel": 0
           }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+          "description": "Total bytes of memory used by coprocessor requests",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 24,
+            "x": 0,
+            "y": 28
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 308,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_coprocessor_memory_quota\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, type) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{instance}}-{{type}}",
+              "metric": "",
+              "query": "sum((\n    tikv_coprocessor_memory_quota\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (instance, type) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Memory Quota",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "bytes",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
         }
       ],
       "repeat": null,
@@ -42505,7 +42638,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 300,
+=======
+      "id": 309,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -42544,7 +42681,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 301,
+=======
+          "id": 310,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -42745,7 +42886,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 302,
+=======
+          "id": 311,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -42946,7 +43091,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 303,
+=======
+          "id": 312,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -43147,7 +43296,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 304,
+=======
+          "id": 313,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -43348,7 +43501,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 305,
+=======
+          "id": 314,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -43481,7 +43638,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 306,
+=======
+          "id": 315,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -43614,7 +43775,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 307,
+=======
+          "id": 316,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -43747,7 +43912,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 308,
+=======
+          "id": 317,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -43880,7 +44049,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 309,
+=======
+          "id": 318,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -44013,7 +44186,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 310,
+=======
+          "id": 319,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -44153,7 +44330,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 311,
+=======
+          "id": 320,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -44250,7 +44431,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 312,
+=======
+          "id": 321,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -44454,7 +44639,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 313,
+=======
+      "id": 322,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -44493,7 +44682,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 314,
+=======
+          "id": 323,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -44626,7 +44819,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 315,
+=======
+          "id": 324,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -44759,7 +44956,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 316,
+=======
+          "id": 325,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -44899,7 +45100,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 317,
+=======
+          "id": 326,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -44996,7 +45201,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 318,
+=======
+          "id": 327,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -45197,7 +45406,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 319,
+=======
+          "id": 328,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -45398,7 +45611,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 320,
+=======
+          "id": 329,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -45602,7 +45819,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 321,
+=======
+      "id": 330,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -45641,7 +45862,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 322,
+=======
+          "id": 331,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -45819,7 +46044,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 323,
+=======
+          "id": 332,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -46020,7 +46249,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 324,
+=======
+          "id": 333,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -46153,7 +46386,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 325,
+=======
+          "id": 334,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -46286,7 +46523,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 326,
+=======
+          "id": 335,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -46419,7 +46660,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 327,
+=======
+          "id": 336,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -46552,7 +46797,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 328,
+=======
+          "id": 337,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -46685,7 +46934,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 329,
+=======
+          "id": 338,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -46814,7 +47067,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 330,
+=======
+          "id": 339,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -46889,7 +47146,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 331,
+=======
+          "id": 340,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -46968,7 +47229,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 332,
+=======
+          "id": 341,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -47221,7 +47486,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 333,
+=======
+          "id": 342,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -47354,7 +47623,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 334,
+=======
+          "id": 343,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -47490,7 +47763,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 335,
+=======
+      "id": 344,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -47529,7 +47806,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 336,
+=======
+          "id": 345,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -47677,7 +47958,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 337,
+=======
+          "id": 346,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -47810,7 +48095,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 338,
+=======
+          "id": 347,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48011,7 +48300,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 339,
+=======
+          "id": 348,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48159,7 +48452,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 340,
+=======
+          "id": 349,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48360,7 +48657,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 341,
+=======
+          "id": 350,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48493,7 +48794,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 342,
+=======
+          "id": 351,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48626,7 +48931,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 343,
+=======
+          "id": 352,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48759,7 +49068,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 344,
+=======
+          "id": 353,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -48892,7 +49205,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 345,
+=======
+          "id": 354,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49032,7 +49349,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 346,
+=======
+          "id": 355,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -49129,7 +49450,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 347,
+=======
+          "id": 356,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49333,7 +49658,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 348,
+=======
+      "id": 357,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -49372,7 +49701,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 349,
+=======
+          "id": 358,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49505,7 +49838,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 350,
+=======
+          "id": 359,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49638,7 +49975,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 351,
+=======
+          "id": 360,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49771,7 +50112,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 352,
+=======
+          "id": 361,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -49907,7 +50252,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 353,
+=======
+      "id": 362,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -49946,7 +50295,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 354,
+=======
+          "id": 363,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50079,7 +50432,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 355,
+=======
+          "id": 364,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50212,7 +50569,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 356,
+=======
+          "id": 365,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50360,7 +50721,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 357,
+=======
+          "id": 366,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50493,7 +50858,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 358,
+=======
+          "id": 367,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50626,7 +50995,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 359,
+=======
+          "id": 368,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50759,7 +51132,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 360,
+=======
+          "id": 369,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -50895,7 +51272,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 361,
+=======
+      "id": 370,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -50934,7 +51315,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 362,
+=======
+          "id": 371,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51067,7 +51452,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 363,
+=======
+          "id": 372,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51200,7 +51589,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 364,
+=======
+          "id": 373,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51333,7 +51726,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 365,
+=======
+          "id": 374,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51466,7 +51863,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 366,
+=======
+          "id": 375,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51599,7 +52000,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 367,
+=======
+          "id": 376,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51735,7 +52140,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 368,
+=======
+      "id": 377,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -51774,7 +52183,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 369,
+=======
+          "id": 378,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -51907,7 +52320,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 370,
+=======
+          "id": 379,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52040,7 +52457,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 371,
+=======
+          "id": 380,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52173,7 +52594,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 372,
+=======
+          "id": 381,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52336,7 +52761,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 373,
+=======
+          "id": 382,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52469,7 +52898,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 374,
+=======
+          "id": 383,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52602,7 +53035,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 375,
+=======
+          "id": 384,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52750,7 +53187,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 376,
+=======
+          "id": 385,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -52901,7 +53342,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 377,
+=======
+      "id": 386,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -52940,7 +53385,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 378,
+=======
+          "id": 387,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53073,7 +53522,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 379,
+=======
+          "id": 388,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53206,7 +53659,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 380,
+=======
+          "id": 389,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53339,7 +53796,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 381,
+=======
+          "id": 390,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53472,7 +53933,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 382,
+=======
+          "id": 391,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53605,7 +54070,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 383,
+=======
+          "id": 392,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53738,7 +54207,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 384,
+=======
+          "id": 393,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -53871,7 +54344,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 385,
+=======
+          "id": 394,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54004,7 +54481,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 386,
+=======
+          "id": 395,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54144,7 +54625,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 387,
+=======
+          "id": 396,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -54241,7 +54726,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 388,
+=======
+          "id": 397,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54374,7 +54863,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 389,
+=======
+          "id": 398,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54522,7 +55015,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 390,
+=======
+          "id": 399,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54670,7 +55167,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 391,
+=======
+          "id": 400,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -54810,7 +55311,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 392,
+=======
+          "id": 401,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -54907,7 +55412,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 393,
+=======
+          "id": 402,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55040,7 +55549,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 394,
+=======
+          "id": 403,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55176,7 +55689,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 395,
+=======
+      "id": 404,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -55215,7 +55732,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 396,
+=======
+          "id": 405,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55348,7 +55869,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 397,
+=======
+          "id": 406,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55511,7 +56036,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 398,
+=======
+          "id": 407,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55659,7 +56188,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 399,
+=======
+          "id": 408,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55792,7 +56325,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 400,
+=======
+          "id": 409,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -55932,7 +56469,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 401,
+=======
+          "id": 410,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -56036,7 +56577,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 402,
+=======
+          "id": 411,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -56140,7 +56685,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 403,
+=======
+          "id": 412,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -56237,7 +56786,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 404,
+=======
+          "id": 413,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56377,7 +56930,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 405,
+=======
+          "id": 414,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -56481,7 +57038,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 406,
+=======
+          "id": 415,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -56585,7 +57146,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 407,
+=======
+          "id": 416,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -56682,7 +57247,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 408,
+=======
+          "id": 417,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56815,7 +57384,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 409,
+=======
+          "id": 418,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -56948,7 +57521,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 410,
+=======
+          "id": 419,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57088,7 +57665,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 411,
+=======
+          "id": 420,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -57185,7 +57766,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 412,
+=======
+          "id": 421,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57321,7 +57906,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 413,
+=======
+      "id": 422,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -57360,7 +57949,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 414,
+=======
+          "id": 423,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57523,7 +58116,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 415,
+=======
+          "id": 424,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57656,7 +58253,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 416,
+=======
+          "id": 425,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -57796,7 +58397,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 417,
+=======
+          "id": 426,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -57900,7 +58505,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 418,
+=======
+          "id": 427,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -57997,7 +58606,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 419,
+=======
+          "id": 428,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58152,7 +58765,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 420,
+=======
+          "id": 429,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -58256,7 +58873,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 421,
+=======
+          "id": 430,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -58360,7 +58981,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 422,
+=======
+          "id": 431,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -58457,7 +59082,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 423,
+=======
+          "id": 432,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58627,7 +59256,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 424,
+=======
+          "id": 433,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -58724,7 +59357,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 425,
+=======
+          "id": 434,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -58925,7 +59562,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 426,
+=======
+          "id": 435,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59126,7 +59767,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 427,
+=======
+          "id": 436,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59259,7 +59904,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 428,
+=======
+          "id": 437,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59422,7 +60071,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 429,
+=======
+          "id": 438,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59555,7 +60208,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 430,
+=======
+          "id": 439,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59688,7 +60345,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 431,
+=======
+          "id": 440,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -59889,7 +60550,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 432,
+=======
+          "id": 441,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60022,7 +60687,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 433,
+=======
+          "id": 442,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -60162,7 +60831,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 434,
+=======
+          "id": 443,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -60266,7 +60939,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 435,
+=======
+          "id": 444,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -60370,7 +61047,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 436,
+=======
+          "id": 445,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -60474,7 +61155,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 437,
+=======
+          "id": 446,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -60578,7 +61263,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 438,
+=======
+          "id": 447,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -60682,7 +61371,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 439,
+=======
+          "id": 448,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -60786,7 +61479,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 440,
+=======
+          "id": 449,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -60883,7 +61580,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 441,
+=======
+          "id": 450,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61031,7 +61732,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 442,
+=======
+          "id": 451,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61164,7 +61869,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 443,
+=======
+          "id": 452,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61297,7 +62006,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 444,
+=======
+          "id": 453,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61445,7 +62158,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 445,
+=======
+          "id": 454,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -61581,7 +62298,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 446,
+=======
+      "id": 455,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -61632,7 +62353,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 447,
+=======
+          "id": 456,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -61728,7 +62453,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 448,
+=======
+          "id": 457,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -61803,7 +62532,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 449,
+=======
+          "id": 458,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -61878,7 +62611,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 450,
+=======
+          "id": 459,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -61953,7 +62690,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 451,
+=======
+          "id": 460,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -62028,7 +62769,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 452,
+=======
+          "id": 461,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -62103,7 +62848,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 453,
+=======
+          "id": 462,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -62178,7 +62927,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 454,
+=======
+          "id": 463,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
@@ -62257,7 +63010,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 455,
+=======
+          "id": 464,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62390,7 +63147,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 456,
+=======
+          "id": 465,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62523,7 +63284,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 457,
+=======
+          "id": 466,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62656,7 +63421,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 458,
+=======
+          "id": 467,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62789,7 +63558,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 459,
+=======
+          "id": 468,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -62922,7 +63695,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 460,
+=======
+          "id": 469,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63070,7 +63847,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 461,
+=======
+          "id": 470,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63203,7 +63984,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 462,
+=======
+          "id": 471,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63336,7 +64121,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 463,
+=======
+          "id": 472,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -63502,7 +64291,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 464,
+=======
+          "id": 473,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -63606,7 +64399,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 465,
+=======
+          "id": 474,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -63710,7 +64507,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 466,
+=======
+          "id": 475,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -63814,7 +64615,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 467,
+=======
+          "id": 476,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -63918,7 +64723,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 468,
+=======
+          "id": 477,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -64022,7 +64831,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 469,
+=======
+          "id": 478,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -64126,7 +64939,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 470,
+=======
+          "id": 479,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -64230,7 +65047,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 471,
+=======
+          "id": 480,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -64327,7 +65148,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 472,
+=======
+          "id": 481,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64460,7 +65285,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 473,
+=======
+          "id": 482,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64593,7 +65422,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 474,
+=======
+          "id": 483,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64726,7 +65559,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 475,
+=======
+          "id": 484,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64859,7 +65696,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 476,
+=======
+          "id": 485,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -64992,7 +65833,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 477,
+=======
+          "id": 486,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65098,6 +65943,142 @@
           "bars": false,
           "cacheTimeout": null,
           "datasource": "${DS_TEST-CLUSTER}",
+<<<<<<< HEAD
+=======
+          "description": "The task status of initial scanning.",
+          "editable": true,
+          "error": false,
+          "fieldConfig": {
+            "defaults": {
+              "thresholds": {
+                "mode": "absolute",
+                "steps": []
+              }
+            }
+          },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
+          "gridPos": {
+            "h": 7,
+            "w": 8,
+            "x": 8,
+            "y": 70
+          },
+          "height": null,
+          "hideTimeOverride": false,
+          "id": 487,
+          "interval": null,
+          "isNew": true,
+          "legend": {
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
+          },
+          "lines": true,
+          "linewidth": 1,
+          "links": [],
+          "maxDataPoints": null,
+          "maxPerRow": null,
+          "minSpan": null,
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
+          "repeat": null,
+          "repeatDirection": null,
+          "seriesOverrides": [],
+          "span": null,
+          "stack": false,
+          "steppedLine": false,
+          "targets": [
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum((\n    tikv_log_backup_pending_initial_scan\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (stage) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{stage}}",
+              "metric": "",
+              "query": "sum((\n    tikv_log_backup_pending_initial_scan\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    \n)) by (stage) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            }
+          ],
+          "thresholds": [],
+          "timeFrom": null,
+          "timeShift": null,
+          "title": "Initial Scanning Task Status",
+          "tooltip": {
+            "msResolution": true,
+            "shared": true,
+            "sort": 0,
+            "value_type": "individual"
+          },
+          "transformations": [],
+          "transparent": false,
+          "type": "graph",
+          "xaxis": {
+            "mode": "time",
+            "name": null,
+            "show": true,
+            "values": []
+          },
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "none",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
+        },
+        {
+          "aliasColors": {},
+          "bars": false,
+          "cacheTimeout": null,
+          "datasource": "${DS_TEST-CLUSTER}",
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "description": "",
           "editable": true,
           "error": false,
@@ -65125,7 +66106,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 478,
+=======
+          "id": 488,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65265,7 +66250,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 479,
+=======
+          "id": 489,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -65369,7 +66358,11 @@
           "hideTimeOverride": false,
           "hideZeroBuckets": true,
           "highlightCards": true,
+<<<<<<< HEAD
           "id": 480,
+=======
+          "id": 490,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "legend": {
             "show": false
@@ -65466,7 +66459,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 481,
+=======
+          "id": 491,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65599,7 +66596,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 482,
+=======
+          "id": 492,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65732,7 +66733,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 483,
+=======
+          "id": 493,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65865,7 +66870,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 484,
+=======
+          "id": 494,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -65998,7 +67007,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 485,
+=======
+          "id": 495,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66131,7 +67144,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 486,
+=======
+          "id": 496,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66267,7 +67284,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 487,
+=======
+      "id": 497,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -66306,7 +67327,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 488,
+=======
+          "id": 498,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66454,7 +67479,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 489,
+=======
+          "id": 499,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66587,7 +67616,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 490,
+=======
+          "id": 500,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66720,7 +67753,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 491,
+=======
+          "id": 501,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -66856,7 +67893,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 492,
+=======
+      "id": 502,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -66895,7 +67936,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 493,
+=======
+          "id": 503,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67028,7 +68073,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 494,
+=======
+          "id": 504,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67161,7 +68210,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 495,
+=======
+          "id": 505,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67294,7 +68347,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 496,
+=======
+          "id": 506,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67427,7 +68484,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 497,
+=======
+          "id": 507,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67560,7 +68621,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 498,
+=======
+          "id": 508,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67696,7 +68761,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 499,
+=======
+      "id": 509,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -67735,7 +68804,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 500,
+=======
+          "id": 510,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -67936,7 +69009,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 501,
+=======
+          "id": 511,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68072,7 +69149,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 502,
+=======
+      "id": 512,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -68111,7 +69192,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 503,
+=======
+          "id": 513,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68244,7 +69329,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 504,
+=======
+          "id": 514,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68377,7 +69466,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 505,
+=======
+          "id": 515,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68510,7 +69603,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 506,
+=======
+          "id": 516,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68643,7 +69740,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 507,
+=======
+          "id": 517,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68791,7 +69892,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 508,
+=======
+          "id": 518,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -68995,7 +70100,11 @@
       },
       "height": null,
       "hideTimeOverride": false,
+<<<<<<< HEAD
       "id": 509,
+=======
+      "id": 519,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
       "interval": null,
       "links": [],
       "maxDataPoints": 100,
@@ -69034,7 +70143,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 510,
+=======
+          "id": 520,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69167,7 +70280,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 511,
+=======
+          "id": 521,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69300,7 +70417,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 512,
+=======
+          "id": 522,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69433,7 +70554,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 513,
+=======
+          "id": 523,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69566,7 +70691,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 514,
+=======
+          "id": 524,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "isNew": true,
           "legend": {
@@ -69763,7 +70892,11 @@
           },
           "height": null,
           "hideTimeOverride": false,
+<<<<<<< HEAD
           "id": 515,
+=======
+          "id": 525,
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
           "interval": null,
           "links": [],
           "maxDataPoints": 100,
