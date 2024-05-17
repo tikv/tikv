@@ -21,6 +21,7 @@
 
 mod cache;
 mod checksum;
+mod config_manager;
 pub mod dag;
 mod endpoint;
 mod error;
@@ -41,7 +42,7 @@ use metrics::ReqTag;
 use rand::prelude::*;
 use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::{mem_trace, Id, MemoryTrace, MemoryTraceGuard};
-use tikv_util::{deadline::Deadline, time::Duration};
+use tikv_util::{deadline::Deadline, memory::HeapSize, time::Duration};
 use txn_types::TsSet;
 
 pub use self::{
@@ -138,6 +139,16 @@ pub struct ReqContext {
 
     /// Perf level
     pub perf_level: PerfLevel,
+}
+
+impl HeapSize for ReqContext {
+    fn approximate_heap_size(&self) -> usize {
+        self.context.approximate_heap_size()
+            + self.ranges.approximate_heap_size()
+            + self.peer.as_ref().map_or(0, |p| p.as_bytes().len())
+            + self.lower_bound.approximate_heap_size()
+            + self.upper_bound.approximate_heap_size()
+    }
 }
 
 impl ReqContext {
