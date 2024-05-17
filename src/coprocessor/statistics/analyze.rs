@@ -26,9 +26,7 @@ use tipb::{self, AnalyzeColumnsReq};
 
 use super::{cmsketch::CmSketch, fmsketch::FmSketch, histogram::Histogram};
 use crate::{
-    coprocessor::{
-        dag::TikvStorage, statistics::analyze_context::AnalyzeVersion, MEMTRACE_ANALYZE, *,
-    },
+    coprocessor::{dag::TikvStorage, MEMTRACE_ANALYZE, *},
     storage::{Snapshot, SnapshotStore},
 };
 
@@ -535,9 +533,9 @@ pub(crate) struct SampleBuilder<S: Snapshot, F: KvFormat> {
     max_fm_sketch_size: usize,
     cm_sketch_depth: usize,
     cm_sketch_width: usize,
-    stats_version: AnalyzeVersion,
-    top_n_size: usize,
     columns_info: Vec<tipb::ColumnInfo>,
+    // NOTE: The field is currently used only when mixed analyze requests are received,
+    // which happens exclusively when the statistics version is 1.
     analyze_common_handle: bool,
     common_handle_col_ids: Vec<i64>,
 }
@@ -574,16 +572,6 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
             max_sample_size: req.get_sample_size() as usize,
             cm_sketch_depth: req.get_cmsketch_depth() as usize,
             cm_sketch_width: req.get_cmsketch_width() as usize,
-            stats_version: common_handle_req.as_ref().map_or_else(
-                || AnalyzeVersion::V1,
-                |req| match req.has_version() {
-                    true => req.get_version().into(),
-                    _ => AnalyzeVersion::V1,
-                },
-            ),
-            top_n_size: common_handle_req
-                .as_ref()
-                .map_or_else(|| 0_usize, |req| req.get_top_n_size() as usize),
             common_handle_col_ids: common_handle_ids,
             columns_info,
             analyze_common_handle: common_handle_req.is_some(),
@@ -605,7 +593,7 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
         let columns_without_handle_len =
             self.columns_info.len() - self.columns_info[0].get_pk_handle() as usize;
 
-        let mut pk_builder = Histogram::new(self.max_bucket_size);
+        let mut pk_hist = Histogram::new(self.max_bucket_size);
         let mut collectors = vec![
             SampleCollector::new(
                 self.max_sample_size,
@@ -630,18 +618,13 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
                 for logical_row in &result.logical_rows {
                     let mut data = vec![];
                     columns_slice[0].encode(*logical_row, &columns_info[0], &mut ctx, &mut data)?;
-                    pk_builder.append(&data, false);
+                    pk_hist.append(&data, false);
                 }
                 columns_slice = &columns_slice[1..];
                 columns_info = &columns_info[1..];
             }
 
             if self.analyze_common_handle {
-                // cur_val recording the current value's data and its counts when iterating
-                // index's rows. Once we met a new value, the old value will be pushed into the
-                // topn_heap to maintain the top-n information.
-                let mut cur_val: (u32, Vec<u8>) = (0, vec![]);
-                let mut topn_heap = BinaryHeap::new();
                 for logical_row in &result.logical_rows {
                     let mut data = vec![];
                     for i in 0..self.common_handle_col_ids.len() {
@@ -658,36 +641,7 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
                         }
                     }
                     common_handle_fms.insert(&data);
-                    if self.stats_version == AnalyzeVersion::V2 {
-                        common_handle_hist.append(&data, true);
-                        if cur_val.1 == data {
-                            cur_val.0 += 1;
-                        } else {
-                            if cur_val.0 > 0 {
-                                topn_heap.push(Reverse(cur_val));
-                            }
-                            if topn_heap.len() > self.top_n_size {
-                                topn_heap.pop();
-                            }
-                            cur_val = (1, data);
-                        }
-                    } else {
-                        common_handle_hist.append(&data, false)
-                    }
-                }
-                if self.stats_version == AnalyzeVersion::V2 {
-                    if cur_val.0 > 0 {
-                        topn_heap.push(Reverse(cur_val));
-                        if topn_heap.len() > self.top_n_size {
-                            topn_heap.pop();
-                        }
-                    }
-                    if let Some(c) = common_handle_cms.as_mut() {
-                        for heap_item in topn_heap {
-                            c.sub(&(heap_item.0).1, (heap_item.0).0);
-                            c.push_to_top_n((heap_item.0).1, (heap_item.0).0 as u64);
-                        }
-                    }
+                    common_handle_hist.append(&data, false)
                 }
             }
 
@@ -754,7 +708,7 @@ impl<S: Snapshot, F: KvFormat> SampleBuilder<S, F> {
         } else {
             None
         };
-        Ok((AnalyzeColumnsResult::new(collectors, pk_builder), idx_res))
+        Ok((AnalyzeColumnsResult::new(collectors, pk_hist), idx_res))
     }
 }
 

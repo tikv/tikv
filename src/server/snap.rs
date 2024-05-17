@@ -219,6 +219,9 @@ pub fn send_snap(
 
             #[cfg(feature = "failpoints")]
             {
+                fail::fail_point!("snap_send_error", |_| {
+                    Err(Error::Other(box_err!("snap_send_error")))
+                });
                 let should_delay = (|| {
                     fail::fail_point!("snap_send_timer_delay", |_| { true });
                     false
@@ -247,10 +250,11 @@ pub fn send_snap(
         send_timer.observe_duration();
         drop(deregister);
         drop(client);
+
+        fail_point!("snapshot_delete_after_send");
+        mgr.delete_snapshot(&key, &chunks.snap, true);
         match recv_result {
             Ok(_) => {
-                fail_point!("snapshot_delete_after_send");
-                mgr.delete_snapshot(&key, &chunks.snap, true);
                 let cost = UnixSecs::now().into_inner().saturating_sub(snap_start);
                 let send_duration_sec = timer.saturating_elapsed().as_secs();
                 // it should ignore if the duration of snapshot is less than 1s to decrease the

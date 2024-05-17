@@ -403,6 +403,7 @@ mod all {
             std::iter::once(enc_key.as_encoded().as_slice()),
         )
     }
+
     #[test]
     fn encryption() {
         let key_folder = TempDir::new().unwrap();
@@ -462,5 +463,19 @@ mod all {
             suite.flushed_files.path(),
             items.union(&items2).map(Vec::as_slice),
         );
+    }
+
+    #[test]
+    fn failed_to_get_task_when_pausing() {
+        let suite = SuiteBuilder::new_named("resume_error").nodes(1).build();
+        suite.must_register_task(1, "resume_error");
+        let mcli = suite.get_meta_cli();
+        run_async_test(mcli.pause("resume_error")).unwrap();
+        suite.sync();
+        fail::cfg("failed_to_get_task", "1*return").unwrap();
+        run_async_test(mcli.resume("resume_error")).unwrap();
+        suite.sync();
+        // Make sure our suite doesn't panic.
+        suite.sync();
     }
 }
