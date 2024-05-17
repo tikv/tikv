@@ -4,6 +4,7 @@ use std::{
     cmp,
     collections::{BTreeMap, BTreeSet},
     fmt::Display,
+    num::NonZeroUsize,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
@@ -294,7 +295,6 @@ struct BackgroundRunnerCore {
     range_stats_manager: Option<RangeStatsManager>,
 }
 
-// TODO (afeinberg): Core should just hold Arc<RangeStatsMananger>,
 #[derive(Clone)]
 struct RangeStatsManager {
     num_regions: Arc<AtomicUsize>,
@@ -304,9 +304,12 @@ struct RangeStatsManager {
     region_loaded_at: Arc<ShardedLock<BTreeMap<u64, Instant>>>,
 }
 
+/// Do not evict a region if has been cached for less than this duration.
 pub const EVICT_MIN_DURATION: Duration = Duration::from_secs(60 * 3);
 
 impl RangeStatsManager {
+    /// Initial number of top regions to track and cache. This may change, see
+    /// `adjust_max_num_regions` below.
     pub fn new(num_regions: usize, info_provider: Arc<dyn RegionInfoProvider>) -> Self {
         RangeStatsManager {
             num_regions: Arc::new(AtomicUsize::new(num_regions)),
@@ -317,64 +320,127 @@ impl RangeStatsManager {
         }
     }
 
+    /// Prevents two instances of this from running concurrently.
     pub fn set_checking_top_regions(&self, v: bool) {
         self.checking_top_regions.store(v, Ordering::Relaxed);
     }
 
+    /// Returns true if another thread is checking top regions.
     pub fn checking_top_regions(&self) -> bool {
         self.checking_top_regions.load(Ordering::Relaxed)
     }
 
-    pub(crate) fn set_num_regions(&self, v: usize) {
+    fn set_max_num_regions(&self, v: usize) {
         self.num_regions.store(v, Ordering::Relaxed);
     }
 
-    pub fn num_regions(&self) -> usize {
+    /// Returns the maximum number of regions that can be cached.
+    ///
+    /// See also `adjust_max_num_regions` below.
+    pub fn max_num_regions(&self) -> usize {
         self.num_regions.load(Ordering::Relaxed)
     }
 
-    /// Computes an ordered list of ranges and their sizes that may be evicted.
-    pub fn collect_candidates_for_eviction(&self, ranges_out: &mut Vec<(CacheRange, u64)>) {
+    /// Collect candidates for eviction sorted by activity in creasing order:
+    ///
+    /// 1. Get all the regions sorted (decreasing) by region activity using
+    ///    [raftstore::coprocessor::RegionCollector::handle_get_top_regions].
+    /// 2. Remove all regions where `is_cached_pred` returns false when passed
+    ///    the region's range or those that have been loaded for less than
+    ///    [`EVICT_MIN_DURATION`].
+    /// 3. Reverse the list so that it is now sorted in the order of increasing
+    ///    activity.
+    /// 4. Store the results in `ranges_out` using [Vec::extend].
+    pub fn collect_candidates_for_eviction<F>(
+        &self,
+        ranges_out: &mut Vec<(CacheRange, u64)>,
+        is_cached_pred: F,
+    ) where
+        F: Fn(&CacheRange) -> bool,
+    {
         // Gets all of the regions, sorted by activity.
-        let all_regions = self.info_provider.get_top_regions(0).unwrap();
+        let all_regions = self.info_provider.get_top_regions(None).unwrap();
         let regions_loaded = self.region_loaded_at.read().unwrap();
-        ranges_out.extend(all_regions.iter().filter_map(|(r, s)| {
-            match regions_loaded.get(&r.get_id()) {
-                // Do not evict ranges that were loaded less than `EVICT_MIN_DURATION` ago.
-                Some(&time_loaded) if Instant::now() - time_loaded < EVICT_MIN_DURATION => None,
-                _ => Some((CacheRange::from_region(r), *s)),
-            }
-        }));
+        ranges_out.extend(
+            all_regions
+                .iter()
+                .filter_map(|(region, approx_size)| {
+                    let r = CacheRange::from_region(region);
+                    is_cached_pred(&r)
+                        .then(|| {
+                            match regions_loaded.get(&region.get_id()) {
+                                // Do not evict ranges that were loaded less than
+                                // `EVICT_MIN_DURATION` ago.
+                                Some(&time_loaded)
+                                    if Instant::now() - time_loaded < EVICT_MIN_DURATION =>
+                                {
+                                    None
+                                }
+                                Some(_) | None =>
+                                // None indicates range loaded from a hint, not by this manager.
+                                {
+                                    Some((r, *approx_size))
+                                }
+                            }
+                        })
+                        .flatten()
+                })
+                .rev(),
+        );
     }
 
+    /// This method should be called when `evicted_range` is succesfully evicted
+    /// to remove any internal `RegionStatsManager` that corresponds to the
+    /// range.
+    ///
+    /// Calls [raftstore::coprocessor::region_info_accessor::RegionInfoProvider::find_region_by_key] to
+    /// find the region corresponding to the range.
+    ///
+    /// TODO (afeinberg): This is inefficient, either make this method bulk, or
+    /// find another way to avoid calling `find_region_by_key` in a loop.
     pub fn handle_range_evicted(&self, evicted_range: &CacheRange) {
         // TODO (afeinberg): This is inefficient.
         let _ = self
             .info_provider
             .find_region_by_key(&evicted_range.start)
             .map(|region| {
-                let _ = self.prev_top_regions.lock().remove(&region.get_id());
+                let id = region.get_id();
+                let _ = self.prev_top_regions.lock().remove(&id);
+                let _ = {
+                    let mut regions_loaded = self.region_loaded_at.write().unwrap();
+                    regions_loaded.remove(&id)
+                };
             });
     }
 
-    pub fn adjust_num_regions(&self, curr_memory_usage: usize, threshold: usize) {
+    /// Attempt to adjust the maximum number of cached regions based on memory
+    /// usage:
+    ///
+    /// If `curr_memory_usage` is LESS THAN `threshold` by 3 *
+    /// [`EXPECTED_AVERAGE_REGION_SIZE`] bytes, *increase* the maximum
+    /// by `threshold - curr_memory_usage / 3 * EXPECTED_AVERAGE_REGION_SIZE`.
+    ///
+    /// If `curr_memory_usage` is GREATER THAN `threshold`, *decrease* the
+    /// maximum by `(curr_memory_usage - threshold) /
+    /// EXPECTED_AVERAGE_REGION_SIZE`.
+    pub fn adjust_max_num_regions(&self, curr_memory_usage: usize, threshold: usize) {
         match curr_memory_usage.cmp(&threshold) {
             cmp::Ordering::Less => {
                 let room_to_grow = threshold - curr_memory_usage;
                 if room_to_grow > EXPECTED_AVERAGE_REGION_SIZE * 3 {
-                    let curr_num_regions = self.num_regions();
+                    let curr_num_regions = self.max_num_regions();
                     let next_num_regions =
                         curr_num_regions + room_to_grow / (EXPECTED_AVERAGE_REGION_SIZE * 3);
                     info!("increasing number of top regions to cache";
                         "from" => curr_num_regions,
                         "to" => next_num_regions,
                     );
-                    self.set_num_regions(next_num_regions);
+                    self.set_max_num_regions(next_num_regions);
                 }
             }
             cmp::Ordering::Greater => {
                 let to_shrink_by = curr_memory_usage - threshold;
-                let curr_num_regions = self.num_regions();
+                let curr_num_regions = self.max_num_regions();
                 let next_num_regions = curr_num_regions
                     .checked_sub(1.max(to_shrink_by / EXPECTED_AVERAGE_REGION_SIZE))
                     .unwrap_or(1)
@@ -383,23 +449,41 @@ impl RangeStatsManager {
                     "from" => curr_num_regions,
                     "to" => next_num_regions,
                 );
-                self.set_num_regions(next_num_regions);
+                self.set_max_num_regions(next_num_regions);
             }
             _ => (),
         };
     }
 
+    /// Collects changes to top regions since the previous time this method was
+    /// called. This method should be called by background tasks responsing
+    /// for algorithmic loading and eviction.
+    ///
+    /// 1. Calls [raftstore::coprocessor::RegionCollector::handle_get_top_regions] to
+    ///    request the top `self.max_num_regions()` regions.
+    ///
+    /// 2. If this is the first time this method has been called on this
+    ///    instance, stores the results of previous step in `ranges_added_out`
+    ///    and returns.
+    ///
+    /// 3. If this method has been called before, compare results of step 1 with
+    ///    previous results:
+    ///   - Newly added ranges (regions missing from previous results) are
+    ///     stored in `ranges_added_out`. This can happen when
+    ///     `max_num_regions()` increases, or when `max_num_regions()` is
+    ///     unchanged but the activity order changed.
+    ///   - Removed regions - regions included in previous results - but not the
+    ///     current ones are stored in `ranges_removed_out`.
     pub fn collect_changed_ranges(
         &self,
         ranges_added_out: &mut Vec<CacheRange>,
         ranges_removed_out: &mut Vec<CacheRange>,
     ) {
-        info!("collect_changed_ranges"; "num_regions" => self.num_regions());
-        // TODO (afeinberg): Error handling here.
+        info!("collect_changed_ranges"; "num_regions" => self.max_num_regions());
         let curr_top_regions = self
             .info_provider
-            .get_top_regions(self.num_regions())
-            .unwrap()
+            .get_top_regions(Some(NonZeroUsize::try_from(self.max_num_regions()).unwrap()))
+            .unwrap() // TODO (afeinberg): Potentially custom error handling here.
             .iter()
             .map(|(r, _)| (r.id, r.clone()))
             .collect::<BTreeMap<_, _>>();
@@ -423,10 +507,18 @@ impl RangeStatsManager {
             .iter()
             .filter(|(id, _)| !prev_top_regions.contains_key(id))
             .map(|(_, region)| CacheRange::from_region(region));
-        let removed_ranges = prev_top_regions
-            .iter()
-            .filter(|(id, _)| !curr_top_regions.contains_key(id))
-            .map(|(_, region)| CacheRange::from_region(region));
+        let regions_loaded = self.region_loaded_at.read().unwrap();
+        let removed_ranges = prev_top_regions.iter().filter_map(|(id, region)| {
+            if !curr_top_regions.contains_key(id) {
+                match regions_loaded.get(id) {
+                    // Do not evict ranges that were loaded less than `EVICT_MIN_DURATION` ago.
+                    Some(&time_loaded) if Instant::now() - time_loaded < EVICT_MIN_DURATION => None,
+                    _ => Some(CacheRange::from_region(region)),
+                }
+            } else {
+                None
+            }
+        });
         ranges_added_out.extend(added_ranges);
         ranges_removed_out.extend(removed_ranges);
     }
@@ -619,6 +711,12 @@ impl BackgroundRunnerCore {
         flush_epoch();
     }
 
+    /// Eviction on soft limit reached:
+    ///
+    /// When soft limit is reached, collect the candidates for eviction, and
+    /// keep evicting until either all candidates are evicted, or the total
+    /// approximated size of evicted regions is equal to or greater than the
+    /// excess memory usage.
     fn evict_on_soft_limit_reached(&mut self) {
         if self.range_stats_manager.is_none() {
             warn!("range stats manager is not initialized, cannot evict on soft limit reached");
@@ -634,12 +732,13 @@ impl BackgroundRunnerCore {
         }
         let mut remaining = to_shrink_by.unwrap();
         let mut ranges_to_evict = Vec::<(CacheRange, u64)>::with_capacity(256);
-        range_stats_manager.collect_candidates_for_eviction(&mut ranges_to_evict);
-        let ranges_to_evict = ranges_to_evict
-            .iter()
-            .filter(|(range, _)| self.engine.read().range_manager().contains_range(range))
-            .rev();
-        for (range, approx_size) in ranges_to_evict {
+
+        // TODO (low-pri): consider returning just an iterator and using scan below for
+        // cleaner code.
+        range_stats_manager.collect_candidates_for_eviction(&mut ranges_to_evict, |range| {
+            self.engine.read().range_manager().contains_range(range)
+        });
+        for (range, approx_size) in &ranges_to_evict {
             if remaining == 0 {
                 break;
             }
@@ -653,11 +752,13 @@ impl BackgroundRunnerCore {
         }
     }
 
+    /// Periodically load top regions and evict regions that are no longer top
+    /// by activity. See: [`Ra`]
     fn top_regions_load_evict(&self) {
         if self.range_stats_manager.is_none() {
             return;
         }
-        let range_stats_manager = self.range_stats_manager.as_ref().unwrap();
+        let range_stats_manager: &RangeStatsManager = self.range_stats_manager.as_ref().unwrap();
         if range_stats_manager.checking_top_regions() {
             return;
         }
@@ -665,18 +766,18 @@ impl BackgroundRunnerCore {
 
         let curr_memory_usage = self.memory_controller.mem_usage();
         let threshold = self.memory_controller.soft_limit_threshold();
-        range_stats_manager.adjust_num_regions(curr_memory_usage, threshold);
+        range_stats_manager.adjust_max_num_regions(curr_memory_usage, threshold);
 
         let mut ranges_to_add = Vec::<CacheRange>::with_capacity(256);
         let mut ranges_to_remove = Vec::<CacheRange>::with_capacity(256);
         range_stats_manager.collect_changed_ranges(&mut ranges_to_add, &mut ranges_to_remove);
         info!("load_evict"; "ranges_to_add" => ?&ranges_to_add, "ranges_to_remove" => ?&ranges_to_remove);
         for evict_range in ranges_to_remove {
-            // TODO (afeinberg): check when last loaded, do not evict unless range has been
-            // cached for a minimum time.
-            let mut core = self.engine.write();
-            if !core.mut_range_manager().evict_range(&evict_range) {
-                error!("fail to evict range"; "evict_range" => ?&evict_range);
+            if self.memory_controller.reached_soft_limit() {
+                let mut core = self.engine.write();
+                if !core.mut_range_manager().evict_range(&evict_range) {
+                    error!("fail to evict range"; "evict_range" => ?&evict_range);
+                }
             }
         }
         for cache_range in ranges_to_add {
@@ -708,7 +809,7 @@ pub(crate) fn flush_epoch() {
 pub struct BackgroundRunner {
     core: BackgroundRunnerCore,
 
-    // We have following three separate workers so that each type of task would not block each
+    // We have following four separate workers so that each type of task would not block each
     // others
     range_load_remote: Remote<yatp::task::future::TaskCell>,
     range_load_worker: Worker,
@@ -918,6 +1019,7 @@ impl Runnable for BackgroundRunner {
                 let f = async move { core.delete_ranges(&ranges) };
                 self.delete_range_remote.spawn(f);
             }
+            // TODO: Consider making this async.
             BackgroundTask::TopRegionsLoadEvict => self.core.top_regions_load_evict(),
         }
     }
