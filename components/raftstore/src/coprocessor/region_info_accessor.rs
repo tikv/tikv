@@ -7,6 +7,7 @@ use std::{
         Bound::{Excluded, Unbounded},
     },
     fmt::{Display, Formatter, Result as FmtResult},
+    num::NonZeroUsize,
     sync::{mpsc, Arc, Mutex, RwLock},
     time::Duration,
 };
@@ -564,10 +565,12 @@ impl RegionCollector {
     }
 
     /// Used by the in-memory engine (if enabled.)
-    /// If `count` is 0, return all the regions for which this node is the
-    /// leader. Otherwise, return the top `count` regions from
-    /// `self.region_activity`. Top regions are determined by comparing
-    /// `read_keys + written_keys` in each region's most recent region stat.
+    /// If `count` is 0, return all the regions.
+    ///
+    /// Otherwise, return the top `count` regions for which this node is the
+    /// leader from `self.region_activity`. Top regions are determined by
+    /// comparing `read_keys + written_keys` in each region's most recent
+    /// region stat.
     ///
     /// Note: this function is `O(N log(N))` with respect to size of
     /// region_activity. This is acceptable, as region_activity is populated
@@ -582,7 +585,6 @@ impl RegionCollector {
         let top_regions = if count == 0 {
             self.regions
                 .values()
-                .filter(|ri| ri.role == StateRole::Leader)
                 .map(|ri| {
                     (
                         ri.region.clone(),
@@ -607,13 +609,15 @@ impl RegionCollector {
             let count = usize::max(count, self.region_activity.len());
             self.region_activity
                 .iter()
-                .sorted_by(|(_, activity_0), (_, activity_1)| compare_fn(activity_0, activity_1))
-                .take(count)
-                .flat_map(|(id, ac)| {
+                .filter_map(|(id, ac)| {
                     self.regions
                         .get(id)
-                        .map(|ri| (ri.region.clone(), ac.region_stat.approximate_size))
+                        .filter(|ri| ri.role == StateRole::Leader)
+                        .map(|ri| (ri, ac))
                 })
+                .sorted_by(|(_, activity_0), (_, activity_1)| compare_fn(activity_0, activity_1))
+                .take(count)
+                .map(|(ri, ac)| (ri.region.clone(), ac.region_stat.approximate_size))
                 .collect::<Vec<_>>()
         };
         callback(top_regions)
@@ -826,7 +830,7 @@ pub trait RegionInfoProvider: Send + Sync {
     fn get_regions_in_range(&self, _start_key: &[u8], _end_key: &[u8]) -> Result<Vec<Region>> {
         unimplemented!()
     }
-    fn get_top_regions(&self, _count: usize) -> Result<TopRegions> {
+    fn get_top_regions(&self, _count: Option<NonZeroUsize>) -> Result<TopRegions> {
         unimplemented!()
     }
 }
@@ -901,10 +905,10 @@ impl RegionInfoProvider for RegionInfoAccessor {
                 })
             })
     }
-    fn get_top_regions(&self, count: usize) -> Result<TopRegions> {
+    fn get_top_regions(&self, count: Option<NonZeroUsize>) -> Result<TopRegions> {
         let (tx, rx) = mpsc::channel();
         let msg = RegionInfoQuery::GetTopRegions {
-            count,
+            count: count.map_or_else(|| 0, usize::from),
             callback: Box::new(move |regions| {
                 if let Err(e) = tx.send(regions) {
                     warn!("failed to send get_top_regions result: {:?}", e);
@@ -1002,7 +1006,7 @@ impl RegionInfoProvider for MockRegionInfoProvider {
             .ok_or(box_err!("Not found region containing {:?}", key))
     }
 
-    fn get_top_regions(&self, _count: usize) -> Result<TopRegions> {
+    fn get_top_regions(&self, _count: Option<NonZeroUsize>) -> Result<TopRegions> {
         let mut regions = Vec::new();
         let (tx, rx) = mpsc::channel();
 

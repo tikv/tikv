@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    num::NonZeroUsize,
     sync::{mpsc::channel, Arc},
     thread,
     time::Duration,
@@ -208,7 +209,7 @@ fn test_region_collection_get_top_regions() {
         let engine = &region_info_providers[&node_id];
 
         let result = engine
-            .get_top_regions(10)
+            .get_top_regions(NonZeroUsize::new(10))
             .unwrap()
             .into_iter()
             .map(|(r, _)| r.get_id())
@@ -225,7 +226,7 @@ fn test_region_collection_get_top_regions() {
         }
         // All the regions for which this node is the leader.
         let result = engine
-            .get_top_regions(0)
+            .get_top_regions(None)
             .unwrap()
             .into_iter()
             .map(|(r, _)| r.get_id())
