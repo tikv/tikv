@@ -7,7 +7,15 @@ use engine_traits::{PerfContext, PerfContextExt, PerfContextKind};
 use kvproto::{kvrpcpb, kvrpcpb::ScanDetailV2};
 use pd_client::BucketMeta;
 use tikv_kv::Engine;
+<<<<<<< HEAD
 use tikv_util::time::{self, Duration, Instant};
+=======
+use tikv_util::{
+    memory::HeapSize,
+    time::{self, Duration, Instant},
+};
+use tipb::ResourceGroupTag;
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
 use txn_types::Key;
 
 use super::metrics::*;
@@ -464,6 +472,16 @@ impl<E: Engine> Drop for Tracker<E> {
                 "tag" => self.req_ctx.tag.get_str(),
             );
         }
+    }
+}
+
+impl<E: Engine> HeapSize for Tracker<E> {
+    fn approximate_heap_size(&self) -> usize {
+        self.req_ctx.approximate_heap_size()
+            + self
+                .buckets
+                .as_ref()
+                .map_or(0, |b| b.approximate_heap_size())
     }
 }
 
