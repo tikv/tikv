@@ -771,6 +771,8 @@ impl BackgroundRunnerCore {
         range_stats_manager.collect_candidates_for_eviction(&mut ranges_to_evict, |range| {
             self.engine.read().range_manager().contains_range(range)
         });
+        // TODO (afeinberg): approximate size may differ from size in in-memory cache,
+        // consider taking the actual size into account.
         for (range, approx_size) in &ranges_to_evict {
             if remaining == 0 {
                 break;
@@ -785,8 +787,13 @@ impl BackgroundRunnerCore {
         }
     }
 
-    /// Periodically load top regions and evict regions that are no longer top
-    /// by activity. See: [`Ra`]
+    /// Periodically load top regions.
+    ///
+    /// If the soft limit is exceeded, evict (some) regions no longer considered
+    /// top.
+    ///
+    /// See: [`RangeStatsManager::collect_changes_ranges`] for
+    /// algorithm details.
     fn top_regions_load_evict(&self) {
         if self.range_stats_manager.is_none() {
             return;
@@ -804,9 +811,10 @@ impl BackgroundRunnerCore {
         let mut ranges_to_add = Vec::<CacheRange>::with_capacity(256);
         let mut ranges_to_remove = Vec::<CacheRange>::with_capacity(256);
         range_stats_manager.collect_changed_ranges(&mut ranges_to_add, &mut ranges_to_remove);
-        info!("load_evict"; "ranges_to_add" => ?&ranges_to_add, "ranges_to_remove" => ?&ranges_to_remove);
+        info!("load_evict"; "ranges_to_add" => ?&ranges_to_add, "may_evict" => ?&ranges_to_remove);
         for evict_range in ranges_to_remove {
             if self.memory_controller.reached_soft_limit() {
+                info!("load_evict: soft limit reached"; "evict_range" => ?&evict_range);
                 let mut core = self.engine.write();
                 if !core.mut_range_manager().evict_range(&evict_range) {
                     error!("fail to evict range"; "evict_range" => ?&evict_range);
@@ -871,8 +879,9 @@ impl Drop for BackgroundRunner {
     }
 }
 
-// The expected average region size: used to estimate the number of top regions
-// to cache.
+// The expected average region size in bytes: used to estimate the number of top
+// regions to cache (using `soft limit threshold /
+// `EXPECTED_AVERAGE_REGION_SIZE`)`.
 pub const EXPECTED_AVERAGE_REGION_SIZE: usize = 96_000_000;
 
 impl BackgroundRunner {
