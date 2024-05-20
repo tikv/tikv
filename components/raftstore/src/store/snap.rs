@@ -2035,6 +2035,7 @@ impl SnapRecvConcurrencyLimiter {
         {
             timestamps.pop_front();
         }
+        timestamps.shrink_to(self.limit.load(Ordering::Relaxed));
     }
 
     // Completes a snapshot receive operation by removing a timestamp from the
