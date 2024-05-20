@@ -5809,6 +5809,27 @@ where
         }
     }
 
+    pub fn send_tombstone_peer_msg<T: Transport>(&self, ctx: &mut PollContext<EK, ER, T>) {
+        let mut msg = ExtraMessage::default();
+        msg.set_type(ExtraMessageType::MsgGcPeerRequest);
+        // Forcely set the index with `u64::max_value()` to make sure the tombstone
+        // message can be handled correctly.
+        msg.set_index(u64::MAX);
+        // No need to set `CheckGcPeer` here as v2 does, because the peer is waited to
+        // be destroyed.
+        let leader_id = self.leader_id();
+        let leader = self.get_peer_from_cache(leader_id);
+        if let Some(leader) = leader {
+            self.send_extra_message(msg, &mut ctx.trans, &leader);
+            info!(
+                "send tombstone peer to leader after applying snapshot failed";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
+                "leader_id" => leader_id,
+            );
+        }
+    }
+
     /// Update states of the peer which can be changed in the previous raft
     /// tick.
     pub fn post_raft_group_tick(&mut self) {

@@ -1263,9 +1263,12 @@ where
                 self.fsm.has_ready = true;
                 let apply_snap_failed =
                     tombstone && self.fsm.peer.peer_id() == peer_id && !self.fsm.peer.is_leader();
-                if apply_snap_failed || self.fsm.peer.should_destroy_after_apply_snapshot() {
+                if apply_snap_failed {
+                    // Send ConfChange to the leader to make the region tombstone the peer.
+                    self.fsm.peer.send_tombstone_peer_msg(self.ctx);
+                } else if self.fsm.peer.should_destroy_after_apply_snapshot() {
                     info!(
-                        "destroy peer due to failure on applying snapshots or manually cancel";
+                        "destroy peer due to manually cancel";
                         "peer_id" => peer_id,
                     );
                     self.maybe_destroy();
@@ -2938,18 +2941,45 @@ where
     fn on_gc_peer_request(&mut self, msg: RaftMessage) {
         let extra_msg = msg.get_extra_msg();
 
-        if !extra_msg.has_check_gc_peer() || extra_msg.get_index() == 0 {
-            // Corrupted message.
-            return;
-        }
-        if self.fsm.peer.get_store().applied_index() < extra_msg.get_index() {
-            // Merge not finish.
-            return;
-        }
+        // To make learner (e.g. tiflash engine) compatiable with raftstore v2,
+        // it needs to response GcPeerResponse.
+        // And as for v1, it needs to trigger the `ConfChange` command to gc
+        // the abnormal peer as expected.
+        if self.ctx.cfg.enable_v2_compatible_learner {
+            if !extra_msg.has_check_gc_peer() || extra_msg.get_index() == 0 {
+                // Corrupted message.
+                return;
+            }
+            if self.fsm.peer.get_store().applied_index() < extra_msg.get_index() {
+                // Merge not finish.
+                return;
+            }
 
-        forward_destroy_to_source_peer(&msg, |m| {
-            let _ = self.ctx.router.send_raft_message(m);
-        });
+            forward_destroy_to_source_peer(&msg, |m| {
+                let _ = self.ctx.router.send_raft_message(m);
+            });
+        } else {
+            if !self.fsm.peer.is_leader() {
+                return;
+            }
+
+            if extra_msg.get_index() == u64::MAX {
+                // It's a GC request from the source peer.
+                let mut req = AdminRequest::default();
+                req.set_cmd_type(AdminCmdType::ChangePeer);
+                req.mut_change_peer()
+                    .set_change_type(ConfChangeType::RemoveNode);
+                req.mut_change_peer().set_peer(msg.get_from_peer().clone());
+                let mut request =
+                    new_admin_request(self.fsm.peer.region().get_id(), self.fsm.peer.peer.clone());
+                request.set_admin_request(req);
+                self.propose_raft_command_internal(
+                    request,
+                    Callback::None,
+                    DiskFullOpt::AllowedOnAlmostFull,
+                );
+            }
+        }
     }
 
     fn on_extra_message(&mut self, mut msg: RaftMessage) {
@@ -3009,11 +3039,7 @@ where
                 self.on_voter_replicated_index_response(msg.get_extra_msg());
             }
             ExtraMessageType::MsgGcPeerRequest => {
-                // To make learner (e.g. tiflash engine) compatiable with raftstore v2,
-                // it needs to response GcPeerResponse.
-                if self.ctx.cfg.enable_v2_compatible_learner {
-                    self.on_gc_peer_request(msg);
-                }
+                self.on_gc_peer_request(msg);
             }
             // It's v2 only message and ignore does no harm.
             ExtraMessageType::MsgGcPeerResponse | ExtraMessageType::MsgFlushMemtable => (),
