@@ -1991,7 +1991,7 @@ impl SnapManagerCore {
 }
 
 /// `SnapRecvConcurrencyLimiter` enforces a limit on the number of simultaneous
-/// snapshot receives. It is consulted before a snapshot is generated.
+/// snapshot receives. It is consulted before a snapshot is generated. It
 /// employs a TTL mechanism to automatically evict operations that have been
 /// pending longer than the specified TTL. The TTL helps to handle scenarios
 /// where a snapshot fails to be sent for any reason.
@@ -2007,20 +2007,23 @@ impl SnapRecvConcurrencyLimiter {
         SnapRecvConcurrencyLimiter {
             limit: Arc::new(AtomicUsize::new(limit)),
             ttl_secs,
-            timestamps: Arc::new(Mutex::new(VecDeque::new())),
+            timestamps: Arc::new(Mutex::new(VecDeque::with_capacity(limit))),
         }
     }
 
     // Attempts to add a snapshot receive operation if below the concurrency
     // limit. Returns true if the operation is allowed, false otherwise.
     pub fn try_recv(&self) -> bool {
-        let limit = self.limit.load(Ordering::Relaxed);
-        if limit == 0 {
-            return true;
-        }
         let mut timestamps = self.timestamps.lock().unwrap();
         let current_time = Instant::now();
         self.evict_expired_timestamps(&mut timestamps, current_time);
+
+        let limit = self.limit.load(Ordering::Relaxed);
+        if limit == 0 {
+            // 0 means no limit. In that case, we avoid pushing into the
+            // VecDeque to prevent it from growing indefinitely.
+            return true;
+        }
 
         if timestamps.len() < limit {
             timestamps.push_back(current_time);
@@ -2616,7 +2619,7 @@ pub mod tests {
             registry: Default::default(),
             recv_concurrency_limiter: Arc::new(SnapRecvConcurrencyLimiter::new(
                 0,
-                RECV_SNAP_TTL_SECS,
+                RECV_SNAP_CONCURRENCY_LIMITER_TTL_SECS,
             )),
             limiter: Limiter::new(f64::INFINITY),
             temp_sst_id: Arc::new(AtomicU64::new(0)),
@@ -3531,5 +3534,10 @@ pub mod tests {
         assert!(limiter.try_recv());
         assert!(limiter.try_recv());
         assert!(limiter.try_recv());
+
+        // After canceling the limit, the capacity of the VecDeque should be 0.
+        limiter.set_limit(0);
+        assert!(limiter.try_recv());
+        assert!(limiter.timestamps.lock().unwrap().capacity() == 0);
     }
 }
