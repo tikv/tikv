@@ -1994,7 +1994,8 @@ impl SnapManagerCore {
 /// snapshot receives. It is consulted before a snapshot is generated. It
 /// employs a TTL mechanism to automatically evict operations that have been
 /// pending longer than the specified TTL. The TTL helps to handle scenarios
-/// where a snapshot fails to be sent for any reason.
+/// where a snapshot fails to be sent for any reason. Note that a limit of 0
+/// means there's no limit.
 #[derive(Clone)]
 pub struct SnapRecvConcurrencyLimiter {
     limit: Arc<AtomicUsize>,
@@ -2003,6 +2004,7 @@ pub struct SnapRecvConcurrencyLimiter {
 }
 
 impl SnapRecvConcurrencyLimiter {
+    // Note that a limit of 0 means there's no limit.
     pub fn new(limit: usize, ttl_secs: u64) -> Self {
         SnapRecvConcurrencyLimiter {
             limit: Arc::new(AtomicUsize::new(limit)),
@@ -3537,6 +3539,11 @@ pub mod tests {
 
         // After canceling the limit, the capacity of the VecDeque should be 0.
         limiter.set_limit(0);
+        assert!(limiter.try_recv());
+        assert!(limiter.timestamps.lock().unwrap().capacity() == 0);
+
+        // Test initializing a limiter with no limit.
+        let limiter = SnapRecvConcurrencyLimiter::new(0, 0);
         assert!(limiter.try_recv());
         assert!(limiter.timestamps.lock().unwrap().capacity() == 0);
     }
