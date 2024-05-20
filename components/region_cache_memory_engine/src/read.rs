@@ -571,8 +571,10 @@ mod tests {
     use crossbeam::epoch;
     use engine_traits::{
         CacheRange, FailedReason, IterMetricsCollector, IterOptions, Iterable, Iterator,
-        MetricsExt, Peekable, RangeCacheEngine, ReadOptions,
+        MetricsExt, Mutable, Peekable, RangeCacheEngine, ReadOptions, WriteBatch, WriteBatchExt,
+        WriteOptions,
     };
+    use keys::{DATA_MAX_KEY, DATA_MIN_KEY};
     use skiplist_rs::SkipList;
     use tikv_util::config::VersionTrack;
 
@@ -1810,26 +1812,21 @@ mod tests {
 
     #[test]
     fn test_xxxx() {
-        let sl_engine = SkiplistEngine::new();
-        let mem_ctl = Arc::new(MemoryController::new(Arc::default(), sl_engine.clone()));
-        let handle = sl_engine.cf_handle("lock");
-        let user_key = b"7A7480000000000000FF725F728000000000FF0000060000000000FA";
-        let mut k = encode_key(user_key, 1000, ValueType::Value);
-        k.set_memory_controller(mem_ctl.clone());
-        let mut v = InternalBytes::from_vec(b"val".to_vec());
-        v.set_memory_controller(mem_ctl.clone());
-        let guard = &epoch::pin();
-        handle.insert(k, v, guard);
-        let mut k = encode_key(user_key, 1001, ValueType::Deletion);
-        k.set_memory_controller(mem_ctl.clone());
-        let mut v = InternalBytes::from_vec(b"".to_vec());
-        v.set_memory_controller(mem_ctl.clone());
-        handle.insert(k, v, guard);
+        let engine = RangeCacheMemoryEngine::new(Arc::new(VersionTrack::new(
+            RangeCacheEngineConfig::config_for_test(),
+        )));
+        let range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
+        engine.new_range(range.clone());
 
-        let mut iter = handle.iterator();
-        let seek_key = encode_seek_key(user_key, 1001);
-        iter.seek(&seek_key, guard);
-        println!("{:?}", iter.key());
-        println!("{:?}", iter.value());
+        let mut wb = engine.write_batch();
+        wb.prepare_for_range(range.clone());
+        wb.put_cf("lock", b"zk1", b"val");
+        wb.delete_cf("lock", b"zk1");
+        wb.set_sequence_number(66151);
+        wb.write_opt(&WriteOptions::default());
+
+        let snap = engine.snapshot(range.clone(), 100, 66302).unwrap();
+        let res = snap.get_value_cf("lock", b"zk1");
+        println!("{:?}", res);
     }
 }

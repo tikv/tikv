@@ -104,23 +104,27 @@ impl RangeCacheWriteBatch {
         Ok(())
     }
 
-    fn write_impl(&mut self, seq: u64) -> Result<()> {
+    fn write_impl(&mut self, mut seq: u64) -> Result<u64> {
         fail::fail_point!("on_write_impl");
+        let origin = seq;
         let ranges_to_delete = self.handle_ranges_to_evict();
         let (entries_to_write, engine) = self.engine.handle_pending_range_in_loading_buffer(
-            seq,
+            &mut seq,
             std::mem::take(&mut self.pending_range_in_loading_buffer),
         );
         let guard = &epoch::pin();
         let start = Instant::now();
+
         // Some entries whose ranges may be marked as evicted above, but it does not
         // matter, they will be deleted later.
-        let res = entries_to_write
+        entries_to_write
             .into_iter()
             .chain(std::mem::take(&mut self.buffer))
             .try_for_each(|e| {
-                e.write_to_memory(seq, &engine, self.memory_controller.clone(), guard)
-            });
+                let cur = seq;
+                seq += 1;
+                e.write_to_memory(cur, &engine, self.memory_controller.clone(), guard)
+            })?;
         let duration = start.saturating_elapsed_secs();
         WRITE_DURATION_HISTOGRAM.observe(duration);
 
@@ -138,7 +142,13 @@ impl RangeCacheWriteBatch {
             }
         }
 
-        res
+        info!(
+            "write_impl seqno";
+            "begin" => origin,
+            "after" => seq,
+        );
+
+        Ok(seq)
     }
 
     // return ranges that can be deleted from engine now
@@ -490,7 +500,7 @@ impl WriteBatchExt for RangeCacheMemoryEngine {
 impl WriteBatch for RangeCacheWriteBatch {
     fn write_opt(&mut self, _: &WriteOptions) -> Result<u64> {
         self.sequence_number
-            .map(|seq| self.write_impl(seq).map(|()| seq))
+            .map(|seq| self.write_impl(seq))
             .transpose()
             .map(|o| o.ok_or_else(|| box_err!("sequence_number must be set!")))?
     }

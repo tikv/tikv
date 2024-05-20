@@ -412,7 +412,7 @@ impl RangeCacheMemoryEngine {
     // cached and which writes should be written directly.
     pub(crate) fn handle_pending_range_in_loading_buffer(
         &self,
-        seq: u64,
+        seq: &mut u64,
         pending_range_in_loading_buffer: Vec<RangeCacheWriteBatchEntry>,
     ) -> (Vec<RangeCacheWriteBatchEntry>, SkiplistEngine) {
         if !pending_range_in_loading_buffer.is_empty() {
@@ -426,7 +426,11 @@ impl RangeCacheMemoryEngine {
                     core.cached_write_batch
                         .entry(range)
                         .or_default()
-                        .extend(write_batches.into_iter().map(|e| (seq, e)));
+                        .extend(write_batches.into_iter().map(|e| {
+                            let cur = *seq;
+                            *seq += 1;
+                            (cur, e)
+                        }));
                 }
             }
             (entries_to_write, engine)

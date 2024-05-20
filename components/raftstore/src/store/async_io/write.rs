@@ -15,9 +15,7 @@ use std::{
 
 use collections::HashMap;
 use crossbeam::channel::TryRecvError;
-use engine_traits::{
-    KvEngine, PerfContext, PerfContextKind, RaftEngine, RaftLogBatch, WriteBatch, WriteOptions,
-};
+use engine_traits::{KvEngine, PerfContext, PerfContextKind, RaftEngine, RaftLogBatch, SnapshotMiscExt, WriteBatch, WriteOptions};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use file_system::{set_io_type, IoType};
@@ -735,12 +733,16 @@ where
                 write_opts.set_sync(true);
                 // TODO: Add perf context
                 let tag = &self.tag;
-                kv_wb.write_opt(&write_opts).unwrap_or_else(|e| {
+                let seq = kv_wb.write_opt(&write_opts).unwrap_or_else(|e| {
                     panic!(
                         "store {}: {} failed to write to kv engine: {:?}",
                         store_id, tag, e
                     );
                 });
+                let snap = self.kv_engine.as_ref().unwrap().snapshot(None);
+                let latest_seq = snap.sequence_number();
+                assert!(seq <= latest_seq);
+
                 if kv_wb.data_size() > KV_WB_SHRINK_SIZE {
                     *kv_wb = self
                         .kv_engine
