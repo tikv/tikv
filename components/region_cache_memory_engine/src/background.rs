@@ -750,7 +750,7 @@ impl BackgroundRunnerCore {
     /// keep evicting until either all candidates are evicted, or the total
     /// approximated size of evicted regions is equal to or greater than the
     /// excess memory usage.
-    fn evict_on_soft_limit_reached(&mut self) {
+    fn evict_on_soft_limit_reached(&self) {
         if self.range_stats_manager.is_none() {
             warn!("range stats manager is not initialized, cannot evict on soft limit reached");
             return;
@@ -861,6 +861,11 @@ pub struct BackgroundRunner {
     gc_range_remote: Remote<yatp::task::future::TaskCell>,
     gc_range_worker: Worker,
 
+    // Region load and eviction worker.
+    // TODO: this can be consolidated, possibly with the GC worker.
+    load_evict_remote: Remote<yatp::task::future::TaskCell>,
+    load_evict_worker: Worker,
+
     lock_cleanup_remote: Remote<yatp::task::future::TaskCell>,
     lock_cleanup_worker: Worker,
 
@@ -875,6 +880,7 @@ impl Drop for BackgroundRunner {
         self.range_load_worker.stop();
         self.delete_range_worker.stop();
         self.gc_range_worker.stop();
+        self.load_evict_worker.stop();
         self.lock_cleanup_worker.stop();
     }
 }
@@ -908,6 +914,10 @@ impl BackgroundRunner {
             .thread_count(1)
             .create();
         let gc_range_remote = gc_range_worker.remote();
+
+        let load_evict_worker = Worker::new("background-region-load-evict-worker");
+        let load_evict_remote = load_evict_worker.remote();
+
         let num_regions_to_cache =
             memory_controller.soft_limit_threshold() / EXPECTED_AVERAGE_REGION_SIZE;
         let range_stats_manager =
@@ -924,6 +934,8 @@ impl BackgroundRunner {
             delete_range_remote,
             gc_range_worker,
             gc_range_remote,
+            load_evict_worker,
+            load_evict_remote,
             lock_cleanup_remote,
             lock_cleanup_worker,
             last_seqno: 0,
@@ -1093,17 +1105,26 @@ impl Runnable for BackgroundRunner {
                     "mem_usage(MB)" => ReadableSize(mem_usage as u64).as_mb()
                 );
                 if mem_usage > self.core.memory_controller.soft_limit_threshold() {
-                    self.core.evict_on_soft_limit_reached();
+                    let core = self.core.clone();
+                    let task = async move {
+                        core.evict_on_soft_limit_reached();
+                        core.memory_controller.set_memory_checking(false);
+                    };
+                    self.load_evict_remote.spawn(task);
+                } else {
+                    self.core.memory_controller.set_memory_checking(false);
                 }
-                self.core.memory_controller.set_memory_checking(false);
             }
             BackgroundTask::DeleteRange(ranges) => {
                 let mut core = self.core.clone();
                 let f = async move { core.delete_ranges(&ranges) };
                 self.delete_range_remote.spawn(f);
             }
-            // TODO: Consider making this async.
-            BackgroundTask::TopRegionsLoadEvict => self.core.top_regions_load_evict(),
+            BackgroundTask::TopRegionsLoadEvict => {
+                let core = self.core.clone();
+                let task = async move { core.top_regions_load_evict() };
+                self.load_evict_remote.spawn(task);
+            }
             BackgroundTask::CleanLockTombstone(snapshot_seqno) => {
                 if snapshot_seqno < self.last_seqno {
                     return;
