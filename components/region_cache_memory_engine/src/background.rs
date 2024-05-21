@@ -1169,7 +1169,6 @@ impl Filter {
 
         let (mvcc_key_prefix, commit_ts) = split_ts(user_key)?;
         if commit_ts > self.safe_point {
-            assert!(v_type != ValueType::Deletion);
             return Ok(());
         }
 
