@@ -639,20 +639,20 @@ where
             };
 
             let mut no_op_loop_count = 3;
-            while self.batch.get_raft_size() < self.raft_write_size_limit || no_op_loop_count > 0 {
-                no_op_loop_count -= 1;
+            while self.batch.get_raft_size() < self.raft_write_size_limit {
                 match self.receiver.try_recv() {
                     Ok(msg) => {
                         stopped |= self.handle_msg(msg);
                     }
                     Err(TryRecvError::Empty) => {
-                        if self.batch.get_raft_size() >= 8192 {
-                            break;
-                        } else {
+                        if self.batch.get_raft_size() < 8192 && no_op_loop_count > 0 {
                             // If the size of the batch is small enough, we spin for a while
                             // to make the batch larger. This can reduce the IOPS
                             // amplification if there are many trivial writes.
+                            no_op_loop_count -= 1;
                             continue;
+                        } else {
+                            break;
                         }
                     }
                     Err(TryRecvError::Disconnected) => {
