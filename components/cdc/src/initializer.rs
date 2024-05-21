@@ -239,17 +239,18 @@ impl<E: KvEngine> Initializer<E> {
 
         // Be compatible with old TiCDC clients, which won't give `observed_range`.
         let (start_key, end_key): (Key, Key);
-        if self.observed_range.start_key_encoded <= region.start_key {
+        if self.observed_range.start_key_encoded.as_encoded() <= &region.start_key {
             start_key = Key::from_encoded_slice(&region.start_key);
         } else {
-            start_key = Key::from_encoded_slice(&self.observed_range.start_key_encoded);
+            start_key = self.observed_range.start_key_encoded.clone();
         }
         if self.observed_range.end_key_encoded.is_empty()
-            || self.observed_range.end_key_encoded >= region.end_key && !region.end_key.is_empty()
+            || self.observed_range.end_key_encoded.as_encoded() >= &region.end_key
+                && !region.end_key.is_empty()
         {
             end_key = Key::from_encoded_slice(&region.end_key);
         } else {
-            end_key = Key::from_encoded_slice(&self.observed_range.end_key_encoded)
+            end_key = self.observed_range.end_key_encoded.clone();
         }
 
         debug!(

@@ -126,11 +126,16 @@ impl DownstreamState {
 }
 
 pub struct Downstream {
+    /// A unique identifier of the Downstream.
     pub id: DownstreamId,
+    /// The IP address of downstream.
     pub peer: String,
     pub region_epoch: RegionEpoch,
+    /// The request ID set by CDC to identify events corresponding different
+    /// requests.
     pub req_id: u64,
     pub conn_id: ConnId,
+
     pub kv_api: ChangeDataRequestKvApi,
     pub filter_loop: bool,
     pub observed_range: ObservedRange,
@@ -271,8 +276,12 @@ impl fmt::Debug for LockTracker {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LockTracker::Pending => write!(f, "LockTracker::Pending"),
-            LockTracker::Preparing(..) => write!(f, "LockTracker::Preparing"),
-            LockTracker::Prepared { .. } => write!(f, "LockTracker::Prepared"),
+            LockTracker::Preparing(ref locks) => {
+                write!(f, "LockTracker::Preparing({})", locks.len())
+            }
+            LockTracker::Prepared { locks, .. } => {
+                write!(f, "LockTracker::Prepared({})", locks.len())
+            }
         }
     }
 }
@@ -330,18 +339,22 @@ impl Drop for Delegate {
         match &self.lock_tracker {
             LockTracker::Pending => {}
             LockTracker::Preparing(locks) => {
+                let mut free_bytes = 0;
                 for lock in locks {
                     let bytes = lock.approximate_heap_size();
                     self.memory_quota.free(bytes);
-                    CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
+                    free_bytes += bytes;
                 }
+                CDC_PENDING_BYTES_GAUGE.sub(free_bytes as _);
             }
             LockTracker::Prepared { locks, .. } => {
+                let mut free_bytes = 0;
                 for lock in locks.keys() {
                     let bytes = lock.approximate_heap_size();
                     self.memory_quota.free(bytes);
-                    CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
+                    free_bytes += bytes;
                 }
+                CDC_PENDING_BYTES_GAUGE.sub(free_bytes as _);
             }
         }
     }
@@ -856,7 +869,9 @@ impl Delegate {
                     self.sink_put(req.take_put(), &mut rows_builder, &mut read_old_value)?
                 }
                 CmdType::Delete => self.sink_delete(req.take_delete(), &mut rows_builder)?,
-                _ => debug!("skip other command"; "region_id" => self.region_id, "command" => ?req),
+                _ => debug!("cdc skip other command";
+                    "region_id" => self.region_id,
+                    "command" => ?req),
             };
         }
 
@@ -1229,7 +1244,7 @@ fn decode_write(
     false
 }
 
-fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow, has_value: &mut bool) -> bool {
+fn decode_lock(key: Vec<u8>, mut lock: Lock, row: &mut EventRow, has_value: &mut bool) -> bool {
     let key = Key::from_encoded(key);
     let op_type = match lock.lock_type {
         LockType::Put => EventRowOpType::Put,
@@ -1245,8 +1260,8 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow, has_value: &mut boo
     row.op_type = op_type as _;
     row.txn_source = lock.txn_source;
     set_event_row_type(row, EventLogType::Prewrite);
-    if let Some(value) = lock.short_value {
-        assert!(!*has_value);
+    if let Some(value) = lock.short_value.take() {
+        assert!(!*has_value, "unexpected lock with value: {:?}", lock);
         *has_value = true;
         row.value = value;
     }
@@ -1287,8 +1302,8 @@ fn decode_default(value: Vec<u8>, row: &mut EventRow, has_value: &mut bool) {
 /// Observed key range.
 #[derive(Clone, Default)]
 pub struct ObservedRange {
-    pub start_key_encoded: Vec<u8>,
-    pub end_key_encoded: Vec<u8>,
+    pub start_key_encoded: Key,
+    pub end_key_encoded: Key,
     pub start_key_raw: Vec<u8>,
     pub end_key_raw: Vec<u8>,
     pub all_key_covered: bool,
@@ -1296,10 +1311,14 @@ pub struct ObservedRange {
 
 impl ObservedRange {
     pub fn new(start_key_encoded: Vec<u8>, end_key_encoded: Vec<u8>) -> Result<ObservedRange> {
-        let start_key_raw = Key::from_encoded(start_key_encoded.clone())
+        let start_key_encoded = Key::from_encoded(start_key_encoded);
+        let end_key_encoded = Key::from_encoded(end_key_encoded);
+        let start_key_raw = start_key_encoded
+            .clone()
             .into_raw()
             .map_err(|e| Error::Other(e.into()))?;
-        let end_key_raw = Key::from_encoded(end_key_encoded.clone())
+        let end_key_raw = end_key_encoded
+            .clone()
             .into_raw()
             .map_err(|e| Error::Other(e.into()))?;
         Ok(ObservedRange {
@@ -1314,9 +1333,10 @@ impl ObservedRange {
     #[allow(clippy::collapsible_if)]
     pub fn update_region_key_range(&mut self, region: &Region) {
         // Check observed key range in region.
-        if self.start_key_encoded <= region.start_key {
+        if self.start_key_encoded.as_encoded() <= &region.start_key {
             if self.end_key_encoded.is_empty()
-                || (region.end_key <= self.end_key_encoded && !region.end_key.is_empty())
+                || (&region.end_key <= self.end_key_encoded.as_encoded()
+                    && !region.end_key.is_empty())
             {
                 // Observed range covers the region.
                 self.all_key_covered = true;
@@ -1335,7 +1355,11 @@ impl ObservedRange {
     }
 
     pub fn contains_encoded_key(&self, key: &[u8]) -> bool {
-        self.is_key_in_range(&self.start_key_encoded, &self.end_key_encoded, key)
+        self.is_key_in_range(
+            self.start_key_encoded.as_encoded(),
+            self.end_key_encoded.as_encoded(),
+            key,
+        )
     }
 
     pub fn contains_raw_key(&self, key: &[u8]) -> bool {
@@ -1352,11 +1376,11 @@ impl ObservedRange {
     }
 
     fn to_range(&self) -> (Bound<&Key>, Bound<&Key>) {
-        let start = Bound::Included(Key::transmute_encoded(&self.start_key_encoded));
+        let start = Bound::Included(&self.start_key_encoded);
         let end = if self.end_key_encoded.is_empty() {
             Bound::Unbounded
         } else {
-            Bound::Excluded(Key::transmute_encoded(&self.end_key_encoded))
+            Bound::Excluded(&self.end_key_encoded)
         };
         (start, end)
     }

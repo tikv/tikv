@@ -45,7 +45,7 @@ pub type KvPair = (Vec<u8>, Value);
 /// Orthogonal to binary representation, keys may or may not embed a timestamp,
 /// but this information is transparent to this type, the caller must use it
 /// consistently.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Hash, Default)]
 #[repr(transparent)]
 pub struct Key(Vec<u8>);
 
@@ -249,9 +249,8 @@ impl Key {
         self.0.len()
     }
 
-    #[inline]
-    pub fn transmute_encoded(encoded_key: &Vec<u8>) -> &Self {
-        unsafe { std::mem::transmute(encoded_key) }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 
