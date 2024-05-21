@@ -320,7 +320,7 @@ def Cluster() -> RowPanel:
                             "tikv_range_cache_memory_engine_flow",
                             label_selectors=['type=~"bytes_read|iter_bytes_read"'],
                         ),
-                        legend_format=r"{{instance}}-range-cache-engine-read",
+                        legend_format=r"{{instance}}-range-cache-engine-read-",
                     ),
                 ],
             ),
@@ -3934,6 +3934,23 @@ def CoprocessorOverview() -> RowPanel:
             ),
         ]
     )
+    layout.row(
+        [
+            graph_panel(
+                title="Memory Quota",
+                description="Total bytes of memory used by coprocessor requests",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_coprocessor_memory_quota",
+                            by_labels=["instance", "type"],
+                        ),
+                    ),
+                ],
+            )
+        ]
+    )
     return layout.row_panel
 
 
@@ -4118,11 +4135,11 @@ def RangeCacheMemoryEngine() -> RowPanel:
             ),
             graph_panel(
                 title="Range Count",
-                description="The pending range count the range cache memory engine",
+                description="The count of different types of range",
                 targets=[
                     target(
                         expr=expr_avg(
-                            "tikv_range_cache_ranges_count",
+                            "tikv_range_cache_count",
                             by_labels=["instance", "type"],
                         ),
                         legend_format="{{instance}}--{{type}}",
@@ -6138,6 +6155,12 @@ def RaftEngine() -> RowPanel:
                         ),
                     ),
                 ],
+            ),
+            graph_panel_histogram_quantiles(
+                title="Write Compression Ratio",
+                description="The compression ratio per write",
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
+                metric="raft_engine_write_compression_ratio",
             ),
         ]
     )
@@ -8834,6 +8857,18 @@ def BackupLog() -> RowPanel:
                         expr=expr_sum_rate(
                             "tikv_log_backup_initial_scan_reason",
                             by_labels=["reason"],
+                        ),
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Initial Scanning Task Status",
+                description="The task status of initial scanning.",
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_log_backup_pending_initial_scan",
+                            by_labels=["stage"],
                         ),
                     )
                 ],

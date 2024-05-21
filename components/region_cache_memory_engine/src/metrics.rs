@@ -69,12 +69,6 @@ lazy_static! {
         exponential_buckets(0.00001, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref IN_MEMORY_ENGINE_FLOW: IntCounterVec = register_int_counter_vec!(
-        "tikv_range_cache_memory_engine_flow",
-        "Bytes and keys of read/written of range cache memory engine",
-        &["type"]
-    )
-    .unwrap();
     pub static ref PREPARE_FOR_APPLY_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
         "tikv_range_cache_engine_prepare_for_apply_duration_seconds",
         "Bucketed histogram of prepare for apply duration in range cache engine.",
@@ -82,9 +76,15 @@ lazy_static! {
         exponential_buckets(0.00001, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref RANGE_CACHE_PENDING_RANGE_COUNT: IntGaugeVec = register_int_gauge_vec!(
-        "tikv_range_cache_ranges_count",
-        "The range count of the range cache engine",
+    pub static ref RANGE_CACHE_COUNT: IntGaugeVec = register_int_gauge_vec!(
+        "tikv_range_cache_count",
+        "The count of each type on range cache.",
+        &["type"]
+    )
+    .unwrap();
+    pub static ref IN_MEMORY_ENGINE_FLOW: IntCounterVec = register_int_counter_vec!(
+        "tikv_range_cache_memory_engine_flow",
+        "Bytes and keys of read/written of range cache memory engine",
         &["type"]
     )
     .unwrap();

@@ -15,6 +15,7 @@ use engine_traits::{
     CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
+use raftstore::coprocessor::RegionInfoProvider;
 use skiplist_rs::{
     base::{Entry, OwnedIter},
     SkipList,
@@ -30,7 +31,7 @@ use crate::{
     read::{RangeCacheIterator, RangeCacheSnapshot},
     statistics::Statistics,
     write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
-    RangeCacheEngineConfig, RangeCacheEngineOptions,
+    RangeCacheEngineConfig, RangeCacheEngineContext,
 };
 
 pub(crate) const CF_DEFAULT_USIZE: usize = 0;
@@ -252,19 +253,28 @@ pub struct RangeCacheMemoryEngine {
 }
 
 impl RangeCacheMemoryEngine {
-    pub fn new(options: RangeCacheEngineOptions) -> Self {
+    pub fn new(range_cache_engine_context: RangeCacheEngineContext) -> Self {
+        RangeCacheMemoryEngine::with_region_info_provider(range_cache_engine_context, None)
+    }
+
+    pub fn with_region_info_provider(
+        range_cache_engine_context: RangeCacheEngineContext,
+        region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
+    ) -> Self {
         info!("init range cache memory engine";);
         let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
         let skiplist_engine = { core.read().engine().clone() };
 
-        let RangeCacheEngineOptions { config, statistics } = options;
+        let RangeCacheEngineContext { config, statistics } = range_cache_engine_context;
         assert!(config.value().enabled);
         let memory_controller = Arc::new(MemoryController::new(config.clone(), skiplist_engine));
 
         let bg_work_manager = Arc::new(BgWorkManager::new(
             core.clone(),
             config.value().gc_interval.0,
+            config.value().load_evict_interval.0,
             memory_controller.clone(),
+            region_info_provider,
         ));
 
         Self {
@@ -272,7 +282,7 @@ impl RangeCacheMemoryEngine {
             rocks_engine: None,
             bg_work_manager,
             memory_controller,
-            statistics: statistics.unwrap(),
+            statistics,
             config,
         }
     }
@@ -331,19 +341,19 @@ impl RangeCacheMemoryEngine {
             .pending_ranges
             .iter()
             .enumerate()
-            .find_map(|(idx, r)| {
-                if r.contains_range(range) {
+            .find_map(|(idx, pending_range)| {
+                if pending_range.contains_range(range) {
                     // The `range` may be a proper subset of `r` and we should split it in this case
                     // and push the rest back to `pending_range` so that each range only schedules
                     // load task of its own.
-                    Some((idx, r.split_off(range)))
-                } else if range.overlaps(r) {
+                    Some((idx, pending_range.split_off(range)))
+                } else if range.overlaps(pending_range) {
                     // Pending range `range` does not contains the applying range `r` but overlap
                     // with it, which means the pending range is out dated, we remove it directly.
                     info!(
                         "out of date pending ranges";
                         "applying_range" => ?range,
-                        "pending_range" => ?r,
+                        "pending_range" => ?pending_range,
                     );
                     overlapped = true;
                     Some((idx, (None, None)))
@@ -514,11 +524,11 @@ pub mod tests {
     use engine_traits::CacheRange;
     use tikv_util::config::VersionTrack;
 
-    use crate::{RangeCacheEngineConfig, RangeCacheEngineOptions, RangeCacheMemoryEngine};
+    use crate::{RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine};
 
     #[test]
     fn test_overlap_with_pending() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range1 = CacheRange::new(b"k1".to_vec(), b"k3".to_vec());

@@ -17,10 +17,17 @@ use slog_global::error;
 use tikv_util::{box_err, time::Instant};
 
 use crate::{
-    background::BackgroundTask, engine::{cf_to_id, SkiplistEngine}, keys::{
+    background::BackgroundTask,
+    engine::{cf_to_id, SkiplistEngine},
+    keys::{
         decode_key, encode_seek_for_prev_key, encode_seek_key, InternalBytes, InternalKey,
         ValueType,
-    }, metrics::IN_MEMORY_ENGINE_SEEK_DURATION, perf_context::PERF_CONTEXT, perf_counter_add, statistics::{LocalStatistics, Statistics, Tickers}, RangeCacheMemoryEngine
+    },
+    metrics::IN_MEMORY_ENGINE_SEEK_DURATION,
+    perf_context::PERF_CONTEXT,
+    perf_counter_add,
+    statistics::{LocalStatistics, Statistics, Tickers},
+    RangeCacheMemoryEngine,
 };
 
 #[derive(PartialEq)]
@@ -260,6 +267,7 @@ impl Drop for RangeCacheIterator {
         );
 
         self.seek_duration.flush();
+        perf_counter_add!(iter_read_bytes, self.local_stats.bytes_read);
     }
 }
 
@@ -459,16 +467,18 @@ impl Iterator for RangeCacheIterator {
         assert!(self.direction == Direction::Forward);
         let guard = &epoch::pin();
         self.iter.next(guard);
+
         perf_counter_add!(internal_key_skipped_count, 1);
         self.local_stats.number_db_next += 1;
         self.valid = self.iter.valid();
         if self.valid {
+            // self.valid can be changed after this
             self.find_next_visible_key(true, guard);
         }
 
         if self.valid {
             self.local_stats.number_db_next_found += 1;
-            self.collects_read_flow_stats();
+            self.local_stats.bytes_read += (self.key().len() + self.value().len()) as u64;
         }
 
         Ok(self.valid)
@@ -483,7 +493,7 @@ impl Iterator for RangeCacheIterator {
         self.local_stats.number_db_prev += 1;
         if self.valid {
             self.local_stats.number_db_prev_found += 1;
-            self.collects_read_flow_stats();
+            self.local_stats.bytes_read += (self.key().len() + self.value().len()) as u64;
         }
 
         Ok(self.valid)
@@ -506,10 +516,11 @@ impl Iterator for RangeCacheIterator {
         let seek_key = encode_seek_key(seek_key, self.sequence_number);
         self.seek_internal(&seek_key);
         if self.valid {
-            self.collects_read_flow_stats();
+            self.local_stats.bytes_read += (self.key().len() + self.value().len()) as u64;
             self.local_stats.number_db_seek_found += 1;
         }
         self.seek_duration.observe(begin.saturating_elapsed_secs());
+
         Ok(self.valid)
     }
 
@@ -529,11 +540,11 @@ impl Iterator for RangeCacheIterator {
 
         self.seek_for_prev_internal(&seek_key);
         if self.valid {
-            self.collects_read_flow_stats();
+            self.local_stats.bytes_read += (self.key().len() + self.value().len()) as u64;
             self.local_stats.number_db_seek_found += 1;
         }
-
         self.seek_duration.observe(begin.saturating_elapsed_secs());
+
         Ok(self.valid)
     }
 
@@ -545,7 +556,7 @@ impl Iterator for RangeCacheIterator {
         self.seek_internal(&seek_key);
 
         if self.valid {
-            self.collects_read_flow_stats();
+            self.local_stats.bytes_read += (self.key().len() + self.value().len()) as u64;
             self.local_stats.number_db_seek_found += 1;
         }
         self.seek_duration.observe(begin.saturating_elapsed_secs());
@@ -565,7 +576,7 @@ impl Iterator for RangeCacheIterator {
         }
 
         if self.valid {
-            self.collects_read_flow_stats();
+            self.local_stats.bytes_read += (self.key().len() + self.value().len()) as u64;
             self.local_stats.number_db_seek_found += 1;
         }
         self.seek_duration.observe(begin.saturating_elapsed_secs());
@@ -649,12 +660,12 @@ mod tests {
         },
         perf_context::PERF_CONTEXT,
         statistics::Tickers,
-        RangeCacheEngineConfig, RangeCacheEngineOptions, RangeCacheMemoryEngine,
+        RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
     };
 
     #[test]
     fn test_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
@@ -843,8 +854,46 @@ mod tests {
     }
 
     #[test]
+    fn test_seek() {
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        )));
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(range.clone());
+
+        {
+            let mut core = engine.core.write();
+            core.range_manager.set_safe_point(&range, 5);
+            let sl = core.engine.data[cf_to_id("write")].clone();
+
+            put_key_val(&sl, "b", "val", 10, 5);
+            put_key_val(&sl, "c", "vall", 10, 5);
+        }
+
+        let snapshot = engine.snapshot(range.clone(), u64::MAX, 100).unwrap();
+        let mut iter_opt = IterOptions::default();
+        iter_opt.set_upper_bound(&range.end, 0);
+        iter_opt.set_lower_bound(&range.start, 0);
+        let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
+
+        let key = construct_mvcc_key("b", 10);
+        iter.seek(&key).unwrap();
+        assert_eq!(iter.value(), b"val");
+        let key = construct_mvcc_key("d", 10);
+        iter.seek(&key).unwrap();
+        assert!(!iter.valid().unwrap());
+
+        let key = construct_mvcc_key("b", 10);
+        iter.seek_for_prev(&key).unwrap();
+        assert_eq!(iter.value(), b"val");
+        let key = construct_mvcc_key("a", 10);
+        iter.seek_for_prev(&key).unwrap();
+        assert!(!iter.valid().unwrap());
+    }
+
+    #[test]
     fn test_get_value() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -924,7 +973,7 @@ mod tests {
 
     #[test]
     fn test_iterator_forawrd() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -1111,7 +1160,7 @@ mod tests {
 
     #[test]
     fn test_iterator_backward() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -1215,7 +1264,7 @@ mod tests {
 
     #[test]
     fn test_seq_visibility() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -1338,7 +1387,7 @@ mod tests {
 
     #[test]
     fn test_seq_visibility_backward() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -1441,7 +1490,7 @@ mod tests {
 
         // backward, all put
         {
-            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
                 VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
             )));
             engine.new_range(range.clone());
@@ -1479,7 +1528,7 @@ mod tests {
 
         // backward, all deletes
         {
-            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
                 VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
             )));
             engine.new_range(range.clone());
@@ -1510,7 +1559,7 @@ mod tests {
 
         // backward, all deletes except for last put, last put's seq
         {
-            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
                 VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
             )));
             engine.new_range(range.clone());
@@ -1543,7 +1592,7 @@ mod tests {
 
         // all deletes except for last put, deletions' seq
         {
-            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
                 VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
             )));
             engine.new_range(range.clone());
@@ -1575,7 +1624,7 @@ mod tests {
 
     #[test]
     fn test_prefix_seek() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"k000".to_vec(), b"k100".to_vec());
@@ -1700,7 +1749,7 @@ mod tests {
 
     #[test]
     fn test_evict_range_without_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
@@ -1759,7 +1808,7 @@ mod tests {
 
     #[test]
     fn test_evict_range_with_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
@@ -1831,7 +1880,7 @@ mod tests {
 
     #[test]
     fn test_tombstone_count_when_iterating() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -1875,7 +1924,7 @@ mod tests {
 
     #[test]
     fn test_read_flow_metrics() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineOptions::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -1950,30 +1999,29 @@ mod tests {
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 0);
         iter.seek_to_first().unwrap();
         rocks_iter.seek_to_first().unwrap();
-        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 12);
         let key = construct_mvcc_key("b", 10);
         iter.seek(&key).unwrap();
         rocks_iter.seek(&key).unwrap();
-        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 25);
         iter.next().unwrap();
         rocks_iter.next().unwrap();
-        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 39);
         iter.next().unwrap();
         rocks_iter.next().unwrap();
+        drop(iter);
         assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 54);
+        assert_eq!(2, statistics.get_ticker_count(Tickers::NumberDbSeek));
+        assert_eq!(2, statistics.get_ticker_count(Tickers::NumberDbSeekFound));
+        assert_eq!(2, statistics.get_ticker_count(Tickers::NumberDbNext));
+        assert_eq!(2, statistics.get_ticker_count(Tickers::NumberDbNextFound));
 
+        let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
         iter.seek_to_last().unwrap();
         rocks_iter.seek_to_last().unwrap();
-        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 69);
         iter.prev().unwrap();
         rocks_iter.prev().unwrap();
-        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 83);
         iter.prev().unwrap();
         rocks_iter.prev().unwrap();
-        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 96);
         iter.prev().unwrap();
         rocks_iter.prev().unwrap();
-        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 108);
         drop(rocks_iter);
         drop(iter);
         assert_eq!(statistics.get_ticker_count(Tickers::IterBytesRead), 108);
@@ -1981,5 +2029,10 @@ mod tests {
             rocks_statistics.get_and_reset_ticker_count(DBStatisticsTickerType::IterBytesRead),
             statistics.get_and_reset_ticker_count(Tickers::IterBytesRead)
         );
+        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 108);
+        assert_eq!(3, statistics.get_ticker_count(Tickers::NumberDbSeek));
+        assert_eq!(3, statistics.get_ticker_count(Tickers::NumberDbSeekFound));
+        assert_eq!(3, statistics.get_ticker_count(Tickers::NumberDbPrev));
+        assert_eq!(3, statistics.get_ticker_count(Tickers::NumberDbPrevFound));
     }
 }

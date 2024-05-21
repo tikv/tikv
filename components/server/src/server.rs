@@ -74,7 +74,7 @@ use raftstore::{
     RaftRouterCompactedEventSender,
 };
 use region_cache_memory_engine::{
-    config::RangeCacheConfigManager, RangeCacheEngineOptions, RangeCacheMemoryEngine,
+    config::RangeCacheConfigManager, RangeCacheEngineContext, RangeCacheMemoryEngine,
     RangeCacheMemoryEngineStatistics,
 };
 use resolved_ts::{LeadershipResolver, Task};
@@ -850,20 +850,25 @@ where
             .unwrap_or_else(|e| fatal!("failed to bootstrap raft_server id: {}", e));
 
         self.snap_mgr = Some(snap_mgr.clone());
+
+        // Create coprocessor endpoint.
+        let copr = coprocessor::Endpoint::new(
+            &server_config.value(),
+            cop_read_pool_handle,
+            self.concurrency_manager.clone(),
+            resource_tag_factory,
+            self.quota_limiter.clone(),
+            self.resource_manager.clone(),
+        );
+        let copr_config_manager = copr.config_manager();
+
         // Create server
         let server = Server::new(
             raft_server.id(),
             &server_config,
             &self.security_mgr,
             storage.clone(),
-            coprocessor::Endpoint::new(
-                &server_config.value(),
-                cop_read_pool_handle,
-                self.concurrency_manager.clone(),
-                resource_tag_factory,
-                self.quota_limiter.clone(),
-                self.resource_manager.clone(),
-            ),
+            copr,
             coprocessor_v2::Endpoint::new(&self.core.config.coprocessor_v2),
             self.resolver.clone().unwrap(),
             Either::Left(snap_mgr.clone()),
@@ -882,6 +887,7 @@ where
                 server.get_snap_worker_scheduler(),
                 server_config.clone(),
                 server.get_grpc_mem_quota().clone(),
+                copr_config_manager,
             )),
         );
 
@@ -1672,17 +1678,18 @@ where
         let range_cache_engine_config = Arc::new(VersionTrack::new(
             self.core.config.range_cache_engine.clone(),
         ));
-        let range_cache_engine_options =
-            RangeCacheEngineOptions::new(range_cache_engine_config.clone());
-        let range_cache_engine_statistics = range_cache_engine_options.statistics();
+        let range_cache_engine_context =
+            RangeCacheEngineContext::new(range_cache_engine_config.clone());
+        let range_cache_engine_statistics = range_cache_engine_context.statistics();
         let kv_engine: EK = KvEngineBuilder::build(
-            range_cache_engine_options,
+            range_cache_engine_context,
             disk_engine.clone(),
             Some(self.pd_client.clone()),
+            Some(Arc::new(self.region_info_accessor.clone())),
         );
         let range_cache_config_manager = RangeCacheConfigManager(range_cache_engine_config);
         self.kv_statistics = Some(factory.rocks_statistics());
-        self.range_cache_engine_statistics = range_cache_engine_statistics;
+        self.range_cache_engine_statistics = Some(range_cache_engine_statistics);
         let engines = Engines::new(kv_engine, raft_engine);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();

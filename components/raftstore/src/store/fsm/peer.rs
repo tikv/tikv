@@ -19,7 +19,8 @@ use std::{
 use batch_system::{BasicMailbox, Fsm};
 use collections::{HashMap, HashSet};
 use engine_traits::{
-    CacheRange, Engines, KvEngine, RaftEngine, RaftLogBatch, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT
+    CacheRange, Engines, KvEngine, RaftEngine, RaftLogBatch, SstMetaInfo, WriteBatchExt, CF_LOCK,
+    CF_RAFT,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;

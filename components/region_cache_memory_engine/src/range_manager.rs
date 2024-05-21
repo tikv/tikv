@@ -318,7 +318,6 @@ impl RangeManager {
             "range_start" => log_wrappers::Value(&evict_range.start),
             "range_end" => log_wrappers::Value(&evict_range.end),
         );
-
         self.range_evictions.fetch_add(1, Ordering::Relaxed);
         let meta = self.ranges.remove(&range_key).unwrap();
         let (left_range, right_range) = range_key.split_off(evict_range);

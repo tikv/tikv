@@ -760,7 +760,7 @@ where
             Err(err) => {
                 err.report(format!("failed to resume backup stream task {}", task_name));
                 let sched = self.scheduler.clone();
-                tokio::task::spawn(root!("retry_resume"; async move {
+                self.pool.spawn(root!("retry_resume"; async move {
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     sched
                         .schedule(Task::WatchTask(TaskOp::ResumeTask(task_name)))
@@ -1165,9 +1165,14 @@ where
     RT: CdcHandle<EK> + 'static,
     EK: KvEngine,
 {
-    pub async fn resolve(&mut self, regions: Vec<u64>, min_ts: TimeStamp) -> Vec<u64> {
+    pub async fn resolve(
+        &mut self,
+        regions: Vec<u64>,
+        min_ts: TimeStamp,
+        timeout: Option<Duration>,
+    ) -> Vec<u64> {
         match self {
-            BackupStreamResolver::V1(x) => x.resolve(regions, min_ts).await,
+            BackupStreamResolver::V1(x) => x.resolve(regions, min_ts, timeout).await,
             BackupStreamResolver::V2(x, _) => {
                 let x = x.clone();
                 resolve_by_raft(regions, min_ts, x).await

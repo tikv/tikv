@@ -43,6 +43,7 @@ pub enum Error {
 pub struct RangeCacheEngineConfig {
     pub enabled: bool,
     pub gc_interval: ReadableDuration,
+    pub load_evict_interval: ReadableDuration,
     pub soft_limit_threshold: Option<ReadableSize>,
     pub hard_limit_threshold: Option<ReadableSize>,
 }
@@ -52,6 +53,7 @@ impl Default for RangeCacheEngineConfig {
         Self {
             enabled: false,
             gc_interval: ReadableDuration(Duration::from_secs(180)),
+            load_evict_interval: ReadableDuration(Duration::from_secs(360)),
             soft_limit_threshold: None,
             hard_limit_threshold: None,
         }
@@ -99,26 +101,27 @@ impl RangeCacheEngineConfig {
         RangeCacheEngineConfig {
             enabled: true,
             gc_interval: ReadableDuration(Duration::from_secs(180)),
-            soft_limit_threshold: Some(ReadableSize::gb(100)),
-            hard_limit_threshold: Some(ReadableSize::gb(200)),
+            load_evict_interval: ReadableDuration(Duration::from_secs(360)),
+            soft_limit_threshold: Some(ReadableSize::gb(1)),
+            hard_limit_threshold: Some(ReadableSize::gb(2)),
         }
     }
 }
 
-pub struct RangeCacheEngineOptions {
+pub struct RangeCacheEngineContext {
     config: Arc<VersionTrack<RangeCacheEngineConfig>>,
-    statistics: Option<Arc<RangeCacheMemoryEngineStatistics>>,
+    statistics: Arc<RangeCacheMemoryEngineStatistics>,
 }
 
-impl RangeCacheEngineOptions {
-    pub fn new(config: Arc<VersionTrack<RangeCacheEngineConfig>>) -> RangeCacheEngineOptions {
-        RangeCacheEngineOptions {
+impl RangeCacheEngineContext {
+    pub fn new(config: Arc<VersionTrack<RangeCacheEngineConfig>>) -> RangeCacheEngineContext {
+        RangeCacheEngineContext {
             config,
-            statistics: Some(Arc::default()),
+            statistics: Arc::default(),
         }
     }
 
-    pub fn statistics(&self) -> Option<Arc<RangeCacheMemoryEngineStatistics>> {
+    pub fn statistics(&self) -> Arc<RangeCacheMemoryEngineStatistics> {
         self.statistics.clone()
     }
 }

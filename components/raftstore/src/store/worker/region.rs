@@ -18,7 +18,8 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{
-    CacheRange, DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, WriteOptions, CF_LOCK, CF_RAFT
+    CacheRange, DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, WriteOptions, CF_LOCK,
+    CF_RAFT,
 };
 use fail::fail_point;
 use file_system::{IoType, WithIoType};

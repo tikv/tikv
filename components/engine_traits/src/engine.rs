@@ -81,7 +81,7 @@ pub trait KvEngine:
     #[cfg(feature = "testexport")]
     fn inner_refcount(&self) -> usize;
 
-    fn evict_range(&self, range: CacheRange) {}
+    fn evict_range(&self, _: CacheRange) {}
 }
 
 #[derive(Debug, Clone)]
