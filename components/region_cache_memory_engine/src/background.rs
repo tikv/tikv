@@ -749,13 +749,19 @@ impl BackgroundRunnerCore {
             if remaining == 0 {
                 break;
             }
+            info!("evict on soft limit reached"; "range" => ?&range, "approx_size" => approx_size, "remaining" => remaining);
             if self.engine.write().mut_range_manager().evict_range(range) {
-                info!("evict on soft limit reached"; "range" => ?&range, "approx_size" => approx_size, "remaining" => remaining);
-                remaining = remaining
-                    .checked_sub(*approx_size as usize)
-                    .unwrap_or_default();
-                range_stats_manager.handle_range_evicted(range);
+                let skiplist_engine = self.engine.read().engine();
+                skiplist_engine.delete_range(range);
+                self.engine
+                    .write()
+                    .mut_range_manager()
+                    .on_delete_ranges(&[range.clone()]);
             }
+            remaining = remaining
+                .checked_sub(*approx_size as usize)
+                .unwrap_or_default();
+            range_stats_manager.handle_range_evicted(range);
         }
     }
 
@@ -788,8 +794,14 @@ impl BackgroundRunnerCore {
             if self.memory_controller.reached_soft_limit() {
                 info!("load_evict: soft limit reached"; "evict_range" => ?&evict_range);
                 let mut core = self.engine.write();
-                if !core.mut_range_manager().evict_range(&evict_range) {
-                    error!("fail to evict range"; "evict_range" => ?&evict_range);
+                if core.mut_range_manager().evict_range(&evict_range) {
+                    let skiplist_engine = core.engine();
+                    drop(core);
+                    skiplist_engine.delete_range(&evict_range);
+                    self.engine
+                        .write()
+                        .mut_range_manager()
+                        .on_delete_ranges(&[evict_range]);
                 }
             }
         }

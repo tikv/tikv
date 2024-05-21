@@ -140,6 +140,10 @@ impl SkiplistEngine {
     }
 
     pub(crate) fn delete_range(&self, range: &CacheRange) {
+        info!(
+            "delete range in range cache engine";
+            "range" => ?range,
+        );
         DATA_CFS.iter().for_each(|&cf| {
             let (start, end) = encode_key_for_eviction(range);
             let handle = self.cf_handle(cf);

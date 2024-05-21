@@ -56,6 +56,10 @@ impl<EK: KvEngine> WriteBatch for HybridEngineWriteBatch<EK> {
             })
     }
 
+    fn post_write(&mut self) {
+        self.cache_write_batch.post_write();
+    }
+
     fn data_size(&self) -> usize {
         self.disk_write_batch.data_size()
     }
