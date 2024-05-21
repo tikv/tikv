@@ -243,6 +243,7 @@ impl<E: Engine> Endpoint<E> {
                 let quota_limiter = self.quota_limiter.clone();
                 builder = Box::new(move |snap, req_ctx| {
                     let data_version = snap.ext().get_data_version();
+                    let range_cache_snap = snap.ext().range_cache_engine_snap();
                     let store = SnapshotStore::new(
                         snap,
                         start_ts.into(),

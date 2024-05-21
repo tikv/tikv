@@ -123,6 +123,10 @@ where
     fn inner_refcount(&self) -> usize {
         self.disk_engine.inner_refcount()
     }
+
+    fn evict_range(&self, range: engine_traits::CacheRange) {
+        self.region_cache_engine.evict_range(range);
+    }
 }
 
 impl<EK, EC> Peekable for HybridEngine<EK, EC>

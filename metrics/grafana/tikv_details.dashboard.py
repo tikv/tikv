@@ -4282,6 +4282,23 @@ def RangeCacheMemoryEngine() -> RowPanel:
                     ),
                 ],
             ),
+            graph_panel(
+                title="Seek duration",
+                description="The time consumed when executing seek operation",
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS, log_base=2),
+                targets=[
+                    target(
+                        expr=expr_max(
+                            "tikv_engine_seek_micro_seconds",
+                            label_selectors=[
+                                'type="seek_max"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="max",
+                    ),
+                ],
+            ),
         ]
     )
     return layout.row_panel

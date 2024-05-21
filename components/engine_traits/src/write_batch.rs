@@ -85,6 +85,8 @@ pub trait WriteBatch: Mutable {
         self.write_opt(&WriteOptions::default())
     }
 
+    fn post_write(&mut self) {}
+
     /// The data size of a write batch
     ///
     /// This is necessarily engine-dependent. In RocksDB though it appears to

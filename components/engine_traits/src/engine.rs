@@ -80,6 +80,8 @@ pub trait KvEngine:
     /// full release of engine.
     #[cfg(feature = "testexport")]
     fn inner_refcount(&self) -> usize;
+
+    fn evict_range(&self, range: CacheRange) {}
 }
 
 #[derive(Debug, Clone)]

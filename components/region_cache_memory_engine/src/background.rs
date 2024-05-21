@@ -356,6 +356,7 @@ impl BackgroundRunnerCore {
             "below_safe_point_unique_keys" => filter.metrics.unique_key,
             "below_safe_point_version" => filter.metrics.versions,
             "below_safe_point_delete_version" => filter.metrics.delete_versions,
+            "current_safe_point" => safe_ts,
         );
 
         std::mem::take(&mut filter.metrics)

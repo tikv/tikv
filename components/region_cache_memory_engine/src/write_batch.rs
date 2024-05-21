@@ -56,6 +56,7 @@ pub struct RangeCacheWriteBatch {
     ranges_to_evict: BTreeSet<CacheRange>,
 
     prepare_apply: Duration,
+    lock_delete_entries: Vec<(RangeCacheWriteBatchEntry, u64)>,
 }
 
 impl std::fmt::Debug for RangeCacheWriteBatch {
@@ -82,6 +83,7 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
             current_range: None,
             ranges_to_evict: BTreeSet::default(),
             prepare_apply: Duration::default(),
+            lock_delete_entries: Vec::new(),
         }
     }
 }
@@ -101,6 +103,7 @@ impl RangeCacheWriteBatch {
             current_range: None,
             ranges_to_evict: BTreeSet::default(),
             prepare_apply: Duration::default(),
+            lock_delete_entries: Vec::new(),
         }
     }
 
@@ -114,11 +117,11 @@ impl RangeCacheWriteBatch {
         Ok(())
     }
 
-    fn write_impl(&mut self, seq: u64) -> Result<()> {
+    fn write_impl(&mut self, mut seq: u64) -> Result<()> {
         fail::fail_point!("on_write_impl");
         let ranges_to_delete = self.handle_ranges_to_evict();
         let (entries_to_write, engine) = self.engine.handle_pending_range_in_loading_buffer(
-            seq,
+            &mut seq,
             std::mem::take(&mut self.pending_range_in_loading_buffer),
         );
         let guard = &epoch::pin();
@@ -129,7 +132,13 @@ impl RangeCacheWriteBatch {
             .into_iter()
             .chain(std::mem::take(&mut self.buffer))
             .try_for_each(|e| {
-                e.write_to_memory(seq, &engine, self.memory_controller.clone(), guard)
+                let cur = seq;
+                seq += 1;
+                let res = e.write_to_memory(cur, &engine, self.memory_controller.clone(), guard);
+                if e.lock_delete() {
+                    self.lock_delete_entries.push((e, cur));
+                }
+                res
             });
         let duration = start.saturating_elapsed_secs();
         WRITE_DURATION_HISTOGRAM.observe(duration);
@@ -350,14 +359,11 @@ impl RangeCacheWriteBatchEntry {
         guard: &epoch::Guard,
     ) -> Result<()> {
         let handle = skiplist_engine.cf_handle(id_to_cf(self.cf));
-        if is_lock_cf(self.cf) && matches!(self.inner, WriteBatchEntryInternal::Deletion) {
-            self.delete_in_lock_cf(seq, &handle, guard);
-        } else {
-            let (mut key, mut value) = self.encode(seq);
-            key.set_memory_controller(memory_controller.clone());
-            value.set_memory_controller(memory_controller);
-            handle.insert(key, value, guard);
-        }
+
+        let (mut key, mut value) = self.encode(seq);
+        key.set_memory_controller(memory_controller.clone());
+        value.set_memory_controller(memory_controller);
+        handle.insert(key, value, guard);
 
         Ok(())
     }
@@ -387,6 +393,10 @@ impl RangeCacheWriteBatchEntry {
             }
         }
         handle.remove(&last_to_remove, guard);
+    }
+
+    fn lock_delete(&self) -> bool {
+        is_lock_cf(self.cf) && matches!(self.inner, WriteBatchEntryInternal::Deletion)
     }
 }
 
@@ -483,6 +493,16 @@ impl WriteBatch for RangeCacheWriteBatch {
             .sum()
     }
 
+    fn post_write(&mut self) {
+        let handle = self.engine.core().read().engine().cf_handle("lock");
+        let guard = &epoch::pin();
+        self.lock_delete_entries.iter().for_each(|(e, seq)| {
+            assert!(e.lock_delete());
+            e.delete_in_lock_cf(*seq, &handle, guard)
+        });
+        self.lock_delete_entries.clear();
+    }
+
     fn count(&self) -> usize {
         self.buffer.len()
     }
@@ -560,12 +580,16 @@ impl Mutable for RangeCacheWriteBatch {
         Ok(())
     }
 
-    fn delete_range(&mut self, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        let range = CacheRange::new(begin_key.to_vec(), end_key.to_vec());
+        self.engine.evict_range(&range);
+        Ok(())
     }
 
-    fn delete_range_cf(&mut self, _: &str, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        let range = CacheRange::new(begin_key.to_vec(), end_key.to_vec());
+        self.engine.evict_range(&range);
+        Ok(())
     }
 }
 

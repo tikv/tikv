@@ -604,6 +604,8 @@ where
             let seq = self.kv_wb_mut().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
+            self.kv_wb_mut().post_write();
+
             if let Some(seqno) = seqno.as_mut() {
                 seqno.post_write(seq)
             }
@@ -2006,6 +2008,12 @@ where
     ) -> Result<()> {
         PEER_WRITE_CMD_COUNTER.ingest_sst.inc();
         let sst = req.get_ingest_sst().get_sst();
+
+        info!(
+            "handle ingest sst";
+            "region_id" => self.region.get_id(),
+            "index" => ctx.exec_log_index,
+        );
 
         if let Err(e) = check_sst_for_ingestion(sst, &self.region) {
             error!(?e;

@@ -19,7 +19,7 @@ use std::{
 use batch_system::{BasicMailbox, Fsm};
 use collections::{HashMap, HashSet};
 use engine_traits::{
-    Engines, KvEngine, RaftEngine, RaftLogBatch, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT,
+    CacheRange, Engines, KvEngine, RaftEngine, RaftLogBatch, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -4119,6 +4119,12 @@ where
                     self.fsm.peer.remove_peer_from_cache(peer_id);
                     // We only care remove itself now.
                     if self.store_id() == store_id {
+                        let range = CacheRange::from_region(self.fsm.peer.region());
+                        info!(
+                            "evict range due to remove node";
+                            "range" => ?range,
+                        );
+                        self.ctx.engines.kv.evict_range(range);
                         if self.fsm.peer.peer_id() == peer_id {
                             remove_self = true;
                         } else {
@@ -4788,6 +4794,14 @@ where
 
     fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState) {
         fail_point!("on_apply_res_prepare_merge");
+        let range = CacheRange::from_region(&region);
+        let range2 = CacheRange::from_region(&state.get_target());
+        info!(
+            "evict range due to merge";
+            "source_range" => ?range,
+            "target_range" => ?range2,
+        );
+
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(
@@ -4797,6 +4811,9 @@ where
                 RegionChangeReason::PrepareMerge,
             );
         }
+
+        self.ctx.engines.kv.evict_range(range);
+        self.ctx.engines.kv.evict_range(range2);
 
         self.fsm.peer.pending_merge_state = Some(state);
         let state = self.fsm.peer.pending_merge_state.as_ref().unwrap();
