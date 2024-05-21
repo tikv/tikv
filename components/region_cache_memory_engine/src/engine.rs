@@ -3,6 +3,7 @@
 use std::{
     collections::BTreeMap,
     fmt::{self, Debug},
+    ops::Bound,
     result,
     sync::Arc,
 };
@@ -14,9 +15,12 @@ use engine_traits::{
     CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
-use skiplist_rs::{base::OwnedIter, SkipList};
+use skiplist_rs::{
+    base::{Entry, OwnedIter},
+    SkipList,
+};
 use slog_global::error;
-use tikv_util::info;
+use tikv_util::{config::VersionTrack, info};
 
 use crate::{
     background::{BackgroundTask, BgWorkManager, PdRangeHintService},
@@ -24,17 +28,36 @@ use crate::{
     memory_controller::MemoryController,
     range_manager::{LoadFailedReason, RangeCacheStatus, RangeManager},
     read::{RangeCacheIterator, RangeCacheSnapshot},
+    statistics::Statistics,
     write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
-    RangeCacheEngineConfig,
+    RangeCacheEngineConfig, RangeCacheEngineContext,
 };
+
+pub(crate) const CF_DEFAULT_USIZE: usize = 0;
+pub(crate) const CF_LOCK_USIZE: usize = 1;
+pub(crate) const CF_WRITE_USIZE: usize = 2;
 
 pub(crate) fn cf_to_id(cf: &str) -> usize {
     match cf {
-        CF_DEFAULT => 0,
-        CF_LOCK => 1,
-        CF_WRITE => 2,
+        CF_DEFAULT => CF_DEFAULT_USIZE,
+        CF_LOCK => CF_LOCK_USIZE,
+        CF_WRITE => CF_WRITE_USIZE,
         _ => panic!("unrecognized cf {}", cf),
     }
+}
+
+pub(crate) fn id_to_cf(id: usize) -> &'static str {
+    match id {
+        CF_DEFAULT_USIZE => CF_DEFAULT,
+        CF_LOCK_USIZE => CF_LOCK,
+        CF_WRITE_USIZE => CF_WRITE,
+        _ => panic!("unrecognized id {}", id),
+    }
+}
+
+#[inline]
+pub(crate) fn is_lock_cf(cf: usize) -> bool {
+    cf == CF_LOCK_USIZE
 }
 
 // A wrapper for skiplist to provide some check and clean up worker
@@ -42,6 +65,27 @@ pub(crate) fn cf_to_id(cf: &str) -> usize {
 pub struct SkiplistHandle(Arc<SkipList<InternalBytes, InternalBytes>>);
 
 impl SkiplistHandle {
+    pub fn get<'a: 'g, 'g>(
+        &'a self,
+        key: &InternalBytes,
+        guard: &'g Guard,
+    ) -> Option<Entry<'a, 'g, InternalBytes, InternalBytes>> {
+        self.0.get(key, guard)
+    }
+
+    pub fn get_with_user_key<'a: 'g, 'g>(
+        &'a self,
+        key: &InternalBytes,
+        guard: &'g Guard,
+    ) -> Option<Entry<'a, 'g, InternalBytes, InternalBytes>> {
+        let n = self.0.lower_bound(Bound::Included(key), guard)?;
+        if n.key().same_user_key_with(key) {
+            Some(n)
+        } else {
+            None
+        }
+    }
+
     pub fn insert(&self, key: InternalBytes, value: InternalBytes, guard: &Guard) {
         assert!(key.memory_controller_set() && value.memory_controller_set());
         self.0.insert(key, value, guard).release(guard);
@@ -203,23 +247,23 @@ pub struct RangeCacheMemoryEngine {
     pub(crate) rocks_engine: Option<RocksEngine>,
     bg_work_manager: Arc<BgWorkManager>,
     memory_controller: Arc<MemoryController>,
+    statistics: Arc<Statistics>,
+    config: Arc<VersionTrack<RangeCacheEngineConfig>>,
 }
 
 impl RangeCacheMemoryEngine {
-    pub fn new(config: &RangeCacheEngineConfig) -> Self {
+    pub fn new(range_cache_engine_context: RangeCacheEngineContext) -> Self {
         info!("init range cache memory engine";);
         let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
         let skiplist_engine = { core.read().engine().clone() };
 
-        let memory_controller = Arc::new(MemoryController::new(
-            config.soft_limit_threshold(),
-            config.hard_limit_threshold(),
-            skiplist_engine,
-        ));
+        let RangeCacheEngineContext { config, statistics } = range_cache_engine_context;
+        assert!(config.value().enabled);
+        let memory_controller = Arc::new(MemoryController::new(config.clone(), skiplist_engine));
 
         let bg_work_manager = Arc::new(BgWorkManager::new(
             core.clone(),
-            config.gc_interval.0,
+            config.value().gc_interval.0,
             memory_controller.clone(),
         ));
 
@@ -228,6 +272,8 @@ impl RangeCacheMemoryEngine {
             rocks_engine: None,
             bg_work_manager,
             memory_controller,
+            statistics,
+            config,
         }
     }
 
@@ -278,27 +324,40 @@ impl RangeCacheMemoryEngine {
             return RangeCacheStatus::Cached;
         }
 
+        let mut overlapped = false;
         // check whether the range is in pending_range and we can schedule load task if
         // it is
         if let Some((idx, (left_range, right_range))) = range_manager
             .pending_ranges
             .iter()
             .enumerate()
-            .find_map(|(idx, r)| {
-                if r.contains_range(range) {
+            .find_map(|(idx, pending_range)| {
+                if pending_range.contains_range(range) {
                     // The `range` may be a proper subset of `r` and we should split it in this case
                     // and push the rest back to `pending_range` so that each range only schedules
                     // load task of its own.
-                    Some((idx, r.split_off(range)))
-                } else if range.contains_range(r) {
-                    // todo(SpadeA): merge occurs
-                    unimplemented!()
+                    Some((idx, pending_range.split_off(range)))
+                } else if range.overlaps(pending_range) {
+                    // Pending range `range` does not contains the applying range `r` but overlap
+                    // with it, which means the pending range is out dated, we remove it directly.
+                    info!(
+                        "out of date pending ranges";
+                        "applying_range" => ?range,
+                        "pending_range" => ?pending_range,
+                    );
+                    overlapped = true;
+                    Some((idx, (None, None)))
                 } else {
                     None
                 }
             })
         {
             let mut core = RwLockUpgradableReadGuard::upgrade(core);
+
+            if overlapped {
+                core.mut_range_manager().pending_ranges.swap_remove(idx);
+                return RangeCacheStatus::NotInCache;
+            }
 
             let range_manager = core.mut_range_manager();
             if let Some(left_range) = left_range {
@@ -317,6 +376,12 @@ impl RangeCacheMemoryEngine {
             range_manager
                 .pending_ranges_loading_data
                 .push_back((range.clone(), rocks_snap, false));
+            info!(
+                "Range to load";
+                "Tag" => &range.tag,
+                "Cached" => range_manager.ranges().len(),
+                "Pending" => range_manager.pending_ranges_loading_data.len(),
+            );
             if let Err(e) = self
                 .bg_worker_manager()
                 .schedule_task(BackgroundTask::LoadRange)
@@ -324,6 +389,7 @@ impl RangeCacheMemoryEngine {
                 error!(
                     "schedule range load failed";
                     "err" => ?e,
+                    "tag" => &range.tag,
                 );
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
@@ -374,6 +440,10 @@ impl RangeCacheMemoryEngine {
     pub(crate) fn memory_controller(&self) -> Arc<MemoryController> {
         self.memory_controller.clone()
     }
+
+    pub(crate) fn statistics(&self) -> Arc<Statistics> {
+        self.statistics.clone()
+    }
 }
 
 impl RangeCacheMemoryEngine {
@@ -415,6 +485,10 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
         let core = self.core.read();
         core.range_manager().get_range_for_key(key)
     }
+
+    fn enabled(&self) -> bool {
+        self.config.value().enabled
+    }
 }
 
 impl Iterable for RangeCacheMemoryEngine {
@@ -423,5 +497,51 @@ impl Iterable for RangeCacheMemoryEngine {
     fn iterator_opt(&self, _: &str, _: IterOptions) -> Result<Self::Iterator> {
         // This engine does not support creating iterators directly by the engine.
         panic!("iterator_opt is not supported on creating by RangeCacheMemoryEngine directly")
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use std::sync::Arc;
+
+    use engine_traits::CacheRange;
+    use tikv_util::config::VersionTrack;
+
+    use crate::{RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine};
+
+    #[test]
+    fn test_overlap_with_pending() {
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        )));
+        let range1 = CacheRange::new(b"k1".to_vec(), b"k3".to_vec());
+        engine.load_range(range1).unwrap();
+
+        let range2 = CacheRange::new(b"k1".to_vec(), b"k5".to_vec());
+        engine.prepare_for_apply(&range2);
+        assert!(
+            engine.core.read().range_manager().pending_ranges.is_empty()
+                && engine
+                    .core
+                    .read()
+                    .range_manager()
+                    .pending_ranges_loading_data
+                    .is_empty()
+        );
+
+        let range1 = CacheRange::new(b"k1".to_vec(), b"k3".to_vec());
+        engine.load_range(range1).unwrap();
+
+        let range2 = CacheRange::new(b"k2".to_vec(), b"k5".to_vec());
+        engine.prepare_for_apply(&range2);
+        assert!(
+            engine.core.read().range_manager().pending_ranges.is_empty()
+                && engine
+                    .core
+                    .read()
+                    .range_manager()
+                    .pending_ranges_loading_data
+                    .is_empty()
+        );
     }
 }
