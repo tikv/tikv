@@ -25,7 +25,6 @@ mod all {
         GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
     };
     use futures::executor::block_on;
-    use raftstore::coprocessor::ObserveHandle;
     use tikv_util::{
         config::{ReadableDuration, ReadableSize},
         defer,
