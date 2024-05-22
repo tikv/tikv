@@ -319,6 +319,20 @@ impl RangeManager {
                     return None;
                 }
                 return Some(range_key);
+            } else if let Some((range_key, _, canceled)) =
+                self.pending_ranges_loading_data.iter_mut().find(|(r, ..)| {
+                    evict_range.overlaps(r)
+                        || evict_range.contains_range(r)
+                        || r.contains_range(evict_range)
+                })
+            {
+                // The range may be loading now
+                info!(
+                    "evict range that overlaps with loading range";
+                    "evicted_range" => ?evict_range,
+                    "overlapped_range" => ?range_key,
+                );
+                *canceled = true;
             }
             info!(
                 "evict a range that is not cached";
