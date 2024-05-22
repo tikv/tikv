@@ -494,23 +494,14 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
     let time_slice_inspector = Arc::new(TimeSliceInspector::new(&unified_read_pool_name));
     ReadPool::Yatp {
         pool,
-<<<<<<< HEAD
         running_tasks: UNIFIED_READ_POOL_RUNNING_TASKS
             .with_label_values(&[&unified_read_pool_name]),
-        running_threads: UNIFIED_READ_POOL_RUNNING_THREADS
-            .with_label_values(&[&unified_read_pool_name]),
-=======
-        running_tasks: TaskPriority::priorities().map(|p| {
-            UNIFIED_READ_POOL_RUNNING_TASKS
-                .with_label_values(&[&unified_read_pool_name, p.as_str()])
-        }),
         running_threads: {
             let running_threads =
                 UNIFIED_READ_POOL_RUNNING_THREADS.with_label_values(&[&unified_read_pool_name]);
             running_threads.set(config.max_thread_count as _);
             running_threads
         },
->>>>>>> 3da0bbaa16 (set the unified read pool size when bootstrapped (#16633))
         max_tasks: config
             .max_tasks_per_worker
             .saturating_mul(config.max_thread_count),
