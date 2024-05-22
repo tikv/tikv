@@ -1905,7 +1905,7 @@ pub mod tests {
 
         // initial cache
         for i in 4..10 {
-            append_ents(&mut store, &vec![new_entry(i, 4)]);
+            append_ents(&mut store, &[new_entry(i, 4)]);
         }
 
         let cached_entries = vec![
