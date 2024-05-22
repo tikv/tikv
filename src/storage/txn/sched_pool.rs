@@ -8,7 +8,6 @@ use std::{
 
 use collections::HashMap;
 use file_system::{set_io_type, IoType};
-use futures::future::FutureExt;
 use kvproto::{kvrpcpb::CommandPri, pdpb::QueryKind};
 use pd_client::{Feature, FeatureGate};
 use prometheus::local::*;
