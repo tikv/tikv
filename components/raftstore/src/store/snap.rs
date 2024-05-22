@@ -2044,8 +2044,7 @@ impl SnapRecvConcurrencyLimiter {
         current_time: Instant,
     ) {
         timestamps.retain(|region_id, timestamp| {
-            if current_time.duration_since(*timestamp) <= Duration::from_secs(self.ttl_secs)
-            {
+            if current_time.duration_since(*timestamp) <= Duration::from_secs(self.ttl_secs) {
                 true
             } else {
                 // This shouldn't happen if the TTL is set properly. When it
