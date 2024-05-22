@@ -299,18 +299,51 @@ impl RangeManager {
     }
 
     // return whether the range can be already removed
-    pub(crate) fn evict_range(&mut self, evict_range: &CacheRange) -> bool {
+    pub(crate) fn evict_range(&mut self, evict_range: &CacheRange) -> Option<CacheRange> {
         let Some(range_key) = self
             .ranges
             .keys()
             .find(|&r| r.contains_range(evict_range))
             .cloned()
         else {
+            if let Some(range_key) = self
+                .ranges
+                .keys()
+                .find(|&r| r.overlaps(evict_range) || evict_range.contains_range(r))
+                .cloned()
+            {
+                info!(
+                    "evict range that overlaps";
+                    "evicted_range" => ?evict_range,
+                    "overlapped_range" => ?range_key,
+                );
+                let meta = self.ranges.remove(&range_key).unwrap();
+                self.ranges_being_deleted.insert(evict_range.clone());
+                if !meta.range_snapshot_list.is_empty() {
+                    self.historical_ranges.insert(range_key, meta);
+                    return None;
+                }
+                return Some(range_key);
+            } else if let Some((range_key, _, canceled)) =
+                self.pending_ranges_loading_data.iter_mut().find(|(r, ..)| {
+                    evict_range.overlaps(r)
+                        || evict_range.contains_range(r)
+                        || r.contains_range(evict_range)
+                })
+            {
+                // The range may be loading now
+                info!(
+                    "evict range that overlaps with loading range";
+                    "evicted_range" => ?evict_range,
+                    "overlapped_range" => ?range_key,
+                );
+                *canceled = true;
+            }
             info!(
                 "evict a range that is not cached";
                 "range" => ?evict_range,
             );
-            return false;
+            return None;
         };
 
         info!(
@@ -337,14 +370,19 @@ impl RangeManager {
 
         if !meta.range_snapshot_list.is_empty() {
             self.historical_ranges.insert(range_key, meta);
-            return false;
+            return None;
         }
 
         // we also need to check with previous historical_ranges
-        !self
+        if !self
             .historical_ranges
             .keys()
             .any(|r| r.overlaps(evict_range))
+        {
+            Some(evict_range.clone())
+        } else {
+            None
+        }
     }
 
     pub fn has_ranges_in_gc(&self) -> bool {
