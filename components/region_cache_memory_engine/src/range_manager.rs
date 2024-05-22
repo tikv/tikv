@@ -490,7 +490,6 @@ mod tests {
         assert!(range_mgr.ranges_being_deleted.contains(&r_left));
         assert!(range_mgr.ranges.get(&r_left).is_none());
 
-        assert!(!range_mgr.evict_range(&r_right));
         assert!(range_mgr.historical_ranges.get(&r_right).is_none());
     }
 

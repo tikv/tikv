@@ -755,14 +755,17 @@ impl BackgroundRunnerCore {
                 break;
             }
             info!("evict on soft limit reached"; "range" => ?&range, "approx_size" => approx_size, "remaining" => remaining);
-            if let Some(range) = self.engine.write().mut_range_manager().evict_range(range) {
-                let skiplist_engine = self.engine.read().engine();
+            let mut core = self.engine.write();
+            if let Some(range) = core.mut_range_manager().evict_range(range) {
+                let skiplist_engine = core.engine();
+                drop(core);
                 skiplist_engine.delete_range(&range);
                 self.engine
                     .write()
                     .mut_range_manager()
                     .on_delete_ranges(&[range]);
             }
+            info!("evict on soft limit reached done";);
             remaining = remaining
                 .checked_sub(*approx_size as usize)
                 .unwrap_or_default();
@@ -1068,7 +1071,7 @@ impl Runnable for BackgroundRunner {
                 if snapshot_seqno < self.last_seqno {
                     return;
                 }
-                let mut core = self.core.clone();
+                let core = self.core.clone();
 
                 let f = async move {
                     let mut last_user_key = vec![];
@@ -2477,6 +2480,7 @@ pub mod tests {
         wb.delete_cf("lock", b"k");
         wb.delete_cf("lock", b"k1");
         wb.delete_cf("lock", b"k2");
+        wb.put_cf("lock", b"k", b"val2");
         wb.set_sequence_number(100);
         wb.write();
 
@@ -2493,7 +2497,7 @@ pub mod tests {
 
         engine
             .bg_worker_manager()
-            .schedule_task(BackgroundTask::CleanLockTombstone(120));
+            .schedule_task(BackgroundTask::CleanLockTombstone(110));
 
         std::thread::sleep(Duration::from_secs(1000));
     }
