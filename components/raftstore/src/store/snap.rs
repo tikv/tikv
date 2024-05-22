@@ -2008,7 +2008,10 @@ impl SnapRecvConcurrencyLimiter {
         SnapRecvConcurrencyLimiter {
             limit: Arc::new(AtomicUsize::new(limit)),
             ttl_secs,
-            timestamps: Arc::new(Mutex::new(HashMap::default())),
+            timestamps: Arc::new(Mutex::new(HashMap::with_capacity_and_hasher(
+                limit,
+                Default::default(),
+            ))),
         }
     }
 
