@@ -239,12 +239,16 @@ impl EntryCache {
 
         let mut mem_size_change = 0;
 
-        // Clean cached entries which have been already sent to apply threads. For
-        // example, if entries [1, 10), [10, 20), [20, 30) are sent to apply threads and
-        // `compact_to(15)` is called, only [20, 30) will still be kept in cache.
+        // Clean cached entries which have been persisted. For example, if entries
+        // [1, 10), [10, 20), [20, 30) are sent to apply threads and `compact_to(15)`
+        // is called, both [10, 20), [20, 30) will still be kept in cache.
         let old_trace_cap = self.trace.capacity();
         while let Some(cached_entries) = self.trace.pop_front() {
-            if cached_entries.range.start >= idx {
+            // Do not evict cached entries if not all of them are persisted.
+            // After PR #16626, it is possible that applying entries are not
+            // yet fully persisted. Therefore, it should not free these
+            // entries until they are completely persisted.
+            if cached_entries.range.end > idx {
                 self.trace.push_front(cached_entries);
                 let trace_len = self.trace.len();
                 let trace_cap = self.trace.capacity();
@@ -253,16 +257,8 @@ impl EntryCache {
                 }
                 break;
             }
-            // Do not evict cached entries if not all of them are persisted.
-            // After PR #16626, it is possible that applying entries are not 
-            // yet fully persisted. Therefore, it should not free these
-            // entries until they are completely persisted.
-            if cached_entries.range.end <= idx {
-                let (_, dangle_size) = cached_entries.take_entries();
-                mem_size_change -= dangle_size as i64;
-            }
-
-            idx = cmp::max(cached_entries.range.end, idx);
+            let (_, dangle_size) = cached_entries.take_entries();
+            mem_size_change -= dangle_size as i64;
         }
         let new_trace_cap = self.trace.capacity();
         mem_size_change += Self::trace_vec_mem_size_change(new_trace_cap, old_trace_cap);
@@ -1938,10 +1934,17 @@ pub mod tests {
         assert!(!cached_entries[1].has_entries());
         assert!(cached_entries[2].has_entries());
 
-        store.cache.persisted = 6;
+        for idx in [6, 7] {
+            store.cache.persisted = idx;
+            store.evict_entry_cache(false);
+            assert_eq!(store.cache.first_index().unwrap(), idx + 1);
+            assert!(cached_entries[2].has_entries());
+        }
+
+        store.cache.persisted = 8;
         store.evict_entry_cache(false);
         assert_eq!(store.cache.first_index().unwrap(), 9);
-        assert!(cached_entries[2].has_entries());
+        assert!(!cached_entries[2].has_entries());
 
         store.cache.persisted = 9;
         store.evict_entry_cache(false);
