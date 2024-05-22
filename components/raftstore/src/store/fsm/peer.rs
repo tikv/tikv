@@ -3159,11 +3159,12 @@ where
             return;
         }
 
-        if self.fsm.peer.peer != *msg.get_to_peer() {
+        if self.fsm.peer.peer.get_id() != msg.get_to_peer().get_id() {
             info!(
                 "receive stale gc message, ignore.";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "to_peer_id" => msg.get_to_peer().get_id(),
             );
             self.ctx.raft_metrics.message_dropped.stale_msg.inc();
             return;
