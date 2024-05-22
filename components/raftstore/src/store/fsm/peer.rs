@@ -2936,16 +2936,14 @@ where
         }
     }
 
-    // In v1, gc_peer_request is handled to be compatible with v2.
-    // Note: it needs to be consistent with Peer::on_gc_peer_request in v2.
+    // In v1, gc_peer_request will gc the abnormal peer. And in other condition,
+    // it needs to be consistent with Peer::on_gc_peer_request in v2.
     fn on_gc_peer_request(&mut self, msg: RaftMessage) {
         let extra_msg = msg.get_extra_msg();
 
-        // To make learner (e.g. tiflash engine) compatiable with raftstore v2,
-        // it needs to response GcPeerResponse.
-        // And as for v1, it needs to trigger the `ConfChange` command to gc
-        // the abnormal peer as expected.
         if self.ctx.cfg.enable_v2_compatible_learner {
+            // To make learner (e.g. tiflash engine) compatiable with raftstore v2,
+            // it needs to response GcPeerResponse.
             if !extra_msg.has_check_gc_peer() || extra_msg.get_index() == 0 {
                 // Corrupted message.
                 return;
@@ -2959,26 +2957,34 @@ where
                 let _ = self.ctx.router.send_raft_message(m);
             });
         } else {
+            // And as for v1, it needs to trigger the `ConfChange` command to gc
+            // the abnormal peer as expected.
             if !self.fsm.peer.is_leader() {
                 return;
             }
 
-            if extra_msg.get_index() == u64::MAX {
-                // It's a GC request from the source peer.
-                let mut req = AdminRequest::default();
-                req.set_cmd_type(AdminCmdType::ChangePeer);
-                req.mut_change_peer()
-                    .set_change_type(ConfChangeType::RemoveNode);
-                req.mut_change_peer().set_peer(msg.get_from_peer().clone());
-                let mut request =
-                    new_admin_request(self.fsm.peer.region().get_id(), self.fsm.peer.peer.clone());
-                request.set_admin_request(req);
-                self.propose_raft_command_internal(
-                    request,
-                    Callback::None,
-                    DiskFullOpt::AllowedOnAlmostFull,
-                );
+            if !extra_msg.get_index() == u64::MAX {
+                // Unexpected message.
+                return;
             }
+
+            // It's a GC request from the source peer.
+            let mut req = AdminRequest::default();
+            req.set_cmd_type(AdminCmdType::ChangePeer);
+            req.mut_change_peer()
+                .set_change_type(ConfChangeType::RemoveNode);
+            req.mut_change_peer().set_peer(msg.get_from_peer().clone());
+            let mut request =
+                new_admin_request(self.fsm.peer.region().get_id(), self.fsm.peer.peer.clone());
+            request
+                .mut_header()
+                .set_region_epoch(self.fsm.peer.region().get_region_epoch().clone());
+            request.set_admin_request(req);
+            self.propose_raft_command_internal(
+                request,
+                Callback::None,
+                DiskFullOpt::AllowedOnAlmostFull,
+            );
         }
     }
 

@@ -225,3 +225,33 @@ fn test_on_check_busy_on_apply_peers() {
     let stats = cluster.pd_client.get_store_stats(3).unwrap();
     assert!(!stats.is_busy);
 }
+
+#[test]
+fn test_on_apply_snap_failed() {
+    let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+
+    let region_id = cluster.run_conf_change();
+    pd_client.must_add_peer(region_id, new_peer(2, 2));
+
+    // To ensure peer 2 is not pending.
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+
+    // Mock applying snapshot failed on peer 3.
+    fail::cfg("region_apply_snap_io_err", "return").unwrap();
+    pd_client.must_add_peer(region_id, new_peer(3, 3));
+    sleep_ms(1000);
+    let pending_peers = pd_client.get_pending_peers();
+    // Region worker is failed on applying snapshot.
+    assert_eq!(pending_peers[&3], new_peer(3, 3));
+    must_get_none(&cluster.get_engine(3), b"k1");
+    sleep_ms(1000);
+    // Check that the region only has 2 peers.
+    let region = cluster.get_region(b"k1");
+    assert_eq!(region.get_peers().len(), 2);
+}
