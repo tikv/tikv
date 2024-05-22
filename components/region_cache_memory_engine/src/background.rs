@@ -1103,9 +1103,16 @@ impl Runnable for BackgroundRunner {
                                     cached_to_remove = Some(iter.key().as_bytes().to_vec());
                                 }
                             }
-                        } else if remove_rest || sequence < snapshot_seqno {
+                        } else if remove_rest {
+                            assert!(sequence < snapshot_seqno);
                             removed += 1;
                             lock_handle.remove(iter.key(), guard);
+                        } else if sequence < snapshot_seqno {
+                            remove_rest = true;
+                            if v_type == ValueType::Deletion {
+                                assert!(cached_to_remove.is_none());
+                                cached_to_remove = Some(iter.key().as_bytes().to_vec());
+                            }
                         }
 
                         iter.next(guard);
