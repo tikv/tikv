@@ -81,6 +81,11 @@ impl CachedEntries {
     pub fn take_entries(&self) -> (Vec<Entry>, usize) {
         mem::take(&mut *self.entries.lock().unwrap())
     }
+
+    #[cfg(test)]
+    pub fn has_entries(&self) -> bool {
+        !self.entries.lock().unwrap().0.is_empty()
+    }
 }
 
 struct EntryCache {
@@ -248,8 +253,12 @@ impl EntryCache {
                 }
                 break;
             }
-            let (_, dangle_size) = cached_entries.take_entries();
-            mem_size_change -= dangle_size as i64;
+            // keep the applying entries if not all of them are persisted.
+            if cached_entries.range.end <= idx {
+                let (_, dangle_size) = cached_entries.take_entries();
+                mem_size_change -= dangle_size as i64;
+            }
+
             idx = cmp::max(cached_entries.range.end, idx);
         }
         let new_trace_cap = self.trace.capacity();
@@ -1883,5 +1892,57 @@ pub mod tests {
         store.maybe_warm_up_entry_cache(res);
         // Cache should be warmed up.
         assert_eq!(store.entry_cache_first_index().unwrap(), 5);
+    }
+
+    #[test]
+    fn test_evict_cached_entries() {
+        let ents = vec![new_entry(3, 3)];
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
+        let worker = LazyWorker::new("snap-manager");
+        let sched = worker.scheduler();
+        let (dummy_scheduler, _) = dummy_scheduler();
+        let mut store = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
+
+        // initial cache
+        for i in 4..10 {
+            append_ents(&mut store, &vec![new_entry(i, 4)]);
+        }
+
+        let cached_entries = vec![
+            CachedEntries::new(vec![new_entry(4, 4)]),
+            CachedEntries::new(vec![new_entry(5, 4)]),
+            CachedEntries::new(vec![new_entry(6, 4), new_entry(7, 4), new_entry(8, 4)]),
+            CachedEntries::new(vec![new_entry(9, 4)]),
+        ];
+        for ents in &cached_entries {
+            store.trace_cached_entries(ents.clone());
+        }
+        assert_eq!(store.cache.first_index().unwrap(), 4);
+
+        store.evict_entry_cache(false);
+        assert_eq!(store.cache.first_index().unwrap(), 4);
+        assert!(cached_entries[0].has_entries());
+
+        store.cache.persisted = 4;
+        store.evict_entry_cache(false);
+        assert_eq!(store.cache.first_index().unwrap(), 5);
+        assert!(!cached_entries[0].has_entries());
+        assert!(cached_entries[1].has_entries());
+
+        store.cache.persisted = 5;
+        store.evict_entry_cache(false);
+        assert_eq!(store.cache.first_index().unwrap(), 6);
+        assert!(!cached_entries[1].has_entries());
+        assert!(cached_entries[2].has_entries());
+
+        store.cache.persisted = 6;
+        store.evict_entry_cache(false);
+        assert_eq!(store.cache.first_index().unwrap(), 9);
+        assert!(cached_entries[2].has_entries());
+
+        store.cache.persisted = 9;
+        store.evict_entry_cache(false);
+        assert!(store.cache.first_index().is_none());
+        assert!(!cached_entries[3].has_entries());
     }
 }
