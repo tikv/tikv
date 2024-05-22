@@ -82,6 +82,7 @@ pub enum BackgroundTask {
     LoadRange,
     MemoryCheckAndEvict,
     DeleteRange(Vec<CacheRange>),
+    CleanLockTombstone(u64),
     TopRegionsLoadEvict,
 }
 
@@ -94,6 +95,10 @@ impl Display for BackgroundTask {
             BackgroundTask::DeleteRange(ref r) => {
                 f.debug_struct("DeleteRange").field("range", r).finish()
             }
+            BackgroundTask::CleanLockTombstone(ref r) => f
+                .debug_struct("CleanLockTombstone")
+                .field("seqno", r)
+                .finish(),
             BackgroundTask::TopRegionsLoadEvict => f.debug_struct("CheckTopRegions").finish(),
         }
     }
@@ -844,6 +849,11 @@ pub struct BackgroundRunner {
 
     gc_range_remote: Remote<yatp::task::future::TaskCell>,
     gc_range_worker: Worker,
+
+    lock_cleanup_remote: Remote<yatp::task::future::TaskCell>,
+    lock_cleanup_worker: Worker,
+
+    last_seqno: u64,
 }
 
 impl Drop for BackgroundRunner {
@@ -851,6 +861,7 @@ impl Drop for BackgroundRunner {
         self.range_load_worker.stop();
         self.delete_range_worker.stop();
         self.gc_range_worker.stop();
+        self.lock_cleanup_worker.stop();
     }
 }
 
@@ -872,8 +883,11 @@ impl BackgroundRunner {
             .create();
         let range_load_remote = range_load_worker.remote();
 
-        let delete_range_worker = Worker::new("background-delete-range_worker");
+        let delete_range_worker = Worker::new("background-delete-range-worker");
         let delete_range_remote = delete_range_worker.remote();
+
+        let lock_cleanup_worker = Worker::new("lock-cleanup-worker");
+        let lock_cleanup_remote = lock_cleanup_worker.remote();
 
         let gc_range_worker = Builder::new("background-range-load-worker")
             // Gc must also use exactly one thread to handle it.
@@ -896,6 +910,9 @@ impl BackgroundRunner {
             delete_range_remote,
             gc_range_worker,
             gc_range_remote,
+            lock_cleanup_remote,
+            lock_cleanup_worker,
+            last_seqno: 0,
         }
     }
 }
@@ -1047,6 +1064,69 @@ impl Runnable for BackgroundRunner {
             }
             // TODO: Consider making this async.
             BackgroundTask::TopRegionsLoadEvict => self.core.top_regions_load_evict(),
+            BackgroundTask::CleanLockTombstone(snapshot_seqno) => {
+                if snapshot_seqno < self.last_seqno {
+                    return;
+                }
+                let mut core = self.core.clone();
+
+                let f = async move {
+                    let mut last_user_key = vec![];
+                    let mut remove_rest = false;
+                    let mut cached_to_remove: Option<Vec<u8>> = None;
+
+                    let mut removed = 0;
+                    let mut total = 0;
+                    let now = Instant::now();
+                    let lock_handle = core.engine.read().engine().cf_handle("lock");
+                    let guard = &epoch::pin();
+                    let mut iter = lock_handle.iterator();
+                    iter.seek_to_first(guard);
+                    while iter.valid() {
+                        total += 1;
+                        let InternalKey {
+                            user_key,
+                            v_type,
+                            sequence,
+                        } = decode_key(iter.key().as_bytes());
+                        if user_key != last_user_key {
+                            if let Some(remove) = cached_to_remove.take() {
+                                removed += 1;
+                                lock_handle.remove(&InternalBytes::from_vec(remove), guard);
+                            }
+                            last_user_key = user_key.to_vec();
+                            if sequence >= snapshot_seqno {
+                                remove_rest = false;
+                            } else {
+                                remove_rest = true;
+                                if v_type == ValueType::Deletion {
+                                    cached_to_remove = Some(iter.key().as_bytes().to_vec());
+                                }
+                            }
+                        } else if remove_rest || sequence < snapshot_seqno {
+                            removed += 1;
+                            lock_handle.remove(iter.key(), guard);
+                        }
+
+                        iter.next(guard);
+                    }
+                    if let Some(remove) = cached_to_remove.take() {
+                        removed += 1;
+                        lock_handle.remove(&InternalBytes::from_vec(remove), guard);
+                    }
+
+                    info!(
+                        "cleanup lock tombstone";
+                        "seqno" => snapshot_seqno,
+                        "total" => total,
+                        "removed" => removed,
+                        "duration" => ?now.saturating_elapsed(),
+                        "current_count" => lock_handle.count(),
+                    );
+                };
+
+                self.lock_cleanup_remote.spawn(f);
+            }
         }
     }
 }
@@ -1132,11 +1212,13 @@ impl Drop for Filter {
     fn drop(&mut self) {
         if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
             let guard = &epoch::pin();
+            self.metrics.filtered += 1;
             self.write_cf_handle
                 .remove(&InternalBytes::from_vec(cached_delete_key), guard);
         }
         if let Some(cached_delete_key) = self.cached_skiplist_delete_key.take() {
             let guard = &epoch::pin();
+            self.metrics.filtered += 1;
             self.write_cf_handle
                 .remove(&InternalBytes::from_vec(cached_delete_key), guard);
         }
@@ -1186,6 +1268,7 @@ impl Filter {
                 // 2. Two consecutive ValueType::Deletion of different user keys.
                 // In either cases, we can delete the previous one directly.
                 let guard = &epoch::pin();
+                self.metrics.filtered += 1;
                 self.write_cf_handle
                     .remove(&InternalBytes::from_vec(cache_skiplist_delete_key), guard)
             }
@@ -1198,10 +1281,12 @@ impl Filter {
             } = decode_key(cache_skiplist_delete_key);
             let guard = &epoch::pin();
             if cache_skiplist_delete_user_key == user_key {
+                self.metrics.filtered += 1;
                 self.write_cf_handle
                     .remove(&InternalBytes::from_bytes(key.clone()), guard);
                 return Ok(());
             } else {
+                self.metrics.filtered += 1;
                 self.write_cf_handle.remove(
                     &InternalBytes::from_vec(self.cached_skiplist_delete_key.take().unwrap()),
                     guard,
@@ -1217,6 +1302,7 @@ impl Filter {
             self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
             self.remove_older = false;
             if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
+                self.metrics.filtered += 1;
                 self.write_cf_handle
                     .remove(&InternalBytes::from_vec(cached_delete_key), guard);
             }
@@ -1285,8 +1371,8 @@ pub mod tests {
     use crossbeam::epoch;
     use engine_rocks::util::new_engine;
     use engine_traits::{
-        CacheRange, IterOptions, Iterable, Iterator, RangeCacheEngine, SyncMutable, CF_DEFAULT,
-        CF_LOCK, CF_WRITE, DATA_CFS,
+        CacheRange, IterOptions, Iterable, Iterator, Mutable, RangeCacheEngine, SyncMutable,
+        WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
     };
     use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
@@ -1295,7 +1381,7 @@ pub mod tests {
     use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
-    use super::{Filter, PdRangeHintService};
+    use super::{BackgroundTask, Filter, PdRangeHintService};
     use crate::{
         background::BackgroundRunner,
         config::RangeCacheConfigManager,
@@ -2365,5 +2451,43 @@ pub mod tests {
         verify(range1, true, 6);
         verify(range2, true, 6);
         assert_eq!(mem_controller.mem_usage(), 1680);
+    }
+
+    #[test]
+    fn test_clean_up_tombstone() {
+        let mut config = RangeCacheEngineConfig::config_for_test();
+        config.soft_limit_threshold = Some(ReadableSize(1000));
+        config.hard_limit_threshold = Some(ReadableSize(1500));
+        let config = Arc::new(VersionTrack::new(config));
+        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(config.clone()));
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(range.clone());
+        let mut wb = engine.write_batch();
+        wb.prepare_for_range(range.clone());
+        wb.put_cf("lock", b"k", b"val");
+        wb.put_cf("lock", b"k1", b"val");
+        wb.put_cf("lock", b"k2", b"val");
+        wb.delete_cf("lock", b"k");
+        wb.delete_cf("lock", b"k1");
+        wb.delete_cf("lock", b"k2");
+        wb.set_sequence_number(100);
+        wb.write();
+
+        let mut wb = engine.write_batch();
+        wb.prepare_for_range(range.clone());
+        wb.put_cf("lock", b"k", b"val");
+        wb.put_cf("lock", b"k1", b"val");
+        wb.put_cf("lock", b"k2", b"val");
+        wb.delete_cf("lock", b"k");
+        wb.delete_cf("lock", b"k1");
+        wb.delete_cf("lock", b"k2");
+        wb.set_sequence_number(110);
+        wb.write();
+
+        engine
+            .bg_worker_manager()
+            .schedule_task(BackgroundTask::CleanLockTombstone(120));
+
+        std::thread::sleep(Duration::from_secs(1000));
     }
 }

@@ -1,11 +1,14 @@
 use core::slice::SlicePattern;
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::BTreeSet,
+    sync::{atomic::Ordering, Arc},
+};
 
 use bytes::Bytes;
 use crossbeam::epoch;
 use engine_traits::{
-    CacheRange, Mutable, RangeCacheEngine, Result, WriteBatch, WriteBatchExt, WriteOptions,
-    CF_DEFAULT,
+    CacheRange, MiscExt, Mutable, RangeCacheEngine, Result, WriteBatch, WriteBatchExt,
+    WriteOptions, CF_DEFAULT,
 };
 use tikv_util::{
     box_err,
@@ -56,7 +59,6 @@ pub struct RangeCacheWriteBatch {
     ranges_to_evict: BTreeSet<CacheRange>,
 
     prepare_apply: Duration,
-    lock_delete_entries: Vec<(RangeCacheWriteBatchEntry, u64)>,
 }
 
 impl std::fmt::Debug for RangeCacheWriteBatch {
@@ -83,7 +85,6 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
             current_range: None,
             ranges_to_evict: BTreeSet::default(),
             prepare_apply: Duration::default(),
-            lock_delete_entries: Vec::new(),
         }
     }
 }
@@ -103,7 +104,6 @@ impl RangeCacheWriteBatch {
             current_range: None,
             ranges_to_evict: BTreeSet::default(),
             prepare_apply: Duration::default(),
-            lock_delete_entries: Vec::new(),
         }
     }
 
@@ -126,6 +126,7 @@ impl RangeCacheWriteBatch {
         );
         let guard = &epoch::pin();
         let start = Instant::now();
+        let mut lock_modification: u64 = 0;
         // Some entries whose ranges may be marked as evicted above, but it does not
         // matter, they will be deleted later.
         let res = entries_to_write
@@ -134,14 +135,49 @@ impl RangeCacheWriteBatch {
             .try_for_each(|e| {
                 let cur = seq;
                 seq += 1;
-                let res = e.write_to_memory(cur, &engine, self.memory_controller.clone(), guard);
-                if e.lock_delete() {
-                    self.lock_delete_entries.push((e, cur));
+                if is_lock_cf(e.cf) {
+                    lock_modification += e.data_size() as u64;
                 }
-                res
+                e.write_to_memory(cur, &engine, self.memory_controller.clone(), guard)
             });
         let duration = start.saturating_elapsed_secs();
         WRITE_DURATION_HISTOGRAM.observe(duration);
+
+        if self
+            .engine
+            .lock_modification_bytes
+            .fetch_add(lock_modification, Ordering::Relaxed)
+            + lock_modification
+            > ReadableSize::mb(16).0
+        {
+            if self
+                .engine
+                .lock_modification_bytes
+                .swap(0, Ordering::Relaxed)
+                > ReadableSize::mb(16).0
+            {
+                let rocks_engine = self.engine.rocks_engine.as_ref().unwrap();
+                let last_seqno = rocks_engine.get_latest_sequence_number();
+                let snapshot_seqno = self
+                    .engine
+                    .rocks_engine
+                    .as_ref()
+                    .unwrap()
+                    .get_oldest_snapshot_sequence_number()
+                    .unwrap_or(last_seqno);
+                if let Err(e) = self
+                    .engine
+                    .bg_worker_manager()
+                    .schedule_task(BackgroundTask::CleanLockTombstone(snapshot_seqno))
+                {
+                    error!(
+                        "schedule lock tombstone cleanup failed";
+                        "err" => ?e,
+                    );
+                    assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+                }
+            }
+        }
 
         if !ranges_to_delete.is_empty() {
             if let Err(e) = self
@@ -494,13 +530,13 @@ impl WriteBatch for RangeCacheWriteBatch {
     }
 
     fn post_write(&mut self) {
-        let handle = self.engine.core().read().engine().cf_handle("lock");
-        let guard = &epoch::pin();
-        self.lock_delete_entries.iter().for_each(|(e, seq)| {
-            assert!(e.lock_delete());
-            e.delete_in_lock_cf(*seq, &handle, guard)
-        });
-        self.lock_delete_entries.clear();
+        // let handle = self.engine.core().read().engine().cf_handle("lock");
+        // let guard = &epoch::pin();
+        // self.lock_delete_entries.iter().for_each(|(e, seq)| {
+        //     assert!(e.lock_delete());
+        //     e.delete_in_lock_cf(*seq, &handle, guard)
+        // });
+        // self.lock_delete_entries.clear();
     }
 
     fn count(&self) -> usize {

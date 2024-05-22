@@ -5,7 +5,10 @@ use std::{
     fmt::{self, Debug},
     ops::Bound,
     result,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, AtomicU64},
+        Arc,
+    },
 };
 
 use crossbeam::epoch::{self, default_collector, Guard};
@@ -102,6 +105,10 @@ impl SkiplistHandle {
         &self,
     ) -> OwnedIter<Arc<SkipList<InternalBytes, InternalBytes>>, InternalBytes, InternalBytes> {
         self.0.owned_iter()
+    }
+
+    pub fn count(&self) -> usize {
+        self.0.len()
     }
 }
 
@@ -254,6 +261,8 @@ pub struct RangeCacheMemoryEngine {
     memory_controller: Arc<MemoryController>,
     statistics: Arc<Statistics>,
     config: Arc<VersionTrack<RangeCacheEngineConfig>>,
+
+    pub(crate) lock_modification_bytes: Arc<AtomicU64>,
 }
 
 impl RangeCacheMemoryEngine {
@@ -288,6 +297,7 @@ impl RangeCacheMemoryEngine {
             memory_controller,
             statistics,
             config,
+            lock_modification_bytes: Arc::default(),
         }
     }
 
