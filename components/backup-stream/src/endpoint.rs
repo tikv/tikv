@@ -39,7 +39,7 @@ use tikv_util::{
 use tokio::{
     io::Result as TokioResult,
     runtime::{Handle, Runtime},
-    sync::{mpsc::Sender, oneshot, Semaphore},
+    sync::Semaphore,
 };
 use tokio_stream::StreamExt;
 use txn_types::TimeStamp;
@@ -797,13 +797,14 @@ where
             let _ = info.unwrap().set_flushing_status_cas(false, true);
             let mts = self.prepare_min_ts().await;
             let sched = self.scheduler.clone();
-            self.region_op(ObserveOp::ResolveRegions {
-                callback: Box::new(move |res| {
-                    try_send!(sched, Task::ExecFlush(task, res));
-                }),
-                min_ts: mts,
-            })
-            .await;
+            self.region_operator
+                .request(ObserveOp::ResolveRegions {
+                    callback: Box::new(move |res| {
+                        try_send!(sched, Task::ExecFlush(task, res));
+                    }),
+                    min_ts: mts,
+                })
+                .await;
         });
     }
 
@@ -812,24 +813,24 @@ where
             let mts = self.prepare_min_ts().await;
             let sched = self.scheduler.clone();
             info!("min_ts prepared for flushing"; "min_ts" => %mts);
-            self.region_op(ObserveOp::ResolveRegions {
-                callback: Box::new(move |res| {
-                    try_send!(sched, Task::ExecFlush(task, res));
-                }),
-                min_ts: mts,
-            })
-            .await
+            self.region_operator
+                .request(ObserveOp::ResolveRegions {
+                    callback: Box::new(move |res| {
+                        try_send!(sched, Task::ExecFlush(task, res));
+                    }),
+                    min_ts: mts,
+                })
+                .await
         })
     }
 
     fn on_exec_flush(&mut self, task: String, resolved: ResolvedRegions) {
         self.checkpoint_mgr.freeze();
-        self.pool
-            .spawn(root!("flush"; self.do_flush(task, resolved).map(|r| {
-                if let Err(err) = r {
-                    err.report("during updating flush status")
-                }
-            })));
+        self.pool.spawn(self.do_flush(task, resolved).map(|r| {
+            if let Err(err) = r {
+                err.report("during updating flush status")
+            }
+        }));
     }
 
     fn update_global_checkpoint(&self, task: String) -> future![()] {

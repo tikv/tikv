@@ -14,7 +14,7 @@ use kvproto::{
     metapb::Region,
 };
 use pd_client::PdClient;
-use tikv_util::{box_err, defer, info, time::Instant, warn, worker::Scheduler};
+use tikv_util::{box_err, defer, info, warn, worker::Scheduler};
 use txn_types::TimeStamp;
 use uuid::Uuid;
 
