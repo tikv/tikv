@@ -2043,8 +2043,21 @@ impl SnapRecvConcurrencyLimiter {
         timestamps: &mut HashMap<u64, Instant>,
         current_time: Instant,
     ) {
-        timestamps.retain(|_, timestamp| {
-            current_time.duration_since(timestamp.clone()) <= Duration::from_secs(self.ttl_secs)
+        timestamps.retain(|region_id, timestamp| {
+            if current_time.duration_since(timestamp.clone()) <= Duration::from_secs(self.ttl_secs)
+            {
+                true
+            } else {
+                // This shouldn't happen if the TTL is set properly. When it
+                // does happen, the limiter may permit more snapshots than the
+                // configured limit to be sent and trigger the receiver busy
+                // error.
+                warn!(
+                    "region {} expired in the snap recv concurrency limiter",
+                    region_id
+                );
+                false
+            }
         });
         timestamps.shrink_to(self.limit.load(Ordering::Relaxed));
     }
