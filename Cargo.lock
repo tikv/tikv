@@ -6425,7 +6425,6 @@ dependencies = [
  "profiler",
  "protobuf",
  "regex",
- "ryu",
  "safemem",
  "serde",
  "serde_json",
