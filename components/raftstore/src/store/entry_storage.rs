@@ -253,7 +253,10 @@ impl EntryCache {
                 }
                 break;
             }
-            // keep the applying entries if not all of them are persisted.
+            // Do not evict cached entries if not all of them are persisted.
+            // After PR #16626, it is possible that applying entries are not 
+            // yet fully persisted. Therefore, it should not free these
+            // entries until they are completely persisted.
             if cached_entries.range.end <= idx {
                 let (_, dangle_size) = cached_entries.take_entries();
                 mem_size_change -= dangle_size as i64;
