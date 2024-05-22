@@ -154,17 +154,13 @@ pub trait SnapCacheBuilder: Send + Sync {
 
 impl<EK: KvEngine> SnapCacheBuilder for TabletRegistry<EK> {
     fn build(&self, region_id: u64, path: &Path) -> Result<()> {
-        if let Some(mut c) = self.get(region_id)
-            && let Some(db) = c.latest()
-        {
+        if let Some(mut c) = self.get(region_id) && let Some(db) = c.latest() {
             let mut checkpointer = db.new_checkpointer()?;
             // Avoid flush.
             checkpointer.create_at(path, None, u64::MAX)?;
             Ok(())
         } else {
-            Err(Error::Other(
-                format!("region {} not found", region_id).into(),
-            ))
+            Err(Error::Other(format!("region {} not found", region_id).into()))
         }
     }
 }
@@ -330,9 +326,7 @@ async fn cleanup_cache(
         };
         let mut buffer = Vec::with_capacity(PREVIEW_CHUNK_LEN);
         for meta in preview.take_metas().into_vec() {
-            if is_sst(&meta.file_name)
-                && let Some(p) = exists.remove(&meta.file_name)
-            {
+            if is_sst(&meta.file_name) && let Some(p) = exists.remove(&meta.file_name) {
                 if is_sst_match_preview(&meta, &p, &mut buffer, limiter, key_manager).await? {
                     reused += meta.file_size;
                     continue;
@@ -1035,11 +1029,7 @@ pub fn copy_tablet_snapshot(
         if let Some(m) = sender_snap_mgr.key_manager()
             && let Some((iv, key)) = m.get_file_internal(path.to_str().unwrap())?
         {
-            key_importer
-                .as_mut()
-                .unwrap()
-                .add(recv.to_str().unwrap(), iv, key)
-                .unwrap();
+            key_importer.as_mut().unwrap().add(recv.to_str().unwrap(), iv, key).unwrap();
         }
     }
     if let Some(i) = key_importer {

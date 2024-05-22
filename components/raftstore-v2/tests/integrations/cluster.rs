@@ -137,9 +137,7 @@ impl TestRouter {
             match res {
                 Ok(_) => return block_on(sub.result()).is_some(),
                 Err(TrySendError::Disconnected(m)) => {
-                    let PeerMsg::WaitFlush(ch) = m else {
-                        unreachable!()
-                    };
+                    let PeerMsg::WaitFlush(ch) = m else { unreachable!() };
                     match self
                         .store_router()
                         .send_control(StoreMsg::WaitFlush { region_id, ch })

@@ -54,7 +54,11 @@ impl MergeContext {
 
     #[inline]
     pub fn maybe_take_pending_prepare(&mut self, applied: u64) -> Option<RaftCmdRequest> {
-        if let Some(PrepareStatus::WaitForFence { fence, req, .. }) = self.prepare_status.as_mut()
+        if let Some(PrepareStatus::WaitForFence {
+            fence,
+            req,
+            ..
+        }) = self.prepare_status.as_mut()
             && applied >= *fence
         {
             // The status will be updated during processing the proposal.
@@ -85,13 +89,8 @@ impl MergeContext {
 impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     #[inline]
     pub fn update_merge_progress_on_became_follower(&mut self) {
-        if let Some(MergeContext {
-            prepare_status: Some(status),
-        }) = self.merge_context()
-            && matches!(
-                status,
-                PrepareStatus::WaitForTrimStatus { .. } | PrepareStatus::WaitForFence { .. }
-            )
+        if let Some(MergeContext { prepare_status: Some(status) }) = self.merge_context()
+            && matches!(status, PrepareStatus::WaitForTrimStatus { .. } | PrepareStatus::WaitForFence { .. })
         {
             self.take_merge_context();
             self.proposal_control_mut().set_pending_prepare_merge(false);

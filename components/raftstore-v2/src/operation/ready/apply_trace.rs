@@ -287,10 +287,7 @@ impl ApplyTrace {
                 }
             })
             .max();
-        if let Some(m) = last_modified
-            && m >= self.admin.flushed + 4096000
-            && m >= self.last_flush_trigger + 4096000
-        {
+        if let Some(m) = last_modified && m >= self.admin.flushed + 4096000 && m >= self.last_flush_trigger + 4096000 {
             self.last_flush_trigger = m;
             true
         } else {

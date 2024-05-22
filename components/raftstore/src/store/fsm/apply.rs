@@ -1270,9 +1270,9 @@ where
             apply_ctx.host.on_empty_cmd(&self.region, index, term);
 
             // 1. When a peer become leader, it will send an empty entry.
-            // 2. When a leader tries to read index during transferring leader, it will also
-            //    propose an empty entry. But that entry will not contain any associated
-            //    callback. So no need to clear callback.
+            // 2. When a leader tries to read index during transferring leader,
+            //    it will also propose an empty entry. But that entry will not contain
+            //    any associated callback. So no need to clear callback.
             while let Some(mut cmd) = self.pending_cmds.pop_normal(u64::MAX, term - 1) {
                 if let Some(cb) = cmd.cb.take() {
                     apply_ctx
@@ -4797,12 +4797,12 @@ where
                     // command may not read the writes of previous commands and break ACID. If
                     // it's still leader, there are two possibility that mailbox is closed:
                     // 1. The process is shutting down.
-                    // 2. The leader is destroyed. A leader won't propose to destroy itself, so it
-                    //    should either destroyed by older leaders or newer leaders. Leader won't
-                    //    respond to read until it has applied to current term, so no command will
-                    //    be proposed until command from older leaders have applied, which will then
-                    //    stop it from accepting proposals. If the command is proposed by new
-                    //    leader, then it won't be able to propose new proposals.
+                    // 2. The leader is destroyed. A leader won't propose to destroy itself, so
+                    //     it should either destroyed by older leaders or newer leaders. Leader
+                    //     won't respond to read until it has applied to current term, so no
+                    //     command will be proposed until command from older leaders have applied,
+                    //     which will then stop it from accepting proposals. If the command is
+                    //     proposed by new leader, then it won't be able to propose new proposals.
                     // So only shutdown needs to be checked here.
                     if !tikv_util::thread_group::is_shutdown(!cfg!(test)) {
                         for p in apply.cbs.drain(..) {

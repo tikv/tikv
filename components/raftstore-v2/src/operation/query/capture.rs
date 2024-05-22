@@ -56,9 +56,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: raftstore::store::Transport>
         let id = self.fsm.peer().region_id();
         let term = self.fsm.peer().term();
         let (ch, _) = QueryResChannel::with_callback(Box::new(move |res| {
-            if let QueryResult::Response(resp) = res
-                && resp.get_header().has_error()
-            {
+            if let QueryResult::Response(resp) = res && resp.get_header().has_error() {
                 // Return error
                 capture_change.snap_cb.report_error(resp.clone());
                 return;

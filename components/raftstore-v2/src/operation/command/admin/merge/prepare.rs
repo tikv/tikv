@@ -328,9 +328,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 entry.get_data(),
                 entry.get_index(),
                 entry.get_term(),
-            ) else {
-                continue;
-            };
+            ) else { continue };
             let cmd_type = cmd.get_admin_request().get_cmd_type();
             match cmd_type {
                 AdminCmdType::TransferLeader
@@ -416,9 +414,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
     ) {
         let region_id = self.region_id();
         if self.merge_context().is_some()
-            && let Some(PrepareStatus::WaitForTrimStatus {
-                pending_peers, req, ..
-            }) = self.merge_context_mut().prepare_status.as_mut()
+            && let Some(PrepareStatus::WaitForTrimStatus { pending_peers, req, .. }) = self
+                .merge_context_mut()
+                .prepare_status
+                .as_mut()
             && req.is_some()
         {
             assert!(resp.has_availability_context());
@@ -454,21 +453,17 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     }
                 };
                 let mut req = req.take().unwrap();
-                req.mut_header()
-                    .set_flags(WriteBatchFlags::PRE_FLUSH_FINISHED.bits());
+                req.mut_header().set_flags(WriteBatchFlags::PRE_FLUSH_FINISHED.bits());
                 let logger = self.logger.clone();
                 let on_flush_finish = move || {
                     let (ch, _) = CmdResChannel::pair();
-                    if let Err(e) =
-                        mailbox.force_send(PeerMsg::AdminCommand(RaftRequest::new(req, ch)))
-                    {
+                    if let Err(e) = mailbox.force_send(PeerMsg::AdminCommand(RaftRequest::new(req, ch))) {
                         error!(
                             logger,
                             "send PrepareMerge request failed after pre-flush finished";
                             "err" => ?e,
                         );
-                        // We rely on `maybe_clean_up_stale_merge_context` to
-                        // clean this up.
+                        // We rely on `maybe_clean_up_stale_merge_context` to clean this up.
                     }
                 };
                 self.start_pre_flush(
@@ -604,7 +599,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // `propose_prepare_merge`.
         // If the req is still inflight and reaches `propose_prepare_merge` later,
         // `already_checked_trim_status` will restore the status.
-        if let Some(PrepareStatus::WaitForTrimStatus { start_time, .. }) = self
+        if let Some(PrepareStatus::WaitForTrimStatus {
+            start_time, ..
+        }) = self
             .merge_context()
             .as_ref()
             .and_then(|c| c.prepare_status.as_ref())

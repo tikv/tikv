@@ -1114,9 +1114,7 @@ mod test {
             }
         }
 
-        let AdminCmdResult::SplitRegion(SplitResult { tablet, .. }) = apply_res else {
-            panic!()
-        };
+        let AdminCmdResult::SplitRegion(SplitResult { tablet, .. }) = apply_res else { panic!() };
         // update cache
         let mut cache = apply.tablet_registry().get(parent_id).unwrap();
         cache.set(*tablet.downcast().unwrap());

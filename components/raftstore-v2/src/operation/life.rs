@@ -240,9 +240,7 @@ fn check_if_to_peer_destroyed<ER: RaftEngine>(
     if util::is_epoch_stale(msg.get_region_epoch(), local_epoch) {
         return Ok(true);
     }
-    if let Some(local_peer) = find_peer(local_state.get_region(), store_id)
-        && to_peer.id <= local_peer.get_id()
-    {
+    if let Some(local_peer) = find_peer(local_state.get_region(), store_id) && to_peer.id <= local_peer.get_id() {
         return Ok(true);
     }
     // If the peer is destroyed by conf change, all above checks will pass.
@@ -711,12 +709,8 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let check_peer_id = check.get_check_peer().get_id();
         let records = self.storage().region_state().get_merged_records();
         let Some(record) = records.iter().find(|r| {
-            r.get_source_peers()
-                .iter()
-                .any(|p| p.get_id() == check_peer_id)
-        }) else {
-            return;
-        };
+            r.get_source_peers().iter().any(|p| p.get_id() == check_peer_id)
+        }) else { return };
         let source_index = record.get_source_index();
         forward_destroy_to_source_peer(msg, |m| {
             let source_checkpoint = super::merge_source_path(

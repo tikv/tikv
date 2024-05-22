@@ -387,9 +387,9 @@ mod tests {
         let res = rx.recv().unwrap().unwrap_err();
         assert!(matches!(
             &res,
-            StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-                box MvccErrorInner::WriteConflict { .. },
-            )))))
+            StorageError(box StorageErrorInner::Txn(TxnError(
+                box TxnErrorInner::Mvcc(MvccError(box MvccErrorInner::WriteConflict { .. }))
+            )))
         ));
         // The tx should be dropped.
         rx.recv().unwrap_err();
@@ -422,9 +422,9 @@ mod tests {
         let res = rx.recv().unwrap().unwrap_err();
         assert!(matches!(
             &res,
-            StorageError(box StorageErrorInner::Txn(TxnError(box TxnErrorInner::Mvcc(MvccError(
-                box MvccErrorInner::KeyIsLocked(_),
-            )))))
+            StorageError(box StorageErrorInner::Txn(TxnError(
+                box TxnErrorInner::Mvcc(MvccError(box MvccErrorInner::KeyIsLocked(_)))
+            )))
         ));
         // Since the cancellation callback can fully execute only when it's successfully
         // removed from the lock waiting queues, it's impossible that `finish_request`

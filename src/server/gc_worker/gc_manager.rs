@@ -586,9 +586,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
     ) -> GcManagerResult<Option<Key>> {
         // Get the information of the next region to do GC.
         let (region, next_key) = self.get_next_gc_context(from_key);
-        let Some(region) = region else {
-            return Ok(None);
-        };
+        let Some(region) = region else { return Ok(None) };
 
         let hex_start = format!("{:?}", log_wrappers::Value::key(region.get_start_key()));
         let hex_end = format!("{:?}", log_wrappers::Value::key(region.get_end_key()));

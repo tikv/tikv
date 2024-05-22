@@ -558,9 +558,7 @@ impl EnginesResourceInfo {
             });
 
         for (_, cache) in cached_latest_tablets.iter_mut() {
-            let Some(tablet) = cache.latest() else {
-                continue;
-            };
+            let Some(tablet) = cache.latest() else { continue };
             for cf in DATA_CFS {
                 fetch_engine_cf(tablet, cf);
             }

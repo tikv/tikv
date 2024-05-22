@@ -1426,7 +1426,8 @@ impl Filter for TeeFilter {
 // 2. the splitted region set has_dirty_data be true in `apply_snapshot`
 // 3. the splitted region schedule tablet trim task in `on_applied_snapshot`
 //    with tablet index 5
-// 4. the splitted region received a snapshot sent from its leader
+// 4. the splitted region received a snapshot sent from its
+//    leader
 // 5. after finishing applying this snapshot, the tablet index in storage
 //    changed to 6
 // 6. tablet trim complete and callbacked to raftstore

@@ -65,8 +65,7 @@ impl Drop for ResolverStatus {
             locks,
             memory_quota,
             ..
-        } = self
-        else {
+        } = self else {
             return;
         };
         if locks.is_empty() {
@@ -97,8 +96,7 @@ impl ResolverStatus {
             locks,
             memory_quota,
             ..
-        } = self
-        else {
+        } = self else {
             panic!("region {:?} resolver has ready", region_id)
         };
         // Check if adding a new lock or unlock will exceed the memory
@@ -112,7 +110,10 @@ impl ResolverStatus {
     }
 
     fn update_tracked_index(&mut self, index: u64, region_id: u64) {
-        let ResolverStatus::Pending { tracked_index, .. } = self else {
+        let ResolverStatus::Pending {
+            tracked_index,
+            ..
+        } = self else {
             panic!("region {:?} resolver has ready", region_id)
         };
         assert!(
@@ -134,8 +135,7 @@ impl ResolverStatus {
             memory_quota,
             tracked_index,
             ..
-        } = self
-        else {
+        } = self else {
             panic!("region {:?} resolver has ready", region_id)
         };
         // Must take locks, otherwise it may double free memory quota on drop.

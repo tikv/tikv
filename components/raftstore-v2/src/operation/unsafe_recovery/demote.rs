@@ -40,9 +40,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             let exit_joint = exit_joint_request(self.region(), self.peer());
             let (ch, sub) = CmdResChannel::pair();
             self.on_admin_command(ctx, exit_joint, ch);
-            if let Some(resp) = sub.try_result()
-                && resp.get_header().has_error()
-            {
+            if let Some(resp) = sub.try_result() && resp.get_header().has_error() {
                 error!(self.logger,
                     "Unsafe recovery, fail to exit residual joint state";
                     "err" => ?resp.get_header().get_error(),
@@ -72,9 +70,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 "req" => ?req);
             let (ch, sub) = CmdResChannel::pair();
             self.on_admin_command(ctx, req, ch);
-            if let Some(resp) = sub.try_result()
-                && resp.get_header().has_error()
-            {
+            if let Some(resp) = sub.try_result() && resp.get_header().has_error() {
                 error!(self.logger,
                     "Unsafe recovery, fail to finish demotion";
                     "err" => ?resp.get_header().get_error(),
@@ -105,10 +101,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             failed_voters,
             target_index,
             demote_after_exit,
-        }) = self.unsafe_recovery_state()
-        else {
-            return;
-        };
+        }) = self.unsafe_recovery_state() else { return };
 
         if self.raft_group().raft.raft_log.applied < *target_index {
             return;
@@ -132,14 +125,12 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                     let exit_joint = exit_joint_request(self.region(), self.peer());
                     let (ch, sub) = CmdResChannel::pair();
                     self.on_admin_command(ctx, exit_joint, ch);
-                    if let Some(resp) = sub.try_result()
-                        && resp.get_header().has_error()
-                    {
+                    if let Some(resp) = sub.try_result() && resp.get_header().has_error() {
                         error!(self.logger,
                             "Unsafe recovery, fail to exit joint state";
                             "err" => ?resp.get_header().get_error(),
                         );
-                        *self.unsafe_recovery_state_mut() = Some(UnsafeRecoveryState::Failed);
+                        *self.unsafe_recovery_state_mut()= Some(UnsafeRecoveryState::Failed);
                     }
                 } else {
                     error!(self.logger,

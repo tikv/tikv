@@ -581,9 +581,7 @@ where
             tx.notify(res);
         }
         rx.inspect(move |ev| {
-            let WriteEvent::Finished(res) = ev else {
-                return;
-            };
+            let WriteEvent::Finished(res) = ev else { return };
             match res {
                 Ok(()) => {
                     ASYNC_REQUESTS_COUNTER_VEC.write.success.inc();

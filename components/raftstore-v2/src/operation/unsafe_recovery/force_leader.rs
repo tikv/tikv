@@ -190,12 +190,11 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             return;
         }
 
-        if let Some(UnsafeRecoveryState::Failed) = self.unsafe_recovery_state()
-            && !force
-        {
-            // Skip force leader if the plan failed, so wait for the next retry of plan with
-            // force leader state holding
-            info!(self.logger, "skip exiting force leader state");
+        if let Some(UnsafeRecoveryState::Failed) = self.unsafe_recovery_state() && !force {
+            // Skip force leader if the plan failed, so wait for the next retry of plan with force leader state holding
+            info!(
+                self.logger, "skip exiting force leader state"
+            );
             return;
         }
 

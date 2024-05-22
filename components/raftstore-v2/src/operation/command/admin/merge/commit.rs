@@ -615,7 +615,10 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if let Some(state) = self.applied_merge_state()
             && state.get_commit() == commit_of_merge(&catch_up_logs.merge)
         {
-            assert_eq!(state.get_target().get_id(), catch_up_logs.target_region_id);
+            assert_eq!(
+                state.get_target().get_id(),
+                catch_up_logs.target_region_id
+            );
             self.finish_catch_up_logs(store_ctx, catch_up_logs);
         } else {
             // Directly append these logs to raft log and then commit them.
@@ -633,8 +636,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
                 }
             }
             catch_up_logs.merge.clear_entries();
-            self.merge_context_mut().prepare_status =
-                Some(PrepareStatus::CatchUpLogs(catch_up_logs));
+            self.merge_context_mut().prepare_status = Some(PrepareStatus::CatchUpLogs(catch_up_logs));
         }
     }
 

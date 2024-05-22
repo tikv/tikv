@@ -342,9 +342,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         if !queue.is_empty() {
             for e in committed_entries {
                 let mut proposal = queue.find_proposal(e.term, e.index, current_term);
-                if let Some(p) = &mut proposal
-                    && p.must_pass_epoch_check
-                {
+                if let Some(p) = &mut proposal && p.must_pass_epoch_check {
                     // In this case the apply can be guaranteed to be successful. Invoke the
                     // on_committed callback if necessary.
                     p.cb.notify_committed();
@@ -845,9 +843,7 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
         }
         control.need_flush = false;
         let flush_state = self.flush_state().clone();
-        if let Some(wb) = &self.write_batch
-            && !wb.is_empty()
-        {
+        if let Some(wb) = &self.write_batch && !wb.is_empty() {
             self.perf_context().start_observe();
             let mut write_opt = WriteOptions::default();
             write_opt.set_disable_wal(true);
@@ -867,7 +863,10 @@ impl<EK: KvEngine, R: ApplyResReporter> Apply<EK, R> {
             let tokens: Vec<_> = self
                 .callbacks_mut()
                 .iter()
-                .flat_map(|(v, _)| v.write_trackers().flat_map(|t| t.as_tracker_token()))
+                .flat_map(|(v, _)| {
+                    v.write_trackers()
+                        .flat_map(|t| t.as_tracker_token())
+                })
                 .collect();
             self.perf_context().report_metrics(&tokens);
         }

@@ -1292,9 +1292,7 @@ impl<T: Simulator> Cluster<T> {
                     engine_traits::CF_RAFT,
                     &keys::region_state_key(region_id),
                 )
-                .unwrap()
-                && state.get_state() == peer_state
-            {
+                .unwrap() && state.get_state() == peer_state {
                 return;
             }
             sleep_ms(10);
