@@ -2354,6 +2354,13 @@ mod tests {
             ft.set_flen(flen);
             ft.set_decimal(decimal);
             let nd = produce_dec_with_specified_tp(&mut ctx, dec, &ft).unwrap();
+            assert_eq!(
+                nd.frac_cnt(),
+                nd.result_frac_cnt(),
+                "frac_cnt {} is not equal to result_frac_cnt {}",
+                nd.frac_cnt(),
+                nd.result_frac_cnt()
+            );
             assert_eq!(nd, want, "{}, {}, {}, {}, {}", dec, nd, want, flen, decimal);
         }
     }
@@ -2765,6 +2772,13 @@ mod tests {
                 match &expect {
                     Ok(d) => {
                         assert!(r.is_ok(), "{}", log);
+                        assert_eq!(
+                            d.frac_cnt(),
+                            d.result_frac_cnt(),
+                            "frac_cnt {} is not equal to result_frac_cnt {}",
+                            d.frac_cnt(),
+                            d.result_frac_cnt()
+                        );
                         assert_eq!(&r.unwrap(), d, "{}", log);
                     }
                     Err(Error::Eval(..)) => {

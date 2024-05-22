@@ -555,7 +555,8 @@ where
                 delegate.unfinished_write_seqno.push(seqno);
             }
             self.prepare_for(delegate);
-            delegate.last_flush_applied_index = delegate.apply_state.get_applied_index()
+            delegate.last_flush_applied_index = delegate.apply_state.get_applied_index();
+            delegate.has_pending_ssts = false;
         }
         self.kv_wb_last_bytes = self.kv_wb().data_size() as u64;
         self.kv_wb_last_keys = self.kv_wb().count() as u64;
@@ -791,7 +792,7 @@ pub fn notify_stale_req_with_msg(term: u64, msg: String, cb: impl ErrorCallback)
 }
 
 /// Checks if a write is needed to be issued before handling the command.
-fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
+fn should_write_to_engine(has_pending_writes: bool, cmd: &RaftCmdRequest) -> bool {
     if cmd.has_admin_request() {
         match cmd.get_admin_request().get_cmd_type() {
             // ComputeHash require an up to date snapshot.
@@ -809,7 +810,7 @@ fn should_write_to_engine(cmd: &RaftCmdRequest) -> bool {
         if req.has_delete_range() {
             return true;
         }
-        if req.has_ingest_sst() {
+        if req.has_ingest_sst() && has_pending_writes {
             return true;
         }
     }
@@ -1043,6 +1044,8 @@ where
     buckets: Option<BucketStat>,
 
     unfinished_write_seqno: Vec<SequenceNumber>,
+
+    has_pending_ssts: bool,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -1077,6 +1080,7 @@ where
             trace: ApplyMemoryTrace::default(),
             buckets: None,
             unfinished_write_seqno: vec![],
+            has_pending_ssts: false,
         }
     }
 
@@ -1227,9 +1231,15 @@ where
                 if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
                     self.priority = Priority::Low;
                 }
+                if self.has_pending_ssts {
+                    // we are in low priority handler and to avoid overlapped ssts with same region
+                    // just return Yield
+                    return ApplyResult::Yield;
+                }
                 let mut has_unflushed_data =
                     self.last_flush_applied_index != self.apply_state.get_applied_index();
-                if (has_unflushed_data && should_write_to_engine(&cmd)
+                if (has_unflushed_data
+                    && should_write_to_engine(!apply_ctx.kv_wb().is_empty(), &cmd)
                     || apply_ctx.kv_wb().should_write_to_engine())
                     && apply_ctx.host.pre_persist(&self.region, false, Some(&cmd))
                 {
@@ -1997,6 +2007,7 @@ where
         match ctx.importer.validate(sst) {
             Ok(meta_info) => {
                 ctx.pending_ssts.push(meta_info.clone());
+                self.has_pending_ssts = true;
                 ssts.push(meta_info)
             }
             Err(e) => {
@@ -2005,7 +2016,6 @@ where
                 panic!("{} ingest {:?}: {:?}", self.tag, sst, e);
             }
         };
-
         Ok(())
     }
 }
@@ -4646,6 +4656,7 @@ where
         self.apply_ctx.flush();
         for fsm in fsms.iter_mut().flatten() {
             fsm.delegate.last_flush_applied_index = fsm.delegate.apply_state.get_applied_index();
+            fsm.delegate.has_pending_ssts = false;
             fsm.delegate.update_memory_trace(&mut self.trace_event);
         }
         MEMTRACE_APPLYS.trace(mem::take(&mut self.trace_event));
@@ -5193,7 +5204,7 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        assert_eq!(should_write_to_engine(&cmd), true);
+        assert_eq!(should_write_to_engine(true, &cmd), true);
         assert_eq!(should_sync_log(&cmd), true);
 
         // Normal command
@@ -5207,7 +5218,17 @@ mod tests {
         let mut req = RaftCmdRequest::default();
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::ComputeHash);
-        assert_eq!(should_write_to_engine(&req), true);
+        assert_eq!(should_write_to_engine(true, &req), true);
+        assert_eq!(should_write_to_engine(false, &req), true);
+
+        // DeleteRange command
+        let mut req = Request::default();
+        req.set_cmd_type(CmdType::DeleteRange);
+        req.set_delete_range(DeleteRangeRequest::default());
+        let mut cmd = RaftCmdRequest::default();
+        cmd.mut_requests().push(req);
+        assert_eq!(should_write_to_engine(true, &cmd), true);
+        assert_eq!(should_write_to_engine(false, &cmd), true);
 
         // IngestSst command
         let mut req = Request::default();
@@ -5215,7 +5236,8 @@ mod tests {
         req.set_ingest_sst(IngestSstRequest::default());
         let mut cmd = RaftCmdRequest::default();
         cmd.mut_requests().push(req);
-        assert_eq!(should_write_to_engine(&cmd), true);
+        assert_eq!(should_write_to_engine(true, &cmd), true);
+        assert_eq!(should_write_to_engine(false, &cmd), false);
     }
 
     #[test]
@@ -6214,7 +6236,7 @@ mod tests {
         // nomral put command, so the first apple_res.exec_res should be empty.
         let apply_res = fetch_apply_res(&rx);
         assert!(apply_res.exec_res.is_empty());
-        // The region was rescheduled low-priority becasuee of ingest command,
+        // The region was rescheduled low-priority because of ingest command,
         // only put entry has been applied;
         let apply_res = fetch_apply_res(&rx);
         assert_eq!(apply_res.applied_term, 3);
@@ -6853,9 +6875,12 @@ mod tests {
             assert!(!resp.get_header().has_error(), "{:?}", resp);
         }
         let mut res = fetch_apply_res(&rx);
-        // There may be one or two ApplyRes which depends on whether these two apply
-        // msgs are batched together.
-        if res.apply_state.get_applied_index() == 3 {
+        // There are five entries [put, ingest, put, ingest, put] in one region.
+        // so the apply results should be notified at index 2/4.
+        if res.apply_state.get_applied_index() == 2 {
+            res = fetch_apply_res(&rx);
+        }
+        if res.apply_state.get_applied_index() == 4 {
             res = fetch_apply_res(&rx);
         }
         assert_eq!(res.apply_state.get_applied_index(), 5);

@@ -192,10 +192,10 @@ impl<'de> Visitor<'de> for JsonVisitor {
     where
         E: de::Error,
     {
-        if v > (i64::MAX as u64) {
-            Ok(Json::from_f64(v as f64).map_err(de::Error::custom)?)
+        if v < i64::MAX as u64 {
+            Json::from_i64(v as i64).map_err(de::Error::custom)
         } else {
-            Ok(Json::from_i64(v as i64).map_err(de::Error::custom)?)
+            Json::from_u64(v).map_err(de::Error::custom)
         }
     }
 
@@ -285,6 +285,10 @@ mod tests {
             (
                 r#"9223372036854775807"#,
                 Json::from_i64(9223372036854775807),
+            ),
+            (
+                r#"9223372036854775808"#,
+                Json::from_u64(9223372036854775808),
             ),
         ];
 
