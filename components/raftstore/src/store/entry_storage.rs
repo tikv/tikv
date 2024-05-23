@@ -239,16 +239,18 @@ impl EntryCache {
 
         let mut mem_size_change = 0;
 
-        // Clean cached entries which have been persisted. For example, if entries
-        // [1, 10), [10, 20), [20, 30) are sent to apply threads and `compact_to(15)`
-        // is called, both [10, 20), [20, 30) will still be kept in cache.
+        // Clean cached entries which have been already sent to apply threads. For
+        // example, if entries [1, 10), [10, 20), [20, 30) are sent to apply threads and
+        // `compact_to(15)` is called:
+        // - if persisted >= 19, then only [20, 30) will still be kept in cache.
+        // - if persisted < 19, then [10, 20), [20, 30) will still be kept in cache.
         let old_trace_cap = self.trace.capacity();
         while let Some(cached_entries) = self.trace.pop_front() {
             // Do not evict cached entries if not all of them are persisted.
             // After PR #16626, it is possible that applying entries are not
             // yet fully persisted. Therefore, it should not free these
             // entries until they are completely persisted.
-            if cached_entries.range.end > idx {
+            if cached_entries.range.start >= idx || cached_entries.range.end > self.persisted + 1 {
                 self.trace.push_front(cached_entries);
                 let trace_len = self.trace.len();
                 let trace_cap = self.trace.capacity();
@@ -259,6 +261,7 @@ impl EntryCache {
             }
             let (_, dangle_size) = cached_entries.take_entries();
             mem_size_change -= dangle_size as i64;
+            idx = cmp::max(cached_entries.range.end, idx);
         }
         let new_trace_cap = self.trace.capacity();
         mem_size_change += Self::trace_vec_mem_size_change(new_trace_cap, old_trace_cap);
