@@ -1345,6 +1345,10 @@ impl Filter {
         self.metrics.filtered += 1;
         self.write_cf_handle
             .remove(&InternalBytes::from_bytes(key.clone()), guard);
+        info!(
+            "gc filter write";
+            "key" => log_wrappers::Value(key.as_bytes()),
+        );
         self.handle_filtered_write(write, guard)?;
 
         Ok(())
@@ -1367,6 +1371,10 @@ impl Filter {
             iter.seek(&default_key, guard);
             while iter.valid() && iter.key().same_user_key_with(&default_key) {
                 self.default_cf_handle.remove(iter.key(), guard);
+                info!(
+                    "gc filter default";
+                    "key" => log_wrappers::Value(key.as_bytes()),
+                );
                 iter.next(guard);
             }
         }
