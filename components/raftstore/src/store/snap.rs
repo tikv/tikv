@@ -2,7 +2,6 @@
 use std::{
     borrow::Cow,
     cmp::{self, Ordering as CmpOrdering, Reverse},
-    collections::VecDeque,
     error::Error as StdError,
     fmt::{self, Display, Formatter},
     io::{self, ErrorKind, Read, Write},
@@ -1884,14 +1883,14 @@ impl SnapManager {
     /// function to consult the concurrency limiter, determining if it can
     /// receive a new snapshot. If the precheck is successful, the leader will
     /// proceed to generate and send the snapshot.
-    pub fn recv_snap_precheck(&self) -> bool {
-        self.core.recv_concurrency_limiter.try_recv()
+    pub fn recv_snap_precheck(&self, region_id: u64) -> bool {
+        self.core.recv_concurrency_limiter.try_recv(region_id)
     }
 
     /// recv_snap_complete is part of the snapshot recv precheck process, and
     /// should be called when a follower finishes receiving a snapshot.
-    pub fn recv_snap_complete(&self) {
-        self.core.recv_concurrency_limiter.finish_recv()
+    pub fn recv_snap_complete(&self, region_id: u64) {
+        self.core.recv_concurrency_limiter.finish_recv(region_id)
     }
 }
 
@@ -2000,7 +1999,7 @@ impl SnapManagerCore {
 pub struct SnapRecvConcurrencyLimiter {
     limit: Arc<AtomicUsize>,
     ttl_secs: u64,
-    timestamps: Arc<Mutex<VecDeque<Instant>>>,
+    timestamps: Arc<Mutex<HashMap<u64, Instant>>>,
 }
 
 impl SnapRecvConcurrencyLimiter {
@@ -2009,37 +2008,56 @@ impl SnapRecvConcurrencyLimiter {
         SnapRecvConcurrencyLimiter {
             limit: Arc::new(AtomicUsize::new(limit)),
             ttl_secs,
-            timestamps: Arc::new(Mutex::new(VecDeque::with_capacity(limit))),
+            timestamps: Arc::new(Mutex::new(HashMap::with_capacity_and_hasher(
+                limit,
+                Default::default(),
+            ))),
         }
     }
 
     // Attempts to add a snapshot receive operation if below the concurrency
     // limit. Returns true if the operation is allowed, false otherwise.
-    pub fn try_recv(&self) -> bool {
+    pub fn try_recv(&self, region_id: u64) -> bool {
         let mut timestamps = self.timestamps.lock().unwrap();
         let current_time = Instant::now();
         self.evict_expired_timestamps(&mut timestamps, current_time);
 
         let limit = self.limit.load(Ordering::Relaxed);
         if limit == 0 {
-            // 0 means no limit. In that case, we avoid pushing into the
-            // VecDeque to prevent it from growing indefinitely.
+            // 0 means no limit. In that case, we avoid inserting into the hash
+            // map to prevent it from growing indefinitely.
             return true;
         }
 
-        if timestamps.len() < limit {
-            timestamps.push_back(current_time);
+        // Insert into the map if its size is within limit. If the region id is
+        // already present in the map, update its timestamp.
+        if timestamps.len() < limit || timestamps.contains_key(&region_id) {
+            timestamps.insert(region_id, current_time);
             return true;
         }
         false
     }
 
-    fn evict_expired_timestamps(&self, timestamps: &mut VecDeque<Instant>, current_time: Instant) {
-        while let Some(&timestamp) = timestamps.front()
-            && current_time.duration_since(timestamp) > Duration::from_secs(self.ttl_secs)
-        {
-            timestamps.pop_front();
-        }
+    fn evict_expired_timestamps(
+        &self,
+        timestamps: &mut HashMap<u64, Instant>,
+        current_time: Instant,
+    ) {
+        timestamps.retain(|region_id, timestamp| {
+            if current_time.duration_since(*timestamp) <= Duration::from_secs(self.ttl_secs) {
+                true
+            } else {
+                // This shouldn't happen if the TTL is set properly. When it
+                // does happen, the limiter may permit more snapshots than the
+                // configured limit to be sent and trigger the receiver busy
+                // error.
+                warn!(
+                    "region {} expired in the snap recv concurrency limiter",
+                    region_id
+                );
+                false
+            }
+        });
         timestamps.shrink_to(self.limit.load(Ordering::Relaxed));
     }
 
@@ -2047,8 +2065,8 @@ impl SnapRecvConcurrencyLimiter {
     // queue. It is sufficient to remove the head of the queue instead of
     // finding the matching timestamp, as we are only concerned with maintaining
     // a total count of active operations.
-    pub fn finish_recv(&self) {
-        self.timestamps.lock().unwrap().pop_front();
+    pub fn finish_recv(&self, region_id: u64) {
+        self.timestamps.lock().unwrap().remove(&region_id);
     }
 
     pub fn set_limit(&self, limit: usize) {
@@ -3503,48 +3521,54 @@ pub mod tests {
         let ttl_secs = 60;
 
         let limiter = SnapRecvConcurrencyLimiter::new(1, ttl_secs);
-        limiter.finish_recv(); // calling finish_recv() on an empty limiter is fine.
-        assert!(limiter.try_recv()); // first recv should succeed
+        limiter.finish_recv(10); // calling finish_recv() on an empty limiter is fine.
+        assert!(limiter.try_recv(1)); // first recv should succeed
 
-        // Second call should fail because we've reached the limit.
-        assert_eq!(limiter.try_recv(), false);
+        // limiter.try_recv(2) should fail because we've reached the limit. But
+        // calling limiter.try_recv(1) should succeed again due to idempotence.
+        assert!(!limiter.try_recv(2));
+        assert!(limiter.try_recv(1));
 
-        // After finish_recv() is called, try_recv() should succeed again.
-        limiter.finish_recv();
-        assert!(limiter.try_recv());
+        // After try_recv(1) is called, try_recv(2) should succeed.
+        limiter.finish_recv(1);
+        assert!(limiter.try_recv(2));
 
         // Dynamically change the limit to 2, which will allow one more receive.
         limiter.set_limit(2);
-        assert!(limiter.try_recv());
-        assert_eq!(limiter.try_recv(), false);
+        assert!(limiter.try_recv(1));
+        assert!(!limiter.try_recv(3));
 
         // Test the evict_expired_timestamps function.
         let t_now = Instant::now();
-        let mut timestamps = VecDeque::from(vec![
-            t_now - Duration::from_secs(ttl_secs + 2), // expired
-            t_now - Duration::from_secs(ttl_secs + 1), // expired
-            t_now - Duration::from_secs(ttl_secs - 1), // alive
-            t_now,                                     // alive
-        ]);
+        let mut timestamps = [
+            (1, t_now - Duration::from_secs(ttl_secs + 2)), // expired
+            (2, t_now - Duration::from_secs(ttl_secs + 1)), // expired
+            (3, t_now - Duration::from_secs(ttl_secs - 1)), // alive
+            (4, t_now),                                     // alive
+        ]
+        .iter()
+        .cloned()
+        .collect();
 
         limiter.evict_expired_timestamps(&mut timestamps, t_now);
         assert_eq!(timestamps.len(), 2);
-
-        // Test the expiring logic in try_recv() with a 0s TTL, which
+        assert!(timestamps.contains_key(&3));
+        assert!(timestamps.contains_key(&4));
+        // Test the expiring logic in try_recv(1) with a 0s TTL, which
         // effectively means there's no limit.
         let limiter = SnapRecvConcurrencyLimiter::new(1, 0);
-        assert!(limiter.try_recv());
-        assert!(limiter.try_recv());
-        assert!(limiter.try_recv());
+        assert!(limiter.try_recv(1));
+        assert!(limiter.try_recv(2));
+        assert!(limiter.try_recv(3));
 
         // After canceling the limit, the capacity of the VecDeque should be 0.
         limiter.set_limit(0);
-        assert!(limiter.try_recv());
+        assert!(limiter.try_recv(1));
         assert!(limiter.timestamps.lock().unwrap().capacity() == 0);
 
         // Test initializing a limiter with no limit.
         let limiter = SnapRecvConcurrencyLimiter::new(0, 0);
-        assert!(limiter.try_recv());
+        assert!(limiter.try_recv(1));
         assert!(limiter.timestamps.lock().unwrap().capacity() == 0);
     }
 }

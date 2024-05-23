@@ -22,7 +22,6 @@ num-traits = "0.2"
 openssl = { workspace = true }
 protobuf = "2"
 regex = "1.1"
-ryu = "1.0"
 safemem = { version = "0.3", default-features = false }
 serde = "1.0"
 serde_json = "1.0"
