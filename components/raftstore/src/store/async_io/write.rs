@@ -733,16 +733,12 @@ where
                 write_opts.set_sync(true);
                 // TODO: Add perf context
                 let tag = &self.tag;
-                let seq = kv_wb.write_opt(&write_opts).unwrap_or_else(|e| {
+                kv_wb.write_opt(&write_opts).unwrap_or_else(|e| {
                     panic!(
                         "store {}: {} failed to write to kv engine: {:?}",
                         store_id, tag, e
                     );
                 });
-                let snap = self.kv_engine.as_ref().unwrap().snapshot(None);
-                let latest_seq = snap.sequence_number();
-                assert!(seq <= latest_seq);
-
                 if kv_wb.data_size() > KV_WB_SHRINK_SIZE {
                     *kv_wb = self
                         .kv_engine

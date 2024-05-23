@@ -1,11 +1,15 @@
 use core::slice::SlicePattern;
-use std::{collections::BTreeSet, fmt::Debug, sync::Arc};
+use std::{
+    collections::BTreeSet,
+    fmt::Debug,
+    sync::{atomic::Ordering, Arc},
+};
 
 use bytes::Bytes;
 use crossbeam::epoch;
 use engine_traits::{
-    CacheRange, Mutable, RangeCacheEngine, Result, WriteBatch, WriteBatchExt, WriteOptions,
-    CF_DEFAULT,
+    CacheRange, MiscExt, Mutable, RangeCacheEngine, Result, WriteBatch, WriteBatchExt,
+    WriteOptions, CF_DEFAULT,
 };
 use tikv_util::{box_err, config::ReadableSize, debug, error, info, time::Instant, warn};
 
@@ -115,6 +119,7 @@ impl RangeCacheWriteBatch {
         let guard = &epoch::pin();
         let start = Instant::now();
 
+        let mut lock_modification: u64 = 0;
         // Some entries whose ranges may be marked as evicted above, but it does not
         // matter, they will be deleted later.
         entries_to_write
@@ -123,10 +128,49 @@ impl RangeCacheWriteBatch {
             .try_for_each(|e| {
                 let cur = seq;
                 seq += 1;
+                if is_lock_cf(e.cf) {
+                    lock_modification += e.data_size() as u64;
+                }
                 e.write_to_memory(cur, &engine, self.memory_controller.clone(), guard)
             })?;
         let duration = start.saturating_elapsed_secs();
         WRITE_DURATION_HISTOGRAM.observe(duration);
+
+        if self
+            .engine
+            .lock_modification_bytes
+            .fetch_add(lock_modification, Ordering::Relaxed)
+            + lock_modification
+            > ReadableSize::mb(4).0
+        {
+            if self
+                .engine
+                .lock_modification_bytes
+                .swap(0, Ordering::Relaxed)
+                > ReadableSize::mb(16).0
+            {
+                let rocks_engine = self.engine.rocks_engine.as_ref().unwrap();
+                let last_seqno = rocks_engine.get_latest_sequence_number();
+                let snapshot_seqno = self
+                    .engine
+                    .rocks_engine
+                    .as_ref()
+                    .unwrap()
+                    .get_oldest_snapshot_sequence_number()
+                    .unwrap_or(last_seqno);
+                if let Err(e) = self
+                    .engine
+                    .bg_worker_manager()
+                    .schedule_task(BackgroundTask::CleanLockTombstone(snapshot_seqno))
+                {
+                    error!(
+                        "schedule lock tombstone cleanup failed";
+                        "err" => ?e,
+                    );
+                    assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+                }
+            }
+        }
 
         if !ranges_to_delete.is_empty() {
             if let Err(e) = self

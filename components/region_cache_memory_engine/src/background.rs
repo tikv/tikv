@@ -68,6 +68,7 @@ pub enum BackgroundTask {
     LoadRange,
     MemoryCheckAndEvict,
     DeleteRange(Vec<CacheRange>),
+    CleanLockTombstone(u64),
 }
 
 impl Display for BackgroundTask {
@@ -79,6 +80,10 @@ impl Display for BackgroundTask {
             BackgroundTask::DeleteRange(ref r) => {
                 f.debug_struct("DeleteRange").field("range", r).finish()
             }
+            BackgroundTask::CleanLockTombstone(s) => f
+                .debug_struct("CleanLockTombstone")
+                .field("seqno", s)
+                .finish(),
         }
     }
 }
@@ -482,6 +487,11 @@ pub struct BackgroundRunner {
 
     gc_range_remote: Remote<yatp::task::future::TaskCell>,
     gc_range_worker: Worker,
+
+    lock_cleanup_remote: Remote<yatp::task::future::TaskCell>,
+    lock_cleanup_worker: Worker,
+
+    last_seqno: u64,
 }
 
 impl Drop for BackgroundRunner {
@@ -489,6 +499,7 @@ impl Drop for BackgroundRunner {
         self.range_load_worker.stop();
         self.delete_range_worker.stop();
         self.gc_range_worker.stop();
+        self.lock_cleanup_worker.stop();
     }
 }
 
@@ -507,6 +518,9 @@ impl BackgroundRunner {
         let delete_range_worker = Worker::new("background-delete-range_worker");
         let delete_range_remote = delete_range_worker.remote();
 
+        let lock_cleanup_worker = Worker::new("lock-cleanup-worker");
+        let lock_cleanup_remote = lock_cleanup_worker.remote();
+
         let gc_range_worker = Builder::new("background-range-load-worker")
             // Gc must also use exactly one thread to handle it.
             .thread_count(1)
@@ -523,6 +537,9 @@ impl BackgroundRunner {
             delete_range_remote,
             gc_range_worker,
             gc_range_remote,
+            lock_cleanup_remote,
+            lock_cleanup_worker,
+            last_seqno: 0,
         }
     }
 }
@@ -671,6 +688,76 @@ impl Runnable for BackgroundRunner {
                 let mut core = self.core.clone();
                 let f = async move { core.delete_ranges(&ranges) };
                 self.delete_range_remote.spawn(f);
+            }
+            BackgroundTask::CleanLockTombstone(snapshot_seqno) => {
+                if snapshot_seqno < self.last_seqno {
+                    return;
+                }
+                let core = self.core.clone();
+
+                let f = async move {
+                    let mut last_user_key = vec![];
+                    let mut remove_rest = false;
+                    let mut cached_to_remove: Option<Vec<u8>> = None;
+
+                    let mut removed = 0;
+                    let mut total = 0;
+                    let now = Instant::now();
+                    let lock_handle = core.engine.read().engine().cf_handle("lock");
+                    let guard = &epoch::pin();
+                    let mut iter = lock_handle.iterator();
+                    iter.seek_to_first(guard);
+                    while iter.valid() {
+                        total += 1;
+                        let InternalKey {
+                            user_key,
+                            v_type,
+                            sequence,
+                        } = decode_key(iter.key().as_bytes());
+                        if user_key != last_user_key {
+                            if let Some(remove) = cached_to_remove.take() {
+                                removed += 1;
+                                lock_handle.remove(&InternalBytes::from_vec(remove), guard);
+                            }
+                            last_user_key = user_key.to_vec();
+                            if sequence >= snapshot_seqno {
+                                remove_rest = false;
+                            } else {
+                                remove_rest = true;
+                                if v_type == ValueType::Deletion {
+                                    cached_to_remove = Some(iter.key().as_bytes().to_vec());
+                                }
+                            }
+                        } else if remove_rest {
+                            assert!(sequence < snapshot_seqno);
+                            removed += 1;
+                            lock_handle.remove(iter.key(), guard);
+                        } else if sequence < snapshot_seqno {
+                            remove_rest = true;
+                            if v_type == ValueType::Deletion {
+                                assert!(cached_to_remove.is_none());
+                                cached_to_remove = Some(iter.key().as_bytes().to_vec());
+                            }
+                        }
+
+                        iter.next(guard);
+                    }
+                    if let Some(remove) = cached_to_remove.take() {
+                        removed += 1;
+                        lock_handle.remove(&InternalBytes::from_vec(remove), guard);
+                    }
+
+                    info!(
+                        "cleanup lock tombstone";
+                        "seqno" => snapshot_seqno,
+                        "total" => total,
+                        "removed" => removed,
+                        "duration" => ?now.saturating_elapsed(),
+                        "current_count" => lock_handle.count(),
+                    );
+                };
+
+                self.lock_cleanup_remote.spawn(f);
             }
         }
     }

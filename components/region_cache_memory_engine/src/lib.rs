@@ -46,7 +46,7 @@ impl Default for RangeCacheEngineConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            gc_interval: ReadableDuration(Duration::from_secs(180)),
+            gc_interval: ReadableDuration(Duration::from_secs(60)),
             soft_limit_threshold: None,
             hard_limit_threshold: None,
         }

@@ -5,7 +5,7 @@ use std::{
     fmt::{self, Debug},
     ops::Bound,
     result,
-    sync::Arc,
+    sync::{atomic::AtomicU64, Arc},
 };
 
 use crossbeam::epoch::{self, default_collector, Guard};
@@ -101,6 +101,10 @@ impl SkiplistHandle {
         &self,
     ) -> OwnedIter<Arc<SkipList<InternalBytes, InternalBytes>>, InternalBytes, InternalBytes> {
         self.0.owned_iter()
+    }
+
+    pub fn count(&self) -> usize {
+        self.0.len()
     }
 }
 
@@ -248,6 +252,7 @@ pub struct RangeCacheMemoryEngine {
     bg_work_manager: Arc<BgWorkManager>,
     memory_controller: Arc<MemoryController>,
     config: Arc<VersionTrack<RangeCacheEngineConfig>>,
+    pub(crate) lock_modification_bytes: Arc<AtomicU64>,
 }
 
 impl RangeCacheMemoryEngine {
@@ -270,6 +275,7 @@ impl RangeCacheMemoryEngine {
             bg_work_manager,
             memory_controller,
             config,
+            lock_modification_bytes: Arc::default(),
         };
         engine
             .load_range(CacheRange::new(
@@ -423,14 +429,13 @@ impl RangeCacheMemoryEngine {
             if !group_entries_to_cache.is_empty() {
                 let mut core = RwLockUpgradableReadGuard::upgrade(core);
                 for (range, write_batches) in group_entries_to_cache {
-                    core.cached_write_batch
-                        .entry(range)
-                        .or_default()
-                        .extend(write_batches.into_iter().map(|e| {
+                    core.cached_write_batch.entry(range).or_default().extend(
+                        write_batches.into_iter().map(|e| {
                             let cur = *seq;
                             *seq += 1;
                             (cur, e)
-                        }));
+                        }),
+                    );
                 }
             }
             (entries_to_write, engine)
