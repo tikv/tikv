@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "7.5.1"
+version = "7.5.2"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -186,7 +186,7 @@ rusoto_mock = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr
 rusoto_s3 = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 
-snappy-sys = { git = "https://github.com/busyjay/rust-snappy.git", branch = "static-link" }
+snappy-sys = { git = "https://github.com/tikv/rust-snappy.git", branch = "static-link" }
 
 # remove this when https://github.com/danburkert/fs2-rs/pull/42 is merged.
 fs2 = { git = "https://github.com/tabokie/fs2-rs", branch = "tikv" }

@@ -31,7 +31,7 @@ use engine_rocks::{
     raw::{
         BlockBasedOptions, Cache, ChecksumType, CompactionPriority, ConcurrentTaskLimiter,
         DBCompactionStyle, DBCompressionType, DBRateLimiterMode, DBRecoveryMode, Env,
-        PrepopulateBlockCache, RateLimiter, WriteBufferManager,
+        LRUCacheOptions, PrepopulateBlockCache, RateLimiter, WriteBufferManager,
     },
     util::{
         FixedPrefixSliceTransform, FixedSuffixSliceTransform, NoopSliceTransform,
@@ -190,7 +190,10 @@ impl TitanCfConfig {
         let mut opts = RocksTitanDbOptions::new();
         opts.set_min_blob_size(self.min_blob_size.0);
         opts.set_blob_file_compression(self.blob_file_compression.into());
-        opts.set_blob_cache(self.blob_cache_size.0 as usize, -1, false, 0.0);
+        let mut cache_opts = LRUCacheOptions::new();
+        cache_opts.set_capacity(self.blob_cache_size.0 as usize);
+        let cache = Cache::new_lru_cache(cache_opts);
+        opts.set_blob_cache(&cache);
         opts.set_min_gc_batch_size(self.min_gc_batch_size.0);
         opts.set_max_gc_batch_size(self.max_gc_batch_size.0);
         opts.set_discardable_ratio(self.discardable_ratio);
@@ -1293,6 +1296,8 @@ pub struct DbConfig {
     #[doc(hidden)]
     #[serde(skip_serializing)]
     pub write_buffer_flush_oldest_first: bool,
+    #[online_config(skip)]
+    pub track_and_verify_wals_in_manifest: bool,
     // Dangerous option only for programming use.
     #[online_config(skip)]
     #[serde(skip)]
@@ -1357,6 +1362,7 @@ impl Default for DbConfig {
             write_buffer_limit: None,
             write_buffer_stall_ratio: 0.0,
             write_buffer_flush_oldest_first: true,
+            track_and_verify_wals_in_manifest: false,
             paranoid_checks: None,
             defaultcf: DefaultCfConfig::default(),
             writecf: WriteCfConfig::default(),
@@ -1533,6 +1539,7 @@ impl DbConfig {
             // Historical stats are not used.
             opts.set_stats_persist_period_sec(0);
         }
+        opts.set_track_and_verify_wals_in_manifest(self.track_and_verify_wals_in_manifest);
         opts
     }
 
