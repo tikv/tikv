@@ -1279,6 +1279,10 @@ impl Filter {
                 // In either cases, we can delete the previous one directly.
                 let guard = &epoch::pin();
                 self.metrics.filtered += 1;
+                info!(
+                    "gc filter write tombstone";
+                    "key" => log_wrappers::Value(&cache_skiplist_delete_key),
+                );
                 self.write_cf_handle
                     .remove(&InternalBytes::from_vec(cache_skiplist_delete_key), guard)
             }
@@ -1292,11 +1296,19 @@ impl Filter {
             let guard = &epoch::pin();
             if cache_skiplist_delete_user_key == user_key {
                 self.metrics.filtered += 1;
+                info!(
+                    "gc filter write hidden by tombstone";
+                    "key" => log_wrappers::Value(key),
+                );
                 self.write_cf_handle
                     .remove(&InternalBytes::from_bytes(key.clone()), guard);
                 return Ok(());
             } else {
                 self.metrics.filtered += 1;
+                info!(
+                    "gc filter write tombstone";
+                    "key" => log_wrappers::Value(&self.cached_skiplist_delete_key.as_ref().unwrap()),
+                );
                 self.write_cf_handle.remove(
                     &InternalBytes::from_vec(self.cached_skiplist_delete_key.take().unwrap()),
                     guard,
@@ -1313,6 +1325,10 @@ impl Filter {
             self.remove_older = false;
             if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
                 self.metrics.filtered += 1;
+                info!(
+                    "gc filter write n";
+                    "key" => log_wrappers::Value(key),
+                );
                 self.write_cf_handle
                     .remove(&InternalBytes::from_vec(cached_delete_key), guard);
             }
@@ -1347,7 +1363,7 @@ impl Filter {
             .remove(&InternalBytes::from_bytes(key.clone()), guard);
         info!(
             "gc filter write";
-            "key" => log_wrappers::Value(key.as_bytes()),
+            "key" => log_wrappers::Value(key),
         );
         self.handle_filtered_write(write, guard)?;
 
@@ -1373,7 +1389,7 @@ impl Filter {
                 self.default_cf_handle.remove(iter.key(), guard);
                 info!(
                     "gc filter default";
-                    "key" => log_wrappers::Value(key.as_bytes()),
+                    "key" => log_wrappers::Value(iter.key().as_bytes()),
                 );
                 iter.next(guard);
             }
