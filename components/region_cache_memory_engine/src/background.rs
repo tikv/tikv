@@ -766,8 +766,8 @@ impl BackgroundRunnerCore {
         let mut remaining = to_shrink_by.unwrap();
         let mut ranges_to_evict = Vec::<(CacheRange, u64)>::with_capacity(256);
 
-        // TODO (low-pri): consider returning just an iterator and using scan below for
-        // cleaner code.
+        // TODO (afeinberg, low): consider returning just an iterator and using scan
+        // below for cleaner code.
         range_stats_manager.collect_candidates_for_eviction(&mut ranges_to_evict, |range| {
             self.engine.read().range_manager().contains_range(range)
         });
@@ -777,11 +777,23 @@ impl BackgroundRunnerCore {
             if remaining == 0 {
                 break;
             }
-            if self.engine.write().mut_range_manager().evict_range(range) {
-                info!("evict on soft limit reached"; "range" => ?&range, "approx_size" => approx_size, "remaining" => remaining);
-                remaining = remaining
-                    .checked_sub(*approx_size as usize)
-                    .unwrap_or_default();
+            let evicted_range = {
+                let mut engine_wr = self.engine.write();
+                if engine_wr.mut_range_manager().evict_range(range) {
+                    info!("evict on soft limit reached"; "range" => ?&range, "approx_size" => approx_size, "remaining" => remaining);
+                    remaining = remaining
+                        .checked_sub(*approx_size as usize)
+                        .unwrap_or_default();
+                    // We need to delete the range manually here.
+                    // TODO (afeinberg): consider making delete_range return number of bytes
+                    // deleted.
+                    engine_wr.engine().delete_range(range);
+                    true
+                } else {
+                    false
+                }
+            };
+            if evicted_range {
                 range_stats_manager.handle_range_evicted(range);
             }
         }
