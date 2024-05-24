@@ -22,6 +22,7 @@ mod memory_controller;
 mod metrics;
 mod perf_context;
 mod range_manager;
+mod range_stats;
 mod read;
 mod region_label;
 mod statistics;
