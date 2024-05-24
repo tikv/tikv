@@ -569,7 +569,7 @@ impl RegionCollector {
     ///
     /// Otherwise, return the top `count` regions for which this node is the
     /// leader from `self.region_activity`. Top regions are determined by
-    /// comparing `read_keys + written_keys` in each region's most recent
+    /// comparing `read_keys` in each region's most recent
     /// region stat.
     ///
     /// Note: this function is `O(N log(N))` with respect to size of
@@ -578,8 +578,8 @@ impl RegionCollector {
     /// approximately `300_000``.
     pub fn handle_get_top_regions(&mut self, count: usize, callback: Callback<TopRegions>) {
         let compare_fn = |a: &RegionActivity, b: &RegionActivity| {
-            let a = a.region_stat.read_keys + a.region_stat.written_keys;
-            let b = b.region_stat.read_keys + b.region_stat.written_keys;
+            let a = a.region_stat.read_keys;
+            let b = b.region_stat.read_keys;
             b.cmp(&a)
         };
         let top_regions = if count == 0 {
