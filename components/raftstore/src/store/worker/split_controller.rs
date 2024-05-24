@@ -846,6 +846,8 @@ impl AutoSplitController {
                         "byte" => byte,
                         "cpu_usage" => cpu_usage,
                         "split_key" => log_wrappers::Value::key(&key),
+                        "hot start_key" => recorder.hottest_key_range.as_ref().map(|range| log_wrappers::Value::key(&range.start_key)).unwrap_or_default(),
+                        "hot end_key" => recorder.hottest_key_range.as_ref().map(|range| log_wrappers::Value::key(&range.end_key)).unwrap_or_default(),
                     );
                     split_infos.push(SplitInfo::with_split_key(
                         region_id,
@@ -853,17 +855,8 @@ impl AutoSplitController {
                         key,
                     ));
                     LOAD_BASE_SPLIT_EVENT.ready_to_split.inc();
-                    if recorder.hottest_key_range.is_some() {
-                        // debug message
-                        info!(
-                            "DEBUG : load based split : expensive range";
-                            "hot start_key" =>
-                            log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().start_key),
-                            "hot end_key" =>
-                            log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().end_key),
-                        );
-                    self.recorders.remove(&region_id);
                     }
+                    self.recorders.remove(&region_id);
                 } else if is_unified_read_pool_busy && is_region_busy {
                     LOAD_BASE_SPLIT_EVENT.cpu_load_fit.inc();
                     top_cpu_usage.push(region_id);
