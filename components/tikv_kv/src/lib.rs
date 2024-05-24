@@ -536,6 +536,10 @@ pub trait SnapshotExt {
     fn range_cache_engine_snap(&self) -> bool {
         false
     }
+
+    fn snapshot_read_ts(&self) -> u64 {
+        0
+    }
 }
 
 pub struct DummySnapshotExt;

@@ -468,7 +468,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
                                 info!(
                                     "Error encountered";
                                     "write_key" => log_wrappers::Value(key),
-                                    "to_start_ts" => write.start_ts,
+                                    "to_start_ts" => start_ts,
                                 );
                                 e
                             })?;

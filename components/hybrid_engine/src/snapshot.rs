@@ -51,6 +51,14 @@ where
     fn range_cache_engine_snap(&self) -> bool {
         self.region_cache_snapshot_available()
     }
+
+    fn read_ts(&self) -> u64 {
+        if let Some(ref snap) = self.region_cache_snap {
+            snap.read_ts()
+        } else {
+            0
+        }
+    }
 }
 
 impl<EK, EC> Debug for HybridEngineSnapshot<EK, EC>

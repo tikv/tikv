@@ -105,7 +105,11 @@ impl Drop for RangeCacheSnapshot {
     }
 }
 
-impl Snapshot for RangeCacheSnapshot {}
+impl Snapshot for RangeCacheSnapshot {
+    fn read_ts(&self) -> u64 {
+        self.snapshot_meta.snapshot_ts
+    }
+}
 
 impl Iterable for RangeCacheSnapshot {
     type Iterator = RangeCacheIterator;

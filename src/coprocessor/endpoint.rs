@@ -442,7 +442,9 @@ impl<E: Engine> Endpoint<E> {
                 .await?;
         let latest_buckets = snapshot.ext().get_buckets();
 
-        tracker.adjust_request_type(snapshot.ext().range_cache_engine_snap());
+        let range_cache_snap = snapshot.ext().range_cache_engine_snap();
+        let read_ts = snapshot.ext().snapshot_read_ts();
+        tracker.adjust_request_type(range_cache_snap);
 
         // Check if the buckets version is latest.
         // skip if request don't carry this bucket version.
@@ -506,6 +508,8 @@ impl<E: Engine> Endpoint<E> {
                     "encounter errors";
                     "error" => ?&e,
                     "start_ts" => ?tracker.req_ctx.txn_start_ts,
+                    "range_cache_engien" => range_cache_snap,
+                    "snaphost_read_ts" => read_ts,
                 );
                 make_error_response(e).into()
             }

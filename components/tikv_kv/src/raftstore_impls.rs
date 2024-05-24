@@ -65,6 +65,10 @@ impl<'a, S: Snapshot> SnapshotExt for RegionSnapshotExt<'a, S> {
     fn range_cache_engine_snap(&self) -> bool {
         self.snapshot.get_snapshot().range_cache_engine_snap()
     }
+
+    fn snapshot_read_ts(&self) -> u64 {
+        self.snapshot.get_snapshot().read_ts()
+    }
 }
 
 impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {
