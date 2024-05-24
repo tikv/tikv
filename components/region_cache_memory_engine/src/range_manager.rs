@@ -320,7 +320,7 @@ impl RangeManager {
                 let meta = self.ranges.remove(&range_key).unwrap();
                 self.ranges_being_deleted.insert(evict_range.clone());
                 if !meta.range_snapshot_list.is_empty() {
-                    self.historical_ranges.insert(range_key, meta);
+                    assert!(self.historical_ranges.insert(range_key, meta).is_none());
                     return None;
                 }
                 return Some(range_key);
@@ -358,18 +358,18 @@ impl RangeManager {
 
         if let Some(left_range) = left_range {
             let left_meta = RangeMeta::derive_from(self.id_allocator.allocate_id(), &meta);
-            self.ranges.insert(left_range, left_meta);
+            assert!(self.ranges.insert(left_range, left_meta).is_none());
         }
 
         if let Some(right_range) = right_range {
             let right_meta = RangeMeta::derive_from(self.id_allocator.allocate_id(), &meta);
-            self.ranges.insert(right_range, right_meta);
+            assert!(self.ranges.insert(right_range, right_meta).is_none());
         }
 
         self.ranges_being_deleted.insert(evict_range.clone());
 
         if !meta.range_snapshot_list.is_empty() {
-            self.historical_ranges.insert(range_key, meta);
+            assert!(self.historical_ranges.insert(range_key, meta).is_none());
             return None;
         }
 

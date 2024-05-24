@@ -442,6 +442,7 @@ impl<E: Engine> Endpoint<E> {
                 .await?;
         let latest_buckets = snapshot.ext().get_buckets();
 
+        let snapshot_seqno = snapshot.ext().snapshot_seqno();
         let range_cache_snap = snapshot.ext().range_cache_engine_snap();
         let read_ts = snapshot.ext().snapshot_read_ts();
         tracker.adjust_request_type(range_cache_snap);
@@ -510,6 +511,7 @@ impl<E: Engine> Endpoint<E> {
                     "start_ts" => ?tracker.req_ctx.txn_start_ts,
                     "range_cache_engien" => range_cache_snap,
                     "snaphost_read_ts" => read_ts,
+                    "snaphost_seqno" => snapshot_seqno,
                 );
                 make_error_response(e).into()
             }

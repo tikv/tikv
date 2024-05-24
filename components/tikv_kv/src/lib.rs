@@ -540,6 +540,10 @@ pub trait SnapshotExt {
     fn snapshot_read_ts(&self) -> u64 {
         0
     }
+
+    fn snapshot_seqno(&self) -> u64 {
+        0
+    }
 }
 
 pub struct DummySnapshotExt;

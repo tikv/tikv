@@ -1260,7 +1260,9 @@ impl Filter {
     fn filter(&mut self, key: &Bytes, value: &Bytes) -> Result<(), String> {
         self.metrics.total += 1;
         let InternalKey {
-            user_key, v_type, ..
+            user_key,
+            v_type,
+            sequence,
         } = decode_key(key);
 
         let (mvcc_key_prefix, commit_ts) = split_ts(user_key)?;
@@ -1360,6 +1362,13 @@ impl Filter {
         }
 
         if !filtered {
+            info!(
+                "gc filter not filter";
+                "key" => log_wrappers::Value(key),
+                "seqno" => sequence,
+                "write type" => ?write.write_type,
+                "start_ts" => write.start_ts,
+            );
             return Ok(());
         }
         self.metrics.filtered += 1;
@@ -1368,6 +1377,9 @@ impl Filter {
         info!(
             "gc filter write";
             "key" => log_wrappers::Value(key),
+            "seqno" => sequence,
+            "write type" => ?write.write_type,
+            "start_ts" => write.start_ts,
         );
         self.handle_filtered_write(write, guard)?;
 

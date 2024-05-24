@@ -69,6 +69,10 @@ impl<'a, S: Snapshot> SnapshotExt for RegionSnapshotExt<'a, S> {
     fn snapshot_read_ts(&self) -> u64 {
         self.snapshot.get_snapshot().read_ts()
     }
+
+    fn snapshot_seqno(&self) -> u64 {
+        self.snapshot.sequence_number()
+    }
 }
 
 impl<S: Snapshot> EngineSnapshot for RegionSnapshot<S> {

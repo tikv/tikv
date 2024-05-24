@@ -338,6 +338,14 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     self.met_newer_ts_data = NewerTsCheckState::Met;
                 }
 
+
+                info!(
+                    "met version larger than start_ts";
+                    "key" => log_wrappers::Value(current_key),
+                    "commit_ts" => key_commit_ts,
+                    "read_start_ts" => self.cfg.ts,
+                );
+
                 // Report error if there's a more recent version if the isolation level is
                 // RcCheckTs.
                 if self.cfg.isolation_level == IsolationLevel::RcCheckTs {
