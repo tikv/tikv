@@ -247,3 +247,82 @@ impl RangeStatsManager {
         ranges_removed_out.extend(removed_ranges);
     }
 }
+
+#[cfg(test)]
+pub mod tests {
+    use kvproto::metapb::Peer;
+    use raftstore::coprocessor::{self, region_info_accessor::TopRegions, RegionInfoProvider};
+    use tikv_util::box_err;
+
+    use super::*;
+
+    struct RegionInfoSimulator {
+        regions: Mutex<TopRegions>,
+    }
+
+    impl RegionInfoSimulator {
+        fn set_top_regions(&self, top_regions: &TopRegions) {
+            *self.regions.lock() = top_regions.clone()
+        }
+    }
+    impl RegionInfoProvider for RegionInfoSimulator {
+        fn find_region_by_key(&self, key: &[u8]) -> coprocessor::Result<Region> {
+            self.regions
+                .lock()
+                .iter()
+                .find(|(region, _)| region.start_key == key)
+                .cloned()
+                .map_or_else(
+                    || Err(box_err!(format!("key {:?} not found", key))),
+                    |(region, _)| Ok(region),
+                )
+        }
+
+        fn get_top_regions(&self, count: Option<NonZeroUsize>) -> coprocessor::Result<TopRegions> {
+            Ok(count.map_or_else(
+                || self.regions.lock().clone(),
+                |count| {
+                    self.regions
+                        .lock()
+                        .iter()
+                        .take(count.get())
+                        .cloned()
+                        .collect::<Vec<_>>()
+                },
+            ))
+        }
+    }
+
+    fn new_region(id: u64, start_key: &[u8], end_key: &[u8], version: u64) -> Region {
+        let mut region = Region::default();
+        region.set_id(id);
+        region.set_start_key(start_key.to_vec());
+        region.set_end_key(end_key.to_vec());
+        region.mut_region_epoch().set_version(version);
+        region.mut_peers().push(Peer::default());
+        region
+    }
+
+    #[test]
+    fn test_collect_changed_regions() {
+        let region_1 = new_region(1, b"k1", b"k2", 0);
+
+        let region_2 = new_region(2, b"k3", b"k4", 0);
+        let sim = Arc::new(RegionInfoSimulator {
+            regions: Mutex::new(vec![(region_1.clone(), 42)]),
+        });
+        let rsm = RangeStatsManager::new(5, sim.clone());
+        let mut added = Vec::<CacheRange>::new();
+        let mut removed = Vec::<CacheRange>::new();
+        rsm.collect_changed_ranges(&mut added, &mut removed);
+        assert_eq!(&added, &[CacheRange::from_region(&region_1)]);
+        assert!(removed.is_empty());
+        let top_regions = vec![(region_1.clone(), 42), (region_2.clone(), 7)];
+        sim.set_top_regions(&top_regions);
+        added.clear();
+        removed.clear();
+        rsm.collect_changed_ranges(&mut added, &mut removed);
+        assert_eq!(&added, &[CacheRange::from_region(&region_2)]);
+        assert!(removed.is_empty());
+    }
+}
