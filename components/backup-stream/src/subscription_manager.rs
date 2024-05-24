@@ -32,7 +32,7 @@ use crate::{
     router::{Router, TaskSelector},
     subscription_track::{CheckpointType, ResolveResult, SubscriptionTracer},
     try_send,
-    utils::{self, CallbackWaitGroup, Work},
+    utils::{self, FutureWaitGroup, Work},
     Task,
 };
 
@@ -295,7 +295,7 @@ pub struct RegionSubscriptionManager<S, R, PDC> {
 
     messenger: Sender<ObserveOp>,
     scan_pool_handle: Arc<ScanPoolHandle>,
-    scans: Arc<CallbackWaitGroup>,
+    scans: Arc<FutureWaitGroup>,
 }
 
 impl<S, R, PDC> Clone for RegionSubscriptionManager<S, R, PDC>
@@ -316,7 +316,7 @@ where
             subs: self.subs.clone(),
             messenger: self.messenger.clone(),
             scan_pool_handle: self.scan_pool_handle.clone(),
-            scans: CallbackWaitGroup::new(),
+            scans: FutureWaitGroup::new(),
         }
     }
 }
@@ -375,7 +375,7 @@ where
             subs: initial_loader.tracing,
             messenger: tx,
             scan_pool_handle: Arc::new(scan_pool_handle),
-            scans: CallbackWaitGroup::new(),
+            scans: FutureWaitGroup::new(),
         };
         let fut = op.clone().region_operator_loop(rx, resolver);
         (op, fut)
@@ -392,8 +392,10 @@ where
     }
 
     /// wait initial scanning get finished.
-    pub fn wait(&self, timeout: Duration) -> future![bool] {
-        tokio::time::timeout(timeout, self.scans.wait()).map(|result| result.is_err())
+    pub async fn wait(&self, timeout: Duration) -> bool {
+        tokio::time::timeout(timeout, self.scans.wait())
+            .map(move |result| result.is_err())
+            .await
     }
 
     /// the handler loop.
@@ -465,6 +467,7 @@ where
                     }
                 }
                 ObserveOp::ResolveRegions { callback, min_ts } => {
+                    fail::fail_point!("subscription_manager_resolve_regions");
                     let now = Instant::now();
                     let timedout = self.wait(Duration::from_secs(5)).await;
                     if timedout {
@@ -759,7 +762,7 @@ mod test {
         use std::time::Duration;
 
         use super::ScanCmd;
-        use crate::{subscription_manager::spawn_executors, utils::CallbackWaitGroup};
+        use crate::{subscription_manager::spawn_executors, utils::FutureWaitGroup};
 
         fn should_finish_in(f: impl FnOnce() + Send + 'static, d: std::time::Duration) {
             let (tx, rx) = futures::channel::oneshot::channel();
@@ -776,7 +779,7 @@ mod test {
         }
 
         let pool = spawn_executors(NoopInitialScan, 1);
-        let wg = CallbackWaitGroup::new();
+        let wg = FutureWaitGroup::new();
         fail::cfg("execute_scan_command_sleep_100", "return").unwrap();
         for _ in 0..100 {
             let wg = wg.clone();
