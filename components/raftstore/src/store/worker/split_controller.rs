@@ -857,7 +857,7 @@ impl AutoSplitController {
                     if recorder.hottest_key_range.is_some() {
                         // debug message
                         info!(
-                            "DEBUG : load based split : expensive range"
+                            "DEBUG : load based split : expensive range";
                             "hot start_key" =>
                             log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap().start_key),
                             "hot end_key" =>
