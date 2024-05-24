@@ -1,11 +1,6 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{
-    error::Error as StdError,
-    result,
-    thread::Builder,
-    time::Instant,
-};
+use std::{error::Error as StdError, result, thread::Builder, time::Instant};
 
 use engine_rocks::{
     raw::{CompactOptions, DBBottommostLevelCompaction},
