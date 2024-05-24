@@ -847,8 +847,8 @@ impl AutoSplitController {
                         "byte" => byte,
                         "cpu_usage" => cpu_usage,
                         "split_key" => log_wrappers::Value::key(&key),
-                        "hot start_key" => recorder.hottest_key_range.as_ref().map(|range| log_wrappers::Value::key(&range.start_key)).unwrap_or_default(),
-                        "hot end_key" => recorder.hottest_key_range.as_ref().map(|range| log_wrappers::Value::key(&range.end_key)).unwrap_or_default(),
+                        "start_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap_or_default().start_key),
+                        "end_key" => log_wrappers::Value::key(&recorder.hottest_key_range.as_ref().unwrap_or_default().end_key), 
                     );
                     split_infos.push(SplitInfo::with_split_key(
                         region_id,
