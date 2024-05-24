@@ -501,7 +501,14 @@ impl<E: Engine> Endpoint<E> {
                 COPR_RESP_SIZE.inc_by(resp.data.len() as u64);
                 resp
             }
-            Err(e) => make_error_response(e).into(),
+            Err(e) => {
+                warn!(
+                    "encounter errors";
+                    "error" => ?&e,
+                    "start_ts" => ?tracker.req_ctx.txn_start_ts,
+                );
+                make_error_response(e).into()
+            }
         };
         resp.set_exec_details(exec_details);
         resp.set_exec_details_v2(exec_details_v2);

@@ -462,7 +462,16 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
                                 &current_user_key,
                                 start_ts,
                                 statistics,
-                            )?;
+                            )
+                            .map_err(|e| {
+                                let key = cursors.write.key(&mut statistics.write);
+                                info!(
+                                    "Error encountered";
+                                    "write_key" => log_wrappers::Value(key),
+                                    "to_start_ts" => write.start_ts,
+                                );
+                                e
+                            })?;
                             break Some(value);
                         }
                     }
