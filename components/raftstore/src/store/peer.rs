@@ -3418,10 +3418,17 @@ where
     /// Responses to the ready read index request on the replica, the replica is
     /// not a leader.
     fn post_pending_read_index_on_replica<T>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
+        
+        let mut found_response: bool = false;
+       
         while let Some(mut read) = self.pending_reads.pop_front() {
             // The response of this read index request is lost, but we need it for
             // the memory lock checking result. Resend the request.
             if let Some(read_index) = read.addition_request.take() {
+                if found_response {
+                    /* we don't want to repropse tail of the queue */
+                    break;
+                }
                 assert_eq!(read.cmds().len(), 1);
                 let (mut req, cb, _) = read.take_cmds().pop().unwrap();
                 assert_eq!(req.requests.len(), 1);
@@ -3436,7 +3443,8 @@ where
                 self.send_read_command(ctx, read_cmd);
                 continue;
             }
-
+            
+            found_response = true; 
             assert!(read.read_index.is_some());
             let is_read_index_request = read.cmds().len() == 1
                 && read.cmds()[0].0.get_requests().len() == 1
