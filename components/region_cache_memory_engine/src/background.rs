@@ -1220,6 +1220,8 @@ struct Filter {
     cached_skiplist_delete_key: Option<Vec<u8>>,
 
     metrics: FilterMetrics,
+
+    last_user_key: Vec<u8>,
 }
 
 impl Drop for Filter {
@@ -1254,6 +1256,7 @@ impl Filter {
             cached_skiplist_delete_key: None,
             remove_older: false,
             metrics: FilterMetrics::default(),
+            last_user_key: vec![],
         }
     }
 
@@ -1323,6 +1326,13 @@ impl Filter {
         }
 
         let guard = &epoch::pin();
+        if user_key != self.last_user_key {
+            self.last_user_key = user_key.to_vec();
+        } else {
+            self.write_cf_handle
+                .remove(&InternalBytes::from_bytes(key.clone()), guard);
+        }
+
         self.metrics.versions += 1;
         if self.mvcc_key_prefix != mvcc_key_prefix {
             self.metrics.unique_key += 1;
