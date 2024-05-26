@@ -1331,6 +1331,7 @@ impl Filter {
         } else {
             self.write_cf_handle
                 .remove(&InternalBytes::from_bytes(key.clone()), guard);
+            return Ok(());
         }
 
         self.metrics.versions += 1;
