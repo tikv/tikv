@@ -24,7 +24,8 @@ pub enum ConfigValue {
     Bool(bool),
     String(String),
     Module(ConfigChange),
-    OffsetTime(OffsetTime),
+    // We cannot use Schedule(ReadableSchedule) directly as the module defining `ReadableSchedule`
+    // imports the current module
     Schedule(Vec<String>),
     Skip,
     None,
@@ -43,7 +44,6 @@ impl Display for ConfigValue {
             ConfigValue::Bool(v) => write!(f, "{}", v),
             ConfigValue::String(v) => write!(f, "{}", v),
             ConfigValue::Module(v) => write!(f, "{:?}", v),
-            ConfigValue::OffsetTime((t, o)) => write!(f, "{} {}", t, o),
             ConfigValue::Schedule(v) => write!(f, "{:?}", v),
             ConfigValue::Skip => write!(f, "ConfigValue::Skip"),
             ConfigValue::None => write!(f, ""),
