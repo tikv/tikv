@@ -426,10 +426,7 @@ impl RangeManager {
     }
 
     pub fn get_range_by_id(&self, region_id: u64) -> Option<CacheRange> {
-        let mut region = metapb::Region::default();
-        region.id = region_id;
-        let r = CacheRange::from_region(&region);
-        let tag = r.tag;
+        let tag = CacheRange::new_tag(region_id);
 
         self.ranges
             .iter()
@@ -438,10 +435,7 @@ impl RangeManager {
     }
 
     pub fn dump_cache(&self, region_id: u64) -> String {
-        let mut region = metapb::Region::default();
-        region.id = region_id;
-        let r = CacheRange::from_region(&region);
-        let tag = r.tag;
+        let tag = CacheRange::new_tag(region_id);
 
         // historical_ranges
         let mut buffer = "historical_ranges:\n".to_owned();

@@ -236,10 +236,7 @@ impl RangeCacheMemoryEngineCore {
     }
 
     pub fn dump_cached_write_batch(&self, region_id: u64) -> String {
-        let mut region = kvproto::metapb::Region::default();
-        region.id = region_id;
-        let r = CacheRange::from_region(&region);
-        let tag = r.tag;
+        let tag = CacheRange::new_tag(region_id);
         let mut buffer = String::default();
         for (range, wb) in self
             .cached_write_batch
