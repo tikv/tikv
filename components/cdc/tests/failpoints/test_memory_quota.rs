@@ -134,7 +134,6 @@ fn test_pending_on_region_ready_memory_quota_exceeded() {
         }
         other => panic!("unknown event {:?}", other),
     }
-    println!("gets an error");
 
     // The delegate must be removed.
     let scheduler = suite.endpoints.values().next().unwrap().scheduler();

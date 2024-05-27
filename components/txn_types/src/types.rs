@@ -45,8 +45,7 @@ pub type KvPair = (Vec<u8>, Value);
 /// Orthogonal to binary representation, keys may or may not embed a timestamp,
 /// but this information is transparent to this type, the caller must use it
 /// consistently.
-#[derive(Eq, PartialEq, Ord, PartialOrd, Hash, Default)]
-#[repr(transparent)]
+#[derive(Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Key(Vec<u8>);
 
 /// Core functions for `Key`.
