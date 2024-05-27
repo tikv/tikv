@@ -1,20 +1,27 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
     error::Error as StdError,
+    future::Future,
     io,
+    pin::Pin,
+    task::ready,
     time::{Duration, SystemTime},
 };
 
 use async_trait::async_trait;
 use cloud::{
-    blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty},
+    blob::{
+        none_to_empty, BlobConfig, BlobObject, BlobStorage, BucketConf, PutResource,
+        StringNonEmpty, WalkBlobStorage,
+    },
     metrics::CLOUD_REQUEST_HISTOGRAM_VEC,
 };
 use fail::fail_point;
+use futures::stream::{self, Stream, TryStream};
 use futures_util::{
     future::FutureExt,
     io::{AsyncRead, AsyncReadExt},
-    stream::TryStreamExt,
+    stream::{StreamExt, TryStreamExt},
 };
 pub use kvproto::brpb::S3 as InputConfig;
 use rusoto_core::{request::DispatchSignedRequest, ByteStream, RusotoError};
@@ -24,6 +31,7 @@ use rusoto_sts::{StsAssumeRoleSessionCredentialsProvider, StsClient};
 use thiserror::Error;
 use tikv_util::{debug, stream::error_stream, time::Instant};
 use tokio::time::{sleep, timeout};
+use uuid::Uuid;
 
 use crate::util::{self, retry_and_count};
 
@@ -623,6 +631,98 @@ impl BlobStorage for S3Storage {
     fn get_part(&self, name: &str, off: u64, len: u64) -> cloud::blob::BlobStream<'_> {
         // inclusive, bytes=0-499 -> [0, 499]
         self.get_range(name, Some(format!("bytes={}-{}", off, off + len - 1)))
+    }
+}
+
+struct GenerateWith<T, Fut: Future<Output = T>, Gen: FnMut() -> Fut> {
+    state: GenerateWithState<T, Fut>,
+    gen: Gen,
+}
+
+impl<T, Fut: Future<Output = T>, Gen: FnMut() -> Fut> GenerateWith<T, Fut, Gen> {
+    fn new(mut gen: Gen) -> Self {
+        Self {
+            state: GenerateWithState::Generating(gen()),
+            gen,
+        }
+    }
+}
+
+enum GenerateWithState<T, Fut: Future<Output = T>> {
+    Generating(Fut),
+    Yield(T),
+}
+
+impl<T, Fut: Future<Output = T>, Gen: FnMut() -> Fut> Stream for GenerateWith<T, Fut, Gen> {
+    type Item = T;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        // SAFETY: We won't move the future in the generating state.
+        let this = unsafe { self.as_mut().get_unchecked_mut() };
+        loop {
+            match &mut this.state {
+                GenerateWithState::Generating(f) => {
+                    // SAFETY: `f` should be pinned because `self` is pinned.
+                    let data = ready!(unsafe { Pin::new_unchecked(f).poll(cx) });
+                    this.state = GenerateWithState::Yield(data);
+                }
+                GenerateWithState::Yield(_) => {
+                    let data = std::mem::replace(
+                        &mut this.state,
+                        GenerateWithState::Generating((this.gen)()),
+                    );
+                    if let GenerateWithState::Yield(data) = data {
+                        return std::task::Poll::Ready(Some(data));
+                    } else {
+                        unreachable!()
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl WalkBlobStorage for S3Storage {
+    fn walk(
+        &self,
+        prefix: &str,
+    ) -> impl TryStream<Ok = cloud::blob::BlobObject, Error = io::Error> + '_ {
+        let cont_token = Uuid::new_v4().to_string();
+        let prefix = prefix.to_owned();
+        GenerateWith::new(move || {
+            let prefix = prefix.clone();
+            let cont_token = cont_token.clone();
+            async move {
+                let mut input = ListObjectsV2Request::default();
+                input.bucket = String::clone(&self.config.bucket.bucket);
+                input.prefix = Some(prefix);
+                input.max_keys = Some(128);
+                input.continuation_token = Some(cont_token);
+                let res = self
+                    .client
+                    .list_objects_v2(input)
+                    .await
+                    .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+                let finished = !res.is_truncated.ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "no IsTruncated in response")
+                })?;
+                let data = res
+                    .contents
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|data| BlobObject {
+                        key: data.key.unwrap_or_default(),
+                    })
+                    .collect::<Vec<_>>();
+                io::Result::Ok((data, finished))
+            }
+        })
+        .try_take_while(|(_, finished)| futures::future::ok(*finished))
+        .map_ok(|(data, _)| stream::iter(data.into_iter().map(Ok)))
+        .try_flatten()
     }
 }
 

@@ -3,6 +3,7 @@
 use std::{io, marker::Unpin, pin::Pin, task::Poll};
 
 use async_trait::async_trait;
+use futures::stream::{Stream, TryStream};
 use futures_io::AsyncRead;
 
 pub trait BlobConfig: 'static + Send + Sync {
@@ -50,6 +51,14 @@ pub trait BlobStorage: 'static + Send + Sync {
 
     /// Read part of contents of the given path.
     fn get_part(&self, name: &str, off: u64, len: u64) -> BlobStream<'_>;
+}
+
+pub struct BlobObject {
+    pub key: String,
+}
+
+pub trait WalkBlobStorage: 'static + Send + Sync {
+    fn walk(&self, prefix: &str) -> impl TryStream<Ok = BlobObject, Error = io::Error> + '_;
 }
 
 impl BlobConfig for dyn BlobStorage {
