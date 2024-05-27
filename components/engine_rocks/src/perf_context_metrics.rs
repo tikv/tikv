@@ -21,6 +21,17 @@ make_auto_flush_static_metric! {
     }
 }
 
+make_static_metric! {
+    pub label_enum IngestType {
+        block,
+        non_block,
+    }
+
+    pub struct IngestExternalFileTimeDuration : Histogram {
+        "type" => IngestType,
+    }
+}
+
 lazy_static! {
     pub static ref APPLY_PERF_CONTEXT_TIME_HISTOGRAM: HistogramVec = register_histogram_vec!(
         "tikv_raftstore_apply_perf_context_time_duration_secs",
@@ -52,4 +63,13 @@ lazy_static! {
         auto_flush_from!(APPLY_PERF_CONTEXT_TIME_HISTOGRAM, PerfContextTimeDuration);
     pub static ref STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC: PerfContextTimeDuration =
         auto_flush_from!(STORE_PERF_CONTEXT_TIME_HISTOGRAM, PerfContextTimeDuration);
+    pub static ref INGEST_EXTERNAL_FILE_TIME_HISTOGRAM: IngestExternalFileTimeDuration =
+        register_static_histogram_vec!(
+            IngestExternalFileTimeDuration,
+            "tikv_storage_ingest_external_file_duration_secs",
+            "Bucketed histogram of ingest external file duration.",
+            &["type"],
+            exponential_buckets(0.00001, 2.0, 26).unwrap()
+        )
+        .unwrap();
 }
