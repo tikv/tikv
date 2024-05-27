@@ -28,7 +28,7 @@ use tikv_util::{config::VersionTrack, info};
 
 use crate::{
     background::{BackgroundTask, BgWorkManager, PdRangeHintService},
-    keys::{encode_key_for_eviction, InternalBytes},
+    keys::{encode_key_for_eviction, encode_seek_key, InternalBytes},
     memory_controller::MemoryController,
     range_manager::{LoadFailedReason, RangeCacheStatus, RangeManager},
     read::{RangeCacheIterator, RangeCacheSnapshot},
@@ -493,25 +493,52 @@ impl RangeCacheMemoryEngine {
     }
 
     pub fn dump_cache(&self, range: CacheRange) -> String {
-        let Ok(snap) = RangeCacheSnapshot::new(self.clone(), range, u64::MAX, u64::MAX) else {
+        let Ok(snap) = RangeCacheSnapshot::new(self.clone(), range.clone(), u64::MAX, u64::MAX)
+        else {
             return String::default();
         };
         let mut buffer = String::default();
         let mut scan = |cf| {
-            let mut iter = snap.iterator_opt(cf, IterOptions::default()).unwrap();
+            let mut iter_opts = IterOptions::default();
+            iter_opts.set_lower_bound(&range.start, 0);
+            iter_opts.set_upper_bound(&range.end, 0);
+
+            buffer.push_str(&format!("RangeCacheIterator\n"));
+            let mut iter = snap.iterator_opt(cf, iter_opts.clone()).unwrap();
             iter.seek_to_first().unwrap();
-            buffer.push_str(&format!("CF: {}", cf));
+            buffer.push_str(&format!("  CF: {}\n", cf));
             while iter.valid().unwrap_or(false) {
                 let key = iter.key();
                 let val = iter.value();
                 buffer.push_str(&format!(
-                    "  key: {}, value: {}",
+                    "    key: {}, value: {}\n",
                     hex::encode_upper(key),
                     hex::encode_upper(val),
                 ));
-                if iter.next().is_err() {
+                if !iter.next().unwrap_or(false) {
                     break;
                 }
+            }
+
+            buffer.push_str(&format!("RawIterator\n"));
+            let mut iter = snap.iterator_opt(cf, iter_opts.clone()).unwrap();
+            iter.seek_to_first().unwrap();
+            let raw_iter = &mut iter.iter;
+            buffer.push_str(&format!("  CF: {}\n", cf));
+            while raw_iter.valid() {
+                let key = raw_iter.key();
+                let val = raw_iter.value();
+                buffer.push_str(&format!(
+                    "    key: {}, value: {}\n",
+                    hex::encode_upper(key.as_bytes()),
+                    hex::encode_upper(val.as_bytes()),
+                ));
+
+                if key.as_slice() >= range.end.as_slice() {
+                    break;
+                }
+                let guard = &epoch::pin();
+                raw_iter.next(guard)
             }
         };
         scan(CF_WRITE);
