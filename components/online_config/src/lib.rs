@@ -25,7 +25,7 @@ pub enum ConfigValue {
     String(String),
     Module(ConfigChange),
     OffsetTime(OffsetTime),
-    Schedule(Schedule),
+    Schedule(Vec<String>),
     Skip,
     None,
 }

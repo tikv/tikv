@@ -24,6 +24,7 @@ use serde::{
     de::{self, Unexpected, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
 };
+use serde_json::Value;
 use thiserror::Error;
 
 use super::time::Instant;
@@ -550,7 +551,12 @@ pub struct ReadableSchedule(pub Vec<ReadableOffsetTime>);
 
 impl From<ReadableSchedule> for ConfigValue {
     fn from(otv: ReadableSchedule) -> ConfigValue {
-        ConfigValue::Schedule(otv.0.into_iter().map(|ot| (ot.0, ot.1)).collect::<Vec<_>>())
+        ConfigValue::Schedule(
+            otv.0
+                .into_iter()
+                .map(|offset_time| offset_time.to_string())
+                .collect(),
+        )
     }
 }
 
@@ -559,7 +565,7 @@ impl From<ConfigValue> for ReadableSchedule {
         if let ConfigValue::Schedule(otv) = c {
             ReadableSchedule(
                 otv.into_iter()
-                    .map(|(o, t)| ReadableOffsetTime(o, t))
+                    .map(|s| ReadableOffsetTime::from_str(s.as_str()).unwrap())
                     .collect::<Vec<_>>(),
             )
         } else {
@@ -581,6 +587,32 @@ impl ReadableSchedule {
         self.0
             .iter()
             .any(|time| time.hour_minutes_matches(datetime))
+    }
+}
+
+fn parse_string_to_vec(input: &str) -> Result<Vec<String>, String> {
+    let value: Value = serde_json::from_str(input).unwrap();
+
+    if let Value::Array(arr) = value {
+        return Ok(arr
+            .into_iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect());
+    }
+
+    Err(format!("{:?} cannot be parsed to vec", input))
+}
+
+impl FromStr for ReadableSchedule {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        Ok(ReadableSchedule(
+            parse_string_to_vec(s)?
+                .into_iter()
+                .map(|s| ReadableOffsetTime::from_str(s.as_str()))
+                .try_collect()?,
+        ))
     }
 }
 
