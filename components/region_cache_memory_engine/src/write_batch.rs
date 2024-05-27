@@ -350,7 +350,7 @@ impl WriteBatchEntryInternal {
 #[derive(Clone, Debug)]
 pub(crate) struct RangeCacheWriteBatchEntry {
     cf: usize,
-    key: Bytes,
+    pub key: Bytes,
     inner: WriteBatchEntryInternal,
 }
 

@@ -49,6 +49,8 @@ pub trait RangeCacheEngine:
     }
 
     fn evict_range(&self, range: CacheRange);
+
+    fn dump_cache(&self, _: u64) -> String;
 }
 
 /// A service that should run in the background to retrieve and apply cache

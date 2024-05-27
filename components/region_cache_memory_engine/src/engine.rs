@@ -14,7 +14,7 @@ use std::{
 use crossbeam::epoch::{self, default_collector, Guard};
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    CacheRange, FailedReason, IterOptions, Iterable, KvEngine, RangeCacheEngine, Result,
+    CacheRange, FailedReason, IterOptions, Iterable, Iterator, KvEngine, RangeCacheEngine, Result,
     CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
@@ -233,6 +233,29 @@ impl RangeCacheMemoryEngineCore {
         assert_eq!(&r, range);
         assert!(!canceled);
         range_manager.new_range(r);
+    }
+
+    pub fn dump_cached_write_batch(&self, region_id: u64) -> String {
+        let mut region = kvproto::metapb::Region::default();
+        region.id = region_id;
+        let r = CacheRange::from_region(&region);
+        let tag = r.tag;
+        let mut buffer = String::default();
+        for (range, wb) in self
+            .cached_write_batch
+            .iter()
+            .filter(|(range, _)| tag == range.tag)
+        {
+            buffer.push_str(&format!("range: {:?}\n", range));
+            for wb in wb {
+                buffer.push_str(&format!(
+                    "  seq: {}, key: {}",
+                    wb.0,
+                    hex::encode_upper(&wb.1.key)
+                ));
+            }
+        }
+        buffer
     }
 }
 
@@ -471,6 +494,34 @@ impl RangeCacheMemoryEngine {
     pub(crate) fn statistics(&self) -> Arc<Statistics> {
         self.statistics.clone()
     }
+
+    pub fn dump_cache(&self, range: CacheRange) -> String {
+        let Ok(snap) = RangeCacheSnapshot::new(self.clone(), range, u64::MAX, u64::MAX) else {
+            return String::default();
+        };
+        let mut buffer = String::default();
+        let mut scan = |cf| {
+            let mut iter = snap.iterator_opt(cf, IterOptions::default()).unwrap();
+            iter.seek_to_first().unwrap();
+            buffer.push_str(&format!("CF: {}", cf));
+            while iter.valid().unwrap_or(false) {
+                let key = iter.key();
+                let val = iter.value();
+                buffer.push_str(&format!(
+                    "  key: {}, value: {}",
+                    hex::encode_upper(key),
+                    hex::encode_upper(val),
+                ));
+                if iter.next().is_err() {
+                    break;
+                }
+            }
+        };
+        scan(CF_WRITE);
+        scan(CF_DEFAULT);
+        scan(CF_LOCK);
+        buffer
+    }
 }
 
 impl RangeCacheMemoryEngine {
@@ -519,6 +570,30 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
 
     fn evict_range(&self, range: CacheRange) {
         self.evict_range(&range);
+    }
+
+    fn dump_cache(&self, region_id: u64) -> String {
+        let mut buffer = String::default();
+        let range;
+        {
+            let core = self.core.read();
+            buffer.push_str(&format!(
+                "range_manager:\n{}\n",
+                core.range_manager.dump_cache(region_id),
+            ));
+            range = core.range_manager.get_range_by_id(region_id);
+        }
+        if let Some(range) = range {
+            buffer.push_str(&format!("---\nengine:\n{}\n", self.dump_cache(range)));
+        }
+        {
+            let core = self.core.read();
+            buffer.push_str(&format!(
+                "---\ncached_write_batch:\n{}\n",
+                core.dump_cached_write_batch(region_id),
+            ));
+        }
+        buffer
     }
 }
 

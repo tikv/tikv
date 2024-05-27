@@ -50,9 +50,7 @@ use raftstore::{
     RaftRouterCompactedEventSender, Result,
 };
 use rand::{seq::SliceRandom, RngCore};
-use region_cache_memory_engine::{
-    RangeCacheEngineContext, RangeCacheEngineOptions, RangeCacheMemoryEngine,
-};
+use region_cache_memory_engine::{RangeCacheEngineContext, RangeCacheMemoryEngine};
 use server::common::{ConfiguredRaftEngine, KvEngineBuilder};
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
