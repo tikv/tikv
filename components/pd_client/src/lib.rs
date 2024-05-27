@@ -25,7 +25,10 @@ use kvproto::{
     resource_manager::TokenBucketsRequest,
 };
 use pdpb::QueryStats;
-use tikv_util::time::{Instant, UnixSecs};
+use tikv_util::{
+    memory::HeapSize,
+    time::{Instant, UnixSecs},
+};
 use txn_types::TimeStamp;
 
 pub use self::{
@@ -131,6 +134,12 @@ impl BucketMeta {
     // total size of the whole buckets
     pub fn total_size(&self) -> u64 {
         self.sizes.iter().sum()
+    }
+}
+
+impl HeapSize for BucketMeta {
+    fn approximate_heap_size(&self) -> usize {
+        self.keys.approximate_heap_size() + self.sizes.approximate_heap_size()
     }
 }
 
