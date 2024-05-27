@@ -4656,7 +4656,7 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
             let schedule = v.parse::<ReadableSchedule>()?;
             ConfigValue::from(schedule)
         }
-        _ => unreachable!(),
+        ConfigValue::Skip | ConfigValue::None | ConfigValue::Module(_) => unreachable!(),
     };
     Ok(res)
 }
