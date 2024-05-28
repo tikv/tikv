@@ -1,5 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
+use core::slice::SlicePattern;
 use std::{
     cmp,
     collections::{BTreeMap, BTreeSet},
@@ -35,7 +36,7 @@ use tikv_util::{
     time::Instant,
     worker::{Builder, Runnable, RunnableWithTimer, ScheduleError, Scheduler, Worker},
 };
-use txn_types::{Key, TimeStamp, WriteRef, WriteType};
+use txn_types::{Key, Lock, TimeStamp, WriteRef, WriteType};
 use yatp::Remote;
 
 use crate::{
@@ -1072,6 +1073,7 @@ impl Runnable for BackgroundRunner {
             // TODO: Consider making this async.
             BackgroundTask::TopRegionsLoadEvict => self.core.top_regions_load_evict(),
             BackgroundTask::CleanLockTombstone(snapshot_seqno) => {
+                return;
                 if snapshot_seqno < self.last_seqno {
                     return;
                 }
@@ -1099,6 +1101,10 @@ impl Runnable for BackgroundRunner {
                         if user_key != last_user_key {
                             if let Some(remove) = cached_to_remove.take() {
                                 removed += 1;
+                                info!(
+                                    "clean lock";
+                                    "key" => log_wrappers::Value(&remove),
+                                );
                                 lock_handle.remove(&InternalBytes::from_vec(remove), guard);
                             }
                             last_user_key = user_key.to_vec();
@@ -1113,6 +1119,21 @@ impl Runnable for BackgroundRunner {
                         } else if remove_rest {
                             assert!(sequence < snapshot_seqno);
                             removed += 1;
+                            if v_type != ValueType::Deletion {
+                                let cached_to_remove_value =
+                                    Lock::parse(iter.value().as_bytes().as_slice()).unwrap();
+                                info!(
+                                    "clean lock2";
+                                    "key" => log_wrappers::Value(iter.key().as_bytes()),
+                                    "lock_type" => ?cached_to_remove_value.lock_type,
+                                    "ts" => cached_to_remove_value.ts,
+                                );
+                            } else {
+                                info!(
+                                    "clean lock2";
+                                    "key" => log_wrappers::Value(iter.key().as_bytes()),
+                                );
+                            }
                             lock_handle.remove(iter.key(), guard);
                         } else if sequence < snapshot_seqno {
                             remove_rest = true;
@@ -1126,6 +1147,10 @@ impl Runnable for BackgroundRunner {
                     }
                     if let Some(remove) = cached_to_remove.take() {
                         removed += 1;
+                        info!(
+                            "clean lock";
+                            "key" => log_wrappers::Value(&remove),
+                        );
                         lock_handle.remove(&InternalBytes::from_vec(remove), guard);
                     }
 
