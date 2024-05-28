@@ -33,12 +33,8 @@ use engine_traits::{
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
 use futures::{compat::Future01CompatExt, FutureExt};
-<<<<<<< HEAD
 use grpcio_health::HealthService;
-=======
-use health_controller::{types::LatencyInspector, HealthController};
 use itertools::Itertools;
->>>>>>> 8ab73504d8 (raftstore: Add slow log for peer and store msg (#16605))
 use keys::{self, data_end_key, data_key, enc_end_key, enc_start_key};
 use kvproto::{
     metapb::{self, Region, RegionEpoch},
@@ -65,18 +61,9 @@ use tikv_util::{
     mpsc::{self, LooseBoundedSender, Receiver},
     slow_log,
     store::{find_peer, region_on_stores},
-<<<<<<< HEAD
     sys as sys_util,
     sys::disk::{get_disk_status, DiskUsage},
-    time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant},
-=======
-    sys::{
-        self as sys_util,
-        cpu_time::ProcessStat,
-        disk::{get_disk_status, DiskUsage},
-    },
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, SlowTimer},
->>>>>>> 8ab73504d8 (raftstore: Add slow log for peer and store msg (#16605))
     timer::SteadyTimer,
     warn,
     worker::{LazyWorker, Scheduler, Worker},
