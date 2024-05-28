@@ -9,6 +9,7 @@ extern crate slog_global;
 extern crate tikv_alloc;
 
 use std::{
+    any::Any,
     io::{self, Write},
     marker::Unpin,
     sync::Arc,
@@ -32,7 +33,7 @@ use tikv_util::{
 use tokio::time::timeout;
 
 mod hdfs;
-pub use cloud::blob::WalkBlobStorage;
+pub use cloud::blob::{BlobObject, WalkBlobStorage};
 pub use hdfs::{HdfsConfig, HdfsStorage};
 pub mod local;
 pub use local::LocalStorage;
@@ -97,7 +98,7 @@ pub fn compression_reader_dispatcher(
 /// An abstraction of an external storage.
 // TODO: these should all be returning a future (i.e. async fn).
 #[async_trait]
-pub trait ExternalStorage: 'static + Send + Sync {
+pub trait ExternalStorage: 'static + Send + Sync + Any {
     fn name(&self) -> &'static str;
 
     fn url(&self) -> io::Result<url::Url>;

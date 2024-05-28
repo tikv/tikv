@@ -246,6 +246,15 @@ impl S3Storage {
         key.to_owned()
     }
 
+    fn maybe_strip_prefix_for_string(&self, key: String) -> String {
+        if let Some(prefix) = &self.config.bucket.prefix {
+            if key.starts_with(prefix.as_str()) {
+                return key[prefix.len()..].trim_start_matches('/').to_owned();
+            }
+        }
+        key
+    }
+
     fn get_range(&self, name: &str, range: Option<String>) -> cloud::blob::BlobStream<'_> {
         let key = self.maybe_prefix_key(name);
         let bucket = self.config.bucket.bucket.clone();
@@ -645,7 +654,7 @@ impl<'cli, 'arg> S3Walker<'cli, 'arg> {
         }
         let mut input = ListObjectsV2Request::default();
         input.bucket = String::clone(&self.cli.config.bucket.bucket);
-        input.prefix = Some(self.prefix.to_owned());
+        input.prefix = Some(self.cli.maybe_prefix_key(self.prefix));
         input.max_keys = Some(128);
         input.continuation_token = self.cont_token.clone();
         let res = self
@@ -663,7 +672,9 @@ impl<'cli, 'arg> S3Walker<'cli, 'arg> {
             .unwrap_or_default()
             .into_iter()
             .map(|data| BlobObject {
-                key: data.key.unwrap_or_default(),
+                key: self
+                    .cli
+                    .maybe_strip_prefix_for_string(data.key.unwrap_or_default()),
             })
             .collect::<Vec<_>>();
         io::Result::Ok(Some(data))

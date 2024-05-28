@@ -1,12 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{io, path::Path, sync::Arc};
+use std::{io, path::Path, pin::Pin, result::Result, sync::Arc};
 
 use async_trait::async_trait;
 pub use aws::{Config as S3Config, S3Storage};
 pub use azure::{AzureStorage, Config as AzureConfig};
-use cloud::blob::{BlobStorage, PutResource};
+use cloud::blob::{BlobObject, BlobStorage, PutResource, WalkBlobStorage};
 use encryption::DataKeyManager;
+use futures::prelude::Stream;
 use gcp::GcsStorage;
 use kvproto::brpb::{
     AzureBlobStorage, Gcs, Noop, StorageBackend, StorageBackend_oneof_backend as Backend, S3,
@@ -133,6 +134,15 @@ impl<Blob: BlobStorage> std::ops::Deref for BlobStore<Blob> {
     type Target = Blob;
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl<Blob: BlobStorage + WalkBlobStorage> WalkBlobStorage for BlobStore<Blob> {
+    fn walk<'c, 'a: 'c, 'b: 'c>(
+        &'a self,
+        prefix: &'b str,
+    ) -> Pin<Box<dyn Stream<Item = Result<BlobObject, io::Error>> + 'c>> {
+        self.0.walk(prefix)
     }
 }
 
