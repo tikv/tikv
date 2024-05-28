@@ -447,13 +447,16 @@ where
                     self.on_observe_result(region, handle, err).await;
                 }
                 ObserveOp::ResolveRegions { callback, min_ts } => {
+                    fail::fail_point!("subscription_manager_resolve_regions");
                     let now = Instant::now();
                     let timedout = self.wait(Duration::from_secs(5)).await;
                     if timedout {
                         warn!("waiting for initial scanning done timed out, forcing progress!";
                             "take" => ?now.saturating_elapsed(), "timedout" => %timedout);
                     }
-                    let regions = resolver.resolve(self.subs.current_regions(), min_ts).await;
+                    let regions = resolver
+                        .resolve(self.subs.current_regions(), min_ts, None)
+                        .await;
                     let cps = self.subs.resolve_with(min_ts, regions);
                     let min_region = cps.iter().min_by_key(|rs| rs.checkpoint);
                     // If there isn't any region observed, the `min_ts` can be used as resolved ts

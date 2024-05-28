@@ -1986,6 +1986,34 @@ impl RaftEngineConfig {
         Ok(())
     }
 
+    fn optimize_for(&mut self, raft_store: &RaftstoreConfig, raft_kv_v2: bool) {
+        if raft_kv_v2 {
+            return;
+        }
+        let default_config = RawRaftEngineConfig::default();
+        let cur_batch_compression_thd = self.config().batch_compression_threshold;
+        // Currently, it only takes whether the configuration
+        // batch-compression-threshold of RaftEngine are set manually
+        // into consideration to determine whether the RaftEngine is customized.
+        let customized = cur_batch_compression_thd != default_config.batch_compression_threshold;
+        // As the async-io is enabled by default (raftstore.store_io_pool_size == 1),
+        // testing records shows that using 4kb as the default value can achieve
+        // better performance and reduce the IO overhead.
+        // Meanwhile, the batch_compression_threshold cannot be modified dynamically if
+        // the threads count of async-io are changed manually.
+        if !customized && raft_store.store_io_pool_size > 0 {
+            let adaptive_batch_comp_thd = RaftEngineReadableSize(std::cmp::max(
+                cur_batch_compression_thd.0 / (raft_store.store_io_pool_size + 1) as u64,
+                RaftEngineReadableSize::kb(4).0,
+            ));
+            self.mut_config().batch_compression_threshold = adaptive_batch_comp_thd;
+            warn!(
+                "raft-engine.batch-compression-threshold {} should be adpative to the size of async-io. Set it to {} instead.",
+                cur_batch_compression_thd, adaptive_batch_comp_thd,
+            );
+        }
+    }
+
     pub fn config(&self) -> RawRaftEngineConfig {
         self.config.clone()
     }
@@ -3257,8 +3285,8 @@ impl ConfigManager for LogConfigManager {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct MemoryConfig {
-    // Whether enable the heap profiling which may have a bit performance overhead about 2% for the
-    // default sample rate.
+    // Whether enables the heap profiling which may have a bit performance overhead about 2% for
+    // the default sample rate.
     pub enable_heap_profiling: bool,
 
     // Average interval between allocation samples, as measured in bytes of allocation activity.
@@ -3267,6 +3295,11 @@ pub struct MemoryConfig {
     // The default sample interval is 512 KB. It only accepts power of two, otherwise it will be
     // rounded up to the next power of two.
     pub profiling_sample_per_bytes: ReadableSize,
+
+    // Whether allocates the exclusive arena for threads.
+    // When disabled, the metric of memory usage for each thread would be unavailable.
+    #[online_config(skip)]
+    pub enable_thread_exclusive_arena: bool,
 }
 
 impl Default for MemoryConfig {
@@ -3274,6 +3307,7 @@ impl Default for MemoryConfig {
         Self {
             enable_heap_profiling: true,
             profiling_sample_per_bytes: ReadableSize::kb(512),
+            enable_thread_exclusive_arena: true,
         }
     }
 }
@@ -3287,6 +3321,7 @@ impl MemoryConfig {
             }
             tikv_alloc::set_prof_sample(self.profiling_sample_per_bytes.0).unwrap();
         }
+        tikv_alloc::set_thread_exclusive_arena(self.enable_thread_exclusive_arena);
     }
 }
 
@@ -3687,6 +3722,8 @@ impl TikvConfig {
         if self.storage.engine == EngineType::RaftKv2 {
             self.raft_store.store_io_pool_size = cmp::max(self.raft_store.store_io_pool_size, 1);
         }
+        self.raft_engine
+            .optimize_for(&self.raft_store, self.storage.engine == EngineType::RaftKv2);
         if self.storage.block_cache.capacity.is_none() {
             let total_mem = SysQuota::memory_limit_in_bytes();
             let capacity = if self.storage.engine == EngineType::RaftKv2 {
@@ -4683,6 +4720,7 @@ pub enum Module {
     Rocksdb,
     Raftdb,
     RaftEngine,
+    RangeCacheEngine,
     Storage,
     Security,
     Encryption,
@@ -4714,6 +4752,7 @@ impl From<&str> for Module {
             "rocksdb" => Module::Rocksdb,
             "raftdb" => Module::Raftdb,
             "raft_engine" => Module::RaftEngine,
+            "range_cache_engine" => Module::RangeCacheEngine,
             "storage" => Module::Storage,
             "security" => Module::Security,
             "import" => Module::Import,
@@ -4866,7 +4905,10 @@ impl ConfigController {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::{
+        sync::{mpsc::channel, Arc},
+        time::Duration,
+    };
 
     use api_version::{ApiV1, KvFormat};
     use case_macros::*;
@@ -5657,22 +5699,26 @@ mod tests {
         assert_eq!(flow_controller.enabled(), true);
     }
 
+    struct MockCfgManager(Box<dyn Fn(ConfigChange) + Send + Sync>);
+
+    impl ConfigManager for MockCfgManager {
+        fn dispatch(&mut self, change: ConfigChange) -> online_config::Result<()> {
+            (self.0)(change);
+            Ok(())
+        }
+    }
+
     #[test]
     fn test_change_resolved_ts_config() {
-        use crossbeam::channel;
-
-        pub struct TestConfigManager(channel::Sender<ConfigChange>);
-        impl ConfigManager for TestConfigManager {
-            fn dispatch(&mut self, change: ConfigChange) -> online_config::Result<()> {
-                self.0.send(change).unwrap();
-                Ok(())
-            }
-        }
-
         let (cfg, _dir) = TikvConfig::with_tmp().unwrap();
         let cfg_controller = ConfigController::new(cfg);
-        let (tx, rx) = channel::unbounded();
-        cfg_controller.register(Module::ResolvedTs, Box::new(TestConfigManager(tx)));
+        let (tx, rx) = channel();
+        cfg_controller.register(
+            Module::ResolvedTs,
+            Box::new(MockCfgManager(Box::new(move |c| {
+                tx.send(c).unwrap();
+            }))),
+        );
 
         // Return error if try to update not support config or unknow config
         cfg_controller
@@ -6303,12 +6349,14 @@ mod tests {
         let cfg_controller = ConfigController::new(cfg.clone());
         let (scheduler, _receiver) = dummy_scheduler();
         let version_tracker = Arc::new(VersionTrack::new(cfg.server.clone()));
+        let cop_manager = MockCfgManager(Box::new(|_| {}));
         cfg_controller.register(
             Module::Server,
             Box::new(ServerConfigManager::new(
                 scheduler,
                 version_tracker.clone(),
                 ResourceQuota::new(None),
+                Box::new(cop_manager),
             )),
         );
 
@@ -6358,6 +6406,39 @@ mod tests {
             default_cfg.server.end_point_request_max_handle_duration(),
             ReadableDuration::secs(900)
         );
+    }
+
+    #[test]
+    fn test_change_coprocessor_endpoint_config() {
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+        cfg.validate().unwrap();
+        let cfg_controller = ConfigController::new(cfg.clone());
+        let (scheduler, _receiver) = dummy_scheduler();
+        let version_tracker = Arc::new(VersionTrack::new(cfg.server.clone()));
+
+        let (cop_tx, cop_rx) = channel();
+        let cop_manager = MockCfgManager(Box::new(move |c| {
+            cop_tx.send(c).unwrap();
+        }));
+        cfg_controller.register(
+            Module::Server,
+            Box::new(ServerConfigManager::new(
+                scheduler,
+                version_tracker.clone(),
+                ResourceQuota::new(None),
+                Box::new(cop_manager),
+            )),
+        );
+
+        cfg_controller
+            .update_config("server.end-point-memory-quota", "32MB")
+            .unwrap();
+        let mut change = cop_rx.try_recv().unwrap();
+        let quota = change.remove("end_point_memory_quota").unwrap();
+        let cap: ReadableSize = quota.into();
+        assert_eq!(cap, ReadableSize::mb(32));
+        cfg.server.end_point_memory_quota = ReadableSize::mb(32);
+        assert_eq_debug(&cfg_controller.get_current(), &cfg);
     }
 
     #[test]
@@ -6908,7 +6989,6 @@ mod tests {
         cfg.raftdb.titan.max_background_gc = default_cfg.raftdb.titan.max_background_gc;
         cfg.backup.num_threads = default_cfg.backup.num_threads;
         cfg.log_backup.num_threads = default_cfg.log_backup.num_threads;
-        cfg.raft_store.cmd_batch_concurrent_ready_max_count = 1;
 
         // There is another set of config values that we can't directly compare:
         // When the default values are `None`, but are then resolved to `Some(_)` later
@@ -6924,6 +7004,14 @@ mod tests {
         default_cfg
             .raft_store
             .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
+        default_cfg.raft_engine.optimize_for(
+            &default_cfg.raft_store,
+            default_cfg.storage.engine == EngineType::RaftKv2,
+        );
+        assert_eq!(
+            default_cfg.raft_engine.config().batch_compression_threshold,
+            RaftEngineReadableSize::kb(4)
+        );
         default_cfg.security.redact_info_log = Some(false);
         default_cfg.coprocessor.region_max_size = Some(default_cfg.coprocessor.region_max_size());
         default_cfg.coprocessor.region_max_keys = Some(default_cfg.coprocessor.region_max_keys());
@@ -7016,6 +7104,10 @@ mod tests {
 
         cfg.coprocessor
             .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
+        cfg.raft_engine.optimize_for(
+            &cfg.raft_store,
+            default_cfg.storage.engine == EngineType::RaftKv2,
+        );
 
         assert_eq_debug(&cfg, &default_cfg);
     }

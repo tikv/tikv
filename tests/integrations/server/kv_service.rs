@@ -2,6 +2,7 @@
 
 use std::{
     char::from_u32,
+    collections::HashMap,
     path::Path,
     sync::{atomic::AtomicU64, *},
     thread,
@@ -21,7 +22,7 @@ use grpcio_health::{proto::HealthCheckRequest, *};
 use kvproto::{
     coprocessor::*,
     debugpb,
-    kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
+    kvrpcpb::{Action::MinCommitTsPushed, PrewriteRequestPessimisticAction::*, *},
     metapb, raft_serverpb,
     raft_serverpb::*,
     tikvpb::*,
@@ -1761,7 +1762,10 @@ fn test_batch_commands() {
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
 #[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
 fn test_health_feedback() {
-    let (_cluster, client, _ctx) = new_cluster();
+    let (cluster, client, _ctx) = new_cluster();
+    let store_id = *cluster.store_metas.iter().next().unwrap().0;
+    assert_ne!(store_id, 0);
+
     let (mut sender, mut receiver) = client.batch_commands().unwrap();
 
     let mut batch_req = BatchCommandsRequest::default();
@@ -1771,6 +1775,7 @@ fn test_health_feedback() {
     block_on(sender.send((batch_req.clone(), WriteFlags::default()))).unwrap();
     let resp = block_on(receiver.next()).unwrap().unwrap();
     assert!(resp.has_health_feedback());
+    assert_eq!(resp.get_health_feedback().get_store_id(), store_id);
 
     block_on(sender.send((batch_req.clone(), WriteFlags::default()))).unwrap();
     let resp = block_on(receiver.next()).unwrap().unwrap();
@@ -1780,9 +1785,78 @@ fn test_health_feedback() {
     block_on(sender.send((batch_req, WriteFlags::default()))).unwrap();
     let resp = block_on(receiver.next()).unwrap().unwrap();
     assert!(resp.has_health_feedback());
+    assert_eq!(resp.get_health_feedback().get_store_id(), store_id);
 
     block_on(sender.close()).unwrap();
     block_on(receiver.for_each(|_| future::ready(())));
+}
+
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
+fn test_explicit_get_health_feedback() {
+    let (cluster, client, _ctx) = new_cluster();
+    let store_id = *cluster.store_metas.iter().next().unwrap().0;
+    assert_ne!(store_id, 0);
+
+    let (mut sender, mut receiver) = client.batch_commands().unwrap();
+
+    let mut batch_req = BatchCommandsRequest::default();
+    batch_req.mut_request_ids().push(1);
+    {
+        let mut req = BatchCommandsRequestRequest::default();
+        req.cmd = Some(BatchCommandsRequest_Request_oneof_cmd::GetHealthFeedback(
+            Default::default(),
+        ));
+        batch_req.mut_requests().push(req);
+    }
+
+    block_on(sender.send((batch_req.clone(), WriteFlags::default()))).unwrap();
+    let resp = block_on(receiver.next()).unwrap().unwrap();
+    assert!(resp.has_health_feedback());
+    assert_eq!(resp.get_health_feedback().get_store_id(), store_id);
+    assert_eq!(resp.request_ids[0], 1);
+    assert!(
+        resp.get_responses()[0]
+            .get_get_health_feedback()
+            .has_health_feedback()
+    );
+    assert_eq!(
+        resp.get_responses()[0]
+            .get_get_health_feedback()
+            .get_health_feedback(),
+        resp.get_health_feedback()
+    );
+    let first_feedback_seq = resp.get_health_feedback().get_feedback_seq_no();
+
+    batch_req.mut_request_ids()[0] = 2;
+    block_on(sender.send((batch_req.clone(), WriteFlags::default()))).unwrap();
+    let resp = block_on(receiver.next()).unwrap().unwrap();
+    assert!(resp.has_health_feedback());
+    assert_eq!(resp.get_health_feedback().get_store_id(), store_id);
+    assert_eq!(resp.request_ids[0], 2);
+    assert!(
+        resp.get_responses()[0]
+            .get_get_health_feedback()
+            .has_health_feedback()
+    );
+    assert_eq!(
+        resp.get_responses()[0]
+            .get_get_health_feedback()
+            .get_health_feedback(),
+        resp.get_health_feedback()
+    );
+    assert_eq!(
+        resp.get_health_feedback().get_feedback_seq_no(),
+        first_feedback_seq + 1
+    );
+
+    block_on(sender.close()).unwrap();
+    block_on(receiver.for_each(|_| future::ready(())));
+
+    // Non-batched API
+    let resp = client.get_health_feedback(&Default::default()).unwrap();
+    assert!(resp.has_health_feedback());
+    assert_eq!(resp.get_health_feedback().get_store_id(), store_id);
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
@@ -3309,7 +3383,8 @@ fn test_pipelined_dml_read_write_conflict() {
     let (_cluster, client, ctx) = new_cluster();
     let (k, v) = (b"key".to_vec(), b"value".to_vec());
 
-    // flushed lock can be observed by another read
+    // flushed lock can be observed by another read, and its min_commit_ts can be
+    // pushed
     let mut req = FlushRequest::default();
     req.set_mutations(
         vec![Mutation {
@@ -3335,6 +3410,18 @@ fn test_pipelined_dml_read_write_conflict() {
     let resp = client.kv_get(&req).unwrap();
     assert!(!resp.has_region_error());
     assert!(resp.get_error().has_locked());
+
+    // reader pushing the lock's min_commit_ts
+    let mut req = CheckTxnStatusRequest::default();
+    req.set_context(ctx.clone());
+    req.set_primary_key(k.clone());
+    req.set_lock_ts(1);
+    req.set_caller_start_ts(2);
+    req.set_current_ts(2);
+    let resp = client.kv_check_txn_status(&req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(!resp.has_error());
+    assert_eq!(resp.get_action(), MinCommitTsPushed);
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
@@ -3367,6 +3454,64 @@ fn test_pipelined_dml_buffer_get_other_key() {
     let resp = client.kv_buffer_batch_get(&req).unwrap();
     assert!(!resp.has_region_error());
     assert!(resp.get_pairs().is_empty());
+}
+
+#[test_case(test_raftstore::must_new_cluster_and_kv_client)]
+#[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
+fn test_pipelined_dml_buffer_get_unordered_keys() {
+    let (_cluster, client, ctx) = new_cluster();
+    let keys = vec![
+        b"key1".to_vec(),
+        b"key2".to_vec(),
+        b"key3".to_vec(),
+        b"key4".to_vec(),
+    ];
+
+    // flushed lock can be observed by another read
+    let mut req = FlushRequest::default();
+    req.set_mutations(
+        keys.iter()
+            .map(|key| Mutation {
+                op: Op::Put,
+                key: key.clone(),
+                value: key.clone(),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>()
+            .into(),
+    );
+    req.set_generation(1);
+    req.set_context(ctx.clone());
+    req.set_start_ts(1);
+    req.set_primary_key(keys[0].clone());
+    let resp = client.kv_flush(&req).unwrap();
+    assert!(!resp.has_region_error());
+    assert!(resp.get_errors().is_empty());
+
+    let mut reversed_keys = keys.clone();
+    reversed_keys.reverse();
+    let duplicated_keys = keys
+        .clone()
+        .iter()
+        .flat_map(|key| vec![key.clone(), key.clone()])
+        .collect();
+    let cases = vec![keys.clone(), reversed_keys, duplicated_keys];
+    for case in cases {
+        let mut req = BufferBatchGetRequest::default();
+        req.set_keys(case.into());
+        req.set_context(ctx.clone());
+        req.set_version(1);
+        let resp = client.kv_buffer_batch_get(&req).unwrap();
+        let pairs = resp.get_pairs();
+        assert_eq!(pairs.len(), 4);
+        let pairs_map = pairs
+            .iter()
+            .map(|pair| (pair.get_key().to_vec(), pair.get_value().to_vec()))
+            .collect::<HashMap<_, _>>();
+        for key in &keys {
+            assert_eq!(pairs_map.get(key).unwrap(), key.as_slice());
+        }
+    }
 }
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]

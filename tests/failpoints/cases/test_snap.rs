@@ -1047,3 +1047,36 @@ fn test_send_snapshot_timeout() {
     fail::remove("snap_send_timer_delay");
     fail::remove("snap_send_duration_timeout");
 }
+
+// Test that snapshots that failed to be sent are cleaned up.
+#[test]
+fn test_snapshot_cleanup_on_send_error() {
+    let mut cluster = new_server_cluster(0, 3);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+
+    let r = cluster.run_conf_change();
+
+    pd_client.must_add_peer(r, new_peer(2, 2));
+    cluster.must_put(b"k1", b"v1");
+
+    // Simulate an error on the gprc stream so that the leader fails to send
+    // the first snapshot to peer 3.
+    fail::cfg("snap_send_error", "return").unwrap();
+    pd_client.must_add_peer(r, new_peer(3, 3));
+
+    // Snapshot files are identified by a snap key which consists of region,
+    // term, and applied index. By performing a new put here, we advance the
+    // applied index on the leader and make it generate a new snapshot file.
+    cluster.must_put(b"k2", b"v2");
+
+    // After removing the failpoint, the new snapshot will be sent to peer 3,
+    // but we want to make sure that the old snapshot gets cleaned up as well.
+    fail::remove("snap_send_error");
+    cluster.must_put(b"k3", b"v3");
+
+    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+
+    // Check that all snapshots on the leader have been deleted.
+    must_empty_dir(cluster.get_snap_dir(1));
+}

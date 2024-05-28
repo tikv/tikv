@@ -126,11 +126,16 @@ impl DownstreamState {
 }
 
 pub struct Downstream {
+    /// A unique identifier of the Downstream.
     pub id: DownstreamId,
+    /// The IP address of downstream.
     pub peer: String,
     pub region_epoch: RegionEpoch,
+    /// The request ID set by CDC to identify events corresponding different
+    /// requests.
     pub req_id: u64,
     pub conn_id: ConnId,
+
     pub kv_api: ChangeDataRequestKvApi,
     pub filter_loop: bool,
     pub observed_range: ObservedRange,
@@ -242,7 +247,7 @@ impl Downstream {
     }
 }
 
-// In `PendingLock`,  `key` is raw format instead of encoded.
+// In `PendingLock`,  `key` is encoded.
 pub enum PendingLock {
     Track { key: Key, start_ts: MiniLock },
     Untrack { key: Key },
@@ -271,8 +276,12 @@ impl fmt::Debug for LockTracker {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LockTracker::Pending => write!(f, "LockTracker::Pending"),
-            LockTracker::Preparing(..) => write!(f, "LockTracker::Preparing"),
-            LockTracker::Prepared { .. } => write!(f, "LockTracker::Prepared"),
+            LockTracker::Preparing(ref locks) => {
+                write!(f, "LockTracker::Preparing({})", locks.len())
+            }
+            LockTracker::Prepared { locks, .. } => {
+                write!(f, "LockTracker::Prepared({})", locks.len())
+            }
         }
     }
 }
@@ -333,18 +342,22 @@ impl Drop for Delegate {
         match &self.lock_tracker {
             LockTracker::Pending => {}
             LockTracker::Preparing(locks) => {
+                let mut free_bytes = 0;
                 for lock in locks {
                     let bytes = lock.approximate_heap_size();
                     self.memory_quota.free(bytes);
-                    CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
+                    free_bytes += bytes;
                 }
+                CDC_PENDING_BYTES_GAUGE.sub(free_bytes as _);
             }
             LockTracker::Prepared { locks, .. } => {
+                let mut free_bytes = 0;
                 for lock in locks.keys() {
                     let bytes = lock.approximate_heap_size();
                     self.memory_quota.free(bytes);
-                    CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
+                    free_bytes += bytes;
                 }
+                CDC_PENDING_BYTES_GAUGE.sub(free_bytes as _);
             }
         }
     }
@@ -418,10 +431,9 @@ impl Delegate {
             _ => unreachable!(),
         };
 
+        let mut free_bytes = 0usize;
         for delta_lock in delta_locks {
-            let bytes = delta_lock.approximate_heap_size();
-            self.memory_quota.free(bytes);
-            CDC_PENDING_BYTES_GAUGE.sub(bytes as _);
+            free_bytes += delta_lock.approximate_heap_size();
             match delta_lock {
                 PendingLock::Track { key, start_ts } => match locks.entry(key) {
                     BTreeMapEntry::Vacant(x) => {
@@ -440,12 +452,16 @@ impl Delegate {
                 },
             }
         }
+        self.memory_quota.free(free_bytes);
+        CDC_PENDING_BYTES_GAUGE.sub(free_bytes as _);
 
+        let mut alloc_bytes = 0usize;
         for key in locks.keys() {
-            let bytes = key.approximate_heap_size();
-            self.memory_quota.alloc(bytes)?;
-            CDC_PENDING_BYTES_GAUGE.add(bytes as _);
+            alloc_bytes += key.approximate_heap_size();
         }
+        self.memory_quota.alloc(alloc_bytes)?;
+        CDC_PENDING_BYTES_GAUGE.add(alloc_bytes as _);
+
         self.lock_tracker = LockTracker::Prepared { region, locks };
         Ok(())
     }
@@ -863,7 +879,9 @@ impl Delegate {
                     self.sink_put(req.take_put(), &mut rows_builder, &mut read_old_value)?
                 }
                 CmdType::Delete => self.sink_delete(req.take_delete(), &mut rows_builder)?,
-                _ => debug!("skip other command"; "region_id" => self.region_id, "command" => ?req),
+                _ => debug!("cdc skip other command";
+                    "region_id" => self.region_id,
+                    "command" => ?req),
             };
         }
 
@@ -998,14 +1016,20 @@ impl Delegate {
             "write" => {
                 let key = Key::from_encoded_slice(&put.key).truncate_ts().unwrap();
                 let row = rows.txns_by_key.entry(key).or_default();
-                if decode_write(put.take_key(), &put.value, &mut row.0, &mut row.1, true) {
+                if decode_write(
+                    put.take_key(),
+                    &put.value,
+                    &mut row.v,
+                    &mut row.has_value,
+                    true,
+                ) {
                     return Ok(());
                 }
 
                 if rows.is_one_pc {
-                    set_event_row_type(&mut row.0, EventLogType::Committed);
-                    let read_old_ts = TimeStamp::from(row.0.commit_ts).prev();
-                    read_old_value(&mut row.0, read_old_ts)?;
+                    set_event_row_type(&mut row.v, EventLogType::Committed);
+                    let read_old_ts = TimeStamp::from(row.v.commit_ts).prev();
+                    read_old_value(&mut row.v, read_old_ts)?;
                 }
             }
             "lock" => {
@@ -1016,20 +1040,20 @@ impl Delegate {
 
                 let key = Key::from_encoded_slice(&put.key);
                 let row = rows.txns_by_key.entry(key.clone()).or_default();
-                if decode_lock(put.take_key(), lock, &mut row.0, &mut row.1) {
+                if decode_lock(put.take_key(), lock, &mut row.v, &mut row.has_value) {
                     return Ok(());
                 }
 
-                let mini_lock = MiniLock::new(row.0.start_ts, txn_source, generation);
-                row.2 = self.push_lock(key, mini_lock)?;
+                let mini_lock = MiniLock::new(row.v.start_ts, txn_source, generation);
+                row.lock_count_modify = self.push_lock(key, mini_lock)?;
 
-                let read_old_ts = std::cmp::max(for_update_ts, row.0.start_ts.into());
-                read_old_value(&mut row.0, read_old_ts)?;
+                let read_old_ts = std::cmp::max(for_update_ts, row.v.start_ts.into());
+                read_old_value(&mut row.v, read_old_ts)?;
             }
             "" | "default" => {
                 let key = Key::from_encoded(put.take_key()).truncate_ts().unwrap();
                 let row = rows.txns_by_key.entry(key).or_default();
-                decode_default(put.take_value(), &mut row.0, &mut row.1);
+                decode_default(put.take_value(), &mut row.v, &mut row.has_value);
             }
             other => panic!("invalid cf {}", other),
         }
@@ -1041,7 +1065,7 @@ impl Delegate {
             "lock" => {
                 if self.pop_lock(Key::from_encoded_slice(&delete.key))? != 0 {
                     let key = Key::from_encoded(delete.take_key());
-                    rows.txns_by_key.get_mut(&key).unwrap().2 -= 1;
+                    rows.txns_by_key.get_mut(&key).unwrap().lock_count_modify -= 1;
                 }
             }
             "" | "default" | "write" => {}
@@ -1126,17 +1150,29 @@ impl Delegate {
 #[derive(Default)]
 struct RowsBuilder {
     // map[Key]->(row, has_value, lock_count_modify)
-    txns_by_key: HashMap<Key, (EventRow, bool, isize)>,
+    txns_by_key: HashMap<Key, RowInBuilding>,
 
     raws: Vec<EventRow>,
 
     is_one_pc: bool,
 }
 
+#[derive(Default)]
+struct RowInBuilding {
+    v: EventRow,
+    has_value: bool,
+    lock_count_modify: isize,
+}
+
 impl RowsBuilder {
     fn finish_build(self) -> (Vec<EventRow>, Vec<(EventRow, isize)>) {
         let mut txns = Vec::with_capacity(self.txns_by_key.len());
-        for (v, has_value, lock_count_modify) in self.txns_by_key.into_values() {
+        for RowInBuilding {
+            v,
+            has_value,
+            lock_count_modify,
+        } in self.txns_by_key.into_values()
+        {
             if v.r_type == EventLogType::Prewrite && v.op_type == EventRowOpType::Put && !has_value
             {
                 // It's possible that a prewrite command only contains lock but without
@@ -1219,7 +1255,7 @@ fn decode_write(
     false
 }
 
-fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow, has_value: &mut bool) -> bool {
+fn decode_lock(key: Vec<u8>, mut lock: Lock, row: &mut EventRow, has_value: &mut bool) -> bool {
     let key = Key::from_encoded(key);
     let op_type = match lock.lock_type {
         LockType::Put => EventRowOpType::Put,
@@ -1236,8 +1272,8 @@ fn decode_lock(key: Vec<u8>, lock: Lock, row: &mut EventRow, has_value: &mut boo
     row.op_type = op_type as _;
     row.txn_source = lock.txn_source;
     set_event_row_type(row, EventLogType::Prewrite);
-    if let Some(value) = lock.short_value {
-        assert!(!*has_value);
+    if let Some(value) = lock.short_value.take() {
+        assert!(!*has_value, "unexpected lock with value: {:?}", lock);
         *has_value = true;
         row.value = value;
     }
@@ -1276,21 +1312,37 @@ fn decode_default(value: Vec<u8>, row: &mut EventRow, has_value: &mut bool) {
 }
 
 /// Observed key range.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ObservedRange {
-    pub start_key_encoded: Vec<u8>,
-    pub end_key_encoded: Vec<u8>,
+    pub start_key_encoded: Key,
+    pub end_key_encoded: Key,
     pub start_key_raw: Vec<u8>,
     pub end_key_raw: Vec<u8>,
     pub all_key_covered: bool,
 }
 
+impl Default for ObservedRange {
+    fn default() -> Self {
+        ObservedRange {
+            start_key_encoded: Key::from_encoded(vec![]),
+            end_key_encoded: Key::from_encoded(vec![]),
+            start_key_raw: vec![],
+            end_key_raw: vec![],
+            all_key_covered: false,
+        }
+    }
+}
+
 impl ObservedRange {
     pub fn new(start_key_encoded: Vec<u8>, end_key_encoded: Vec<u8>) -> Result<ObservedRange> {
-        let start_key_raw = Key::from_encoded(start_key_encoded.clone())
+        let start_key_encoded = Key::from_encoded(start_key_encoded);
+        let end_key_encoded = Key::from_encoded(end_key_encoded);
+        let start_key_raw = start_key_encoded
+            .clone()
             .into_raw()
             .map_err(|e| Error::Other(e.into()))?;
-        let end_key_raw = Key::from_encoded(end_key_encoded.clone())
+        let end_key_raw = end_key_encoded
+            .clone()
             .into_raw()
             .map_err(|e| Error::Other(e.into()))?;
         Ok(ObservedRange {
@@ -1305,9 +1357,10 @@ impl ObservedRange {
     #[allow(clippy::collapsible_if)]
     pub fn update_region_key_range(&mut self, region: &Region) {
         // Check observed key range in region.
-        if self.start_key_encoded <= region.start_key {
+        if self.start_key_encoded.as_encoded() <= &region.start_key {
             if self.end_key_encoded.is_empty()
-                || (region.end_key <= self.end_key_encoded && !region.end_key.is_empty())
+                || (&region.end_key <= self.end_key_encoded.as_encoded()
+                    && !region.end_key.is_empty())
             {
                 // Observed range covers the region.
                 self.all_key_covered = true;
@@ -1326,7 +1379,11 @@ impl ObservedRange {
     }
 
     pub fn contains_encoded_key(&self, key: &[u8]) -> bool {
-        self.is_key_in_range(&self.start_key_encoded, &self.end_key_encoded, key)
+        self.is_key_in_range(
+            self.start_key_encoded.as_encoded(),
+            self.end_key_encoded.as_encoded(),
+            key,
+        )
     }
 
     pub fn contains_raw_key(&self, key: &[u8]) -> bool {
@@ -1343,15 +1400,13 @@ impl ObservedRange {
     }
 
     fn to_range(&self) -> (Bound<&Key>, Bound<&Key>) {
-        unsafe {
-            let start = Bound::Included(std::mem::transmute(&self.start_key_encoded));
-            let end = if self.end_key_encoded.is_empty() {
-                Bound::Unbounded
-            } else {
-                Bound::Excluded(std::mem::transmute(&self.end_key_encoded))
-            };
-            (start, end)
-        }
+        let start = Bound::Included(&self.start_key_encoded);
+        let end = if self.end_key_encoded.is_empty() {
+            Bound::Unbounded
+        } else {
+            Bound::Excluded(&self.end_key_encoded)
+        };
+        (start, end)
     }
 }
 

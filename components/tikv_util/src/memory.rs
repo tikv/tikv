@@ -3,18 +3,28 @@
 use std::{
     mem,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicIsize, AtomicUsize, Ordering},
         Arc,
     },
 };
 
 use collections::HashMap;
 use kvproto::{
+    coprocessor as coppb,
     encryptionpb::EncryptionMeta,
-    kvrpcpb::LockInfo,
+    kvrpcpb::{self, LockInfo},
     metapb::{Peer, Region, RegionEpoch},
     raft_cmdpb::{self, RaftCmdRequest, ReadIndexRequest},
 };
+
+// The maxinum memory size in byte for a single `alloc` or `alloc_force`.
+// We set this hard limit to avoid the `in_use` counter overflow that may
+// lead to undefined behavior.
+// When passes a higher value, the result will depend on the called function:
+// - alloc. Return an error.
+// - alloc_force. Ignore this call and do nothing.
+// - free. Ignore this call and do nothing.
+const MAX_MEMORY_ALLOC_SIZE: usize = 1 << 48;
 
 /// Transmute vec from one type to the other type.
 ///
@@ -37,6 +47,13 @@ pub trait HeapSize {
     /// performance critical path.
     fn approximate_heap_size(&self) -> usize {
         0
+    }
+
+    fn approximate_mem_size(&self) -> usize
+    where
+        Self: Sized,
+    {
+        mem::size_of::<Self>() + self.approximate_heap_size()
     }
 }
 
@@ -136,6 +153,27 @@ impl HeapSize for RaftCmdRequest {
     }
 }
 
+impl HeapSize for coppb::KeyRange {
+    fn approximate_heap_size(&self) -> usize {
+        self.start.capacity() + self.end.capacity()
+    }
+}
+
+impl HeapSize for kvrpcpb::Context {
+    fn approximate_heap_size(&self) -> usize {
+        self.resolved_locks.capacity() * mem::size_of::<u64>()
+            + self.committed_locks.capacity() * mem::size_of::<u64>()
+            + self.resource_group_tag.capacity()
+            + self.request_source.as_bytes().len()
+            + self
+                .get_resource_control_context()
+                .resource_group_name
+                .as_bytes()
+                .len()
+            + self.get_source_stmt().session_alias.as_bytes().len()
+    }
+}
+
 #[derive(Debug)]
 pub struct MemoryQuotaExceeded;
 
@@ -144,7 +182,9 @@ impl std::error::Error for MemoryQuotaExceeded {}
 impl_display_as_debug!(MemoryQuotaExceeded);
 
 pub struct MemoryQuota {
-    in_use: AtomicUsize,
+    // We suppose the memory quota should not exceed the upper bound of `isize`.
+    // As we don't support 32bit(or lower) arch, this won't be a problem.
+    in_use: AtomicIsize,
     capacity: AtomicUsize,
 }
 
@@ -180,14 +220,26 @@ impl Drop for OwnedAllocated {
 
 impl MemoryQuota {
     pub fn new(capacity: usize) -> MemoryQuota {
+        let capacity = Self::adjust_capacity(capacity);
         MemoryQuota {
-            in_use: AtomicUsize::new(0),
+            in_use: AtomicIsize::new(0),
             capacity: AtomicUsize::new(capacity),
         }
     }
 
+    #[inline]
+    fn adjust_capacity(capacity: usize) -> usize {
+        // Value bigger than isize::MAX just means unlimited,
+        // so replace it with isize::MAX to avoid overflow.
+        std::cmp::min(capacity, isize::MAX as usize)
+    }
+
+    #[inline]
     pub fn in_use(&self) -> usize {
-        self.in_use.load(Ordering::Relaxed)
+        let value = self.in_use.load(Ordering::Relaxed);
+        // Saturating at the numeric bounds instead of overflowing.
+        // we handle negative overflow here to make `free` implementation simpler.
+        std::cmp::max(value, 0) as usize
     }
 
     /// Returns a floating number between [0, 1] presents the current memory
@@ -201,47 +253,47 @@ impl MemoryQuota {
     }
 
     pub fn set_capacity(&self, capacity: usize) {
+        let capacity = Self::adjust_capacity(capacity);
         self.capacity.store(capacity, Ordering::Relaxed);
     }
 
     pub fn alloc_force(&self, bytes: usize) {
-        self.in_use.fetch_add(bytes, Ordering::Release);
+        if bytes > MAX_MEMORY_ALLOC_SIZE {
+            warn!("bytes size exceeds the max memory alloc size, force alloc is ignored"; "bytes" => bytes);
+            return;
+        }
+        self.in_use.fetch_add(bytes as isize, Ordering::Relaxed);
     }
 
     pub fn alloc(&self, bytes: usize) -> Result<(), MemoryQuotaExceeded> {
-        let capacity = self.capacity.load(Ordering::Relaxed);
-        let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
-        loop {
-            if in_use_bytes + bytes > capacity {
-                return Err(MemoryQuotaExceeded);
-            }
-            let new_in_use_bytes = in_use_bytes + bytes;
-            match self.in_use.compare_exchange_weak(
-                in_use_bytes,
-                new_in_use_bytes,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return Ok(()),
-                Err(current) => in_use_bytes = current,
-            }
+        let capacity = self.capacity.load(Ordering::Relaxed) as isize;
+        let in_use_bytes = self.in_use.load(Ordering::Relaxed);
+        if bytes > capacity.saturating_sub(in_use_bytes) as usize || bytes > MAX_MEMORY_ALLOC_SIZE {
+            return Err(MemoryQuotaExceeded);
         }
+        let bytes = bytes as isize;
+        let new_in_use_bytes = self.in_use.fetch_add(bytes, Ordering::Relaxed);
+        if bytes > capacity - new_in_use_bytes {
+            self.in_use.fetch_sub(bytes, Ordering::Relaxed);
+            return Err(MemoryQuotaExceeded);
+        }
+        Ok(())
     }
 
     pub fn free(&self, bytes: usize) {
-        let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
-        loop {
-            // Saturating at the numeric bounds instead of overflowing.
-            let new_in_use_bytes = in_use_bytes - std::cmp::min(bytes, in_use_bytes);
-            match self.in_use.compare_exchange_weak(
-                in_use_bytes,
-                new_in_use_bytes,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return,
-                Err(current) => in_use_bytes = current,
-            }
+        // bytes higher than `MAX_MEMORY_ALLOC_SIZE` means the memory is acquired with
+        // `alloc_force`, so also ignore the `free` call.
+        if bytes > MAX_MEMORY_ALLOC_SIZE {
+            warn!("bytes size exceeds the max memory alloc size, free is ignored"; "bytes" => bytes);
+            return;
+        }
+        let bytes = bytes as isize;
+        let new_in_use_bytes = self.in_use.fetch_sub(bytes, Ordering::Relaxed) - bytes;
+        if new_in_use_bytes < 0 {
+            // handle overflow. This is just a conservative operation trying to minimize the
+            // impact in extreme scenario.
+            self.in_use
+                .fetch_add(std::cmp::min(-new_in_use_bytes, bytes), Ordering::Relaxed);
         }
     }
 }
@@ -263,6 +315,72 @@ mod tests {
         assert_eq!(quota.in_use(), 100);
         quota.free(95);
         assert_eq!(quota.in_use(), 5);
+    }
+
+    #[test]
+    fn test_memory_quota_multi_thread() {
+        let cap = 1000;
+        // use a number not devided by the cap.
+        let req = 6;
+        let num_threads = 10;
+        let quota = MemoryQuota::new(cap);
+
+        // first alloc more than free, the in_use should reach near the capacity but not
+        // exceed.
+        std::thread::scope(|s| {
+            let mut handlers = vec![];
+            for _i in 0..num_threads {
+                let h = s.spawn(|| {
+                    for j in 0..100 {
+                        let res = quota.alloc(req);
+                        if res.is_err() {
+                            let in_use = quota.in_use.load(Ordering::Relaxed) as usize;
+                            assert!(
+                                cap - num_threads * req < in_use
+                                    && in_use < cap + num_threads * req
+                            );
+                        } else if j % 3 == 0 {
+                            // do free randomly.
+                            quota.free(req);
+                        }
+                    }
+                });
+                handlers.push(h);
+            }
+            for h in handlers {
+                h.join().unwrap();
+            }
+        });
+        assert_eq!(quota.in_use(), cap - cap % req);
+
+        // test free more the alloc, the final result should be 0.
+        quota.free(cap / 2);
+        std::thread::scope(|s| {
+            let mut handlers = vec![];
+            for _i in 0..num_threads {
+                let h = s.spawn(|| {
+                    for j in 0..100 {
+                        if quota.alloc(req).is_ok() {
+                            quota.free(req);
+                        }
+                        // do random more free.
+                        if j % 2 == 0 {
+                            quota.free(req);
+                            let in_use = quota.in_use.load(Ordering::Relaxed);
+                            assert!(
+                                in_use < cap as isize && in_use > -((num_threads * req) as isize)
+                            );
+                        }
+                    }
+                });
+                handlers.push(h);
+            }
+            for h in handlers {
+                h.join().unwrap();
+            }
+        });
+        let in_use = quota.in_use.load(Ordering::Relaxed);
+        assert_eq!(in_use, 0);
     }
 
     #[test]
@@ -303,6 +421,16 @@ mod tests {
         assert_eq!(quota.in_use(), 12);
         drop(allocated2);
         assert_eq!(quota.in_use(), 4);
+
+        // test out of range alloc and free.
+        assert!(quota.alloc(MAX_MEMORY_ALLOC_SIZE * 2).is_err());
+
+        // in_use should not change after force_alloc with extreme big value.
+        let in_use = quota.in_use();
+        assert!(in_use > 0);
+        quota.alloc_force(MAX_MEMORY_ALLOC_SIZE * 2);
+        quota.free(MAX_MEMORY_ALLOC_SIZE * 2);
+        assert_eq!(quota.in_use(), in_use);
     }
 
     #[test]
