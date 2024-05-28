@@ -82,6 +82,8 @@ slog = { workspace = true }
 slog-global = { workspace = true }
 smallvec = "1.4"
 sst_importer = { workspace = true }
+strum = { version = "0.20", features = ["derive"] }
+strum_macros = "0.24"
 tempfile = "3.0"
 thiserror = "1.0"
 tidb_query_datatype = { workspace = true }
