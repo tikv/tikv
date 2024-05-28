@@ -15,7 +15,7 @@ use std::{
 use api_version::{ApiV2, KvFormat};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::FlowInfo;
+use engine_rocks::{FlowInfo, RocksEngine};
 use engine_traits::{
     raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range,
     WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -275,7 +275,9 @@ fn get_keys_in_region(keys: &mut Peekable<IntoIter<Key>>, region: &Region) -> Ve
     let mut keys_in_region = Vec::new();
 
     loop {
-        let Some(key) = keys.peek() else { break };
+        let Some(key) = keys.peek() else {
+            break;
+        };
         let key = key.as_encoded().as_slice();
 
         if key < region.get_start_key() {
@@ -753,17 +755,17 @@ impl<E: Engine> GcRunnerCore<E> {
             let delete_files_start_time = Instant::now();
             for cf in cfs {
                 local_storage
-                .delete_ranges_cf(
-                    &WriteOptions::default(),
-                    cf,
-                    DeleteStrategy::DeleteFiles,
-                    &[Range::new(&start_data_key, &end_data_key)],
-                )
-                .map_err(|e| {
-                    let e: Error = box_err!(e);
-                    warn!("unsafe destroy range failed at delete_files_in_range_cf"; "err" => ?e);
-                    e
-                })?;
+                    .delete_ranges_cf(
+                        &WriteOptions::default(),
+                        cf,
+                        DeleteStrategy::DeleteFiles,
+                        &[Range::new(&start_data_key, &end_data_key)],
+                    )
+                    .map_err(|e| {
+                        let e: Error = box_err!(e);
+                        warn!("unsafe destroy range failed at delete_files_in_range_cf"; "err" => ?e);
+                        e
+                    })?;
             }
 
             info!(
@@ -789,17 +791,17 @@ impl<E: Engine> GcRunnerCore<E> {
                         e
                     })?;
                 local_storage
-                .delete_ranges_cf(
-                    &WriteOptions::default(),
-                    cf,
-                    DeleteStrategy::DeleteBlobs,
-                    &[Range::new(&start_data_key, &end_data_key)],
-                )
-                .map_err(|e| {
-                    let e: Error = box_err!(e);
-                    warn!("unsafe destroy range failed at delete_blob_files_in_range"; "err" => ?e);
-                    e
-                })?;
+                    .delete_ranges_cf(
+                        &WriteOptions::default(),
+                        cf,
+                        DeleteStrategy::DeleteBlobs,
+                        &[Range::new(&start_data_key, &end_data_key)],
+                    )
+                    .map_err(|e| {
+                        let e: Error = box_err!(e);
+                        warn!("unsafe destroy range failed at delete_blob_files_in_range"; "err" => ?e);
+                        e
+                    })?;
             }
 
             info!(
@@ -938,7 +940,7 @@ impl<E: Engine> GcRunnerCore<E> {
     }
 
     #[inline]
-    fn run(&mut self, task: GcTask<E::Local>) {
+    fn run(&mut self, task: GcTask<<E::Local as MiscExt>::DiskEngine>) {
         let _io_type_guard = WithIoType::new(IoType::Gc);
         let enum_label = task.get_enum_label();
         GC_GCTASK_COUNTER_STATIC.get(enum_label).inc();
@@ -1088,10 +1090,10 @@ impl<E: Engine> GcRunner<E> {
 }
 
 impl<E: Engine> Runnable for GcRunner<E> {
-    type Task = GcTask<E::Local>;
+    type Task = GcTask<<E::Local as MiscExt>::DiskEngine>;
 
     #[inline]
-    fn run(&mut self, task: GcTask<E::Local>) {
+    fn run(&mut self, task: GcTask<<E::Local as MiscExt>::DiskEngine>) {
         // Refresh config before handle task
         self.inner.refresh_cfg();
 
@@ -1164,8 +1166,8 @@ where
     /// How many strong references. The worker will be stopped
     /// once there are no more references.
     refs: Arc<AtomicUsize>,
-    worker: Arc<Mutex<LazyWorker<GcTask<E::Local>>>>,
-    worker_scheduler: Scheduler<GcTask<E::Local>>,
+    worker: Arc<Mutex<LazyWorker<GcTask<<E::Local as MiscExt>::DiskEngine>>>>,
+    worker_scheduler: Scheduler<GcTask<<E::Local as MiscExt>::DiskEngine>>,
 
     gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
     feature_gate: FeatureGate,
@@ -1207,6 +1209,49 @@ impl<E: Engine> Drop for GcWorker<E> {
 }
 
 impl<E: Engine> GcWorker<E> {
+    pub fn stop(&self) -> Result<()> {
+        // Stop GcManager.
+        if let Some(h) = self.gc_manager_handle.lock().unwrap().take() {
+            h.stop()?;
+        }
+        // Stop self.
+        self.worker.lock().unwrap().stop();
+        Ok(())
+    }
+
+    /// Cleans up all keys in a range and quickly free the disk space. The range
+    /// might span over multiple regions, and the `ctx` doesn't indicate region.
+    /// The request will be done directly on RocksDB, bypassing the Raft layer.
+    /// User must promise that, after calling `destroy_range`, the range will
+    /// never be accessed any more. However, `destroy_range` is allowed to be
+    /// called multiple times on an single range.
+    pub fn unsafe_destroy_range(
+        &self,
+        ctx: Context,
+        start_key: Key,
+        end_key: Key,
+        callback: Callback<()>,
+    ) -> Result<()> {
+        GC_COMMAND_COUNTER_VEC_STATIC.unsafe_destroy_range.inc();
+
+        // Use schedule_force to allow unsafe_destroy_range to schedule even if
+        // the GC worker is full. This will help free up space in the case when
+        // the GC worker is busy with other tasks.
+        // Unsafe destroy range is in store level, so the number of them is
+        // quite small, so we don't need to worry about its memory usage.
+        self.worker_scheduler
+            .schedule_force(GcTask::UnsafeDestroyRange {
+                ctx,
+                start_key,
+                end_key,
+                callback,
+                region_info_provider: self.region_info_provider.clone(),
+            })
+            .or_else(handle_gc_task_schedule_error)
+    }
+}
+
+impl<E: Engine<Local: KvEngine<DiskEngine = RocksEngine>>> GcWorker<E> {
     pub fn new(
         engine: E,
         flow_info_sender: Sender<FlowInfo>,
@@ -1246,7 +1291,8 @@ impl<E: Engine> GcWorker<E> {
         );
 
         info!("initialize compaction filter to perform GC when necessary");
-        self.engine.kv_engine().init_compaction_filter(
+        let disk_engine = self.engine.kv_engine().map(|e| e.get_disk_engine().clone());
+        disk_engine.init_compaction_filter(
             cfg.self_store_id,
             safe_point.clone(),
             self.config_manager.clone(),
@@ -1289,17 +1335,7 @@ impl<E: Engine> GcWorker<E> {
         Ok(())
     }
 
-    pub fn stop(&self) -> Result<()> {
-        // Stop GcManager.
-        if let Some(h) = self.gc_manager_handle.lock().unwrap().take() {
-            h.stop()?;
-        }
-        // Stop self.
-        self.worker.lock().unwrap().stop();
-        Ok(())
-    }
-
-    pub fn scheduler(&self) -> Scheduler<GcTask<E::Local>> {
+    pub fn scheduler(&self) -> Scheduler<GcTask<<E::Local as MiscExt>::DiskEngine>> {
         self.worker_scheduler.clone()
     }
 
@@ -1310,37 +1346,6 @@ impl<E: Engine> GcWorker<E> {
                 region,
                 safe_point,
                 callback,
-            })
-            .or_else(handle_gc_task_schedule_error)
-    }
-
-    /// Cleans up all keys in a range and quickly free the disk space. The range
-    /// might span over multiple regions, and the `ctx` doesn't indicate region.
-    /// The request will be done directly on RocksDB, bypassing the Raft layer.
-    /// User must promise that, after calling `destroy_range`, the range will
-    /// never be accessed any more. However, `destroy_range` is allowed to be
-    /// called multiple times on an single range.
-    pub fn unsafe_destroy_range(
-        &self,
-        ctx: Context,
-        start_key: Key,
-        end_key: Key,
-        callback: Callback<()>,
-    ) -> Result<()> {
-        GC_COMMAND_COUNTER_VEC_STATIC.unsafe_destroy_range.inc();
-
-        // Use schedule_force to allow unsafe_destroy_range to schedule even if
-        // the GC worker is full. This will help free up space in the case when
-        // the GC worker is busy with other tasks.
-        // Unsafe destroy range is in store level, so the number of them is
-        // quite small, so we don't need to worry about its memory usage.
-        self.worker_scheduler
-            .schedule_force(GcTask::UnsafeDestroyRange {
-                ctx,
-                start_key,
-                end_key,
-                callback,
-                region_info_provider: self.region_info_provider.clone(),
             })
             .or_else(handle_gc_task_schedule_error)
     }
@@ -1528,7 +1533,6 @@ pub mod test_gc_worker {
 
 #[cfg(test)]
 mod tests {
-
     use std::{
         collections::{BTreeMap, BTreeSet},
         path::Path,

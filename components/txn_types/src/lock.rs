@@ -9,7 +9,6 @@ use tikv_util::{
         bytes::{self, BytesEncoder},
         number::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN},
     },
-    info,
     memory::HeapSize,
     warn,
 };

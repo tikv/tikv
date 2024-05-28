@@ -405,37 +405,6 @@ impl RangeCacheWriteBatchEntry {
 
         Ok(())
     }
-
-    // For lock cf, we delete directly rather than writing tombstone for performance
-    // purpose.
-    // todo(SpadeA): we need to verify the corretness of it before GA range cache
-    // engine.
-    fn delete_in_lock_cf(&self, seq: u64, handle: &SkiplistHandle, guard: &epoch::Guard) {
-        let seek_key = encode_seek_key(&self.key, seq);
-        let Some(mut entry) = handle.get_with_user_key(&seek_key, guard) else {
-            debug!(
-                "write to memory failed for lock cf, not get";
-                "key" => log_wrappers::Value::key(self.key.as_slice()),
-                "encoded_key" => log_wrappers::Value::key(seek_key.as_bytes()),
-            );
-            return;
-        };
-
-        let last_to_remove = InternalBytes::from_bytes(entry.key().as_bytes().clone());
-        while let Some(e) = entry.next() {
-            if e.key().same_user_key_with(&last_to_remove) {
-                handle.remove(e.key(), guard);
-                entry.move_next();
-            } else {
-                break;
-            }
-        }
-        handle.remove(&last_to_remove, guard);
-    }
-
-    fn lock_delete(&self) -> bool {
-        is_lock_cf(self.cf) && matches!(self.inner, WriteBatchEntryInternal::Deletion)
-    }
 }
 
 // group_write_batch_entries classifies the entries to two categories according

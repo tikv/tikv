@@ -21,9 +21,11 @@ use engine_rocks::{
 };
 use engine_traits::{KvEngine, MiscExt, MvccProperties, WriteBatch, WriteOptions};
 use file_system::{IoType, WithIoType};
+use hybrid_engine::HybridEngine;
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
 use raftstore::coprocessor::RegionInfoProvider;
+use region_cache_memory_engine::RangeCacheMemoryEngine;
 use tikv_util::{
     time::Instant,
     worker::{ScheduleError, Scheduler},
@@ -147,7 +149,7 @@ where
         safe_point: Arc<AtomicU64>,
         cfg_tracker: GcWorkerConfigManager,
         feature_gate: FeatureGate,
-        gc_scheduler: Scheduler<GcTask<EK>>,
+        gc_scheduler: Scheduler<GcTask<<EK as MiscExt>::DiskEngine>>,
         region_info_provider: Arc<dyn RegionInfoProvider>,
     );
 }
@@ -162,7 +164,7 @@ where
         _safe_point: Arc<AtomicU64>,
         _cfg_tracker: GcWorkerConfigManager,
         _feature_gate: FeatureGate,
-        _gc_scheduler: Scheduler<GcTask<EK>>,
+        _gc_scheduler: Scheduler<GcTask<<EK as MiscExt>::DiskEngine>>,
         _region_info_provider: Arc<dyn RegionInfoProvider>,
     ) {
         info!("Compaction filter is not supported for this engine.");
