@@ -7104,6 +7104,7 @@ dependencies = [
  "panic_hook",
  "rand 0.8.5",
  "slog",
+ "slog-global",
  "thiserror",
  "tikv_alloc",
  "tikv_util",

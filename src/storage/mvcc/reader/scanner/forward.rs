@@ -338,7 +338,6 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     self.met_newer_ts_data = NewerTsCheckState::Met;
                 }
 
-
                 info!(
                     "met version larger than start_ts";
                     "key" => log_wrappers::Value(current_key),

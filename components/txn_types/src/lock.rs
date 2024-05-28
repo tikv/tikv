@@ -9,7 +9,9 @@ use tikv_util::{
         bytes::{self, BytesEncoder},
         number::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN},
     },
+    info,
     memory::HeapSize,
+    warn,
 };
 
 use crate::{
@@ -319,9 +321,19 @@ impl Lock {
 
     pub fn parse(mut b: &[u8]) -> Result<Lock> {
         if b.is_empty() {
+            warn!(
+                "parse lock error";
+                "val" => log_wrappers::Value(b),
+            );
             return Err(Error::from(ErrorInner::BadFormatLock));
         }
-        let lock_type = LockType::from_u8(b.read_u8()?).ok_or(ErrorInner::BadFormatLock)?;
+        let lock_type = LockType::from_u8(b.read_u8()?).ok_or_else(|| {
+            warn!(
+                "parse lock error";
+                "val" => log_wrappers::Value(b),
+            );
+            ErrorInner::BadFormatLock
+        })?;
         let primary = bytes::decode_compact_bytes(&mut b)?;
         let ts = number::decode_var_u64(&mut b)?.into();
         let ttl = if b.is_empty() {

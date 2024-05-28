@@ -15,6 +15,7 @@ farmhash = "1.1.5"
 kvproto = { workspace = true }
 log_wrappers = { workspace = true }
 slog = { workspace = true }
+slog-global = { workspace = true }
 thiserror = "1.0"
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
