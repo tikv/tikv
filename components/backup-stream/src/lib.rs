@@ -1,10 +1,12 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 #![feature(slice_group_by)]
+#![feature(trait_alias)]
 #![feature(result_flattening)]
 #![feature(assert_matches)]
 #![feature(test)]
 
 mod checkpoint_manager;
+mod compact;
 pub mod config;
 mod endpoint;
 pub mod errors;

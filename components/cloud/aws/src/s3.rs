@@ -1,10 +1,8 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
     error::Error as StdError,
-    future::Future,
     io,
     pin::Pin,
-    task::ready,
     time::{Duration, SystemTime},
 };
 
@@ -31,7 +29,6 @@ use rusoto_sts::{StsAssumeRoleSessionCredentialsProvider, StsClient};
 use thiserror::Error;
 use tikv_util::{debug, stream::error_stream, time::Instant};
 use tokio::time::{sleep, timeout};
-use uuid::Uuid;
 
 use crate::util::{self, retry_and_count};
 
@@ -634,95 +631,63 @@ impl BlobStorage for S3Storage {
     }
 }
 
-struct GenerateWith<T, Fut: Future<Output = T>, Gen: FnMut() -> Fut> {
-    state: GenerateWithState<T, Fut>,
-    gen: Gen,
+struct S3Walker<'cli, 'arg> {
+    cli: &'cli S3Storage,
+    finished: bool,
+    cont_token: Option<String>,
+    prefix: &'arg str,
 }
 
-impl<T, Fut: Future<Output = T>, Gen: FnMut() -> Fut> GenerateWith<T, Fut, Gen> {
-    fn new(mut gen: Gen) -> Self {
-        Self {
-            state: GenerateWithState::Generating(gen()),
-            gen,
+impl<'cli, 'arg> S3Walker<'cli, 'arg> {
+    async fn one_page(&mut self) -> io::Result<Option<Vec<BlobObject>>> {
+        if self.finished {
+            return io::Result::Ok(None);
         }
-    }
-}
-
-enum GenerateWithState<T, Fut: Future<Output = T>> {
-    Generating(Fut),
-    Yield(T),
-}
-
-impl<T, Fut: Future<Output = T>, Gen: FnMut() -> Fut> Stream for GenerateWith<T, Fut, Gen> {
-    type Item = T;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        // SAFETY: We won't move the future in the generating state.
-        let this = unsafe { self.as_mut().get_unchecked_mut() };
-        loop {
-            match &mut this.state {
-                GenerateWithState::Generating(f) => {
-                    // SAFETY: `f` should be pinned because `self` is pinned.
-                    let data = ready!(unsafe { Pin::new_unchecked(f).poll(cx) });
-                    this.state = GenerateWithState::Yield(data);
-                }
-                GenerateWithState::Yield(_) => {
-                    let data = std::mem::replace(
-                        &mut this.state,
-                        GenerateWithState::Generating((this.gen)()),
-                    );
-                    if let GenerateWithState::Yield(data) = data {
-                        return std::task::Poll::Ready(Some(data));
-                    } else {
-                        unreachable!()
-                    }
-                }
-            }
-        }
+        let mut input = ListObjectsV2Request::default();
+        input.bucket = String::clone(&self.cli.config.bucket.bucket);
+        input.prefix = Some(self.prefix.to_owned());
+        input.max_keys = Some(128);
+        input.continuation_token = self.cont_token.clone();
+        let res = self
+            .cli
+            .client
+            .list_objects_v2(input)
+            .await
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        self.finished = !res.is_truncated.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "no IsTruncated in response")
+        })?;
+        self.cont_token = res.next_continuation_token;
+        let data = res
+            .contents
+            .unwrap_or_default()
+            .into_iter()
+            .map(|data| BlobObject {
+                key: data.key.unwrap_or_default(),
+            })
+            .collect::<Vec<_>>();
+        io::Result::Ok(Some(data))
     }
 }
 
 impl WalkBlobStorage for S3Storage {
-    fn walk(
-        &self,
-        prefix: &str,
-    ) -> impl TryStream<Ok = cloud::blob::BlobObject, Error = io::Error> + '_ {
-        let cont_token = Uuid::new_v4().to_string();
-        let prefix = prefix.to_owned();
-        GenerateWith::new(move || {
-            let prefix = prefix.clone();
-            let cont_token = cont_token.clone();
-            async move {
-                let mut input = ListObjectsV2Request::default();
-                input.bucket = String::clone(&self.config.bucket.bucket);
-                input.prefix = Some(prefix);
-                input.max_keys = Some(128);
-                input.continuation_token = Some(cont_token);
-                let res = self
-                    .client
-                    .list_objects_v2(input)
-                    .await
-                    .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
-                let finished = !res.is_truncated.ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::InvalidData, "no IsTruncated in response")
-                })?;
-                let data = res
-                    .contents
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|data| BlobObject {
-                        key: data.key.unwrap_or_default(),
-                    })
-                    .collect::<Vec<_>>();
-                io::Result::Ok((data, finished))
-            }
+    fn walk<'c, 'a: 'c, 'b: 'c>(
+        &'a self,
+        prefix: &'b str,
+    ) -> Pin<Box<dyn Stream<Item = std::result::Result<BlobObject, io::Error>> + 'c>> {
+        let walker = S3Walker {
+            cli: self,
+            finished: false,
+            cont_token: None,
+            prefix,
+        };
+        let s = stream::try_unfold(walker, |mut w| async move {
+            let res = w.one_page().await?;
+            io::Result::Ok(res.map(|v| (v, w)))
         })
-        .try_take_while(|(_, finished)| futures::future::ok(*finished))
-        .map_ok(|(data, _)| stream::iter(data.into_iter().map(Ok)))
-        .try_flatten()
+        .map_ok(|data| stream::iter(data.into_iter().map(Ok)))
+        .try_flatten();
+        Box::pin(s)
     }
 }
 
@@ -735,6 +700,29 @@ mod tests {
     use tikv_util::stream::block_on_external_io;
 
     use super::*;
+
+    #[test]
+    #[ignore]
+    fn test_somewhat() {
+        let mut bucket = BucketConf::default(StringNonEmpty::opt("astro".to_owned()).unwrap());
+        bucket.endpoint = StringNonEmpty::opt("http://10.2.7.193:9000".to_owned());
+        let s3 = Config::default(bucket);
+        let s3 = Config {
+            access_key_pair: Some(AccessKeyPair {
+                access_key: StringNonEmpty::opt("minioadmin".to_owned()).unwrap(),
+                secret_access_key: StringNonEmpty::opt("minioadmin".to_owned()).unwrap(),
+                session_token: None,
+            }),
+            force_path_style: true,
+            ..s3
+        };
+
+        let storage = S3Storage::new(s3).unwrap();
+        let s = storage.walk("tpcc-1000-incr/v1/backupmeta");
+        let items = block_on_external_io(TryStreamExt::try_collect::<Vec<_>>(s));
+        println!("{:?}", items);
+        println!("{}", items.unwrap().len());
+    }
 
     #[test]
     fn test_s3_get_content_md5() {

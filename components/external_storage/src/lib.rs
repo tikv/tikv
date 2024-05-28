@@ -32,6 +32,7 @@ use tikv_util::{
 use tokio::time::timeout;
 
 mod hdfs;
+pub use cloud::blob::WalkBlobStorage;
 pub use hdfs::{HdfsConfig, HdfsStorage};
 pub mod local;
 pub use local::LocalStorage;

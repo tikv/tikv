@@ -53,12 +53,16 @@ pub trait BlobStorage: 'static + Send + Sync {
     fn get_part(&self, name: &str, off: u64, len: u64) -> BlobStream<'_>;
 }
 
+#[derive(Debug)]
 pub struct BlobObject {
     pub key: String,
 }
 
 pub trait WalkBlobStorage: 'static + Send + Sync {
-    fn walk(&self, prefix: &str) -> impl TryStream<Ok = BlobObject, Error = io::Error> + '_;
+    fn walk<'c, 'a: 'c, 'b: 'c>(
+        &'a self,
+        prefix: &'b str,
+    ) -> Pin<Box<dyn Stream<Item = std::result::Result<BlobObject, io::Error>> + 'c>>;
 }
 
 impl BlobConfig for dyn BlobStorage {
