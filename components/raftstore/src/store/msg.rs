@@ -952,7 +952,7 @@ impl<EK: KvEngine> StoreMsg<EK> {
             StoreMsg::GcSnapshotFinish => 10,
             StoreMsg::AwakenRegions { .. } => 11,
             #[cfg(any(test, feature = "testexport"))]
-            StoreMsg::Validate(_) => 13,
+            StoreMsg::Validate(_) => 12,
         }
     }
 }
