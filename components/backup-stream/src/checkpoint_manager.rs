@@ -10,7 +10,7 @@ use futures::{
 use grpcio::{RpcStatus, RpcStatusCode, WriteFlags};
 use kvproto::{
     errorpb::{Error as PbError, *},
-    logbackuppb::{FlushEvent, SubscribeFlushEventResponse},
+    logbackup::{FlushEvent, SubscribeFlushEventResponse},
     metapb::Region,
 };
 use pd_client::PdClient;
@@ -92,7 +92,7 @@ impl SubscriptionManager {
         for (id, sub) in &mut self.subscribers {
             let send_all = async {
                 for es in events.chunks(1024) {
-                    let mut resp = SubscribeFlushEventResponse::new();
+                    let mut resp = SubscribeFlushEventResponse::default();
                     resp.set_events(es.to_vec().into());
                     sub.feed((resp, WriteFlags::default())).await?;
                 }
@@ -128,7 +128,7 @@ impl SubscriptionManager {
 // Note: can we make it more generic...?
 #[cfg(not(test))]
 pub type Subscription =
-    grpcio::ServerStreamingSink<kvproto::logbackuppb::SubscribeFlushEventResponse>;
+    grpcio::ServerStreamingSink<kvproto::logbackup::SubscribeFlushEventResponse>;
 
 #[cfg(test)]
 pub type Subscription = tests::MockSink;
@@ -349,7 +349,7 @@ impl CheckpointManager {
         if let Some(mgr) = self.manager_handle.as_mut() {
             let r = items
                 .map(|(r, ts)| {
-                    let mut f = FlushEvent::new();
+                    let mut f = FlushEvent::default();
                     f.set_checkpoint(ts.into_inner());
                     f.set_start_key(r.start_key);
                     f.set_end_key(r.end_key);
@@ -417,8 +417,8 @@ impl CheckpointManager {
 }
 
 fn not_leader(r: u64) -> PbError {
-    let mut err = PbError::new();
-    let mut nl = NotLeader::new();
+    let mut err = PbError::default();
+    let mut nl = NotLeader::default();
     nl.set_region_id(r);
     err.set_not_leader(nl);
     err.set_message(
@@ -427,8 +427,8 @@ fn not_leader(r: u64) -> PbError {
 }
 
 fn epoch_not_match(id: u64, sent: u64, real: u64) -> PbError {
-    let mut err = PbError::new();
-    let en = EpochNotMatch::new();
+    let mut err = PbError::default();
+    let en = EpochNotMatch::default();
     err.set_epoch_not_match(en);
     err.set_message(format!(
         "the region {} has recorded version {}, but you sent {}",
@@ -614,7 +614,7 @@ pub mod tests {
 
     use futures::{future::ok, Sink};
     use grpcio::{RpcStatus, RpcStatusCode};
-    use kvproto::{logbackuppb::SubscribeFlushEventResponse, metapb::*};
+    use kvproto::{logbackup::SubscribeFlushEventResponse, metapb::*};
     use pd_client::{PdClient, PdFuture};
     use txn_types::TimeStamp;
 

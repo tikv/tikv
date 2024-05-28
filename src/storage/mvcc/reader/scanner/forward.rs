@@ -4,7 +4,7 @@
 use std::{borrow::Cow, cmp::Ordering};
 
 use engine_traits::CF_DEFAULT;
-use kvproto::kvrpcpb::{ExtraOp, IsolationLevel, WriteConflictReason};
+use kvproto::kvrpcpb::{write_conflict::Reason as WriteConflictReason, ExtraOp, IsolationLevel};
 use txn_types::{Key, LastChange, Lock, LockType, OldValue, TimeStamp, Value, WriteRef, WriteType};
 
 use super::ScannerConfig;
@@ -2143,7 +2143,7 @@ mod latest_entry_tests {
 #[cfg(test)]
 mod delta_entry_tests {
     use engine_traits::{CF_LOCK, CF_WRITE};
-    use kvproto::kvrpcpb::{Context, PrewriteRequestPessimisticAction::*};
+    use kvproto::kvrpcpb::{prewrite_request::PessimisticAction::*, Context};
     use txn_types::{is_short_value, SHORT_VALUE_MAX_LEN};
 
     use super::{super::ScannerBuilder, test_util::*, *};

@@ -1,7 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use futures::channel::mpsc::UnboundedSender;
-use kvproto::brpb::CheckAdminResponse;
+use kvproto::backup::CheckAdminResponse;
 use raftstore::store::snapshot_backup::{SnapshotBrHandle, SnapshotBrWaitApplyRequest};
 use tikv_util::box_err;
 

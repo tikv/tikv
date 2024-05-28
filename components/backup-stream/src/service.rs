@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use grpcio::RpcContext;
-use kvproto::{logbackuppb::*, metapb::Region};
+use kvproto::{logbackup::*, metapb::Region};
 use tikv_util::{warn, worker::Scheduler};
 
 use crate::{
@@ -24,7 +24,7 @@ impl Service {
 }
 
 fn id_of(region: &Region) -> RegionIdentity {
-    let mut id = RegionIdentity::new();
+    let mut id = RegionIdentity::default();
     id.set_id(region.get_id());
     id.set_epoch_version(region.get_region_epoch().get_version());
     id
@@ -32,7 +32,7 @@ fn id_of(region: &Region) -> RegionIdentity {
 
 impl From<RegionIdWithVersion> for RegionIdentity {
     fn from(val: RegionIdWithVersion) -> Self {
-        let mut id = RegionIdentity::new();
+        let mut id = RegionIdentity::default();
         id.set_id(val.region_id);
         id.set_epoch_version(val.region_epoch_version);
         id
@@ -54,25 +54,25 @@ impl LogBackup for Service {
         let t = Task::RegionCheckpointsOp(RegionCheckpointOperation::Get(
             RegionSet::Regions(regions),
             Box::new(move |rs| {
-                let mut resp = GetLastFlushTsOfRegionResponse::new();
+                let mut resp = GetLastFlushTsOfRegionResponse::default();
                 resp.set_checkpoints(
                     rs.into_iter()
                         .map(|r| match r {
                             GetCheckpointResult::Ok { region, checkpoint } => {
-                                let mut r = RegionCheckpoint::new();
+                                let mut r = RegionCheckpoint::default();
                                 let id = id_of(&region);
                                 r.set_region(id);
                                 r.set_checkpoint(checkpoint.into_inner());
                                 r
                             }
                             GetCheckpointResult::NotFound { id, err } => {
-                                let mut r = RegionCheckpoint::new();
+                                let mut r = RegionCheckpoint::default();
                                 r.set_region(id.into());
                                 r.set_err(err);
                                 r
                             }
                             GetCheckpointResult::EpochNotMatch { region, err } => {
-                                let mut r = RegionCheckpoint::new();
+                                let mut r = RegionCheckpoint::default();
                                 r.set_region(id_of(&region));
                                 r.set_err(err);
                                 r
@@ -93,9 +93,9 @@ impl LogBackup for Service {
     fn subscribe_flush_event(
         &mut self,
         _ctx: grpcio::RpcContext<'_>,
-        _req: kvproto::logbackuppb::SubscribeFlushEventRequest,
+        _req: kvproto::logbackup::SubscribeFlushEventRequest,
         #[allow(unused_variables)] sink: grpcio::ServerStreamingSink<
-            kvproto::logbackuppb::SubscribeFlushEventResponse,
+            kvproto::logbackup::SubscribeFlushEventResponse,
         >,
     ) {
         #[cfg(test)]

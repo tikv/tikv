@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::kvrpcpb::WriteConflictReason;
+use kvproto::kvrpcpb::write_conflict::Reason as WriteConflictReason;
 // #[PerformanceCriticalPath]
 use txn_types::{Key, LastChange, OldValue, PessimisticLock, TimeStamp, Value, Write, WriteType};
 
@@ -429,9 +429,9 @@ fn is_already_exist(res: &MvccError) -> bool {
 
 pub mod tests {
     use concurrency_manager::ConcurrencyManager;
-    use kvproto::kvrpcpb::Context;
     #[cfg(test)]
-    use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
+    use kvproto::kvrpcpb::prewrite_request::PessimisticAction::*;
+    use kvproto::kvrpcpb::Context;
     use txn_types::{Lock, TimeStamp};
 
     use super::*;

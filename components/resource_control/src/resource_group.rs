@@ -90,10 +90,10 @@ impl Default for ResourceGroupManager {
         };
 
         // init the default resource group by default.
-        let mut default_group = PbResourceGroup::new();
+        let mut default_group = PbResourceGroup::default();
         default_group.name = DEFAULT_RESOURCE_GROUP_NAME.into();
         default_group.priority = MEDIUM_PRIORITY;
-        default_group.mode = GroupMode::RuMode;
+        default_group.mode = GroupMode::RuMode.into();
         default_group
             .mut_r_u_settings()
             .mut_r_u()
@@ -732,7 +732,7 @@ pub(crate) mod tests {
     ) -> PbResourceGroup {
         use kvproto::resource_manager::{GroupRawResourceSettings, GroupRequestUnitSettings};
 
-        let mut group = PbResourceGroup::new();
+        let mut group = PbResourceGroup::default();
         group.set_name(name);
         let mode = if is_ru_mode {
             GroupMode::RuMode
@@ -743,14 +743,14 @@ pub(crate) mod tests {
         group.set_priority(group_priority);
         if is_ru_mode {
             assert!(read_tokens == write_tokens);
-            let mut ru_setting = GroupRequestUnitSettings::new();
+            let mut ru_setting = GroupRequestUnitSettings::default();
             ru_setting
                 .mut_r_u()
                 .mut_settings()
                 .set_fill_rate(read_tokens);
             group.set_r_u_settings(ru_setting);
         } else {
-            let mut resource_setting = GroupRawResourceSettings::new();
+            let mut resource_setting = GroupRawResourceSettings::default();
             resource_setting
                 .mut_cpu()
                 .mut_settings()

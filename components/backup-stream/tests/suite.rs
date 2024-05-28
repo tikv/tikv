@@ -25,10 +25,10 @@ use engine_rocks::RocksEngine;
 use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt};
 use grpcio::{ChannelBuilder, Server, ServerBuilder};
 use kvproto::{
-    brpb::{CompressionType, Local, Metadata, StorageBackend},
+    backup::{CompressionType, Local, Metadata, StorageBackend},
     kvrpcpb::*,
-    logbackuppb::{SubscribeFlushEventRequest, SubscribeFlushEventResponse},
-    logbackuppb_grpc::{create_log_backup, LogBackupClient},
+    logbackup::{SubscribeFlushEventRequest, SubscribeFlushEventResponse},
+    logbackup_grpc::{create_log_backup, LogBackupClient},
     tikvpb::*,
 };
 use pd_client::PdClient;

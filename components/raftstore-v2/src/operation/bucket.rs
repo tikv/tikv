@@ -102,7 +102,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             msg.set_region_epoch(self.region().get_region_epoch().clone());
             let extra_msg = msg.mut_extra_msg();
             extra_msg.set_type(ExtraMessageType::MsgRefreshBuckets);
-            let mut refresh_buckets = RefreshBuckets::new();
+            let mut refresh_buckets = RefreshBuckets::default();
             refresh_buckets.set_version(version);
             refresh_buckets.set_keys(keys.clone().into());
             extra_msg.set_refresh_buckets(refresh_buckets);

@@ -199,7 +199,7 @@ impl CachedRawClient {
         let client = RawClient {
             stub: lame_stub,
             target_info: TargetInfo::new("0.0.0.0:0".to_string(), ""),
-            members: GetMembersResponse::new(),
+            members: GetMembersResponse::default(),
         };
         let context = ConnectContext {
             cfg,

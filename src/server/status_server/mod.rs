@@ -837,17 +837,13 @@ fn into_debug_request_group(mut rg: ResourceGroup) -> ResourceGroupSetting {
         name: rg.name,
         ru: rg
             .r_u_settings
-            .get_ref()
-            .get_r_u()
-            .get_settings()
-            .get_fill_rate(),
+            .as_ref()
+            .map_or(0, |r| r.get_r_u().get_settings().get_fill_rate()),
         priority: rg.priority,
         burst_limit: rg
             .r_u_settings
-            .get_ref()
-            .get_r_u()
-            .get_settings()
-            .get_burst_limit(),
+            .as_ref()
+            .map_or(0, |r| r.get_r_u().get_settings().get_burst_limit()),
         background: BackgroundSetting {
             task_types: rg
                 .background_settings

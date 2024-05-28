@@ -24,7 +24,6 @@ use grpcio::{
 };
 use health_controller::HealthController;
 use kvproto::{coprocessor::*, kvrpcpb::*, mpp::*, raft_serverpb::*, tikvpb::*};
-use protobuf::RepeatedField;
 use raft::eraftpb::MessageType;
 use raftstore::{
     store::{
@@ -1197,7 +1196,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let task = async move {
             let res = f.await?;
             let mut response = GetLockWaitInfoResponse::default();
-            response.set_entries(RepeatedField::from_vec(res));
+            response.set_entries(res);
             sink.success(response).await?;
             ServerResult::Ok(())
         }
@@ -1471,7 +1470,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
 }
 
 fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
-    use BatchCommandsResponse_Response_oneof_cmd::*;
+    use kvproto::tikvpb::batch_commands_response::response::Cmd::*;
     let now = Instant::now();
     for (resp, measure) in measures
         .batch_resp
@@ -2468,18 +2467,18 @@ txn_command_future!(future_flush, FlushRequest, FlushResponse, (v, resp) {
 });
 
 pub mod batch_commands_response {
-    pub type Response = kvproto::tikvpb::BatchCommandsResponseResponse;
+    pub type Response = kvproto::tikvpb::batch_commands_response::Response;
 
     pub mod response {
-        pub type Cmd = kvproto::tikvpb::BatchCommandsResponse_Response_oneof_cmd;
+        pub type Cmd = kvproto::tikvpb::batch_commands_response::response::Cmd;
     }
 }
 
 pub mod batch_commands_request {
-    pub type Request = kvproto::tikvpb::BatchCommandsRequestRequest;
+    pub type Request = kvproto::tikvpb::batch_commands_request::Request;
 
     pub mod request {
-        pub type Cmd = kvproto::tikvpb::BatchCommandsRequest_Request_oneof_cmd;
+        pub type Cmd = kvproto::tikvpb::batch_commands_request::request::Cmd;
     }
 }
 
@@ -2613,7 +2612,7 @@ impl HealthFeedbackAttacher {
         let mut requested_feedback = None;
 
         for r in resp.responses.iter_mut().flat_map(|r| &mut r.cmd) {
-            if let BatchCommandsResponse_Response_oneof_cmd::GetHealthFeedback(r) = r {
+            if let batch_commands_response::response::Cmd::GetHealthFeedback(r) = r {
                 if requested_feedback.is_none() {
                     requested_feedback = Some(self.gen_health_feedback_pb());
                 }
@@ -2763,7 +2762,7 @@ mod tests {
         let resp_with_get_health_feedback = || {
             let mut resp = BatchCommandsResponse::default();
             let mut resp_item = BatchCommandsResponseResponse::default();
-            resp_item.cmd = Some(BatchCommandsResponse_Response_oneof_cmd::GetHealthFeedback(
+            resp_item.cmd = Some(batch_commands_response::response::Cmd::GetHealthFeedback(
                 GetHealthFeedbackResponse::default(),
             ));
             resp.responses.push(resp_item);
@@ -2780,7 +2779,7 @@ mod tests {
         // info.
         fn get_feedback_in_response(resp: &BatchCommandsResponseResponse) -> &HealthFeedback {
             match resp.cmd {
-                Some(BatchCommandsResponse_Response_oneof_cmd::GetHealthFeedback(ref f)) => {
+                Some(batch_commands_response::response::Cmd::GetHealthFeedback(ref f)) => {
                     assert!(!f.has_region_error());
                     f.get_health_feedback()
                 }

@@ -955,7 +955,7 @@ pub mod tests {
         WriteBatch, WriteBatchExt, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
     };
     use kvproto::{
-        kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*},
+        kvrpcpb::{prewrite_request::PessimisticAction::*, AssertionLevel, Context},
         metapb::{Peer, Region},
     };
     use pd_client::FeatureGate;

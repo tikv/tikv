@@ -15,7 +15,7 @@ use engine_traits::{name_to_cf, raw_ttl::ttl_current_ts, CfName, KvEngine, SstCo
 use external_storage::{create_storage, BackendConfig, ExternalStorage, HdfsConfig};
 use futures::{channel::mpsc::*, executor::block_on};
 use kvproto::{
-    brpb::*,
+    backup::*,
     encryptionpb::EncryptionMethod,
     kvrpcpb::{ApiVersion, Context, IsolationLevel, KeyRange},
     metapb::*,
@@ -1035,7 +1035,7 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     match stat {
                         Err(err) => {
                             error_unknown!(%err; "error during backup"; "region" => ?brange.region,);
-                            let mut resp = BackupResponse::new();
+                            let mut resp = BackupResponse::default();
                             resp.set_error(err.into());
                             if let Err(err) =  resp_tx.unbounded_send(resp) {
                                 warn!("failed to send response"; "err" => ?err)

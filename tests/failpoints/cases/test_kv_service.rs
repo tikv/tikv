@@ -4,7 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
-    kvrpcpb::{PrewriteRequestPessimisticAction::SkipPessimisticCheck, *},
+    kvrpcpb::{prewrite_request::PessimisticAction::SkipPessimisticCheck, *},
     tikvpb::TikvClient,
 };
 use test_raftstore::{

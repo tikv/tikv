@@ -19,7 +19,7 @@ use futures_util::{
 };
 use grpcio::{RpcStatus, RpcStatusCode, WriteFlags};
 use kvproto::{
-    brpb::{
+    backup::{
         PrepareSnapshotBackupEventType as PEvnT, PrepareSnapshotBackupRequest as PReq,
         PrepareSnapshotBackupRequestType as PReqT, PrepareSnapshotBackupResponse as PResp,
     },
@@ -81,7 +81,7 @@ impl ResultSink {
                     return Err(grpcio::Error::RpcFinished(Some(status)));
                 }
                 HandleErr::SendErrResp(err) => {
-                    let mut resp = PResp::new();
+                    let mut resp = PResp::default();
                     error_extra_info(&mut resp);
                     resp.set_error(err);
                     self.0.send((resp, WriteFlags::default())).await?;
@@ -101,12 +101,12 @@ impl From<Error> for HandleErr {
             )),
             Error::RaftStore(r) => HandleErr::SendErrResp(errorpb::Error::from(r)),
             Error::WaitApplyAborted(reason) => HandleErr::SendErrResp({
-                let mut err = errorpb::Error::new();
+                let mut err = errorpb::Error::default();
                 err.set_message(format!("wait apply has been aborted, perhaps epoch not match or leadership changed, note = {:?}", reason));
                 match reason {
                     Some(AbortReason::EpochNotMatch(enm)) => err.set_epoch_not_match(enm),
                     Some(AbortReason::StaleCommand { .. }) => {
-                        err.set_stale_command(StaleCommand::new())
+                        err.set_stale_command(StaleCommand::default())
                     }
                     _ => {}
                 }
@@ -177,7 +177,7 @@ impl<SR: SnapshotBrHandle> Env<SR> {
 
     fn update_lease(&self, lease_dur: Duration) -> Result<PResp> {
         self.check_initialized()?;
-        let mut event = PResp::new();
+        let mut event = PResp::default();
         event.set_ty(PEvnT::UpdateLeaseResult);
         event.set_last_lease_is_valid(self.rejector.update_lease(lease_dur));
         Ok(event)
@@ -186,7 +186,7 @@ impl<SR: SnapshotBrHandle> Env<SR> {
     fn reset(&self) -> PResp {
         let rejected = !self.rejector.allowed();
         self.rejector.reset();
-        let mut event = PResp::new();
+        let mut event = PResp::default();
         event.set_ty(PEvnT::UpdateLeaseResult);
         event.set_last_lease_is_valid(rejected);
         event
@@ -337,7 +337,7 @@ impl<SR: SnapshotBrHandle + 'static> StreamHandleLoop<SR> {
                 },
                 StreamHandleEvent::WaitApplyDone(region, res) => {
                     let resp = res.map(|_| {
-                        let mut resp = PResp::new();
+                        let mut resp = PResp::default();
                         resp.set_region(region.clone());
                         resp.set_ty(PEvnT::WaitApplyDone);
                         resp

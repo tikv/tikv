@@ -842,11 +842,7 @@ mod tests {
         enum_expr.mut_val().write_u64(2u64).unwrap();
         let mut field_type = FieldType::new();
         field_type.set_tp(FieldTypeTp::Enum.to_u8().unwrap() as i32);
-        let elems = protobuf::RepeatedField::from_slice(&[
-            String::from("c"),
-            String::from("b"),
-            String::from("a"),
-        ]);
+        let elems = vec![String::from("c"), String::from("b"), String::from("a")];
         field_type.set_elems(elems);
         enum_expr.set_field_type(field_type);
 

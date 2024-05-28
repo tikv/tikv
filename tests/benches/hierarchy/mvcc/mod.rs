@@ -2,7 +2,7 @@
 
 use concurrency_manager::ConcurrencyManager;
 use criterion::{black_box, BatchSize, Bencher, Criterion};
-use kvproto::kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*};
+use kvproto::kvrpcpb::{prewrite_request::PessimisticAction::*, AssertionLevel, Context};
 use test_util::KvGenerator;
 use tikv::storage::{
     kv::{Engine, WriteData},

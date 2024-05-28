@@ -2,7 +2,6 @@
 
 use std::cmp::Ordering;
 
-use bytes::Bytes;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     disk_usage::DiskUsage,
@@ -132,7 +131,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         // It's only necessary to ping the target peer, but ping all for simplicity.
         self.raft_group_mut().ping();
 
-        let mut msg = eraftpb::Message::new();
+        let mut msg = eraftpb::Message::default();
         msg.set_to(peer.get_id());
         msg.set_msg_type(eraftpb::MessageType::MsgTransferLeader);
         msg.set_from(self.peer_id());
@@ -315,14 +314,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         &mut self,
         reply_cmd: bool, // whether it is a reply to a TransferLeader command
     ) {
-        let mut msg = eraftpb::Message::new();
+        let mut msg = eraftpb::Message::default();
         msg.set_from(self.peer_id());
         msg.set_to(self.leader_id());
         msg.set_msg_type(eraftpb::MessageType::MsgTransferLeader);
         msg.set_index(self.storage().apply_state().applied_index);
         msg.set_log_term(self.term());
         if reply_cmd {
-            msg.set_context(Bytes::from_static(TRANSFER_LEADER_COMMAND_REPLY_CTX));
+            msg.set_context(TRANSFER_LEADER_COMMAND_REPLY_CTX.to_vec());
         }
         self.raft_group_mut().raft.msgs.push(msg);
     }

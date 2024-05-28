@@ -382,7 +382,7 @@ fn test_cdc_observed_before_incremental_scan_snapshot() {
             if let Some(Event_oneof_event::Entries(ref entries)) = event.event {
                 for row in entries.get_entries() {
                     row_count += 1;
-                    if row.r_type == EventLogType::Initialized {
+                    if row.r#type == EventLogType::Initialized {
                         initialized_pos = row_count;
                     }
                 }

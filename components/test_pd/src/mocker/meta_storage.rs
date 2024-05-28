@@ -113,9 +113,9 @@ impl PdMocker for MetaStorage {
                 let mut event = mpb::Event::new();
                 event.set_kv(convert_kv(x.pair.clone()));
                 match x.kind {
-                    KvEventType::Put => event.set_type(mpb::EventEventType::Put),
+                    KvEventType::Put => event.set_type(mpb::event::EventType::Put),
                     KvEventType::Delete => {
-                        event.set_type(mpb::EventEventType::Delete);
+                        event.set_type(mpb::event::EventType::Delete);
                         event.set_prev_kv(convert_kv(x.pair));
                     }
                 }

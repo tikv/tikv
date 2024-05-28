@@ -14,7 +14,8 @@ use engine_traits::CF_WRITE;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::{
-        Mutation, Op, PessimisticLockRequest, PrewriteRequest, PrewriteRequestPessimisticAction::*,
+        prewrite_request::PessimisticAction::*, Mutation, Op, PessimisticLockRequest,
+        PrewriteRequest,
     },
     metapb::Region,
     pdpb::{self, CheckPolicy},

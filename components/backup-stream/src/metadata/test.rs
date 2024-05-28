@@ -7,7 +7,7 @@ use std::{
     iter::FromIterator,
 };
 
-use kvproto::brpb::{Noop, StorageBackend};
+use kvproto::backup::{Noop, StorageBackend};
 use tokio_stream::StreamExt;
 
 use super::{keys::MetaKey, MetadataClient, StreamTask};

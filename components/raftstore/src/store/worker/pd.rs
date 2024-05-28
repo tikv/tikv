@@ -1312,7 +1312,7 @@ where
                             for mut demote in plan.take_demotes().into_iter() {
                                 if let Err(e) = handle.send_demote_peers(
                                     demote.get_region_id(),
-                                    demote.take_failed_voters().into_vec(),
+                                    demote.take_failed_voters(),
                                     syncer.clone(),
                                 ) {
                                     error!("fail to send update peer list message for recovery"; "err" => ?e);

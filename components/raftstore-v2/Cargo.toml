@@ -48,7 +48,7 @@ pd_client = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { workspace = true }
-raft-proto = { version = "0.7.0" }
+raft-proto = { workspace = true }
 raftstore = { workspace = true }
 rand = "0.8.3"
 resource_control = { workspace = true }

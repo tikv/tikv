@@ -295,7 +295,7 @@ mod tests {
 
     use engine_rocks::{ReadPerfInstant, RocksEngine};
     use engine_traits::{KvEngine, MiscExt};
-    use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
+    use kvproto::kvrpcpb::prewrite_request::PessimisticAction::*;
     use tikv::{
         config::DbConfig,
         storage::{kv::TestEngineBuilder, txn::tests::*},

@@ -21,7 +21,7 @@ use engine_rocks::ReadPerfInstant;
 use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 use futures::{ready, task::Poll};
 use kvproto::{
-    brpb::CompressionType,
+    backup::CompressionType,
     metapb::Region,
     raft_cmdpb::{CmdType, Request},
 };
@@ -1077,7 +1077,7 @@ mod test {
 
     #[tokio::test]
     async fn test_compression_writer() {
-        use kvproto::brpb::CompressionType;
+        use kvproto::backup::CompressionType;
         use tempfile::TempDir;
         use tokio::{fs::File, io::AsyncReadExt};
 

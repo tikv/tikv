@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::kvrpcpb::{IsolationLevel, WriteConflictReason};
+use kvproto::kvrpcpb::{write_conflict::Reason as WriteConflictReason, IsolationLevel};
 use tikv_kv::SEEK_BOUND;
 use txn_types::{Key, LastChange, Lock, LockType, TimeStamp, TsSet, Value, WriteRef, WriteType};
 
@@ -419,7 +419,7 @@ impl<S: Snapshot> PointGetter<S> {
 #[cfg(test)]
 mod tests {
     use engine_rocks::ReadPerfInstant;
-    use kvproto::kvrpcpb::{Assertion, AssertionLevel, PrewriteRequestPessimisticAction::*};
+    use kvproto::kvrpcpb::{prewrite_request::PessimisticAction::*, Assertion, AssertionLevel};
     use tidb_query_datatype::{
         codec::row::v2::{
             encoder_for_test::{prepare_cols_for_test, RowEncoder},

@@ -29,7 +29,7 @@ use grpcio::{
     ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink,
     UnarySink, WriteFlags,
 };
-use kvproto::{raft_serverpb::StoreIdent, recoverdatapb::*};
+use kvproto::{raft_serverpb::StoreIdent, recover_data::*};
 use raftstore::{
     router::RaftStoreRouter,
     store::{

@@ -16,7 +16,7 @@ use futures_util::{
     io::{AsyncRead, AsyncReadExt},
     stream::TryStreamExt,
 };
-pub use kvproto::brpb::S3 as InputConfig;
+pub use kvproto::backup::S3 as InputConfig;
 use rusoto_core::{request::DispatchSignedRequest, ByteStream, RusotoError};
 use rusoto_credential::{ProvideAwsCredentials, StaticProvider};
 use rusoto_s3::{util::AddressingStyle, *};

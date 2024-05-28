@@ -49,7 +49,7 @@ fn test_break_leadership_on_restart() {
     raft_msg.set_to_peer(new_peer(3, 3));
     raft_msg.mut_region_epoch().version = 1;
     raft_msg.mut_region_epoch().conf_ver = 3;
-    raft_msg.mut_message().msg_type = MessageType::MsgHeartbeat;
+    raft_msg.mut_message().msg_type = MessageType::MsgHeartbeat as i32;
     raft_msg.mut_message().from = 1;
     raft_msg.mut_message().to = 3;
     raft_msg.mut_message().term = 6;

@@ -137,7 +137,7 @@ impl From<Record> for Vec<GroupTagRecordItem> {
     fn from(record: Record) -> Self {
         let mut items = Vec::with_capacity(record.timestamps.len());
         for n in 0..record.timestamps.len() {
-            let mut item = GroupTagRecordItem::new();
+            let mut item = GroupTagRecordItem::default();
             item.set_timestamp_sec(record.timestamps[n]);
             item.set_cpu_time_ms(record.cpu_time_list[n]);
             item.set_read_keys(record.read_keys_list[n]);
@@ -178,11 +178,16 @@ impl From<Records> for Vec<ResourceUsageRecord> {
                 continue;
             }
             let items: Vec<GroupTagRecordItem> = record.into();
-            let mut tag_record = GroupTagRecord::new();
+            let mut tag_record = GroupTagRecord::default();
             tag_record.set_resource_group_tag(tag);
             tag_record.set_items(items.into());
-            let mut r = ResourceUsageRecord::new();
-            r.set_record(tag_record);
+            let r: ResourceUsageRecord = ResourceUsageRecord {
+                record_oneof: Some(
+                    kvproto::resource_usage_agent::resource_usage_record::RecordOneof::Record(
+                        tag_record,
+                    ),
+                ),
+            };
             res.push(r);
         }
 
@@ -197,17 +202,22 @@ impl From<Records> for Vec<ResourceUsageRecord> {
                 },
             ) in records.others
             {
-                let mut item = GroupTagRecordItem::new();
+                let mut item = GroupTagRecordItem::default();
                 item.set_timestamp_sec(ts);
                 item.set_cpu_time_ms(cpu_time);
                 item.set_read_keys(read_keys);
                 item.set_write_keys(write_keys);
                 items.push(item);
             }
-            let mut tag_record = GroupTagRecord::new();
+            let mut tag_record = GroupTagRecord::default();
             tag_record.set_items(items.into());
-            let mut r = ResourceUsageRecord::new();
-            r.set_record(tag_record);
+            let r: ResourceUsageRecord = ResourceUsageRecord {
+                record_oneof: Some(
+                    kvproto::resource_usage_agent::resource_usage_record::RecordOneof::Record(
+                        tag_record,
+                    ),
+                ),
+            };
             res.push(r);
         }
 

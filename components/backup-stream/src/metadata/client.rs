@@ -4,7 +4,7 @@ use std::{cmp::Ordering, collections::HashMap, fmt::Debug, path::Path, sync::Arc
 
 use dashmap::DashMap;
 use kvproto::{
-    brpb::{StreamBackupError, StreamBackupTaskInfo},
+    backup::{StreamBackupError, StreamBackupTaskInfo},
     metapb::Region,
 };
 use tikv_util::{defer, time::Instant, warn};

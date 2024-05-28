@@ -65,7 +65,7 @@ prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { workspace = true }
-raft-proto = { version = "0.7.0", default-features = false }
+raft-proto = { workspace = true }
 rand = "0.8.3"
 resource_control = { workspace = true }
 resource_metering = { workspace = true }

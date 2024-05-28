@@ -16,9 +16,8 @@ use grpcio::{
 use kvproto::{
     encryptionpb::EncryptionMethod,
     import_sstpb::{
-        Error as ImportPbError, ImportSst, Range, RawWriteRequest_oneof_chunk as RawChunk,
-        SuspendImportRpcRequest, SuspendImportRpcResponse, SwitchMode,
-        WriteRequest_oneof_chunk as Chunk, *,
+        raw_write_request::Chunk as RawChunk, write_request::Chunk, Error as ImportPbError,
+        ImportSst, Range, SuspendImportRpcRequest, SuspendImportRpcResponse, SwitchMode, *,
     },
     metapb::RegionEpoch,
 };
@@ -883,8 +882,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             let cipher = req
                 .cipher_info
                 .to_owned()
-                .into_option()
-                .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
+                .filter(|c| c.cipher_type != EncryptionMethod::Plaintext as i32);
 
             let tablet = match tablets.get(region_id) {
                 Some(tablet) => tablet,

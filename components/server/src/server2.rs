@@ -42,9 +42,9 @@ use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use health_controller::HealthController;
 use kvproto::{
-    brpb::create_backup, cdcpb_grpc::create_change_data, deadlock::create_deadlock,
-    debugpb_grpc::create_debug, diagnosticspb::create_diagnostics,
-    import_sstpb_grpc::create_import_sst, kvrpcpb::ApiVersion, logbackuppb::create_log_backup,
+    backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
+    debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
+    kvrpcpb::ApiVersion, logbackup::create_log_backup,
     resource_usage_agent::create_resource_metering_pub_sub,
 };
 use pd_client::{

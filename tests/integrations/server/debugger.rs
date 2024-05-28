@@ -4,12 +4,9 @@ use collections::{HashMap, HashSet};
 use engine_rocks::{raw::Range, util::get_cf_handle};
 use engine_traits::{CachedTablet, MiscExt, CF_WRITE};
 use keys::{data_key, DATA_MAX_KEY};
-use kvproto::{
-    debugpb::{
-        Db, FlashbackToVersionRequest, FlashbackToVersionResponse, GetAllRegionsInStoreRequest,
-        RegionInfoRequest,
-    },
-    debugpb_grpc::DebugClient,
+use kvproto::debugpb::{
+    Db, DebugClient, FlashbackToVersionRequest, FlashbackToVersionResponse,
+    GetAllRegionsInStoreRequest, RegionInfoRequest,
 };
 use test_raftstore::{must_kv_read_equal, write_and_read_key};
 use tikv::{

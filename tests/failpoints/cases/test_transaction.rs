@@ -15,8 +15,8 @@ use futures::{executor::block_on, StreamExt};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
     kvrpcpb::{
-        self as pb, AssertionLevel, Context, GetRequest, Op, PessimisticLockRequest,
-        PrewriteRequest, PrewriteRequestPessimisticAction::*,
+        self as pb, prewrite_request::PessimisticAction::*, AssertionLevel, Context, GetRequest,
+        Op, PessimisticLockRequest, PrewriteRequest,
     },
     raft_serverpb::RaftMessage,
     tikvpb::TikvClient,

@@ -15,7 +15,7 @@ use engine_traits::{
     CF_LOCK, CF_WRITE,
 };
 use futures::channel::mpsc::UnboundedSender;
-use kvproto::recoverdatapb::ResolveKvDataResponse;
+use kvproto::recover_data::ResolveKvDataResponse;
 use thiserror::Error;
 use tikv_util::sys::thread::StdThreadBuildWrapper;
 use txn_types::{Key, TimeStamp, Write, WriteRef};

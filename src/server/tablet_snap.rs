@@ -48,8 +48,9 @@ use grpcio::{
 };
 use kvproto::{
     raft_serverpb::{
-        RaftMessage, RaftSnapshotData, TabletSnapshotFileChunk, TabletSnapshotFileMeta,
-        TabletSnapshotPreview, TabletSnapshotRequest, TabletSnapshotResponse,
+        tablet_snapshot_request::Payload, RaftMessage, RaftSnapshotData, TabletSnapshotEnd,
+        TabletSnapshotFileChunk, TabletSnapshotFileMeta, TabletSnapshotHead, TabletSnapshotPreview,
+        TabletSnapshotRequest, TabletSnapshotResponse,
     },
     tikvpb::TikvClient,
 };
@@ -189,11 +190,11 @@ pub(crate) struct RecvTabletSnapContext<'a> {
 }
 
 impl<'a> RecvTabletSnapContext<'a> {
-    pub(crate) fn new(mut head: TabletSnapshotRequest, mgr: &'a TabletSnapManager) -> Result<Self> {
-        if !head.has_head() {
-            return Err(box_err!("no raft message in the first chunk"));
-        }
-        let mut head = head.take_head();
+    pub(crate) fn new(head: TabletSnapshotRequest, mgr: &'a TabletSnapManager) -> Result<Self> {
+        let mut head = match head.payload {
+            Some(Payload::Head(h)) => h,
+            _ => return Err(box_err!("no raft message in the first chunk")),
+        };
         let meta = head.take_message();
         let key = TabletSnapKey::from_region_snap(
             meta.get_region_id(),
@@ -325,11 +326,14 @@ async fn cleanup_cache(
     let mut missing = vec![];
     loop {
         let mut preview = match stream.next().await {
-            Some(Ok(mut req)) if req.has_preview() => req.take_preview(),
+            Some(Ok(req)) => match req.payload {
+                Some(Payload::Preview(p)) => p,
+                res => return Err(protocol_error("preview", res)),
+            },
             res => return Err(protocol_error("preview", res)),
         };
         let mut buffer = Vec::with_capacity(PREVIEW_CHUNK_LEN);
-        for meta in preview.take_metas().into_vec() {
+        for meta in preview.take_metas() {
             if is_sst(&meta.file_name)
                 && let Some(p) = exists.remove(&meta.file_name)
             {
@@ -413,7 +417,10 @@ async fn accept_one_file(
             return Ok(exp_size);
         }
         chunk = match stream.next().await {
-            Some(Ok(mut req)) if req.has_chunk() => req.take_chunk(),
+            Some(Ok(req)) => match req.payload {
+                Some(Payload::Chunk(p)) => p,
+                res => return Err(protocol_error("chunk", res)),
+            },
             res => return Err(protocol_error("chunk", res)),
         };
         if !chunk.file_name.is_empty() {
@@ -434,7 +441,10 @@ async fn accept_missing(
     let mut key_importer = key_manager.as_deref().map(|m| DataKeyImporter::new(m));
     for name in missing_ssts {
         let chunk = match stream.next().await {
-            Some(Ok(mut req)) if req.has_chunk() => req.take_chunk(),
+            Some(Ok(req)) => match req.payload {
+                Some(Payload::Chunk(p)) => p,
+                res => return Err(protocol_error("chunk", res)),
+            },
             res => return Err(protocol_error("chunk", res)),
         };
         if chunk.file_name != name {
@@ -449,25 +459,28 @@ async fn accept_missing(
             Err(box_err!("failed to receive snapshot"))
         });
         let chunk = match stream.next().await {
-            Some(Ok(mut req)) if req.has_chunk() => req.take_chunk(),
-            Some(Ok(req)) if req.has_end() => {
-                let checksum = req.get_end().get_checksum();
-                if checksum != digest.sum64() {
-                    return Err(Error::Other(
-                        format!("checksum mismatch {} {}", checksum, digest.sum64()).into(),
-                    ));
-                }
-                File::open(path)?.sync_data()?;
-                let res = stream.next().await;
-                return if res.is_none() {
-                    if let Some(i) = key_importer {
-                        i.commit().map_err(|e| Error::Other(e.into()))?;
+            Some(Ok(req)) => match req.payload {
+                Some(Payload::Chunk(p)) => p,
+                Some(Payload::End(e)) => {
+                    let checksum = e.get_checksum();
+                    if checksum != digest.sum64() {
+                        return Err(Error::Other(
+                            format!("checksum mismatch {} {}", checksum, digest.sum64()).into(),
+                        ));
                     }
-                    Ok(received_bytes)
-                } else {
-                    Err(protocol_error("None", res))
-                };
-            }
+                    File::open(path)?.sync_data()?;
+                    let res = stream.next().await;
+                    return if res.is_none() {
+                        if let Some(i) = key_importer {
+                            i.commit().map_err(|e| Error::Other(e.into()))?;
+                        }
+                        Ok(received_bytes)
+                    } else {
+                        Err(protocol_error("None", res))
+                    };
+                }
+                res => return Err(protocol_error("chunk", res)),
+            },
             res => return Err(protocol_error("chunk", res)),
         };
         if chunk.file_name.is_empty() {
@@ -598,7 +611,7 @@ async fn build_one_preview(
     iter: &mut impl Iterator<Item = (&String, &u64)>,
     limiter: &Limiter,
     key_manager: &Option<Arc<DataKeyManager>>,
-) -> Result<TabletSnapshotRequest> {
+) -> Result<TabletSnapshotPreview> {
     let mut preview = TabletSnapshotPreview::default();
     for _ in 0..PREVIEW_BATCH_SIZE {
         let (name, size) = match iter.next() {
@@ -617,14 +630,12 @@ async fn build_one_preview(
         }
         preview.mut_metas().push(meta);
     }
-    let mut req = TabletSnapshotRequest::default();
-    req.set_preview(preview);
-    Ok(req)
+    Ok(preview)
 }
 
 async fn find_missing(
     path: &Path,
-    mut head: TabletSnapshotRequest,
+    mut head: TabletSnapshotHead,
     sender: &mut (impl Sink<(TabletSnapshotRequest, WriteFlags), Error = Error> + Unpin),
     receiver: &mut (impl Stream<Item = grpcio::Result<TabletSnapshotResponse>> + Unpin),
     limiter: &Limiter,
@@ -651,6 +662,9 @@ async fn find_missing(
         }
     }
     if sst_sizes < USE_CACHE_THRESHOLD {
+        let head = TabletSnapshotRequest {
+            payload: Some(Payload::Head(head)),
+        };
         sender
             .send((head, WriteFlags::default().buffer_hint(true)))
             .await?;
@@ -658,14 +672,20 @@ async fn find_missing(
         return Ok(other_files);
     }
 
-    head.mut_head().set_use_cache(true);
+    head.set_use_cache(true);
+    let head = TabletSnapshotRequest {
+        payload: Some(Payload::Head(head)),
+    };
     // Send immediately to make receiver collect cache earlier.
     sender.send((head, WriteFlags::default())).await?;
     let mut ssts_iter = ssts.iter().peekable();
     while ssts_iter.peek().is_some() {
-        let mut req = build_one_preview(path, &mut ssts_iter, limiter, key_manager).await?;
+        let mut preview = build_one_preview(path, &mut ssts_iter, limiter, key_manager).await?;
         let is_end = ssts_iter.peek().is_none();
-        req.mut_preview().end = is_end;
+        preview.end = is_end;
+        let req = TabletSnapshotRequest {
+            payload: Some(Payload::Preview(preview)),
+        };
         sender
             .send((req, WriteFlags::default().buffer_hint(!is_end)))
             .await?;
@@ -710,8 +730,9 @@ async fn send_missing(
             chunk.set_key(key);
         }
         if file_size == 0 {
-            let mut req = TabletSnapshotRequest::default();
-            req.set_chunk(chunk);
+            let req = TabletSnapshotRequest {
+                payload: Some(Payload::Chunk(chunk)),
+            };
             sender
                 .send((req, WriteFlags::default().buffer_hint(true)))
                 .await?;
@@ -724,15 +745,15 @@ async fn send_missing(
             let to_read = cmp::min(FILE_CHUNK_LEN as u64, file_size) as usize;
             read_to(&mut f, &mut chunk.data, to_read, limiter).await?;
             digest.write(&chunk.data);
-            let mut req = TabletSnapshotRequest::default();
-            req.set_chunk(chunk);
+            let req = TabletSnapshotRequest {
+                payload: Some(Payload::Chunk(std::mem::take(&mut chunk))),
+            };
             sender
                 .send((req, WriteFlags::default().buffer_hint(true)))
                 .await?;
             if file_size == to_read as u64 {
                 break;
             }
-            chunk = TabletSnapshotFileChunk::default();
             file_size -= to_read as u64;
         }
     }
@@ -769,8 +790,10 @@ pub async fn send_snap(
     info!("begin to send snapshot file"; "snap_key" => %key);
     let io_type = io_type_from_raft_message(&msg)?;
     let _with_io_type = WithIoType::new(io_type);
-    let mut head = TabletSnapshotRequest::default();
-    head.mut_head().set_message(msg);
+    let head = TabletSnapshotHead {
+        message: Some(msg),
+        use_cache: false,
+    };
     let missing = find_missing(
         &path,
         head,
@@ -786,8 +809,9 @@ pub async fn send_snap(
     // is closed). So we need to use an explicit `Done` to indicate all messages
     // are sent. In V1, we have checksum and meta list, so this is not a
     // problem.
-    let mut req = TabletSnapshotRequest::default();
-    req.mut_end().set_checksum(checksum);
+    let req = TabletSnapshotRequest {
+        payload: Some(Payload::End(TabletSnapshotEnd { checksum })),
+    };
     sink.send((req, WriteFlags::default())).await?;
     info!("sent all snap file finish"; "snap_key" => %key);
     sink.close().await?;

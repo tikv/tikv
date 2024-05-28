@@ -556,7 +556,7 @@ impl TryFrom<SharedError> for Error {
 
 #[cfg(test)]
 mod test {
-    use kvproto::kvrpcpb::WriteConflictReason;
+    use kvrpcpb::write_conflict::Reason as WriteConflictReason;
 
     use super::*;
 

@@ -47,7 +47,7 @@ pub enum ErrorInner {
         conflict_commit_ts: TimeStamp,
         key: Vec<u8>,
         primary: Vec<u8>,
-        reason: kvrpcpb::WriteConflictReason,
+        reason: kvrpcpb::write_conflict::Reason,
     },
 }
 

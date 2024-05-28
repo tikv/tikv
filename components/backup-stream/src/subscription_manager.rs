@@ -527,7 +527,7 @@ where
     }
 
     fn on_high_memory_usage(&mut self, inconsistent_region_id: u64) {
-        let mut lame_region = Region::new();
+        let mut lame_region = Region::default();
         lame_region.set_id(inconsistent_region_id);
         let mut act_region = None;
         self.subs.deregister_region_if(&lame_region, |act, _| {
@@ -844,7 +844,7 @@ mod test {
 
     use engine_test::{kv::KvTestEngine, raft::RaftTestEngine};
     use kvproto::{
-        brpb::{Noop, StorageBackend, StreamBackupTaskInfo},
+        backup::{Noop, StorageBackend, StreamBackupTaskInfo},
         metapb::{Region, RegionEpoch},
     };
     use raftstore::{

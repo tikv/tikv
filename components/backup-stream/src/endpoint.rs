@@ -14,7 +14,7 @@ use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
 use futures::{stream::AbortHandle, FutureExt, TryFutureExt};
 use kvproto::{
-    brpb::{StreamBackupError, StreamBackupTaskInfo},
+    backup::{StreamBackupError, StreamBackupTaskInfo},
     metapb::{Region, RegionEpoch},
 };
 use pd_client::PdClient;
@@ -239,7 +239,7 @@ where
                     _ => Err(err),
                 })?;
                 meta_cli.pause(&t).await?;
-                let mut last_error = StreamBackupError::new();
+                let mut last_error = StreamBackupError::default();
                 last_error.set_error_code(code);
                 last_error.set_error_message(msg.clone());
                 last_error.set_store_id(store_id);
@@ -459,7 +459,7 @@ where
                 debug!("the region isn't registered (no resolver found) but sent to backup_batch, maybe stale."; "region_id" => %region_id);
                 // Sadly, we know nothing about the epoch in this context. Thankfully this is a
                 // local error and won't be sent to outside.
-                return Err(Error::ObserveCanceled(region_id, RegionEpoch::new()));
+                return Err(Error::ObserveCanceled(region_id, RegionEpoch::default()));
             }
         };
         // Stale data is acceptable, while stale locks may block the checkpoint
@@ -476,7 +476,7 @@ where
         // ```
         if batch.pitr_id != resolver.value().handle.id {
             debug!("stale command"; "region_id" => %region_id, "now" => ?resolver.value().handle.id, "remote" => ?batch.pitr_id);
-            return Err(Error::ObserveCanceled(region_id, RegionEpoch::new()));
+            return Err(Error::ObserveCanceled(region_id, RegionEpoch::default()));
         }
 
         let kvs = ApplyEvents::from_cmd_batch(batch, resolver.value_mut().resolver())?;

@@ -279,7 +279,7 @@ pub fn lock_only_filter(mut cmd_batch: CmdBatch) -> Option<CmdBatch> {
         ObserveLevel::All => Some(cmd_batch),
         ObserveLevel::LockRelated => {
             for cmd in &mut cmd_batch.cmds {
-                let mut requests = cmd.request.take_requests().into_vec();
+                let mut requests = cmd.request.take_requests();
                 requests.retain(|req| {
                     let cf = match req.get_cmd_type() {
                         CmdType::Put => req.get_put().cf.as_str(),
@@ -299,7 +299,7 @@ pub fn lock_only_filter(mut cmd_batch: CmdBatch) -> Option<CmdBatch> {
 mod tests {
     use concurrency_manager::ConcurrencyManager;
     use kvproto::{
-        kvrpcpb::{AssertionLevel, PrewriteRequestPessimisticAction::*},
+        kvrpcpb::{prewrite_request::PessimisticAction::*, AssertionLevel},
         raft_cmdpb::{CmdType, Request},
     };
     use tikv::storage::{

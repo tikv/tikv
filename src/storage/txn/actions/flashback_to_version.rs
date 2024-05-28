@@ -294,7 +294,7 @@ pub fn get_first_user_key(
 #[cfg(test)]
 pub mod tests {
     use concurrency_manager::ConcurrencyManager;
-    use kvproto::kvrpcpb::{Context, PrewriteRequestPessimisticAction::DoPessimisticCheck};
+    use kvproto::kvrpcpb::{prewrite_request::PessimisticAction::DoPessimisticCheck, Context};
     use tikv_kv::ScanMode;
     use txn_types::{TimeStamp, SHORT_VALUE_MAX_LEN};
 

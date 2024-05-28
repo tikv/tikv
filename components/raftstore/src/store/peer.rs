@@ -15,7 +15,6 @@ use std::{
 };
 
 use bitflags::bitflags;
-use bytes::Bytes;
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
@@ -3856,7 +3855,7 @@ where
         // It's only necessary to ping the target peer, but ping all for simplicity.
         self.raft_group.ping();
 
-        let mut msg = eraftpb::Message::new();
+        let mut msg = eraftpb::Message::default();
         msg.set_to(peer.get_id());
         msg.set_msg_type(eraftpb::MessageType::MsgTransferLeader);
         msg.set_from(self.peer_id());
@@ -4680,14 +4679,14 @@ where
         &mut self,
         reply_cmd: bool, // whether it is a reply to a TransferLeader command
     ) {
-        let mut msg = eraftpb::Message::new();
+        let mut msg = eraftpb::Message::default();
         msg.set_from(self.peer_id());
         msg.set_to(self.leader_id());
         msg.set_msg_type(eraftpb::MessageType::MsgTransferLeader);
         msg.set_index(self.get_store().applied_index());
         msg.set_log_term(self.term());
         if reply_cmd {
-            msg.set_context(Bytes::from_static(TRANSFER_LEADER_COMMAND_REPLY_CTX));
+            msg.set_context(TRANSFER_LEADER_COMMAND_REPLY_CTX.to_vec());
         }
         self.raft_group.raft.msgs.push(msg);
     }

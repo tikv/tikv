@@ -284,7 +284,7 @@ where
         // here. It's safe to do so because `storage.enable_ttl` is impossible to change
         // thanks to the config check. let should_check = match (ident.api_version,
         // self.api_version) {
-        let should_check = match (ident.api_version, self.api_version) {
+        let should_check = match (ident.get_api_version(), self.api_version) {
             (ApiVersion::V1, ApiVersion::V1ttl) | (ApiVersion::V1ttl, ApiVersion::V1) => false,
             (left, right) => left != right,
         };
@@ -317,7 +317,7 @@ where
             }
             // Switch api version
             let ident = StoreIdent {
-                api_version: self.api_version,
+                api_version: self.api_version as i32,
                 ..ident
             };
             engines.kv.put_msg(keys::STORE_IDENT_KEY, &ident)?;

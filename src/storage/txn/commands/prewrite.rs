@@ -10,8 +10,8 @@ use std::mem;
 
 use engine_traits::CF_WRITE;
 use kvproto::kvrpcpb::{
-    AssertionLevel, ExtraOp, PrewriteRequestForUpdateTsConstraint,
-    PrewriteRequestPessimisticAction::{self, *},
+    prewrite_request::{self, ForUpdateTsConstraint, PessimisticAction::*},
+    AssertionLevel, ExtraOp,
 };
 use tikv_kv::SnapshotExt;
 use txn_types::{
@@ -265,7 +265,7 @@ command! {
         cmd_ty => PrewriteResult,
         content => {
             /// The set of mutations to apply; the bool = is pessimistic lock.
-            mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
+            mutations: Vec<(Mutation, prewrite_request::PessimisticAction)>,
             /// The primary lock. Secondary locks (from `mutations`) will refer to the primary lock.
             primary: Vec<u8>,
             /// The transaction timestamp.
@@ -289,7 +289,7 @@ command! {
             /// that must be satisfied as long as data is consistent.
             assertion_level: AssertionLevel,
             /// Constraints on the pessimistic locks that have to be checked when prewriting.
-            for_update_ts_constraints: Vec<PrewriteRequestForUpdateTsConstraint>,
+            for_update_ts_constraints: Vec<ForUpdateTsConstraint>,
         }
         in_heap => {
             primary,
@@ -327,7 +327,7 @@ impl std::fmt::Debug for PrewritePessimistic {
 impl PrewritePessimistic {
     #[cfg(test)]
     pub fn with_defaults(
-        mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
+        mutations: Vec<(Mutation, prewrite_request::PessimisticAction)>,
         primary: Vec<u8>,
         start_ts: TimeStamp,
         for_update_ts: TimeStamp,
@@ -351,7 +351,7 @@ impl PrewritePessimistic {
 
     #[cfg(test)]
     pub fn with_1pc(
-        mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
+        mutations: Vec<(Mutation, prewrite_request::PessimisticAction)>,
         primary: Vec<u8>,
         start_ts: TimeStamp,
         for_update_ts: TimeStamp,
@@ -376,7 +376,7 @@ impl PrewritePessimistic {
 
     #[cfg(test)]
     pub fn with_for_update_ts_constraints(
-        mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
+        mutations: Vec<(Mutation, prewrite_request::PessimisticAction)>,
         primary: Vec<u8>,
         start_ts: TimeStamp,
         for_update_ts: TimeStamp,
@@ -397,7 +397,7 @@ impl PrewritePessimistic {
             for_update_ts_constraints
                 .into_iter()
                 .map(|(index, expected_for_update_ts)| {
-                    let mut constraint = PrewriteRequestForUpdateTsConstraint::default();
+                    let mut constraint = ForUpdateTsConstraint::default();
                     constraint.set_index(index as u32);
                     constraint.set_expected_for_update_ts(expected_for_update_ts.into_inner());
                     constraint
@@ -879,13 +879,13 @@ impl PrewriteKind for Pessimistic {
 /// For pessimistic txns, this is `PessimisticMutation` which contains a
 /// `Mutation` and some other extra information necessary for pessimistic txns.
 trait MutationLock {
-    fn pessimistic_action(&self) -> PrewriteRequestPessimisticAction;
+    fn pessimistic_action(&self) -> prewrite_request::PessimisticAction;
     fn pessimistic_expected_for_update_ts(&self) -> Option<TimeStamp>;
     fn into_mutation(self) -> Mutation;
 }
 
 impl MutationLock for Mutation {
-    fn pessimistic_action(&self) -> PrewriteRequestPessimisticAction {
+    fn pessimistic_action(&self) -> prewrite_request::PessimisticAction {
         SkipPessimisticCheck
     }
 
@@ -903,7 +903,7 @@ pub struct PessimisticMutation {
     pub mutation: Mutation,
     /// Indicates what kind of operations(checks) need to be performed, and also
     /// implies the type of the lock status.
-    pub pessimistic_action: PrewriteRequestPessimisticAction,
+    pub pessimistic_action: prewrite_request::PessimisticAction,
     /// Specifies whether it needs to check the `for_update_ts` field in the
     /// pessimistic lock during prewrite. If any, the check only passes if the
     /// `for_update_ts` field in pessimistic lock is not greater than the
@@ -912,7 +912,7 @@ pub struct PessimisticMutation {
 }
 
 impl MutationLock for PessimisticMutation {
-    fn pessimistic_action(&self) -> PrewriteRequestPessimisticAction {
+    fn pessimistic_action(&self) -> prewrite_request::PessimisticAction {
         self.pessimistic_action
     }
 
@@ -926,7 +926,10 @@ impl MutationLock for PessimisticMutation {
 }
 
 impl PessimisticMutation {
-    pub fn new(mutation: Mutation, pessimistic_action: PrewriteRequestPessimisticAction) -> Self {
+    pub fn new(
+        mutation: Mutation,
+        pessimistic_action: prewrite_request::PessimisticAction,
+    ) -> Self {
         Self {
             mutation,
             pessimistic_action,
@@ -935,8 +938,8 @@ impl PessimisticMutation {
     }
 }
 
-impl From<(Mutation, PrewriteRequestPessimisticAction)> for PessimisticMutation {
-    fn from(value: (Mutation, PrewriteRequestPessimisticAction)) -> Self {
+impl From<(Mutation, prewrite_request::PessimisticAction)> for PessimisticMutation {
+    fn from(value: (Mutation, prewrite_request::PessimisticAction)) -> Self {
         PessimisticMutation::new(value.0, value.1)
     }
 }
@@ -2174,7 +2177,7 @@ mod tests {
             pk: &[u8],
             secondary_keys: Option<Vec<Vec<u8>>>,
             ts: u64,
-            pessimistic_action: PrewriteRequestPessimisticAction,
+            pessimistic_action: prewrite_request::PessimisticAction,
             is_retry_request: bool,
             engine: &mut E,
             cm: &ConcurrencyManager,

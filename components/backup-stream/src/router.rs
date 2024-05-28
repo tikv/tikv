@@ -17,7 +17,7 @@ use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_WRITE};
 use external_storage::{create_storage, BackendConfig, ExternalStorage, UnpinReader};
 use futures::io::Cursor;
 use kvproto::{
-    brpb::{
+    backup::{
         CompressionType, DataFileGroup, DataFileInfo, FileType, MetaVersion, Metadata,
         StreamBackupTaskInfo,
     },
@@ -1595,7 +1595,7 @@ mod tests {
 
     use external_storage::{ExternalData, NoopStorage};
     use futures::AsyncReadExt;
-    use kvproto::brpb::{Local, Noop, StorageBackend, StreamBackupTaskInfo};
+    use kvproto::backup::{Local, Noop, StorageBackend, StreamBackupTaskInfo};
     use online_config::{ConfigManager, OnlineConfig};
     use tempfile::TempDir;
     use tikv_util::{

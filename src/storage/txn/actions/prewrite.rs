@@ -5,9 +5,10 @@ use std::cmp;
 
 use fail::fail_point;
 use kvproto::kvrpcpb::{
-    self, Assertion, AssertionLevel,
-    PrewriteRequestPessimisticAction::{self, *},
-    WriteConflictReason,
+    self,
+    prewrite_request::{self, PessimisticAction::*},
+    write_conflict::Reason as WriteConflictReason,
+    Assertion, AssertionLevel,
 };
 use txn_types::{
     is_short_value, Key, LastChange, Mutation, MutationType, OldValue, TimeStamp, Value, Write,
@@ -39,7 +40,7 @@ pub fn prewrite<S: Snapshot>(
     txn_props: &TransactionProperties<'_>,
     mutation: Mutation,
     secondary_keys: &Option<Vec<Vec<u8>>>,
-    pessimistic_action: PrewriteRequestPessimisticAction,
+    pessimistic_action: prewrite_request::PessimisticAction,
     expected_for_update_ts: Option<TimeStamp>,
 ) -> Result<(TimeStamp, OldValue)> {
     prewrite_with_generation(
@@ -60,7 +61,7 @@ pub fn prewrite_with_generation<S: Snapshot>(
     txn_props: &TransactionProperties<'_>,
     mutation: Mutation,
     secondary_keys: &Option<Vec<Vec<u8>>>,
-    pessimistic_action: PrewriteRequestPessimisticAction,
+    pessimistic_action: prewrite_request::PessimisticAction,
     expected_for_update_ts: Option<TimeStamp>,
     generation: u64,
 ) -> Result<(TimeStamp, OldValue)> {
@@ -284,7 +285,7 @@ struct PrewriteMutation<'a> {
     mutation_type: MutationType,
     secondary_keys: &'a Option<Vec<Vec<u8>>>,
     min_commit_ts: TimeStamp,
-    pessimistic_action: PrewriteRequestPessimisticAction,
+    pessimistic_action: prewrite_request::PessimisticAction,
 
     lock_type: Option<LockType>,
     lock_ttl: u64,
@@ -300,7 +301,7 @@ impl<'a> PrewriteMutation<'a> {
     fn from_mutation(
         mutation: Mutation,
         secondary_keys: &'a Option<Vec<Vec<u8>>>,
-        pessimistic_action: PrewriteRequestPessimisticAction,
+        pessimistic_action: prewrite_request::PessimisticAction,
         txn_props: &'a TransactionProperties<'a>,
     ) -> Result<PrewriteMutation<'a>> {
         let should_not_write = mutation.should_not_write();
@@ -352,7 +353,7 @@ impl<'a> PrewriteMutation<'a> {
     fn check_lock(
         &mut self,
         lock: Lock,
-        pessimistic_action: PrewriteRequestPessimisticAction,
+        pessimistic_action: prewrite_request::PessimisticAction,
         expected_for_update_ts: Option<TimeStamp>,
         generation_to_write: u64,
     ) -> Result<LockStatus> {
@@ -646,7 +647,7 @@ impl<'a> PrewriteMutation<'a> {
         &self,
         write: &Write,
         commit_ts: TimeStamp,
-        reason: kvrpcpb::WriteConflictReason,
+        reason: kvrpcpb::write_conflict::Reason,
     ) -> Result<()> {
         Err(ErrorInner::WriteConflict {
             start_ts: self.txn_props.start_ts,
@@ -779,7 +780,7 @@ impl<'a> PrewriteMutation<'a> {
                     SkipPessimisticCheck => !self.txn_props.is_retry_request,
                     // For keys that postpones constraint check to prewrite, do not skip constraint
                     // check.
-                    PrewriteRequestPessimisticAction::DoConstraintCheck => false,
+                    prewrite_request::PessimisticAction::DoConstraintCheck => false,
                 }
             }
         }
@@ -2092,7 +2093,7 @@ pub mod tests {
             key: &[u8],
             value: &[u8],
             ts: u64,
-            pessimistic_action: PrewriteRequestPessimisticAction,
+            pessimistic_action: prewrite_request::PessimisticAction,
             for_update_ts: u64,
             assertion: Assertion,
             assertion_level: AssertionLevel,

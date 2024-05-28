@@ -88,8 +88,10 @@ impl<S: Stream<Item = pd_client::Result<mpb::WatchResponse>>> Stream for PdWatch
                     assert!(buf.is_empty());
                     for mut e in x.take_events().into_iter() {
                         let ty = match e.get_type() {
-                            kvproto::meta_storagepb::EventEventType::Put => KvEventType::Put,
-                            kvproto::meta_storagepb::EventEventType::Delete => KvEventType::Delete,
+                            kvproto::meta_storagepb::event::EventType::Put => KvEventType::Put,
+                            kvproto::meta_storagepb::event::EventType::Delete => {
+                                KvEventType::Delete
+                            }
                         };
                         let kv = KvEvent {
                             kind: ty,

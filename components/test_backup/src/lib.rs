@@ -18,7 +18,7 @@ use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_L
 use external_storage::make_local_backend;
 use futures::{channel::mpsc as future_mpsc, executor::block_on};
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::{brpb::*, kvrpcpb::*, tikvpb::TikvClient};
+use kvproto::{backup::*, kvrpcpb::*, tikvpb::TikvClient};
 use rand::Rng;
 use test_raftstore::*;
 use tidb_query_common::storage::{
@@ -427,7 +427,7 @@ impl TestSuite {
         let mut range = KeyRange::default();
         range.set_start_key(start.into_bytes());
         range.set_end_key(end.into_bytes());
-        req.set_ranges(protobuf::RepeatedField::from_vec(vec![range]));
+        req.set_ranges(vec![range]);
         let response = self.tikv_cli.raw_checksum(&req).unwrap();
         (response.checksum, response.total_kvs, response.total_bytes)
     }

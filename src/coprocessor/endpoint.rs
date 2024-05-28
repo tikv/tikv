@@ -581,7 +581,7 @@ impl<E: Engine> Endpoint<E> {
         if let Err(busy_err) = self.read_pool.check_busy_threshold(Duration::from_millis(
             req.get_context().get_busy_threshold_ms() as u64,
         )) {
-            let mut pb_error = errorpb::Error::new();
+            let mut pb_error = errorpb::Error::default();
             pb_error.set_server_is_busy(busy_err);
             let resp = make_error_response(Error::Region(pb_error));
             return Either::Left(async move { resp.into() });

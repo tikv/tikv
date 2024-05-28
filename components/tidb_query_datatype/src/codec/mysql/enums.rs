@@ -331,14 +331,10 @@ mod tests {
     }
 
     fn get_enum_field_type() -> FieldType {
-        let mut field_type = FieldType::new();
+        let mut field_type = FieldType::default();
         field_type.set_tp(FieldTypeTp::Enum.to_u8().unwrap() as i32);
 
-        let elems = protobuf::RepeatedField::from_slice(&[
-            String::from("c"),
-            String::from("b"),
-            String::from("a"),
-        ]);
+        let elems = vec![String::from("c"), String::from("b"), String::from("a")];
         field_type.set_elems(elems);
 
         field_type

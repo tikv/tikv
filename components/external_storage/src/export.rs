@@ -8,8 +8,8 @@ pub use azure::{AzureStorage, Config as AzureConfig};
 use cloud::blob::{BlobStorage, PutResource};
 use encryption::DataKeyManager;
 use gcp::GcsStorage;
-use kvproto::brpb::{
-    AzureBlobStorage, Gcs, Noop, StorageBackend, StorageBackend_oneof_backend as Backend, S3,
+use kvproto::backup::{
+    self, storage_backend::Backend, AzureBlobStorage, Gcs, Hdfs, Noop, StorageBackend, S3,
 };
 use tikv_util::time::{Instant, Limiter};
 
@@ -83,42 +83,42 @@ fn create_backend(
 
 // Creates a S3 `StorageBackend`
 pub fn make_s3_backend(config: S3) -> StorageBackend {
-    let mut backend = StorageBackend::default();
-    backend.set_s3(config);
-    backend
+    StorageBackend {
+        backend: Some(Backend::S3(config)),
+    }
 }
 
 pub fn make_local_backend(path: &Path) -> StorageBackend {
     let path = path.display().to_string();
-    let mut backend = StorageBackend::default();
-    backend.mut_local().set_path(path);
-    backend
+    StorageBackend {
+        backend: Some(Backend::Local(backup::Local { path })),
+    }
 }
 
 pub fn make_hdfs_backend(remote: String) -> StorageBackend {
-    let mut backend = StorageBackend::default();
-    backend.mut_hdfs().set_remote(remote);
-    backend
+    StorageBackend {
+        backend: Some(Backend::Hdfs(Hdfs { remote })),
+    }
 }
 
 /// Creates a noop `StorageBackend`.
 pub fn make_noop_backend() -> StorageBackend {
     let noop = Noop::default();
-    let mut backend = StorageBackend::default();
-    backend.set_noop(noop);
-    backend
+    StorageBackend {
+        backend: Some(Backend::Noop(noop)),
+    }
 }
 
 pub fn make_gcs_backend(config: Gcs) -> StorageBackend {
-    let mut backend = StorageBackend::default();
-    backend.set_gcs(config);
-    backend
+    StorageBackend {
+        backend: Some(Backend::Gcs(config)),
+    }
 }
 
 pub fn make_azblob_backend(config: AzureBlobStorage) -> StorageBackend {
-    let mut backend = StorageBackend::default();
-    backend.set_azure_blob_storage(config);
-    backend
+    StorageBackend {
+        backend: Some(Backend::AzureBlobStorage(config)),
+    }
 }
 
 pub struct BlobStore<Blob: BlobStorage>(Blob);

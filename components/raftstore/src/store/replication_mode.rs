@@ -180,7 +180,7 @@ impl GlobalReplicationState {
     pub fn store_dr_autosync_status(&self) -> Option<StoreDrAutoSyncStatus> {
         match self.status.get_mode() {
             ReplicationMode::DrAutoSync => {
-                let mut s = StoreDrAutoSyncStatus::new();
+                let mut s = StoreDrAutoSyncStatus::default();
                 s.set_state(self.status.get_dr_auto_sync().get_state());
                 s.set_state_id(self.status.get_dr_auto_sync().get_state_id());
                 Some(s)

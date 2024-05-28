@@ -17,7 +17,7 @@ use engine_traits::{
 use fail::fail_point;
 use keys::{data_end_key, data_key};
 use kvproto::{
-    cdcpb::ChangeDataRequestKvApi,
+    cdcpb::change_data_request::KvApi as ChangeDataRequestKvApi,
     kvrpcpb::ExtraOp as TxnExtraOp,
     metapb::{Region, RegionEpoch},
 };
@@ -598,7 +598,7 @@ mod tests {
     use engine_traits::{MiscExt, CF_WRITE};
     use futures::{executor::block_on, StreamExt};
     use kvproto::{
-        cdcpb::{EventLogType, Event_oneof_event},
+        cdcpb::{event::Event as Event_oneof_event, EventLogType},
         errorpb::Error as ErrorHeader,
     };
     use raftstore::{coprocessor::ObserveHandle, router::CdcRaftRouter, store::RegionSnapshot};
@@ -1158,7 +1158,9 @@ mod tests {
         let mut total_entries = 0;
         while let Some((event, _)) = block_on(drain.drain().next()) {
             if let CdcEvent::Event(e) = event {
-                total_entries += e.get_entries().get_entries().len();
+                if let Some(Event_oneof_event::Entries(e)) = e {
+                    total_entries += e.get_entries().len();
+                }
             }
         }
         assert_eq!(total_entries, 2);

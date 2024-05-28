@@ -117,9 +117,9 @@ pub fn commit<S: Snapshot>(
 
 pub mod tests {
     use concurrency_manager::ConcurrencyManager;
-    use kvproto::kvrpcpb::Context;
     #[cfg(test)]
-    use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
+    use kvproto::kvrpcpb::prewrite_request::PessimisticAction::*;
+    use kvproto::kvrpcpb::Context;
     use tikv_kv::SnapContext;
     #[cfg(test)]
     use txn_types::{LastChange, TimeStamp};

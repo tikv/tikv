@@ -8,7 +8,7 @@ use std::{
 
 use futures::{compat::Future01CompatExt, stream, StreamExt};
 use kvproto::{
-    meta_storagepb::EventEventType,
+    meta_storagepb::event::EventType,
     resource_manager::{ResourceGroup, TokenBucketRequest, TokenBucketsRequest},
 };
 use pd_client::{
@@ -74,13 +74,13 @@ impl ResourceManagerService {
                         self.revision = resp.get_header().get_revision();
                         let events = resp.get_events();
                         events.iter().for_each(|event| match event.get_type() {
-                            EventEventType::Put => {
+                            EventType::Put => {
                                 match protobuf::parse_from_bytes::<ResourceGroup>(event.get_kv().get_value()) {
                                     Ok(group) => self.manager.add_resource_group(group),
                                     Err(e) => error!("parse put resource group event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
                                 }
                             }
-                            EventEventType::Delete => {
+                            EventType::Delete => {
                                 match protobuf::parse_from_bytes::<ResourceGroup>(event.get_prev_kv().get_value()) {
                                     Ok(group) => self.manager.remove_resource_group(group.get_name()),
                                     Err(e) => error!("parse delete resource group event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),

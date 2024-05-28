@@ -5,7 +5,7 @@ use std::{sync::*, time::Duration};
 use collections::HashMap;
 use engine_rocks::RocksEngine;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::{import_sstpb_grpc::ImportSstClient, kvrpcpb::*, tikvpb::TikvClient};
+use kvproto::{import_sstpb::ImportSstClient, kvrpcpb::*, tikvpb::TikvClient};
 use online_config::ConfigValue;
 use resolved_ts::Task;
 use test_raftstore::*;

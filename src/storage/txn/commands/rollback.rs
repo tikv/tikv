@@ -84,7 +84,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for Rollback {
 
 #[cfg(test)]
 mod tests {
-    use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
+    use kvproto::kvrpcpb::prewrite_request::PessimisticAction::*;
 
     use crate::storage::{txn::tests::*, TestEngineBuilder};
 

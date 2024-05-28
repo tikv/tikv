@@ -18,7 +18,7 @@ use grpcio::{
     WriteFlags,
 };
 use kvproto::{
-    brpb::{
+    backup::{
         self, PrepareSnapshotBackupEventType, PrepareSnapshotBackupRequest,
         PrepareSnapshotBackupRequestType, PrepareSnapshotBackupResponse,
     },
@@ -36,7 +36,7 @@ use tikv_util::{
 pub struct Node {
     service: Option<Server>,
     pub rejector: Arc<PrepareDiskSnapObserver>,
-    pub backup_client: Option<brpb::BackupClient>,
+    pub backup_client: Option<backup::BackupClient>,
 }
 
 pub struct Suite {
@@ -73,14 +73,14 @@ impl Suite {
         let env = BEnv::new(router, self.nodes[&id].rejector.clone(), None);
         let service = backup::Service::new(sched, env);
         let builder = ServerBuilder::new(Arc::clone(&self.grpc_env))
-            .register_service(brpb::create_backup(service));
+            .register_service(backup::create_backup(service));
         let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
         server.start();
         let (_, port) = server.bind_addrs().next().unwrap();
         let addr = format!("127.0.0.1:{}", port);
         let channel = ChannelBuilder::new(self.grpc_env.clone()).connect(&addr);
         println!("connecting channel to {} for store {}", addr, id);
-        let client = brpb::BackupClient::new(channel);
+        let client = backup::BackupClient::new(channel);
         let node = self.nodes.get_mut(&id).unwrap();
         node.service = Some(server);
         node.backup_client = Some(client);
@@ -100,7 +100,7 @@ impl Suite {
         self.cluster.wait_region_split(&region);
     }
 
-    fn backup(&self, id: u64) -> &brpb::BackupClient {
+    fn backup(&self, id: u64) -> &backup::BackupClient {
         self.nodes[&id].backup_client.as_ref().unwrap()
     }
 

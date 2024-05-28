@@ -323,7 +323,7 @@ impl WriteEvent {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SnapContext<'a> {
     pub pb_ctx: &'a Context,
     pub read_id: Option<ThreadReadId>,
@@ -336,6 +336,18 @@ pub struct SnapContext<'a> {
     pub key_ranges: Vec<KeyRange>,
     // Marks that this snapshot request is allowed in the flashback state.
     pub allowed_in_flashback: bool,
+}
+
+impl Default for SnapContext<'static> {
+    fn default() -> Self {
+        Self {
+            pb_ctx: Context::default_ref(),
+            read_id: None,
+            start_ts: None,
+            key_ranges: vec![],
+            allowed_in_flashback: false,
+        }
+    }
 }
 
 /// Engine defines the common behaviour for a storage engine type.

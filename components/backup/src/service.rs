@@ -5,7 +5,7 @@ use std::sync::{atomic::*, Arc, Mutex};
 use futures::{channel::mpsc, FutureExt, SinkExt, StreamExt, TryFutureExt};
 use futures_util::stream::AbortHandle;
 use grpcio::{self, *};
-use kvproto::brpb::*;
+use kvproto::backup::*;
 use raftstore::store::snapshot_backup::SnapshotBrHandle;
 use tikv_util::{error, info, warn, worker::*};
 

@@ -44,9 +44,9 @@ use grpcio::{EnvBuilder, Environment};
 use health_controller::HealthController;
 use hybrid_engine::HybridEngine;
 use kvproto::{
-    brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
+    backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
-    kvrpcpb::ApiVersion, logbackuppb::create_log_backup, recoverdatapb::create_recover_data,
+    kvrpcpb::ApiVersion, logbackup::create_log_backup, recover_data::create_recover_data,
     resource_usage_agent::create_resource_metering_pub_sub,
 };
 use pd_client::{

@@ -76,7 +76,6 @@ use uuid::Builder as UuidBuilder;
 use self::memtrace::*;
 use super::metrics::*;
 use crate::{
-    bytes_capacity,
     coprocessor::{
         ApplyCtxInfo, Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
         RegionState,
@@ -3506,7 +3505,7 @@ impl<C: WriteCallback> Apply<C> {
     ) -> Apply<C> {
         let mut entries_size = 0;
         for e in &entries {
-            entries_size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
+            entries_size += e.data.capacity() + e.context.capacity();
         }
         let cached_entries = CachedEntries::new(entries);
         Apply {
@@ -5039,7 +5038,7 @@ mod memtrace {
         fn approximate_heap_size(&self) -> usize {
             let mut size = self.pending_entries.capacity() * mem::size_of::<Entry>();
             for e in &self.pending_entries {
-                size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
+                size += e.data.capacity() + e.context.capacity();
             }
 
             size += self.pending_msgs.capacity() * mem::size_of::<Msg<EK>>();
@@ -5080,7 +5079,7 @@ mod memtrace {
         fn approximate_heap_size(&self) -> usize {
             let mut size: usize = 0;
             for e in &self.merge.entries {
-                size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
+                size += e.data.capacity() + e.context.capacity();
             }
             size
         }

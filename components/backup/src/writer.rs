@@ -11,7 +11,7 @@ use external_storage::{ExternalStorage, UnpinReader};
 use file_system::Sha256Reader;
 use futures_util::io::AllowStdIo;
 use kvproto::{
-    brpb::{CipherInfo, File},
+    backup::{CipherInfo, File},
     metapb::Region,
 };
 use tikv::{coprocessor::checksum_crc64_xor, storage::txn::TxnEntry};
@@ -123,7 +123,7 @@ impl<W: SstWriter + 'static> Writer<W> {
         let file_name = format!("{}_{}.sst", name, cf);
         let iv = Iv::new_ctr().map_err(|e| Error::Other(box_err!("new IV error: {:?}", e)))?;
         let encrypter_reader =
-            EncrypterReader::new(sst_reader, cipher.cipher_type, &cipher.cipher_key, iv)
+            EncrypterReader::new(sst_reader, cipher.get_cipher_type(), &cipher.cipher_key, iv)
                 .map_err(|e| Error::Other(box_err!("new EncrypterReader error: {:?}", e)))?;
 
         let (reader, hasher) = Sha256Reader::new(encrypter_reader)

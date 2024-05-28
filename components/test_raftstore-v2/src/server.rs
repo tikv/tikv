@@ -21,9 +21,9 @@ use grpcio_health::HealthService;
 use health_controller::HealthController;
 use kvproto::{
     deadlock_grpc::create_deadlock,
-    debugpb_grpc::{create_debug, DebugClient},
+    debugpb::{create_debug, DebugClient},
     diagnosticspb_grpc::create_diagnostics,
-    import_sstpb_grpc::create_import_sst,
+    import_sstpb::create_import_sst,
     kvrpcpb::{ApiVersion, Context},
     metapb,
     raft_cmdpb::RaftCmdResponse,

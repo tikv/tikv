@@ -104,7 +104,7 @@ health_controller = { workspace = true }
 hex = "0.4"
 http = "0"
 hybrid_engine = { workspace = true }
-hyper = { version = "0.14", features = ["full"] }
+hyper = { version = "=0.14.26", features = ["full"] }
 hyper-tls = "0.5"
 into_other = { workspace = true }
 itertools = "0.10"
@@ -137,7 +137,7 @@ pin-project = "1.0"
 pnet_datalink = "0.23"
 pprof = { version = "0.13", default-features = false, features = [
   "flamegraph",
-  "protobuf-codec",
+  "prost-codec",
 ] }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
@@ -207,8 +207,7 @@ zipf = "6.1.0"
 
 [patch.crates-io]
 # TODO: remove this when new raft-rs is published.
-raft = { git = "https://github.com/tikv/raft-rs", branch = "master" }
-raft-proto = { git = "https://github.com/tikv/raft-rs", branch = "master" }
+# raft = { path = "../raft-rs", default-features = false, features = ["prost-codec", "default-logger"] }
 protobuf = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 protobuf-codegen = { git = "https://github.com/pingcap/rust-protobuf", branch = "v2.8" }
 
@@ -239,7 +238,7 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "7693954bd1dd86e
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
 # [patch.'https://github.com/pingcap/kvproto']
-# kvproto = { git = "https://github.com/your_github_id/kvproto", branch = "your_branch" }
+# kvproto = { path = "../kvproto", features = ["grpcio-prost"] }
 #
 # After the PR to rust-rocksdb is merged, remember to comment this out and run `cargo update -p rocksdb`.
 # [patch.'https://github.com/tikv/rust-rocksdb']
@@ -412,23 +411,22 @@ time = { version = "0.1" }
 tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs
-raft = { version = "0.7.0", default-features = false, features = [
-  "protobuf-codec",
-] }
+raft = { git = "https://github.com/glorv/raft-rs", branch = "prost", default-features = false, features = ["prost-codec", "default-logger"] }
+raft-proto = { git = "https://github.com/glorv/raft-rs", branch = "prost", default-features = false, features = ["prost-codec"] }
 raft-engine = { git = "https://github.com/tikv/raft-engine.git", features = [
   "swap",
 ] }
 raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git" }
-grpcio = { version = "0.10.4", default-features = false, features = [
+grpcio = { git = "https://github.com/glorv/grpc-rs", branch = "prost", default-features = false, features = [
   "openssl",
-  "protobuf-codec",
+  "prost-codec",
   "nightly",
 ] }
-grpcio-health = { version = "0.10.4", default-features = false, features = [
-  "protobuf-codec",
+grpcio-health = { git = "https://github.com/glorv/grpc-rs", branch = "prost", default-features = false, features = [
+  "prost-codec",
 ] }
-tipb = { git = "https://github.com/pingcap/tipb.git" }
-kvproto = { git = "https://github.com/pingcap/kvproto.git" }
+tipb = { git = "https://github.com/glorv/tipb", branch = "prost", default-features = false, features = ["grpcio-prost-codec"] }
+kvproto = { git = "https://github.com/glorv/kvproto", branch = "tonic-prost", features = ["grpcio-prost"] }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }

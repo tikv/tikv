@@ -1154,7 +1154,7 @@ fn check_availability_by_last_heartbeats(
             .iter()
             .find(|p| p.get_id() == *id)
             .map_or(false, |p| {
-                p.role == PeerRole::Voter || p.role == PeerRole::IncomingVoter
+                p.get_role() == PeerRole::Voter || p.get_role() == PeerRole::IncomingVoter
             })
         {
             // leader itself is not a slow peer
@@ -1181,7 +1181,7 @@ fn check_availability_by_last_heartbeats(
             .iter()
             .find(|p| p.get_id() == peer.get_id())
             .map_or(false, |p| {
-                p.role == PeerRole::Voter || p.role == PeerRole::IncomingVoter
+                p.get_role() == PeerRole::Voter || p.get_role() == PeerRole::IncomingVoter
             });
         if !is_voter && change_type == ConfChangeType::AddNode {
             // exiting peers, promoting from learner to voter
@@ -1791,10 +1791,8 @@ impl RegionReadProgressCore {
             peer_id: li.leader_id,
             region_id: self.region_id,
             term: li.leader_term,
-            region_epoch: protobuf::SingularPtrField::some(li.epoch.clone()),
-            read_state: protobuf::SingularPtrField::some(read_state),
-            unknown_fields: protobuf::UnknownFields::default(),
-            cached_size: protobuf::CachedSize::default(),
+            region_epoch: Some(li.epoch.clone()),
+            read_state: Some(read_state),
         }
     }
 

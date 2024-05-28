@@ -1116,7 +1116,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                             conflict_commit_ts: released_lock.commit_ts,
                             key: released_lock.key.into_raw().unwrap(),
                             primary: lock_info.parameters.primary,
-                            reason: kvrpcpb::WriteConflictReason::PessimisticRetry,
+                            reason: kvrpcpb::write_conflict::Reason::PessimisticRetry,
                         },
                     )));
                     cb(Err(e.into()), false);

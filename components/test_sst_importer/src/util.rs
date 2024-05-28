@@ -12,7 +12,7 @@ use external_storage::{ExternalStorage, UnpinReader};
 use futures::{executor::block_on, io::Cursor as AsyncCursor, stream, SinkExt};
 use grpcio::{Result, WriteFlags};
 use kvproto::{
-    brpb::{Local, StorageBackend},
+    backup::{Local, StorageBackend},
     import_sstpb::{KvMeta, *},
     kvrpcpb::*,
     tikvpb::*,
@@ -231,7 +231,7 @@ where
     meta.set_start_ts(start_ts.unwrap_or_default());
     meta.set_length(len);
     meta.set_restore_ts(u64::MAX);
-    meta.set_compression_type(kvproto::brpb::CompressionType::Unknown);
+    meta.set_compression_type(kvproto::backup::CompressionType::Unknown);
     meta.set_name(name.to_owned());
     meta.set_cf(CF_DEFAULT.to_owned());
     meta

@@ -50,7 +50,7 @@ pub use flashback_to_version_read_phase::{
     FlashbackToVersionState,
 };
 pub use flush::Flush;
-use kvproto::kvrpcpb::*;
+use kvproto::kvrpcpb::{prewrite_request::PessimisticAction, *};
 pub use mvcc_by_key::MvccByKey;
 pub use mvcc_by_start_ts::MvccByStartTs;
 pub use pause::Pause;
@@ -190,7 +190,11 @@ impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
                 .take_mutations()
                 .into_iter()
                 .map(Into::into)
-                .zip(pessimistic_actions)
+                .zip(
+                    pessimistic_actions
+                        .into_iter()
+                        .map(|a| PessimisticAction::try_from(a).unwrap()),
+                )
                 .collect();
             PrewritePessimistic::new(
                 mutations,
@@ -968,7 +972,7 @@ pub mod test_util {
     pub fn pessimistic_prewrite<E: Engine>(
         engine: &mut E,
         statistics: &mut Statistics,
-        mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
+        mutations: Vec<(Mutation, prewrite_request::PessimisticAction)>,
         primary: Vec<u8>,
         start_ts: u64,
         for_update_ts: u64,
@@ -991,7 +995,7 @@ pub mod test_util {
         engine: &mut E,
         cm: ConcurrencyManager,
         statistics: &mut Statistics,
-        mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
+        mutations: Vec<(Mutation, prewrite_request::PessimisticAction)>,
         primary: Vec<u8>,
         start_ts: u64,
         for_update_ts: u64,
@@ -1019,7 +1023,7 @@ pub mod test_util {
     pub fn pessimistic_prewrite_check_for_update_ts<E: Engine>(
         engine: &mut E,
         statistics: &mut Statistics,
-        mutations: Vec<(Mutation, PrewriteRequestPessimisticAction)>,
+        mutations: Vec<(Mutation, prewrite_request::PessimisticAction)>,
         primary: Vec<u8>,
         start_ts: u64,
         for_update_ts: u64,

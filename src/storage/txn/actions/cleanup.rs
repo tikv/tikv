@@ -79,9 +79,9 @@ pub fn cleanup<S: Snapshot>(
 pub mod tests {
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::CF_WRITE;
-    use kvproto::kvrpcpb::Context;
     #[cfg(test)]
-    use kvproto::kvrpcpb::PrewriteRequestPessimisticAction::*;
+    use kvproto::kvrpcpb::prewrite_request::PessimisticAction::*;
+    use kvproto::kvrpcpb::Context;
     use txn_types::TimeStamp;
 
     use super::*;

@@ -7,9 +7,8 @@ use futures::{
     SinkExt, StreamExt,
 };
 use grpcio::{RpcContext, ServerStreamingSink, WriteFlags};
-use kvproto::{
-    resource_usage_agent::{ResourceMeteringRequest, ResourceUsageRecord},
-    resource_usage_agent_grpc::ResourceMeteringPubSub,
+use kvproto::resource_usage_agent::{
+    ResourceMeteringPubSub, ResourceMeteringRequest, ResourceUsageRecord,
 };
 use tikv_util::{info, warn};
 

@@ -170,7 +170,7 @@ mod test {
                     let mut resp = raft_cmdpb::RaftCmdResponse::default();
                     let mut header = raft_cmdpb::RaftResponseHeader::default();
                     if !self.leaders.borrow().contains(&region_id) {
-                        let mut err = kvproto::errorpb::Error::new();
+                        let mut err = kvproto::errorpb::Error::default();
                         err.set_not_leader(kvproto::errorpb::NotLeader::new());
                         header.set_error(err);
                     }

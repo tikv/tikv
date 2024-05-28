@@ -297,7 +297,7 @@ impl From<Error> for errorpb::Error {
                 after,
                 reason: hint,
             }) => {
-                let mut e = errorpb::ServerIsBusy::new();
+                let mut e = errorpb::ServerIsBusy::default();
                 e.set_backoff_ms(after.as_millis() as _);
                 e.set_reason(hint);
                 errorpb.set_server_is_busy(e);

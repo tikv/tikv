@@ -14,7 +14,7 @@ use engine_rocks::RocksEngine;
 use engine_traits::{Peekable, CF_RAFT};
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
-    kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
+    kvrpcpb::{prewrite_request::PessimisticAction::*, *},
     raft_serverpb::{PeerState, RaftMessage, RegionLocalState},
     tikvpb::TikvClient,
 };

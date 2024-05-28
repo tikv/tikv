@@ -16,8 +16,8 @@ use grpcio::{
     WriteFlags,
 };
 use kvproto::diagnosticspb::{
-    Diagnostics, SearchLogRequest, SearchLogRequestTarget, SearchLogResponse, ServerInfoRequest,
-    ServerInfoResponse, ServerInfoType,
+    search_log_request::Target as SearchLogRequestTarget, Diagnostics, SearchLogRequest,
+    SearchLogResponse, ServerInfoRequest, ServerInfoResponse, ServerInfoType,
 };
 use tikv_util::{
     sys::{ioload, SystemExt},

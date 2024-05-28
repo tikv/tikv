@@ -76,7 +76,6 @@ use tikv_util::{
 use time::{self, Timespec};
 
 use crate::{
-    bytes_capacity,
     coprocessor::{CoprocessorHost, RegionChangeEvent, RegionChangeReason},
     store::{
         async_io::{
@@ -415,7 +414,7 @@ where
 
         let mut heap_size = 0;
         for e in msg.get_message().get_entries() {
-            heap_size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
+            heap_size += e.data.capacity() + e.context.capacity();
         }
         let peer_msg = PeerMsg::RaftMessage(
             InspectedRaftMessage { heap_size, msg },

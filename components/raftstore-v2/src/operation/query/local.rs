@@ -309,7 +309,7 @@ where
     ) -> impl Future<Output = std::result::Result<RegionSnapshot<E::Snapshot>, RaftCmdResponse>>
     + Send
     + 'static {
-        let region_id = req.header.get_ref().region_id;
+        let region_id = req.get_header().region_id;
         let mut tried_cnt = 0;
         let res = loop {
             let res = self.try_get_snapshot(&req, false /* after_read_index */);
@@ -467,7 +467,7 @@ where
             return;
         }
 
-        let region_id = req.header.get_ref().region_id;
+        let region_id = req.get_header().region_id;
         TLS_LOCAL_READ_METRICS.with(|m| m.borrow_mut().renew_lease_advance.inc());
         // Send a read query which may renew the lease
         let msg = PeerMsg::raft_query(req.clone()).0;

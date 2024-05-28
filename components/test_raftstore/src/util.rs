@@ -31,7 +31,7 @@ use grpcio::{ChannelBuilder, Environment};
 use hybrid_engine::HybridEngine;
 use kvproto::{
     encryptionpb::EncryptionMethod,
-    kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
+    kvrpcpb::{prewrite_request::PessimisticAction::*, *},
     metapb::{self, RegionEpoch},
     raft_cmdpb::{
         AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, CmdType,
@@ -1054,7 +1054,7 @@ pub fn kv_batch_read(
 ) -> BatchGetResponse {
     let mut batch_get_req = BatchGetRequest::default();
     batch_get_req.set_context(ctx);
-    batch_get_req.set_keys(RepeatedField::from(keys));
+    batch_get_req.set_keys(keys);
     batch_get_req.set_version(ts);
     client.kv_batch_get(&batch_get_req).unwrap()
 }
@@ -1063,7 +1063,7 @@ pub fn must_kv_prewrite_with(
     client: &TikvClient,
     ctx: Context,
     muts: Vec<Mutation>,
-    pessimistic_actions: Vec<PrewriteRequestPessimisticAction>,
+    pessimistic_actions: Vec<prewrite_request::PessimisticAction>,
     pk: Vec<u8>,
     ts: u64,
     for_update_ts: u64,
@@ -1100,7 +1100,7 @@ pub fn try_kv_prewrite_with(
     client: &TikvClient,
     ctx: Context,
     muts: Vec<Mutation>,
-    pessimistic_actions: Vec<PrewriteRequestPessimisticAction>,
+    pessimistic_actions: Vec<prewrite_request::PessimisticAction>,
     pk: Vec<u8>,
     ts: u64,
     for_update_ts: u64,
@@ -1125,7 +1125,7 @@ pub fn try_kv_prewrite_with_impl(
     client: &TikvClient,
     ctx: Context,
     muts: Vec<Mutation>,
-    pessimistic_actions: Vec<PrewriteRequestPessimisticAction>,
+    pessimistic_actions: Vec<prewrite_request::PessimisticAction>,
     pk: Vec<u8>,
     ts: u64,
     for_update_ts: u64,

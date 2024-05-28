@@ -22,7 +22,7 @@ use grpcio_health::{proto::HealthCheckRequest, *};
 use kvproto::{
     coprocessor::*,
     debugpb,
-    kvrpcpb::{Action::MinCommitTsPushed, PrewriteRequestPessimisticAction::*, *},
+    kvrpcpb::{prewrite_request::PessimisticAction::*, Action::MinCommitTsPushed, *},
     metapb, raft_serverpb,
     raft_serverpb::*,
     tikvpb::*,

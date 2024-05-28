@@ -11,7 +11,7 @@ use grpcio::{
     Error as GrpcError, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink,
     WriteFlags,
 };
-use kvproto::debugpb::{self, *};
+use kvproto::debugpb::{self, get_range_properties_response::RangeProperty, *};
 use raftstore::store::fsm::store::StoreRegionMeta;
 use tikv_kv::RaftExtension;
 use tikv_util::{future::paired_future_callback, metrics};
@@ -505,7 +505,7 @@ where
                 .map_ok(|props| {
                     let mut resp = GetRangePropertiesResponse::default();
                     for (key, value) in props {
-                        let mut prop = GetRangePropertiesResponseRangeProperty::default();
+                        let mut prop = RangeProperty::default();
                         prop.set_key(key);
                         prop.set_value(value);
                         resp.mut_properties().push(prop)
@@ -718,9 +718,9 @@ where
 }
 
 mod region_size_response {
-    pub type Entry = kvproto::debugpb::RegionSizeResponseEntry;
+    pub type Entry = kvproto::debugpb::region_size_response::Entry;
 }
 
 mod list_fail_points_response {
-    pub type Entry = kvproto::debugpb::ListFailPointsResponseEntry;
+    pub type Entry = kvproto::debugpb::list_fail_points_response::Entry;
 }

@@ -11,8 +11,10 @@ use futures::stream::TryStreamExt;
 use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{
     cdcpb::{
-        ChangeData, ChangeDataEvent, ChangeDataRequest, ChangeDataRequestKvApi,
-        ChangeDataRequest_oneof_request,
+        change_data_request::{
+            KvApi as ChangeDataRequestKvApi, Request as ChangeDataRequest_oneof_request,
+        },
+        ChangeData, ChangeDataEvent, ChangeDataRequest,
     },
     kvrpcpb::ApiVersion,
 };
@@ -351,7 +353,7 @@ impl Service {
             request.get_region_epoch().clone(),
             request.request_id,
             conn_id,
-            request.kv_api,
+            request.get_kv_api(),
             request.filter_loop,
             observed_range,
         );

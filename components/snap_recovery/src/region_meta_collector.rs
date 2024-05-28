@@ -6,7 +6,7 @@ use engine_traits::{Engines, KvEngine, RaftEngine, CF_RAFT};
 use futures::channel::mpsc::UnboundedSender;
 use kvproto::{
     raft_serverpb::{PeerState, RaftApplyState, RaftLocalState, RegionLocalState},
-    recoverdatapb::*,
+    recover_data::*,
 };
 use thiserror::Error;
 use tikv_util::sys::thread::StdThreadBuildWrapper;
@@ -146,7 +146,13 @@ where
 
             // It's safe to unwrap region_local_state here, since region_id  guarantees that
             // the region state exists
-            if region_state.region_local_state.as_ref().unwrap().state == PeerState::Tombstone {
+            if region_state
+                .region_local_state
+                .as_ref()
+                .unwrap()
+                .get_state()
+                == PeerState::Tombstone
+            {
                 continue;
             }
 
@@ -217,7 +223,7 @@ impl LocalRegion {
             .get_region_epoch()
             .version;
         region_meta.tombstone =
-            self.region_local_state.as_ref().unwrap().state == PeerState::Tombstone;
+            self.region_local_state.as_ref().unwrap().get_state() == PeerState::Tombstone;
         region_meta.start_key = self
             .region_local_state
             .as_ref()
