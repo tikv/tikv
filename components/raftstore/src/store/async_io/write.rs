@@ -581,6 +581,7 @@ where
     batch: WriteTaskBatch<EK, ER>,
     cfg_tracker: Tracker<Config>,
     raft_write_size_limit: usize,
+    raft_write_batch_size_thd: usize,
     metrics: StoreWriteMetrics,
     message_metrics: RaftSendMessageMetrics,
     perf_context: ER::PerfContext,
@@ -619,6 +620,7 @@ where
             batch,
             cfg_tracker,
             raft_write_size_limit: cfg.value().raft_write_size_limit.0 as usize,
+            raft_write_batch_size_thd: cfg.value().raft_write_batch_size_thd.0 as usize,
             metrics: StoreWriteMetrics::new(cfg.value().waterfall_metrics),
             message_metrics: RaftSendMessageMetrics::default(),
             perf_context,
@@ -645,7 +647,9 @@ where
                         stopped |= self.handle_msg(msg);
                     }
                     Err(TryRecvError::Empty) => {
-                        if self.batch.get_raft_size() < 8192 && no_op_loop_count > 0 {
+                        if self.batch.get_raft_size() < self.raft_write_batch_size_thd
+                            && no_op_loop_count > 0
+                        {
                             // If the size of the batch is small enough, we spin for a while
                             // to make the batch larger. This can reduce the IOPS
                             // amplification if there are many trivial writes.
@@ -891,6 +895,7 @@ where
         // update config
         if let Some(incoming) = self.cfg_tracker.any_new() {
             self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
+            self.raft_write_batch_size_thd = incoming.raft_write_batch_size_thd.0 as usize;
             self.metrics.waterfall_metrics = incoming.waterfall_metrics;
         }
     }
