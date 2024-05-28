@@ -4,12 +4,17 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{Read, Write},
+    str::FromStr,
     sync::{Arc, Mutex},
 };
 
 use online_config::{ConfigChange, OnlineConfig};
 use raftstore::store::Config as RaftstoreConfig;
 use tikv::config::*;
+<<<<<<< HEAD
+=======
+use tikv_util::config::{ReadableOffsetTime, ReadableSchedule, ReadableSize};
+>>>>>>> f302b9db0c (raftstore: fix online config change panic for periodic-full-compact-start-time (#17069))
 
 fn change(name: &str, value: &str) -> HashMap<String, String> {
     let mut m = HashMap::new();
@@ -23,6 +28,29 @@ fn test_update_config() {
     cfg.validate().unwrap();
     let cfg_controller = ConfigController::new(cfg);
     let mut cfg = cfg_controller.get_current();
+
+    cfg_controller
+        .update(change(
+            "raftstore.periodic-full-compact-start-times",
+            "[\"12:00 +0800\",\"14:00 +0800\"]",
+        ))
+        .unwrap();
+    cfg.raft_store.periodic_full_compact_start_times = ReadableSchedule(vec![
+        ReadableOffsetTime::from_str("12:00 +0800").unwrap(),
+        ReadableOffsetTime::from_str("14:00 +0800").unwrap(),
+    ]);
+    assert_eq!(cfg_controller.get_current(), cfg);
+
+    cfg_controller
+        .update(change(
+            "raftstore.periodic-full-compact-start-times",
+            "[\"12:00\",\"14:00\"]",
+        ))
+        .unwrap();
+    cfg.raft_store.periodic_full_compact_start_times = ReadableSchedule(vec![
+        ReadableOffsetTime::from_str("12:00").unwrap(),
+        ReadableOffsetTime::from_str("14:00").unwrap(),
+    ]);
 
     // normal update
     cfg_controller
