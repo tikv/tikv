@@ -33,6 +33,8 @@ pub enum Error {
     Grpc(#[from] GrpcError),
     #[error("Protobuf meet error {0}")]
     Protobuf(#[from] ProtobufError),
+    #[error("Prost decode meet error {0}")]
+    Prost(#[from] prost::DecodeError),
     #[error("I/O Error: {0}")]
     Io(#[from] IoError),
     #[error("Txn error: {0}")]
@@ -61,6 +63,7 @@ impl ErrorCodeExt for Error {
         use error_code::backup_stream::*;
         match self {
             Error::Protobuf(_) => PROTO,
+            Error::Prost(_) => PROTO,
             Error::NoSuchTask { .. } => NO_SUCH_TASK,
             Error::MalformedMetadata(_) => MALFORMED_META,
             Error::Io(_) => IO,

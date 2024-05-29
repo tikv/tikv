@@ -514,6 +514,7 @@ dependencies = [
  "pin-project",
  "prometheus",
  "prometheus-static-metric",
+ "prost 0.12.6",
  "protobuf",
  "raft",
  "raftstore",
@@ -4336,7 +4337,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.4.2"
-source = "git+https://github.com/tikv/raft-engine.git#cd1533d79cfea02d005b458bd70fd9675846c9c6"
+source = "git+https://github.com/glorv/raft-engine.git?branch=prost#20a335d6b1362a44a779f8c875f6f20b64ba7a8e"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4370,7 +4371,7 @@ dependencies = [
 [[package]]
 name = "raft-engine-ctl"
 version = "0.4.2"
-source = "git+https://github.com/tikv/raft-engine.git#cd1533d79cfea02d005b458bd70fd9675846c9c6"
+source = "git+https://github.com/glorv/raft-engine.git?branch=prost#31371061201c8998740770b9bfc5c33ee35c88af"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
@@ -4459,6 +4460,7 @@ dependencies = [
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
+ "prost 0.12.6",
  "protobuf",
  "raft",
  "raft-proto",
@@ -4905,6 +4907,7 @@ dependencies = [
  "pd_client",
  "pin-project",
  "prometheus",
+ "prost 0.12.6",
  "protobuf",
  "rand 0.8.5",
  "serde",
@@ -6651,6 +6654,7 @@ dependencies = [
  "openssl",
  "panic_hook",
  "profiler",
+ "prost 0.12.6",
  "protobuf",
  "regex",
  "ryu",

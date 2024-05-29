@@ -75,13 +75,14 @@ impl ResourceManagerService {
                         let events = resp.get_events();
                         events.iter().for_each(|event| match event.get_type() {
                             EventType::Put => {
-                                match protobuf::parse_from_bytes::<ResourceGroup>(event.get_kv().get_value()) {
+                                match prost::Message::decode(event.get_kv().get_value()) {
                                     Ok(group) => self.manager.add_resource_group(group),
                                     Err(e) => error!("parse put resource group event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
                                 }
                             }
                             EventType::Delete => {
-                                match protobuf::parse_from_bytes::<ResourceGroup>(event.get_prev_kv().get_value()) {
+                                let res: Result<ResourceGroup, _> = prost::Message::decode(event.get_prev_kv().get_value());
+                                match res {
                                     Ok(group) => self.manager.remove_resource_group(group.get_name()),
                                     Err(e) => error!("parse delete resource group event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
                                 }
@@ -108,6 +109,7 @@ impl ResourceManagerService {
     }
 
     async fn reload_all_resource_groups(&mut self) {
+        use prost::Message;
         loop {
             match self
                 .meta_client
@@ -118,7 +120,7 @@ impl ResourceManagerService {
                     let kvs = resp.take_kvs().into_iter().collect::<Vec<_>>();
                     let mut vaild_groups = HashSet::with_capacity(kvs.len());
                     kvs.iter().for_each(|g| {
-                        match protobuf::parse_from_bytes::<ResourceGroup>(g.get_value()) {
+                        match ResourceGroup::decode(g.get_value()) {
                             Ok(rg) => {
                                 vaild_groups.insert(rg.get_name().to_ascii_lowercase());
                                 self.manager.add_resource_group(rg);

@@ -762,6 +762,7 @@ pub(crate) fn u64_to_timespec(u: u64) -> Timespec {
 }
 
 pub fn get_entry_header(entry: &Entry) -> RaftRequestHeader {
+    use prost::{Message};
     if entry.get_entry_type() != EntryType::EntryNormal {
         return RaftRequestHeader::default();
     }
@@ -776,13 +777,15 @@ pub fn get_entry_header(entry: &Entry) -> RaftRequestHeader {
         Ok(decoder) => decoder.header().clone(),
         Err(_) => {
             // request header is encoded into data
-            let mut is = CodedInputStream::from_bytes(entry.get_data());
+            let data = entry.get_data();
+            let mut is = CodedInputStream::from_bytes(data);
             if is.eof().unwrap() {
                 return RaftRequestHeader::default();
             }
             let (field_number, _) = is.read_tag_unpack().unwrap();
-            let t = is.read_message().unwrap();
             // Header field is of number 1
+            let pos = is.pos() as usize;
+            let t = prost::Message::decode_length_delimited(&data[pos..]).unwrap();
             if field_number != 1 {
                 panic!("unexpected field number: {} {:?}", field_number, t);
             }
@@ -2521,19 +2524,19 @@ mod tests {
         for i in 1..3 {
             region.mut_peers().push(metapb::Peer {
                 id: i,
-                role: PeerRole::Voter,
+                role: PeerRole::Voter as i32,
                 ..Default::default()
             });
         }
         region.mut_peers().push(metapb::Peer {
             id: 3,
-            role: PeerRole::IncomingVoter,
+            role: PeerRole::IncomingVoter as i32,
             ..Default::default()
         });
         for i in 4..6 {
             region.mut_peers().push(metapb::Peer {
                 id: i,
-                role: PeerRole::Learner,
+                role: PeerRole::Learner as i32,
                 ..Default::default()
             });
         }
@@ -2566,7 +2569,7 @@ mod tests {
             // promote peer 4 from learner to voter, it should work
             (
                 vec![ChangePeerRequest {
-                    change_type: eraftpb::ConfChangeType::AddNode,
+                    change_type: eraftpb::ConfChangeType::AddNode as i32,
                     peer: Some(metapb::Peer {
                         id: 4,
                         ..Default::default()
@@ -2580,7 +2583,7 @@ mod tests {
             // normal voters)
             (
                 vec![ChangePeerRequest {
-                    change_type: eraftpb::ConfChangeType::AddNode,
+                    change_type: eraftpb::ConfChangeType::AddNode as i32,
                     peer: Some(metapb::Peer {
                         id: 4,
                         ..Default::default()
@@ -2593,7 +2596,7 @@ mod tests {
             // remove a peer 3, it should work as peer 3 is slow
             (
                 vec![ChangePeerRequest {
-                    change_type: eraftpb::ConfChangeType::RemoveNode,
+                    change_type: eraftpb::ConfChangeType::RemoveNode as i32,
                     peer: Some(metapb::Peer {
                         id: 3,
                         ..Default::default()
@@ -2606,7 +2609,7 @@ mod tests {
             // remove a peer 2, it should be rejected as peer 3 is slow
             (
                 vec![ChangePeerRequest {
-                    change_type: eraftpb::ConfChangeType::RemoveNode,
+                    change_type: eraftpb::ConfChangeType::RemoveNode as i32,
                     peer: Some(metapb::Peer {
                         id: 2,
                         ..Default::default()
@@ -2619,7 +2622,7 @@ mod tests {
             // demote peer2, it should be rejected
             (
                 vec![ChangePeerRequest {
-                    change_type: eraftpb::ConfChangeType::AddLearnerNode,
+                    change_type: eraftpb::ConfChangeType::AddLearnerNode as i32,
                     peer: Some(metapb::Peer {
                         id: 2,
                         ..Default::default()
@@ -2633,7 +2636,7 @@ mod tests {
             (
                 vec![
                     ChangePeerRequest {
-                        change_type: eraftpb::ConfChangeType::AddNode,
+                        change_type: eraftpb::ConfChangeType::AddNode as i32,
                         peer: Some(metapb::Peer {
                             id: 4,
                             ..Default::default()
@@ -2642,7 +2645,7 @@ mod tests {
                         ..Default::default()
                     },
                     ChangePeerRequest {
-                        change_type: eraftpb::ConfChangeType::AddLearnerNode,
+                        change_type: eraftpb::ConfChangeType::AddLearnerNode as i32,
                         peer: Some(metapb::Peer {
                             id: 2,
                             ..Default::default()
@@ -2658,7 +2661,7 @@ mod tests {
             (
                 vec![
                     ChangePeerRequest {
-                        change_type: eraftpb::ConfChangeType::AddNode,
+                        change_type: eraftpb::ConfChangeType::AddNode as i32,
                         peer: Some(metapb::Peer {
                             id: 5,
                             ..Default::default()
@@ -2667,7 +2670,7 @@ mod tests {
                         ..Default::default()
                     },
                     ChangePeerRequest {
-                        change_type: eraftpb::ConfChangeType::AddLearnerNode,
+                        change_type: eraftpb::ConfChangeType::AddLearnerNode as i32,
                         peer: Some(metapb::Peer {
                             id: 2,
                             ..Default::default()
@@ -2682,7 +2685,7 @@ mod tests {
             (
                 vec![
                     ChangePeerRequest {
-                        change_type: eraftpb::ConfChangeType::AddNode,
+                        change_type: eraftpb::ConfChangeType::AddNode as i32,
                         peer: Some(metapb::Peer {
                             id: 4,
                             ..Default::default()
@@ -2691,7 +2694,7 @@ mod tests {
                         ..Default::default()
                     },
                     ChangePeerRequest {
-                        change_type: eraftpb::ConfChangeType::AddNode,
+                        change_type: eraftpb::ConfChangeType::AddNode as i32,
                         peer: Some(metapb::Peer {
                             id: 5,
                             ..Default::default()
@@ -2727,19 +2730,19 @@ mod tests {
         let mut region = Region::default();
         region.mut_peers().push(metapb::Peer {
             id: 1,
-            role: PeerRole::Voter,
+            role: PeerRole::Voter as i32,
             ..Default::default()
         });
         for i in 2..4 {
             region.mut_peers().push(metapb::Peer {
                 id: i,
-                role: PeerRole::IncomingVoter,
+                role: PeerRole::IncomingVoter as i32,
                 ..Default::default()
             });
         }
         region.mut_peers().push(metapb::Peer {
             id: 4,
-            role: PeerRole::Learner,
+            role: PeerRole::Learner as i32,
             ..Default::default()
         });
 
@@ -2767,7 +2770,7 @@ mod tests {
             // promote peer 4 from learner to voter, it should work
             (
                 vec![ChangePeerRequest {
-                    change_type: eraftpb::ConfChangeType::AddNode,
+                    change_type: eraftpb::ConfChangeType::AddNode as i32,
                     peer: Some(metapb::Peer {
                         id: 4,
                         ..Default::default()
@@ -2780,7 +2783,7 @@ mod tests {
             // remove a peer 3, it should work as peer 3 is slow
             (
                 vec![ChangePeerRequest {
-                    change_type: eraftpb::ConfChangeType::RemoveNode,
+                    change_type: eraftpb::ConfChangeType::RemoveNode as i32,
                     peer: Some(metapb::Peer {
                         id: 3,
                         ..Default::default()
@@ -2794,7 +2797,7 @@ mod tests {
             (
                 vec![
                     ChangePeerRequest {
-                        change_type: eraftpb::ConfChangeType::RemoveNode,
+                        change_type: eraftpb::ConfChangeType::RemoveNode as i32,
                         peer: Some(metapb::Peer {
                             id: 2,
                             ..Default::default()
@@ -2803,7 +2806,7 @@ mod tests {
                         ..Default::default()
                     },
                     ChangePeerRequest {
-                        change_type: eraftpb::ConfChangeType::AddLearnerNode,
+                        change_type: eraftpb::ConfChangeType::AddLearnerNode as i32,
                         peer: Some(metapb::Peer {
                             id: 3,
                             ..Default::default()

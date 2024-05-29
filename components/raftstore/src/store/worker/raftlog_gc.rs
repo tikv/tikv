@@ -212,7 +212,7 @@ mod tests {
         let region_id = 1;
         let mut raft_wb = raft_db.log_batch(0);
         for i in 0..100 {
-            let mut e = Entry::new();
+            let mut e = Entry::default();
             e.set_index(i);
             raft_wb.append(region_id, None, vec![e]).unwrap();
         }

@@ -5231,13 +5231,13 @@ mod tests {
         let mut req = RaftCmdRequest::default();
         entry.set_entry_type(EntryType::EntryNormal);
         let data = req.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
+        entry.set_data(data);
         assert!(can_witness_skip(&entry));
 
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::CompactLog);
         let data = req.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
+        entry.set_data(data);
         assert!(!can_witness_skip(&entry));
 
         let mut req = RaftCmdRequest::default();
@@ -5245,19 +5245,19 @@ mod tests {
         request.set_cmd_type(CmdType::Put);
         req.set_requests(vec![request].into());
         let data = req.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
+        entry.set_data(data);
         assert!(can_witness_skip(&entry));
 
         entry.set_entry_type(EntryType::EntryConfChange);
         let conf_change = ConfChange::new();
         let data = conf_change.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
+        entry.set_data(data);
         assert!(!can_witness_skip(&entry));
 
         entry.set_entry_type(EntryType::EntryConfChangeV2);
         let conf_change_v2 = ConfChangeV2::new();
         let data = conf_change_v2.write_to_bytes().unwrap();
-        entry.set_data(Bytes::copy_from_slice(&data));
+        entry.set_data(data);
         assert!(!can_witness_skip(&entry));
     }
 

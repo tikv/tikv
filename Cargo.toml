@@ -413,10 +413,10 @@ txn_types = { path = "components/txn_types" }
 # External libs
 raft = { git = "https://github.com/glorv/raft-rs", branch = "prost", default-features = false, features = ["prost-codec", "default-logger"] }
 raft-proto = { git = "https://github.com/glorv/raft-rs", branch = "prost", default-features = false, features = ["prost-codec"] }
-raft-engine = { git = "https://github.com/tikv/raft-engine.git", features = [
+raft-engine = { git = "https://github.com/glorv/raft-engine.git", branch = "prost", features = [
   "swap",
 ] }
-raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git" }
+raft-engine-ctl = { git = "https://github.com/glorv/raft-engine.git", branch = "prost" }
 grpcio = { git = "https://github.com/glorv/grpc-rs", branch = "prost", default-features = false, features = [
   "openssl",
   "prost-codec",
@@ -445,6 +445,7 @@ tracing = { version = "0.1.39", default-features = false, features = [
 ] }
 openssl = "0.10"
 openssl-sys = "0.9"
+prost = "0.12"
 
 [profile.dev.package.grpcio-sys]
 debug = false

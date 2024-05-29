@@ -19,7 +19,7 @@ use futures::{
 };
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri};
 use online_config::ConfigManager;
-use protobuf::{CodedInputStream, Message};
+use protobuf::Message;
 use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
@@ -209,15 +209,12 @@ impl<E: Engine> Endpoint<E> {
             None
         };
 
-        let mut input = CodedInputStream::from_bytes(&data);
-        input.set_recursion_limit(self.recursion_limit);
-
         let mut req_ctx: ReqContext;
         let builder: RequestHandlerBuilder<E::Snap>;
         match req.get_tp() {
             REQ_TYPE_DAG => {
-                let mut dag = DagRequest::default();
-                box_try!(dag.merge_from(&mut input));
+                let mut dag: DagRequest = DagRequest::default();
+                box_try!(dag.merge_from_bytes(&data));
                 let mut table_scan = false;
                 let mut is_desc_scan = false;
                 if let Some(scan) = dag.get_executors().iter().next() {
@@ -289,7 +286,7 @@ impl<E: Engine> Endpoint<E> {
             }
             REQ_TYPE_ANALYZE => {
                 let mut analyze = AnalyzeReq::default();
-                box_try!(analyze.merge_from(&mut input));
+                box_try!(analyze.merge_from_bytes(&data));
                 if start_ts == 0 {
                     start_ts = analyze.get_start_ts_fallback();
                 }
@@ -334,7 +331,7 @@ impl<E: Engine> Endpoint<E> {
             }
             REQ_TYPE_CHECKSUM => {
                 let mut checksum = ChecksumRequest::default();
-                box_try!(checksum.merge_from(&mut input));
+                box_try!(checksum.merge_from_bytes(&data));
                 let table_scan = checksum.get_scan_on() == ChecksumScanOn::Table;
                 if start_ts == 0 {
                     start_ts = checksum.get_start_ts_fallback();

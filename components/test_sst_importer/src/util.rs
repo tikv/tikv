@@ -37,10 +37,12 @@ pub fn send_upload_sst(
     meta: &SstMeta,
     data: &[u8],
 ) -> Result<UploadResponse> {
-    let mut r1 = UploadRequest::default();
-    r1.set_meta(meta.clone());
-    let mut r2 = UploadRequest::default();
-    r2.set_data(data.to_vec());
+    let r1 = UploadRequest {
+        chunk: Some(upload_request::Chunk::Meta(meta.clone())),
+    };
+    let r2 = UploadRequest {
+        chunk: Some(upload_request::Chunk::Data(data.to_vec())),
+    };
     let reqs: Vec<_> = vec![r1, r2]
         .into_iter()
         .map(|r| Result::Ok((r, WriteFlags::default())))
@@ -68,10 +70,11 @@ pub fn send_write_sst(
     values: Vec<Vec<u8>>,
     commit_ts: u64,
 ) -> Result<WriteResponse> {
-    let mut r1 = WriteRequest::default();
-    r1.set_meta(meta.clone());
-    let mut r2 = WriteRequest::default();
-
+    let r1 = WriteRequest {
+        context: None,
+        chunk: Some(write_request::Chunk::Meta(meta.clone())),
+    };
+    
     let mut batch = WriteBatch::default();
     let mut pairs = vec![];
 
@@ -83,7 +86,10 @@ pub fn send_write_sst(
     }
     batch.set_commit_ts(commit_ts);
     batch.set_pairs(pairs.into());
-    r2.set_batch(batch);
+    let r2 = WriteRequest {
+        context: None,
+        chunk: Some(write_request::Chunk::Batch(batch)),
+    };
 
     let reqs: Vec<_> = vec![r1, r2]
         .into_iter()
@@ -227,7 +233,7 @@ where
     let len = buf.len() as u64;
     block_on_external_io(storage.write(name, UnpinReader(Box::new(AsyncCursor::new(buf))), len))
         .unwrap();
-    let mut meta = KvMeta::new();
+    let mut meta = KvMeta::default();
     meta.set_start_ts(start_ts.unwrap_or_default());
     meta.set_length(len);
     meta.set_restore_ts(u64::MAX);
@@ -260,11 +266,9 @@ pub fn register_range_for(meta: &mut KvMeta, start: &[u8], end: &[u8]) {
 }
 
 pub fn local_storage(tmp: &TempDir) -> StorageBackend {
-    let mut backend = StorageBackend::default();
-    backend.set_local({
-        let mut local = Local::default();
-        local.set_path(tmp.path().to_str().unwrap().to_owned());
-        local
-    });
-    backend
+    let mut local = Local::default();
+    local.set_path(tmp.path().to_str().unwrap().to_owned());
+    StorageBackend {
+        backend: Some(kvproto::backup::storage_backend::Backend::Local(local))
+    }
 }

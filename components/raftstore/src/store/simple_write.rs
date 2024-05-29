@@ -7,7 +7,6 @@ use kvproto::{
     import_sstpb::SstMeta,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request},
 };
-use protobuf::{CodedInputStream, Message};
 use slog::Logger;
 use tikv_util::slog_panic;
 
@@ -61,9 +60,10 @@ where
         bin: SimpleWriteBinary,
         size_limit: usize,
     ) -> SimpleWriteReqEncoder<C> {
+        use prost::Message;
         let mut buf = Vec::with_capacity(256);
         buf.push(MAGIC_PREFIX);
-        header.write_length_delimited_to_vec(&mut buf).unwrap();
+        header.encode_length_delimited(&mut buf).unwrap();
         buf.extend_from_slice(&bin.buf);
 
         SimpleWriteReqEncoder {
@@ -232,27 +232,27 @@ impl<'a> SimpleWriteReqDecoder<'a> {
     pub fn new(
         fallback: impl FnOnce(&'a [u8], u64, u64) -> RaftCmdRequest,
         logger: &Logger,
-        buf: &'a [u8],
+        mut buf: &'a [u8],
         index: u64,
         term: u64,
     ) -> Result<SimpleWriteReqDecoder<'a>, RaftCmdRequest> {
+        use prost::encoding::{WireType, message::merge, DecodeContext};
         match buf.first().cloned() {
             Some(MAGIC_PREFIX) => {
-                let mut is = CodedInputStream::from_bytes(&buf[1..]);
-                let header = match is.read_message() {
-                    Ok(h) => h,
-                    Err(e) => slog_panic!(
+                let mut header = RaftRequestHeader::default();
+                buf = &buf[1..];
+                if let Err(e) = merge(WireType::LengthDelimited, &mut header, &mut buf, DecodeContext::default()) {
+                    slog_panic!(
                         logger,
                         "data corrupted";
                         "term" => term,
                         "index" => index,
                         "error" => ?e
-                    ),
-                };
-                let read = is.pos();
+                    );
+                }
                 Ok(SimpleWriteReqDecoder {
                     header,
-                    buf: &buf[1 + read as usize..],
+                    buf,
                 })
             }
             _ => Err(fallback(buf, index, term)),
@@ -437,6 +437,7 @@ fn decode_cf(buf: &[u8]) -> (&str, &[u8]) {
 
 #[inline(always)]
 fn encode(simple_write: SimpleWrite<'_>, buf: &mut Vec<u8>) {
+    use prost::Message;
     match simple_write {
         SimpleWrite::Put(put) => {
             buf.push(PUT_TAG);
@@ -461,7 +462,7 @@ fn encode(simple_write: SimpleWrite<'_>, buf: &mut Vec<u8>) {
             encode_len(ssts.len() as u32, buf);
             // IngestSST is not a frequent operation, use protobuf to reduce complexity.
             for sst in ssts {
-                sst.write_length_delimited_to_vec(buf).unwrap();
+                sst.encode_length_delimited(buf).unwrap();
             }
         }
     }
@@ -469,6 +470,7 @@ fn encode(simple_write: SimpleWrite<'_>, buf: &mut Vec<u8>) {
 
 #[inline]
 fn decode<'a>(buf: &mut &'a [u8]) -> Option<SimpleWrite<'a>> {
+    use prost::encoding::{WireType, message::merge, DecodeContext};
     let (tag, left) = buf.split_first()?;
     match *tag {
         PUT_TAG => {
@@ -498,18 +500,16 @@ fn decode<'a>(buf: &mut &'a [u8]) -> Option<SimpleWrite<'a>> {
             }))
         }
         INGEST_TAG => {
-            let (len, left) = decode_len(left);
-            let mut ssts = Vec::with_capacity(len as usize);
-            let mut is = CodedInputStream::from_bytes(left);
+            let (len, mut left) = decode_len(left);
+            let mut ssts: Vec<SstMeta> = Vec::with_capacity(len as usize);
             for _ in 0..len {
-                let sst = match is.read_message() {
-                    Ok(sst) => sst,
-                    Err(e) => panic!("data corrupted {:?}", e),
-                };
+                let mut sst = SstMeta::default();
+                if let Err(e) = merge(WireType::LengthDelimited, &mut sst, &mut left, DecodeContext::default()) {
+                    panic!("data corrupted {:?}", e);
+                }
                 ssts.push(sst);
             }
-            let read = is.pos();
-            *buf = &left[read as usize..];
+            *buf = left;
             Some(SimpleWrite::Ingest(ssts))
         }
         tag => panic!("corrupted data: invalid tag {}", tag),
@@ -652,6 +652,7 @@ mod tests {
 
     #[test]
     fn test_invalid() {
+        use protobuf::Message;
         let mut raft_cmd = RaftCmdRequest::default();
         raft_cmd.mut_header().set_term(2);
 

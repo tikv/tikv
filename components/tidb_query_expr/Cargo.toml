@@ -21,6 +21,7 @@ num = { version = "0.3", default-features = false }
 num-traits = "0.2"
 openssl = { workspace = true }
 protobuf = "2"
+prost = { workspace = true }
 regex = "1.1"
 ryu = "1.0"
 safemem = { version = "0.3", default-features = false }

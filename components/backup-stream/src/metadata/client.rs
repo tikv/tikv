@@ -191,8 +191,7 @@ impl MetadataEvent {
         Some(match event.kind {
             KvEventType::Put => {
                 let stream_task = StreamTask {
-                    info: protobuf::parse_from_bytes::<StreamBackupTaskInfo>(event.pair.value())
-                        .ok()?,
+                    info: prost::Message::decode(event.pair.value()).ok()?,
                     is_paused: false,
                 };
 
@@ -294,7 +293,8 @@ impl<Store: MetaStore> MetadataClient<Store> {
             return Ok(None);
         }
         let r = &r[0];
-        let err = protobuf::parse_from_bytes(r.value())?;
+        let err = prost::Message::decode(r.value())?;
+        //let err = protobuf::parse_from_bytes(r.value())?;
         Ok(Some(err))
     }
 
@@ -310,7 +310,8 @@ impl<Store: MetaStore> MetadataClient<Store> {
             return Ok(None);
         }
         let r = &r[0];
-        let err = protobuf::parse_from_bytes(r.value())?;
+        let err = prost::Message::decode(r.value())?;
+        //let err = protobuf::parse_from_bytes(r.value())?;
         Ok(Some(err))
     }
 
@@ -374,7 +375,8 @@ impl<Store: MetaStore> MetadataClient<Store> {
         if items.is_empty() {
             return Ok(None);
         }
-        let info = protobuf::parse_from_bytes::<StreamBackupTaskInfo>(items[0].value())?;
+        //let info = protobuf::parse_from_bytes::<StreamBackupTaskInfo>(items[0].value())?;
+        let info = prost::Message::decode(items[0].value())?;
         let is_paused = self.check_task_paused(name).await?;
 
         Ok(Some(StreamTask { info, is_paused }))
@@ -398,7 +400,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
 
         let mut tasks = Vec::with_capacity(kvs.inner.len());
         for kv in kvs.inner {
-            let t = protobuf::parse_from_bytes::<StreamBackupTaskInfo>(kv.value())?;
+            let t: StreamBackupTaskInfo = prost::Message::decode(kv.value())?;
             let paused = self.check_task_paused(t.get_name()).await?;
             tasks.push(StreamTask {
                 info: t,
