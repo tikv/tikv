@@ -11,34 +11,50 @@ use txn_types::TimeStamp;
 
 use super::errors::{Error, Result};
 
-trait CompactStorage: WalkBlobStorage + ExternalStorage {}
+pub trait CompactStorage: WalkBlobStorage + ExternalStorage {}
 
 impl<T: WalkBlobStorage + ExternalStorage> CompactStorage for T {}
 
 const METADATA_PREFIX: &'static str = "v1/backupmeta";
 
 #[derive(Debug)]
-struct MetaStorage {
-    files: Vec<MetaFile>,
+pub struct MetaStorage {
+    pub files: Vec<MetaFile>,
 }
 
 #[derive(Debug)]
-struct MetaFile {
-    name: Arc<str>,
-    logs: Vec<LogFile>,
+pub struct MetaFile {
+    pub name: Arc<str>,
+    pub logs: Vec<LogFile>,
 }
 
 #[derive(Debug)]
-struct LogFile {
-    name: Arc<str>,
-    offset: u64,
-    length: u64,
+
+pub struct LogFile {
+    pub id: LogFileId,
+    pub real_size: u64,
+    pub region_id: u64,
 }
 
-struct LoadFromExt {
-    from_ts: Option<TimeStamp>,
-    to_ts: Option<TimeStamp>,
-    max_concurrent_fetch: usize,
+pub struct LogFileId {
+    pub name: Arc<str>,
+    pub offset: u64,
+    pub length: u64,
+}
+
+impl std::fmt::Debug for LogFileId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Id")
+            .field(&self.name)
+            .field(&format_args!("@{}+{}", self.offset, self.length))
+            .finish()
+    }
+}
+
+pub struct LoadFromExt {
+    pub from_ts: Option<TimeStamp>,
+    pub to_ts: Option<TimeStamp>,
+    pub max_concurrent_fetch: usize,
 }
 
 impl Default for LoadFromExt {
@@ -69,7 +85,7 @@ fn select_vec<'a, T, F: Future<Output = T> + Unpin + 'a>(
 }
 
 impl MetaStorage {
-    async fn load_from_ext(s: &dyn CompactStorage, ext: LoadFromExt) -> Result<Self> {
+    pub async fn load_from_ext(s: &dyn CompactStorage, ext: LoadFromExt) -> Result<Self> {
         let mut files = s.walk(&METADATA_PREFIX);
         let mut result = MetaStorage { files: vec![] };
         let mut pending_futures = vec![];
@@ -103,9 +119,13 @@ impl MetaFile {
             let name = Arc::from(group.path.clone().into_boxed_str());
             for log_file in group.get_data_files_info() {
                 log_files.push(LogFile {
-                    name: Arc::clone(&name),
-                    offset: log_file.range_offset,
-                    length: log_file.range_length,
+                    id: LogFileId {
+                        name: Arc::clone(&name),
+                        offset: log_file.range_offset,
+                        length: log_file.range_length,
+                    },
+                    real_size: log_file.length,
+                    region_id: log_file.region_id as _,
                 })
             }
         }
@@ -115,34 +135,5 @@ impl MetaFile {
             logs: log_files,
         };
         Ok(result)
-    }
-}
-
-mod test {
-    use std::any::Any;
-
-    use external_storage::{BackendConfig, BlobStore, S3Storage};
-    use kvproto::brpb::{StorageBackend, S3};
-
-    use super::{CompactStorage, LoadFromExt, MetaStorage};
-
-    #[tokio::test]
-    #[ignore]
-    async fn playground() {
-        let mut backend = StorageBackend::new();
-        let mut s3 = S3::new();
-        s3.endpoint = "http://10.2.7.193:9000".to_owned();
-        s3.force_path_style = true;
-        s3.access_key = "minioadmin".to_owned();
-        s3.secret_access_key = "minioadmin".to_owned();
-        s3.bucket = "astro".to_owned();
-        s3.prefix = "tpcc-1000-incr".to_owned();
-        backend.set_s3(s3);
-        let storage = external_storage::create_storage(&backend, BackendConfig::default()).unwrap()
-            as Box<dyn Any>;
-        let storage = storage.downcast::<BlobStore<S3Storage>>().unwrap();
-
-        let meta = MetaStorage::load_from_ext(storage.as_ref(), LoadFromExt::default()).await;
-        println!("{:?}", meta.unwrap().files[0]);
     }
 }
