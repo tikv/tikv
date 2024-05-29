@@ -23,7 +23,7 @@ use kvproto::{
 use pd_client::BucketMeta;
 use tikv_util::{
     codec::number::decode_u64,
-    debug, error,
+    debug, error, info,
     lru::LruCache,
     store::find_peer_by_id,
     time::{monotonic_raw_now, ThreadReadId},
@@ -37,7 +37,7 @@ use crate::{
     errors::RAFTSTORE_IS_BUSY,
     store::{
         cmd_resp,
-        fsm::store::StoreMeta,
+        fsm::{apply::PRINTF_LOG, store::StoreMeta},
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
         Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand, ReadCallback,
         ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TxnExt,
@@ -151,6 +151,14 @@ pub trait ReadExecutor {
                         let mut res = ReadIndexResponse::default();
                         res.set_read_index(read_index);
                         resp.set_read_index(res);
+
+                        if PRINTF_LOG.load(Ordering::Relaxed) {
+                            info!("*** read_index response";
+                                "req.start_ts" => req.get_read_index().get_start_ts(),
+                                "req.key_ranges" => ?req.get_read_index().get_key_ranges(),
+                                "read_index" => read_index
+                            );
+                        }
                     } else {
                         panic!("[region {}] can not get readindex", region.get_id());
                     }
@@ -1065,6 +1073,17 @@ where
     ) {
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => {
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    req.get_requests()
+                        .iter()
+                        .filter(|r| r.has_read_index())
+                        .for_each(|r| {
+                            info!("*** using local reader";
+                                "start_ts" => r.get_read_index().get_start_ts(),
+                                "key_ranges" => ?r.get_read_index().get_key_ranges(),
+                            );
+                        });
+                }
                 if let Some(ref mut ctx) = snap_ctx {
                     ctx.set_range(CacheRange::from_region(&delegate.region))
                 }
@@ -1175,7 +1194,20 @@ where
                 cb.set_result(response);
             }
             // Forward to raftstore.
-            Ok(None) => self.redirect(RaftCommand::new(req, cb)),
+            Ok(None) => {
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    req.get_requests()
+                        .iter()
+                        .filter(|r| r.has_read_index())
+                        .for_each(|r| {
+                            info!("*** redirecting to raftstore";
+                                "start_ts" => r.get_read_index().get_start_ts(),
+                                "key_ranges" => ?r.get_read_index().get_key_ranges(),
+                            );
+                        });
+                }
+                self.redirect(RaftCommand::new(req, cb))
+            }
             Err(e) => {
                 let mut response = cmd_resp::new_error(e);
                 if let Some(delegate) = self

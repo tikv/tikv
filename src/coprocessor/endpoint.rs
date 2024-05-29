@@ -4,6 +4,7 @@ use std::{
     borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, mem, sync::Arc,
     time::Duration,
 };
+use std::sync::atomic::Ordering;
 
 use ::tracker::{
     set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS,
@@ -20,6 +21,7 @@ use futures::{
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri};
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
+use raftstore::store::fsm::apply::PRINTF_LOG;
 use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
@@ -460,6 +462,11 @@ impl<E: Engine> Endpoint<E> {
             err.set_bucket_version_not_match(bucket_not_match);
             return Err(Error::Region(err));
         }
+
+        if PRINTF_LOG.load(Ordering::Relaxed) {
+            info!("cop handle_unary_request_impl snapshot got"; "req_ctx" => ?tracker.req_ctx, "range_cache_snap" => snapshot.ext().range_cache_engine_snap());
+        }
+
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
         tracker.req_ctx.deadline.check()?;
@@ -498,6 +505,10 @@ impl<E: Engine> Endpoint<E> {
         tracker.collect_storage_statistics(storage_stats);
         let (exec_details, exec_details_v2) = tracker.get_exec_details();
         tracker.on_finish_all_items();
+
+        if PRINTF_LOG.load(Ordering::Relaxed) {
+            info!("cop handle finish"; "return_rows" => exec_summary.num_produced_rows,  "req_ctx" => ?tracker.req_ctx);
+        }
 
         let mut resp = match result {
             Ok(resp) => {

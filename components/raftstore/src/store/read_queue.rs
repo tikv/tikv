@@ -1,7 +1,7 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::{cmp, collections::VecDeque, mem, u64, usize};
+use std::{cmp, collections::VecDeque, mem, sync::atomic::Ordering, u64, usize};
 
 use collections::HashMap;
 use kvproto::{
@@ -12,7 +12,7 @@ use protobuf::Message;
 use tikv_util::{
     box_err,
     codec::number::{NumberEncoder, MAX_VAR_U64_LEN},
-    debug, error,
+    debug, error, info,
     memory::HeapSize,
     time::{duration_to_sec, monotonic_raw_now},
     MustConsumeVec,
@@ -22,7 +22,11 @@ use uuid::Uuid;
 
 use super::msg::ErrorCallback;
 use crate::{
-    store::{fsm::apply, metrics::*, Config},
+    store::{
+        fsm::apply::{self, PRINTF_LOG},
+        metrics::*,
+        Config,
+    },
     Result,
 };
 
@@ -274,6 +278,15 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
                     if occur_index < index {
                         continue;
                     }
+                }
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    info!(
+                        "*** advance_replica_reads";
+                        // "start_ts" => self.reads[offset].start_ts,
+                        "uuid" => ?uuid,
+                        "read_index" => index,
+                        "offset" => offset
+                    );
                 }
                 self.reads[offset].read_index = Some(index);
                 min_changed_offset = cmp::min(min_changed_offset, offset);

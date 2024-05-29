@@ -163,6 +163,8 @@ impl<T> From<TypedCommand<T>> for Command {
 
 impl From<PrewriteRequest> for TypedCommand<PrewriteResult> {
     fn from(mut req: PrewriteRequest) -> Self {
+        // Debug set `start_ts` to `txn_source`.
+        req.mut_context().txn_source = req.start_version;
         let for_update_ts = req.get_for_update_ts();
         let secondary_keys = if req.get_use_async_commit() {
             Some(req.get_secondaries().into())
@@ -250,6 +252,8 @@ impl From<PessimisticLockRequest> for TypedCommand<StorageResult<PessimisticLock
 
 impl From<CommitRequest> for TypedCommand<TxnStatus> {
     fn from(mut req: CommitRequest) -> Self {
+        // Debug set `start_ts` to `txn_source`.
+        req.mut_context().txn_source = req.start_version;
         let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
 
         Commit::new(

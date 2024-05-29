@@ -9,6 +9,7 @@ use std::{
     },
     time::Duration,
 };
+use std::ops::Deref;
 
 use api_version::KvFormat;
 use fail::fail_point;
@@ -28,6 +29,7 @@ use protobuf::RepeatedField;
 use raft::eraftpb::MessageType;
 use raftstore::{
     store::{
+        fsm::apply::PRINTF_LOG,
         memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES},
         metrics::{MESSAGE_RECV_BY_STORE, RAFT_ENTRIES_CACHES_GAUGE},
         CheckLeaderTask,
@@ -1543,6 +1545,13 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: GetRequest,
 ) -> impl Future<Output = ServerResult<GetResponse>> {
+    if PRINTF_LOG.load(Ordering::Relaxed) {
+        info!(
+            "future_get";
+            "region_id" => req.get_context().region_id,
+            "start_ts" => req.get_version(),
+        );
+    }
     let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
         req.get_context(),
         RequestType::KvGet,
@@ -2252,8 +2261,27 @@ fn future_copr<E: Engine>(
     peer: Option<String>,
     req: Request,
 ) -> impl Future<Output = ServerResult<MemoryTraceGuard<Response>>> {
+    let start_ts = req.start_ts;
+    if PRINTF_LOG.load(Ordering::Relaxed) {
+        info!(
+            "future_cop";
+            "region_id" => req.get_context().region_id,
+            "start_ts" => start_ts,
+        );
+    }
     let ret = copr.parse_and_handle_unary_request(req, peer);
-    async move { Ok(ret.await) }
+    async move {
+        let resp = ret.await;
+        let res = resp.deref();
+        if PRINTF_LOG.load(Ordering::Relaxed) {
+            info!(
+                "Coprocessor response";
+                "start_ts" => start_ts,
+                "response" => ?res,
+            );
+        }
+        Ok(resp)
+    }
 }
 
 fn future_raw_coprocessor<E: Engine, L: LockManager, F: KvFormat>(

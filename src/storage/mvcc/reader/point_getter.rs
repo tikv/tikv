@@ -2,9 +2,11 @@
 
 // #[PerformanceCriticalPath
 use std::borrow::Cow;
+use std::sync::atomic::Ordering;
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{IsolationLevel, WriteConflictReason};
+use raftstore::store::fsm::apply::PRINTF_LOG;
 use tikv_kv::SEEK_BOUND;
 use txn_types::{Key, LastChange, Lock, LockType, TimeStamp, TsSet, Value, WriteRef, WriteType};
 
@@ -174,7 +176,18 @@ impl<S: Snapshot> PointGetter<S> {
             // Check locks that signal concurrent writes for `Si` or more recent writes for
             // `RcCheckTs`.
             if let Some(lock) = self.load_and_check_lock(user_key)? {
-                return self.load_data_from_lock(user_key, lock);
+                let lock_clone = lock.clone();
+                let data = self.load_data_from_lock(user_key, lock);
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    info!("*** point getter with access lock";
+                        "start_ts" => self.ts,
+                        "lock" => ?lock_clone,
+                        "access_locks" => ?&self.access_locks,
+                        "key" => %user_key,
+                        "data" => ?&data,
+                    );
+                }
+                return data;
             }
         }
 
@@ -192,6 +205,7 @@ impl<S: Snapshot> PointGetter<S> {
     fn load_and_check_lock(&mut self, user_key: &Key) -> Result<Option<Lock>> {
         self.statistics.lock.get += 1;
         let lock_value = self.snapshot.get_cf(CF_LOCK, user_key)?;
+        let seqno = self.snapshot.sequence_number();
 
         if let Some(ref lock_value) = lock_value {
             let lock = Lock::parse(lock_value)?;
@@ -207,10 +221,30 @@ impl<S: Snapshot> PointGetter<S> {
             ) {
                 self.statistics.lock.processed_keys += 1;
                 if self.access_locks.contains(lock.ts) {
+                    if PRINTF_LOG.load(Ordering::Relaxed) {
+                        info!("*** getter with access lock return lock";
+                            "lock" => ?&lock,
+                            "start_ts" => self.ts,
+                            "access" => ?self.access_locks,
+                            "key" => %user_key,
+                            "lock_ts" => lock.ts,
+                            "seqno" => seqno,
+                        );
+                    }
                     return Ok(Some(lock));
                 }
                 Err(e.into())
             } else {
+                if self.bypass_locks.contains(lock.ts) {
+                    if PRINTF_LOG.load(Ordering::Relaxed) {
+                        info!("*** getter with bypass lock return None";
+                            "start_ts" => self.ts,
+                            "bypass_locks" => ?self.bypass_locks,
+                            "key" => %user_key,
+                            "lock_ts" => lock.ts,
+                        );
+                    }
+                }
                 Ok(None)
             }
         } else {

@@ -497,6 +497,10 @@ pub trait Snapshot: Sync + Send + Clone {
     }
 
     fn ext(&self) -> Self::Ext<'_>;
+
+    fn sequence_number(&self) -> u64 {
+        0
+    }
 }
 
 pub trait SnapshotExt {

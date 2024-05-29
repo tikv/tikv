@@ -51,6 +51,7 @@ use raftstore::store::TxnExt;
 use resource_control::{ResourceController, ResourceGroupManager, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory};
 use smallvec::{smallvec, SmallVec};
+use raftstore::store::fsm::apply::PRINTF_LOG;
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{
     memory::MemoryQuota, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
@@ -567,7 +568,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let cid = task.cid();
         let tracker = task.tracker();
         let cmd = task.cmd();
-        debug!("received new command"; "cid" => cid, "cmd" => ?cmd, "tracker" => ?tracker);
+        if PRINTF_LOG.load(Ordering::Relaxed) {
+            info!("received new command"; "cid" => cid, "cmd" => ?cmd, "tracker" => ?tracker);
+        }
 
         let tag = cmd.tag();
         let priority_tag = get_priority_tag(cmd.priority());
@@ -756,11 +759,14 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     }
                     task.set_extra_op(extra_op);
 
-                    debug!(
-                        "process cmd with snapshot";
-                        "cid" => task.cid(), "term" => ?term, "extra_op" => ?extra_op,
-                        "tracker" => ?task.tracker()
-                    );
+                    if PRINTF_LOG.load(Ordering::Relaxed) {
+                        info!(
+                            "process cmd with snapshot";
+                            "cmd" => ?&task.cmd(),
+                            "cid" => task.cid(), "term" => ?term, "extra_op" => ?extra_op,
+                            "tracker" => ?task.tracker()
+                        );
+                    }
                     sched.process(snapshot, task).await;
                 }
                 Err(err) => {
@@ -803,6 +809,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let pr = ProcessResult::Failed {
             err: StorageError::from(err),
         };
+        if PRINTF_LOG.load(Ordering::Relaxed) {
+            info!("write command finished with error";
+                "pr" => ?&pr,
+            );
+        }
         if let Some(details) = sched_details {
             GLOBAL_TRACKERS.with_tracker(details.tracker, |tracker| {
                 tracker.metrics.scheduler_process_nanos = details
@@ -873,8 +884,14 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
         }
 
-        debug!("write command finished";
-            "cid" => cid, "pipelined" => pipelined, "async_apply_prewrite" => async_apply_prewrite);
+        if PRINTF_LOG.load(Ordering::Relaxed) {
+            info!(
+                "write command finished";
+                "pipelined" => pipelined,
+                "async_apply_prewrite" => async_apply_prewrite,
+                "result" => ?result
+            );
+        }
         drop(lock_guards);
 
         if result.is_ok() && !known_txn_status.is_empty() {
@@ -1391,7 +1408,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // the error to the callback, and releases the latches.
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
-                debug!("write command failed"; "cid" => cid, "err" => ?err);
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    info!("write command failed"; "cid" => cid, "err" => ?err);
+                }
                 scheduler.finish_with_err(cid, err, Some(sched_details));
                 return;
             }
@@ -1683,6 +1702,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 WriteEvent::Finished(res) => {
                     fail_point!("scheduler_async_write_finish");
                     let ok = res.is_ok();
+
+                    if PRINTF_LOG.load(Ordering::Relaxed) {
+                        info!("scheduler async write applied finish and callback";
+                        "cid" => cid,
+                        "ok" => ok);
+                    }
 
                     sched.on_write_finished(
                         cid,

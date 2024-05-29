@@ -11,7 +11,7 @@ use std::{
     },
     iter::Iterator,
     mem,
-    sync::{Arc, Mutex},
+    sync::{atomic::Ordering, Arc, Mutex},
     time::{Duration, Instant},
     u64,
 };
@@ -80,7 +80,7 @@ use crate::{
         demote_failed_voters_request,
         entry_storage::MAX_WARMED_UP_CACHE_KEEP_TIME,
         fsm::{
-            apply,
+            apply::{self, PRINTF_LOG},
             store::{PollContext, StoreMeta},
             ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeObserver, ChangePeer,
             ExecResult, SwitchWitness,
@@ -2419,12 +2419,14 @@ where
         fail_point!("on_apply_res", |_| {});
         match res {
             ApplyTaskRes::Apply(mut res) => {
-                debug!(
-                    "async apply finish";
-                    "region_id" => self.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                    "res" => ?res,
-                );
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    info!(
+                        "async apply finish";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "res" => ?res.apply_state,
+                    );
+                }
                 if self.fsm.peer.wait_data {
                     return;
                 }

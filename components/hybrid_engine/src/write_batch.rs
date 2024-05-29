@@ -131,11 +131,14 @@ impl<EK: KvEngine> Mutable for HybridEngineWriteBatch<EK> {
     }
 
     fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        self.disk_write_batch.delete_range(begin_key, end_key)
+        self.disk_write_batch.delete_range(begin_key, end_key)?;
+        self.cache_write_batch.delete_range(begin_key, end_key)
     }
 
     fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         self.disk_write_batch
+            .delete_range_cf(cf, begin_key, end_key)?;
+        self.cache_write_batch
             .delete_range_cf(cf, begin_key, end_key)
     }
 }

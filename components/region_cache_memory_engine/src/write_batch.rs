@@ -1,6 +1,7 @@
 use core::slice::SlicePattern;
 use std::{
     collections::BTreeSet,
+    fmt::Debug,
     sync::{atomic::Ordering, Arc},
 };
 
@@ -347,11 +348,23 @@ impl WriteBatchEntryInternal {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct RangeCacheWriteBatchEntry {
     cf: usize,
     key: Bytes,
     inner: WriteBatchEntryInternal,
+}
+
+impl Debug for RangeCacheWriteBatchEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Range Cache Entry: Key {}, Value {:?}, CF {}",
+            log_wrappers::hex_encode_upper(&self.key),
+            self.inner,
+            self.cf,
+        )
+    }
 }
 
 impl RangeCacheWriteBatchEntry {
@@ -402,6 +415,12 @@ impl RangeCacheWriteBatchEntry {
         key.set_memory_controller(memory_controller.clone());
         value.set_memory_controller(memory_controller);
         handle.insert(key, value, guard);
+
+        info!(
+            "write to memory";
+            "entry" => ?self,
+            "seqno" => seq,
+        );
 
         Ok(())
     }

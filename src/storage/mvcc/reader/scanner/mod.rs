@@ -79,6 +79,12 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
+    #[inline]
+    pub fn range_cache_snap(mut self, range_cache_snap: bool) -> Self {
+        self.0.range_cache_snap = range_cache_snap;
+        self
+    }
+
     /// Limit the range to `[lower_bound, upper_bound)` in which the
     /// `ForwardKvScanner` should scan. `None` means unbounded.
     ///
@@ -275,6 +281,7 @@ pub struct ScannerConfig<S: Snapshot> {
     access_locks: TsSet,
 
     check_has_newer_ts_data: bool,
+    range_cache_snap: bool,
 }
 
 impl<S: Snapshot> ScannerConfig<S> {
@@ -293,6 +300,7 @@ impl<S: Snapshot> ScannerConfig<S> {
             bypass_locks: Default::default(),
             access_locks: Default::default(),
             check_has_newer_ts_data: false,
+            range_cache_snap: false,
         }
     }
 

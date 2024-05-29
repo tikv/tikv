@@ -1,7 +1,12 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use core::slice::SlicePattern;
-use std::{fmt::Debug, ops::Deref, result, sync::Arc};
+use std::{
+    fmt::Debug,
+    ops::Deref,
+    result,
+    sync::{atomic::Ordering, Arc},
+};
 
 use bytes::Bytes;
 use crossbeam::epoch::{self};
@@ -12,9 +17,10 @@ use engine_traits::{
     CF_DEFAULT,
 };
 use prometheus::local::LocalHistogram;
+use raftstore::store::fsm::apply::PRINTF_LOG;
 use skiplist_rs::{base::OwnedIter, SkipList};
 use slog_global::error;
-use tikv_util::{box_err, time::Instant};
+use tikv_util::{box_err, info, time::Instant};
 
 use crate::{
     background::BackgroundTask,
@@ -193,14 +199,18 @@ impl Peekable for RangeCacheSnapshot {
             InternalKey {
                 user_key,
                 v_type: ValueType::Value,
-                ..
+                sequence,
             } if user_key == key => {
-                let value = iter.value().clone_bytes();
-                self.engine
-                    .statistics()
-                    .record_ticker(Tickers::BytesRead, value.len() as u64);
-                perf_counter_add!(get_read_bytes, value.len() as u64);
-                Ok(Some(RangeCacheDbVector(value)))
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    info!(
+                        "get_value_cf_opt in memory engine";
+                        "key" => log_wrappers::Value(key),
+                        "cf" => cf,
+                        "seqno" => self.sequence_number(),
+                        "find_seqno" => sequence,
+                    );
+                }
+                Ok(Some(RangeCacheDbVector(iter.value().clone_bytes())))
             }
             _ => Ok(None),
         }
