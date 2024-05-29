@@ -1073,7 +1073,6 @@ impl Runnable for BackgroundRunner {
             // TODO: Consider making this async.
             BackgroundTask::TopRegionsLoadEvict => self.core.top_regions_load_evict(),
             BackgroundTask::CleanLockTombstone(snapshot_seqno) => {
-                return;
                 if snapshot_seqno < self.last_seqno {
                     return;
                 }
