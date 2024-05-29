@@ -1253,12 +1253,24 @@ impl Drop for Filter {
         if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
             let guard = &epoch::pin();
             self.metrics.filtered += 1;
+            if PRINTF_LOG.load(Ordering::Relaxed) {
+                info!(
+                    "gc filter write n";
+                    "key" => log_wrappers::Value(&cached_delete_key),
+                );
+            }
             self.write_cf_handle
                 .remove(&InternalBytes::from_vec(cached_delete_key), guard);
         }
         if let Some(cached_delete_key) = self.cached_skiplist_delete_key.take() {
             let guard = &epoch::pin();
             self.metrics.filtered += 1;
+            if PRINTF_LOG.load(Ordering::Relaxed) {
+                info!(
+                    "gc filter tombstone";
+                    "key" => log_wrappers::Value(&cached_delete_key),
+                );
+            }
             self.write_cf_handle
                 .remove(&InternalBytes::from_vec(cached_delete_key), guard);
         }

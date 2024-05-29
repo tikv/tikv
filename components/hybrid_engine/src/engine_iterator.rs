@@ -57,6 +57,80 @@ where
             iter_opts,
         }
     }
+
+    fn next_to_match(&mut self, next_first: bool) {
+        match self.iter {
+            Either::Left(ref mut iter) => unreachable!(),
+            Either::Right(ref mut iter) => {
+                let key = iter.key();
+                let val = iter.value();
+                if next_first {
+                    assert!(self.disk_iter.next().unwrap());
+                }
+                loop {
+                    let disk_key = self.disk_iter.key();
+                    let disk_val = self.disk_iter.value();
+                    if disk_key == key {
+                        break;
+                    }
+                    if disk_key > key {
+                        let (lower, upper) = self.iter_opts.clone().build_bounds();
+                        let prefix_same_as_start = self.iter_opts.prefix_same_as_start();
+                        error!(
+                            "next inconsistent";
+                            "cache_key" => log_wrappers::Value(key),
+                            "cache_val" => log_wrappers::Value(val),
+                            "disk_key" => log_wrappers::Value(disk_key),
+                            "disk_val" => log_wrappers::Value(disk_val),
+                            "lower" => log_wrappers::Value(&lower.unwrap_or_default()),
+                            "upper" => log_wrappers::Value(&upper.unwrap_or_default()),
+                            "prefix_same_as_start" => prefix_same_as_start,
+                            "seqno" => self.seqno,
+                        );
+                        unreachable!()
+                    }
+                    assert!(self.disk_iter.next().unwrap());
+                }
+            }
+        }
+    }
+
+    fn prev_to_match(&mut self, prev_first: bool) {
+        match self.iter {
+            Either::Left(ref mut iter) => unreachable!(),
+            Either::Right(ref mut iter) => {
+                let key = iter.key();
+                let val = iter.value();
+                if prev_first {
+                    assert!(self.disk_iter.next().unwrap());
+                }
+                loop {
+                    let disk_key = self.disk_iter.key();
+                    let disk_val = self.disk_iter.value();
+                    if disk_key == key {
+                        break;
+                    }
+                    if disk_key < key {
+                        let (lower, upper) = self.iter_opts.clone().build_bounds();
+                        let prefix_same_as_start = self.iter_opts.prefix_same_as_start();
+                        error!(
+                            "prev inconsistent";
+                            "cache_key" => log_wrappers::Value(key),
+                            "cache_val" => log_wrappers::Value(val),
+                            "disk_key" => log_wrappers::Value(disk_key),
+                            "disk_val" => log_wrappers::Value(disk_val),
+                            "lower" => log_wrappers::Value(&lower.unwrap_or_default()),
+                            "upper" => log_wrappers::Value(&upper.unwrap_or_default()),
+                            "prefix_same_as_start" => prefix_same_as_start,
+                            "seqno" => self.seqno,
+                        );
+                        unreachable!()
+                    }
+                    assert!(self.disk_iter.prev().unwrap());
+                }
+            }
+        }
+    }
 }
 
 fn split_ts(key: &[u8]) -> result::Result<(&[u8], u64), String> {
@@ -79,8 +153,8 @@ where
             Either::Left(ref mut iter) => iter.seek(key),
             Either::Right(ref mut iter) => {
                 if AUDIT_MODE.load(Ordering::Relaxed) {
-                    let res = iter.seek(key)?;
-                    let res2 = self
+                    let valid = iter.seek(key)?;
+                    let valid2 = self
                         .disk_iter
                         .seek(key)
                         .map_err(|e| {
@@ -92,27 +166,13 @@ where
                             e
                         })
                         .unwrap();
-                    if res != res2 {
+                    if valid && !valid2 {
                         let prefix_same_as_start = self.iter_opts.prefix_same_as_start();
                         let (lower, upper) = self.iter_opts.clone().build_bounds();
-                        if res {
-                            error!(
-                                "seek cache key";
-                                "key" => log_wrappers::Value(iter.key()),
-                                "seqno" => self.seqno,
-                            );
-                        } else {
-                            error!(
-                                "seek disk key";
-                                "key" => log_wrappers::Value(self.disk_iter.key()),
-                                "seqno" => self.seqno,
-                            );
-                        }
                         error!(
                             "seek result not equal";
                             "key" => log_wrappers::Value(key),
-                            "res" => res,
-                            "res2" => res2,
+                            "cache_key" => log_wrappers::Value(iter.key()),
                             "lower" => log_wrappers::Value(&lower.unwrap_or_default()),
                             "upper" => log_wrappers::Value(&upper.unwrap_or_default()),
                             "prefix_same_as_start" => prefix_same_as_start,
@@ -120,28 +180,10 @@ where
                         );
                         unreachable!();
                     }
-                    if res {
-                        if iter.key() != self.disk_iter.key()
-                            || iter.value() != self.disk_iter.value()
-                        {
-                            let prefix_same_as_start = self.iter_opts.prefix_same_as_start();
-                            let (lower, upper) = self.iter_opts.clone().build_bounds();
-                            error!(
-                                "seek result not equal";
-                                "seek_key" => log_wrappers::Value(key),
-                                "cache_key" => log_wrappers::Value(iter.key()),
-                                "cache_val" => log_wrappers::Value(iter.value()),
-                                "disk_key" => log_wrappers::Value(self.disk_iter.key()),
-                                "disk_val" => log_wrappers::Value(self.disk_iter.value()),
-                                "lower" => log_wrappers::Value(&lower.unwrap_or_default()),
-                                "upper" => log_wrappers::Value(&upper.unwrap_or_default()),
-                                "prefix_same_as_start" => prefix_same_as_start,
-                                "seqno" => self.seqno,
-                            );
-                            unreachable!();
-                        }
+                    if valid {
+                        self.next_to_match(false);
                     }
-                    Ok(res)
+                    Ok(valid)
                 } else {
                     iter.seek(key)
                 }
@@ -154,8 +196,8 @@ where
             Either::Left(ref mut iter) => iter.seek_for_prev(key),
             Either::Right(ref mut iter) => {
                 if AUDIT_MODE.load(Ordering::Relaxed) {
-                    let res = iter.seek_for_prev(key)?;
-                    let res2 = self
+                    let valid = iter.seek_for_prev(key)?;
+                    let valid2 = self
                         .disk_iter
                         .seek_for_prev(key)
                         .map_err(|e| {
@@ -167,27 +209,15 @@ where
                             e
                         })
                         .unwrap();
-                    if res != res2 {
+                    if valid && !valid2 {
                         let prefix_same_as_start = self.iter_opts.prefix_same_as_start();
                         let (lower, upper) = self.iter_opts.clone().build_bounds();
-                        if res {
-                            error!(
-                                "seek_for_prev cache key";
-                                "key" => log_wrappers::Value(iter.key()),
-                                "seqno" => self.seqno,
-                            );
-                        } else {
-                            error!(
-                                "seek_for_prev disk key";
-                                "key" => log_wrappers::Value(self.disk_iter.key()),
-                                "seqno" => self.seqno,
-                            );
-                        }
                         error!(
                             "seek_for_prev result not equal";
                             "key" => log_wrappers::Value(key),
-                            "res" => res,
-                            "res2" => res2,
+                            "res" => valid,
+                            "res2" => valid2,
+                            "cache_key" => log_wrappers::Value(iter.key()),
                             "lower" => log_wrappers::Value(&lower.unwrap_or_default()),
                             "upper" => log_wrappers::Value(&upper.unwrap_or_default()),
                             "prefix_same_as_start" => prefix_same_as_start,
@@ -196,28 +226,10 @@ where
                         unreachable!();
                     }
 
-                    if res {
-                        let prefix_same_as_start = self.iter_opts.prefix_same_as_start();
-                        let (lower, upper) = self.iter_opts.clone().build_bounds();
-                        if iter.key() != self.disk_iter.key()
-                            || iter.value() != self.disk_iter.value()
-                        {
-                            error!(
-                                "seek_for_prev result not equal";
-                                "seek_key" => log_wrappers::Value(key),
-                                "cache_key" => log_wrappers::Value(iter.key()),
-                                "cache_val" => log_wrappers::Value(iter.value()),
-                                "disk_key" => log_wrappers::Value(self.disk_iter.key()),
-                                "disk_val" => log_wrappers::Value(self.disk_iter.value()),
-                                "lower" => log_wrappers::Value(&lower.unwrap_or_default()),
-                                "upper" => log_wrappers::Value(&upper.unwrap_or_default()),
-                                "prefix_same_as_start" => prefix_same_as_start,
-                                "seqno" => self.seqno,
-                            );
-                            unreachable!();
-                        }
+                    if valid {
+                        self.prev_to_match(false);
                     }
-                    Ok(res)
+                    Ok(valid)
                 } else {
                     iter.seek_for_prev(key)
                 }
@@ -230,8 +242,8 @@ where
             Either::Left(ref mut iter) => iter.seek_to_first(),
             Either::Right(ref mut iter) => {
                 if AUDIT_MODE.load(Ordering::Relaxed) {
-                    let res = iter.seek_to_first()?;
-                    let res2 = self
+                    let valid = iter.seek_to_first()?;
+                    let valid2 = self
                         .disk_iter
                         .seek_to_first()
                         .map_err(|e| {
@@ -242,26 +254,13 @@ where
                             e
                         })
                         .unwrap();
-                    if res != res2 {
+                    if valid && !valid2 {
                         let prefix_same_as_start = self.iter_opts.prefix_same_as_start();
                         let (lower, upper) = self.iter_opts.clone().build_bounds();
-                        if res {
-                            error!(
-                                "seek_to_first cache key";
-                                "key" => log_wrappers::Value(iter.key()),
-                                "seqno" => self.seqno,
-                            );
-                        } else {
-                            error!(
-                                "seek_to_first disk key";
-                                "key" => log_wrappers::Value(self.disk_iter.key()),
-                                "seqno" => self.seqno,
-                            );
-                        }
                         error!(
                             "seek_to_first result not equal";
-                            "res" => res,
-                            "res2" => res2,
+                            "res" => valid,
+                            "res2" => valid2,
                             "lower" => log_wrappers::Value(&lower.unwrap_or_default()),
                             "upper" => log_wrappers::Value(&upper.unwrap_or_default()),
                             "prefix_same_as_start" => prefix_same_as_start,
@@ -270,27 +269,10 @@ where
                         unreachable!();
                     }
 
-                    if res {
-                        if iter.key() != self.disk_iter.key()
-                            || iter.value() != self.disk_iter.value()
-                        {
-                            let prefix_same_as_start = self.iter_opts.prefix_same_as_start();
-                            let (lower, upper) = self.iter_opts.clone().build_bounds();
-                            error!(
-                                "seek_to_first result not equal";
-                                "cache_key" => log_wrappers::Value(iter.key()),
-                                "cache_val" => log_wrappers::Value(iter.value()),
-                                "disk_key" => log_wrappers::Value(self.disk_iter.key()),
-                                "disk_val" => log_wrappers::Value(self.disk_iter.value()),
-                                "lower" => log_wrappers::Value(&lower.unwrap_or_default()),
-                                "upper" => log_wrappers::Value(&upper.unwrap_or_default()),
-                                "prefix_same_as_start" => prefix_same_as_start,
-                                "seqno" => self.seqno,
-                            );
-                            unreachable!();
-                        }
+                    if valid {
+                        self.next_to_match(false);
                     }
-                    Ok(res)
+                    Ok(valid)
                 } else {
                     iter.seek_to_first()
                 }
@@ -303,8 +285,8 @@ where
             Either::Left(ref mut iter) => iter.seek_to_last(),
             Either::Right(ref mut iter) => {
                 if AUDIT_MODE.load(Ordering::Relaxed) {
-                    let res = iter.seek_to_last()?;
-                    let res2 = self
+                    let valid = iter.seek_to_last()?;
+                    let valid2 = self
                         .disk_iter
                         .seek_to_last()
                         .map_err(|e| {
@@ -315,26 +297,13 @@ where
                             e
                         })
                         .unwrap();
-                    if res != res2 {
+                    if valid != valid2 {
                         let prefix_same_as_start = self.iter_opts.prefix_same_as_start();
                         let (lower, upper) = self.iter_opts.clone().build_bounds();
-                        if res {
-                            error!(
-                                "seek_to_last cache key";
-                                "key" => log_wrappers::Value(iter.key()),
-                                "seqno" => self.seqno,
-                            );
-                        } else {
-                            error!(
-                                "seek_to_last disk key";
-                                "key" => log_wrappers::Value(self.disk_iter.key()),
-                                "seqno" => self.seqno,
-                            );
-                        }
                         error!(
                             "seek_to_last result not equal";
-                            "res" => res,
-                            "res2" => res2,
+                            "res" => valid,
+                            "res2" => valid2,
                             "lower" => log_wrappers::Value(&lower.unwrap_or_default()),
                             "upper" => log_wrappers::Value(&upper.unwrap_or_default()),
                             "prefix_same_as_start" => prefix_same_as_start,
@@ -343,27 +312,10 @@ where
                         unreachable!();
                     }
 
-                    if res {
-                        if iter.key() != self.disk_iter.key()
-                            || iter.value() != self.disk_iter.value()
-                        {
-                            let prefix_same_as_start = self.iter_opts.prefix_same_as_start();
-                            let (lower, upper) = self.iter_opts.clone().build_bounds();
-                            error!(
-                                "seek_to_last result not equal";
-                                "cache_key" => log_wrappers::Value(iter.key()),
-                                "cache_val" => log_wrappers::Value(iter.value()),
-                                "disk_key" => log_wrappers::Value(self.disk_iter.key()),
-                                "disk_val" => log_wrappers::Value(self.disk_iter.value()),
-                                "lower" => log_wrappers::Value(&lower.unwrap_or_default()),
-                                "upper" => log_wrappers::Value(&upper.unwrap_or_default()),
-                                "prefix_same_as_start" => prefix_same_as_start,
-                                "seqno" => self.seqno,
-                            );
-                            unreachable!();
-                        }
+                    if valid {
+                        self.prev_to_match(false);
                     }
-                    Ok(res)
+                    Ok(valid)
                 } else {
                     iter.seek_to_last()
                 }
@@ -378,23 +330,7 @@ where
                 if AUDIT_MODE.load(Ordering::Relaxed) {
                     let valid = iter.prev()?;
                     if valid {
-                        let key = iter.key();
-                        let val = iter.value();
-                        loop {
-                            assert!(self.disk_iter.prev().unwrap());
-                            let disk_key = self.disk_iter.key();
-                            let disk_val = self.disk_iter.value();
-                            let (user_key, ts) = split_ts(key).unwrap();
-                            let (disk_user_key, disk_ts) = split_ts(key).unwrap();
-                            if disk_ts == ts {
-                                break;
-                            }
-                            assert_eq!(user_key, disk_user_key);
-                        }
-                        let disk_key = self.disk_iter.key();
-                        let disk_val = self.disk_iter.value();
-                        assert_eq!(key, disk_key);
-                        assert_eq!(val, disk_val);
+                        self.prev_to_match(true);
                     }
                     Ok(valid)
                 } else {
@@ -411,37 +347,7 @@ where
                 if AUDIT_MODE.load(Ordering::Relaxed) {
                     let valid = iter.next()?;
                     if valid {
-                        let key = iter.key();
-                        let val = iter.value();
-                        loop {
-                            assert!(self.disk_iter.next().unwrap());
-                            let disk_key = self.disk_iter.key();
-                            let disk_val = self.disk_iter.value();
-                            let (user_key, ts) = split_ts(key).unwrap();
-                            let (disk_user_key, disk_ts) = split_ts(key).unwrap();
-                            if disk_ts == ts {
-                                break;
-                            }
-                            assert_eq!(user_key, disk_user_key);
-                        }
-                        let disk_key = self.disk_iter.key();
-                        let disk_val = self.disk_iter.value();
-                        let (lower, upper) = self.iter_opts.clone().build_bounds();
-                        let prefix_same_as_start = self.iter_opts.prefix_same_as_start();
-                        if key != disk_key || val != disk_val {
-                            error!(
-                                "next inconsistent";
-                                "cache_key" => log_wrappers::Value(key),
-                                "cache_val" => log_wrappers::Value(val),
-                                "disk_key" => log_wrappers::Value(disk_key),
-                                "disk_val" => log_wrappers::Value(disk_val),
-                                "lower" => log_wrappers::Value(&lower.unwrap_or_default()),
-                                "upper" => log_wrappers::Value(&upper.unwrap_or_default()),
-                                "prefix_same_as_start" => prefix_same_as_start,
-                                "seqno" => self.seqno,
-                            );
-                            unreachable!()
-                        }
+                        self.next_to_match(true);
                     }
                     Ok(valid)
                 } else {
