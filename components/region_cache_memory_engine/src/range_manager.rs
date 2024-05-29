@@ -11,6 +11,7 @@ use std::{
 
 use engine_rocks::RocksSnapshot;
 use engine_traits::{CacheRange, FailedReason};
+use kvproto::metapb;
 use tikv_util::info;
 
 use crate::read::RangeCacheSnapshotMeta;
@@ -422,6 +423,69 @@ impl RangeManager {
 
     pub fn get_and_reset_range_evictions(&self) -> u64 {
         self.range_evictions.swap(0, Ordering::Relaxed)
+    }
+
+    pub fn get_range_by_id(&self, region_id: u64) -> Option<CacheRange> {
+        let tag = CacheRange::new_tag(region_id);
+
+        self.ranges
+            .iter()
+            .find(|(range, _)| tag == range.tag)
+            .map(|(r, _)| r.clone())
+    }
+
+    pub fn dump_cache(&self, region_id: u64) -> String {
+        let tag = CacheRange::new_tag(region_id);
+
+        // historical_ranges
+        let mut buffer = "historical_ranges:\n".to_owned();
+        for (range, meta) in self
+            .historical_ranges
+            .iter()
+            .filter(|(range, _)| tag == range.tag)
+        {
+            buffer.push_str(&format!("  range: {:?}, meta: {:?}\n", range, meta));
+        }
+
+        // ranges_being_deleted
+        buffer.push_str("ranges_being_deleted:\n");
+        for range in self
+            .ranges_being_deleted
+            .iter()
+            .filter(|range| tag == range.tag)
+        {
+            buffer.push_str(&format!("  range: {:?}\n", range));
+        }
+
+        // ranges
+        buffer.push_str("ranges:\n");
+        for (range, meta) in self.ranges.iter().filter(|(range, _)| tag == range.tag) {
+            buffer.push_str(&format!("  range: {:?}, meta: {:?}\n", range, meta));
+        }
+
+        // pending_ranges
+        buffer.push_str("pending_ranges:\n");
+        for range in self.pending_ranges.iter().filter(|range| tag == range.tag) {
+            buffer.push_str(&format!("  range: {:?}\n", range));
+        }
+
+        // pending_ranges_loading_data
+        buffer.push_str("pending_ranges_loading_data:\n");
+        for range in self
+            .pending_ranges_loading_data
+            .iter()
+            .filter(|range| tag == range.0.tag)
+        {
+            buffer.push_str(&format!("  range: {:?}\n", range));
+        }
+
+        // ranges_in_gc
+        buffer.push_str("ranges_in_gc:\n");
+        for range in self.ranges_in_gc.iter().filter(|range| tag == range.tag) {
+            buffer.push_str(&format!("  range: {:?}\n", range));
+        }
+
+        buffer
     }
 }
 

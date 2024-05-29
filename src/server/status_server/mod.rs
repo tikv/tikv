@@ -95,6 +95,7 @@ pub struct StatusServer<R> {
     security_config: Arc<SecurityConfig>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
     grpc_service_mgr: GrpcServiceManager,
+    dump_cache_engine: Option<Arc<dyn Fn(u64) -> String + Send + Sync + 'static>>,
 }
 
 impl<R> StatusServer<R>
@@ -130,7 +131,15 @@ where
             security_config,
             resource_manager,
             grpc_service_mgr,
+            dump_cache_engine: None,
         })
+    }
+
+    pub fn set_dump_cache_engine(
+        &mut self,
+        handler: Arc<dyn Fn(u64) -> String + Send + Sync + 'static>,
+    ) {
+        self.dump_cache_engine = Some(handler);
     }
 
     fn dump_heap_prof_to_resp(req: Request<Body>) -> hyper::Result<Response<Body>> {
@@ -500,7 +509,11 @@ where
         ))
     }
 
-    pub async fn dump_region_meta(req: Request<Body>, router: R) -> hyper::Result<Response<Body>> {
+    pub async fn dump_region_meta(
+        req: Request<Body>,
+        router: R,
+        dump_cache_engine: Option<&Arc<dyn Fn(u64) -> String + Send + Sync + 'static>>,
+    ) -> hyper::Result<Response<Body>> {
         lazy_static! {
             static ref REGION: Regex = Regex::new(r"/region/(?P<id>\d+)").unwrap();
         }
@@ -539,7 +552,7 @@ where
             }
         };
 
-        let body = match serde_json::to_vec(&meta) {
+        let mut body = match serde_json::to_vec(&meta) {
             Ok(body) => body,
             Err(err) => {
                 return Ok(make_response(
@@ -564,6 +577,11 @@ where
             };
             body
         };
+        if let Some(dump) = dump_cache_engine {
+            let content = dump(id);
+            body.push(b'\n');
+            body.extend_from_slice(content.as_bytes());
+        }
         match Response::builder()
             .header("content-type", "application/json")
             .body(hyper::Body::from(body))
@@ -613,6 +631,7 @@ where
         let router = self.router.clone();
         let resource_manager = self.resource_manager.clone();
         let grpc_service_mgr = self.grpc_service_mgr.clone();
+        let dump_cache_engine = self.dump_cache_engine.clone();
         // Start to serve.
         let server = builder.serve(make_service_fn(move |conn: &C| {
             let x509 = conn.get_x509();
@@ -621,6 +640,7 @@ where
             let router = router.clone();
             let resource_manager = resource_manager.clone();
             let grpc_service_mgr = grpc_service_mgr.clone();
+            let dump_cache_engine = dump_cache_engine.clone();
             async move {
                 // Create a status service.
                 Ok::<_, hyper::Error>(service_fn(move |req: Request<Body>| {
@@ -630,6 +650,7 @@ where
                     let router = router.clone();
                     let resource_manager = resource_manager.clone();
                     let grpc_service_mgr = grpc_service_mgr.clone();
+                    let dump_cache_engine = dump_cache_engine.clone();
                     async move {
                         let path = req.uri().path().to_owned();
                         let method = req.method().to_owned();
@@ -719,7 +740,7 @@ where
                                 Ok(Response::default())
                             }
                             (Method::GET, path) if path.starts_with("/region") => {
-                                Self::dump_region_meta(req, router).await
+                                Self::dump_region_meta(req, router, dump_cache_engine.as_ref()).await
                             }
                             (Method::PUT, path) if path.starts_with("/log-level") => {
                                 Self::change_log_level(req).await

@@ -127,6 +127,10 @@ where
     fn evict_range(&self, range: engine_traits::CacheRange) {
         self.region_cache_engine.evict_range(range);
     }
+
+    fn dump_cache(&self, region_id: u64) -> String {
+        self.region_cache_engine.dump_cache(region_id)
+    }
 }
 
 impl<EK, EC> Peekable for HybridEngine<EK, EC>

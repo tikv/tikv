@@ -296,6 +296,7 @@ where
     resolved_ts_scheduler: Option<Scheduler<Task>>,
     grpc_service_mgr: GrpcServiceManager,
     snap_br_rejector: Option<Arc<PrepareDiskSnapObserver>>,
+    dump_cache_engine: Option<Arc<dyn Fn(u64) -> String + Send + Sync + 'static>>,
 }
 
 struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -502,6 +503,7 @@ where
             resolved_ts_scheduler: None,
             grpc_service_mgr: GrpcServiceManager::new(tx),
             snap_br_rejector: None,
+            dump_cache_engine: None,
         }
     }
 
@@ -520,6 +522,8 @@ where
             self.region_info_accessor.region_leaders(),
         );
 
+        let engine_ = engines.kv.clone();
+        self.dump_cache_engine = Some(Arc::new(move |region_id| engine_.dump_cache(region_id)));
         self.engines = Some(TikvEngines {
             engines,
             store_meta,
@@ -1569,6 +1573,7 @@ where
                     return;
                 }
             };
+            status_server.set_dump_cache_engine(self.dump_cache_engine.clone().unwrap());
             // Start the status server.
             if let Err(e) = status_server.start(self.core.config.server.status_addr.clone()) {
                 error_unknown!(%e; "failed to bind addr for status service");

@@ -82,6 +82,10 @@ pub trait KvEngine:
     fn inner_refcount(&self) -> usize;
 
     fn evict_range(&self, _: CacheRange) {}
+
+    fn dump_cache(&self, _: u64) -> String {
+        return String::new();
+    }
 }
 
 #[derive(Debug, Clone)]

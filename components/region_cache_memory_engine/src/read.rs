@@ -231,7 +231,7 @@ impl SnapshotMiscExt for RangeCacheSnapshot {
 
 pub struct RangeCacheIterator {
     valid: bool,
-    iter: OwnedIter<Arc<SkipList<InternalBytes, InternalBytes>>, InternalBytes, InternalBytes>,
+    pub iter: OwnedIter<Arc<SkipList<InternalBytes, InternalBytes>>, InternalBytes, InternalBytes>,
     // The lower bound is inclusive while the upper bound is exclusive if set
     // Note: bounds (region boundaries) have no mvcc versions
     lower_bound: Vec<u8>,
