@@ -510,7 +510,7 @@ impl BackgroundRunner {
             // Gc must also use exactly one thread to handle it.
             .thread_count(1)
             .create();
-        let gc_range_remote = delete_range_worker.remote();
+        let gc_range_remote = gc_range_worker.remote();
         Self {
             core: BackgroundRunnerCore {
                 engine,
