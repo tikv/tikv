@@ -10,7 +10,7 @@ use std::{
     net::SocketAddr,
     pin::Pin,
     str::{self, FromStr},
-    sync::Arc,
+    sync::{atomic::Ordering, Arc},
     task::{Context, Poll},
     time::{Duration, Instant},
 };
@@ -44,6 +44,7 @@ use openssl::{
 use pin_project::pin_project;
 use profile::*;
 use prometheus::TEXT_FORMAT;
+use raftstore::store::fsm::apply::PRINTF_LOG;
 use regex::Regex;
 use resource_control::ResourceGroupManager;
 use security::{self, SecurityConfig};
@@ -63,6 +64,7 @@ use tokio::{
 };
 use tokio_openssl::SslStream;
 use tracing_active_tree::tree::formating::FormatFlat;
+use hybrid_engine::AUDIT_MODE;
 
 use crate::{
     config::{ConfigController, LogLevel},
@@ -753,6 +755,34 @@ where
                             }
                             (Method::PUT, "/resume_grpc") => {
                                 Self::handle_resume_grpc(grpc_service_mgr)
+                            }
+                            (Method::PUT, "/turn_on_print_log") => {
+                                PRINTF_LOG.store(true, Ordering::Relaxed);
+                                Ok(make_response(
+                                    StatusCode::OK,
+                                    "Successfully turn on printf log",
+                                ))
+                            }
+                            (Method::PUT, "/turn_off_print_log") => {
+                                PRINTF_LOG.store(false, Ordering::Relaxed);
+                                Ok(make_response(
+                                    StatusCode::OK,
+                                    "Successfully turn off printf log",
+                                ))
+                            }
+                            (Method::PUT, "/turn_on_audit") => {
+                                AUDIT_MODE.store(true, Ordering::Relaxed);
+                                Ok(make_response(
+                                    StatusCode::OK,
+                                    "Successfully turn on audit",
+                                ))
+                            }
+                            (Method::PUT, "/turn_off_audit") => {
+                                AUDIT_MODE.store(false, Ordering::Relaxed);
+                                Ok(make_response(
+                                    StatusCode::OK,
+                                    "Successfully turn off audit",
+                                ))
                             }
                             (Method::GET, "/async_tasks") => Self::dump_async_trace(),
                             _ => {

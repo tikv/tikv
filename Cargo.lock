@@ -2543,6 +2543,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "lazy_static",
+ "log_wrappers",
  "online_config",
  "prometheus",
  "prometheus-static-metric",

@@ -21,6 +21,7 @@ tempfile = "3.0"
 prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
 prometheus-static-metric = "0.5"
 lazy_static = "1.4.0"
+log_wrappers = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.0"

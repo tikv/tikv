@@ -27,4 +27,5 @@ pub mod util;
 mod write_batch;
 
 pub use engine::HybridEngine;
+pub use engine_iterator::AUDIT_MODE;
 pub use snapshot::HybridEngineSnapshot;

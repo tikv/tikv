@@ -82,10 +82,18 @@ where
         Ok(match self.region_cache_snap() {
             Some(region_cache_snap) if is_data_cf(cf) => {
                 HybridEngineIterator::region_cache_engine_iterator(
-                    region_cache_snap.iterator_opt(cf, opts)?,
+                    region_cache_snap.iterator_opt(cf, opts.clone())?,
+                    self.disk_snap.iterator_opt(cf, opts.clone())?,
+                    self.disk_snap.sequence_number(),
+                    opts,
                 )
             }
-            _ => HybridEngineIterator::disk_engine_iterator(self.disk_snap.iterator_opt(cf, opts)?),
+            _ => HybridEngineIterator::disk_engine_iterator(
+                self.disk_snap.iterator_opt(cf, opts.clone())?,
+                self.disk_snap.iterator_opt(cf, opts.clone())?,
+                self.disk_snap.sequence_number(),
+                opts,
+            ),
         })
     }
 }

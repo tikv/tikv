@@ -361,7 +361,6 @@ impl RangeCacheIterator {
         self.iter.seek_for_prev(key, guard);
         self.local_stats.number_db_seek += 1;
         self.prev_internal(guard);
-        self.valid = self.iter.valid();
     }
 
     fn prev_internal(&mut self, guard: &epoch::Guard) {
@@ -371,13 +370,15 @@ impl RangeCacheIterator {
             self.saved_user_key.extend_from_slice(user_key);
 
             if user_key < self.lower_bound.as_slice() {
-                break;
+                self.valid = false;
+                return;
             }
 
             if let Some(ref prefix) = self.prefix {
                 if prefix != self.prefix_extractor.as_mut().unwrap().transform(user_key) {
                     // stop iterating due to unmatched prefix
-                    break;
+                    self.valid = false;
+                    return;
                 }
             }
 
@@ -654,12 +655,14 @@ mod tests {
     use bytes::{BufMut, Bytes};
     use crossbeam::epoch;
     use engine_rocks::{
-        raw::DBStatisticsTickerType, util::new_engine_opt, RocksDbOptions, RocksStatistics,
+        raw::DBStatisticsTickerType,
+        util::{new_engine, new_engine_opt},
+        RocksDbOptions, RocksStatistics,
     };
     use engine_traits::{
         CacheRange, FailedReason, IterMetricsCollector, IterOptions, Iterable, Iterator,
         MetricsExt, Mutable, Peekable, RangeCacheEngine, ReadOptions, WriteBatch, WriteBatchExt,
-        CF_DEFAULT, CF_LOCK, CF_WRITE,
+        CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
     };
     use skiplist_rs::SkipList;
     use tempfile::Builder;
@@ -1406,6 +1409,20 @@ mod tests {
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
+
+        let path = Builder::new().prefix("test_load").tempdir().unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+
+        let mut wb = rocks_engine.write_batch();
+        wb.put(b"aaa", b"val");
+        wb.put(b"aaa", b"val2");
+        wb.put(b"aaa", b"val3");
+        wb.write();
+
+        let mut iter = rocks_engine.iterator("default").unwrap();
+        iter.seek_for_prev(b"aaa").unwrap();
+        println!("{:?}", iter.value());
 
         {
             let mut core = engine.core.write();
