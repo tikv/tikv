@@ -548,26 +548,9 @@ where
                     .cancel_apply_snapshot(region_id, peer_id);
                 status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
                 SNAP_COUNTER.apply.fail.inc();
-                // As the snapshot failed, it should be cleared and the related peer should be
-                // marked tombstone.
-                if let Ok(apply_state) = self.apply_state(region_id) {
-                    let term = apply_state.get_truncated_state().get_term();
-                    let idx = apply_state.get_truncated_state().get_index();
-                    let snap_key = SnapKey::new(region_id, term, idx);
-                    let _ = self.router.send(
-                        region_id,
-                        CasualMessage::GcSnap {
-                            snaps: vec![(snap_key, false)],
-                        },
-                    );
-                    info!(
-                        "clear snapshot data";
-                        "region_id" => region_id,
-                        "peer_id" => peer_id,
-                        "term" => term,
-                        "index" => idx,
-                    );
-                }
+                // As the snapshot failed, the related peer should be marked tombstone.
+                // And as for the abnormal snapshot, it will be automatically cleaned up by
+                // the CleanupWorker later.
                 true
             }
         };

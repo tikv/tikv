@@ -921,6 +921,9 @@ where
     /// this peer has raft log gaps and whether should be marked busy on
     /// apply.
     pub last_leader_committed_idx: Option<u64>,
+
+    /// Check whether the peer should be destroyed.
+    pub should_tombstone: bool,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1072,6 +1075,7 @@ where
             snapshot_recovery_state: None,
             busy_on_apply: Some(false),
             last_leader_committed_idx: None,
+            should_tombstone: false,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -5811,7 +5815,7 @@ where
 
     pub fn send_tombstone_peer_msg<T: Transport>(&self, ctx: &mut PollContext<EK, ER, T>) {
         let mut msg = ExtraMessage::default();
-        msg.set_type(ExtraMessageType::MsgGcPeerRequest);
+        msg.set_type(ExtraMessageType::MsgTombstonePeerRequest);
         // Forcely set the index with `u64::max_value()` to make sure the tombstone
         // message can be handled correctly.
         msg.set_index(u64::MAX);

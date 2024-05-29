@@ -229,6 +229,8 @@ fn test_on_check_busy_on_apply_peers() {
 #[test]
 fn test_on_apply_snap_failed() {
     let mut cluster = new_node_cluster(0, 3);
+    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(5);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(100);
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
 
     let pd_client = Arc::clone(&cluster.pd_client);

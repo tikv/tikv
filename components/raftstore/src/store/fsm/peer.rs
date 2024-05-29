@@ -1261,12 +1261,10 @@ where
             }
             CasualMessage::SnapshotApplied { peer_id, tombstone } => {
                 self.fsm.has_ready = true;
-                let apply_snap_failed =
+                // If failed on applying snapshot, it should tomebstone the peer.
+                self.fsm.peer.should_tombstone =
                     tombstone && self.fsm.peer.peer_id() == peer_id && !self.fsm.peer.is_leader();
-                if apply_snap_failed {
-                    // Send ConfChange to the leader to make the region tombstone the peer.
-                    self.fsm.peer.send_tombstone_peer_msg(self.ctx);
-                } else if self.fsm.peer.should_destroy_after_apply_snapshot() {
+                if self.fsm.peer.should_destroy_after_apply_snapshot() {
                     info!(
                         "destroy peer due to manually cancel";
                         "peer_id" => peer_id,
@@ -2264,6 +2262,11 @@ where
         // the pending conf change check because first index has been updated to
         // a value that is larger than last index.
         if self.fsm.peer.is_handling_snapshot() || self.fsm.peer.has_pending_snapshot() {
+            // If failed on applying snapshot, send ConfChange to the leader to make the
+            // region tombstone the peer.
+            if self.fsm.peer.should_tombstone {
+                self.fsm.peer.send_tombstone_peer_msg(self.ctx);
+            }
             // need to check if snapshot is applied.
             self.fsm.has_ready = true;
             self.fsm.missing_ticks = 0;
@@ -2936,56 +2939,53 @@ where
         }
     }
 
-    // In v1, gc_peer_request will gc the abnormal peer. And in other condition,
-    // it needs to be consistent with Peer::on_gc_peer_request in v2.
+    // In v1, gc_peer_request is handled to be compatible with v2.
+    // Note: it needs to be consistent with Peer::on_gc_peer_request in v2.
     fn on_gc_peer_request(&mut self, msg: RaftMessage) {
         let extra_msg = msg.get_extra_msg();
 
-        if self.ctx.cfg.enable_v2_compatible_learner {
-            // To make learner (e.g. tiflash engine) compatiable with raftstore v2,
-            // it needs to response GcPeerResponse.
-            if !extra_msg.has_check_gc_peer() || extra_msg.get_index() == 0 {
-                // Corrupted message.
-                return;
-            }
-            if self.fsm.peer.get_store().applied_index() < extra_msg.get_index() {
-                // Merge not finish.
-                return;
-            }
-
-            forward_destroy_to_source_peer(&msg, |m| {
-                let _ = self.ctx.router.send_raft_message(m);
-            });
-        } else {
-            // And as for v1, it needs to trigger the `ConfChange` command to gc
-            // the abnormal peer as expected.
-            if !self.fsm.peer.is_leader() {
-                return;
-            }
-
-            if !extra_msg.get_index() == u64::MAX {
-                // Unexpected message.
-                return;
-            }
-
-            // It's a GC request from the source peer.
-            let mut req = AdminRequest::default();
-            req.set_cmd_type(AdminCmdType::ChangePeer);
-            req.mut_change_peer()
-                .set_change_type(ConfChangeType::RemoveNode);
-            req.mut_change_peer().set_peer(msg.get_from_peer().clone());
-            let mut request =
-                new_admin_request(self.fsm.peer.region().get_id(), self.fsm.peer.peer.clone());
-            request
-                .mut_header()
-                .set_region_epoch(self.fsm.peer.region().get_region_epoch().clone());
-            request.set_admin_request(req);
-            self.propose_raft_command_internal(
-                request,
-                Callback::None,
-                DiskFullOpt::AllowedOnAlmostFull,
-            );
+        if !extra_msg.has_check_gc_peer() || extra_msg.get_index() == 0 {
+            // Corrupted message.
+            return;
         }
+        if self.fsm.peer.get_store().applied_index() < extra_msg.get_index() {
+            // Merge not finish.
+            return;
+        }
+
+        forward_destroy_to_source_peer(&msg, |m| {
+            let _ = self.ctx.router.send_raft_message(m);
+        });
+    }
+
+    // Trigger the `ConfChange` command to tombstone the abnormal peer as expected.
+    fn on_tombstone_peer_request(&mut self, msg: RaftMessage) {
+        if !self.fsm.peer.is_leader() {
+            return;
+        }
+
+        if !msg.get_extra_msg().get_index() == u64::MAX {
+            // Unexpected message.
+            return;
+        }
+
+        // It's a tombstone request from the source peer.
+        let mut req = AdminRequest::default();
+        req.set_cmd_type(AdminCmdType::ChangePeer);
+        req.mut_change_peer()
+            .set_change_type(ConfChangeType::RemoveNode);
+        req.mut_change_peer().set_peer(msg.get_from_peer().clone());
+        let mut request =
+            new_admin_request(self.fsm.peer.region().get_id(), self.fsm.peer.peer.clone());
+        request
+            .mut_header()
+            .set_region_epoch(self.fsm.peer.region().get_region_epoch().clone());
+        request.set_admin_request(req);
+        self.propose_raft_command_internal(
+            request,
+            Callback::None,
+            DiskFullOpt::AllowedOnAlmostFull,
+        );
     }
 
     fn on_extra_message(&mut self, mut msg: RaftMessage) {
@@ -3045,7 +3045,14 @@ where
                 self.on_voter_replicated_index_response(msg.get_extra_msg());
             }
             ExtraMessageType::MsgGcPeerRequest => {
-                self.on_gc_peer_request(msg);
+                // To make learner (e.g. tiflash engine) compatiable with raftstore v2,
+                // it needs to response GcPeerResponse.
+                if self.ctx.cfg.enable_v2_compatible_learner {
+                    self.on_gc_peer_request(msg);
+                }
+            }
+            ExtraMessageType::MsgTombstonePeerRequest => {
+                self.on_tombstone_peer_request(msg);
             }
             // It's v2 only message and ignore does no harm.
             ExtraMessageType::MsgGcPeerResponse | ExtraMessageType::MsgFlushMemtable => (),
@@ -3853,6 +3860,8 @@ where
         fail_point!("destroy_peer");
         // Mark itself as pending_remove
         self.fsm.peer.pending_remove = true;
+        // Reset itself to avoid further access.
+        self.fsm.peer.should_tombstone = false;
 
         // try to decrease the RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE count.
         self.fsm.peer.disable_apply_unpersisted_log(0);
