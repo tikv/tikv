@@ -705,7 +705,14 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         // the task directly.
         let conn = match self.connections.get_mut(&conn_id) {
             Some(conn) => conn,
-            None => return,
+            None => {
+                info!("cdc register region on an deregistered connection, ignore";
+                    "region_id" => region_id,
+                    "conn_id" => ?conn_id,
+                    "req_id" => request_id,
+                    "downstream_id" => ?downstream_id);
+                return;
+            }
         };
         downstream.set_sink(conn.get_sink().clone());
 
