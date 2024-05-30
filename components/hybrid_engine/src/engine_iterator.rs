@@ -65,7 +65,20 @@ where
                 let key = iter.key();
                 let val = iter.value();
                 if next_first {
-                    assert!(self.disk_iter.next().unwrap());
+                    if !self.disk_iter.next().unwrap() {
+                        let (lower, upper) = self.iter_opts.clone().build_bounds();
+                        let prefix_same_as_start = self.iter_opts.prefix_same_as_start();
+                        error!(
+                            "prev inconsistent, disk iterator prev failed";
+                            "cache_key" => log_wrappers::Value(key),
+                            "cache_val" => log_wrappers::Value(val),
+                            "lower" => log_wrappers::Value(&lower.unwrap_or_default()),
+                            "upper" => log_wrappers::Value(&upper.unwrap_or_default()),
+                            "prefix_same_as_start" => prefix_same_as_start,
+                            "seqno" => self.seqno,
+                        );
+                        unreachable!()
+                    }
                 }
                 loop {
                     let disk_key = self.disk_iter.key();
@@ -102,7 +115,20 @@ where
                 let key = iter.key();
                 let val = iter.value();
                 if prev_first {
-                    assert!(self.disk_iter.next().unwrap());
+                    if !self.disk_iter.prev().unwrap() {
+                        let (lower, upper) = self.iter_opts.clone().build_bounds();
+                        let prefix_same_as_start = self.iter_opts.prefix_same_as_start();
+                        error!(
+                            "prev inconsistent, disk iterator prev failed";
+                            "cache_key" => log_wrappers::Value(key),
+                            "cache_val" => log_wrappers::Value(val),
+                            "lower" => log_wrappers::Value(&lower.unwrap_or_default()),
+                            "upper" => log_wrappers::Value(&upper.unwrap_or_default()),
+                            "prefix_same_as_start" => prefix_same_as_start,
+                            "seqno" => self.seqno,
+                        );
+                        unreachable!()
+                    }
                 }
                 loop {
                     let disk_key = self.disk_iter.key();
