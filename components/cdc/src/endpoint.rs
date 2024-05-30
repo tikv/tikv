@@ -632,8 +632,20 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let downstream_state = downstream.get_state();
         let filter_loop = downstream.get_filter_loop();
 
-        // Register must follow OpenConn, so the connection must be available.
-        let conn = self.connections.get_mut(&conn_id).unwrap();
+        // The connection can be deregistered by some internal errors. Clients will
+        // be always notified by closing the GRPC server stream, so it's OK to drop
+        // the task directly.
+        let conn = match self.connections.get_mut(&conn_id) {
+            Some(conn) => conn,
+            None => {
+                info!("cdc register region on an deregistered connection, ignore";
+                    "region_id" => region_id,
+                    "conn_id" => ?conn_id,
+                    "req_id" => request_id,
+                    "downstream_id" => ?downstream_id);
+                return;
+            }
+        };
         downstream.set_sink(conn.get_sink().clone());
 
         // Check if the cluster id matches.
@@ -2629,4 +2641,306 @@ mod tests {
             last_batch_count = event.resolved_ts().regions.len();
         }
     }
+<<<<<<< HEAD
+=======
+
+    #[test]
+    fn test_register_deregister_with_multiplexing() {
+        let cfg = CdcConfig {
+            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            ..Default::default()
+        };
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
+        suite.add_region(1, 100);
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let (tx, mut rx) = channel::channel(1, quota);
+        let mut rx = rx.drain();
+
+        let conn = Conn::new(tx, String::new());
+        let conn_id = conn.get_id();
+        suite.run(Task::OpenConn { conn });
+
+        let version = FeatureGate::batch_resolved_ts();
+        suite.run(set_conn_version_task(conn_id, version));
+
+        let mut req_header = Header::default();
+        req_header.set_cluster_id(0);
+        let mut req = ChangeDataRequest::default();
+
+        req.set_region_id(1);
+        req.set_request_id(1);
+        let region_epoch = req.get_region_epoch().clone();
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch.clone(),
+            1,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+            false,
+            ObservedRange::default(),
+        );
+        suite.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+        });
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 1);
+
+        // Subscribe one region with a different request_id is allowed.
+        req.set_request_id(2);
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch.clone(),
+            2,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+            false,
+            ObservedRange::default(),
+        );
+        suite.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+        });
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
+
+        // Subscribe one region with a same request_id is not allowed.
+        req.set_request_id(2);
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch.clone(),
+            2,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+            false,
+            ObservedRange::default(),
+        );
+        suite.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+        });
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
+        let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+            .unwrap()
+            .unwrap();
+        let check = matches!(cdc_event.0, CdcEvent::Event(e) if {
+            matches!(e.event, Some(Event_oneof_event::Error(ref err)) if {
+                err.has_duplicate_request()
+            })
+        });
+        assert!(check);
+
+        // Deregister an unexist downstream.
+        suite.run(Task::Deregister(Deregister::Downstream {
+            conn_id,
+            request_id: 1,
+            region_id: 1,
+            downstream_id: DownstreamId::new(),
+            err: None,
+        }));
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
+
+        // Deregister an unexist delegate.
+        suite.run(Task::Deregister(Deregister::Delegate {
+            region_id: 1,
+            observe_id: ObserveId::new(),
+            err: Error::Rocks("test error".to_owned()),
+        }));
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
+
+        // Deregister an exist downstream.
+        let downstream_id = suite.capture_regions[&1].downstreams()[0].get_id();
+        suite.run(Task::Deregister(Deregister::Downstream {
+            conn_id,
+            request_id: 1,
+            region_id: 1,
+            downstream_id,
+            err: Some(Error::Rocks("test error".to_owned())),
+        }));
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 1);
+        let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+            .unwrap()
+            .unwrap();
+        let check = matches!(cdc_event.0, CdcEvent::Event(e) if {
+            matches!(e.event, Some(Event_oneof_event::Error(ref err)) if {
+                err.has_region_not_found()
+            })
+        });
+        assert!(check);
+
+        // Subscribe one region with a different request_id is allowed.
+        req.set_request_id(1);
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch.clone(),
+            1,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+            false,
+            ObservedRange::default(),
+        );
+        suite.run(Task::Register {
+            request: req.clone(),
+            downstream,
+            conn_id,
+        });
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
+
+        // Deregister an exist delegate.
+        let observe_id = suite.capture_regions[&1].handle.id;
+        suite.run(Task::Deregister(Deregister::Delegate {
+            region_id: 1,
+            observe_id,
+            err: Error::Rocks("test error".to_owned()),
+        }));
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 0);
+        assert_eq!(suite.capture_regions.len(), 0);
+        for _ in 0..2 {
+            let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+                .unwrap()
+                .unwrap();
+            let check = matches!(cdc_event.0, CdcEvent::Event(e) if {
+                matches!(e.event, Some(Event_oneof_event::Error(ref err)) if {
+                    err.has_region_not_found()
+                })
+            });
+            assert!(check);
+        }
+
+        // Resubscribe the region.
+        for i in 1..=2 {
+            req.set_request_id(i as _);
+            let downstream = Downstream::new(
+                "".to_string(),
+                region_epoch.clone(),
+                i as _,
+                conn_id,
+                ChangeDataRequestKvApi::TiDb,
+                false,
+                ObservedRange::default(),
+            );
+            suite.run(Task::Register {
+                request: req.clone(),
+                downstream,
+                conn_id,
+            });
+            assert_eq!(suite.connections[&conn_id].downstreams_count(), i);
+        }
+
+        // Deregister the request.
+        suite.run(Task::Deregister(Deregister::Request {
+            conn_id,
+            request_id: 1,
+        }));
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 1);
+        suite.run(Task::Deregister(Deregister::Request {
+            conn_id,
+            request_id: 2,
+        }));
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 0);
+        assert_eq!(suite.capture_regions.len(), 0);
+        for _ in 0..2 {
+            let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+                .unwrap()
+                .unwrap();
+            let check = matches!(cdc_event.0, CdcEvent::Event(e) if {
+                matches!(e.event, Some(Event_oneof_event::Error(ref err)) if {
+                    err.has_region_not_found()
+                })
+            });
+            assert!(check);
+        }
+
+        // Resubscribe the region.
+        suite.add_region(2, 100);
+        for i in 1..=2 {
+            req.set_request_id(1);
+            req.set_region_id(i);
+            let downstream = Downstream::new(
+                "".to_string(),
+                region_epoch.clone(),
+                1,
+                conn_id,
+                ChangeDataRequestKvApi::TiDb,
+                false,
+                ObservedRange::default(),
+            );
+            suite.run(Task::Register {
+                request: req.clone(),
+                downstream,
+                conn_id,
+            });
+            assert_eq!(suite.connections[&conn_id].downstreams_count(), i as usize);
+        }
+
+        // Deregister regions one by one in the request.
+        suite.run(Task::Deregister(Deregister::Region {
+            conn_id,
+            request_id: 1,
+            region_id: 1,
+        }));
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 1);
+        assert_eq!(suite.capture_regions.len(), 1);
+
+        suite.run(Task::Deregister(Deregister::Region {
+            conn_id,
+            request_id: 1,
+            region_id: 2,
+        }));
+        assert_eq!(suite.connections[&conn_id].downstreams_count(), 0);
+        assert_eq!(suite.capture_regions.len(), 0);
+
+        for _ in 0..2 {
+            let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
+                .unwrap()
+                .unwrap();
+            let check = matches!(cdc_event.0, CdcEvent::Event(e) if {
+                matches!(e.event, Some(Event_oneof_event::Error(ref err)) if {
+                    err.has_region_not_found()
+                })
+            });
+            assert!(check);
+        }
+    }
+
+    #[test]
+    fn test_register_after_connection_deregistered() {
+        let cfg = CdcConfig {
+            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            ..Default::default()
+        };
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
+        suite.add_region(1, 100);
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let (tx, _rx) = channel::channel(1, quota);
+
+        let conn = Conn::new(tx, String::new());
+        let conn_id = conn.get_id();
+        suite.run(Task::OpenConn { conn });
+
+        suite.run(Task::Deregister(Deregister::Conn(conn_id)));
+
+        let mut req = ChangeDataRequest::default();
+
+        req.set_region_id(1);
+        req.set_request_id(1);
+        let region_epoch = req.get_region_epoch().clone();
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch.clone(),
+            1,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+            false,
+            ObservedRange::default(),
+        );
+        suite.run(Task::Register {
+            request: req,
+            downstream,
+            conn_id,
+        });
+        assert!(suite.connections.is_empty());
+    }
+>>>>>>> 7ccbe3144f (cdc: handles region registers correctly after connection deregistered (#17076))
 }
