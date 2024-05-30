@@ -992,6 +992,7 @@ pub mod tests {
             region_label_meta_client,
             tests::{add_region_label_rule, new_region_label_rule, new_test_server_and_client},
         },
+        test_util::{put_data, put_data_with_overwrite},
         write_batch::RangeCacheWriteBatchEntry,
         RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
     };
@@ -1369,6 +1370,11 @@ pub mod tests {
         assert_eq!(3, element_count(&write));
 
         let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
+
+        // gc should not hanlde keys with larger seqno than oldest seqno
+        worker.core.gc_range(&range, 13, 10);
+        assert_eq!(3, element_count(&default));
+        assert_eq!(3, element_count(&write));
 
         // gc will not remove the latest mvcc put below safe point
         worker.core.gc_range(&range, 14, 100);
