@@ -69,8 +69,8 @@ impl<'a> RpnStackNodeVectorValue<'a> {
                     ],
                     match &mut result_vec {
                         VectorValue::TT(dest_column) => {
+                            let src_ref = TT::borrow_vector_value(physical_value);
                             for index in logical_rows {
-                                let src_ref = TT::borrow_vector_value(physical_value);
                                 dest_column.push(src_ref.get_option_ref(*index).map(|x| x.into_owned_value()));
                             }
                         },
