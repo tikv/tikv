@@ -11,6 +11,7 @@ use engine_traits::{
     CacheRange, MiscExt, Mutable, RangeCacheEngine, Result, WriteBatch, WriteBatchExt,
     WriteOptions, CF_DEFAULT,
 };
+use raftstore::store::fsm::apply::PRINTF_LOG;
 use tikv_util::{
     box_err,
     config::ReadableSize,
@@ -416,11 +417,13 @@ impl RangeCacheWriteBatchEntry {
         value.set_memory_controller(memory_controller);
         handle.insert(key, value, guard);
 
-        info!(
-            "write to memory";
-            "entry" => ?self,
-            "seqno" => seq,
-        );
+        if PRINTF_LOG.load(Ordering::Relaxed) {
+            info!(
+                "write to memory";
+                "entry" => ?self,
+                "seqno" => seq,
+            );
+        }
 
         Ok(())
     }
