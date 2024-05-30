@@ -437,11 +437,11 @@ impl RangeCacheMemoryEngine {
         &self.bg_work_manager
     }
 
-    pub(crate) fn memory_controller(&self) -> Arc<MemoryController> {
+    pub fn memory_controller(&self) -> Arc<MemoryController> {
         self.memory_controller.clone()
     }
 
-    pub(crate) fn statistics(&self) -> Arc<Statistics> {
+    pub fn statistics(&self) -> Arc<Statistics> {
         self.statistics.clone()
     }
 }

@@ -23,10 +23,12 @@ mod range_manager;
 mod read;
 mod region_label;
 mod statistics;
+pub mod test_util;
 mod write_batch;
 
 pub use background::{BackgroundRunner, GcTask};
-pub use engine::RangeCacheMemoryEngine;
+pub use engine::{RangeCacheMemoryEngine, SkiplistHandle};
+pub use keys::{encoding_for_filter, InternalBytes};
 pub use metrics::flush_range_cache_engine_statistics;
 pub use range_manager::RangeCacheStatus;
 pub use statistics::Statistics as RangeCacheMemoryEngineStatistics;
