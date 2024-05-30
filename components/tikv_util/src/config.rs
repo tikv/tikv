@@ -2069,7 +2069,7 @@ mod tests {
     #[test]
     fn test_readable_schedule() {
         let schedule = ReadableSchedule(
-            vec!["09:30 +00:00", "23:00 +00:00"]
+            vec!["09:30 +0000", "23:00 +00:00"]
                 .into_iter()
                 .flat_map(ReadableOffsetTime::from_str)
                 .collect::<Vec<_>>(),
