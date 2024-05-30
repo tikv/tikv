@@ -1,11 +1,14 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
+
 use async_trait::async_trait;
 use tidb_query_common::{storage::IntervalRange, Result};
 use tidb_query_datatype::{
-    codec::{batch::{LazyBatchColumn, LazyBatchColumnVec}, data_type::*},
+    codec::{
+        batch::{LazyBatchColumn, LazyBatchColumnVec},
+        data_type::*,
+    },
     expr::{EvalConfig, EvalContext},
 };
 use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnExpressionNode};
@@ -19,8 +22,9 @@ pub struct BatchProjectionExecutor<Src: BatchExecutor> {
     schema: Vec<FieldType>,
 
     exprs: Vec<RpnExpression>,
-    // use no_dup_column_ref_only to recognize whether the projection executor contains only no-duplicate column references
-    // if so, we can optimize the projection executor by avoiding unnecessary column copying
+    // use no_dup_column_ref_only to recognize whether the projection executor contains only
+    // no-duplicate column references if so, we can optimize the projection executor by
+    // avoiding unnecessary column copying
     no_dup_column_ref_only: bool,
     // column_offsets is used to store the column offsets of the no-duplicate column references
     // Note: the column_offsets is only valid when no_dup_column_ref_only is true
@@ -58,7 +62,12 @@ impl<Src: BatchExecutor> BatchProjectionExecutor<Src> {
         let mut column_offset_vec = Vec::with_capacity(exprs_len);
         for expr in &exprs {
             if no_dup_column_ref_only && expr.len() == 1 {
-                check_column_ref(expr, &mut column_offset_set, &mut no_dup_column_ref_only, &mut column_offset_vec);
+                check_column_ref(
+                    expr,
+                    &mut column_offset_set,
+                    &mut no_dup_column_ref_only,
+                    &mut column_offset_vec,
+                );
             } else {
                 no_dup_column_ref_only = false;
                 break;
@@ -82,9 +91,15 @@ impl<Src: BatchExecutor> BatchProjectionExecutor<Src> {
         let mut column_offset_set = HashSet::with_capacity(exprs_len);
         let mut column_offset_vec = Vec::with_capacity(exprs_len);
         for def in exprs_def {
-            let rpn_expression = RpnExpressionBuilder::build_from_expr_tree(def, &mut ctx, src.schema().len())?;
+            let rpn_expression =
+                RpnExpressionBuilder::build_from_expr_tree(def, &mut ctx, src.schema().len())?;
             if no_dup_column_ref_only && rpn_expression.len() == 1 {
-                check_column_ref(&rpn_expression, &mut column_offset_set, &mut no_dup_column_ref_only, &mut column_offset_vec);
+                check_column_ref(
+                    &rpn_expression,
+                    &mut column_offset_set,
+                    &mut no_dup_column_ref_only,
+                    &mut column_offset_vec,
+                );
             } else {
                 no_dup_column_ref_only = false;
             }
@@ -103,8 +118,14 @@ impl<Src: BatchExecutor> BatchProjectionExecutor<Src> {
     }
 }
 
-// check_column_ref checks whether the RpnExpression contains only one column reference and no duplicate column references
-fn check_column_ref(rpn_expression: &RpnExpression, column_offset_set: &mut HashSet<usize>, no_dup_column_ref_only: &mut bool, column_offset_vec: &mut Vec<usize>) {
+// check_column_ref checks whether the RpnExpression contains only one column
+// reference and no duplicate column references
+fn check_column_ref(
+    rpn_expression: &RpnExpression,
+    column_offset_set: &mut HashSet<usize>,
+    no_dup_column_ref_only: &mut bool,
+    column_offset_vec: &mut Vec<usize>,
+) {
     match rpn_expression[0] {
         RpnExpressionNode::ColumnRef { offset, .. } => {
             if !column_offset_set.insert(offset) {
@@ -144,9 +165,13 @@ impl<Src: BatchExecutor> BatchExecutor for BatchProjectionExecutor<Src> {
         if is_drained.is_ok() && logical_len != 0 {
             if self.no_dup_column_ref_only {
                 for offset in self.column_offsets.iter() {
-                    // Little trick here, we push a None column to the end of the physical columns, and then swap it with the offset column
-                    // and then remove the end column, this is to avoid the overhead of moving all the columns after the offset column
-                    src_result.physical_columns.push(LazyBatchColumn::from(VectorValue::Int(vec![None].into())));
+                    // Little trick here, we push a None column to the end of the physical columns,
+                    // and then swap it with the offset column and then remove
+                    // the end column, this is to avoid the overhead of moving all the columns after
+                    // the offset column
+                    src_result
+                        .physical_columns
+                        .push(LazyBatchColumn::from(VectorValue::Int(vec![None].into())));
                     eval_result.push(src_result.physical_columns.swap_remove(*offset));
                 }
             } else {
@@ -170,7 +195,8 @@ impl<Src: BatchExecutor> BatchExecutor for BatchProjectionExecutor<Src> {
                                     logical_len,
                                 )));
                             } else {
-                                eval_result.push(LazyBatchColumn::from(col.take_vector_value().unwrap()));
+                                eval_result
+                                    .push(LazyBatchColumn::from(col.take_vector_value().unwrap()));
                             }
                         }
                     }
