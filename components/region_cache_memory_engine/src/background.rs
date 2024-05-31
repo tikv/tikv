@@ -883,8 +883,8 @@ impl Filter {
         }
 
         let guard = &epoch::pin();
-        // Also, we only handle the same user_key once (user_key here refers to refers
-        // to the key with MVCC version but without sequence number).
+        // Also, we only handle the same user_key once (user_key here refers to the key
+        // with MVCC version but without sequence number).
         if user_key != self.last_user_key {
             self.last_user_key = user_key.to_vec();
         } else {
