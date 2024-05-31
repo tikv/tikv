@@ -322,10 +322,19 @@ impl RangeCacheWriteBatch {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 enum WriteBatchEntryInternal {
     PutValue(Bytes),
     Deletion,
+}
+
+impl Debug for WriteBatchEntryInternal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PutValue(_) => write!(f, "PutValue"),
+            Self::Deletion => write!(f, "Deletion"),
+        }
+    }
 }
 
 impl WriteBatchEntryInternal {
