@@ -1,7 +1,7 @@
-use std::any::Any;
+use std::{any::Any, time::Instant};
 
 use external_storage::{BackendConfig, BlobStore, S3Storage};
-use futures::stream::{self, StreamExt};
+use futures::stream::{self, StreamExt, TryStreamExt};
 use kvproto::brpb::{StorageBackend, S3};
 
 use super::{
@@ -24,14 +24,22 @@ async fn playground() {
     let storage = external_storage::create_storage(&backend, BackendConfig::default()).unwrap()
         as Box<dyn Any>;
     let storage = storage.downcast::<BlobStore<S3Storage>>().unwrap();
-
-    let meta = MetaStorage::load_from_ext(storage.as_ref(), LoadFromExt::default()).await;
+    let now = Instant::now();
+    let mut ext = LoadFromExt::default();
+    ext.max_concurrent_fetch = 128;
+    let meta = MetaStorage::load_from_ext(storage.as_ref(), ext).await;
     let mut collect = CollectCompaction::new(
         stream::iter(meta.unwrap().files)
             .flat_map(|file| stream::iter(file.logs.into_iter()))
             .map(Ok),
     );
-
-    let compaction = collect.next().await.unwrap().unwrap();
-    println!("{}", compaction.source.len());
+    println!("{:?}", now.elapsed());
+    let compaction = collect.try_collect::<Vec<_>>().await.unwrap();
+    println!("{:?}", now.elapsed());
+    println!("{:?}", compaction[0]);
+    println!("{:?}", compaction.len());
+    println!(
+        "{:?}",
+        compaction.iter().map(|f| f.source.len()).sum::<usize>()
+    );
 }

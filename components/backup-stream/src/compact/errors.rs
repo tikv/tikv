@@ -17,6 +17,8 @@ pub enum ErrorKind {
     Io(#[from] std::io::Error),
     #[error("Protobuf {0}")]
     Protobuf(#[from] protobuf::error::ProtobufError),
+    #[error("Engine {0}")]
+    Engine(#[from] engine_traits::Error),
 }
 
 impl<T: Into<ErrorKind>> From<T> for Error {

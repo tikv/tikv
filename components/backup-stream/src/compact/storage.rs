@@ -9,7 +9,11 @@ use futures::{
 use tidb_query_datatype::codec::mysql::Time;
 use txn_types::TimeStamp;
 
-use super::errors::{Error, Result};
+use super::{
+    errors::{Error, Result},
+    util::select_vec,
+};
+use crate::utils;
 
 pub trait CompactStorage: WalkBlobStorage + ExternalStorage {}
 
@@ -34,6 +38,10 @@ pub struct LogFile {
     pub id: LogFileId,
     pub real_size: u64,
     pub region_id: u64,
+    pub cf: &'static str,
+    pub min_ts: u64,
+    pub max_ts: u64,
+    pub min_start_ts: u64,
 }
 
 pub struct LogFileId {
@@ -65,23 +73,6 @@ impl Default for LoadFromExt {
             max_concurrent_fetch: 16,
         }
     }
-}
-
-fn select_vec<'a, T, F: Future<Output = T> + Unpin + 'a>(
-    v: &'a mut Vec<F>,
-) -> impl Future<Output = T> + 'a {
-    futures::future::poll_fn(|cx| {
-        for (idx, fut) in v.iter_mut().enumerate() {
-            match fut.poll_unpin(cx) {
-                std::task::Poll::Ready(item) => {
-                    let _ = v.swap_remove(idx);
-                    return item.into();
-                }
-                std::task::Poll::Pending => continue,
-            }
-        }
-        std::task::Poll::Pending
-    })
 }
 
 impl MetaStorage {
@@ -126,6 +117,10 @@ impl MetaFile {
                     },
                     real_size: log_file.length,
                     region_id: log_file.region_id as _,
+                    cf: utils::cf_name(&log_file.cf),
+                    max_ts: log_file.max_ts,
+                    min_ts: log_file.min_ts,
+                    min_start_ts: log_file.min_begin_ts_in_default_cf,
                 })
             }
         }
