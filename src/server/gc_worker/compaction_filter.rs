@@ -147,7 +147,7 @@ where
         safe_point: Arc<AtomicU64>,
         cfg_tracker: GcWorkerConfigManager,
         feature_gate: FeatureGate,
-        gc_scheduler: Scheduler<GcTask<EK>>,
+        gc_scheduler: Scheduler<GcTask<<EK as MiscExt>::DiskEngine>>,
         region_info_provider: Arc<dyn RegionInfoProvider>,
     );
 }
@@ -162,7 +162,7 @@ where
         _safe_point: Arc<AtomicU64>,
         _cfg_tracker: GcWorkerConfigManager,
         _feature_gate: FeatureGate,
-        _gc_scheduler: Scheduler<GcTask<EK>>,
+        _gc_scheduler: Scheduler<GcTask<<EK as MiscExt>::DiskEngine>>,
         _region_info_provider: Arc<dyn RegionInfoProvider>,
     ) {
         info!("Compaction filter is not supported for this engine.");
