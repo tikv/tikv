@@ -9,7 +9,7 @@ use engine_traits::{
     IterMetricsCollector, IterOptions, Iterable, Iterator, KvEngine, MetricsExt, RangeCacheEngine,
     Result,
 };
-use tikv_util::{error, warn, Either};
+use tikv_util::{error, warn, Either, info};
 use txn_types::Key;
 
 pub static AUDIT_MODE: AtomicBool = AtomicBool::new(false);
@@ -69,7 +69,7 @@ where
                         let (lower, upper) = self.iter_opts.clone().build_bounds();
                         let prefix_same_as_start = self.iter_opts.prefix_same_as_start();
                         error!(
-                            "prev inconsistent, disk iterator prev failed";
+                            "next inconsistent, disk iterator next failed";
                             "cache_key" => log_wrappers::Value(key),
                             "cache_val" => log_wrappers::Value(val),
                             "lower" => log_wrappers::Value(&lower.unwrap_or_default()),
@@ -102,6 +102,13 @@ where
                         );
                         unreachable!()
                     }
+
+                    info!(
+                        "next_to_match: skip rocksdb key";
+                        "cache_key" => log_wrappers::Value(key),
+                        "disk_key" => log_wrappers::Value(disk_key),
+                    );
+
                     assert!(self.disk_iter.next().unwrap());
                 }
             }
@@ -152,6 +159,13 @@ where
                         );
                         unreachable!()
                     }
+
+                    info!(
+                        "next_to_match: skip rocksdb key";
+                        "cache_key" => log_wrappers::Value(key),
+                        "disk_key" => log_wrappers::Value(disk_key),
+                    );
+
                     assert!(self.disk_iter.prev().unwrap());
                 }
             }

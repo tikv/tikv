@@ -304,10 +304,18 @@ impl<B: WriteBatch> DeleteBatch<B> {
         match &mut self.batch {
             Either::Left(batch) => {
                 let key = Key::from_encoded_slice(key).append_ts(ts);
+                info!(
+                    "delete rocksdb key";
+                    "key" => log_wrappers::Value(key.as_encoded()),
+                );
                 batch.delete(key.as_encoded())?;
             }
             Either::Right(keys) => {
                 let key = Key::from_encoded_slice(keys::origin_key(key)).append_ts(ts);
+                info!(
+                    "delete rocksdb key";
+                    "key" => log_wrappers::Value(key.as_encoded()),
+                );
                 keys.push(key);
             }
         }

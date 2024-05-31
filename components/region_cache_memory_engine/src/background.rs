@@ -977,10 +977,10 @@ impl Runnable for BackgroundRunner {
                             continue;
                         }
 
+                        let seq = snap.sequence_number();
                         let snapshot_load = || -> bool {
                             for &cf in DATA_CFS {
                                 let handle = skiplist_engine.cf_handle(cf);
-                                let seq = snap.sequence_number();
                                 let guard = &epoch::pin();
                                 match snap.iterator_opt(cf, iter_opt.clone()) {
                                     Ok(mut iter) => {
@@ -1018,7 +1018,14 @@ impl Runnable for BackgroundRunner {
                                             val.set_memory_controller(
                                                 core.memory_controller.clone(),
                                             );
+
+                                            info!(
+                                                "write to memory in load";
+                                                "key" => log_wrappers::Value(encoded_key.as_slice()),
+                                                "cf" => ?cf,
+                                            );
                                             handle.insert(encoded_key, val, guard);
+
                                             iter.next().unwrap();
                                         }
                                     }
@@ -1046,6 +1053,7 @@ impl Runnable for BackgroundRunner {
                                 "Loading range finished";
                                 "range" => ?range,
                                 "duration(sec)" => ?duration,
+                                "seqno" => seq,
                             );
                         } else {
                             info!("Loading range canceled";"range" => ?range);
