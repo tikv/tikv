@@ -370,7 +370,7 @@ dependencies = [
  "time 0.3.20",
  "tokio",
  "url",
- "uuid 1.2.1",
+ "uuid 1.8.0",
 ]
 
 [[package]]
@@ -396,7 +396,7 @@ dependencies = [
  "serde_json",
  "time 0.3.20",
  "url",
- "uuid 1.2.1",
+ "uuid 1.8.0",
 ]
 
 [[package]]
@@ -416,7 +416,7 @@ dependencies = [
  "serde_json",
  "time 0.3.20",
  "url",
- "uuid 1.2.1",
+ "uuid 1.8.0",
 ]
 
 [[package]]
@@ -453,7 +453,7 @@ dependencies = [
  "sha2 0.10.6",
  "time 0.3.20",
  "url",
- "uuid 1.2.1",
+ "uuid 1.8.0",
 ]
 
 [[package]]
@@ -472,7 +472,7 @@ dependencies = [
  "serde_json",
  "time 0.3.20",
  "url",
- "uuid 1.2.1",
+ "uuid 1.8.0",
 ]
 
 [[package]]
@@ -1428,7 +1428,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bef552e6f588e446098f6ba40d89ac146c8c7b64aade83c051ee00bb5d2bc18d"
 dependencies = [
- "uuid 1.2.1",
+ "uuid 1.8.0",
 ]
 
 [[package]]
@@ -3120,18 +3120,18 @@ dependencies = [
 
 [[package]]
 name = "memmap2"
-version = "0.5.10"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83faa42c0a078c393f6b29d5db232d8be22776a891f8f56e5284faee4a20b327"
+checksum = "180d4b35be83d33392d1d1bfbd2ae1eca7ff5de1a94d3fc87faaa99a069e7cbd"
 dependencies = [
  "libc 0.2.146",
 ]
 
 [[package]]
 name = "memmap2"
-version = "0.7.0"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "180d4b35be83d33392d1d1bfbd2ae1eca7ff5de1a94d3fc87faaa99a069e7cbd"
+checksum = "45fd3a57831bf88bc63f8cebc0cf956116276e97fef3966103e96416209f7c92"
 dependencies = [
  "libc 0.2.146",
 ]
@@ -3975,9 +3975,9 @@ dependencies = [
 
 [[package]]
 name = "pprof"
-version = "0.11.1"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "196ded5d4be535690899a4631cc9f18cdc41b7ebf24a79400f46f48e49a11059"
+checksum = "ef5c97c51bd34c7e742402e216abdeb44d415fbe6ae41d56b114723e953711cb"
 dependencies = [
  "backtrace",
  "cfg-if 1.0.0",
@@ -5028,9 +5028,9 @@ dependencies = [
 
 [[package]]
 name = "rustc-demangle"
-version = "0.1.16"
+version = "0.1.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c691c0e608126e00913e33f0ccf3727d5fc84573623b8d65b2df340b5201783"
+checksum = "719b953e2095829ee67db738b3bfa9fa368c94900df327b3f07fe6e794d2fe1f"
 
 [[package]]
 name = "rustc-hash"
@@ -5783,21 +5783,21 @@ checksum = "6bdef32e8150c2a081110b42772ffe7d7c9032b606bc226c8260fd97e0976601"
 
 [[package]]
 name = "symbolic-common"
-version = "10.1.1"
+version = "12.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac457d054f793cedfde6f32d21d692b8351cfec9084fefd0470c0373f6d799bc"
+checksum = "1cccfffbc6bb3bb2d3a26cd2077f4d055f6808d266f9d4d158797a4c60510dfe"
 dependencies = [
  "debugid",
- "memmap2 0.5.10",
+ "memmap2 0.9.3",
  "stable_deref_trait",
- "uuid 1.2.1",
+ "uuid 1.8.0",
 ]
 
 [[package]]
 name = "symbolic-demangle"
-version = "10.1.1"
+version = "12.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48808b846eef84e0ac06365dc620f028ae632355e5dcffc007bf1b2bf5eab17b"
+checksum = "76a99812da4020a67e76c4eb41f08c87364c14170495ff780f30dd519c221a68"
 dependencies = [
  "rustc-demangle",
  "symbolic-common",
@@ -7321,9 +7321,9 @@ dependencies = [
 
 [[package]]
 name = "uuid"
-version = "1.2.1"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "feb41e78f93363bb2df8b0e86a2ca30eed7806ea16ea0c790d757cf93f79be83"
+checksum = "a183cf7feeba97b4dd1c0d46788634f6221d87fa961b305bed08c851829efcc0"
 dependencies = [
  "getrandom 0.2.3",
 ]
