@@ -20,10 +20,10 @@ use crossbeam::{
     epoch, select,
     sync::ShardedLock,
 };
-use engine_rocks::RocksSnapshot;
+use engine_rocks::{RocksEngine, RocksEngineIterator, RocksSnapshot};
 use engine_traits::{
-    CacheRange, IterOptions, Iterable, Iterator, RangeHintService, SnapshotMiscExt, CF_DEFAULT,
-    CF_WRITE, DATA_CFS,
+    iter_option, CacheRange, IterOptions, Iterable, Iterator, RangeHintService, SnapshotMiscExt,
+    CF_DEFAULT, CF_WRITE, DATA_CFS,
 };
 use kvproto::metapb::Region;
 use parking_lot::{Mutex, RwLock};
@@ -51,6 +51,7 @@ use crate::{
         RANGE_LOAD_TIME_HISTOGRAM,
     },
     range_manager::LoadFailedReason,
+    read::{RangeCacheIterator, RangeCacheSnapshot},
     region_label::{
         LabelRule, RegionLabelAddedCb, RegionLabelRulesManager, RegionLabelServiceBuilder,
     },
@@ -88,6 +89,8 @@ pub enum BackgroundTask {
     DeleteRange(Vec<CacheRange>),
     CleanLockTombstone(u64),
     TopRegionsLoadEvict,
+    SetRocksEngine(RocksEngine),
+    Audit((Vec<RangeCacheSnapshot>, RocksSnapshot)),
 }
 
 impl Display for BackgroundTask {
@@ -104,6 +107,8 @@ impl Display for BackgroundTask {
                 .field("seqno", r)
                 .finish(),
             BackgroundTask::TopRegionsLoadEvict => f.debug_struct("CheckTopRegions").finish(),
+            BackgroundTask::Audit(_) => f.debug_struct("audit").finish(),
+            BackgroundTask::SetRocksEngine(_) => f.debug_struct("SetDiskEngine").finish(),
         }
     }
 }
@@ -862,6 +867,8 @@ pub struct BackgroundRunner {
     lock_cleanup_worker: Worker,
 
     last_seqno: u64,
+    // RocksEngine is used to get the oldest snapshot no.
+    rocks_engine: Option<RocksEngine>,
 }
 
 impl Drop for BackgroundRunner {
@@ -921,7 +928,75 @@ impl BackgroundRunner {
             lock_cleanup_remote,
             lock_cleanup_worker,
             last_seqno: 0,
+            rocks_engine: None,
         }
+    }
+}
+
+fn next_to_match(cf: &str, iter: &mut RangeCacheIterator, disk_iter: &mut RocksEngineIterator) {
+    let key = iter.key();
+    let val = iter.value();
+    if !disk_iter.next().unwrap() {
+        error!(
+            "next inconsistent, disk iterator next failed";
+            "cache_key" => log_wrappers::Value(key),
+            "cache_val" => log_wrappers::Value(val),
+            "lower" => log_wrappers::Value(&iter.lower_bound),
+            "upper" => log_wrappers::Value(&iter.upper_bound),
+            "seqno" => iter.sequence_number,
+            "cf" => ?cf,
+        );
+        unreachable!()
+    }
+    let (user_key, ts) = if cf != "lock" {
+        split_ts(key).unwrap()
+    } else {
+        (b"".as_slice(), 0)
+    };
+    loop {
+        let disk_key = disk_iter.key();
+        let disk_val = disk_iter.value();
+        if disk_key == key {
+            break;
+        } else if cf != "lock" {
+            let (disk_user_key, disk_ts) = split_ts(disk_key).unwrap();
+            if disk_user_key == user_key && disk_ts > ts {
+                error!(
+                    "next inconsistent, missing higher ts";
+                    "cache_key" => log_wrappers::Value(key),
+                    "cache_val" => log_wrappers::Value(val),
+                    "disk_key" => log_wrappers::Value(disk_key),
+                    "disk_val" => log_wrappers::Value(disk_val),
+                    "lower" => log_wrappers::Value(&iter.lower_bound),
+                    "upper" => log_wrappers::Value(&iter.upper_bound),
+                    "seqno" => iter.sequence_number,
+                    "cf" => ?cf,
+                );
+                unreachable!()
+            }
+        }
+        if disk_key > key {
+            error!(
+                "next inconsistent";
+                "cache_key" => log_wrappers::Value(key),
+                "cache_val" => log_wrappers::Value(val),
+                "disk_key" => log_wrappers::Value(disk_key),
+                "disk_val" => log_wrappers::Value(disk_val),
+                "lower" => log_wrappers::Value(&iter.lower_bound),
+                "upper" => log_wrappers::Value(&iter.upper_bound),
+                "seqno" => iter.sequence_number,
+                "cf" => ?cf,
+            );
+            unreachable!()
+        }
+
+        info!(
+            "next_to_match: skip rocksdb key";
+            "cache_key" => log_wrappers::Value(key),
+            "disk_key" => log_wrappers::Value(disk_key),
+        );
+
+        assert!(disk_iter.next().unwrap());
     }
 }
 
@@ -930,6 +1005,42 @@ impl Runnable for BackgroundRunner {
 
     fn run(&mut self, task: Self::Task) {
         match task {
+            BackgroundTask::SetRocksEngine(rocks_engine) => {
+                self.rocks_engine = Some(rocks_engine);
+            }
+            BackgroundTask::Audit((ranges_snap, rocksdb_snap)) => {
+                for range_snap in ranges_snap {
+                    let opts = iter_option(
+                        &range_snap.snapshot_meta.range.start,
+                        &range_snap.snapshot_meta.range.end,
+                        false,
+                    );
+                    for cf in DATA_CFS {
+                        let mut iter = range_snap.iterator_opt(cf, opts.clone()).unwrap();
+                        let mut disk_iter = rocksdb_snap.iterator_opt(cf, opts.clone()).unwrap();
+                        let valid = iter.seek_to_first().unwrap();
+                        if !valid {
+                            continue;
+                        }
+                        let valid = disk_iter.seek_to_first().unwrap();
+                        if !valid {
+                            error!(
+                                "seek_to_first result not equal";
+                                "lower" => log_wrappers::Value(&iter.lower_bound),
+                                "upper" => log_wrappers::Value(&iter.upper_bound),
+                                "cache_key" => log_wrappers::Value(&iter.key()),
+                                "seqno" => iter.sequence_number,
+                                "cf" => ?cf,
+                            );
+                            unreachable!();
+                        }
+
+                        while iter.next().unwrap() {
+                            next_to_match(cf, &mut iter, &mut disk_iter);
+                        }
+                    }
+                }
+            }
             BackgroundTask::Gc(t) => {
                 info!(
                     "start a new round of gc for range cache engine";

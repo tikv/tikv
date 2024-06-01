@@ -12,7 +12,7 @@ use crossbeam::epoch::{self, default_collector, Guard};
 use engine_rocks::RocksEngine;
 use engine_traits::{
     CacheRange, FailedReason, IterOptions, Iterable, Iterator, KvEngine, RangeCacheEngine, Result,
-    CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    SnapshotMiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
 use raftstore::coprocessor::RegionInfoProvider;
@@ -21,7 +21,7 @@ use skiplist_rs::{
     SkipList,
 };
 use slog_global::error;
-use tikv_util::{config::VersionTrack, info};
+use tikv_util::{config::VersionTrack, info, warn};
 
 use crate::{
     background::{BackgroundTask, BgWorkManager, PdRangeHintService},
@@ -543,6 +543,30 @@ impl RangeCacheMemoryEngine {
         scan(CF_LOCK);
         buffer
     }
+
+    pub fn schedule_audit(&self) {
+        let snap = self.rocks_engine.as_ref().unwrap().snapshot(None);
+        let mut ranges_to_audit = vec![];
+        let ranges: Vec<_> = {
+            let core = self.core().write();
+            core.range_manager.ranges().keys().cloned().collect()
+        };
+        for range in ranges {
+            if let Ok(range_snap) = self.snapshot(range.clone(), u64::MAX, snap.sequence_number()) {
+                ranges_to_audit.push(range_snap);
+            } else {
+                warn!(
+                    "failed to get snap in audit";
+                    "range" => ?range,
+                );
+            }
+        }
+        if !ranges_to_audit.is_empty() {
+            self.bg_worker_manager()
+                .schedule_task(BackgroundTask::Audit((ranges_to_audit, snap)))
+                .unwrap();
+        }
+    }
 }
 
 impl RangeCacheMemoryEngine {
@@ -571,7 +595,10 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
 
     type DiskEngine = RocksEngine;
     fn set_disk_engine(&mut self, disk_engine: Self::DiskEngine) {
-        self.rocks_engine = Some(disk_engine);
+        self.rocks_engine = Some(disk_engine.clone());
+        self.bg_worker_manager()
+            .schedule_task(BackgroundTask::SetRocksEngine(disk_engine))
+            .unwrap();
     }
 
     type RangeHintService = PdRangeHintService;

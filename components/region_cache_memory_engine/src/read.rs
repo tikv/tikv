@@ -66,7 +66,7 @@ impl RangeCacheSnapshotMeta {
 
 #[derive(Clone, Debug)]
 pub struct RangeCacheSnapshot {
-    snapshot_meta: RangeCacheSnapshotMeta,
+    pub snapshot_meta: RangeCacheSnapshotMeta,
     skiplist_engine: SkiplistEngine,
     engine: RangeCacheMemoryEngine,
 }
@@ -234,11 +234,11 @@ pub struct RangeCacheIterator {
     pub iter: OwnedIter<Arc<SkipList<InternalBytes, InternalBytes>>, InternalBytes, InternalBytes>,
     // The lower bound is inclusive while the upper bound is exclusive if set
     // Note: bounds (region boundaries) have no mvcc versions
-    lower_bound: Vec<u8>,
-    upper_bound: Vec<u8>,
+    pub lower_bound: Vec<u8>,
+    pub upper_bound: Vec<u8>,
     // A snapshot sequence number passed from RocksEngine Snapshot to guarantee suitable
     // visibility.
-    sequence_number: u64,
+    pub sequence_number: u64,
 
     saved_user_key: Vec<u8>,
     // This is only used by backwawrd iteration where the value we want may not be pointed by the

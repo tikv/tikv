@@ -1,5 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::{sync::Arc, thread::JoinHandle};
+
 use engine_traits::{
     FailedReason, KvEngine, Mutable, Peekable, RangeCacheEngine, ReadOptions, Result,
     SnapshotContext, SnapshotMiscExt, SyncMutable, WriteBatch, WriteBatchExt,
@@ -26,6 +28,7 @@ where
 {
     disk_engine: EK,
     region_cache_engine: EC,
+    handler: Arc<JoinHandle<()>>,
 }
 
 impl<EK, EC> HybridEngine<EK, EC>
@@ -55,10 +58,11 @@ where
     EK: KvEngine,
     EC: RangeCacheEngine,
 {
-    pub fn new(disk_engine: EK, region_cache_engine: EC) -> Self {
+    pub fn new(disk_engine: EK, region_cache_engine: EC, handler: JoinHandle<()>) -> Self {
         Self {
             disk_engine,
             region_cache_engine,
+            handler: Arc::new(handler),
         }
     }
 }

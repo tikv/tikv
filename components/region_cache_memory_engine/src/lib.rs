@@ -46,6 +46,7 @@ pub struct RangeCacheEngineConfig {
     pub load_evict_interval: ReadableDuration,
     pub soft_limit_threshold: Option<ReadableSize>,
     pub hard_limit_threshold: Option<ReadableSize>,
+    pub audit_interval: ReadableDuration,
 }
 
 impl Default for RangeCacheEngineConfig {
@@ -53,6 +54,7 @@ impl Default for RangeCacheEngineConfig {
         Self {
             enabled: false,
             gc_interval: ReadableDuration(Duration::from_secs(180)),
+            audit_interval: ReadableDuration(Duration::from_secs(180)),
             load_evict_interval: ReadableDuration(Duration::from_secs(360)),
             soft_limit_threshold: None,
             hard_limit_threshold: None,
@@ -101,6 +103,7 @@ impl RangeCacheEngineConfig {
         RangeCacheEngineConfig {
             enabled: true,
             gc_interval: ReadableDuration(Duration::from_secs(180)),
+            audit_interval: ReadableDuration(Duration::from_secs(180)),
             load_evict_interval: ReadableDuration(Duration::from_secs(360)),
             soft_limit_threshold: Some(ReadableSize::gb(1)),
             hard_limit_threshold: Some(ReadableSize::gb(2)),
@@ -109,7 +112,7 @@ impl RangeCacheEngineConfig {
 }
 
 pub struct RangeCacheEngineContext {
-    config: Arc<VersionTrack<RangeCacheEngineConfig>>,
+    pub config: Arc<VersionTrack<RangeCacheEngineConfig>>,
     statistics: Arc<RangeCacheMemoryEngineStatistics>,
 }
 

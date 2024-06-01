@@ -47,6 +47,7 @@ where
         VersionTrack::new(config),
     )));
     configure_memory_engine_fn(&memory_engine);
-    let hybrid_engine = HybridEngine::new(disk_engine, memory_engine);
+    let handler = std::thread::spawn(|| {});
+    let hybrid_engine = HybridEngine::new(disk_engine, memory_engine, handler);
     Ok((path, hybrid_engine))
 }

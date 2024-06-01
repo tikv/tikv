@@ -15,6 +15,7 @@ use std::{
     u64,
 };
 
+use crossbeam::{channel::tick, select};
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
     flush_engine_statistics,
@@ -730,12 +731,29 @@ impl KvEngineBuilder for HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
         pd_client: Option<Arc<RpcClient>>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
+        let audit_interval = range_cache_engine_context
+            .config
+            .value()
+            .audit_interval
+            .0
+            .clone();
         // todo(SpadeA): add config for it
         let mut memory_engine = RangeCacheMemoryEngine::with_region_info_provider(
             range_cache_engine_context,
             region_info_provider,
         );
         memory_engine.set_disk_engine(disk_engine.clone());
+        let m = memory_engine.clone();
+        let handler = std::thread::spawn(move || {
+            let tick = tick(audit_interval);
+            loop {
+                select! {
+                    recv(tick) -> _ => {
+                        m.schedule_audit();
+                    }
+                }
+            }
+        });
         if let Some(pd_client) = pd_client.as_ref() {
             memory_engine.start_hint_service(
                 <RangeCacheMemoryEngine as RangeCacheEngine>::RangeHintService::from(
@@ -743,7 +761,7 @@ impl KvEngineBuilder for HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
                 ),
             )
         }
-        HybridEngine::new(disk_engine, memory_engine)
+        HybridEngine::new(disk_engine, memory_engine, handler)
     }
 }
 
