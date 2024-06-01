@@ -1,8 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]
-use std::{borrow::Cow, cmp::Ordering};
-use std::sync::atomic;
+use std::{borrow::Cow, cmp::Ordering, sync::atomic};
 
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel, WriteConflictReason};

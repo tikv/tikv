@@ -86,6 +86,7 @@ where
                     self.disk_snap.iterator_opt(cf, opts.clone())?,
                     self.disk_snap.sequence_number(),
                     opts,
+                    cf.to_string(),
                 )
             }
             _ => HybridEngineIterator::disk_engine_iterator(
@@ -93,6 +94,7 @@ where
                 self.disk_snap.iterator_opt(cf, opts.clone())?,
                 self.disk_snap.sequence_number(),
                 opts,
+                cf.to_string(),
             ),
         })
     }

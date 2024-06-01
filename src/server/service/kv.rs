@@ -3,13 +3,13 @@
 // #[PerformanceCriticalPath]: TiKV gRPC APIs implementation
 use std::{
     mem,
+    ops::Deref,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
     time::Duration,
 };
-use std::ops::Deref;
 
 use api_version::KvFormat;
 use fail::fail_point;

@@ -24,6 +24,7 @@ use futures::{
     prelude::*,
 };
 use http::header::{HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE};
+use hybrid_engine::AUDIT_MODE;
 use hyper::{
     self, header,
     server::{
@@ -64,7 +65,6 @@ use tokio::{
 };
 use tokio_openssl::SslStream;
 use tracing_active_tree::tree::formating::FormatFlat;
-use hybrid_engine::AUDIT_MODE;
 
 use crate::{
     config::{ConfigController, LogLevel},

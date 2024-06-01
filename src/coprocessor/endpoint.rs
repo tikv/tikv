@@ -1,10 +1,14 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, mem, sync::Arc,
+    borrow::Cow,
+    future::Future,
+    iter::FromIterator,
+    marker::PhantomData,
+    mem,
+    sync::{atomic::Ordering, Arc},
     time::Duration,
 };
-use std::sync::atomic::Ordering;
 
 use ::tracker::{
     set_tls_tracker_token, with_tls_tracker, RequestInfo, RequestType, GLOBAL_TRACKERS,

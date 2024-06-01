@@ -5,7 +5,10 @@
 //!
 //! FIXME: Things here need to be moved elsewhere.
 
-use crate::{cf_names::CfNamesExt, errors::Result, flow_control_factors::FlowControlFactorsExt, KvEngine, range::Range, WriteBatchExt, WriteOptions};
+use crate::{
+    cf_names::CfNamesExt, errors::Result, flow_control_factors::FlowControlFactorsExt,
+    range::Range, KvEngine, WriteBatchExt, WriteOptions,
+};
 
 #[derive(Clone, Debug)]
 pub enum DeleteStrategy {

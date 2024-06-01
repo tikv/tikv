@@ -9,7 +9,7 @@ use engine_traits::{
     IterMetricsCollector, IterOptions, Iterable, Iterator, KvEngine, MetricsExt, RangeCacheEngine,
     Result,
 };
-use tikv_util::{error, warn, Either, info};
+use tikv_util::{error, info, warn, Either};
 use txn_types::Key;
 
 pub static AUDIT_MODE: AtomicBool = AtomicBool::new(false);
@@ -23,6 +23,7 @@ where
     disk_iter: <EK::Snapshot as Iterable>::Iterator,
     seqno: u64,
     iter_opts: IterOptions,
+    cf: String,
 }
 
 impl<EK, EC> HybridEngineIterator<EK, EC>
@@ -35,12 +36,14 @@ where
         disk_iter: <EK::Snapshot as Iterable>::Iterator,
         seqno: u64,
         iter_opts: IterOptions,
+        cf: String,
     ) -> Self {
         Self {
             iter: Either::Left(iter),
             disk_iter,
             seqno,
             iter_opts,
+            cf,
         }
     }
 
@@ -49,12 +52,14 @@ where
         disk_iter: <EK::Snapshot as Iterable>::Iterator,
         seqno: u64,
         iter_opts: IterOptions,
+        cf: String,
     ) -> Self {
         Self {
             iter: Either::Right(iter),
             disk_iter,
             seqno,
             iter_opts,
+            cf,
         }
     }
 
@@ -76,15 +81,40 @@ where
                             "upper" => log_wrappers::Value(&upper.unwrap_or_default()),
                             "prefix_same_as_start" => prefix_same_as_start,
                             "seqno" => self.seqno,
+                            "cf" => ?self.cf,
                         );
                         unreachable!()
                     }
                 }
+                let (user_key, ts) = if self.cf.as_str() != "lock" {
+                    split_ts(key).unwrap()
+                } else {
+                    (b"".as_slice(), 0)
+                };
                 loop {
                     let disk_key = self.disk_iter.key();
                     let disk_val = self.disk_iter.value();
                     if disk_key == key {
                         break;
+                    } else if self.cf.as_str() != "lock" {
+                        let (disk_user_key, disk_ts) = split_ts(disk_key).unwrap();
+                        if disk_user_key == user_key && disk_ts > ts {
+                            let (lower, upper) = self.iter_opts.clone().build_bounds();
+                            let prefix_same_as_start = self.iter_opts.prefix_same_as_start();
+                            error!(
+                                "next inconsistent, missing higher ts";
+                                "cache_key" => log_wrappers::Value(key),
+                                "cache_val" => log_wrappers::Value(val),
+                                "disk_key" => log_wrappers::Value(disk_key),
+                                "disk_val" => log_wrappers::Value(disk_val),
+                                "lower" => log_wrappers::Value(&lower.unwrap_or_default()),
+                                "upper" => log_wrappers::Value(&upper.unwrap_or_default()),
+                                "prefix_same_as_start" => prefix_same_as_start,
+                                "seqno" => self.seqno,
+                                "cf" => ?self.cf,
+                            );
+                            unreachable!()
+                        }
                     }
                     if disk_key > key {
                         let (lower, upper) = self.iter_opts.clone().build_bounds();
@@ -99,6 +129,7 @@ where
                             "upper" => log_wrappers::Value(&upper.unwrap_or_default()),
                             "prefix_same_as_start" => prefix_same_as_start,
                             "seqno" => self.seqno,
+                            "cf" => ?self.cf,
                         );
                         unreachable!()
                     }
@@ -133,6 +164,7 @@ where
                             "upper" => log_wrappers::Value(&upper.unwrap_or_default()),
                             "prefix_same_as_start" => prefix_same_as_start,
                             "seqno" => self.seqno,
+                            "cf" => ?self.cf,
                         );
                         unreachable!()
                     }
@@ -156,6 +188,7 @@ where
                             "upper" => log_wrappers::Value(&upper.unwrap_or_default()),
                             "prefix_same_as_start" => prefix_same_as_start,
                             "seqno" => self.seqno,
+                            "cf" => ?self.cf,
                         );
                         unreachable!()
                     }
