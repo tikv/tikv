@@ -2068,8 +2068,9 @@ mod tests {
 
     #[test]
     fn test_readable_schedule() {
+        // Tests HHMM offsets for timezones.
         let schedule = ReadableSchedule(
-            vec!["09:30 +00:00", "23:00 +00:00"]
+            vec!["09:30 +0000", "11:15 +0530", "23:00 +0000"]
                 .into_iter()
                 .flat_map(ReadableOffsetTime::from_str)
                 .collect::<Vec<_>>(),
@@ -2080,12 +2081,14 @@ mod tests {
         let time_c = DateTime::parse_from_rfc3339("2023-10-27T23:15:00-00:00").unwrap();
         let time_d = DateTime::parse_from_rfc3339("2023-10-27T23:00:00-00:00").unwrap();
         let time_e = DateTime::parse_from_rfc3339("2023-10-27T20:00:00-00:00").unwrap();
+        let time_f = DateTime::parse_from_rfc3339("2024-05-29T05:45:00-00:00").unwrap();
 
         // positives for schedule by hour
         assert!(schedule.is_scheduled_this_hour(&time_a));
         assert!(schedule.is_scheduled_this_hour(&time_b));
         assert!(schedule.is_scheduled_this_hour(&time_c));
         assert!(schedule.is_scheduled_this_hour(&time_d));
+        assert!(schedule.is_scheduled_this_hour(&time_f));
 
         // negatives for schedule by hour
         assert!(!schedule.is_scheduled_this_hour(&time_e));
@@ -2093,11 +2096,34 @@ mod tests {
         // positives for schedule by hour and minute
         assert!(schedule.is_scheduled_this_hour_minute(&time_a));
         assert!(schedule.is_scheduled_this_hour_minute(&time_d));
+        assert!(schedule.is_scheduled_this_hour_minute(&time_f));
 
         // negatives for schedule by hour and minute
         assert!(!schedule.is_scheduled_this_hour_minute(&time_b));
         assert!(!schedule.is_scheduled_this_hour_minute(&time_c));
         assert!(!schedule.is_scheduled_this_hour_minute(&time_e));
+    }
+
+    #[test]
+    fn test_readable_schedule_col_separated_offsets() {
+        // Test that HH:MM offsets are supported.
+        let schedule = ReadableSchedule(
+            vec!["09:30 +00:00", "11:15 +05:30", "23:00 +00:00"]
+                .into_iter()
+                .flat_map(ReadableOffsetTime::from_str)
+                .collect::<Vec<_>>(),
+        );
+
+        let time_a = DateTime::parse_from_rfc3339("2023-10-27T09:30:57-00:00").unwrap();
+        let time_b = DateTime::parse_from_rfc3339("2023-10-27T23:00:00-00:00").unwrap();
+        let time_c = DateTime::parse_from_rfc3339("2024-05-29T05:45:00-00:00").unwrap();
+        let time_d = DateTime::parse_from_rfc3339("2023-10-27T20:00:00-00:00").unwrap();
+
+        assert!(schedule.is_scheduled_this_hour(&time_a));
+        assert!(schedule.is_scheduled_this_hour(&time_b));
+        assert!(schedule.is_scheduled_this_hour(&time_c));
+        assert!(schedule.is_scheduled_this_hour_minute(&time_c));
+        assert!(!schedule.is_scheduled_this_hour_minute(&time_d));
     }
 
     #[test]
