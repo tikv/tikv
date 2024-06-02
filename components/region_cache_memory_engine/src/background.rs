@@ -38,7 +38,7 @@ use crate::{
         RANGE_LOAD_TIME_HISTOGRAM,
     },
     range_manager::LoadFailedReason,
-    range_stats::RangeStatsManager,
+    range_stats::{RangeStatsManager, DEFAULT_EVICT_MIN_DURATION},
     region_label::{
         LabelRule, RegionLabelAddedCb, RegionLabelRulesManager, RegionLabelServiceBuilder,
     },
@@ -691,8 +691,9 @@ impl BackgroundRunner {
 
         let num_regions_to_cache =
             memory_controller.soft_limit_threshold() / EXPECTED_AVERAGE_REGION_SIZE;
-        let range_stats_manager =
-            region_info_provider.map(|r_i_p| RangeStatsManager::new(num_regions_to_cache, r_i_p));
+        let range_stats_manager = region_info_provider.map(|r_i_p| {
+            RangeStatsManager::new(num_regions_to_cache, DEFAULT_EVICT_MIN_DURATION, r_i_p)
+        });
         Self {
             core: BackgroundRunnerCore {
                 engine,

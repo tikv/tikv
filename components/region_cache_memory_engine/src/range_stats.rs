@@ -26,21 +26,32 @@ pub(crate) struct RangeStatsManager {
     prev_top_regions: Arc<Mutex<BTreeMap<u64, Region>>>,
     checking_top_regions: Arc<AtomicBool>,
     region_loaded_at: Arc<ShardedLock<BTreeMap<u64, Instant>>>,
+    evict_min_duration: Duration,
 }
 
 /// Do not evict a region if has been cached for less than this duration.
-pub const EVICT_MIN_DURATION: Duration = Duration::from_secs(60 * 3);
+pub const DEFAULT_EVICT_MIN_DURATION: Duration = Duration::from_secs(60 * 3);
 
 impl RangeStatsManager {
-    /// Initial number of top regions to track and cache. This may change, see
-    /// `adjust_max_num_regions` below.
-    pub fn new(num_regions: usize, info_provider: Arc<dyn RegionInfoProvider>) -> Self {
+    /// Creates a new RangeStatsManager that retrieves state from
+    /// `info_provider`.
+    ///
+    /// * `num_regions` Initial number of top regions to track and cache. This
+    ///   may change, see `adjust_max_num_regions` below.
+    /// * `evict_min_duration` - do not evict regions that have been loaded for
+    ///   less than this duration.
+    pub fn new(
+        num_regions: usize,
+        evict_min_duration: Duration,
+        info_provider: Arc<dyn RegionInfoProvider>,
+    ) -> Self {
         RangeStatsManager {
             num_regions: Arc::new(AtomicUsize::new(num_regions)),
             info_provider,
             prev_top_regions: Arc::new(Mutex::new(BTreeMap::new())),
             checking_top_regions: Arc::new(AtomicBool::new(false)),
             region_loaded_at: Arc::new(ShardedLock::new(BTreeMap::new())),
+            evict_min_duration,
         }
     }
 
@@ -71,7 +82,7 @@ impl RangeStatsManager {
     ///    [raftstore::coprocessor::RegionCollector::handle_get_top_regions].
     /// 2. Remove all regions where `is_cached_pred` returns false when passed
     ///    the region's range or those that have been loaded for less than
-    ///    [`EVICT_MIN_DURATION`].
+    ///    `self.evict_min_duration`.
     /// 3. Reverse the list so that it is now sorted in the order of increasing
     ///    activity.
     /// 4. Store the results in `ranges_out` using [Vec::extend].
@@ -96,7 +107,7 @@ impl RangeStatsManager {
                                 // Do not evict ranges that were loaded less than
                                 // `EVICT_MIN_DURATION` ago.
                                 Some(&time_loaded)
-                                    if Instant::now() - time_loaded < EVICT_MIN_DURATION =>
+                                    if Instant::now() - time_loaded < self.evict_min_duration =>
                                 {
                                     None
                                 }
@@ -232,11 +243,17 @@ impl RangeStatsManager {
             .filter(|(id, _)| !prev_top_regions.contains_key(id))
             .map(|(_, region)| CacheRange::from_region(region));
         let regions_loaded = self.region_loaded_at.read().unwrap();
-        let removed_ranges = prev_top_regions.iter().filter_map(|(id, region)| {
-            if !curr_top_regions.contains_key(id) {
-                match regions_loaded.get(id) {
+        let removed_ranges = prev_top_regions.iter().filter_map(|(&id, region)| {
+            if !curr_top_regions.contains_key(&id) {
+                match regions_loaded.get(&id) {
                     // Do not evict ranges that were loaded less than `EVICT_MIN_DURATION` ago.
-                    Some(&time_loaded) if Instant::now() - time_loaded < EVICT_MIN_DURATION => None,
+                    Some(&time_loaded)
+                        if Instant::now() - time_loaded < self.evict_min_duration =>
+                    {
+                        let mut mut_prev_top_regions = self.prev_top_regions.lock();
+                        let _ = mut_prev_top_regions.insert(id, region.clone());
+                        None
+                    }
                     _ => Some(CacheRange::from_region(region)),
                 }
             } else {
@@ -311,7 +328,8 @@ pub mod tests {
         let sim = Arc::new(RegionInfoSimulator {
             regions: Mutex::new(vec![(region_1.clone(), 42)]),
         });
-        let rsm = RangeStatsManager::new(5, sim.clone());
+        // 10 ms min duration eviction for testing purposes.
+        let rsm = RangeStatsManager::new(5, Duration::from_millis(10), sim.clone());
         let mut added = Vec::<CacheRange>::new();
         let mut removed = Vec::<CacheRange>::new();
         rsm.collect_changed_ranges(&mut added, &mut removed);
@@ -324,5 +342,36 @@ pub mod tests {
         rsm.collect_changed_ranges(&mut added, &mut removed);
         assert_eq!(&added, &[CacheRange::from_region(&region_2)]);
         assert!(removed.is_empty());
+        let region_3 = new_region(3, b"k5", b"k6", 0);
+        let region_4 = new_region(4, b"k7", b"k8", 0);
+        let region_5 = new_region(5, b"k9", b"k10", 0);
+        let region_6 = new_region(6, b"k11", b"k12", 0);
+        let top_regions = vec![
+            (region_6.clone(), 42),
+            (region_2.clone(), 7),
+            (region_3.clone(), 8),
+            (region_4.clone(), 9),
+            (region_5.clone(), 2),
+        ];
+        sim.set_top_regions(&top_regions);
+        added.clear();
+        removed.clear();
+        rsm.collect_changed_ranges(&mut added, &mut removed);
+        assert_eq!(
+            &added,
+            &[
+                CacheRange::from_region(&region_3),
+                CacheRange::from_region(&region_4),
+                CacheRange::from_region(&region_5),
+                CacheRange::from_region(&region_6)
+            ]
+        );
+        // `region_1` is no longer in the top regions list, but since it was loaded less
+        // than 10 ms ago, it should not be included in the removed ranges.
+        assert!(removed.is_empty());
+        std::thread::sleep(Duration::from_millis(100));
+        // After 100 ms passed, check again, and verify `region_1` is evictable.
+        rsm.collect_changed_ranges(&mut added, &mut removed);
+        assert_eq!(&removed, &[CacheRange::from_region(&region_1)]);
     }
 }
