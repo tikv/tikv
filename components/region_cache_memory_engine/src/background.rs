@@ -808,17 +808,6 @@ impl BackgroundRunnerCore {
         let mut ranges_to_remove = Vec::<CacheRange>::with_capacity(256);
         range_stats_manager.collect_changed_ranges(&mut ranges_to_add, &mut ranges_to_remove);
         info!("load_evict"; "ranges_to_add" => ?&ranges_to_add, "may_evict" => ?&ranges_to_remove);
-        let mut ranges: Vec<_> = {
-            let mut core = self.engine.write();
-            core.mut_range_manager().pending_ranges.clear();
-            core.mut_range_manager()
-                .ranges()
-                .keys()
-                .take(2)
-                .cloned()
-                .collect()
-        };
-        ranges_to_remove.append(&mut ranges);
         for evict_range in ranges_to_remove {
             if self.memory_controller.reached_soft_limit() {
                 info!("load_evict: soft limit reached"; "evict_range" => ?&evict_range);
