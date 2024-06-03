@@ -72,11 +72,11 @@ pub fn new_engine_opt(
     let existed: Vec<&str> = cfs_list.iter().map(|v| v.as_str()).collect();
     let needed: Vec<&str> = cf_opts.iter().map(|(name, _)| *name).collect();
 
+    let env = match db_opt.env() {
+        Some(env) => env,
+        None => Arc::new(Env::default()),
+    };
     let cf_descs = if !existed.is_empty() {
-        let env = match db_opt.env() {
-            Some(env) => env,
-            None => Arc::new(Env::default()),
-        };
         // panic if OPTIONS not found for existing instance?
         let (_, tmp) = load_latest_options(path, &env, true)
             .unwrap_or_else(|e| panic!("failed to load_latest_options {:?}", e))
@@ -441,17 +441,16 @@ impl<A: CompactionFilter, B: CompactionFilter> CompactionFilter for StackingComp
         &mut self,
         level: usize,
         key: &[u8],
-        seqno: u64,
         value: &[u8],
         value_type: CompactionFilterValueType,
     ) -> CompactionFilterDecision {
         if let Some(outer) = self.outer.as_mut()
-            && let r = outer.unsafe_filter(level, key, seqno, value, value_type)
+            && let r = outer.unsafe_filter(level, key, value, value_type)
             && !matches!(r, CompactionFilterDecision::Keep)
         {
             r
         } else if let Some(inner) = self.inner.as_mut() {
-            inner.unsafe_filter(level, key, seqno, value, value_type)
+            inner.unsafe_filter(level, key, value, value_type)
         } else {
             CompactionFilterDecision::Keep
         }
@@ -501,7 +500,6 @@ impl CompactionFilter for RangeCompactionFilter {
         &mut self,
         _level: usize,
         key: &[u8],
-        _seqno: u64,
         _value: &[u8],
         _value_type: CompactionFilterValueType,
     ) -> CompactionFilterDecision {
@@ -553,43 +551,52 @@ mod tests {
         // create db when db not exist
         let mut cfs_opts = vec![(CF_DEFAULT, RocksCfOptions::default())];
         let mut opts = RocksCfOptions::default();
-        opts.set_level_compaction_dynamic_level_bytes(true);
-        cfs_opts.push(("cf_dynamic_level_bytes", opts.clone()));
+        opts.set_level_compaction_dynamic_level_bytes(false);
+        cfs_opts.push(("cf_dynamic_level_bytes_disabled", opts.clone()));
         let db = new_engine_opt(path_str, RocksDbOptions::default(), cfs_opts).unwrap();
-        column_families_must_eq(path_str, vec![CF_DEFAULT, "cf_dynamic_level_bytes"]);
+        column_families_must_eq(
+            path_str,
+            vec![CF_DEFAULT, "cf_dynamic_level_bytes_disabled"],
+        );
         check_dynamic_level_bytes(&db);
         drop(db);
 
         // add cf1.
         let cfs_opts = vec![
             (CF_DEFAULT, opts.clone()),
-            ("cf_dynamic_level_bytes", opts.clone()),
+            ("cf_dynamic_level_bytes_disabled", opts.clone()),
             ("cf1", opts.clone()),
         ];
         let db = new_engine_opt(path_str, RocksDbOptions::default(), cfs_opts).unwrap();
-        column_families_must_eq(path_str, vec![CF_DEFAULT, "cf_dynamic_level_bytes", "cf1"]);
+        column_families_must_eq(
+            path_str,
+            vec![CF_DEFAULT, "cf_dynamic_level_bytes_disabled", "cf1"],
+        );
         check_dynamic_level_bytes(&db);
-        for cf in &[CF_DEFAULT, "cf_dynamic_level_bytes", "cf1"] {
+        for cf in &[CF_DEFAULT, "cf_dynamic_level_bytes_disabled", "cf1"] {
             db.put_cf(cf, b"k", b"v").unwrap();
         }
         drop(db);
 
         // change order should not cause data corruption.
         let cfs_opts = vec![
-            ("cf_dynamic_level_bytes", opts.clone()),
+            ("cf_dynamic_level_bytes_disabled", opts.clone()),
             ("cf1", opts.clone()),
             (CF_DEFAULT, opts),
         ];
         let db = new_engine_opt(path_str, RocksDbOptions::default(), cfs_opts).unwrap();
-        column_families_must_eq(path_str, vec![CF_DEFAULT, "cf_dynamic_level_bytes", "cf1"]);
+        column_families_must_eq(
+            path_str,
+            vec![CF_DEFAULT, "cf_dynamic_level_bytes_disabled", "cf1"],
+        );
         check_dynamic_level_bytes(&db);
-        for cf in &[CF_DEFAULT, "cf_dynamic_level_bytes", "cf1"] {
+        for cf in &[CF_DEFAULT, "cf_dynamic_level_bytes_disabled", "cf1"] {
             assert_eq!(db.get_value_cf(cf, b"k").unwrap().unwrap(), b"v");
         }
         drop(db);
 
         // drop cf1.
-        let cfs = vec![CF_DEFAULT, "cf_dynamic_level_bytes"];
+        let cfs = vec![CF_DEFAULT, "cf_dynamic_level_bytes_disabled"];
         let db = new_engine(path_str, &cfs).unwrap();
         column_families_must_eq(path_str, cfs);
         check_dynamic_level_bytes(&db);
@@ -617,9 +624,11 @@ mod tests {
 
     fn check_dynamic_level_bytes(db: &RocksEngine) {
         let tmp_cf_opts = db.get_options_cf(CF_DEFAULT).unwrap();
-        assert!(!tmp_cf_opts.get_level_compaction_dynamic_level_bytes());
-        let tmp_cf_opts = db.get_options_cf("cf_dynamic_level_bytes").unwrap();
         assert!(tmp_cf_opts.get_level_compaction_dynamic_level_bytes());
+        let tmp_cf_opts = db
+            .get_options_cf("cf_dynamic_level_bytes_disabled")
+            .unwrap();
+        assert!(!tmp_cf_opts.get_level_compaction_dynamic_level_bytes());
     }
 
     #[test]
