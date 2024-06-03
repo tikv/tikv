@@ -23,7 +23,7 @@ use crossbeam::{
 use engine_rocks::{RocksEngine, RocksEngineIterator, RocksSnapshot};
 use engine_traits::{
     iter_option, CacheRange, IterOptions, Iterable, Iterator, RangeHintService, SnapshotMiscExt,
-    CF_DEFAULT, CF_WRITE, DATA_CFS,
+    CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use kvproto::metapb::Region;
 use parking_lot::{Mutex, RwLock};
@@ -933,20 +933,27 @@ impl BackgroundRunner {
     }
 }
 
-fn next_to_match(cf: &str, iter: &mut RangeCacheIterator, disk_iter: &mut RocksEngineIterator) {
+fn next_to_match(
+    cf: &str,
+    iter: &mut RangeCacheIterator,
+    disk_iter: &mut RocksEngineIterator,
+    next_fisrt: bool,
+) {
     let key = iter.key();
     let val = iter.value();
-    if !disk_iter.next().unwrap() {
-        error!(
-            "next inconsistent, disk iterator next failed";
-            "cache_key" => log_wrappers::Value(key),
-            "cache_val" => log_wrappers::Value(val),
-            "lower" => log_wrappers::Value(&iter.lower_bound),
-            "upper" => log_wrappers::Value(&iter.upper_bound),
-            "seqno" => iter.sequence_number,
-            "cf" => ?cf,
-        );
-        unreachable!()
+    if next_fisrt {
+        if !disk_iter.next().unwrap() {
+            error!(
+                "next inconsistent, disk iterator next failed";
+                "cache_key" => log_wrappers::Value(key),
+                "cache_val" => log_wrappers::Value(val),
+                "lower" => log_wrappers::Value(&iter.lower_bound),
+                "upper" => log_wrappers::Value(&iter.upper_bound),
+                "seqno" => iter.sequence_number,
+                "cf" => ?cf,
+            );
+            unreachable!()
+        }
     }
     let (user_key, ts) = if cf != "lock" {
         split_ts(key).unwrap()
@@ -961,8 +968,23 @@ fn next_to_match(cf: &str, iter: &mut RangeCacheIterator, disk_iter: &mut RocksE
         } else if cf != "lock" {
             let (disk_user_key, disk_ts) = split_ts(disk_key).unwrap();
             if disk_user_key == user_key && disk_ts > ts {
-                let write = parse_write(disk_iter.value()).unwrap();
-                if write.write_type != WriteType::Rollback && write.write_type != WriteType::Lock {
+                if let Ok(write) = parse_write(disk_iter.value())
+                    && cf == "write"
+                    && (write.write_type == WriteType::Rollback
+                        || write.write_type == WriteType::Lock)
+                {
+                    info!(
+                        "meet gced rollback or lock";
+                        "cache_key" => log_wrappers::Value(key),
+                        "cache_val" => log_wrappers::Value(val),
+                        "disk_key" => log_wrappers::Value(disk_key),
+                        "disk_val" => log_wrappers::Value(disk_val),
+                        "lower" => log_wrappers::Value(&iter.lower_bound),
+                        "upper" => log_wrappers::Value(&iter.upper_bound),
+                        "seqno" => iter.sequence_number,
+                        "cf" => ?cf,
+                    );
+                } else {
                     error!(
                         "next inconsistent, missing higher ts";
                         "cache_key" => log_wrappers::Value(key),
@@ -975,18 +997,6 @@ fn next_to_match(cf: &str, iter: &mut RangeCacheIterator, disk_iter: &mut RocksE
                         "cf" => ?cf,
                     );
                     unreachable!()
-                } else {
-                    info!(
-                        "meet gced rollback or lock";
-                        "cache_key" => log_wrappers::Value(key),
-                        "cache_val" => log_wrappers::Value(val),
-                        "disk_key" => log_wrappers::Value(disk_key),
-                        "disk_val" => log_wrappers::Value(disk_val),
-                        "lower" => log_wrappers::Value(&iter.lower_bound),
-                        "upper" => log_wrappers::Value(&iter.upper_bound),
-                        "seqno" => iter.sequence_number,
-                        "cf" => ?cf,
-                    );
                 }
             }
         }
@@ -1030,7 +1040,7 @@ impl Runnable for BackgroundRunner {
                         &range_snap.snapshot_meta.range.end,
                         false,
                     );
-                    for cf in DATA_CFS {
+                    for cf in &[CF_LOCK, CF_WRITE] {
                         let mut iter = range_snap.iterator_opt(cf, opts.clone()).unwrap();
                         let mut disk_iter = rocksdb_snap.iterator_opt(cf, opts.clone()).unwrap();
                         let valid = iter.seek_to_first().unwrap();
@@ -1050,8 +1060,10 @@ impl Runnable for BackgroundRunner {
                             unreachable!();
                         }
 
+                        next_to_match(cf, &mut iter, &mut disk_iter, false);
+
                         while iter.next().unwrap() {
-                            next_to_match(cf, &mut iter, &mut disk_iter);
+                            next_to_match(cf, &mut iter, &mut disk_iter, true);
                         }
                     }
                 }
@@ -1190,10 +1202,10 @@ impl Runnable for BackgroundRunner {
             }
             BackgroundTask::MemoryCheckAndEvict => {
                 let mem_usage = self.core.memory_controller.mem_usage();
-                info!(
-                    "start memory usage check and evict";
-                    "mem_usage(MB)" => ReadableSize(mem_usage as u64).as_mb()
-                );
+                // info!(
+                //     "start memory usage check and evict";
+                //     "mem_usage(MB)" => ReadableSize(mem_usage as u64).as_mb()
+                // );
                 if mem_usage > self.core.memory_controller.soft_limit_threshold() {
                     self.core.evict_on_soft_limit_reached();
                 }
