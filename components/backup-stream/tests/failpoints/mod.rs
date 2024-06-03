@@ -25,25 +25,16 @@ mod all {
         GetCheckpointResult, RegionCheckpointOperation, RegionSet, Task,
     };
     use futures::executor::block_on;
-<<<<<<< HEAD
-    use tikv_util::{config::ReadableSize, defer};
-=======
-    use raftstore::coprocessor::ObserveHandle;
     use tikv_util::{
         config::{ReadableDuration, ReadableSize},
         defer,
     };
     use txn_types::Key;
->>>>>>> de72fcf385 (log-backup: Fix flush invalid ts (#16832))
 
     use crate::{
-        make_record_key, make_split_key_at_record, make_table_key, mutation, run_async_test,
+        make_record_key, make_split_key_at_record, make_table_key, mutation, run_async_test, Suite,
         SuiteBuilder,
     };
-<<<<<<< HEAD
-=======
-    use crate::{make_table_key, Suite};
->>>>>>> de72fcf385 (log-backup: Fix flush invalid ts (#16832))
 
     #[test]
     fn failed_register_task() {
