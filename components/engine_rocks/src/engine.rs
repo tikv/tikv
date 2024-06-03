@@ -6,6 +6,7 @@ use engine_traits::{
     IterOptions, Iterable, KvEngine, Peekable, ReadOptions, Result, SnapshotContext, SyncMutable,
 };
 use rocksdb::{DBIterator, Writable, DB};
+use tikv_util::info;
 
 use crate::{
     db_vector::RocksDbVector, options::RocksReadOptions, r2e, util::get_cf_handle,
@@ -257,6 +258,13 @@ impl SyncMutable for RocksEngine {
     }
 
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
+        if cf != "lock" {
+            info!(
+                "delete_cf";
+                "cf" => ?cf,
+                "key" => log_wrappers::Value(key),
+            );
+        }
         let handle = get_cf_handle(&self.db, cf)?;
         self.db.delete_cf(handle, key).map_err(r2e)
     }

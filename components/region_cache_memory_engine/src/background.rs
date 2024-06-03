@@ -808,6 +808,17 @@ impl BackgroundRunnerCore {
         let mut ranges_to_remove = Vec::<CacheRange>::with_capacity(256);
         range_stats_manager.collect_changed_ranges(&mut ranges_to_add, &mut ranges_to_remove);
         info!("load_evict"; "ranges_to_add" => ?&ranges_to_add, "may_evict" => ?&ranges_to_remove);
+        let mut ranges: Vec<_> = {
+            let mut core = self.engine.write();
+            core.mut_range_manager().pending_ranges.clear();
+            core.mut_range_manager()
+                .ranges()
+                .keys()
+                .take(2)
+                .cloned()
+                .collect()
+        };
+        ranges_to_remove.append(&mut ranges);
         for evict_range in ranges_to_remove {
             if self.memory_controller.reached_soft_limit() {
                 info!("load_evict: soft limit reached"; "evict_range" => ?&evict_range);
@@ -963,43 +974,62 @@ fn next_to_match(
     loop {
         let disk_key = disk_iter.key();
         let disk_val = disk_iter.value();
+
+        if cf == "lock" {
+            if disk_key != key {
+                error!(
+                    "next inconsistent, lock not match";
+                    "cache_key" => log_wrappers::Value(key),
+                    "cache_val" => log_wrappers::Value(val),
+                    "disk_key" => log_wrappers::Value(disk_key),
+                    "disk_val" => log_wrappers::Value(disk_val),
+                    "lower" => log_wrappers::Value(&iter.lower_bound),
+                    "upper" => log_wrappers::Value(&iter.upper_bound),
+                    "seqno" => iter.sequence_number,
+                    "cf" => ?cf,
+                );
+                unreachable!()
+            }
+            break;
+        }
+
         if disk_key == key {
             break;
-        } else if cf != "lock" {
-            let (disk_user_key, disk_ts) = split_ts(disk_key).unwrap();
-            if disk_user_key == user_key && disk_ts > ts {
-                if let Ok(write) = parse_write(disk_iter.value())
-                    && cf == "write"
-                    && (write.write_type == WriteType::Rollback
-                        || write.write_type == WriteType::Lock)
-                {
-                    info!(
-                        "meet gced rollback or lock";
-                        "cache_key" => log_wrappers::Value(key),
-                        "cache_val" => log_wrappers::Value(val),
-                        "disk_key" => log_wrappers::Value(disk_key),
-                        "disk_val" => log_wrappers::Value(disk_val),
-                        "lower" => log_wrappers::Value(&iter.lower_bound),
-                        "upper" => log_wrappers::Value(&iter.upper_bound),
-                        "seqno" => iter.sequence_number,
-                        "cf" => ?cf,
-                    );
-                } else {
-                    error!(
-                        "next inconsistent, missing higher ts";
-                        "cache_key" => log_wrappers::Value(key),
-                        "cache_val" => log_wrappers::Value(val),
-                        "disk_key" => log_wrappers::Value(disk_key),
-                        "disk_val" => log_wrappers::Value(disk_val),
-                        "lower" => log_wrappers::Value(&iter.lower_bound),
-                        "upper" => log_wrappers::Value(&iter.upper_bound),
-                        "seqno" => iter.sequence_number,
-                        "cf" => ?cf,
-                    );
-                    unreachable!()
-                }
+        }
+
+        let (disk_user_key, disk_ts) = split_ts(disk_key).unwrap();
+        if disk_user_key == user_key && disk_ts > ts {
+            if let Ok(write) = parse_write(disk_iter.value())
+                && cf == "write"
+                && (write.write_type == WriteType::Rollback || write.write_type == WriteType::Lock)
+            {
+                info!(
+                    "meet gced rollback or lock";
+                    "cache_key" => log_wrappers::Value(key),
+                    "cache_val" => log_wrappers::Value(val),
+                    "disk_key" => log_wrappers::Value(disk_key),
+                    "disk_val" => log_wrappers::Value(disk_val),
+                    "lower" => log_wrappers::Value(&iter.lower_bound),
+                    "upper" => log_wrappers::Value(&iter.upper_bound),
+                    "seqno" => iter.sequence_number,
+                    "cf" => ?cf,
+                );
+            } else {
+                error!(
+                    "next inconsistent, missing higher ts";
+                    "cache_key" => log_wrappers::Value(key),
+                    "cache_val" => log_wrappers::Value(val),
+                    "disk_key" => log_wrappers::Value(disk_key),
+                    "disk_val" => log_wrappers::Value(disk_val),
+                    "lower" => log_wrappers::Value(&iter.lower_bound),
+                    "upper" => log_wrappers::Value(&iter.upper_bound),
+                    "seqno" => iter.sequence_number,
+                    "cf" => ?cf,
+                );
+                unreachable!()
             }
         }
+
         if disk_key > key {
             error!(
                 "next inconsistent";
@@ -1332,7 +1362,16 @@ impl RunnableWithTimer for BackgroundRunner {
         let cached = core.range_manager.ranges().len();
         let loading = core.range_manager.pending_ranges_loading_data.len();
         let evictions = core.range_manager.get_and_reset_range_evictions();
+        let deleting = core.range_manager.ranges_being_deleted.len();
         drop(core);
+        info!(
+            "range types";
+            "pending_range" => pending,
+            "cached_range" => cached,
+            "loading_range" => loading,
+            "range_evictions" => evictions,
+            "range_deleting" => deleting,
+        );
         RANGE_CACHE_COUNT
             .with_label_values(&["pending_range"])
             .set(pending as i64);
@@ -1345,6 +1384,9 @@ impl RunnableWithTimer for BackgroundRunner {
         RANGE_CACHE_COUNT
             .with_label_values(&["range_evictions"])
             .set(evictions as i64);
+        RANGE_CACHE_COUNT
+            .with_label_values(&["range_deleting"])
+            .set(deleting as i64);
     }
 
     fn get_interval(&self) -> Duration {
