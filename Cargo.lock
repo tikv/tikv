@@ -169,8 +169,8 @@ dependencies = [
 
 [[package]]
 name = "async-speed-limit"
-version = "0.4.1"
-source = "git+https://github.com/tikv/async-speed-limit?branch=master#a113aef3cc24bf7fa5faf2b7025abaf02fc53fe3"
+version = "0.4.2"
+source = "git+https://github.com/tikv/async-speed-limit?branch=master#777301784c9c1857f049b04f0dff578f983d5734"
 dependencies = [
  "futures-core",
  "futures-io",
@@ -2963,7 +2963,7 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
+source = "git+https://github.com/v01dstar/rust-rocksdb?branch=upgrade-rocksdb#51ab90b4d0fa5aba64fb491e4fde33dcd21fa467"
 dependencies = [
  "bindgen 0.65.1",
  "bzip2-sys",
@@ -2982,7 +2982,7 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
+source = "git+https://github.com/v01dstar/rust-rocksdb?branch=upgrade-rocksdb#51ab90b4d0fa5aba64fb491e4fde33dcd21fa467"
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4820,7 +4820,7 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
-source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
+source = "git+https://github.com/v01dstar/rust-rocksdb?branch=upgrade-rocksdb#51ab90b4d0fa5aba64fb491e4fde33dcd21fa467"
 dependencies = [
  "libc 0.2.151",
  "librocksdb_sys",
@@ -6545,6 +6545,7 @@ dependencies = [
  "resource_control",
  "resource_metering",
  "rev_lines",
+ "rocksdb",
  "seahash",
  "security",
  "semver 0.11.0",
