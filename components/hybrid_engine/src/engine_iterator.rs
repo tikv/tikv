@@ -10,7 +10,7 @@ use engine_traits::{
     Result,
 };
 use tikv_util::{error, info, warn, Either};
-use txn_types::Key;
+use txn_types::{Key, WriteRef, WriteType};
 
 pub static AUDIT_MODE: AtomicBool = AtomicBool::new(false);
 
@@ -26,6 +26,15 @@ where
     cf: String,
 }
 
+fn parse_write(value: &[u8]) -> result::Result<WriteRef<'_>, String> {
+    match WriteRef::parse(value) {
+        Ok(write) => Ok(write),
+        Err(_) => Err(format!(
+            "invalid write cf value: {}",
+            log_wrappers::Value(value)
+        )),
+    }
+}
 impl<EK, EC> HybridEngineIterator<EK, EC>
 where
     EK: KvEngine,
@@ -98,22 +107,37 @@ where
                         break;
                     } else if self.cf.as_str() != "lock" {
                         let (disk_user_key, disk_ts) = split_ts(disk_key).unwrap();
+                        let (lower, upper) = self.iter_opts.clone().build_bounds();
                         if disk_user_key == user_key && disk_ts > ts {
-                            let (lower, upper) = self.iter_opts.clone().build_bounds();
-                            let prefix_same_as_start = self.iter_opts.prefix_same_as_start();
-                            error!(
-                                "next inconsistent, missing higher ts";
-                                "cache_key" => log_wrappers::Value(key),
-                                "cache_val" => log_wrappers::Value(val),
-                                "disk_key" => log_wrappers::Value(disk_key),
-                                "disk_val" => log_wrappers::Value(disk_val),
-                                "lower" => log_wrappers::Value(&lower.unwrap_or_default()),
-                                "upper" => log_wrappers::Value(&upper.unwrap_or_default()),
-                                "prefix_same_as_start" => prefix_same_as_start,
-                                "seqno" => self.seqno,
-                                "cf" => ?self.cf,
-                            );
-                            unreachable!()
+                            let write = parse_write(self.disk_iter.value()).unwrap();
+                            if write.write_type != WriteType::Rollback
+                                && write.write_type != WriteType::Lock
+                            {
+                                error!(
+                                    "next inconsistent, missing higher ts";
+                                    "cache_key" => log_wrappers::Value(key),
+                                    "cache_val" => log_wrappers::Value(val),
+                                    "disk_key" => log_wrappers::Value(disk_key),
+                                    "disk_val" => log_wrappers::Value(disk_val),
+                                    "lower" => log_wrappers::Value(&lower.unwrap_or_default()),
+                                    "upper" => log_wrappers::Value(&upper.unwrap_or_default()),
+                                    "seqno" => self.seqno,
+                                    "cf" => ?self.cf,
+                                );
+                                unreachable!()
+                            } else {
+                                info!(
+                                    "meet gced rollback or lock";
+                                    "cache_key" => log_wrappers::Value(key),
+                                    "cache_val" => log_wrappers::Value(val),
+                                    "disk_key" => log_wrappers::Value(disk_key),
+                                    "disk_val" => log_wrappers::Value(disk_val),
+                                    "lower" => log_wrappers::Value(&lower.unwrap_or_default()),
+                                    "upper" => log_wrappers::Value(&upper.unwrap_or_default()),
+                                    "seqno" => self.seqno,
+                                    "cf" => ?self.cf,
+                                );
+                            }
                         }
                     }
                     if disk_key > key {

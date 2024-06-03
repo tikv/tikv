@@ -961,18 +961,33 @@ fn next_to_match(cf: &str, iter: &mut RangeCacheIterator, disk_iter: &mut RocksE
         } else if cf != "lock" {
             let (disk_user_key, disk_ts) = split_ts(disk_key).unwrap();
             if disk_user_key == user_key && disk_ts > ts {
-                error!(
-                    "next inconsistent, missing higher ts";
-                    "cache_key" => log_wrappers::Value(key),
-                    "cache_val" => log_wrappers::Value(val),
-                    "disk_key" => log_wrappers::Value(disk_key),
-                    "disk_val" => log_wrappers::Value(disk_val),
-                    "lower" => log_wrappers::Value(&iter.lower_bound),
-                    "upper" => log_wrappers::Value(&iter.upper_bound),
-                    "seqno" => iter.sequence_number,
-                    "cf" => ?cf,
-                );
-                unreachable!()
+                let write = parse_write(disk_iter.value()).unwrap();
+                if write.write_type != WriteType::Rollback && write.write_type != WriteType::Lock {
+                    error!(
+                        "next inconsistent, missing higher ts";
+                        "cache_key" => log_wrappers::Value(key),
+                        "cache_val" => log_wrappers::Value(val),
+                        "disk_key" => log_wrappers::Value(disk_key),
+                        "disk_val" => log_wrappers::Value(disk_val),
+                        "lower" => log_wrappers::Value(&iter.lower_bound),
+                        "upper" => log_wrappers::Value(&iter.upper_bound),
+                        "seqno" => iter.sequence_number,
+                        "cf" => ?cf,
+                    );
+                    unreachable!()
+                } else {
+                    info!(
+                        "meet gced rollback or lock";
+                        "cache_key" => log_wrappers::Value(key),
+                        "cache_val" => log_wrappers::Value(val),
+                        "disk_key" => log_wrappers::Value(disk_key),
+                        "disk_val" => log_wrappers::Value(disk_val),
+                        "lower" => log_wrappers::Value(&iter.lower_bound),
+                        "upper" => log_wrappers::Value(&iter.upper_bound),
+                        "seqno" => iter.sequence_number,
+                        "cf" => ?cf,
+                    );
+                }
             }
         }
         if disk_key > key {
@@ -1219,10 +1234,12 @@ impl Runnable for BackgroundRunner {
                         if user_key != last_user_key {
                             if let Some(remove) = cached_to_remove.take() {
                                 removed += 1;
-                                info!(
-                                    "clean lock";
-                                    "key" => log_wrappers::Value(&remove),
-                                );
+                                if PRINTF_LOG.load(Ordering::Relaxed) {
+                                    info!(
+                                        "clean lock";
+                                        "key" => log_wrappers::Value(&remove),
+                                    );
+                                }
                                 lock_handle.remove(&InternalBytes::from_vec(remove), guard);
                             }
                             last_user_key = user_key.to_vec();
@@ -1240,17 +1257,21 @@ impl Runnable for BackgroundRunner {
                             if v_type != ValueType::Deletion {
                                 let cached_to_remove_value =
                                     Lock::parse(iter.value().as_bytes().as_slice()).unwrap();
-                                info!(
-                                    "clean lock2";
-                                    "key" => log_wrappers::Value(iter.key().as_bytes()),
-                                    "lock_type" => ?cached_to_remove_value.lock_type,
-                                    "ts" => cached_to_remove_value.ts,
-                                );
+                                if PRINTF_LOG.load(Ordering::Relaxed) {
+                                    info!(
+                                        "clean lock2";
+                                        "key" => log_wrappers::Value(iter.key().as_bytes()),
+                                        "lock_type" => ?cached_to_remove_value.lock_type,
+                                        "ts" => cached_to_remove_value.ts,
+                                    );
+                                }
                             } else {
-                                info!(
-                                    "clean lock2";
-                                    "key" => log_wrappers::Value(iter.key().as_bytes()),
-                                );
+                                if PRINTF_LOG.load(Ordering::Relaxed) {
+                                    info!(
+                                        "clean lock2";
+                                        "key" => log_wrappers::Value(iter.key().as_bytes()),
+                                    );
+                                }
                             }
                             lock_handle.remove(iter.key(), guard);
                         } else if sequence < snapshot_seqno {
@@ -1265,10 +1286,12 @@ impl Runnable for BackgroundRunner {
                     }
                     if let Some(remove) = cached_to_remove.take() {
                         removed += 1;
-                        info!(
-                            "clean lock";
-                            "key" => log_wrappers::Value(&remove),
-                        );
+                        if PRINTF_LOG.load(Ordering::Relaxed) {
+                            info!(
+                                "clean lock";
+                                "key" => log_wrappers::Value(&remove),
+                            );
+                        }
                         lock_handle.remove(&InternalBytes::from_vec(remove), guard);
                     }
 
