@@ -1,12 +1,16 @@
-use std::{future::Future, pin::Pin, process::Output, sync::Arc, task::ready};
+use std::{
+    collections::VecDeque, future::Future, pin::Pin, process::Output, sync::Arc, task::ready,
+};
 
+use chrono::format::Item;
 use external_storage::{BlobObject, ExternalStorage, WalkBlobStorage};
 use futures::{
-    future::{BoxFuture, FutureExt, TryFutureExt},
+    future::{BoxFuture, FusedFuture, FutureExt, TryFutureExt},
     io::AsyncReadExt,
-    stream::StreamExt,
+    stream::{self, StreamExt, TryStream},
 };
 use tidb_query_datatype::codec::mysql::Time;
+use tokio_stream::Stream;
 use txn_types::TimeStamp;
 
 use super::{
@@ -90,6 +94,103 @@ impl MetaStorage {
             result.files.push(fut.await?);
         }
         Ok(result)
+    }
+}
+
+pub struct StreamyMetaStorage<'a> {
+    prefetch:
+        VecDeque<Prefetch<Pin<Box<dyn Future<Output = Result<MetaFile>> + 'a>>, Result<MetaFile>>>,
+    files: Pin<Box<dyn Stream<Item = std::io::Result<BlobObject>> + 'a>>,
+    ext_storage: &'a dyn ExternalStorage,
+    ext: LoadFromExt,
+}
+
+#[pin_project::pin_project(project = ProjCachedFuse)]
+enum Prefetch<F: Future<Output = T>, T> {
+    Polling(#[pin] F),
+    Ready(T),
+}
+
+impl<F: Future<Output = T>, T> Prefetch<F, T> {
+    fn must_cached(self) -> T {
+        match self {
+            Prefetch::Ready(v) => v,
+            _ => panic!("must_cached call but the future not ready"),
+        }
+    }
+}
+
+impl<F: Future<Output = T>, T> Future for Prefetch<F, T> {
+    type Output = ();
+
+    fn poll(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        match self.as_mut().project() {
+            ProjCachedFuse::Polling(fut) => {
+                let resolved = ready!(fut.poll(cx));
+                unsafe {
+                    // SAFETY: we won't poll it anymore.
+                    *self.get_unchecked_mut() = Prefetch::Ready(resolved);
+                }
+                ().into()
+            }
+            ProjCachedFuse::Ready(_) => std::task::Poll::Pending,
+        }
+    }
+}
+
+impl<F: Future<Output = T>, T> FusedFuture for Prefetch<F, T> {
+    fn is_terminated(&self) -> bool {
+        match self {
+            Prefetch::Polling(_) => false,
+            Prefetch::Ready(_) => true,
+        }
+    }
+}
+
+impl<'a> Stream for StreamyMetaStorage<'a> {
+    type Item = Result<MetaFile>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        loop {
+            if self.prefetch.len() > self.ext.max_concurrent_fetch {
+                for fut in &mut self.prefetch {
+                    if !fut.is_terminated() {
+                        let _ = fut.poll_unpin(cx);
+                    }
+                }
+                if self.prefetch[0].is_terminated() {
+                    return Some(self.prefetch.pop_front().unwrap().must_cached()).into();
+                }
+            }
+
+            let input = ready!(self.files.poll_next_unpin(cx));
+            let storage = self.ext_storage;
+            match input {
+                Some(Ok(load)) => self.prefetch.push_back(Prefetch::Polling(
+                    MetaFile::load_from(storage, load).boxed_local(),
+                )),
+                Some(Err(err)) => return Some(Err(err.into())).into(),
+                None => return None.into(),
+            }
+        }
+    }
+}
+
+impl<'a> StreamyMetaStorage<'a> {
+    pub async fn load_from_ext(s: &'a dyn CompactStorage, ext: LoadFromExt) -> Self {
+        let files = s.walk(&METADATA_PREFIX);
+        Self {
+            prefetch: VecDeque::new(),
+            files,
+            ext_storage: s,
+            ext,
+        }
     }
 }
 

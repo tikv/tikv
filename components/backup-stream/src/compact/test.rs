@@ -8,6 +8,7 @@ use super::{
     compaction::CollectCompaction,
     storage::{CompactStorage, LoadFromExt, MetaStorage},
 };
+use crate::compact::storage::StreamyMetaStorage;
 
 #[tokio::test]
 #[ignore]
@@ -27,19 +28,13 @@ async fn playground() {
     let now = Instant::now();
     let mut ext = LoadFromExt::default();
     ext.max_concurrent_fetch = 128;
-    let meta = MetaStorage::load_from_ext(storage.as_ref(), ext).await;
-    let mut collect = CollectCompaction::new(
-        stream::iter(meta.unwrap().files)
-            .flat_map(|file| stream::iter(file.logs.into_iter()))
-            .map(Ok),
-    );
+    let meta = StreamyMetaStorage::load_from_ext(storage.as_ref(), ext).await;
+    let mut collect = CollectCompaction::new(meta.flat_map(|file| match file {
+        Ok(file) => stream::iter(file.logs).map(Ok).left_stream(),
+        Err(err) => stream::once(futures::future::err(err)).right_stream(),
+    }));
     println!("{:?}", now.elapsed());
-    let compaction = collect.try_collect::<Vec<_>>().await.unwrap();
+    let compaction = collect.next().await.unwrap();
     println!("{:?}", now.elapsed());
-    println!("{:?}", compaction[0]);
-    println!("{:?}", compaction.len());
-    println!(
-        "{:?}",
-        compaction.iter().map(|f| f.source.len()).sum::<usize>()
-    );
+    println!("{:?}", compaction);
 }

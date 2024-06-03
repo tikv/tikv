@@ -1,11 +1,18 @@
 use std::{
-    collections::HashMap, marker::PhantomData, pin::Pin, process::Output, sync::Arc, task::ready,
+    collections::{BTreeSet, HashMap},
+    marker::PhantomData,
+    pin::Pin,
+    process::Output,
+    sync::Arc,
+    task::ready,
 };
 
 use async_compression::futures::write::ZstdDecoder;
-use engine_traits::{SstCompressionType, SstExt, SstWriter, SstWriterBuilder};
+use engine_traits::{
+    ExternalSstFileInfo, SstCompressionType, SstExt, SstMetaInfo, SstWriter, SstWriterBuilder,
+};
 use external_storage::ExternalStorage;
-use futures::io::{AsyncReadExt, AsyncWriteExt, Cursor};
+use futures::io::{AllowStdIo, AsyncReadExt, AsyncWriteExt, Cursor};
 use tikv_util::{
     codec::{
         self,
@@ -20,7 +27,7 @@ use tokio_stream::Stream;
 use super::{
     errors::Result,
     storage::{LogFile, LogFileId},
-    util::Cooperate,
+    util::{Cooperate, ExecuteAllExt},
 };
 
 #[derive(Debug)]
@@ -157,10 +164,12 @@ impl<S: Stream<Item = Result<LogFile>>> Stream for CollectCompaction<S> {
     }
 }
 
+#[derive(Clone)]
 struct Source {
     inner: Arc<dyn ExternalStorage>,
 }
 
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
 struct Record {
     key: Vec<u8>,
     value: Vec<u8>,
@@ -178,7 +187,7 @@ impl Source {
         let mut co = Cooperate::new(4096);
         let iter = stream_event::EventIterator::new(&content);
         while iter.valid() {
-            co.check().await;
+            co.step().await;
             output.push(Record {
                 key: iter.key().to_owned(),
                 value: iter.value().to_owned(),
@@ -194,22 +203,63 @@ struct CompactWorker<DB> {
     source: Source,
     output: Arc<dyn ExternalStorage>,
     max_load_concurrency: usize,
+    co: Cooperate,
 
     // Note: maybe use the TiKV config to construct a DB?
     _great_phantom: PhantomData<DB>,
 }
 
-impl<DB: SstExt> CompactWorker<DB> {
+impl<DB: SstExt> CompactWorker<DB>
+where
+    <<DB as SstExt>::SstWriter as SstWriter>::ExternalSstFileReader: 'static,
+{
     const COMPRESSION: Option<SstCompressionType> = Some(SstCompressionType::Lz4);
 
-    async fn compact(&mut self, c: Compaction) -> Result<()> {
-        let mut items = vec![];
-        for file in c.source {
-            self.source.load(file, &mut items).await?;
-        }
-        items.sort_by(|k1, k2| k1.key.cmp(&k2.key));
+    async fn merge_and_sort(&mut self, items: Vec<Vec<Record>>) -> Vec<Record> {
+        #[derive(PartialEq, Eq)]
+        struct KeyRecord(Record);
 
-        let mut co = Cooperate::new(4096);
+        impl PartialOrd for KeyRecord {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                Some(Ord::cmp(self, other))
+            }
+        }
+
+        impl Ord for KeyRecord {
+            fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                self.0.key.cmp(&other.0.key)
+            }
+        }
+
+        let mut result = BTreeSet::new();
+        let flatten_items = items.into_iter().flat_map(|v| v.into_iter());
+        for item in flatten_items {
+            self.co.step().await;
+            result.insert(KeyRecord(item));
+        }
+        result.into_iter().map(|f| f.0).collect()
+    }
+
+    async fn compact(&mut self, c: Compaction) -> Result<()> {
+        let mut ext = ExecuteAllExt::default();
+        ext.max_concurrency = self.max_load_concurrency;
+        let items = super::util::execute_all_ext(
+            c.source
+                .into_iter()
+                .map(|f| {
+                    let source = &self.source;
+                    Box::pin(async move {
+                        let mut out = vec![];
+                        source.load(f, &mut out).await?;
+                        Result::Ok(out)
+                    })
+                })
+                .collect(),
+            ext,
+        )
+        .await?;
+        let sorted_items = self.merge_and_sort(items).await;
+
         let out_name = format!("{}-{}-{}.sst", c.region_id, c.min_ts, c.max_ts);
         let mut w = <DB as SstExt>::SstWriterBuilder::new()
             .set_cf(c.cf)
@@ -217,10 +267,20 @@ impl<DB: SstExt> CompactWorker<DB> {
             .set_in_memory(true)
             .build(&out_name)?;
 
-        for item in items {
-            co.check().await;
+        for item in sorted_items {
+            self.co.step().await;
             w.put(&item.key, &item.value)?;
         }
+
+        let (info, out) = w.finish_read()?;
+
+        self.output
+            .write(
+                &out_name,
+                external_storage::UnpinReader(Box::new(AllowStdIo::new(out))),
+                info.file_size(),
+            )
+            .await?;
         Ok(())
     }
 }

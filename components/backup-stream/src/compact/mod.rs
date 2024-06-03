@@ -40,7 +40,7 @@ mod util {
             }
         }
 
-        pub fn check(&mut self) -> CooperateYield {
+        pub fn step(&mut self) -> CooperateYield {
             self.work_count += 1;
             if self.work_count > self.yield_every {
                 self.work_count = 0;
@@ -51,9 +51,10 @@ mod util {
         }
     }
 
-    pub fn select_vec<'a, T, F: Future<Output = T> + Unpin + 'a>(
-        v: &'a mut Vec<F>,
-    ) -> impl Future<Output = T> + 'a {
+    pub fn select_vec<'a, T, F>(v: &'a mut Vec<F>) -> impl Future<Output = T> + 'a
+    where
+        F: Future<Output = T> + Unpin + 'a,
+    {
         use futures::FutureExt;
 
         futures::future::poll_fn(|cx| {
@@ -68,5 +69,33 @@ mod util {
             }
             std::task::Poll::Pending
         })
+    }
+
+    pub struct ExecuteAllExt {
+        pub max_concurrency: usize,
+    }
+
+    impl Default for ExecuteAllExt {
+        fn default() -> Self {
+            Self {
+                max_concurrency: 16,
+            }
+        }
+    }
+
+    pub async fn execute_all_ext<T, F, E>(futs: Vec<F>, ext: ExecuteAllExt) -> Result<Vec<T>, E>
+    where
+        F: Future<Output = Result<T, E>> + Unpin,
+    {
+        let mut pending_futures = vec![];
+        let mut result = Vec::with_capacity(futs.len());
+        for fut in futs {
+            pending_futures.push(fut);
+            if pending_futures.len() >= ext.max_concurrency {
+                result.push(select_vec(&mut pending_futures).await?);
+            }
+        }
+        result.append(&mut futures::future::try_join_all(pending_futures.into_iter()).await?);
+        Ok(result)
     }
 }
