@@ -578,8 +578,10 @@ impl RegionCollector {
     /// approximately `300_000``.
     pub fn handle_get_top_regions(&mut self, count: usize, callback: Callback<TopRegions>) {
         let compare_fn = |a: &RegionActivity, b: &RegionActivity| {
-            let a = a.region_stat.read_keys + a.region_stat.written_keys;
-            let b = b.region_stat.read_keys + b.region_stat.written_keys;
+            let a = (a.region_stat.read_keys as f64 * 0.99
+                + a.region_stat.written_keys as f64 * 0.01) as u64;
+            let b = (b.region_stat.read_keys as f64 * 0.99
+                + b.region_stat.written_keys as f64 * 0.01) as u64;
             b.cmp(&a)
         };
         let top_regions = if count == 0 {
