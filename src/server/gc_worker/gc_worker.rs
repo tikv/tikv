@@ -22,6 +22,7 @@ use engine_traits::{
 };
 use file_system::{IoType, WithIoType};
 use futures::executor::block_on;
+use keyspace_meta::KeyspaceLevelGCService;
 use kvproto::{kvrpcpb::Context, metapb::Region};
 use pd_client::{FeatureGate, PdClient};
 use raftstore::coprocessor::RegionInfoProvider;
@@ -1169,6 +1170,7 @@ where
 
     gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
     feature_gate: FeatureGate,
+    keyspace_level_gc_service: Arc<Option<KeyspaceLevelGCService>>,
 }
 
 impl<E: Engine> Clone for GcWorker<E> {
@@ -1186,6 +1188,7 @@ impl<E: Engine> Clone for GcWorker<E> {
             gc_manager_handle: self.gc_manager_handle.clone(),
             feature_gate: self.feature_gate.clone(),
             region_info_provider: self.region_info_provider.clone(),
+            keyspace_level_gc_service: Arc::clone(&self.keyspace_level_gc_service),
         }
     }
 }
@@ -1213,6 +1216,7 @@ impl<E: Engine> GcWorker<E> {
         cfg: GcConfig,
         feature_gate: FeatureGate,
         region_info_provider: Arc<dyn RegionInfoProvider>,
+        keyspace_level_gc_service: Arc<Option<KeyspaceLevelGCService>>,
     ) -> Self {
         let worker_builder = WorkerBuilder::new("gc-worker")
             .pending_capacity(GC_MAX_PENDING_TASKS)
@@ -1232,6 +1236,7 @@ impl<E: Engine> GcWorker<E> {
             gc_manager_handle: Arc::new(Mutex::new(None)),
             feature_gate,
             region_info_provider,
+            keyspace_level_gc_service,
         }
     }
 
@@ -1253,6 +1258,7 @@ impl<E: Engine> GcWorker<E> {
             self.feature_gate.clone(),
             self.scheduler(),
             Arc::new(cfg.region_info_provider.clone()),
+            Arc::clone(&self.keyspace_level_gc_service),
         );
 
         let mut handle = self.gc_manager_handle.lock().unwrap();
@@ -1699,6 +1705,7 @@ mod tests {
             gc_config,
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![region1, region2])),
+            Arc::new(None),
         );
         gc_worker.start(store_id).unwrap();
         // Convert keys to key value pairs, where the value is "value-{key}".
@@ -1877,6 +1884,7 @@ mod tests {
             gc_config,
             feature_gate,
             Arc::new(ri_provider.clone()),
+            Arc::new(None),
         );
         gc_worker.start(store_id).unwrap();
 
@@ -2271,6 +2279,7 @@ mod tests {
             gc_config,
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![region.clone()])),
+            Arc::new(None),
         );
 
         // Before starting gc_worker, fill the scheduler to full.
@@ -2833,6 +2842,7 @@ mod tests {
             gc_config,
             gate,
             Arc::new(MockRegionInfoProvider::new(vec![])),
+            Arc::new(None),
         );
         let mut config_change = ConfigChange::new();
         config_change.insert(String::from("num_threads"), ConfigValue::Usize(5));

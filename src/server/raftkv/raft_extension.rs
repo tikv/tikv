@@ -5,6 +5,7 @@ use std::{
     ops::{Deref, DerefMut},
 };
 
+use api_version::ApiV2;
 use futures::future::BoxFuture;
 use kvproto::{
     metapb::{Region, RegionEpoch},
@@ -158,6 +159,19 @@ where
         let router = self.router.clone();
         Box::pin(async move {
             let meta: RegionMeta = region.await?;
+
+            // Don't support check consistency on keyspace region now.
+            let startkey = meta.region_state.start_key;
+            let endkey = meta.region_state.end_key;
+            if ApiV2::get_u32_keyspace_id_by_key(startkey.as_slice()).is_some()
+                || ApiV2::get_u32_keyspace_id_by_key(endkey.as_slice()).is_some()
+            {
+                return Err(raftstore::Error::Other(From::from(
+                    "Don't support check consistency on keyspace region now.",
+                ))
+                .into());
+            }
+
             let leader_id = meta.raft_status.soft_state.leader_id;
             let mut leader = None;
             for peer in meta.region_state.peers {

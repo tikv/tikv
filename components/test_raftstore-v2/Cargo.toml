@@ -39,6 +39,7 @@ grpcio = { workspace = true }
 grpcio-health = { workspace = true }
 health_controller = { workspace = true }
 keys = { workspace = true }
+keyspace_meta = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.3"
 log_wrappers = { workspace = true }

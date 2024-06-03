@@ -2,7 +2,7 @@
 
 use api_version::{ApiV2, KvFormat, RawValue};
 use engine_rocks::RocksEngine;
-use engine_traits::{MiscExt, CF_DEFAULT};
+use engine_traits::{MiscExt, CF_DEFAULT, CF_WRITE};
 use kvproto::kvrpcpb::{Context, *};
 use tempfile::TempDir;
 use tikv::{
@@ -44,7 +44,7 @@ fn test_check_need_gc() {
     let raw_engine = engine.get_rocksdb();
     let mut gc_runner = TestGcRunner::new(0);
 
-    do_write(&engine, false, 5);
+    do_write(&engine, false, 5, true);
 
     // Check init value
     assert_eq!(
@@ -81,12 +81,12 @@ fn test_check_need_gc() {
 
     // TEST 2: props.num_versions as f64 > props.num_rows as f64 * ratio_threshold
     // return true.
-    do_write(&engine, false, 5);
+    do_write(&engine, false, 5, true);
     engine.get_rocksdb().flush_cfs(&[], true).unwrap();
 
     do_gc(&raw_engine, 2, &mut gc_runner, &dir);
 
-    do_write(&engine, false, 5);
+    do_write(&engine, false, 5, true);
     engine.get_rocksdb().flush_cfs(&[], true).unwrap();
 
     // Set ratio_threshold, let (props.num_versions as f64 > props.num_rows as
@@ -110,19 +110,25 @@ fn test_check_need_gc() {
     );
 }
 
-fn do_write<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
-    make_data(engine, is_delete, op_nums);
-}
+pub fn do_write<E: Engine>(engine: &E, is_delete: bool, op_nums: u64, is_rawkv: bool) {
+    let mut data_prefix = api_version::api_v2::TIDB_TABLE_KEY_PREFIX;
+    if is_rawkv {
+        data_prefix = api_version::api_v2::RAW_KEY_PREFIX;
+    }
+    let mut test_cf = CF_WRITE;
+    if is_rawkv {
+        test_cf = CF_DEFAULT;
+    }
 
-fn make_data<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
-    let user_key = b"r\0aaaaaaaaaaa";
+    // make data as keyspace id = 1.
+    let user_key = vec![data_prefix, 0, 0, 1, 1, 2, 3];
 
     let mut test_raws = vec![];
     let start_mvcc = 70;
 
     let mut i = 0;
     while i < op_nums {
-        test_raws.push((user_key, start_mvcc + i, is_delete));
+        test_raws.push((user_key.as_slice(), start_mvcc + i, is_delete));
         i += 1;
     }
 
@@ -138,7 +144,7 @@ fn make_data<E: Engine>(engine: &E, is_delete: bool, op_nums: u64) {
                 }),
             )
         })
-        .map(|(k, v)| Modify::Put(CF_DEFAULT, Key::from_encoded_slice(k.as_slice()), v))
+        .map(|(k, v)| Modify::Put(test_cf, Key::from_encoded_slice(k.as_slice()), v))
         .collect();
 
     let ctx = Context {
@@ -184,7 +190,7 @@ fn test_skip_gc_by_check() {
     let raw_engine = engine.get_rocksdb();
     let mut gc_runner = TestGcRunner::new(0);
 
-    do_write(&engine, false, 5);
+    do_write(&engine, false, 5, true);
     engine.get_rocksdb().flush_cfs(&[], true).unwrap();
 
     // The min_mvcc_ts ts > gc safepoint, check_need_gc return false, don't call
@@ -207,12 +213,12 @@ fn test_skip_gc_by_check() {
 
     // TEST 2:When is_bottommost_level = false,
     // write data to level2
-    do_write(&engine, false, 5);
+    do_write(&engine, false, 5, true);
     engine.get_rocksdb().flush_cfs(&[], true).unwrap();
 
     do_gc(&raw_engine, 2, &mut gc_runner, &dir);
 
-    do_write(&engine, false, 5);
+    do_write(&engine, false, 5, true);
     engine.get_rocksdb().flush_cfs(&[], true).unwrap();
 
     // Set ratio_threshold, let (props.num_versions as f64 > props.num_rows as

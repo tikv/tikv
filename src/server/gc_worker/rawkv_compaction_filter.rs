@@ -15,6 +15,7 @@ use engine_rocks::{
     RocksEngine,
 };
 use engine_traits::{raw_ttl::ttl_current_ts, MiscExt};
+use keyspace_meta::KeyspaceLevelGCService;
 use prometheus::local::LocalHistogramVec;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::worker::{ScheduleError, Scheduler};
@@ -55,7 +56,17 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
 
         let current = ttl_current_ts();
         let safe_point = gc_context.safe_point.load(Ordering::Relaxed);
-        if safe_point == 0 {
+
+        // If there is no initialized keyspace level GC, it should also skip GC in
+        // compaction filter.
+        let keyspace_level_gc_service = gc_context.keyspace_level_gc_service.clone();
+        let mut is_all_ks_not_init_gc_sp = true;
+        if let Some(ref keyspace_level_gc_service) = *keyspace_level_gc_service {
+            is_all_ks_not_init_gc_sp =
+                keyspace_level_gc_service.is_all_keyspace_level_gc_have_not_initialized()
+        }
+
+        if safe_point == 0 && is_all_ks_not_init_gc_sp {
             // Safe point has not been initialized yet.
             debug!("skip gc in compaction filter because of no safe point");
             return None;
@@ -86,7 +97,12 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
             .with_label_values(&[STAT_RAW_KEYMODE])
             .inc();
 
-        if !check_need_gc(safe_point.into(), ratio_threshold, context) {
+        if !check_need_gc(
+            safe_point.into(),
+            ratio_threshold,
+            context,
+            keyspace_level_gc_service.clone(),
+        ) {
             debug!("skip gc in compaction filter because it's not necessary");
             GC_COMPACTION_FILTER_SKIP
                 .with_label_values(&[STAT_RAW_KEYMODE])
@@ -100,6 +116,7 @@ impl CompactionFilterFactory for RawCompactionFilterFactory {
             current,
             context,
             (store_id, region_info_provider),
+            keyspace_level_gc_service,
         );
         let name = CString::new("raw_compaction_filter").unwrap();
         Some((name, filter))
@@ -125,6 +142,8 @@ pub struct RawCompactionFilter {
     filtered_hist: LocalHistogramVec,
 
     encountered_errors: bool,
+
+    keyspace_level_gc_service: Arc<Option<KeyspaceLevelGCService>>,
 }
 
 thread_local! {
@@ -177,9 +196,15 @@ impl RawCompactionFilter {
         ts: u64,
         context: &CompactionFilterContext,
         regions_provider: (u64, Arc<dyn RegionInfoProvider>),
+        keyspace_level_gc_service: Arc<Option<KeyspaceLevelGCService>>,
     ) -> Self {
         // Safe point must have been initialized.
-        assert!(safe_point > 0);
+        let mut is_all_ks_not_init_gc_sp = true;
+        if let Some(ref keyspace_level_gc_service) = *keyspace_level_gc_service {
+            is_all_ks_not_init_gc_sp =
+                keyspace_level_gc_service.is_all_keyspace_level_gc_have_not_initialized()
+        }
+        assert!(safe_point > 0 || !is_all_ks_not_init_gc_sp);
         debug!("gc in compaction filter"; "safe_point" => safe_point);
         RawCompactionFilter {
             safe_point,
@@ -199,6 +224,8 @@ impl RawCompactionFilter {
             filtered_hist: GC_DELETE_VERSIONS_HISTOGRAM.local(),
 
             encountered_errors: false,
+
+            keyspace_level_gc_service,
         }
     }
 
@@ -212,6 +239,12 @@ impl RawCompactionFilter {
     ) -> Result<CompactionFilterDecision, String> {
         if !key.starts_with(keys::DATA_PREFIX_KEY) {
             return Ok(CompactionFilterDecision::Keep);
+        }
+
+        if let Some(keyspace_level_gc_service) = self.keyspace_level_gc_service.as_ref() {
+            println!("[test-yjy] rawkv compaction_filter do_filter");
+            self.safe_point = keyspace_level_gc_service
+                .get_gc_safe_point_by_key(self.safe_point, keys::origin_key(key));
         }
 
         // If the key mode is not KeyMode::Raw or value_type is not

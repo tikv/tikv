@@ -18,6 +18,8 @@ pub const TIDB_META_KEY_PREFIX: u8 = b'm';
 pub const TIDB_TABLE_KEY_PREFIX: u8 = b't';
 pub const DEFAULT_KEY_SPACE_ID: [u8; 3] = [0, 0, 0]; // reserve 3 bytes for key space id.
 pub const DEFAULT_KEY_SPACE_ID_END: [u8; 3] = [0, 0, 1];
+pub const KEYSPACE_PREFIX_LEN: usize = KEYSPACE_ID_LEN + 1;
+pub const KEYSPACE_ID_LEN: usize = DEFAULT_KEY_SPACE_ID.len();
 
 pub const TIDB_RANGES: &[(&[u8], &[u8])] = &[
     (&[TIDB_META_KEY_PREFIX], &[TIDB_META_KEY_PREFIX + 1]),
@@ -245,6 +247,49 @@ impl ApiV2 {
         apiv2_key
     }
 
+    pub fn get_keyspace_prefix_by_key(key: &[u8]) -> [u8; KEYSPACE_ID_LEN] {
+        assert!(key.len() >= KEYSPACE_PREFIX_LEN);
+        [key[1], key[2], key[3]]
+    }
+
+    pub fn get_u32_keyspace_id_by_key_prefix(keyspace_id: [u8; KEYSPACE_ID_LEN]) -> u32 {
+        u32::from_be_bytes([0, keyspace_id[0], keyspace_id[1], keyspace_id[2]])
+    }
+
+    // Return `None` when the key is not an API V2 key.
+    pub fn get_u32_keyspace_id_by_key(key: &[u8]) -> Option<u32> {
+        let key_mode = Self::parse_key_mode(key);
+        if key_mode == KeyMode::Raw || key_mode == KeyMode::Txn {
+            Some(Self::get_u32_keyspace_id_by_key_prefix(
+                Self::get_keyspace_prefix_by_key(key),
+            ))
+        } else {
+            None
+        }
+    }
+
+    pub fn get_keyspace_prefix(key_mode: KeyMode, keyspace_id: u32) -> Vec<u8> {
+        let keyspace_id_bytes = keyspace_id.to_be_bytes();
+
+        match key_mode {
+            KeyMode::Raw => {
+                let mut prefix = Vec::with_capacity(4);
+                prefix.push(RAW_KEY_PREFIX);
+                prefix.extend_from_slice(&keyspace_id_bytes[1..4]);
+                prefix
+            }
+            KeyMode::Txn => {
+                let mut prefix = Vec::with_capacity(4);
+                prefix.push(TXN_KEY_PREFIX);
+                prefix.extend_from_slice(&keyspace_id_bytes[1..4]);
+                prefix
+            }
+            KeyMode::Tidb | KeyMode::Unknown => {
+                vec![]
+            }
+        }
+    }
+
     pub const ENCODED_LOGICAL_DELETE: [u8; 1] = [ValueMeta::DELETE_FLAG.bits];
 }
 
@@ -283,7 +328,7 @@ fn decode_raw_key_timestamp(encoded_key: &Key, with_ts: bool) -> Result<Option<T
 mod tests {
     use txn_types::{Key, TimeStamp};
 
-    use crate::{ApiV2, KvFormat, RawValue};
+    use crate::{ApiV2, KeyMode, KvFormat, RawValue};
 
     #[test]
     fn test_key_decode_err() {
@@ -430,5 +475,29 @@ mod tests {
             assert_eq!(ts, decoded_ts1.unwrap(), "case {}", idx);
             assert_eq!(ts, decoded_ts2, "case {}", idx);
         }
+    }
+
+    #[test]
+    fn test_get_u32_keyspace_id_by_key() {
+        // Give the key to test and check that the parsed keyspace id is as expected.
+        let cases = vec![
+            (vec![b'x', 0, 0, 1], Some(1)),
+            (vec![b'r', 0, 0, 1], Some(1)),
+            (vec![b'x', 1, 2, 3, 4, 5], Some(0x10203)),
+            (vec![b'm', 0, 0, 1], None), // It's not an API V2 key, so expect return None.
+            (vec![b't', 0, 0, 1], None), // It's not an API V2 key, so expect return None.
+        ];
+
+        for (key, expected) in cases.into_iter() {
+            assert_eq!(ApiV2::get_u32_keyspace_id_by_key(&key), expected);
+        }
+    }
+
+    #[test]
+    fn test_get_keyspace_prefix() {
+        let txn_prefix = ApiV2::get_keyspace_prefix(KeyMode::Txn, 1);
+        assert_eq!(txn_prefix, vec![b'x', 0, 0, 1]);
+        let txn_prefix = ApiV2::get_keyspace_prefix(KeyMode::Raw, 1);
+        assert_eq!(txn_prefix, vec![b'r', 0, 0, 1]);
     }
 }

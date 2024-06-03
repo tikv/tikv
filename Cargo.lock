@@ -484,7 +484,7 @@ dependencies = [
  "concurrency_manager",
  "crossbeam",
  "crossbeam-channel",
- "dashmap",
+ "dashmap 5.2.0",
  "encryption",
  "engine_panic",
  "engine_rocks",
@@ -560,7 +560,7 @@ dependencies = [
  "collections",
  "criterion",
  "crossbeam",
- "dashmap",
+ "dashmap 5.2.0",
  "derive_more",
  "fail",
  "file_system",
@@ -1356,6 +1356,16 @@ dependencies = [
  "darling_core",
  "quote",
  "syn 1.0.103",
+]
+
+[[package]]
+name = "dashmap"
+version = "4.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e77a43b28d0668df09411cb0bc9a8c2adc40f9a048afe863e05fd43251e8e39c"
+dependencies = [
+ "cfg-if 1.0.0",
+ "num_cpus",
 ]
 
 [[package]]
@@ -2840,6 +2850,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "keyspace_meta"
+version = "0.0.1"
+dependencies = [
+ "api_version",
+ "byteorder",
+ "collections",
+ "crossbeam",
+ "crossbeam-skiplist",
+ "dashmap 5.2.0",
+ "fail",
+ "file_system",
+ "futures 0.3.15",
+ "kvproto",
+ "lazy_static",
+ "online_config",
+ "parking_lot 0.12.1",
+ "pd_client",
+ "pin-project",
+ "prometheus",
+ "protobuf",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "slog",
+ "slog-global",
+ "strum 0.20.0",
+ "test_pd",
+ "test_pd_client",
+ "tikv_util",
+ "tokio-timer",
+ "yatp",
+]
+
+[[package]]
 name = "kvproto"
 version = "0.0.2"
 source = "git+https://github.com/pingcap/kvproto.git#d9297553c9009f569eaf4350f68a908f7811ee55"
@@ -3684,6 +3728,7 @@ name = "pd_client"
 version = "0.1.0"
 dependencies = [
  "collections",
+ "dashmap 4.0.2",
  "error_code",
  "fail",
  "futures 0.3.15",
@@ -4592,7 +4637,7 @@ dependencies = [
  "bytes",
  "collections",
  "crossbeam",
- "dashmap",
+ "dashmap 5.2.0",
  "engine_rocks",
  "engine_traits",
  "fail",
@@ -4714,7 +4759,7 @@ dependencies = [
  "collections",
  "crossbeam",
  "crossbeam-skiplist",
- "dashmap",
+ "dashmap 5.2.0",
  "fail",
  "file_system",
  "futures 0.3.15",
@@ -5287,6 +5332,7 @@ dependencies = [
  "collections",
  "concurrency_manager",
  "crossbeam",
+ "dashmap 5.2.0",
  "encryption",
  "encryption_export",
  "engine_rocks",
@@ -5303,6 +5349,7 @@ dependencies = [
  "hex 0.4.2",
  "hybrid_engine",
  "keys",
+ "keyspace_meta",
  "kvproto",
  "libc 0.2.151",
  "log",
@@ -5580,7 +5627,7 @@ dependencies = [
  "api_version",
  "collections",
  "crc32fast",
- "dashmap",
+ "dashmap 5.2.0",
  "encryption",
  "engine_rocks",
  "engine_test",
@@ -6008,6 +6055,7 @@ dependencies = [
  "health_controller",
  "hybrid_engine",
  "keys",
+ "keyspace_meta",
  "kvproto",
  "lazy_static",
  "log_wrappers",
@@ -6057,6 +6105,7 @@ dependencies = [
  "grpcio-health",
  "health_controller",
  "keys",
+ "keyspace_meta",
  "kvproto",
  "lazy_static",
  "log_wrappers",
@@ -6120,6 +6169,7 @@ dependencies = [
  "collections",
  "engine_rocks",
  "futures 0.3.15",
+ "keyspace_meta",
  "kvproto",
  "pd_client",
  "raftstore",
@@ -6168,6 +6218,7 @@ dependencies = [
  "criterion-cpu-time",
  "criterion-perf-events",
  "crossbeam",
+ "dashmap 5.2.0",
  "encryption",
  "engine_rocks",
  "engine_rocks_helper",
@@ -6183,6 +6234,7 @@ dependencies = [
  "health_controller",
  "hyper",
  "keys",
+ "keyspace_meta",
  "kvproto",
  "libc 0.2.151",
  "log_wrappers",
@@ -6462,7 +6514,7 @@ dependencies = [
  "crc64fast",
  "crossbeam",
  "crypto",
- "dashmap",
+ "dashmap 5.2.0",
  "encryption_export",
  "engine_panic",
  "engine_rocks",
@@ -6493,6 +6545,7 @@ dependencies = [
  "itertools",
  "keyed_priority_queue",
  "keys",
+ "keyspace_meta",
  "kvproto",
  "lazy_static",
  "libc 0.2.151",
@@ -7007,7 +7060,7 @@ version = "0.1.0"
 source = "git+https://github.com/tikv/tracing-active-tree.git?rev=a71f8f8148f88ab759deb6d3e1d62d07ab218347#a71f8f8148f88ab759deb6d3e1d62d07ab218347"
 dependencies = [
  "coarsetime",
- "dashmap",
+ "dashmap 5.2.0",
  "indextree",
  "lazy_static",
  "smallvec",
@@ -7712,7 +7765,7 @@ dependencies = [
  "crossbeam-deque",
  "crossbeam-skiplist",
  "crossbeam-utils",
- "dashmap",
+ "dashmap 5.2.0",
  "fail",
  "lazy_static",
  "num_cpus",

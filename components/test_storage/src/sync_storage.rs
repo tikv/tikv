@@ -124,6 +124,7 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
             config,
             Default::default(),
             Arc::new(MockRegionInfoProvider::new(Vec::new())),
+            Arc::new(None),
         );
         gc_worker.start(store_id)?;
         Ok(Self {
