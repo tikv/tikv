@@ -866,6 +866,9 @@ pub struct BackgroundRunner {
     lock_cleanup_remote: Remote<yatp::task::future::TaskCell>,
     lock_cleanup_worker: Worker,
 
+    audit_remote: Remote<yatp::task::future::TaskCell>,
+    audit_worker: Worker,
+
     last_seqno: u64,
     // RocksEngine is used to get the oldest snapshot no.
     rocks_engine: Option<RocksEngine>,
@@ -904,6 +907,9 @@ impl BackgroundRunner {
         let lock_cleanup_worker = Worker::new("lock-cleanup-worker");
         let lock_cleanup_remote = lock_cleanup_worker.remote();
 
+        let audit_worker = Worker::new("audit-worker");
+        let audit_remote = audit_worker.remote();
+
         let gc_range_worker = Builder::new("background-range-load-worker")
             // Gc must also use exactly one thread to handle it.
             .thread_count(1)
@@ -927,6 +933,8 @@ impl BackgroundRunner {
             gc_range_remote,
             lock_cleanup_remote,
             lock_cleanup_worker,
+            audit_remote,
+            audit_worker,
             last_seqno: 0,
             rocks_engine: None,
         }
@@ -1053,39 +1061,44 @@ impl Runnable for BackgroundRunner {
                 self.rocks_engine = Some(rocks_engine);
             }
             BackgroundTask::Audit((ranges_snap, rocksdb_snap)) => {
-                for range_snap in ranges_snap {
-                    let opts = iter_option(
-                        &range_snap.snapshot_meta.range.start,
-                        &range_snap.snapshot_meta.range.end,
-                        false,
-                    );
-                    for cf in &[CF_LOCK, CF_WRITE] {
-                        let mut iter = range_snap.iterator_opt(cf, opts.clone()).unwrap();
-                        let mut disk_iter = rocksdb_snap.iterator_opt(cf, opts.clone()).unwrap();
-                        let valid = iter.seek_to_first().unwrap();
-                        if !valid {
-                            continue;
-                        }
-                        let valid = disk_iter.seek_to_first().unwrap();
-                        if !valid {
-                            error!(
-                                "seek_to_first result not equal";
-                                "lower" => log_wrappers::Value(&iter.lower_bound),
-                                "upper" => log_wrappers::Value(&iter.upper_bound),
-                                "cache_key" => log_wrappers::Value(&iter.key()),
-                                "seqno" => iter.sequence_number,
-                                "cf" => ?cf,
-                            );
-                            unreachable!();
-                        }
+                let f = async move {
+                    for range_snap in ranges_snap {
+                        let opts = iter_option(
+                            &range_snap.snapshot_meta.range.start,
+                            &range_snap.snapshot_meta.range.end,
+                            false,
+                        );
+                        for cf in &[CF_LOCK, CF_WRITE] {
+                            let mut iter = range_snap.iterator_opt(cf, opts.clone()).unwrap();
+                            let mut disk_iter =
+                                rocksdb_snap.iterator_opt(cf, opts.clone()).unwrap();
+                            let valid = iter.seek_to_first().unwrap();
+                            if !valid {
+                                continue;
+                            }
+                            let valid = disk_iter.seek_to_first().unwrap();
+                            if !valid {
+                                error!(
+                                    "seek_to_first result not equal";
+                                    "lower" => log_wrappers::Value(&iter.lower_bound),
+                                    "upper" => log_wrappers::Value(&iter.upper_bound),
+                                    "cache_key" => log_wrappers::Value(&iter.key()),
+                                    "seqno" => iter.sequence_number,
+                                    "cf" => ?cf,
+                                );
+                                unreachable!();
+                            }
 
-                        next_to_match(cf, &mut iter, &mut disk_iter, false);
+                            next_to_match(cf, &mut iter, &mut disk_iter, false);
 
-                        while iter.next().unwrap() {
-                            next_to_match(cf, &mut iter, &mut disk_iter, true);
+                            while iter.next().unwrap() {
+                                next_to_match(cf, &mut iter, &mut disk_iter, true);
+                            }
                         }
                     }
-                }
+                };
+
+                self.audit_remote.spawn(f);
             }
             BackgroundTask::Gc(t) => {
                 info!(
