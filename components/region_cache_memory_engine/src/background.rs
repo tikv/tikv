@@ -90,7 +90,7 @@ pub enum BackgroundTask {
     CleanLockTombstone(u64),
     TopRegionsLoadEvict,
     SetRocksEngine(RocksEngine),
-    Audit((Vec<RangeCacheSnapshot>, RocksSnapshot)),
+    Audit((Vec<(RangeCacheSnapshot, u64)>, RocksSnapshot)),
 }
 
 impl Display for BackgroundTask {
@@ -946,6 +946,8 @@ fn next_to_match(
     iter: &mut RangeCacheIterator,
     disk_iter: &mut RocksEngineIterator,
     next_fisrt: bool,
+    last_user_key: &Vec<u8>,
+    safe_ts: u64,
 ) {
     let key = iter.key();
     let val = iter.value();
@@ -1012,18 +1014,21 @@ fn next_to_match(
                     "cf" => ?cf,
                 );
             } else {
-                error!(
-                    "next inconsistent, missing higher ts";
-                    "cache_key" => log_wrappers::Value(key),
-                    "cache_val" => log_wrappers::Value(val),
-                    "disk_key" => log_wrappers::Value(disk_key),
-                    "disk_val" => log_wrappers::Value(disk_val),
-                    "lower" => log_wrappers::Value(&iter.lower_bound),
-                    "upper" => log_wrappers::Value(&iter.upper_bound),
-                    "seqno" => iter.sequence_number,
-                    "cf" => ?cf,
-                );
-                unreachable!()
+                if disk_user_key == last_user_key && disk_ts > safe_ts {
+                    error!(
+                        "next inconsistent, missing higher ts";
+                        "cache_key" => log_wrappers::Value(key),
+                        "cache_val" => log_wrappers::Value(val),
+                        "disk_key" => log_wrappers::Value(disk_key),
+                        "disk_val" => log_wrappers::Value(disk_val),
+                        "lower" => log_wrappers::Value(&iter.lower_bound),
+                        "upper" => log_wrappers::Value(&iter.upper_bound),
+                        "seqno" => iter.sequence_number,
+                        "safe_ts" => safe_ts,
+                        "cf" => ?cf,
+                    );
+                    unreachable!()
+                }
             }
         }
 
@@ -1062,7 +1067,7 @@ impl Runnable for BackgroundRunner {
             }
             BackgroundTask::Audit((ranges_snap, rocksdb_snap)) => {
                 let f = async move {
-                    for range_snap in ranges_snap {
+                    for (range_snap, safe_ts) in ranges_snap {
                         let opts = iter_option(
                             &range_snap.snapshot_meta.range.start,
                             &range_snap.snapshot_meta.range.end,
@@ -1089,10 +1094,28 @@ impl Runnable for BackgroundRunner {
                                 unreachable!();
                             }
 
-                            next_to_match(cf, &mut iter, &mut disk_iter, false);
+                            next_to_match(cf, &mut iter, &mut disk_iter, false, &vec![], safe_ts);
+                            let mut last_user_key = if *cf == CF_WRITE {
+                                split_ts(iter.key()).unwrap().0.to_vec()
+                            } else {
+                                vec![]
+                            };
 
                             while iter.next().unwrap() {
-                                next_to_match(cf, &mut iter, &mut disk_iter, true);
+                                next_to_match(
+                                    cf,
+                                    &mut iter,
+                                    &mut disk_iter,
+                                    true,
+                                    &last_user_key,
+                                    safe_ts,
+                                );
+                                if *cf == CF_WRITE {
+                                    let cur_user_key = split_ts(iter.key()).unwrap().0;
+                                    if last_user_key != cur_user_key {
+                                        last_user_key = cur_user_key.to_vec();
+                                    }
+                                }
                             }
                         }
                     }

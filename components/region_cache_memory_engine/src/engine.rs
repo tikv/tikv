@@ -549,11 +549,16 @@ impl RangeCacheMemoryEngine {
         let mut ranges_to_audit = vec![];
         let ranges: Vec<_> = {
             let core = self.core().write();
-            core.range_manager.ranges().keys().cloned().collect()
+            core.range_manager
+                .ranges()
+                .iter()
+                .map(|(r, meta)| (r.clone(), meta.safe_point()))
+                .collect()
         };
         for range in ranges {
-            if let Ok(range_snap) = self.snapshot(range.clone(), u64::MAX, snap.sequence_number()) {
-                ranges_to_audit.push(range_snap);
+            if let Ok(range_snap) = self.snapshot(range.0.clone(), u64::MAX, snap.sequence_number())
+            {
+                ranges_to_audit.push((range_snap, range.1));
             } else {
                 warn!(
                     "failed to get snap in audit";
