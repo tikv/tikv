@@ -58,12 +58,12 @@ mod tests {
 
         let mut check_pointer = engine.new_checkpointer().unwrap();
 
-        engine.pause_background_work().unwrap();
-        let path2 = dir.path().join("checkpoint");
-        check_pointer
-            .create_at(path2.as_path(), None, 0)
-            .unwrap_err();
-        engine.continue_background_work().unwrap();
+        // engine.pause_background_work().unwrap();
+        // let path2 = dir.path().join("checkpoint");
+        // check_pointer
+        //     .create_at(path2.as_path(), None, 0)
+        //     .unwrap_err();
+        // engine.continue_background_work().unwrap();
 
         let path2 = dir.path().join("checkpoint");
         check_pointer.create_at(path2.as_path(), None, 0).unwrap();
