@@ -245,7 +245,6 @@ where
         let current_size = SizePolicy::<K, V>::current(&self.size_policy);
         match self.map.entry(key) {
             HashMapEntry::Occupied(mut e) => {
-                // TODO: evict entries if size exceeds capacity.
                 self.size_policy.on_remove(e.key(), &e.get().value);
                 self.size_policy.on_insert(e.key(), &value);
                 let mut entry = e.get_mut();
@@ -254,7 +253,6 @@ where
             }
             HashMapEntry::Vacant(v) => {
                 let record = if self.capacity <= current_size {
-                    // TODO: evict not only one entry to fit capacity.
                     let res = self.trace.reuse_tail(v.key().clone());
                     old_key = Some(res.0);
                     res.1
@@ -269,6 +267,28 @@ where
         if let Some(o) = old_key {
             let entry = self.map.remove(&o).unwrap();
             self.size_policy.on_remove(&o, &entry.value);
+        }
+
+        // NOTE: now when inserting a value larger than the capacity, actually this
+        // implementation will clean the whole cache.
+        // Perhaps we can reject entries larger than capacity goes in the LRU cache, but
+        // that is impossible for now: the `SizePolicy` trait doesn't provide the
+        // interface of querying the actual size of an item.
+        self.evict_until_fit()
+    }
+
+    fn evict_until_fit(&mut self) {
+        let cap = self.capacity;
+        loop {
+            let current_size = self.size_policy.current();
+            // Should we keep at least one entry? So our users won't lose their fresh record
+            // once it exceeds the capacity.
+            if current_size <= cap || self.map.is_empty() {
+                break;
+            }
+            let key = self.trace.remove_tail();
+            let val = self.map.remove(&key).unwrap();
+            self.size_policy.on_remove(&key, &val.value);
         }
     }
 
@@ -581,6 +601,29 @@ mod tests {
         }
         for i in 10..20 {
             assert_eq!(map.get(&i), Some(&vec![b' ']));
+        }
+    }
+
+    #[test]
+    fn test_oversized() {
+        let mut cache = LruCache::with_capacity_sample_and_trace(42, 0, TestTracker(0));
+        cache.insert(
+            42,
+            b"this is the answer... but will it being inserted?".to_vec(),
+        );
+        assert!(cache.size() <= 42);
+        cache.insert(42, b"Aha, perhaps an shorter answer.".to_vec());
+        assert!(cache.size() <= 42);
+        cache.insert(43, b"Yet a new challenger.".to_vec());
+        assert!(cache.size() <= 42);
+
+        for i in 0..100 {
+            cache.insert(i, vec![i as _]);
+            assert!(cache.size() <= 42);
+        }
+        for i in 90..200 {
+            cache.insert(i, vec![i as _; 8]);
+            assert!(cache.size() <= 42);
         }
     }
 }

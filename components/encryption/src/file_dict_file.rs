@@ -10,7 +10,7 @@ use file_system::{rename, File, OpenOptions};
 use kvproto::encryptionpb::{EncryptedContent, FileDictionary, FileInfo};
 use protobuf::Message;
 use rand::{thread_rng, RngCore};
-use tikv_util::{box_err, set_panic_mark, warn};
+use tikv_util::{box_err, info, set_panic_mark, warn};
 
 use crate::{
     encrypted_file::{EncryptedFile, Header, Version, TMP_FILE_SUFFIX},
@@ -134,11 +134,19 @@ impl FileDictionaryFile {
                 .open(&tmp_path)
                 .unwrap();
 
-            let header = Header::new(&file_dict_bytes, Version::V2);
-            tmp_file.write_all(&header.to_bytes())?;
+            let header = Header::new(&file_dict_bytes, Version::V2).to_bytes();
+            tmp_file.write_all(&header)?;
             tmp_file.write_all(&file_dict_bytes)?;
             tmp_file.sync_all()?;
 
+            let new_size = header.len() + file_dict_bytes.len();
+            info!(
+                "installing new dictionary file";
+                "name" => tmp_path.display(),
+                "old_size" => self.file_size,
+                "new_size" => new_size,
+            );
+            self.file_size = new_size;
             // Replace old file with the tmp file aomticlly.
             rename(&tmp_path, &origin_path)?;
             let base_dir = File::open(&self.base)?;
@@ -148,9 +156,8 @@ impl FileDictionaryFile {
         } else {
             let file = EncryptedFile::new(&self.base, &self.name);
             file.write(&file_dict_bytes, &PlaintextBackend::default())?;
+            self.file_size = file_dict_bytes.len();
         }
-        // rough size, excluding EncryptedFile meta.
-        self.file_size = file_dict_bytes.len();
         Ok(())
     }
 
@@ -197,6 +204,7 @@ impl FileDictionaryFile {
                             }
                         }
                         Err(e @ Error::TailRecordParseIncomplete) => {
+                            // We will call `rewrite` later to trim the corruption.
                             warn!(
                                 "{:?} occurred and the last complete filename is {}",
                                 e, last_record_name

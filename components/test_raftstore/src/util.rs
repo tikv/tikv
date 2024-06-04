@@ -132,13 +132,16 @@ lazy_static! {
     static ref TEST_CONFIG: TikvConfig = {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let common_test_cfg = manifest_dir.join("src/common-test.toml");
-        TikvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
+        let mut cfg = TikvConfig::from_file(&common_test_cfg, None).unwrap_or_else(|e| {
             panic!(
                 "invalid auto generated configuration file {}, err {}",
                 manifest_dir.display(),
                 e
             );
-        })
+        });
+        // To speed up leader transfer.
+        cfg.raft_store.allow_unsafe_vote_after_start = true;
+        cfg
     };
 }
 
@@ -559,6 +562,7 @@ pub fn must_error_read_on_peer<T: Simulator>(
     }
 }
 
+#[track_caller]
 pub fn must_contains_error(resp: &RaftCmdResponse, msg: &str) {
     let header = resp.get_header();
     assert!(header.has_error());

@@ -2,8 +2,13 @@
 
 use std::{
     error::Error as StdError,
+    fmt::Display,
+    future::Future,
     result,
-    sync::mpsc::{sync_channel, SyncSender},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     thread::Builder,
     time::Instant,
 };
@@ -13,29 +18,38 @@ use engine_rocks::{
     util::get_cf_handle,
     RocksEngine,
 };
-use engine_traits::{CfNamesExt, CfOptionsExt, Engines, Peekable, RaftEngine};
+use engine_traits::{CfNamesExt, CfOptionsExt, Engines, KvEngine, Peekable, RaftEngine};
 use futures::{
     channel::mpsc,
     executor::{ThreadPool, ThreadPoolBuilder},
+    stream::{AbortHandle, Aborted},
     FutureExt, SinkExt, StreamExt,
 };
 use grpcio::{
-    ClientStreamingSink, RequestStream, RpcContext, ServerStreamingSink, UnarySink, WriteFlags,
+    ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink,
+    UnarySink, WriteFlags,
 };
 use kvproto::{raft_serverpb::StoreIdent, recoverdatapb::*};
 use raftstore::{
     router::RaftStoreRouter,
     store::{
         fsm::RaftRouter,
-        msg::{Callback, CasualMessage, PeerMsg, SignificantMsg},
+        msg::{PeerMsg, SignificantMsg},
+        snapshot_backup::{SnapshotBrWaitApplyRequest, SyncReport},
         transport::SignificantRouter,
-        SnapshotRecoveryWaitApplySyncer,
+        SnapshotBrWaitApplySyncer,
     },
 };
 use thiserror::Error;
 use tikv_util::sys::thread::{StdThreadBuildWrapper, ThreadBuildWrapper};
+use tokio::sync::oneshot::{self, Sender};
 
-use crate::{data_resolver::DataResolverManager, region_meta_collector::RegionMetaCollector};
+use crate::{
+    data_resolver::DataResolverManager,
+    leader_keeper::LeaderKeeper,
+    metrics::{CURRENT_WAIT_APPLY_LEADER, REGION_EVENT_COUNTER},
+    region_meta_collector::RegionMetaCollector,
+};
 
 pub type Result<T> = result::Result<T, Error>;
 
@@ -60,6 +74,44 @@ pub struct RecoveryService<ER: RaftEngine> {
     engines: Engines<RocksEngine, ER>,
     router: RaftRouter<RocksEngine, ER>,
     threads: ThreadPool,
+
+    /// The handle to last call of recover region RPC.
+    ///
+    /// We need to make sure the execution of keeping leader exits before next
+    /// `RecoverRegion` rpc gets in. Or the previous call may stuck at keep
+    /// leader forever, once the second caller request the leader to be at
+    /// another store.
+    // NOTE: Perhaps it would be better to abort the procedure as soon as the client
+    // stream has been closed, but yet it seems there isn't such hook like
+    // `on_client_go` for us, and the current implementation only start
+    // work AFTER the client closes their sender part(!)
+    last_recovery_region_rpc: Arc<Mutex<Option<RecoverRegionState>>>,
+}
+
+struct RecoverRegionState {
+    start_at: Instant,
+    finished: Arc<AtomicBool>,
+    abort: AbortHandle,
+}
+
+impl RecoverRegionState {
+    /// Create the state by wrapping a execution of recover region.
+    fn wrap_task<F: Future<Output = T>, T>(
+        task: F,
+    ) -> (Self, impl Future<Output = std::result::Result<T, Aborted>>) {
+        let finished = Arc::new(AtomicBool::new(false));
+        let (cancelable_task, abort) = futures::future::abortable(task);
+        let state = Self {
+            start_at: Instant::now(),
+            finished: Arc::clone(&finished),
+            abort,
+        };
+        (state, async move {
+            let res = cancelable_task.await;
+            finished.store(true, Ordering::SeqCst);
+            res
+        })
+    }
 }
 
 impl<ER: RaftEngine> RecoveryService<ER> {
@@ -93,6 +145,7 @@ impl<ER: RaftEngine> RecoveryService<ER> {
             engines,
             router,
             threads,
+            last_recovery_region_rpc: Arc::default(),
         }
     }
 
@@ -134,14 +187,42 @@ impl<ER: RaftEngine> RecoveryService<ER> {
         Ok(store_id)
     }
 
+    fn abort_last_recover_region(&self, place: impl Display) {
+        let mut last_state_lock = self.last_recovery_region_rpc.lock().unwrap();
+        Self::abort_last_recover_region_of(place, &mut last_state_lock)
+    }
+
+    fn replace_last_recover_region(&self, place: impl Display, new_state: RecoverRegionState) {
+        let mut last_state_lock = self.last_recovery_region_rpc.lock().unwrap();
+        Self::abort_last_recover_region_of(place, &mut last_state_lock);
+        *last_state_lock = Some(new_state);
+    }
+
+    fn abort_last_recover_region_of(
+        place: impl Display,
+        last_state_lock: &mut Option<RecoverRegionState>,
+    ) {
+        if let Some(last_state) = last_state_lock.take() {
+            info!("Another task enter, checking last task.";
+                "finished" => ?last_state.finished,
+                "start_before" => ?last_state.start_at.elapsed(),
+                "abort_by" => %place,
+            );
+            if !last_state.finished.load(Ordering::SeqCst) {
+                last_state.abort.abort();
+                warn!("Last task not finished, aborting it.");
+            }
+        }
+    }
+
     // a new wait apply syncer share with all regions,
     // when all region reached the target index, share reference decreased to 0,
     // trigger closure to send finish info back.
-    pub fn wait_apply_last(router: RaftRouter<RocksEngine, ER>, sender: SyncSender<u64>) {
-        let wait_apply = SnapshotRecoveryWaitApplySyncer::new(0, sender);
+    pub fn wait_apply_last<EK: KvEngine>(router: RaftRouter<EK, ER>, sender: Sender<SyncReport>) {
+        let wait_apply = SnapshotBrWaitApplySyncer::new(0, sender);
         router.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(
-                wait_apply.clone(),
+            PeerMsg::SignificantMsg(SignificantMsg::SnapshotBrWaitApply(
+                SnapshotBrWaitApplyRequest::relaxed(wait_apply.clone()),
             ))
         });
     }
@@ -185,7 +266,7 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
     // 1. br start to ready region meta
     fn read_region_meta(
         &mut self,
-        _ctx: RpcContext<'_>,
+        ctx: RpcContext<'_>,
         _req: ReadRegionMetaRequest,
         mut sink: ServerStreamingSink<RegionMeta>,
     ) {
@@ -203,13 +284,18 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
         }
         .map(|res: Result<()>| match res {
             Ok(_) => {
-                info!("collect region meta done");
+                debug!("collect region meta done");
             }
             Err(e) => {
                 error!("rcollect region meta failure"; "error" => ?e);
             }
         });
 
+        // Hacking: Sometimes, the client may omit the RPC call to `recover_region` if
+        // no leader should be register to some (unfortunate) store. So we abort
+        // last recover region here too, anyway this RPC implies a consequent
+        // `recover_region` for now.
+        self.abort_last_recover_region(format_args!("read_region_meta by {}", ctx.peer()));
         self.threads.spawn_ok(send_task);
     }
 
@@ -217,11 +303,11 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
     // assign region leader and wait leader apply to last log
     fn recover_region(
         &mut self,
-        _ctx: RpcContext<'_>,
+        ctx: RpcContext<'_>,
         mut stream: RequestStream<RecoverRegionRequest>,
         sink: ClientStreamingSink<RecoverRegionResponse>,
     ) {
-        let raft_router = self.router.clone();
+        let mut raft_router = Mutex::new(self.router.clone());
         let store_id = self.get_store_id();
         info!("start to recover the region");
         let task = async move {
@@ -229,62 +315,35 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
             while let Some(req) = stream.next().await {
                 let req = req.map_err(|e| eprintln!("rpc recv fail: {}", e)).unwrap();
                 if req.as_leader {
+                    REGION_EVENT_COUNTER.promote_to_leader.inc();
                     leaders.push(req.region_id);
-                }
-            }
-
-            let mut rxs = Vec::with_capacity(leaders.len());
-            for &region_id in &leaders {
-                if let Err(e) = raft_router.send_casual_msg(region_id, CasualMessage::Campaign) {
-                    // TODO: retry may necessay
-                    warn!("region fails to campaign: ";
-                    "region_id" => region_id, 
-                    "err" => ?e);
-                    continue;
                 } else {
-                    info!("region starts to campaign";
-                    "region_id" => region_id);
-                }
-
-                let (tx, rx) = sync_channel(1);
-                let callback = Callback::read(Box::new(move |_| {
-                    if tx.send(1).is_err() {
-                        error!("response failed"; "region_id" => region_id);
-                    }
-                }));
-                if let Err(e) = raft_router
-                    .significant_send(region_id, SignificantMsg::LeaderCallback(callback))
-                {
-                    warn!("LeaderCallback failed"; "err" => ?e, "region_id" => region_id);
-                }
-                rxs.push(Some(rx));
-            }
-
-            // leader is campaign and be ensured as leader
-            for (_rid, rx) in leaders.iter().zip(rxs) {
-                if let Some(rx) = rx {
-                    match rx.recv() {
-                        Ok(_id) => {
-                            info!("leader is assigned for region");
-                        }
-                        Err(e) => {
-                            error!("check leader failed"; "error" => ?e);
-                        }
-                    }
+                    REGION_EVENT_COUNTER.keep_follower.inc();
                 }
             }
 
-            info!("all region leader assigned done");
+            let mut lk = LeaderKeeper::new(&raft_router, leaders.clone());
+            // We must use the tokio runtime here because there isn't a `block_in_place`
+            // like thing in the futures executor. It simply panics when block
+            // on the block_on context.
+            // It is also impossible to directly `await` here, because that will make
+            // borrowing to the raft router crosses the await point.
+            lk.elect_and_wait_all_ready().await;
+            info!("all region leader assigned done"; "count" => %leaders.len());
+            drop(lk);
 
             let now = Instant::now();
             // wait apply to the last log
             let mut rx_apply = Vec::with_capacity(leaders.len());
             for &region_id in &leaders {
-                let (tx, rx) = sync_channel(1);
-                let wait_apply = SnapshotRecoveryWaitApplySyncer::new(region_id, tx.clone());
-                if let Err(e) = raft_router.significant_send(
+                let (tx, rx) = oneshot::channel();
+                REGION_EVENT_COUNTER.start_wait_leader_apply.inc();
+                let wait_apply = SnapshotBrWaitApplySyncer::new(region_id, tx);
+                if let Err(e) = raft_router.get_mut().unwrap().significant_send(
                     region_id,
-                    SignificantMsg::SnapshotRecoveryWaitApply(wait_apply.clone()),
+                    SignificantMsg::SnapshotBrWaitApply(SnapshotBrWaitApplyRequest::relaxed(
+                        wait_apply.clone(),
+                    )),
                 ) {
                     error!(
                         "failed to send wait apply";
@@ -292,26 +351,27 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
                         "err" => ?e,
                     );
                 }
-                rx_apply.push(Some(rx));
+                rx_apply.push(rx);
             }
 
             // leader apply to last log
-            for (_rid, rx) in leaders.iter().zip(rx_apply) {
-                if let Some(rx) = rx {
-                    match rx.recv() {
-                        Ok(region_id) => {
-                            info!("leader apply to last log"; "error" => region_id);
-                        }
-                        Err(e) => {
-                            error!("leader failed to apply to last log"; "error" => ?e);
-                        }
+            for (rid, rx) in leaders.iter().zip(rx_apply) {
+                CURRENT_WAIT_APPLY_LEADER.set(*rid as _);
+                match rx.await {
+                    Ok(_) => {
+                        debug!("leader apply to last log"; "region_id" => rid);
+                    }
+                    Err(e) => {
+                        error!("leader failed to apply to last log"; "error" => ?e);
                     }
                 }
+                REGION_EVENT_COUNTER.finish_wait_leader_apply.inc();
             }
+            CURRENT_WAIT_APPLY_LEADER.set(0);
 
             info!(
                 "all region leader apply to last log";
-                "spent_time" => now.elapsed().as_secs(),
+                "spent_time" => now.elapsed().as_secs(), "count" => %leaders.len(),
             );
 
             let mut resp = RecoverRegionResponse::default();
@@ -320,10 +380,20 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
                 Err(e) => error!("failed to get store id"; "error" => ?e),
             };
 
-            let _ = sink.success(resp).await;
+            resp
         };
 
-        self.threads.spawn_ok(task);
+        let (state, task) = RecoverRegionState::wrap_task(task);
+        self.replace_last_recover_region(format!("recover_region by {}", ctx.peer()), state);
+        self.threads.spawn_ok(async move {
+            let res = match task.await {
+                Ok(resp) => sink.success(resp),
+                Err(Aborted) => sink.fail(RpcStatus::new(RpcStatusCode::ABORTED)),
+            };
+            if let Err(err) = res.await {
+                warn!("failed to response recover region rpc"; "err" => %err);
+            }
+        });
     }
 
     // 3. ensure all region peer/follower apply to last
@@ -337,11 +407,11 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
         info!("wait_apply start");
         let task = async move {
             let now = Instant::now();
-            let (tx, rx) = sync_channel(1);
-            RecoveryService::wait_apply_last(router, tx.clone());
-            match rx.recv() {
+            let (tx, rx) = oneshot::channel();
+            RecoveryService::wait_apply_last(router, tx);
+            match rx.await {
                 Ok(id) => {
-                    info!("follower apply to last log"; "error" => id);
+                    info!("follower apply to last log"; "report" => ?id);
                 }
                 Err(e) => {
                     error!("follower failed to apply to last log"; "error" => ?e);
@@ -395,5 +465,34 @@ impl<ER: RaftEngine> RecoverData for RecoveryService<ER> {
         });
 
         self.threads.spawn_ok(send_task);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::{sync::atomic::Ordering, time::Duration};
+
+    use futures::never::Never;
+
+    use super::RecoverRegionState;
+
+    #[test]
+    fn test_state() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let (state, task) = RecoverRegionState::wrap_task(futures::future::pending::<Never>());
+        let hnd = rt.spawn(task);
+        state.abort.abort();
+        rt.block_on(async { tokio::time::timeout(Duration::from_secs(10), hnd).await })
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+
+        let (state, task) = RecoverRegionState::wrap_task(futures::future::ready(42));
+        assert_eq!(state.finished.load(Ordering::SeqCst), false);
+        assert_eq!(rt.block_on(task), Ok(42));
+        assert_eq!(state.finished.load(Ordering::SeqCst), true);
     }
 }

@@ -22,8 +22,10 @@ use crate::storage::{
         Error, ErrorInner, Lock, LockType, MvccTxn, Result, SnapshotReader,
     },
     txn::{
-        actions::check_data_constraint::check_data_constraint, sched_pool::tls_can_enable,
-        scheduler::LAST_CHANGE_TS, LockInfo,
+        actions::{check_data_constraint::check_data_constraint, common::next_last_change_info},
+        sched_pool::tls_can_enable,
+        scheduler::LAST_CHANGE_TS,
+        LockInfo,
     },
     Snapshot,
 };
@@ -378,7 +380,7 @@ impl<'a> PrewriteMutation<'a> {
             }
             if seek_ts == TimeStamp::max() {
                 (self.last_change_ts, self.versions_to_last_change) =
-                    write.next_last_change_info(commit_ts);
+                    next_last_change_info(&self.key, &write, reader.start_ts, reader, commit_ts)?;
             }
             match self.txn_props.kind {
                 TransactionKind::Optimistic(_) => {
@@ -755,7 +757,7 @@ fn amend_pessimistic_lock<S: Snapshot>(
             .into());
         }
         (mutation.last_change_ts, mutation.versions_to_last_change) =
-            write.next_last_change_info(*commit_ts);
+            next_last_change_info(&mutation.key, write, reader.start_ts, reader, *commit_ts)?;
     } else {
         // last_change_ts == 0 && versions_to_last_change > 0 means the key actually
         // does not exist.
@@ -2330,8 +2332,10 @@ pub mod tests {
         assert_eq!(lock.versions_to_last_change, 1);
         must_rollback(&mut engine, key, 55, false);
 
-        // Latest version is a LOCK without last_change_ts. Set the last_change_ts of
-        // the new record to zero.
+        // Latest version is a LOCK without last_change_ts. It iterates back to find the
+        // actual last write. In this case it is a DELETE, so it returns
+        // (last_change_ts == 0 && versions_to_last_change == 1), indicating the key
+        // does not exist.
         let write = Write::new(WriteType::Lock, 60.into(), None);
         engine
             .put_cf(
@@ -2344,11 +2348,11 @@ pub mod tests {
         prewrite_func(&mut engine, LockType::Lock, 70);
         let lock = must_locked(&mut engine, key, 70);
         assert!(lock.last_change_ts.is_zero());
-        assert_eq!(lock.versions_to_last_change, 0);
+        assert_eq!(lock.versions_to_last_change, 1);
         must_rollback(&mut engine, key, 70, false);
 
-        // Latest version is a ROLLBACK without last_change_ts. Set the last_change_ts
-        // of the new record to zero.
+        // Latest version is a ROLLBACK without last_change_ts. Iterate back to find the
+        // DELETE.
         let write = Write::new(WriteType::Rollback, 75.into(), None);
         engine
             .put_cf(
@@ -2361,7 +2365,7 @@ pub mod tests {
         prewrite_func(&mut engine, LockType::Lock, 85);
         let lock = must_locked(&mut engine, key, 85);
         assert!(lock.last_change_ts.is_zero());
-        assert_eq!(lock.versions_to_last_change, 0);
+        assert_eq!(lock.versions_to_last_change, 1);
         must_rollback(&mut engine, key, 85, false);
 
         // Latest version is a LOCK with last_change_ts

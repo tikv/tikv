@@ -2,7 +2,7 @@
 
 use engine_traits::{
     CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
-    Range, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt, ALL_CFS,
+    Range, RangeStats, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt, ALL_CFS,
 };
 use rocksdb::Range as RocksRange;
 use tikv_util::{box_try, keybuilder::KeyBuilder};
@@ -320,15 +320,8 @@ impl MiscExt for RocksEngine {
             .get_property_int_cf(handle, ROCKSDB_TOTAL_SST_FILES_SIZE))
     }
 
-    fn get_range_entries_and_versions(
-        &self,
-        cf: &str,
-        start: &[u8],
-        end: &[u8],
-    ) -> Result<Option<(u64, u64)>> {
-        Ok(crate::properties::get_range_entries_and_versions(
-            self, cf, start, end,
-        ))
+    fn get_range_stats(&self, cf: &str, start: &[u8], end: &[u8]) -> Result<Option<RangeStats>> {
+        Ok(crate::properties::get_range_stats(self, cf, start, end))
     }
 
     fn is_stalled_or_stopped(&self) -> bool {
@@ -343,6 +336,16 @@ impl MiscExt for RocksEngine {
                 .get_property_int(ROCKSDB_IS_WRITE_STOPPED)
                 .unwrap_or_default()
                 != 0
+    }
+
+    fn disable_manual_compaction(&self) -> Result<()> {
+        self.as_inner().disable_manual_compaction();
+        Ok(())
+    }
+
+    fn enable_manual_compaction(&self) -> Result<()> {
+        self.as_inner().enable_manual_compaction();
+        Ok(())
     }
 }
 

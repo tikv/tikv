@@ -177,6 +177,7 @@ make_static_metric! {
         region_nonexistent,
         applying_snap,
         disk_full,
+        unsafe_vote,
     }
 
     pub label_enum ProposalType {
@@ -250,6 +251,31 @@ make_static_metric! {
         empty_hottest_key_range,
         // The top hot CPU region could not be split.
         unable_to_split_cpu_top,
+    }
+
+    pub label_enum SnapshotBrWaitApplyEventType {
+        sent,
+        trivial,
+        accepted,
+        term_not_match,
+        epoch_not_match,
+        duplicated,
+        finished,
+    }
+
+    pub struct SnapshotBrWaitApplyEvent : IntCounter {
+        "event" => SnapshotBrWaitApplyEventType
+    }
+
+    pub label_enum SnapshotBrLeaseEventType {
+        create,
+        renew,
+        expired,
+        reset,
+    }
+
+    pub struct SnapshotBrLeaseEvent : IntCounter {
+        "event" => SnapshotBrLeaseEventType
     }
 
     pub struct HibernatedPeerStateGauge: IntGauge {
@@ -646,6 +672,11 @@ lazy_static! {
             "Total number of leader missed region."
         ).unwrap();
 
+    pub static ref CHECK_STALE_PEER_COUNTER: IntCounter = register_int_counter!(
+        "tikv_raftstore_check_stale_peer",
+        "Total number of checking stale peers."
+    ).unwrap();
+
     pub static ref INGEST_SST_DURATION_SECONDS: Histogram =
         register_histogram!(
             "tikv_snapshot_ingest_sst_duration_seconds",
@@ -794,4 +825,41 @@ lazy_static! {
         "Total snapshot generate limit used",
     )
     .unwrap();
+
+    pub static ref MESSAGE_RECV_BY_STORE: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_message_recv_by_store",
+        "Messages received by store",
+        &["store"]
+    )
+    .unwrap();
+
+    pub static ref PEER_IN_FLASHBACK_STATE: IntGauge = register_int_gauge!(
+        "tikv_raftstore_peer_in_flashback_state",
+        "Total number of peers in the flashback state"
+    ).unwrap();
+
+    pub static ref SNAP_BR_SUSPEND_COMMAND_TYPE: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_snap_br_suspend_command_type",
+        "The statistic of rejecting some admin commands being proposed.",
+        &["type"]
+    ).unwrap();
+
+    pub static ref SNAP_BR_WAIT_APPLY_EVENT: SnapshotBrWaitApplyEvent = register_static_int_counter_vec!(
+        SnapshotBrWaitApplyEvent,
+        "tikv_raftstore_snap_br_wait_apply_event",
+        "The events of wait apply issued by snapshot br.",
+        &["event"]
+    ).unwrap();
+
+    pub static ref SNAP_BR_SUSPEND_COMMAND_LEASE_UNTIL: IntGauge = register_int_gauge!(
+        "tikv_raftstore_snap_br_suspend_command_lease_until",
+        "The lease that snapshot br holds of rejecting some type of commands. (In unix timestamp.)"
+    ).unwrap();
+
+    pub static ref SNAP_BR_LEASE_EVENT: SnapshotBrLeaseEvent = register_static_int_counter_vec!(
+        SnapshotBrLeaseEvent,
+        "tikv_raftstore_snap_br_lease_event",
+        "The events of the lease to denying new admin commands being proposed by snapshot br.",
+        &["event"]
+    ).unwrap();
 }

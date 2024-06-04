@@ -56,7 +56,7 @@ use txn_types::{Key, PessimisticLock, TimeStamp, TxnExtra, Value};
 pub use self::{
     btree_engine::{BTreeEngine, BTreeEngineIterator, BTreeEngineSnapshot},
     cursor::{Cursor, CursorBuilder},
-    mock_engine::{ExpectedWrite, MockEngineBuilder},
+    mock_engine::{ExpectedWrite, MockEngine, MockEngineBuilder},
     raft_extension::{FakeExtension, RaftExtension},
     rocksdb_engine::{RocksEngine, RocksSnapshot},
     stats::{

@@ -507,6 +507,15 @@ impl RouterInner {
     async fn on_event(&self, task: String, events: ApplyEvents) -> Result<()> {
         let task_info = self.get_task_info(&task).await?;
         task_info.on_events(events).await?;
+        #[cfg(features = "failpoints")]
+        {
+            let delayed = (|| {
+                fail::fail_point!("router_on_event_delay_ms", |v| {
+                    v.and_then(|v| v.parse::<u64>().ok()).unwrap_or(0)
+                })
+            })();
+            tokio::time::sleep(Duration::from_millis(delayed)).await;
+        }
 
         // When this event make the size of temporary files exceeds the size limit, make
         // a flush. Note that we only flush if the size is less than the limit before
@@ -671,22 +680,25 @@ impl TempFileKey {
 
     /// The full name of the file owns the key.
     fn temp_file_name(&self) -> String {
+        let timestamp = (|| {
+            fail::fail_point!("temp_file_name_timestamp", |t| t.map_or_else(
+                || TimeStamp::physical_now(),
+                |v|
+                    // reduce the precision of timestamp
+                    v.parse::<u64>().ok().map_or(0, |u| TimeStamp::physical_now() / u)
+            ));
+            TimeStamp::physical_now()
+        })();
+        let uuid = uuid::Uuid::new_v4();
         if self.is_meta {
             format!(
-                "meta_{:08}_{}_{:?}_{}.temp.log",
-                self.region_id,
-                self.cf,
-                self.cmd_type,
-                TimeStamp::physical_now(),
+                "meta_{:08}_{}_{:?}_{:?}_{}.temp.log",
+                self.region_id, self.cf, self.cmd_type, uuid, timestamp,
             )
         } else {
             format!(
-                "{:08}_{:08}_{}_{:?}_{}.temp.log",
-                self.table_id,
-                self.region_id,
-                self.cf,
-                self.cmd_type,
-                TimeStamp::physical_now(),
+                "{:08}_{:08}_{}_{:?}_{:?}_{}.temp.log",
+                self.table_id, self.region_id, self.cf, self.cmd_type, uuid, timestamp,
             )
         }
     }
@@ -857,6 +869,7 @@ impl StreamTaskInfo {
     }
 
     async fn on_events_of_key(&self, key: TempFileKey, events: ApplyEvents) -> Result<()> {
+        fail::fail_point!("before_generate_temp_file");
         if let Some(f) = self.files.read().await.get(&key) {
             self.total_size
                 .fetch_add(f.lock().await.on_events(events).await?, Ordering::SeqCst);
@@ -879,6 +892,7 @@ impl StreamTaskInfo {
         let f = w.get(&key).unwrap();
         self.total_size
             .fetch_add(f.lock().await.on_events(events).await?, Ordering::SeqCst);
+        fail::fail_point!("after_write_to_file");
         Ok(())
     }
 
@@ -962,7 +976,9 @@ impl StreamTaskInfo {
     pub async fn move_to_flushing_files(&self) -> Result<&Self> {
         // if flushing_files is not empty, which represents this flush is a retry
         // operation.
-        if !self.flushing_files.read().await.is_empty() {
+        if !self.flushing_files.read().await.is_empty()
+            || !self.flushing_meta_files.read().await.is_empty()
+        {
             return Ok(self);
         }
 
@@ -1025,7 +1041,12 @@ impl StreamTaskInfo {
             //  and push it into merged_file_info(DataFileGroup).
             file_info_clone.set_range_offset(stat_length);
             data_files_open.push({
-                let file = File::open(data_file.local_path.clone()).await?;
+                let file = File::open(data_file.local_path.clone())
+                    .await
+                    .context(format_args!(
+                        "failed to open read file {:?}",
+                        data_file.local_path.clone()
+                    ))?;
                 let compress_length = file.metadata().await?.len();
                 stat_length += compress_length;
                 file_info_clone.set_range_length(compress_length);
@@ -1090,7 +1111,6 @@ impl StreamTaskInfo {
             .await?;
         self.merge_log(metadata, storage.clone(), &self.flushing_meta_files, true)
             .await?;
-
         Ok(())
     }
 
@@ -1148,7 +1168,8 @@ impl StreamTaskInfo {
                     UnpinReader(Box::new(Cursor::new(meta_buff))),
                     buflen as _,
                 )
-                .await?;
+                .await
+                .context(format_args!("flush meta {:?}", meta_path))?;
         }
         Ok(())
     }
@@ -1182,13 +1203,14 @@ impl StreamTaskInfo {
                 .await?
                 .generate_metadata(store_id)
                 .await?;
+
+            fail::fail_point!("after_moving_to_flushing_files");
             crate::metrics::FLUSH_DURATION
                 .with_label_values(&["generate_metadata"])
                 .observe(sw.lap().as_secs_f64());
 
             // flush log file to storage.
             self.flush_log(&mut metadata_info).await?;
-
             // the field `min_resolved_ts` of metadata will be updated
             // only after flush is done.
             metadata_info.min_resolved_ts = metadata_info
@@ -2306,6 +2328,90 @@ mod tests {
         )
         .await;
         assert_eq!(result.is_ok(), true);
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_flush_on_events_race() -> Result<()> {
+        let (tx, _rx) = dummy_scheduler();
+        let tmp = std::env::temp_dir().join(format!("{}", uuid::Uuid::new_v4()));
+        let router = Arc::new(RouterInner::new(
+            tmp.clone(),
+            tx,
+            // disable auto flush.
+            1000,
+            Duration::from_secs(300),
+        ));
+
+        let (task, _path) = task("race".to_owned()).await?;
+        must_register_table(router.as_ref(), task, 1).await;
+        router
+            .must_mut_task_info("race", |i| {
+                i.storage = Arc::new(NoopStorage::default());
+            })
+            .await;
+        let mut b = KvEventsBuilder::new(42, 0);
+        b.put_table(CF_DEFAULT, 1, b"k1", b"v1");
+        let events_before_flush = b.finish();
+
+        b.put_table(CF_DEFAULT, 1, b"k1", b"v1");
+        let events_after_flush = b.finish();
+
+        // make timestamp precision to 1 seconds.
+        fail::cfg("temp_file_name_timestamp", "return(1000)").unwrap();
+
+        let (trigger_tx, trigger_rx) = std::sync::mpsc::sync_channel(0);
+        let trigger_rx = std::sync::Mutex::new(trigger_rx);
+
+        let (fp_tx, fp_rx) = std::sync::mpsc::sync_channel(0);
+        let fp_rx = std::sync::Mutex::new(fp_rx);
+
+        let t = router.get_task_info("race").await.unwrap();
+        let _ = router.on_events(events_before_flush).await;
+
+        // make generate temp files ***happen after*** moving files to flushing_files
+        // and read flush file ***happen between*** genenrate file name and
+        // write kv to file. T1 is write thread. T2 is flush thread
+        // The order likes
+        // [T1] generate file name -> [T2] moving files to flushing_files -> [T1] write
+        // kv to file -> [T2] read flush file.
+        fail::cfg_callback("after_write_to_file", move || {
+            fp_tx.send(()).unwrap();
+        })
+        .unwrap();
+
+        fail::cfg_callback("before_generate_temp_file", move || {
+            trigger_rx.lock().unwrap().recv().unwrap();
+        })
+        .unwrap();
+
+        fail::cfg_callback("after_moving_to_flushing_files", move || {
+            trigger_tx.send(()).unwrap();
+            fp_rx.lock().unwrap().recv().unwrap();
+        })
+        .unwrap();
+
+        // set flush status to true, because we disabled the auto flush.
+        t.set_flushing_status(true);
+        let router_clone = router.clone();
+        let _ = tokio::join!(
+            // do flush in another thread
+            tokio::spawn(async move {
+                router_clone.do_flush("race", 42, TimeStamp::max()).await;
+            }),
+            router.on_events(events_after_flush)
+        );
+        fail::remove("after_write_to_file");
+        fail::remove("before_generate_temp_file");
+        fail::remove("after_moving_to_flushing_files");
+        fail::remove("temp_file_name_timestamp");
+
+        // set flush status to true, because we disabled the auto flush.
+        t.set_flushing_status(true);
+        let res = router.do_flush("race", 42, TimeStamp::max()).await;
+        // this time flush should success.
+        assert!(res.is_some());
+        assert_eq!(t.files.read().await.len(), 0,);
         Ok(())
     }
 }

@@ -49,6 +49,7 @@ engine_rocks = { workspace = true }
 engine_rocks_helper = { workspace = true }
 engine_traits = { workspace = true }
 error_code = { workspace = true }
+fail = "0.5"
 file_system = { workspace = true }
 fs2 = "0.4"
 futures = "0.3"
@@ -71,6 +72,7 @@ resolved_ts = { workspace = true }
 resource_metering = { workspace = true }
 security = { workspace = true }
 serde_json = "1.0"
+service = { workspace = true }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 snap_recovery = { workspace = true }

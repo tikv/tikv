@@ -10,7 +10,8 @@ use crate::storage::{
         ErrorInner, MvccTxn, Result as MvccResult, SnapshotReader,
     },
     txn::{
-        actions::check_data_constraint::check_data_constraint, sched_pool::tls_can_enable,
+        actions::{check_data_constraint::check_data_constraint, common::next_last_change_info},
+        sched_pool::tls_can_enable,
         scheduler::LAST_CHANGE_TS,
     },
     types::PessimisticLockKeyResult,
@@ -276,7 +277,8 @@ pub fn acquire_pessimistic_lock<S: Snapshot>(
             check_data_constraint(reader, should_not_exist, &write, commit_ts, &key)?;
         }
 
-        (last_change_ts, versions_to_last_change) = write.next_last_change_info(commit_ts);
+        (last_change_ts, versions_to_last_change) =
+            next_last_change_info(&key, &write, txn.start_ts, reader, commit_ts)?;
 
         // Load value if locked_with_conflict, so that when the client (TiDB) need to
         // read the value during statement retry, it will be possible to read the value
@@ -1697,7 +1699,7 @@ pub mod tests {
         must_succeed(&mut engine, key, key, 80, 80);
         let lock = must_pessimistic_locked(&mut engine, key, 80, 80);
         assert!(lock.last_change_ts.is_zero());
-        assert_eq!(lock.versions_to_last_change, 0);
+        assert_eq!(lock.versions_to_last_change, 1);
         pessimistic_rollback::tests::must_success(&mut engine, key, 80, 80);
 
         // Latest version is a ROLLBACK without last_change_ts
@@ -1713,7 +1715,7 @@ pub mod tests {
         must_succeed(&mut engine, key, key, 95, 95);
         let lock = must_pessimistic_locked(&mut engine, key, 95, 95);
         assert!(lock.last_change_ts.is_zero());
-        assert_eq!(lock.versions_to_last_change, 0);
+        assert_eq!(lock.versions_to_last_change, 1);
         pessimistic_rollback::tests::must_success(&mut engine, key, 95, 95);
 
         // Latest version is a LOCK with last_change_ts

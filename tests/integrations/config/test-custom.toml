@@ -167,6 +167,8 @@ clean-stale-peer-delay = "0s"
 region-compact-check-step = 1234
 region-compact-min-tombstones = 999
 region-compact-tombstones-percent = 33
+region-compact-min-redundant-rows = 999
+region-compact-redundant-rows-percent = 33
 pd-heartbeat-tick-interval = "12m"
 pd-store-heartbeat-tick-interval = "12s"
 snap-mgr-gc-tick-interval = "12m"
@@ -181,6 +183,7 @@ abnormal-leader-missing-duration = "6h"
 peer-stale-state-check-interval = "2h"
 leader-transfer-max-log-lag = 123
 snap-apply-batch-size = "12MB"
+snap-apply-copy-symlink = true
 consistency-check-interval = "12s"
 report-region-flow-interval = "12m"
 raft-store-max-leader-lease = "12s"
@@ -330,6 +333,8 @@ compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
+ttl = "10d"
+periodic-compaction-seconds = "10d"
 
 [rocksdb.defaultcf.titan]
 min-blob-size = "2018B"
@@ -392,6 +397,8 @@ compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
+ttl = "10d"
+periodic-compaction-seconds = "10d"
 
 [rocksdb.lockcf]
 block-size = "12KB"
@@ -441,6 +448,8 @@ compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
+ttl = "10d"
+periodic-compaction-seconds = "10d"
 
 [rocksdb.raftcf]
 block-size = "12KB"
@@ -490,6 +499,8 @@ compaction-guard-max-output-file-size = "34MB"
 prepopulate-block-cache = "flush-only"
 format-version = 5
 checksum = "xxh3"
+ttl = "10d"
+periodic-compaction-seconds = "10d"
 
 [raftdb]
 wal-recovery-mode = "skip-any-corrupted-records"
@@ -625,6 +636,16 @@ batch-size = 7
 s3-multi-part-size = "15MB"
 sst-max-size = "789MB"
 
+[log-backup]
+min-ts-interval = "2s"
+max-flush-interval = "11s"
+num-threads = 7
+enable = true
+temp-path = "./stream"
+file-size-limit = "5GiB"
+initial-scan-pending-memory-quota = "2KiB"
+initial-scan-rate-limit = "3MiB"
+
 [backup.hadoop]
 home = "/root/hadoop"
 linux-user = "hadoop"
@@ -640,6 +661,7 @@ batch-keys = 256
 max-write-bytes-per-sec = "10MB"
 enable-compaction-filter = false
 compaction-filter-skip-version-check = true
+num-threads = 2
 
 [pessimistic-txn]
 enabled = false # test backward compatibility
@@ -655,6 +677,7 @@ hibernate-regions-compatible = false
 incremental-scan-threads = 3
 incremental-scan-concurrency = 4
 incremental-scan-speed-limit = 7
+incremental-fetch-speed-limit = 8
 incremental-scan-ts-filter-ratio = 0.7
 tso-worker-threads = 2
 old-value-cache-memory-quota = "14MB"
@@ -664,6 +687,8 @@ sink-memory-quota = "7MB"
 enable = true
 advance-ts-interval = "5s"
 scan-lock-pool-size = 1
+memory-quota = "1MB"
+incremental-scan-concurrency = 7
 
 [split]
 detect-times = 10

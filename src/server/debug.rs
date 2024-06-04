@@ -8,6 +8,7 @@ use std::{
     thread::{Builder as ThreadBuilder, JoinHandle},
 };
 
+use api_version::KvFormat;
 use collections::HashSet;
 use engine_rocks::{
     raw::{CompactOptions, DBBottommostLevelCompaction},
@@ -19,8 +20,10 @@ use engine_traits::{
     RaftEngine, Range, RangePropertiesExt, SyncMutable, WriteBatch, WriteBatchExt, WriteOptions,
     CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE,
 };
+use futures::future::Future;
 use kvproto::{
     debugpb::{self, Db as DbType},
+    kvrpcpb::{self, Context},
     metapb::{PeerRole, Region},
     raft_serverpb::*,
 };
@@ -31,17 +34,23 @@ use raftstore::{
     store::{write_initial_apply_state, write_initial_raft_state, write_peer_state, PeerStorage},
 };
 use thiserror::Error;
+use tikv_kv::Engine;
 use tikv_util::{
     config::ReadableSize, keybuilder::KeyBuilder, store::find_peer,
     sys::thread::StdThreadBuildWrapper, worker::Worker,
 };
 use txn_types::Key;
 
+use super::service::{future_flashback_to_version, future_prepare_flashback_to_version};
 pub use crate::storage::mvcc::MvccInfoIterator;
 use crate::{
     config::ConfigController,
     server::reset_to_version::ResetToVersionManager,
-    storage::mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType},
+    storage::{
+        lock_manager::LockManager,
+        mvcc::{Lock, LockType, TimeStamp, Write, WriteRef, WriteType},
+        Storage,
+    },
 };
 
 pub type Result<T> = result::Result<T, Error>;
@@ -56,6 +65,9 @@ pub enum Error {
 
     #[error("{0:?}")]
     Other(#[from] Box<dyn StdError + Sync + Send>),
+
+    #[error("Flashback Failed {0:?}")]
+    FlashbackFailed(String),
 }
 
 /// Describes the meta information of a Region.
@@ -125,13 +137,26 @@ trait InnerRocksEngineExtractor {
 }
 
 #[derive(Clone)]
-pub struct Debugger<ER: RaftEngine> {
+pub struct Debugger<ER, E, L, K>
+where
+    ER: RaftEngine,
+    E: Engine,
+    L: LockManager,
+    K: KvFormat,
+{
     engines: Engines<RocksEngine, ER>,
     reset_to_version_manager: ResetToVersionManager,
     cfg_controller: ConfigController,
+    storage: Option<Storage<E, L, K>>,
 }
 
-impl<ER: RaftEngine> InnerRocksEngineExtractor for Debugger<ER> {
+impl<ER, E, L, K> InnerRocksEngineExtractor for Debugger<ER, E, L, K>
+where
+    ER: RaftEngine,
+    E: Engine,
+    L: LockManager,
+    K: KvFormat,
+{
     default fn get_db_from_type(&self, db: DbType) -> Result<&RocksEngine> {
         match db {
             DbType::Kv => Ok(&self.engines.kv),
@@ -141,7 +166,12 @@ impl<ER: RaftEngine> InnerRocksEngineExtractor for Debugger<ER> {
     }
 }
 
-impl InnerRocksEngineExtractor for Debugger<RocksEngine> {
+impl<E, L, K> InnerRocksEngineExtractor for Debugger<RocksEngine, E, L, K>
+where
+    E: Engine,
+    L: LockManager,
+    K: KvFormat,
+{
     fn get_db_from_type(&self, db: DbType) -> Result<&RocksEngine> {
         match db {
             DbType::Kv => Ok(&self.engines.kv),
@@ -151,16 +181,24 @@ impl InnerRocksEngineExtractor for Debugger<RocksEngine> {
     }
 }
 
-impl<ER: RaftEngine> Debugger<ER> {
+impl<ER, E, L, K> Debugger<ER, E, L, K>
+where
+    ER: RaftEngine,
+    E: Engine,
+    L: LockManager,
+    K: KvFormat,
+{
     pub fn new(
         engines: Engines<RocksEngine, ER>,
         cfg_controller: ConfigController,
-    ) -> Debugger<ER> {
+        storage: Option<Storage<E, L, K>>,
+    ) -> Debugger<ER, E, L, K> {
         let reset_to_version_manager = ResetToVersionManager::new(engines.kv.clone());
         Debugger {
             engines,
             reset_to_version_manager,
             cfg_controller,
+            storage,
         }
     }
 
@@ -908,6 +946,109 @@ impl<ER: RaftEngine> Debugger<ER> {
     pub fn reset_to_version(&self, version: u64) {
         self.reset_to_version_manager.start(version.into());
     }
+
+    pub fn key_range_flashback_to_version(
+        &self,
+        version: u64,
+        region_id: u64,
+        start_key: &[u8],
+        end_key: &[u8],
+        start_ts: u64,
+        commit_ts: u64,
+    ) -> impl Future<Output = Result<()>> + Send {
+        let store_id = self.get_store_ident().unwrap().get_store_id();
+        let r = self.region_info(region_id).unwrap();
+        let region = r
+            .region_local_state
+            .as_ref()
+            .map(|s| s.get_region().clone())
+            .unwrap();
+
+        async_key_range_flashback_to_version(
+            self.storage.as_ref().unwrap().clone(),
+            region,
+            version,
+            store_id,
+            start_key.to_vec(),
+            end_key.to_vec(),
+            start_ts,
+            commit_ts,
+        )
+    }
+}
+
+async fn async_key_range_flashback_to_version<E: Engine, L: LockManager, F: KvFormat>(
+    storage: Storage<E, L, F>,
+    region: Region,
+    version: u64,
+    store_id: u64,
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
+    start_ts: u64,
+    commit_ts: u64,
+) -> Result<()> {
+    let is_in_flashback = region.get_is_in_flashback();
+    let in_prepare_state = TimeStamp::from(commit_ts).is_zero();
+    if in_prepare_state && is_in_flashback {
+        return Ok(());
+    } else if !in_prepare_state && !is_in_flashback {
+        return Err(Error::FlashbackFailed("not in flashback state".into()));
+    }
+
+    let mut ctx = Context::default();
+    ctx.set_region_id(region.get_id());
+    ctx.set_region_epoch(region.get_region_epoch().to_owned());
+    let peer = find_peer(&region, store_id).unwrap();
+    ctx.set_peer(peer.clone());
+
+    // Flashback will encode the key, so we need to use raw key.
+    let start_key = Key::from_encoded_slice(&start_key)
+        .to_raw()
+        .unwrap_or_default();
+    let end_key = Key::from_encoded_slice(&end_key)
+        .to_raw()
+        .unwrap_or_default();
+
+    // Means now is prepare flashback.
+    if in_prepare_state {
+        let mut req = kvrpcpb::PrepareFlashbackToVersionRequest::new();
+        req.set_version(version);
+        req.set_start_key(start_key.clone());
+        req.set_end_key(end_key.clone());
+        req.set_context(ctx.clone());
+        req.set_start_ts(start_ts);
+
+        let resp = future_prepare_flashback_to_version(storage, req)
+            .await
+            .unwrap();
+        if !resp.get_error().is_empty() || resp.has_region_error() {
+            error!("exec prepare flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
+            return Err(Error::FlashbackFailed(format!(
+                "exec prepare flashback failed: resp err is: {:?}, region err is: {:?}",
+                resp.get_error(),
+                resp.get_region_error()
+            )));
+        }
+    } else {
+        let mut req = kvrpcpb::FlashbackToVersionRequest::new();
+        req.set_version(version);
+        req.set_start_key(start_key.clone());
+        req.set_end_key(end_key.clone());
+        req.set_context(ctx.clone());
+        req.set_start_ts(start_ts);
+        req.set_commit_ts(commit_ts);
+
+        let resp = future_flashback_to_version(storage, req).await.unwrap();
+        if !resp.get_error().is_empty() || resp.has_region_error() {
+            error!("exec finish flashback failed"; "err" => ?resp.get_error(), "region_err" => ?resp.get_region_error());
+            return Err(Error::FlashbackFailed(format!(
+                "exec finish flashback failed: resp err is: {:?}, region err is: {:?}",
+                resp.get_error(),
+                resp.get_region_error()
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn dump_default_cf_properties(
@@ -1396,6 +1537,7 @@ fn divide_db(db: &RocksEngine, parts: usize) -> raftstore::Result<Vec<Vec<u8>>> 
 
 #[cfg(test)]
 mod tests {
+    use api_version::ApiV1;
     use engine_rocks::{util::new_engine_opt, RocksCfOptions, RocksDbOptions, RocksEngine};
     use engine_traits::{Mutable, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
     use kvproto::{
@@ -1404,9 +1546,13 @@ mod tests {
     };
     use raft::eraftpb::EntryType;
     use tempfile::Builder;
+    use tikv_kv::MockEngine;
 
     use super::*;
-    use crate::storage::mvcc::{Lock, LockType};
+    use crate::storage::{
+        lock_manager::MockLockManager,
+        mvcc::{Lock, LockType},
+    };
 
     fn init_region_state(
         engine: &RocksEngine,
@@ -1531,16 +1677,21 @@ mod tests {
         }
     }
 
-    fn new_debugger() -> Debugger<RocksEngine> {
+    fn new_debugger() -> Debugger<RocksEngine, MockEngine, MockLockManager, ApiV1> {
         let tmp = Builder::new().prefix("test_debug").tempdir().unwrap();
         let path = tmp.path().to_str().unwrap();
         let engine = engine_rocks::util::new_engine(path, ALL_CFS).unwrap();
 
         let engines = Engines::new(engine.clone(), engine);
-        Debugger::new(engines, ConfigController::default())
+        Debugger::new(engines, ConfigController::default(), None)
     }
 
-    impl Debugger<RocksEngine> {
+    impl<E, L, K> Debugger<RocksEngine, E, L, K>
+    where
+        E: Engine,
+        L: LockManager,
+        K: KvFormat,
+    {
         fn set_store_id(&self, store_id: u64) {
             let mut ident = self.get_store_ident().unwrap_or_default();
             ident.set_store_id(store_id);

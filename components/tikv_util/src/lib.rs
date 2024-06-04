@@ -4,6 +4,7 @@
 #![feature(thread_id_value)]
 #![feature(box_patterns)]
 #![feature(vec_into_raw_parts)]
+#![feature(let_chains)]
 
 #[cfg(test)]
 extern crate test;
@@ -342,6 +343,19 @@ impl<L, R> Either<L, R> {
             Either::Right(r) => Some(r),
             _ => None,
         }
+    }
+
+    #[inline]
+    pub fn is_left(&self) -> bool {
+        match *self {
+            Either::Left(_) => true,
+            Either::Right(_) => false,
+        }
+    }
+
+    #[inline]
+    pub fn is_right(&self) -> bool {
+        !self.is_left()
     }
 }
 

@@ -1,5 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::time::Duration;
+
 use futures::{executor::block_on, stream::StreamExt};
 use kvproto::{import_sstpb::*, kvrpcpb::Context, tikvpb::*};
 use pd_client::PdClient;
@@ -386,4 +388,110 @@ fn test_duplicate_and_close() {
     assert_eq!(ret.len(), (data_count - 1000) as usize * 4);
     req.set_mode(SwitchMode::Normal);
     import.switch_mode(&req).unwrap();
+}
+
+#[test]
+fn test_suspend_import() {
+    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+    let sst_range = (0, 10);
+    let write = |sst_range: (u8, u8)| {
+        let mut meta = new_sst_meta(0, 0);
+        meta.set_region_id(ctx.get_region_id());
+        meta.set_region_epoch(ctx.get_region_epoch().clone());
+
+        let mut keys = vec![];
+        let mut values = vec![];
+        for i in sst_range.0..sst_range.1 {
+            keys.push(vec![i]);
+            values.push(vec![i]);
+        }
+        send_write_sst(&import, &meta, keys, values, 1)
+    };
+    let ingest = |sst_meta: &SstMeta| {
+        let mut ingest = IngestRequest::default();
+        ingest.set_context(ctx.clone());
+        ingest.set_sst(sst_meta.clone());
+        import.ingest(&ingest)
+    };
+    let multi_ingest = |sst_metas: &[SstMeta]| {
+        let mut multi_ingest = MultiIngestRequest::default();
+        multi_ingest.set_context(ctx.clone());
+        multi_ingest.set_ssts(sst_metas.to_vec().into());
+        import.multi_ingest(&multi_ingest)
+    };
+    let suspendctl = |for_time| {
+        let mut req = SuspendImportRpcRequest::default();
+        req.set_caller("test_suspend_import".to_owned());
+        if for_time == 0 {
+            req.set_should_suspend_imports(false);
+        } else {
+            req.set_should_suspend_imports(true);
+            req.set_duration_in_secs(for_time);
+        }
+        req
+    };
+
+    let write_res = write(sst_range).unwrap();
+    assert_eq!(write_res.metas.len(), 1);
+    let sst = write_res.metas[0].clone();
+
+    assert!(
+        !import
+            .suspend_import_rpc(&suspendctl(6000))
+            .unwrap()
+            .already_suspended
+    );
+    let write_res = write(sst_range);
+    write_res.unwrap();
+    let ingest_res = ingest(&sst).unwrap();
+    assert!(
+        ingest_res.get_error().has_server_is_busy(),
+        "{:?}",
+        ingest_res
+    );
+    let multi_ingest_res = multi_ingest(&[sst.clone()]).unwrap();
+    assert!(
+        multi_ingest_res.get_error().has_server_is_busy(),
+        "{:?}",
+        multi_ingest_res
+    );
+
+    assert!(
+        import
+            .suspend_import_rpc(&suspendctl(0))
+            .unwrap()
+            .already_suspended
+    );
+
+    let ingest_res = ingest(&sst);
+    assert!(ingest_res.is_ok(), "{:?} => {:?}", sst, ingest_res);
+
+    check_ingested_txn_kvs(&tikv, &ctx, sst_range, 2);
+
+    // test timeout.
+    assert!(
+        !import
+            .suspend_import_rpc(&suspendctl(1))
+            .unwrap()
+            .already_suspended
+    );
+    let sst_range = (10, 20);
+    let write_res = write(sst_range);
+    let sst = write_res.unwrap().metas;
+    let res = multi_ingest(&sst);
+    assert!(
+        res.as_ref().unwrap().get_error().has_server_is_busy(),
+        "{:?}",
+        res
+    );
+    std::thread::sleep(Duration::from_secs(1));
+    multi_ingest(&sst).unwrap();
+
+    // check an insane value should be rejected.
+    import
+        .suspend_import_rpc(&suspendctl(u64::MAX - 42))
+        .unwrap_err();
+    let sst_range = (20, 30);
+    let ssts = write(sst_range).unwrap();
+    multi_ingest(ssts.get_metas()).unwrap();
 }

@@ -409,6 +409,7 @@ impl Lock {
         key: &Key,
         ts: TimeStamp,
         bypass_locks: &TsSet,
+        is_replica_read: bool,
     ) -> Result<()> {
         if lock.ts > ts
             || lock.lock_type == LockType::Lock
@@ -428,6 +429,14 @@ impl Lock {
         }
 
         let raw_key = key.to_raw()?;
+
+        // Disable replica read for autocommit max ts read, to avoid breaking
+        // linearizability. See https://github.com/pingcap/tidb/issues/43583 for details.
+        if ts == TimeStamp::max() && is_replica_read {
+            return Err(Error::from(ErrorInner::KeyIsLocked(
+                lock.into_owned().into_lock_info(raw_key),
+            )));
+        }
 
         if ts == TimeStamp::max() && raw_key == lock.primary && !lock.use_async_commit {
             // When `ts == TimeStamp::max()` (which means to get latest committed version
@@ -478,9 +487,25 @@ impl Lock {
         iso_level: IsolationLevel,
     ) -> Result<()> {
         match iso_level {
-            IsolationLevel::Si => Lock::check_ts_conflict_si(lock, key, ts, bypass_locks),
+            IsolationLevel::Si => Lock::check_ts_conflict_si(lock, key, ts, bypass_locks, false),
             IsolationLevel::RcCheckTs => {
                 Lock::check_ts_conflict_rc_check_ts(lock, key, ts, bypass_locks)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    pub fn check_ts_conflict_for_replica_read(
+        lock: Cow<'_, Self>,
+        key: &Key,
+        ts: TimeStamp,
+        bypass_locks: &TsSet,
+        iso_level: IsolationLevel,
+    ) -> Result<()> {
+        match iso_level {
+            IsolationLevel::Si => Lock::check_ts_conflict_si(lock, key, ts, bypass_locks, true),
+            IsolationLevel::RcCheckTs => {
+                unreachable!()
             }
             _ => Ok(()),
         }

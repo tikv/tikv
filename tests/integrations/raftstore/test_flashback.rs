@@ -11,12 +11,72 @@ use kvproto::{
     metapb,
     raft_cmdpb::{AdminCmdType, CmdType, RaftCmdResponse, Request},
 };
-use raftstore::store::Callback;
+use raftstore::store::{Callback, LocksStatus};
 use test_raftstore::*;
-use txn_types::WriteBatchFlags;
+use tikv::storage::kv::SnapContext;
+use txn_types::{Key, PessimisticLock, WriteBatchFlags};
 
 const TEST_KEY: &[u8] = b"k1";
 const TEST_VALUE: &[u8] = b"v1";
+
+#[test]
+fn test_flashback_with_in_memory_pessimistic_locks() {
+    let mut cluster = new_server_cluster(0, 3);
+    cluster.cfg.raft_store.raft_heartbeat_ticks = 20;
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+
+    let region = cluster.get_region(TEST_KEY);
+    // Write a pessimistic lock to the in-memory pessimistic lock table.
+    {
+        let snapshot = cluster.must_get_snapshot_of_region(region.get_id());
+        let txn_ext = snapshot.txn_ext.unwrap();
+        let mut pessimistic_locks = txn_ext.pessimistic_locks.write();
+        assert!(pessimistic_locks.is_writable());
+        pessimistic_locks
+            .insert(vec![(
+                Key::from_raw(TEST_KEY),
+                PessimisticLock {
+                    primary: TEST_KEY.to_vec().into_boxed_slice(),
+                    start_ts: 10.into(),
+                    ttl: 3000,
+                    for_update_ts: 20.into(),
+                    min_commit_ts: 30.into(),
+                    last_change_ts: 5.into(),
+                    versions_to_last_change: 3,
+                },
+            )])
+            .unwrap();
+        assert_eq!(pessimistic_locks.len(), 1);
+    }
+    // Prepare flashback.
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::PrepareFlashback);
+    // Check the in-memory pessimistic lock table.
+    {
+        let snapshot = cluster.must_get_snapshot_of_region_with_ctx(
+            region.get_id(),
+            SnapContext {
+                allowed_in_flashback: true,
+                ..Default::default()
+            },
+        );
+        let txn_ext = snapshot.txn_ext.unwrap();
+        let pessimistic_locks = txn_ext.pessimistic_locks.read();
+        assert!(!pessimistic_locks.is_writable());
+        assert_eq!(pessimistic_locks.status, LocksStatus::IsInFlashback);
+        assert_eq!(pessimistic_locks.len(), 0);
+    }
+    // Finish flashback.
+    cluster.must_send_wait_flashback_msg(region.get_id(), AdminCmdType::FinishFlashback);
+    // Check the in-memory pessimistic lock table.
+    {
+        let snapshot = cluster.must_get_snapshot_of_region(region.get_id());
+        let txn_ext = snapshot.txn_ext.unwrap();
+        let pessimistic_locks = txn_ext.pessimistic_locks.read();
+        assert!(pessimistic_locks.is_writable());
+        assert_eq!(pessimistic_locks.len(), 0);
+    }
+}
 
 #[test]
 fn test_allow_read_only_request() {

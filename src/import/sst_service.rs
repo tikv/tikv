@@ -4,7 +4,10 @@ use std::{
     collections::{HashMap, VecDeque},
     future::Future,
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -21,7 +24,8 @@ use kvproto::{
     errorpb,
     import_sstpb::{
         Error as ImportPbError, ImportSst, Range, RawWriteRequest_oneof_chunk as RawChunk, SstMeta,
-        SwitchMode, WriteRequest_oneof_chunk as Chunk, *,
+        SuspendImportRpcRequest, SuspendImportRpcResponse, SwitchMode,
+        WriteRequest_oneof_chunk as Chunk, *,
     },
     kvrpcpb::Context,
     raft_cmdpb::{CmdType, DeleteRequest, PutRequest, RaftCmdRequest, RaftRequestHeader, Request},
@@ -42,12 +46,18 @@ use tikv_util::{
     time::{Instant, Limiter},
 };
 use tokio::{runtime::Runtime, time::sleep};
-use txn_types::{Key, WriteRef, WriteType};
+use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 
 use super::make_rpc_error;
-use crate::{import::duplicate_detect::DuplicateDetector, server::CONFIG_ROCKSDB_GAUGE};
+use crate::{
+    import::duplicate_detect::DuplicateDetector, send_rpc_response, server::CONFIG_ROCKSDB_GAUGE,
+};
 
 const MAX_INFLIGHT_RAFT_MSGS: usize = 64;
+/// The max time of suspending requests.
+/// This may save us from some client sending insane value to the server.
+const SUSPEND_REQUEST_MAX_SECS: u64 = // 6h
+    6 * 60 * 60;
 
 /// When encoded into the wire format, every message would be add a 2 bytes
 /// header. We add the header size to it so we won't make the request exceed the
@@ -77,6 +87,8 @@ where
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
     raft_entry_max_size: ReadableSize,
+    // When less than now, don't accept any requests.
+    suspend_req_until: Arc<AtomicU64>,
 }
 
 pub struct SnapshotResult<E: KvEngine> {
@@ -128,6 +140,9 @@ impl RequestCollector {
     }
 
     fn accept_kv(&mut self, cf: &str, is_delete: bool, k: Vec<u8>, v: Vec<u8>) {
+        debug!("Accepting KV."; "cf" => %cf, 
+            "key" => %log_wrappers::Value::key(&k), 
+            "value" => %log_wrappers::Value::key(&v));
         // Need to skip the empty key/value that could break the transaction or cause
         // data corruption. see details at https://github.com/pingcap/tiflow/issues/5468.
         if k.is_empty() || (!is_delete && v.is_empty()) {
@@ -314,6 +329,7 @@ where
             limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
             raft_entry_max_size,
+            suspend_req_until: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -521,7 +537,6 @@ where
         while let Some((meta, rule)) = tasks.next() {
             let buff = importer.read_from_kv_file(
                 meta,
-                rule,
                 ext_storage.clone(),
                 req.get_storage_backend(),
                 &limiter,
@@ -532,6 +547,7 @@ where
                 meta.get_start_ts(),
                 meta.get_restore_ts(),
                 buff,
+                rule,
                 |k, v| collector.accept_kv(meta.get_cf(), meta.get_is_delete(), k, v),
             )? {
                 if let Some(range) = range.as_mut() {
@@ -565,6 +581,47 @@ where
         }
 
         Ok(range)
+    }
+
+    /// Check whether we should suspend the current request.
+    fn check_suspend(&self) -> Result<()> {
+        let now = TimeStamp::physical_now();
+        let suspend_until = self.suspend_req_until.load(Ordering::SeqCst);
+        if now < suspend_until {
+            Err(Error::Suspended {
+                time_to_lease_expire: Duration::from_millis(suspend_until - now),
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    /// suspend requests for a period.
+    ///
+    /// # returns
+    ///
+    /// whether for now, the requests has already been suspended.
+    pub fn suspend_requests(&self, for_time: Duration) -> bool {
+        let now = TimeStamp::physical_now();
+        let last_suspend_until = self.suspend_req_until.load(Ordering::SeqCst);
+        let suspended = now < last_suspend_until;
+        let suspend_until = TimeStamp::physical_now() + for_time.as_millis() as u64;
+        self.suspend_req_until
+            .store(suspend_until, Ordering::SeqCst);
+        suspended
+    }
+
+    /// allow all requests to enter.
+    ///
+    /// # returns
+    ///
+    /// whether requests has already been previously suspended.
+    pub fn allow_requests(&self) -> bool {
+        let now = TimeStamp::physical_now();
+        let last_suspend_until = self.suspend_req_until.load(Ordering::SeqCst);
+        let suspended = now < last_suspend_until;
+        self.suspend_req_until.store(0, Ordering::SeqCst);
+        suspended
     }
 }
 
@@ -842,6 +899,13 @@ where
     ) {
         let label = "ingest";
         let timer = Instant::now_coarse();
+        let mut resp = IngestResponse::default();
+
+        if let Err(err) = self.check_suspend() {
+            resp.set_error(ImportPbError::from(err).take_store_error());
+            ctx.spawn(async move { crate::send_rpc_response!(Ok(resp), sink, label, timer) });
+            return;
+        }
 
         let mut resp = IngestResponse::default();
         if let Some(errorpb) = self.check_write_stall() {
@@ -884,6 +948,12 @@ where
     ) {
         let label = "multi-ingest";
         let timer = Instant::now_coarse();
+        let mut resp = IngestResponse::default();
+        if let Err(err) = self.check_suspend() {
+            resp.set_error(ImportPbError::from(err).take_store_error());
+            ctx.spawn(async move { crate::send_rpc_response!(Ok(resp), sink, label, timer) });
+            return;
+        }
 
         let mut resp = IngestResponse::default();
         if let Some(errorpb) = self.check_write_stall() {
@@ -1079,6 +1149,37 @@ where
         RawChunk,
         new_raw_writer
     );
+
+    fn suspend_import_rpc(
+        &mut self,
+        ctx: RpcContext<'_>,
+        req: SuspendImportRpcRequest,
+        sink: UnarySink<SuspendImportRpcResponse>,
+    ) {
+        let label = "suspend_import_rpc";
+        let timer = Instant::now_coarse();
+
+        if req.should_suspend_imports && req.get_duration_in_secs() > SUSPEND_REQUEST_MAX_SECS {
+            ctx.spawn(async move {
+                send_rpc_response!(Err(Error::Io(
+                    std::io::Error::new(std::io::ErrorKind::InvalidInput,
+                        format!("you are going to suspend the import RPCs too long. (for {} seconds, max acceptable duration is {} seconds)", 
+                        req.get_duration_in_secs(), SUSPEND_REQUEST_MAX_SECS)))), sink, label, timer);
+            });
+            return;
+        }
+
+        let suspended = if req.should_suspend_imports {
+            info!("suspend incoming import RPCs."; "for_second" => req.get_duration_in_secs(), "caller" => req.get_caller());
+            self.suspend_requests(Duration::from_secs(req.get_duration_in_secs()))
+        } else {
+            info!("allow incoming import RPCs."; "caller" => req.get_caller());
+            self.allow_requests()
+        };
+        let mut resp = SuspendImportRpcResponse::default();
+        resp.set_already_suspended(suspended);
+        ctx.spawn(async move { send_rpc_response!(Ok(resp), sink, label, timer) });
+    }
 }
 
 // add error statistics from pb error response

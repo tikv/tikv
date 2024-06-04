@@ -194,6 +194,8 @@ fn test_serde_custom_tikv_config() {
         region_compact_check_step: 1_234,
         region_compact_min_tombstones: 999,
         region_compact_tombstones_percent: 33,
+        region_compact_min_redundant_rows: 999,
+        region_compact_redundant_rows_percent: 33,
         pd_heartbeat_tick_interval: ReadableDuration::minutes(12),
         pd_store_heartbeat_tick_interval: ReadableDuration::secs(12),
         notify_capacity: 12_345,
@@ -206,6 +208,7 @@ fn test_serde_custom_tikv_config() {
         peer_stale_state_check_interval: ReadableDuration::hours(2),
         leader_transfer_max_log_lag: 123,
         snap_apply_batch_size: ReadableSize::mb(12),
+        snap_apply_copy_symlink: true,
         region_worker_tick_interval: ReadableDuration::millis(1000),
         clean_stale_ranges_tick: 10,
         lock_cf_compact_interval: ReadableDuration::minutes(12),
@@ -213,6 +216,7 @@ fn test_serde_custom_tikv_config() {
         consistency_check_interval: ReadableDuration::secs(12),
         report_region_flow_interval: ReadableDuration::minutes(12),
         raft_store_max_leader_lease: ReadableDuration::secs(12),
+        allow_unsafe_vote_after_start: false,
         right_derive_when_split: false,
         allow_remove_leader: true,
         merge_max_log_gap: 3,
@@ -254,6 +258,7 @@ fn test_serde_custom_tikv_config() {
         max_snapshot_file_raw_size: ReadableSize::gb(10),
         unreachable_backoff: ReadableDuration::secs(111),
         check_peers_availability_interval: ReadableDuration::secs(30),
+        unsafe_disable_check_quorum: false,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
@@ -310,6 +315,7 @@ fn test_serde_custom_tikv_config() {
         enable_pipelined_write: false,
         enable_multi_batch_write: true,
         enable_unordered_write: true,
+        track_and_verify_wals_in_manifest: false,
         defaultcf: DefaultCfConfig {
             block_size: ReadableSize::kb(12),
             block_cache_size: ReadableSize::gb(12),
@@ -363,6 +369,8 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            ttl: Some(ReadableDuration::days(10)),
+            periodic_compaction_seconds: Some(ReadableDuration::days(10)),
         },
         writecf: WriteCfConfig {
             block_size: ReadableSize::kb(12),
@@ -431,6 +439,8 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            ttl: Some(ReadableDuration::days(10)),
+            periodic_compaction_seconds: Some(ReadableDuration::days(10)),
         },
         lockcf: LockCfConfig {
             block_size: ReadableSize::kb(12),
@@ -499,6 +509,8 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            ttl: Some(ReadableDuration::days(10)),
+            periodic_compaction_seconds: Some(ReadableDuration::days(10)),
         },
         raftcf: RaftCfConfig {
             block_size: ReadableSize::kb(12),
@@ -567,6 +579,8 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            ttl: Some(ReadableDuration::days(10)),
+            periodic_compaction_seconds: Some(ReadableDuration::days(10)),
         },
         titan: titan_db_config.clone(),
     };
@@ -650,6 +664,8 @@ fn test_serde_custom_tikv_config() {
             prepopulate_block_cache: PrepopulateBlockCache::FlushOnly,
             format_version: 5,
             checksum: ChecksumType::XXH3,
+            ttl: None,
+            periodic_compaction_seconds: None,
         },
         titan: titan_db_config,
     };
@@ -758,7 +774,14 @@ fn test_serde_custom_tikv_config() {
         ..Default::default()
     };
     value.backup_stream = BackupStreamConfig {
-        num_threads: 12,
+        max_flush_interval: ReadableDuration::secs(11),
+        num_threads: 7,
+        enable: true,
+        temp_path: "./stream".to_string(),
+        file_size_limit: ReadableSize::gb(5),
+        initial_scan_pending_memory_quota: ReadableSize::kb(2),
+        initial_scan_rate_limit: ReadableSize::mb(3),
+        min_ts_interval: ReadableDuration::secs(2),
         ..Default::default()
     };
     value.import = ImportConfig {
@@ -774,6 +797,7 @@ fn test_serde_custom_tikv_config() {
         max_write_bytes_per_sec: ReadableSize::mb(10),
         enable_compaction_filter: false,
         compaction_filter_skip_version_check: true,
+        num_threads: 2,
     };
     value.pessimistic_txn = PessimisticTxnConfig {
         wait_for_lock_timeout: ReadableDuration::millis(10),
@@ -788,6 +812,7 @@ fn test_serde_custom_tikv_config() {
         incremental_scan_threads: 3,
         incremental_scan_concurrency: 4,
         incremental_scan_speed_limit: ReadableSize(7),
+        incremental_fetch_speed_limit: ReadableSize(8),
         incremental_scan_ts_filter_ratio: 0.7,
         tso_worker_threads: 2,
         old_value_cache_memory_quota: ReadableSize::mb(14),
@@ -797,6 +822,8 @@ fn test_serde_custom_tikv_config() {
         enable: true,
         advance_ts_interval: ReadableDuration::secs(5),
         scan_lock_pool_size: 1,
+        memory_quota: ReadableSize::mb(1),
+        incremental_scan_concurrency: 7,
     };
     value.causal_ts = CausalTsConfig {
         renew_interval: ReadableDuration::millis(100),

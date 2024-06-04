@@ -55,7 +55,7 @@ thiserror = "1.0"
 tikv_alloc = { workspace = true }
 time = "0.1"
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
-tokio-executor = "0.1"
+tokio-executor = { workspace = true }
 tokio-timer = { workspace = true }
 tracker = { workspace = true }
 url = "2"

@@ -80,7 +80,7 @@ fn test_tombstone<T: Simulator>(cluster: &mut Cluster<T>) {
 
     raft_msg.set_region_id(r1);
     // Use an invalid from peer to ignore gc peer message.
-    raft_msg.set_from_peer(new_peer(0, 0));
+    raft_msg.set_from_peer(new_peer(100, 100));
     raft_msg.set_to_peer(new_peer(2, 2));
     raft_msg.mut_region_epoch().set_conf_ver(0);
     raft_msg.mut_region_epoch().set_version(0);

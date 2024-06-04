@@ -207,5 +207,6 @@ fn main() {
         process::exit(0);
     }
 
-    server::server::run_tikv(config);
+    let (service_event_tx, service_event_rx) = tikv_util::mpsc::unbounded(); // pipe for controling service
+    server::server::run_tikv(config, service_event_tx, service_event_rx);
 }

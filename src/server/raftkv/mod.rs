@@ -44,8 +44,8 @@ use raftstore::{
     errors::Error as RaftServerError,
     router::{LocalReadRouter, RaftStoreRouter},
     store::{
-        self, Callback as StoreCallback, RaftCmdExtraOpts, ReadIndexContext, ReadResponse,
-        RegionSnapshot, StoreMsg, WriteResponse,
+        self, Callback as StoreCallback, RaftCmdExtraOpts, ReadCallback, ReadIndexContext,
+        ReadResponse, RegionSnapshot, StoreMsg, WriteResponse,
     },
 };
 use thiserror::Error;
@@ -55,6 +55,7 @@ use tikv_util::{
     future::{paired_future_callback, paired_must_called_future_callback},
     time::Instant,
 };
+use tracker::GLOBAL_TRACKERS;
 use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 
 use super::metrics::*;
@@ -542,7 +543,7 @@ where
                 .set_key_ranges(mem::take(&mut ctx.key_ranges).into());
         }
         ASYNC_REQUESTS_COUNTER_VEC.snapshot.all.inc();
-        let begin_instant = Instant::now_coarse();
+        let begin_instant = Instant::now();
         let (cb, f) = paired_must_called_future_callback(drop_snapshot_callback);
 
         let mut header = new_request_header(ctx.pb_ctx);
@@ -563,23 +564,24 @@ where
         let mut cmd = RaftCmdRequest::default();
         cmd.set_header(header);
         cmd.set_requests(vec![req].into());
+        let store_cb = StoreCallback::read(Box::new(move |resp| {
+            cb(on_read_result(resp).map_err(Error::into));
+        }));
+        let tracker = *store_cb.read_tracker().unwrap();
+
         if res.is_ok() {
             res = self
                 .router
-                .read(
-                    ctx.read_id,
-                    cmd,
-                    StoreCallback::read(Box::new(move |resp| {
-                        cb(on_read_result(resp).map_err(Error::into));
-                    })),
-                )
+                .read(ctx.read_id, cmd, store_cb)
                 .map_err(kv::Error::from);
         }
         async move {
-            // It's impossible to return cancel because the callback will be invoked if it's
-            // destroyed.
             let res = match res {
-                Ok(()) => f.await.unwrap(),
+                Ok(()) => match f.await {
+                    Ok(r) => r,
+                    // Canceled may be returned during shutdown.
+                    Err(e) => Err(kv::Error::from(kv::ErrorInner::Other(box_err!(e)))),
+                },
                 Err(e) => Err(e),
             };
             match res {
@@ -597,9 +599,31 @@ where
                     Err(e)
                 }
                 Ok(CmdRes::Snap(s)) => {
-                    ASYNC_REQUESTS_DURATIONS_VEC
-                        .snapshot
-                        .observe(begin_instant.saturating_elapsed_secs());
+                    let elapse = begin_instant.saturating_elapsed_secs();
+                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                        if tracker.metrics.read_index_propose_wait_nanos > 0 {
+                            ASYNC_REQUESTS_DURATIONS_VEC
+                                .snapshot_read_index_propose_wait
+                                .observe(
+                                    tracker.metrics.read_index_propose_wait_nanos as f64
+                                        / 1_000_000_000.0,
+                                );
+                            // snapshot may be hanlded by lease read in raftstore
+                            if tracker.metrics.read_index_confirm_wait_nanos > 0 {
+                                ASYNC_REQUESTS_DURATIONS_VEC
+                                    .snapshot_read_index_confirm
+                                    .observe(
+                                        tracker.metrics.read_index_confirm_wait_nanos as f64
+                                            / 1_000_000_000.0,
+                                    );
+                            }
+                        } else if tracker.metrics.local_read {
+                            ASYNC_REQUESTS_DURATIONS_VEC
+                                .snapshot_local_read
+                                .observe(elapse);
+                        }
+                    });
+                    ASYNC_REQUESTS_DURATIONS_VEC.snapshot.observe(elapse);
                     ASYNC_REQUESTS_COUNTER_VEC.snapshot.success.inc();
                     Ok(s)
                 }
@@ -717,7 +741,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                     start_key.as_ref(),
                     end_key.as_ref(),
                     |key, lock| {
-                        txn_types::Lock::check_ts_conflict(
+                        txn_types::Lock::check_ts_conflict_for_replica_read(
                             Cow::Borrowed(lock),
                             key,
                             start_ts,

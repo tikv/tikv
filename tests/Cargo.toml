@@ -55,10 +55,10 @@ test-engine-raft-raft-engine = [
   "raftstore/test-engine-raft-raft-engine"
 ]
 test-engines-rocksdb = [
-  "raftstore/test-engines-rocksdb",
+  "raftstore/test-engines-rocksdb"
 ]
 test-engines-panic = [
-  "raftstore/test-engines-panic",
+  "raftstore/test-engines-panic"
 ]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
@@ -95,6 +95,8 @@ raft = { version = "0.7.0", default-features = false, features = ["protobuf-code
 raft_log_engine = { workspace = true }
 raftstore = { workspace = true }
 rand = "0.8.3"
+server = { workspace = true }
+service = { workspace = true }
 slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
 slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tempfile = "3.0"
@@ -115,7 +117,6 @@ uuid = { version = "0.8.1", features = ["serde", "v4"] }
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "6599eb9dca74229b2c1fcc44118bef7eff127128" }
 
 [dev-dependencies]
-arrow = "13.0"
 byteorder = "1.2"
 # See https://bheisler.github.io/criterion.rs/book/user_guide/known_limitations.html for the usage
 # of `real_blackbox` feature.
@@ -137,7 +138,7 @@ resource_metering = { workspace = true }
 security = { workspace = true }
 serde_json = "1.0"
 sst_importer = { workspace = true }
-test_backup = { workspace = true }
+test_backup = { workspace = true, default-features = false }
 test_coprocessor = { workspace = true }
 test_pd = { workspace = true }
 test_pd_client = { workspace = true }

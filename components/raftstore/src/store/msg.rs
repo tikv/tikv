@@ -23,17 +23,20 @@ use kvproto::{
 use pd_client::BucketMeta;
 use raft::SnapshotStatus;
 use smallvec::{smallvec, SmallVec};
+use strum::{EnumCount, EnumVariantNames};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 use tracker::{get_tls_tracker_token, TrackerToken, GLOBAL_TRACKERS, INVALID_TRACKER_TOKEN};
 
-use super::{local_metrics::TimeTracker, region_meta::RegionMeta, FetchedLogs, RegionSnapshot};
+use super::{
+    local_metrics::TimeTracker, region_meta::RegionMeta,
+    snapshot_backup::SnapshotBrWaitApplyRequest, FetchedLogs, RegionSnapshot,
+};
 use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
     peer::{
-        SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
-        UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
-        UnsafeRecoveryWaitApplySyncer,
+        UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
+        UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
     },
     util::{KeysInfoFormatter, LatencyInspector},
     worker::{Bucket, BucketRange},
@@ -513,7 +516,7 @@ where
     UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSyncer),
     UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
-    SnapshotRecoveryWaitApply(SnapshotRecoveryWaitApplySyncer),
+    SnapshotBrWaitApply(SnapshotBrWaitApplyRequest),
     CheckPendingAdmin(UnboundedSender<CheckAdminResponse>),
 }
 
@@ -529,6 +532,7 @@ pub enum CasualMessage<EK: KvEngine> {
         split_keys: Vec<Vec<u8>>,
         callback: Callback<EK::Snapshot>,
         source: Cow<'static, str>,
+        share_source_region_size: bool,
     },
 
     /// Hash result of ComputeHash command.
@@ -720,6 +724,7 @@ pub struct InspectedRaftMessage {
 
 /// Message that can be sent to a peer.
 #[allow(clippy::large_enum_variant)]
+#[derive(EnumCount, EnumVariantNames)]
 pub enum PeerMsg<EK: KvEngine> {
     /// Raft message is the message sent between raft nodes in the same
     /// raft group. Messages need to be redirected to raftstore if target
@@ -788,6 +793,23 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
 }
 
 impl<EK: KvEngine> PeerMsg<EK> {
+    pub fn discriminant(&self) -> usize {
+        match self {
+            PeerMsg::RaftMessage(..) => 0,
+            PeerMsg::RaftCommand(_) => 1,
+            PeerMsg::Tick(_) => 2,
+            PeerMsg::SignificantMsg(_) => 3,
+            PeerMsg::ApplyRes { .. } => 4,
+            PeerMsg::Start => 5,
+            PeerMsg::Noop => 6,
+            PeerMsg::Persisted { .. } => 7,
+            PeerMsg::CasualMessage(_) => 8,
+            PeerMsg::HeartbeatPd => 9,
+            PeerMsg::UpdateReplicationMode => 10,
+            PeerMsg::Destroy(_) => 11,
+        }
+    }
+
     /// For some specific kind of messages, it's actually acceptable if failed
     /// to send it by `significant_send`. This function determine if the
     /// current message is acceptable to fail.
@@ -799,6 +821,7 @@ impl<EK: KvEngine> PeerMsg<EK> {
     }
 }
 
+#[derive(EnumCount, EnumVariantNames)]
 pub enum StoreMsg<EK>
 where
     EK: KvEngine,
@@ -835,10 +858,6 @@ where
         inspector: LatencyInspector,
     },
 
-    /// Message only used for test.
-    #[cfg(any(test, feature = "testexport"))]
-    Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
-
     UnsafeRecoveryReport(pdpb::StoreReport),
     UnsafeRecoveryCreatePeer {
         syncer: UnsafeRecoveryExecutePlanSyncer,
@@ -850,6 +869,10 @@ where
     AwakenRegions {
         abnormal_stores: Vec<u64>,
     },
+
+    /// Message only used for test.
+    #[cfg(any(test, feature = "testexport"))]
+    Validate(Box<dyn FnOnce(&crate::store::Config) + Send>),
 }
 
 impl<EK> fmt::Debug for StoreMsg<EK>
@@ -884,6 +907,28 @@ where
             }
             StoreMsg::GcSnapshotFinish => write!(fmt, "GcSnapshotFinish"),
             StoreMsg::AwakenRegions { .. } => write!(fmt, "AwakenRegions"),
+        }
+    }
+}
+
+impl<EK: KvEngine> StoreMsg<EK> {
+    pub fn discriminant(&self) -> usize {
+        match self {
+            StoreMsg::RaftMessage(..) => 0,
+            StoreMsg::ValidateSstResult { .. } => 1,
+            StoreMsg::ClearRegionSizeInRange { .. } => 2,
+            StoreMsg::StoreUnreachable { .. } => 3,
+            StoreMsg::CompactedEvent(_) => 4,
+            StoreMsg::Tick(_) => 5,
+            StoreMsg::Start { .. } => 6,
+            StoreMsg::UpdateReplicationMode(_) => 7,
+            StoreMsg::LatencyInspect { .. } => 8,
+            StoreMsg::UnsafeRecoveryReport(_) => 9,
+            StoreMsg::UnsafeRecoveryCreatePeer { .. } => 10,
+            StoreMsg::GcSnapshotFinish => 11,
+            StoreMsg::AwakenRegions { .. } => 12,
+            #[cfg(any(test, feature = "testexport"))]
+            StoreMsg::Validate(_) => 13,
         }
     }
 }

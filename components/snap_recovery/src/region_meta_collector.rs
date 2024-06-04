@@ -12,6 +12,8 @@ use kvproto::{
 use thiserror::Error;
 use tikv_util::sys::thread::StdThreadBuildWrapper;
 
+use crate::metrics::REGION_EVENT_COUNTER;
+
 pub type Result<T> = result::Result<T, Error>;
 
 #[allow(dead_code)]
@@ -146,6 +148,7 @@ impl<ER: RaftEngine> CollectWorker<ER> {
             // send to br
             let response = region_state.to_region_meta();
 
+            REGION_EVENT_COUNTER.collect_meta.inc();
             if let Err(e) = self.tx.unbounded_send(response) {
                 warn!("send the region meta failure";
                 "err" => ?e);

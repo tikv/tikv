@@ -158,6 +158,9 @@ pub struct Write {
     pub last_change_ts: TimeStamp,
     /// The number of versions that need skipping from this record
     /// to find the latest PUT/DELETE record
+    /// NOTE: `last_change_ts` == 0 && `versions_to_last_change` > 0 means the
+    /// key does not exist. Either there is no such key **or the last write
+    /// is a DELETE**.
     pub versions_to_last_change: u64,
     /// The source of this txn.
     pub txn_source: u64,
@@ -274,25 +277,6 @@ impl Write {
             txn_source: self.txn_source,
         }
     }
-
-    /// Returns the new `last_change_ts` and `versions_to_last_change` according
-    /// to this write record.
-    pub fn next_last_change_info(&self, commit_ts: TimeStamp) -> (TimeStamp, u64) {
-        match self.write_type {
-            WriteType::Put | WriteType::Delete => (commit_ts, 1),
-            WriteType::Lock | WriteType::Rollback => {
-                // If neither `last_change_ts` nor `versions_to_last_change` exists, do not
-                // set `last_change_ts` to indicate we don't know where is the last change.
-                // This should not happen if data is written in new version TiKV. If we hope to
-                // support data from old TiKV, consider iterating to the last change to find it.
-                if !self.last_change_ts.is_zero() || self.versions_to_last_change != 0 {
-                    (self.last_change_ts, self.versions_to_last_change + 1)
-                } else {
-                    (TimeStamp::zero(), 0)
-                }
-            }
-        }
-    }
 }
 
 #[derive(PartialEq, Clone)]
@@ -322,7 +306,8 @@ pub struct WriteRef<'a> {
     /// The number of versions that need skipping from this record
     /// to find the latest PUT/DELETE record.
     /// If versions_to_last_change > 0 but last_change_ts == 0, the key does not
-    /// have a PUT/DELETE record before this write record.
+    /// have a PUT/DELETE record before this write record, OR the previous
+    /// change is a DELETE.
     pub versions_to_last_change: u64,
     /// The source of this txn.
     pub txn_source: u64,

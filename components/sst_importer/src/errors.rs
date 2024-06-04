@@ -2,6 +2,7 @@
 
 use std::{
     error::Error as StdError, io::Error as IoError, num::ParseIntError, path::PathBuf, result,
+    time::Duration,
 };
 
 use encryption::Error as EncryptionError;
@@ -31,6 +32,7 @@ pub fn error_inc(type_: &str, err: &Error) {
         Error::BadFormat(..) => "bad_format",
         Error::Encryption(..) => "encryption",
         Error::CodecError(..) => "codec",
+        Error::Suspended { .. } => "suspended",
         _ => return,
     };
     IMPORTER_ERROR_VEC.with_label_values(&[type_, label]).inc();
@@ -125,6 +127,9 @@ pub enum Error {
 
     #[error("resource is not enough {0}")]
     ResourceNotEnough(String),
+
+    #[error("imports are suspended for {time_to_lease_expire:?}")]
+    Suspended { time_to_lease_expire: Duration },
 }
 
 impl Error {
@@ -158,6 +163,17 @@ impl From<Error> for import_sstpb::Error {
                 import_err.set_message(msg.clone());
                 import_err.set_server_is_busy(errorpb::ServerIsBusy::default());
                 err.set_store_error(import_err);
+                err.set_message(format!("{}", e));
+            }
+            Error::Suspended {
+                time_to_lease_expire,
+            } => {
+                let mut store_err = errorpb::Error::default();
+                let mut server_is_busy = errorpb::ServerIsBusy::default();
+                server_is_busy.set_backoff_ms(time_to_lease_expire.as_millis() as _);
+                store_err.set_server_is_busy(server_is_busy);
+                store_err.set_message(format!("{}", e));
+                err.set_store_error(store_err);
                 err.set_message(format!("{}", e));
             }
             _ => {
@@ -197,6 +213,7 @@ impl ErrorCodeExt for Error {
             Error::IncompatibleApiVersion => error_code::sst_importer::INCOMPATIBLE_API_VERSION,
             Error::InvalidKeyMode { .. } => error_code::sst_importer::INVALID_KEY_MODE,
             Error::ResourceNotEnough(_) => error_code::sst_importer::RESOURCE_NOT_ENOUTH,
+            Error::Suspended { .. } => error_code::sst_importer::SUSPENDED,
         }
     }
 }

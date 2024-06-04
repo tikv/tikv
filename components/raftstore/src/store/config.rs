@@ -92,6 +92,16 @@ pub struct Config {
     #[online_config(skip)]
     pub raft_reject_transfer_leader_duration: ReadableDuration,
 
+    /// Whether to disable checking quorum for the raft group. This will make
+    /// leader lease unavailable.
+    /// It cannot be changed in the config file, the only way to change it is
+    /// programmatically change the config structure during bootstrapping
+    /// the cluster.
+    #[doc(hidden)]
+    #[serde(skip)]
+    #[online_config(skip)]
+    pub unsafe_disable_check_quorum: bool,
+
     // Interval (ms) to check region whether need to be split or not.
     pub split_region_check_tick_interval: ReadableDuration,
     /// When size change of region exceed the diff since last check, it
@@ -106,6 +116,11 @@ pub struct Config {
     /// Minimum percentage of tombstones to trigger manual compaction.
     /// Should between 1 and 100.
     pub region_compact_tombstones_percent: u64,
+    /// Minimum number of redundant rows to trigger manual compaction.
+    pub region_compact_min_redundant_rows: u64,
+    /// Minimum percentage of tombstones to trigger manual compaction.
+    /// Should between 1 and 100.
+    pub region_compact_redundant_rows_percent: u64,
     pub pd_heartbeat_tick_interval: ReadableDuration,
     pub pd_store_heartbeat_tick_interval: ReadableDuration,
     pub snap_mgr_gc_tick_interval: ReadableDuration,
@@ -137,6 +152,14 @@ pub struct Config {
     #[online_config(skip)]
     pub snap_apply_batch_size: ReadableSize,
 
+    /// When applying a Region snapshot, its SST files can be modified by TiKV
+    /// itself. However those files could be read-only, for example, a TiKV
+    /// [agent](cmd/tikv-agent) is started based on a read-only remains. So
+    /// we can set `snap_apply_copy_symlink` to `true` to make a copy on
+    /// those SST files.
+    #[online_config(skip)]
+    pub snap_apply_copy_symlink: bool,
+
     // used to periodically check whether schedule pending applies in region runner
     #[doc(hidden)]
     #[online_config(skip)]
@@ -164,6 +187,15 @@ pub struct Config {
     // Check if leader lease will expire at `current_time + renew_leader_lease_advance_duration`.
     // It will be set to raft_store_max_leader_lease/4 by default.
     pub renew_leader_lease_advance_duration: ReadableDuration,
+
+    // Set true to allow handling request vote messages within one election time
+    // after TiKV start.
+    //
+    // Note: set to true may break leader lease. It should only be true in tests.
+    #[doc(hidden)]
+    #[serde(skip)]
+    #[online_config(skip)]
+    pub allow_unsafe_vote_after_start: bool,
 
     // Right region derive origin region id when split.
     #[online_config(hidden)]
@@ -352,6 +384,8 @@ impl Default for Config {
             region_compact_check_step: 100,
             region_compact_min_tombstones: 10000,
             region_compact_tombstones_percent: 30,
+            region_compact_min_redundant_rows: 50000,
+            region_compact_redundant_rows_percent: 20,
             pd_heartbeat_tick_interval: ReadableDuration::minutes(1),
             pd_store_heartbeat_tick_interval: ReadableDuration::secs(10),
             notify_capacity: 40960,
@@ -364,6 +398,7 @@ impl Default for Config {
             peer_stale_state_check_interval: ReadableDuration::minutes(5),
             leader_transfer_max_log_lag: 128,
             snap_apply_batch_size: ReadableSize::mb(10),
+            snap_apply_copy_symlink: false,
             region_worker_tick_interval: if cfg!(feature = "test") {
                 ReadableDuration::millis(200)
             } else {
@@ -396,7 +431,7 @@ impl Default for Config {
             apply_yield_duration: ReadableDuration::millis(500),
             apply_yield_write_size: ReadableSize::kb(32),
             perf_level: PerfLevel::Uninitialized,
-            evict_cache_on_memory_ratio: 0.0,
+            evict_cache_on_memory_ratio: 0.1,
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
@@ -424,11 +459,13 @@ impl Default for Config {
             report_min_resolved_ts_interval: ReadableDuration::secs(1),
             check_leader_lease_interval: ReadableDuration::secs(0),
             renew_leader_lease_advance_duration: ReadableDuration::secs(0),
+            allow_unsafe_vote_after_start: false,
             report_region_buckets_tick_interval: ReadableDuration::secs(10),
             max_snapshot_file_raw_size: ReadableSize::mb(100),
             unreachable_backoff: ReadableDuration::secs(10),
             // TODO: make its value reasonable
             check_peers_availability_interval: ReadableDuration::secs(30),
+            unsafe_disable_check_quorum: false,
         }
     }
 }
@@ -517,6 +554,12 @@ impl Config {
             warn!(
                 "Election timeout ticks needs to be same across all the cluster, \
                  otherwise it may lead to inconsistency."
+            );
+        }
+        if self.allow_unsafe_vote_after_start {
+            warn!(
+                "allow_unsafe_vote_after_start need to be false, otherwise \
+                it may lead to inconsistency"
             );
         }
 

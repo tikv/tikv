@@ -485,6 +485,8 @@ where
                     *snap_state = SnapState::Relax;
                     *tried_cnt = 0;
                     if self.validate_snap(&s, request_index) {
+                        info!("start sending snapshot"; "region_id" => self.region.get_id(),
+                            "peer_id" => self.peer_id, "request_peer" => to,);
                         return Ok(s);
                     }
                 }
@@ -989,6 +991,9 @@ where
         // The `region` is updated after persisting in order to stay consistent with the
         // one in `StoreMeta::regions` (will be updated soon).
         // See comments in `apply_snapshot` for more details.
+        (|| {
+            fail_point!("before_set_region_on_peer_3", self.peer_id == 3, |_| {});
+        })();
         self.set_region(res.region.clone());
     }
 }

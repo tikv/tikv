@@ -10,6 +10,7 @@ use std::{
 use chrono::Local;
 use clap::ArgMatches;
 use collections::HashMap;
+use fail;
 use tikv::config::{check_critical_config, persist_config, MetricConfig, TikvConfig};
 use tikv_util::{self, config, logger};
 
@@ -75,6 +76,9 @@ fn make_engine_log_path(path: &str, sub_path: &str, filename: &str) -> String {
 
 #[allow(dead_code)]
 pub fn initial_logger(config: &TikvConfig) {
+    fail::fail_point!("mock_force_uninitial_logger", |_| {
+        LOG_INITIALIZED.store(false, Ordering::SeqCst);
+    });
     let rocksdb_info_log_path = if !config.rocksdb.info_log_dir.is_empty() {
         make_engine_log_path(&config.rocksdb.info_log_dir, "", DEFAULT_ROCKSDB_LOG_FILE)
     } else {

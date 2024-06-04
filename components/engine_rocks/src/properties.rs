@@ -9,7 +9,7 @@ use std::{
 };
 
 use api_version::{ApiV2, KeyMode, KvFormat};
-use engine_traits::{raw_ttl::ttl_current_ts, MvccProperties, Range};
+use engine_traits::{raw_ttl::ttl_current_ts, MvccProperties, Range, RangeStats};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
@@ -414,7 +414,10 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
         // TsFilter filters sst based on max_ts and min_ts during iterating.
         // To prevent seeing outdated (GC) records, we should consider
         // RocksDB delete entry type.
-        if entry_type != DBEntryType::Put && entry_type != DBEntryType::Delete {
+        if entry_type != DBEntryType::Put
+            && entry_type != DBEntryType::Delete
+            && entry_type != DBEntryType::BlobIndex
+        {
             return;
         }
 
@@ -451,35 +454,43 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
         if self.row_versions > self.props.max_row_versions {
             self.props.max_row_versions = self.row_versions;
         }
-
-        if self.key_mode == KeyMode::Raw {
-            let decode_raw_value = ApiV2::decode_raw_value(value);
-            match decode_raw_value {
-                Ok(raw_value) => {
-                    if raw_value.is_valid(self.current_ts) {
-                        self.props.num_puts += 1;
-                    } else {
-                        self.props.num_deletes += 1;
+        if entry_type != DBEntryType::BlobIndex {
+            if self.key_mode == KeyMode::Raw {
+                let decode_raw_value = ApiV2::decode_raw_value(value);
+                match decode_raw_value {
+                    Ok(raw_value) => {
+                        if raw_value.is_valid(self.current_ts) {
+                            self.props.num_puts += 1;
+                        } else {
+                            self.props.num_deletes += 1;
+                        }
+                        if let Some(expire_ts) = raw_value.expire_ts {
+                            self.props.ttl.add(expire_ts);
+                        }
+                    }
+                    Err(_) => {
+                        self.num_errors += 1;
                     }
                 }
-                Err(_) => {
-                    self.num_errors += 1;
+            } else {
+                let write_type = match Write::parse_type(value) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        self.num_errors += 1;
+                        return;
+                    }
+                };
+
+                match write_type {
+                    WriteType::Put => self.props.num_puts += 1,
+                    WriteType::Delete => self.props.num_deletes += 1,
+                    _ => {}
                 }
             }
         } else {
-            let write_type = match Write::parse_type(value) {
-                Ok(v) => v,
-                Err(_) => {
-                    self.num_errors += 1;
-                    return;
-                }
-            };
-
-            match write_type {
-                WriteType::Put => self.props.num_puts += 1,
-                WriteType::Delete => self.props.num_deletes += 1,
-                _ => {}
-            }
+            // NOTE: if titan is enabled, the entry will always be treated as PUT.
+            // Be careful if you try to enable Titan on CF_WRITE.
+            self.props.num_puts += 1;
         }
 
         // Add new row.
@@ -530,12 +541,12 @@ impl TablePropertiesCollectorFactory<MvccPropertiesCollector>
     }
 }
 
-pub fn get_range_entries_and_versions(
+pub fn get_range_stats(
     engine: &crate::RocksEngine,
     cf: &str,
     start: &[u8],
     end: &[u8],
-) -> Option<(u64, u64)> {
+) -> Option<RangeStats> {
     let range = Range::new(start, end);
     let collection = match engine.get_properties_of_tables_in_range(cf, &[range]) {
         Ok(v) => v,
@@ -557,8 +568,11 @@ pub fn get_range_entries_and_versions(
         num_entries += v.num_entries();
         props.add(&mvcc);
     }
-
-    Some((num_entries, props.num_versions))
+    Some(RangeStats {
+        num_entries,
+        num_versions: props.num_versions,
+        num_rows: props.num_rows,
+    })
 }
 
 #[cfg(test)]
@@ -773,10 +787,9 @@ mod tests {
 
         let start_keys = keys::data_key(&[]);
         let end_keys = keys::data_end_key(&[]);
-        let (entries, versions) =
-            get_range_entries_and_versions(&db, CF_WRITE, &start_keys, &end_keys).unwrap();
-        assert_eq!(entries, (cases.len() * 2) as u64);
-        assert_eq!(versions, cases.len() as u64);
+        let range_stats = get_range_stats(&db, CF_WRITE, &start_keys, &end_keys).unwrap();
+        assert_eq!(range_stats.num_entries, (cases.len() * 2) as u64);
+        assert_eq!(range_stats.num_versions, cases.len() as u64);
     }
 
     #[test]
@@ -845,6 +858,8 @@ mod tests {
         assert_eq!(props.num_puts, 4);
         assert_eq!(props.num_versions, 7);
         assert_eq!(props.max_row_versions, 3);
+        assert_eq!(props.ttl.max_expire_ts, Some(u64::MAX));
+        assert_eq!(props.ttl.min_expire_ts, Some(10));
     }
 
     #[bench]

@@ -65,6 +65,45 @@ pub fn prepare_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
     Ok(())
 }
 
+/// Just like prepare_sst_for_ingestion, but
+/// * always use copy instead of hard link;
+/// * add write permission on the copied file if necessary.
+pub fn copy_sst_for_ingestion<P: AsRef<Path>, Q: AsRef<Path>>(
+    path: P,
+    clone: Q,
+    encryption_key_manager: Option<&DataKeyManager>,
+) -> Result<()> {
+    let path = path.as_ref().to_str().unwrap();
+    let clone = clone.as_ref().to_str().unwrap();
+
+    if Path::new(clone).exists() {
+        file_system::remove_file(clone).map_err(|e| format!("remove {}: {:?}", clone, e))?;
+    }
+    // always try to remove the file from key manager because the clean up in
+    // rocksdb is not atomic, thus the file may be deleted but key in key
+    // manager is not.
+    if let Some(key_manager) = encryption_key_manager {
+        key_manager.delete_file(clone)?;
+    }
+
+    file_system::copy_and_sync(path, clone)
+        .map_err(|e| format!("copy from {} to {}: {:?}", path, clone, e))?;
+
+    let mut pmts = file_system::metadata(clone)?.permissions();
+    if pmts.readonly() {
+        pmts.set_readonly(false);
+        file_system::set_permissions(clone, pmts)?;
+    }
+
+    // sync clone dir
+    File::open(Path::new(clone).parent().unwrap())?.sync_all()?;
+    if let Some(key_manager) = encryption_key_manager {
+        key_manager.link_file(path, clone)?;
+    }
+
+    Ok(())
+}
+
 pub fn url_for<E: ExternalStorage>(storage: &E) -> String {
     storage
         .url()
@@ -88,7 +127,7 @@ mod tests {
     use tempfile::Builder;
     use test_util::encryption::new_test_key_manager;
 
-    use super::prepare_sst_for_ingestion;
+    use super::{copy_sst_for_ingestion, prepare_sst_for_ingestion};
 
     #[cfg(unix)]
     fn check_hard_link<P: AsRef<Path>>(path: P, nlink: u64) {
@@ -225,5 +264,42 @@ mod tests {
         let key_manager = new_test_key_manager(&tmp_dir, None, None, None);
         let manager = Arc::new(key_manager.unwrap().unwrap());
         check_prepare_sst_for_ingestion(None, None, Some(&manager), true /* was_encrypted */);
+    }
+
+    #[test]
+    fn test_copy_sst_for_ingestion() {
+        let path = Builder::new()
+            .prefix("_util_rocksdb_test_copy_sst_for_ingestion")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+
+        let sst_dir = Builder::new()
+            .prefix("_util_rocksdb_test_copy_sst_for_ingestion_sst")
+            .tempdir()
+            .unwrap();
+        let sst_path = sst_dir.path().join("abc.sst");
+        let sst_clone = sst_dir.path().join("abc.sst.clone");
+
+        let kvs = [("k1", "v1"), ("k2", "v2"), ("k3", "v3")];
+
+        let db_opts = RocksDbOptions::default();
+        let cf_opts = vec![(CF_DEFAULT, RocksCfOptions::default())];
+        let db = new_engine_opt(path_str, db_opts, cf_opts).unwrap();
+
+        gen_sst_with_kvs(&db, CF_DEFAULT, sst_path.to_str().unwrap(), &kvs);
+
+        copy_sst_for_ingestion(&sst_path, &sst_clone, None).unwrap();
+        check_hard_link(&sst_path, 1);
+        check_hard_link(&sst_clone, 1);
+
+        copy_sst_for_ingestion(&sst_path, &sst_clone, None).unwrap();
+        check_hard_link(&sst_path, 1);
+        check_hard_link(&sst_clone, 1);
+
+        db.ingest_external_file_cf(CF_DEFAULT, &[sst_clone.to_str().unwrap()])
+            .unwrap();
+        check_db_with_kvs(&db, CF_DEFAULT, &kvs);
+        assert!(!sst_clone.exists());
     }
 }
