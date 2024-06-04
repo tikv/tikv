@@ -674,6 +674,7 @@ impl BackgroundRunnerCore {
                     .pop_front()
                     .unwrap();
                 assert_eq!(r, range);
+                core.cached_write_batch.remove(&range).unwrap();
                 drop(core);
                 // Clear the range directly here to quickly free the memory.
                 self.delete_ranges(&[r]);
@@ -715,6 +716,7 @@ impl BackgroundRunnerCore {
             .pending_ranges_loading_data
             .pop_front()
             .unwrap();
+        core.cached_write_batch.remove(&range).unwrap();
         assert_eq!(r, range);
     }
 

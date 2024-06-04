@@ -425,6 +425,7 @@ impl RangeCacheMemoryEngine {
                 "Cached" => range_manager.ranges().len(),
                 "Pending" => range_manager.pending_ranges_loading_data.len(),
             );
+            assert!(core.cached_write_batch.get(&range).is_none());
             if let Err(e) = self
                 .bg_worker_manager()
                 .schedule_task(BackgroundTask::LoadRange)
