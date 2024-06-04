@@ -155,6 +155,7 @@ impl Iterable for RangeCacheSnapshot {
             sequence_number: self.sequence_number(),
             saved_user_key: vec![],
             saved_value: None,
+            read_ts: self.snapshot_meta.snapshot_ts,
             direction: Direction::Uninit,
             statistics: self.engine.statistics(),
             prefix_extractor,
@@ -251,6 +252,8 @@ pub struct RangeCacheIterator {
     prefix: Option<Vec<u8>>,
 
     direction: Direction,
+
+    pub read_ts: u64,
 
     statistics: Arc<Statistics>,
     local_stats: LocalStatistics,

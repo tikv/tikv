@@ -90,12 +90,7 @@ pub enum BackgroundTask {
     CleanLockTombstone(u64),
     TopRegionsLoadEvict,
     SetRocksEngine(RocksEngine),
-    Audit(
-        (
-            Vec<((RangeCacheSnapshot, u64), RangeCacheSnapshot)>,
-            RocksSnapshot,
-        ),
-    ),
+    Audit((Vec<(RangeCacheSnapshot, u64)>, RocksSnapshot)),
 }
 
 impl Display for BackgroundTask {
@@ -952,8 +947,9 @@ fn next_to_match(
     disk_iter: &mut RocksEngineIterator,
     next_fisrt: bool,
     last_user_key: &Vec<u8>,
-    safe_ts: u64,
+    last_ts: u64,
 ) {
+    let read_ts = iter.read_ts;
     let key = iter.key();
     let val = iter.value();
     if next_fisrt {
@@ -1001,6 +997,11 @@ fn next_to_match(
             break;
         }
 
+        // k1-10,  k1-8,  k1-5, k1-4, k1-3
+        //       9      7
+        //  range k1-3
+        //  disk  k1-4
+
         let (disk_user_key, disk_ts) = split_ts(disk_key).unwrap();
         if disk_user_key == user_key && disk_ts > ts {
             if let Ok(write) = parse_write(disk_iter.value())
@@ -1019,7 +1020,7 @@ fn next_to_match(
                     "cf" => ?cf,
                 );
             } else {
-                if disk_user_key == last_user_key && disk_ts > safe_ts {
+                if disk_user_key == last_user_key && (disk_ts >= read_ts || disk_ts > last_ts) {
                     error!(
                         "next inconsistent, missing higher ts";
                         "cache_key" => log_wrappers::Value(key),
@@ -1029,7 +1030,8 @@ fn next_to_match(
                         "lower" => log_wrappers::Value(&iter.lower_bound),
                         "upper" => log_wrappers::Value(&iter.upper_bound),
                         "seqno" => iter.sequence_number,
-                        "safe_ts" => safe_ts,
+                        "read_ts" => read_ts,
+                        "last_ts" => last_ts,
                         "cf" => ?cf,
                     );
                     unreachable!()
@@ -1073,7 +1075,7 @@ impl Runnable for BackgroundRunner {
             BackgroundTask::Audit((ranges_snap, rocksdb_snap)) => {
                 let core = self.core.engine.clone();
                 let f = async move {
-                    for ((range_snap, safe_ts), _guard) in ranges_snap {
+                    for (range_snap, safe_ts) in ranges_snap {
                         let opts = iter_option(
                             &range_snap.snapshot_meta.range.start,
                             &range_snap.snapshot_meta.range.end,
@@ -1081,6 +1083,7 @@ impl Runnable for BackgroundRunner {
                         );
                         for cf in &[CF_LOCK, CF_WRITE] {
                             let mut iter = range_snap.iterator_opt(cf, opts.clone()).unwrap();
+                            let read_ts = iter.read_ts;
                             let mut disk_iter =
                                 rocksdb_snap.iterator_opt(cf, opts.clone()).unwrap();
                             let valid = iter.seek_to_first().unwrap();
@@ -1100,11 +1103,12 @@ impl Runnable for BackgroundRunner {
                                 unreachable!();
                             }
 
-                            next_to_match(cf, &mut iter, &mut disk_iter, false, &vec![], safe_ts);
-                            let mut last_user_key = if *cf == CF_WRITE {
-                                split_ts(iter.key()).unwrap().0.to_vec()
+                            next_to_match(cf, &mut iter, &mut disk_iter, false, &vec![], 0);
+                            let (mut last_user_key, mut last_ts) = if *cf == CF_WRITE {
+                                let r = split_ts(iter.key()).unwrap();
+                                (r.0.to_vec(), r.1)
                             } else {
-                                vec![]
+                                (vec![], 0)
                             };
 
                             while iter.next().unwrap() {
@@ -1114,12 +1118,16 @@ impl Runnable for BackgroundRunner {
                                     &mut disk_iter,
                                     true,
                                     &last_user_key,
-                                    safe_ts,
+                                    last_ts,
                                 );
                                 if *cf == CF_WRITE {
-                                    let cur_user_key = split_ts(iter.key()).unwrap().0;
+                                    let (cur_user_key, ts) = split_ts(iter.key()).unwrap();
                                     if last_user_key != cur_user_key {
                                         last_user_key = cur_user_key.to_vec();
+                                        last_ts = 0;
+                                    }
+                                    if last_ts == 0 && last_ts < read_ts {
+                                        last_ts = read_ts;
                                     }
                                 }
                             }

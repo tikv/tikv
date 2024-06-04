@@ -6,6 +6,7 @@ use std::{
     ops::Bound,
     result,
     sync::{atomic::AtomicU64, Arc},
+    time::Duration,
 };
 
 use crossbeam::epoch::{self, default_collector, Guard};
@@ -22,18 +23,18 @@ use skiplist_rs::{
 };
 use slog_global::error;
 use tikv_util::{config::VersionTrack, info, warn};
+use txn_types::TimeStamp;
 
 use crate::{
     background::{BackgroundTask, BgWorkManager, PdRangeHintService},
     keys::{encode_key_for_eviction, encode_seek_key, InternalBytes},
     memory_controller::MemoryController,
     range_manager::{LoadFailedReason, RangeCacheStatus, RangeManager},
-    read::{RangeCacheIterator, RangeCacheSnapshot},
+    read::{RangeCacheIterator, RangeCacheSnapshot, RangeCacheSnapshotMeta},
     statistics::Statistics,
     write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
     RangeCacheEngineConfig, RangeCacheEngineContext,
 };
-use crate::read::RangeCacheSnapshotMeta;
 
 pub(crate) const CF_DEFAULT_USIZE: usize = 0;
 pub(crate) const CF_LOCK_USIZE: usize = 1;
@@ -492,9 +493,9 @@ impl RangeCacheMemoryEngine {
 
     pub fn dump_cache(&self, range: CacheRange) -> String {
         let Ok(snap) = RangeCacheSnapshot::new(self.clone(), range.clone(), u64::MAX, u64::MAX)
-            else {
-                return String::default();
-            };
+        else {
+            return String::default();
+        };
         let mut buffer = String::default();
         let mut scan = |cf| {
             let mut iter_opts = IterOptions::default();
@@ -549,29 +550,18 @@ impl RangeCacheMemoryEngine {
         let snap = self.rocks_engine.as_ref().unwrap().snapshot(None);
         let mut ranges_to_audit = vec![];
         let ranges: Vec<_> = {
-            let mut ret = vec![];
             let mut core = self.core().write();
-            let ranges: Vec<_> = core.range_manager
+            core.range_manager
                 .ranges()
                 .iter()
-                .map(|(r, meta)| {
-                    (r.clone(), meta.safe_point())
-                })
-                .collect();
-            for (r, ts) in ranges {
-                let range_id = core.range_manager.range_snapshot(&r, ts).unwrap();
-                ret.push((RangeCacheSnapshot {
-                    snapshot_meta: RangeCacheSnapshotMeta::new(range_id, r, ts, snap.sequence_number()),
-                    skiplist_engine: core.engine.clone(),
-                    engine: self.clone(),
-                }, ts));
-            }
-            ret
+                .map(|(r, meta)| (r.clone(), meta.safe_point()))
+                .collect()
         };
         for range in ranges {
-            if let Ok(range_snap) = self.snapshot(range.0.snapshot_meta.range.clone(), u64::MAX, snap.sequence_number())
+            let read_ts = TimeStamp::physical_now() - Duration::from_secs(40).as_millis() as u64;
+            if let Ok(range_snap) = self.snapshot(range.0.clone(), read_ts, snap.sequence_number())
             {
-                ranges_to_audit.push(((range_snap, range.1), range.0));
+                ranges_to_audit.push((range_snap, range.1));
             } else {
                 warn!(
                     "failed to get snap in audit";
@@ -694,11 +684,11 @@ pub mod tests {
         assert!(
             engine.core.read().range_manager().pending_ranges.is_empty()
                 && engine
-                .core
-                .read()
-                .range_manager()
-                .pending_ranges_loading_data
-                .is_empty()
+                    .core
+                    .read()
+                    .range_manager()
+                    .pending_ranges_loading_data
+                    .is_empty()
         );
 
         let range1 = CacheRange::new(b"k1".to_vec(), b"k3".to_vec());
@@ -709,11 +699,11 @@ pub mod tests {
         assert!(
             engine.core.read().range_manager().pending_ranges.is_empty()
                 && engine
-                .core
-                .read()
-                .range_manager()
-                .pending_ranges_loading_data
-                .is_empty()
+                    .core
+                    .read()
+                    .range_manager()
+                    .pending_ranges_loading_data
+                    .is_empty()
         );
     }
 }
