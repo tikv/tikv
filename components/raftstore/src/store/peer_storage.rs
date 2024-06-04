@@ -796,7 +796,7 @@ where
                     SnapState::ApplyAborted
                 } else if s == JOB_STATUS_FAILED {
                     // Cleanup region and treat it as tombstone.
-                    warn!("{} applying snapshot failed", self.tag,);
+                    warn!("{} applying snapshot failed", self.tag);
                     SnapState::ApplyAborted
                 } else {
                     return CheckApplyingSnapStatus::Applying;
