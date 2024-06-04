@@ -2242,6 +2242,11 @@ where
             self.fsm.hibernate_state.group_state() == GroupState::Chaos,
             |_| {}
         );
+        fail_point!(
+            "on_raft_base_tick_skip_tombstone_peer",
+            self.fsm.peer.should_tombstone,
+            |_| {}
+        );
 
         if self.fsm.peer.pending_remove {
             self.fsm.peer.mut_store().flush_entry_cache_metrics();
@@ -2263,9 +2268,9 @@ where
         // a value that is larger than last index.
         if self.fsm.peer.is_handling_snapshot() || self.fsm.peer.has_pending_snapshot() {
             // If failed on applying snapshot, send ConfChange to the leader to make the
-            // region tombstone the peer.
+            // peer removed.
             if self.fsm.peer.should_tombstone {
-                self.fsm.peer.send_tombstone_peer_msg(self.ctx);
+                self.fsm.peer.send_forcely_remove_peer_msg(self.ctx);
             }
             // need to check if snapshot is applied.
             self.fsm.has_ready = true;
@@ -2958,8 +2963,8 @@ where
         });
     }
 
-    // Trigger the `ConfChange` command to tombstone the abnormal peer as expected.
-    fn on_tombstone_peer_request(&mut self, msg: RaftMessage) {
+    // Trigger the `ConfChange` command to remove the abnormal peer as expected.
+    fn on_forcely_remove_peer_request(&mut self, msg: RaftMessage) {
         if !self.fsm.peer.is_leader() {
             return;
         }
@@ -2969,7 +2974,7 @@ where
             return;
         }
 
-        // It's a tombstone request from the source peer.
+        // Request from the source peer.
         let mut req = AdminRequest::default();
         req.set_cmd_type(AdminCmdType::ChangePeer);
         req.mut_change_peer()
@@ -3051,8 +3056,8 @@ where
                     self.on_gc_peer_request(msg);
                 }
             }
-            ExtraMessageType::MsgTombstonePeerRequest => {
-                self.on_tombstone_peer_request(msg);
+            ExtraMessageType::MsgForcelyRemovePeerRequest => {
+                self.on_forcely_remove_peer_request(msg);
             }
             // It's v2 only message and ignore does no harm.
             ExtraMessageType::MsgGcPeerResponse | ExtraMessageType::MsgFlushMemtable => (),

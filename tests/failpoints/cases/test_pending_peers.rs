@@ -228,32 +228,79 @@ fn test_on_check_busy_on_apply_peers() {
 
 #[test]
 fn test_on_apply_snap_failed() {
-    let mut cluster = new_node_cluster(0, 3);
-    cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(5);
-    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(100);
-    cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    // Case 1: apply snapshot failed.
+    {
+        let mut cluster = new_node_cluster(0, 3);
+        cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(5);
+        cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(100);
+        cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
 
-    let pd_client = Arc::clone(&cluster.pd_client);
-    // Disable default max peer count check.
-    pd_client.disable_default_operator();
+        let pd_client = Arc::clone(&cluster.pd_client);
+        // Disable default max peer count check.
+        pd_client.disable_default_operator();
 
-    let region_id = cluster.run_conf_change();
-    pd_client.must_add_peer(region_id, new_peer(2, 2));
+        let region_id = cluster.run_conf_change();
+        pd_client.must_add_peer(region_id, new_peer(2, 2));
 
-    // To ensure peer 2 is not pending.
-    cluster.must_put(b"k1", b"v1");
-    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+        // To ensure peer 2 is not pending.
+        cluster.must_put(b"k1", b"v1");
+        must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 
-    // Mock applying snapshot failed on peer 3.
-    fail::cfg("region_apply_snap_io_err", "return").unwrap();
-    pd_client.must_add_peer(region_id, new_peer(3, 3));
-    sleep_ms(1000);
-    let pending_peers = pd_client.get_pending_peers();
-    // Region worker is failed on applying snapshot.
-    assert_eq!(pending_peers[&3], new_peer(3, 3));
-    must_get_none(&cluster.get_engine(3), b"k1");
-    sleep_ms(1000);
-    // Check that the region only has 2 peers.
-    let region = cluster.get_region(b"k1");
-    assert_eq!(region.get_peers().len(), 2);
+        // Mock applying snapshot failed on peer 3.
+        fail::cfg("region_apply_snap_io_err", "return").unwrap();
+        pd_client.must_add_peer(region_id, new_peer(3, 3));
+        sleep_ms(1000);
+        let pending_peers = pd_client.get_pending_peers();
+        // Region worker is failed on applying snapshot.
+        assert_eq!(pending_peers[&3], new_peer(3, 3));
+        must_get_none(&cluster.get_engine(3), b"k1");
+        sleep_ms(1000);
+        // Check that the region only has 2 peers.
+        let region = cluster.get_region(b"k1");
+        assert_eq!(region.get_peers().len(), 2);
+        fail::remove("region_apply_snap_io_err");
+    }
+    // Case 2: apply snapshot failed and new peer is added.
+    {
+        let mut cluster = new_node_cluster(0, 5);
+        cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(5);
+        cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(100);
+        cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+
+        let pd_client = Arc::clone(&cluster.pd_client);
+        // Disable default max peer count check.
+        pd_client.disable_default_operator();
+
+        let region_id = cluster.run_conf_change();
+        pd_client.must_add_peer(region_id, new_peer(2, 2));
+        pd_client.must_add_peer(region_id, new_peer(3, 3));
+
+        // To ensure peer 2,3 is not pending.
+        cluster.must_put(b"k1", b"v1");
+        must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+        must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
+
+        // Mock applying snapshot failed on peer 4.
+        fail::cfg("on_raft_base_tick_skip_tombstone_peer", "return").unwrap();
+        fail::cfg("region_apply_snap_io_err", "return").unwrap();
+        pd_client.must_add_peer(region_id, new_peer(4, 4));
+        sleep_ms(1000);
+        // Region worker is failed on applying snapshot.
+        let pending_peers = pd_client.get_pending_peers();
+        assert_eq!(pending_peers[&4], new_peer(4, 4));
+        must_get_none(&cluster.get_engine(4), b"k1");
+        fail::remove("region_apply_snap_io_err");
+
+        pd_client.must_add_peer(region_id, new_peer(5, 5));
+        must_get_none(&cluster.get_engine(5), b"k1");
+        sleep_ms(1000);
+        // Check that the region only has 5 peers.
+        let region = cluster.get_region(b"k1");
+        assert_eq!(region.get_peers().len(), 5);
+        fail::remove("on_raft_base_tick_skip_tombstone_peer");
+        sleep_ms(1000);
+        // Check the abnormal peer 4 is removed.
+        let region = cluster.get_region(b"k1");
+        assert_eq!(region.get_peers().len(), 4);
+    }
 }

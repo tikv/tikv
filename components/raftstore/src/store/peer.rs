@@ -5813,20 +5813,18 @@ where
         }
     }
 
-    pub fn send_tombstone_peer_msg<T: Transport>(&self, ctx: &mut PollContext<EK, ER, T>) {
+    pub fn send_forcely_remove_peer_msg<T: Transport>(&self, ctx: &mut PollContext<EK, ER, T>) {
         let mut msg = ExtraMessage::default();
-        msg.set_type(ExtraMessageType::MsgTombstonePeerRequest);
-        // Forcely set the index with `u64::max_value()` to make sure the tombstone
+        msg.set_type(ExtraMessageType::MsgForcelyRemovePeerRequest);
+        // Forcely set the index with `u64::max_value()` to make sure the remove
         // message can be handled correctly.
         msg.set_index(u64::MAX);
-        // No need to set `CheckGcPeer` here as v2 does, because the peer is waited to
-        // be destroyed.
         let leader_id = self.leader_id();
         let leader = self.get_peer_from_cache(leader_id);
         if let Some(leader) = leader {
             self.send_extra_message(msg, &mut ctx.trans, &leader);
             info!(
-                "send tombstone peer to leader after applying snapshot failed";
+                "send forcely remove peer to leader after applying snapshot failed";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
                 "leader_id" => leader_id,

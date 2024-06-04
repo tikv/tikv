@@ -2842,7 +2842,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/LykxSassinator/kvproto?branch=tombstone_peer#c41e8a34a70091625b50d60195e7c802a4b37353"
+source = "git+https://github.com/LykxSassinator/kvproto?branch=tombstone_peer#7d36c8fe9777a3fe7ef7d63024fec45f6f7fc8ba"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
