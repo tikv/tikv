@@ -1,0 +1,8 @@
+# Sort the member alphabetically.
+aliases:
+  sig-critical-approvers-config:
+    - easonn7
+    - yudongusa
+  sig-approvers: # default repo approvers
+    - CalvinNeo
+    - zanmato1984
