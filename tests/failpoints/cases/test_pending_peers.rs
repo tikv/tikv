@@ -256,5 +256,4 @@ fn test_on_apply_snap_failed() {
     // Check that the region only has 2 peers.
     let region = cluster.get_region(b"k1");
     assert_eq!(region.get_peers().len(), 2);
-    fail::remove("region_apply_snap_io_err");
 }
