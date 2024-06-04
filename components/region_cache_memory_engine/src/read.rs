@@ -54,7 +54,7 @@ pub struct RangeCacheSnapshotMeta {
 }
 
 impl RangeCacheSnapshotMeta {
-    fn new(range_id: u64, range: CacheRange, snapshot_ts: u64, sequence_number: u64) -> Self {
+    pub fn new(range_id: u64, range: CacheRange, snapshot_ts: u64, sequence_number: u64) -> Self {
         Self {
             range_id,
             range,
@@ -67,8 +67,8 @@ impl RangeCacheSnapshotMeta {
 #[derive(Clone, Debug)]
 pub struct RangeCacheSnapshot {
     pub snapshot_meta: RangeCacheSnapshotMeta,
-    skiplist_engine: SkiplistEngine,
-    engine: RangeCacheMemoryEngine,
+    pub skiplist_engine: SkiplistEngine,
+    pub engine: RangeCacheMemoryEngine,
 }
 
 impl RangeCacheSnapshot {

@@ -90,7 +90,12 @@ pub enum BackgroundTask {
     CleanLockTombstone(u64),
     TopRegionsLoadEvict,
     SetRocksEngine(RocksEngine),
-    Audit((Vec<(RangeCacheSnapshot, u64)>, RocksSnapshot)),
+    Audit(
+        (
+            Vec<((RangeCacheSnapshot, u64), RangeCacheSnapshot)>,
+            RocksSnapshot,
+        ),
+    ),
 }
 
 impl Display for BackgroundTask {
@@ -1066,8 +1071,9 @@ impl Runnable for BackgroundRunner {
                 self.rocks_engine = Some(rocks_engine);
             }
             BackgroundTask::Audit((ranges_snap, rocksdb_snap)) => {
+                let core = self.core.engine.clone();
                 let f = async move {
-                    for (range_snap, safe_ts) in ranges_snap {
+                    for ((range_snap, safe_ts), _guard) in ranges_snap {
                         let opts = iter_option(
                             &range_snap.snapshot_meta.range.start,
                             &range_snap.snapshot_meta.range.end,
