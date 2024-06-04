@@ -4,4 +4,4 @@ options:
 filters:
   "(OWNERS|split_config\\.rs)$":
     approvers:
-      - sig-critical-approvers-config-tikv
+      - sig-critical-approvers-config-components

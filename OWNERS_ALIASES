@@ -1,10 +1,10 @@
 # Sort the member alphabetically.
 aliases:
-  sig-critical-approvers-config-tikv:
+  sig-critical-approvers-config-components:
     - easonn7
     - kevin-xianliu
     - zhangjinpeng87
-  sig-critical-approvers-config-transaction:
+  sig-critical-approvers-config-src:
     - easonn7
     - kevin-xianliu
     - cfzjywxk
