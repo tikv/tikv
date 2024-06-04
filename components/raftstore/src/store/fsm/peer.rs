@@ -2842,11 +2842,24 @@ where
         self.fsm.hibernate_state.count_vote(from.get_id());
     }
 
-    fn on_availability_response(&mut self, from: &metapb::Peer, msg: &ExtraMessage) {
+    fn on_availability_response(&mut self, msg: RaftMessage) {
         if !self.fsm.peer.is_leader() {
             return;
         }
-        if !msg.wait_data {
+        let from = msg.get_from_peer();
+        let extra_msg = msg.get_extra_msg();
+        let availability_context = extra_msg.get_availability_context();
+        if availability_context.get_unavailable() {
+            let from_epoch = availability_context.get_from_region_epoch();
+            let self_epoch = self.fsm.peer.region().get_region_epoch();
+            // If the epoch of the peer is stale and the peer is alreay unavailable,
+            // the peer should be destroyed.
+            if util::is_epoch_stale(from_epoch, self_epoch) {
+                self.ctx.handle_stale_msg(&msg, self_epoch.clone(), None);
+            }
+            return;
+        }
+        if !extra_msg.wait_data {
             let original_remains_nr = self.fsm.peer.wait_data_peers.len();
             self.fsm
                 .peer
@@ -2881,6 +2894,10 @@ where
         report.set_from_region_id(self.region_id());
         report.set_from_region_epoch(self.region().get_region_epoch().clone());
         report.set_trimmed(true);
+        // Using the `should_tombstone` flag to indicate the peer is unavailable when
+        // the peer is in the tombstone state due to failure to apply snapshot or
+        // other unexpected errors.
+        report.set_unavailable(self.fsm.peer.should_tombstone);
         self.fsm
             .peer
             .send_extra_message(resp, &mut self.ctx.trans, from);
@@ -3036,7 +3053,7 @@ where
                 self.on_availability_request(msg.get_from_peer());
             }
             ExtraMessageType::MsgAvailabilityResponse => {
-                self.on_availability_response(msg.get_from_peer(), msg.get_extra_msg());
+                self.on_availability_response(msg);
             }
             ExtraMessageType::MsgVoterReplicatedIndexRequest => {
                 self.on_voter_replicated_index_request(msg.get_from_peer());
