@@ -4,4 +4,4 @@ options:
 filters:
   "(OWNERS|mod\\.rs)$":
     approvers:
-      - sig-critical-approvers-config-transaction
+      - sig-critical-approvers-config-src
