@@ -468,13 +468,8 @@ where
                         warn!("waiting for initial scanning done timed out, forcing progress!"; 
                             "take" => ?now.saturating_elapsed(), "timedout" => %timedout);
                     }
-<<<<<<< HEAD
                     let regions = leader_checker
-                        .resolve(self.subs.current_regions(), min_ts)
-=======
-                    let regions = resolver
                         .resolve(self.subs.current_regions(), min_ts, None)
->>>>>>> e106c8dd72 (resolved_ts: use smaller timeout when do check_leader (#16000) (#16943))
                         .await;
                     let cps = self.subs.resolve_with(min_ts, regions);
                     let min_region = cps.iter().min_by_key(|rs| rs.checkpoint);
