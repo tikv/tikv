@@ -80,7 +80,7 @@ use crate::{
         demote_failed_voters_request,
         entry_storage::MAX_WARMED_UP_CACHE_KEEP_TIME,
         fsm::{
-            apply::{self, PRINTF_LOG},
+            apply::{self, PRINTF_LOG, TXN_LOG},
             store::{PollContext, StoreMeta},
             ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeObserver, ChangePeer,
             ExecResult, SwitchWitness,
@@ -2419,7 +2419,7 @@ where
         fail_point!("on_apply_res", |_| {});
         match res {
             ApplyTaskRes::Apply(mut res) => {
-                if PRINTF_LOG.load(Ordering::Relaxed) {
+                if TXN_LOG.load(Ordering::Relaxed) {
                     info!(
                         "async apply finish";
                         "region_id" => self.region_id(),

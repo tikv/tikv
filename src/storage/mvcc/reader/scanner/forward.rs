@@ -5,7 +5,7 @@ use std::{borrow::Cow, cmp::Ordering, sync::atomic};
 
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel, WriteConflictReason};
-use raftstore::store::fsm::apply::PRINTF_LOG;
+use raftstore::store::fsm::apply::{PRINTF_LOG, TXN_LOG};
 use txn_types::{Key, LastChange, Lock, LockType, OldValue, TimeStamp, Value, WriteRef, WriteType};
 
 use super::ScannerConfig;
@@ -336,7 +336,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                 }
                 let key_commit_ts = Key::decode_ts_from(current_key)?;
 
-                if PRINTF_LOG.load(atomic::Ordering::Relaxed) {
+                if TXN_LOG.load(atomic::Ordering::Relaxed) {
                     info!(
                         "on move_write_cursor_to_ts";
                         "user_key" => log_wrappers::hex_encode_upper(user_key.as_encoded().as_slice()),
@@ -354,7 +354,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     self.met_newer_ts_data = NewerTsCheckState::Met;
                 }
 
-                if PRINTF_LOG.load(atomic::Ordering::Relaxed) {
+                if TXN_LOG.load(atomic::Ordering::Relaxed) {
                     info!(
                         "met version larger than start_ts";
                         "key" => log_wrappers::Value(current_key),
@@ -383,7 +383,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
         self.statistics.write.over_seek_bound += 1;
 
         let seek_key = user_key.clone().append_ts(self.cfg.ts);
-        if PRINTF_LOG.load(atomic::Ordering::Relaxed) {
+        if TXN_LOG.load(atomic::Ordering::Relaxed) {
             info!(
                 "on move_write_cursor_to_ts for seek";
                 "seek_key" => log_wrappers::hex_encode_upper(seek_key.as_encoded().as_slice()),
@@ -482,7 +482,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
 
             let current_key = cursors.write.key(&mut statistics.write);
             let key_commit_ts = Key::decode_ts_from(current_key)?;
-            if PRINTF_LOG.load(atomic::Ordering::Relaxed) {
+            if TXN_LOG.load(atomic::Ordering::Relaxed) {
                 info!(
                     "on handle_write";
                     "user_key" => log_wrappers::hex_encode_upper(current_user_key.as_encoded().as_slice()),

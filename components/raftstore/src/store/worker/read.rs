@@ -44,6 +44,7 @@ use crate::{
     },
     Error, Result,
 };
+use crate::store::fsm::apply::TXN_LOG;
 
 /// #[RaftstoreCommon]
 pub trait ReadExecutor {
@@ -152,7 +153,7 @@ pub trait ReadExecutor {
                         res.set_read_index(read_index);
                         resp.set_read_index(res);
 
-                        if PRINTF_LOG.load(Ordering::Relaxed) {
+                        if TXN_LOG.load(Ordering::Relaxed) {
                             info!("*** read_index response";
                                 "req.start_ts" => req.get_read_index().get_start_ts(),
                                 "req.key_ranges" => ?req.get_read_index().get_key_ranges(),
@@ -1073,7 +1074,7 @@ where
     ) {
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => {
-                if PRINTF_LOG.load(Ordering::Relaxed) {
+                if TXN_LOG.load(Ordering::Relaxed) {
                     req.get_requests()
                         .iter()
                         .filter(|r| r.has_read_index())
@@ -1195,7 +1196,7 @@ where
             }
             // Forward to raftstore.
             Ok(None) => {
-                if PRINTF_LOG.load(Ordering::Relaxed) {
+                if TXN_LOG.load(Ordering::Relaxed) {
                     req.get_requests()
                         .iter()
                         .filter(|r| r.has_read_index())

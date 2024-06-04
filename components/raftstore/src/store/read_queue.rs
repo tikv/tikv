@@ -25,6 +25,7 @@ use crate::{
     store::{
         fsm::apply::{self, PRINTF_LOG},
         metrics::*,
+        read_queue::apply::TXN_LOG,
         Config,
     },
     Result,
@@ -279,7 +280,7 @@ impl<C: ErrorCallback> ReadIndexQueue<C> {
                         continue;
                     }
                 }
-                if PRINTF_LOG.load(Ordering::Relaxed) {
+                if TXN_LOG.load(Ordering::Relaxed) {
                     info!(
                         "*** advance_replica_reads";
                         // "start_ts" => self.reads[offset].start_ts,

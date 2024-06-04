@@ -5,7 +5,7 @@ use std::{borrow::Cow, sync::atomic::Ordering};
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{IsolationLevel, WriteConflictReason};
-use raftstore::store::fsm::apply::PRINTF_LOG;
+use raftstore::store::fsm::apply::{PRINTF_LOG, TXN_LOG};
 use tikv_kv::SEEK_BOUND;
 use txn_types::{Key, LastChange, Lock, LockType, TimeStamp, TsSet, Value, WriteRef, WriteType};
 
@@ -177,7 +177,7 @@ impl<S: Snapshot> PointGetter<S> {
             if let Some(lock) = self.load_and_check_lock(user_key)? {
                 let lock_clone = lock.clone();
                 let data = self.load_data_from_lock(user_key, lock);
-                if PRINTF_LOG.load(Ordering::Relaxed) {
+                if TXN_LOG.load(Ordering::Relaxed) {
                     info!("*** point getter with access lock";
                         "start_ts" => self.ts,
                         "lock" => ?lock_clone,
@@ -220,7 +220,7 @@ impl<S: Snapshot> PointGetter<S> {
             ) {
                 self.statistics.lock.processed_keys += 1;
                 if self.access_locks.contains(lock.ts) {
-                    if PRINTF_LOG.load(Ordering::Relaxed) {
+                    if TXN_LOG.load(Ordering::Relaxed) {
                         info!("*** getter with access lock return lock";
                             "lock" => ?&lock,
                             "start_ts" => self.ts,
@@ -235,7 +235,7 @@ impl<S: Snapshot> PointGetter<S> {
                 Err(e.into())
             } else {
                 if self.bypass_locks.contains(lock.ts) {
-                    if PRINTF_LOG.load(Ordering::Relaxed) {
+                    if TXN_LOG.load(Ordering::Relaxed) {
                         info!("*** getter with bypass lock return None";
                             "start_ts" => self.ts,
                             "bypass_locks" => ?self.bypass_locks,

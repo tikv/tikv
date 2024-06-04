@@ -25,7 +25,7 @@ use futures::{
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri};
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
-use raftstore::store::fsm::apply::PRINTF_LOG;
+use raftstore::store::fsm::apply::{PRINTF_LOG, TXN_LOG};
 use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
@@ -467,7 +467,7 @@ impl<E: Engine> Endpoint<E> {
             return Err(Error::Region(err));
         }
 
-        if PRINTF_LOG.load(Ordering::Relaxed) {
+        if TXN_LOG.load(Ordering::Relaxed) {
             info!("cop handle_unary_request_impl snapshot got"; "req_ctx" => ?tracker.req_ctx, "range_cache_snap" => snapshot.ext().range_cache_engine_snap());
         }
 
@@ -510,7 +510,7 @@ impl<E: Engine> Endpoint<E> {
         let (exec_details, exec_details_v2) = tracker.get_exec_details();
         tracker.on_finish_all_items();
 
-        if PRINTF_LOG.load(Ordering::Relaxed) {
+        if TXN_LOG.load(Ordering::Relaxed) {
             info!("cop handle finish"; "return_rows" => exec_summary.num_produced_rows,  "req_ctx" => ?tracker.req_ctx);
         }
 

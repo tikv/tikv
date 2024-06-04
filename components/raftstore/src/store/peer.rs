@@ -114,6 +114,7 @@ use crate::{
     },
     Error, Result,
 };
+use crate::store::fsm::apply::TXN_LOG;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 // 1s
@@ -4081,7 +4082,7 @@ where
             .filter(|req| req.has_read_index())
             .map(|req| req.take_read_index());
         let (id, dropped) = self.propose_read_index(request.as_ref());
-        if PRINTF_LOG.load(Ordering::Relaxed) {
+        if TXN_LOG.load(Ordering::Relaxed) {
             info!(
                 "*** propose read index";
                 "start_ts" => ?request.as_ref().map(|r| r.get_start_ts()),

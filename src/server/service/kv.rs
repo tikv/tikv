@@ -36,6 +36,7 @@ use raftstore::{
     },
     Error as RaftStoreError, Result as RaftStoreResult,
 };
+use raftstore::store::fsm::apply::TXN_LOG;
 use resource_control::ResourceGroupManager;
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::{RaftExtension, StageLatencyStats};
@@ -1545,7 +1546,7 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
     storage: &Storage<E, L, F>,
     mut req: GetRequest,
 ) -> impl Future<Output = ServerResult<GetResponse>> {
-    if PRINTF_LOG.load(Ordering::Relaxed) {
+    if TXN_LOG.load(Ordering::Relaxed) {
         info!(
             "future_get";
             "region_id" => req.get_context().region_id,
@@ -2262,7 +2263,7 @@ fn future_copr<E: Engine>(
     req: Request,
 ) -> impl Future<Output = ServerResult<MemoryTraceGuard<Response>>> {
     let start_ts = req.start_ts;
-    if PRINTF_LOG.load(Ordering::Relaxed) {
+    if TXN_LOG.load(Ordering::Relaxed) {
         info!(
             "future_cop";
             "region_id" => req.get_context().region_id,
@@ -2273,7 +2274,7 @@ fn future_copr<E: Engine>(
     async move {
         let resp = ret.await;
         let res = resp.deref();
-        if PRINTF_LOG.load(Ordering::Relaxed) {
+        if TXN_LOG.load(Ordering::Relaxed) {
             info!(
                 "Coprocessor response";
                 "start_ts" => start_ts,

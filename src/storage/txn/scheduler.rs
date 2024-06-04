@@ -51,6 +51,7 @@ use raftstore::store::{fsm::apply::PRINTF_LOG, TxnExt};
 use resource_control::{ResourceController, ResourceGroupManager, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory};
 use smallvec::{smallvec, SmallVec};
+use raftstore::store::fsm::apply::TXN_LOG;
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{
     memory::MemoryQuota, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
@@ -567,7 +568,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let cid = task.cid();
         let tracker = task.tracker();
         let cmd = task.cmd();
-        if PRINTF_LOG.load(Ordering::Relaxed) {
+        if TXN_LOG.load(Ordering::Relaxed) {
             info!("received new command"; "cid" => cid, "cmd" => ?cmd, "tracker" => ?tracker);
         }
 
@@ -758,7 +759,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     }
                     task.set_extra_op(extra_op);
 
-                    if PRINTF_LOG.load(Ordering::Relaxed) {
+                    if TXN_LOG.load(Ordering::Relaxed) {
                         info!(
                             "process cmd with snapshot";
                             "cmd" => ?&task.cmd(),
@@ -808,7 +809,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let pr = ProcessResult::Failed {
             err: StorageError::from(err),
         };
-        if PRINTF_LOG.load(Ordering::Relaxed) {
+        if TXN_LOG.load(Ordering::Relaxed) {
             info!("write command finished with error";
                 "pr" => ?&pr,
             );
@@ -883,7 +884,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
         }
 
-        if PRINTF_LOG.load(Ordering::Relaxed) {
+        if TXN_LOG.load(Ordering::Relaxed) {
             info!(
                 "write command finished";
                 "pipelined" => pipelined,
@@ -1407,7 +1408,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // the error to the callback, and releases the latches.
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
-                if PRINTF_LOG.load(Ordering::Relaxed) {
+                if TXN_LOG.load(Ordering::Relaxed) {
                     info!("write command failed"; "cid" => cid, "err" => ?err);
                 }
                 scheduler.finish_with_err(cid, err, Some(sched_details));
@@ -1702,7 +1703,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     fail_point!("scheduler_async_write_finish");
                     let ok = res.is_ok();
 
-                    if PRINTF_LOG.load(Ordering::Relaxed) {
+                    if TXN_LOG.load(Ordering::Relaxed) {
                         info!("scheduler async write applied finish and callback";
                         "cid" => cid,
                         "ok" => ok);

@@ -92,6 +92,7 @@ use raftstore::store::{
     fsm::apply::PRINTF_LOG, util::build_key_range, ReadStats, TxnExt, WriteStats,
 };
 use rand::prelude::*;
+use raftstore::store::fsm::apply::TXN_LOG;
 use resource_control::{ResourceController, ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory};
 use tikv_kv::{OnAppliedCb, SnapshotExt};
@@ -602,7 +603,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         key: Key,
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Option<Value>, KvGetStatistics)>> {
-        if PRINTF_LOG.load(Ordering::Relaxed) {
+        if TXN_LOG.load(Ordering::Relaxed) {
             info!("storage.get";
                 "key" => %key,
                 "start_ts" => start_ts,
@@ -3321,7 +3322,7 @@ fn prepare_snap_ctx<'a>(
     concurrency_manager: &ConcurrencyManager,
     cmd: CommandKind,
 ) -> Result<SnapContext<'a>> {
-    if PRINTF_LOG.load(Ordering::Relaxed) {
+    if TXN_LOG.load(Ordering::Relaxed) {
         let keys_debug: Vec<_> = keys.clone().into_iter().collect();
         info!("prepare_snap_ctx"; "cmd" => ?cmd, "start_ts" => start_ts, "stale_read" => pb_ctx.get_stale_read(),
         "isolation_level" => ?pb_ctx.get_isolation_level(), "bypass_locks" => ?bypass_locks, "keys" => ?keys_debug);
