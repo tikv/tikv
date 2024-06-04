@@ -20,11 +20,12 @@ mod util {
         type Output = ();
 
         fn poll(
-            self: std::pin::Pin<&mut Self>,
+            mut self: std::pin::Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
         ) -> std::task::Poll<Self::Output> {
             if self.0 {
                 cx.waker().wake_by_ref();
+                self.0 = false;
                 Poll::Pending
             } else {
                 Poll::Ready(())

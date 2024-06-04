@@ -1,5 +1,10 @@
-use std::{any::Any, time::Instant};
+use std::{
+    any::Any,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
+use engine_rocks::RocksEngine;
 use external_storage::{BackendConfig, BlobStore, S3Storage};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use kvproto::brpb::{StorageBackend, S3};
@@ -8,7 +13,10 @@ use super::{
     compaction::CollectCompaction,
     storage::{CompactStorage, LoadFromExt, MetaStorage},
 };
-use crate::compact::storage::StreamyMetaStorage;
+use crate::compact::{
+    compaction::{CompactLogExt, CompactStatistic, CompactWorker, LoadStatistic},
+    storage::StreamyMetaStorage,
+};
 
 #[tokio::test]
 #[ignore]
@@ -26,6 +34,13 @@ async fn playground() {
         as Box<dyn Any>;
     let storage = storage.downcast::<BlobStore<S3Storage>>().unwrap();
     let now = Instant::now();
+
+    let guard = pprof::ProfilerGuardBuilder::default()
+        .frequency(99)
+        .blocklist(&["libc", "libgcc", "pthread", "vdso"])
+        .build()
+        .unwrap();
+
     let mut ext = LoadFromExt::default();
     ext.max_concurrent_fetch = 128;
     let meta = StreamyMetaStorage::load_from_ext(storage.as_ref(), ext).await;
@@ -37,4 +52,27 @@ async fn playground() {
     let compaction = collect.next().await.unwrap();
     println!("{:?}", now.elapsed());
     println!("{:?}", compaction);
+    drop(collect);
+    let arc_store = Arc::from(*storage);
+    let mut compact_worker = CompactWorker::<RocksEngine>::inplace(Arc::clone(&arc_store) as _);
+    let mut load_stat = LoadStatistic::default();
+    let mut compact_stat = CompactStatistic::default();
+    let c_ext = CompactLogExt {
+        load_statistic: Some(&mut load_stat),
+        compact_statistic: Some(&mut compact_stat),
+        max_load_concurrency: 32,
+    };
+    compact_worker
+        .compact_ext(compaction.unwrap(), c_ext)
+        .await
+        .unwrap();
+
+    println!("{:?}\n{:?}", load_stat, compact_stat);
+    let mut file = std::fs::File::create("/tmp/pprof.svg").unwrap();
+    guard
+        .report()
+        .build()
+        .unwrap()
+        .flamegraph(&mut file)
+        .unwrap();
 }

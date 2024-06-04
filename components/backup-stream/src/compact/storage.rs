@@ -46,8 +46,11 @@ pub struct LogFile {
     pub min_ts: u64,
     pub max_ts: u64,
     pub min_start_ts: u64,
+    pub min_key: Arc<[u8]>,
+    pub max_key: Arc<[u8]>,
 }
 
+#[derive(Clone)]
 pub struct LogFileId {
     pub name: Arc<str>,
     pub offset: u64,
@@ -207,9 +210,9 @@ impl MetaFile {
         meta_file.merge_from_bytes(&content)?;
         let mut log_files = vec![];
 
-        for group in meta_file.get_file_groups() {
+        for mut group in meta_file.take_file_groups().into_iter() {
             let name = Arc::from(group.path.clone().into_boxed_str());
-            for log_file in group.get_data_files_info() {
+            for mut log_file in group.take_data_files_info().into_iter() {
                 log_files.push(LogFile {
                     id: LogFileId {
                         name: Arc::clone(&name),
@@ -221,10 +224,13 @@ impl MetaFile {
                     cf: utils::cf_name(&log_file.cf),
                     max_ts: log_file.max_ts,
                     min_ts: log_file.min_ts,
+                    max_key: Arc::from(log_file.take_end_key().into_boxed_slice()),
+                    min_key: Arc::from(log_file.take_start_key().clone().into_boxed_slice()),
                     min_start_ts: log_file.min_begin_ts_in_default_cf,
                 })
             }
         }
+        drop(meta_file);
 
         let result = Self {
             name: Arc::from(blob.key.to_owned().into_boxed_str()),

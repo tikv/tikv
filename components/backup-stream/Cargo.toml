@@ -95,6 +95,10 @@ test_pd = { workspace = true }
 test_pd_client = { workspace = true }
 test_raftstore = { workspace = true }
 test_util = { workspace = true }
+pprof = { version = "0.13", default-features = false, features = [
+  "flamegraph",
+  "protobuf-codec",
+] } 
 tokio = { version = "1.5", features = ["test-util"] }
 url = "2"
 walkdir = "2"

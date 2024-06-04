@@ -1,6 +1,7 @@
 use std::{fmt::Display, panic::Location};
 
 use thiserror::Error as ThisError;
+use tikv_util::codec;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -19,6 +20,8 @@ pub enum ErrorKind {
     Protobuf(#[from] protobuf::error::ProtobufError),
     #[error("Engine {0}")]
     Engine(#[from] engine_traits::Error),
+    #[error("Codec {0}")]
+    Codec(#[from] codec::Error),
 }
 
 impl<T: Into<ErrorKind>> From<T> for Error {
