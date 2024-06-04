@@ -239,7 +239,7 @@ impl RangeManager {
         };
         let meta = self.ranges.get_mut(&range_key).unwrap();
 
-        if read_ts <= meta.safe_point {
+        if read_ts < meta.safe_point {
             return Err(FailedReason::TooOldRead);
         }
 
