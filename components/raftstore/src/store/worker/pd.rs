@@ -7,13 +7,8 @@ use std::{
     io, mem,
     sync::{
         atomic::Ordering,
-<<<<<<< HEAD
-        mpsc::{self, Receiver, Sender},
-        Arc,
-=======
         mpsc::{self, Receiver, Sender, SyncSender},
-        Arc, Mutex,
->>>>>>> 101b8bc50f (raftstore: optimize AutoSplitController memory usage (#16678))
+        Arc,
     },
     thread::{Builder, JoinHandle},
     time::{Duration, Instant},
@@ -582,20 +577,8 @@ where
                 // make sure the record won't be disturbed.
                 let mut collect_store_infos_thread_stats = ThreadInfoStatistics::new();
                 let mut load_base_split_thread_stats = ThreadInfoStatistics::new();
-<<<<<<< HEAD
-=======
-                let mut region_cpu_records_collector = None;
                 let mut auto_split_controller_ctx = AutoSplitControllerContext::new(STATS_LIMIT);
-                // Register the region CPU records collector.
-                if auto_split_controller
-                    .cfg
-                    .region_cpu_overload_threshold_ratio()
-                    > 0.0
-                {
-                    region_cpu_records_collector =
-                        Some(collector_reg_handle.register(Box::new(reporter.clone()), false));
-                }
->>>>>>> 101b8bc50f (raftstore: optimize AutoSplitController memory usage (#16678))
+                
                 while let Err(mpsc::RecvTimeoutError::Timeout) =
                     timer_rx.recv_timeout(tick_interval)
                 {
@@ -681,7 +664,6 @@ where
             thread_stats,
         );
         auto_split_controller.clear();
-<<<<<<< HEAD
         let task = Task::AutoSplit { split_infos };
         if let Err(e) = scheduler.schedule(task) {
             error!(
@@ -689,10 +671,7 @@ where
                 "err" => ?e,
             );
         }
-=======
         auto_split_controller_ctx.maybe_gc();
-        reporter.auto_split(split_infos);
->>>>>>> 101b8bc50f (raftstore: optimize AutoSplitController memory usage (#16678))
         for i in 0..TOP_N {
             if i < top_qps.len() {
                 READ_QPS_TOPN
@@ -733,33 +712,14 @@ where
         }
     }
 
-<<<<<<< HEAD
     #[inline(always)]
-    fn get_read_stats_sender(&self) -> &Option<Sender<ReadStats>> {
+    fn get_read_stats_sender(&self) -> &Option<SyncSender<ReadStats>> {
         &self.read_stats_sender
     }
 
     #[inline(always)]
-    fn get_cpu_stats_sender(&self) -> &Option<Sender<Arc<RawRecords>>> {
+    fn get_cpu_stats_sender(&self) -> &Option<SyncSender<Arc<RawRecords>>> {
         &self.cpu_stats_sender
-=======
-    #[inline]
-    pub fn maybe_send_read_stats(&self, read_stats: ReadStats) {
-        if let Some(sender) = &self.read_stats_sender {
-            if sender.send(read_stats).is_err() {
-                debug!("send read_stats failed, are we shutting down?")
-            }
-        }
-    }
-
-    #[inline]
-    pub fn maybe_send_cpu_stats(&self, cpu_stats: &Arc<RawRecords>) {
-        if let Some(sender) = &self.cpu_stats_sender {
-            if sender.send(cpu_stats.clone()).is_err() {
-                debug!("send region cpu info failed, are we shutting down?")
-            }
-        }
->>>>>>> 101b8bc50f (raftstore: optimize AutoSplitController memory usage (#16678))
     }
 }
 
@@ -1664,7 +1624,7 @@ where
         }
         if !read_stats.region_infos.is_empty() {
             if let Some(sender) = self.stats_monitor.get_read_stats_sender() {
-                if sender.send(read_stats).is_err() {
+                if sender.try_send(read_stats).is_err() {
                     warn!("send read_stats failed, are we shutting down?")
                 }
             }
@@ -1816,7 +1776,7 @@ where
     fn handle_region_cpu_records(&mut self, records: Arc<RawRecords>) {
         // Send Region CPU info to AutoSplitController inside the stats_monitor.
         if let Some(cpu_stats_sender) = self.stats_monitor.get_cpu_stats_sender() {
-            if cpu_stats_sender.send(records.clone()).is_err() {
+            if cpu_stats_sender.try_send(records.clone()).is_err() {
                 warn!("send region cpu info failed, are we shutting down?")
             }
         }
