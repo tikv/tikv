@@ -496,8 +496,8 @@ impl Iterator for RangeCacheIterator {
 
     fn value(&self) -> &[u8] {
         assert!(self.valid);
-        if let Some(saved_value) = self.saved_value.as_ref() {
-            saved_value.as_slice()
+        if self.direction == Direction::Backward {
+            self.saved_value.as_ref().unwrap().as_slice()
         } else {
             self.iter.value().as_slice()
         }
@@ -505,8 +505,12 @@ impl Iterator for RangeCacheIterator {
 
     fn next(&mut self) -> Result<bool> {
         assert!(self.valid);
-        assert!(self.direction == Direction::Forward);
         let guard = &epoch::pin();
+
+        if self.direction == Direction::Backward {
+            self.reverse_to_forward(guard);
+        }
+
         self.iter.next(guard);
 
         perf_counter_add!(internal_key_skipped_count, 1);
@@ -2107,14 +2111,14 @@ mod tests {
 
         let mut wb = engine.write_batch();
         wb.prepare_for_range(range.clone());
-        wb.delete(b"a");
-        wb.delete(b"a");
-        wb.delete(b"a");
-        wb.delete(b"a");
-        wb.put(b"a", b"val_a");
-        wb.put(b"b", b"val_b");
-        wb.set_sequence_number(100);
-        wb.write();
+        wb.delete(b"a").unwrap();
+        wb.delete(b"a").unwrap();
+        wb.delete(b"a").unwrap();
+        wb.delete(b"a").unwrap();
+        wb.put(b"a", b"val_a").unwrap();
+        wb.put(b"b", b"val_b").unwrap();
+        wb.set_sequence_number(100).unwrap();
+        wb.write().unwrap();
 
         let snap = engine
             .snapshot(range.clone(), 100, MAX_SEQUENCE_NUMBER)
