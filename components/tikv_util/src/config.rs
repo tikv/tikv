@@ -24,6 +24,7 @@ use serde::{
     de::{self, Unexpected, Visitor},
     Deserialize, Deserializer, Serialize, Serializer,
 };
+use serde_json::Value;
 use thiserror::Error;
 
 use super::time::Instant;
@@ -529,28 +530,17 @@ impl<'de> Deserialize<'de> for ReadableDuration {
 #[derive(Clone, Debug, Copy, PartialEq)]
 pub struct ReadableOffsetTime(pub NaiveTime, pub FixedOffset);
 
-impl From<ReadableOffsetTime> for ConfigValue {
-    fn from(ot: ReadableOffsetTime) -> ConfigValue {
-        ConfigValue::OffsetTime((ot.0, ot.1))
-    }
-}
-
-impl From<ConfigValue> for ReadableOffsetTime {
-    fn from(c: ConfigValue) -> ReadableOffsetTime {
-        if let ConfigValue::OffsetTime(ot) = c {
-            ReadableOffsetTime(ot.0, ot.1)
-        } else {
-            panic!("expect: ConfigValue::OffsetTime, got: {:?}", c)
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 pub struct ReadableSchedule(pub Vec<ReadableOffsetTime>);
 
 impl From<ReadableSchedule> for ConfigValue {
     fn from(otv: ReadableSchedule) -> ConfigValue {
-        ConfigValue::Schedule(otv.0.into_iter().map(|ot| (ot.0, ot.1)).collect::<Vec<_>>())
+        ConfigValue::Schedule(
+            otv.0
+                .into_iter()
+                .map(|offset_time| offset_time.to_string())
+                .collect(),
+        )
     }
 }
 
@@ -559,7 +549,7 @@ impl From<ConfigValue> for ReadableSchedule {
         if let ConfigValue::Schedule(otv) = c {
             ReadableSchedule(
                 otv.into_iter()
-                    .map(|(o, t)| ReadableOffsetTime(o, t))
+                    .map(|s| ReadableOffsetTime::from_str(s.as_str()).unwrap())
                     .collect::<Vec<_>>(),
             )
         } else {
@@ -581,6 +571,32 @@ impl ReadableSchedule {
         self.0
             .iter()
             .any(|time| time.hour_minutes_matches(datetime))
+    }
+}
+
+fn parse_string_to_vec(input: &str) -> Result<Vec<String>, String> {
+    let value: Value = serde_json::from_str(input).unwrap();
+
+    if let Value::Array(arr) = value {
+        return Ok(arr
+            .into_iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect());
+    }
+
+    Err(format!("{:?} cannot be parsed to vec", input))
+}
+
+impl FromStr for ReadableSchedule {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        Ok(ReadableSchedule(
+            parse_string_to_vec(s)?
+                .into_iter()
+                .map(|s| ReadableOffsetTime::from_str(s.as_str()))
+                .try_collect()?,
+        ))
     }
 }
 
@@ -2052,8 +2068,9 @@ mod tests {
 
     #[test]
     fn test_readable_schedule() {
+        // Tests HHMM offsets for timezones.
         let schedule = ReadableSchedule(
-            vec!["09:30 +00:00", "23:00 +00:00"]
+            vec!["09:30 +0000", "11:15 +0530", "23:00 +0000"]
                 .into_iter()
                 .flat_map(ReadableOffsetTime::from_str)
                 .collect::<Vec<_>>(),
@@ -2064,12 +2081,14 @@ mod tests {
         let time_c = DateTime::parse_from_rfc3339("2023-10-27T23:15:00-00:00").unwrap();
         let time_d = DateTime::parse_from_rfc3339("2023-10-27T23:00:00-00:00").unwrap();
         let time_e = DateTime::parse_from_rfc3339("2023-10-27T20:00:00-00:00").unwrap();
+        let time_f = DateTime::parse_from_rfc3339("2024-05-29T05:45:00-00:00").unwrap();
 
         // positives for schedule by hour
         assert!(schedule.is_scheduled_this_hour(&time_a));
         assert!(schedule.is_scheduled_this_hour(&time_b));
         assert!(schedule.is_scheduled_this_hour(&time_c));
         assert!(schedule.is_scheduled_this_hour(&time_d));
+        assert!(schedule.is_scheduled_this_hour(&time_f));
 
         // negatives for schedule by hour
         assert!(!schedule.is_scheduled_this_hour(&time_e));
@@ -2077,11 +2096,68 @@ mod tests {
         // positives for schedule by hour and minute
         assert!(schedule.is_scheduled_this_hour_minute(&time_a));
         assert!(schedule.is_scheduled_this_hour_minute(&time_d));
+        assert!(schedule.is_scheduled_this_hour_minute(&time_f));
 
         // negatives for schedule by hour and minute
         assert!(!schedule.is_scheduled_this_hour_minute(&time_b));
         assert!(!schedule.is_scheduled_this_hour_minute(&time_c));
         assert!(!schedule.is_scheduled_this_hour_minute(&time_e));
+    }
+
+    #[test]
+    fn test_readable_schedule_col_separated_offsets() {
+        // Test that HH:MM offsets are supported.
+        let schedule = ReadableSchedule(
+            vec!["09:30 +00:00", "11:15 +05:30", "23:00 +00:00"]
+                .into_iter()
+                .flat_map(ReadableOffsetTime::from_str)
+                .collect::<Vec<_>>(),
+        );
+
+        let time_a = DateTime::parse_from_rfc3339("2023-10-27T09:30:57-00:00").unwrap();
+        let time_b = DateTime::parse_from_rfc3339("2023-10-27T23:00:00-00:00").unwrap();
+        let time_c = DateTime::parse_from_rfc3339("2024-05-29T05:45:00-00:00").unwrap();
+        let time_d = DateTime::parse_from_rfc3339("2023-10-27T20:00:00-00:00").unwrap();
+
+        assert!(schedule.is_scheduled_this_hour(&time_a));
+        assert!(schedule.is_scheduled_this_hour(&time_b));
+        assert!(schedule.is_scheduled_this_hour(&time_c));
+        assert!(schedule.is_scheduled_this_hour_minute(&time_c));
+        assert!(!schedule.is_scheduled_this_hour_minute(&time_d));
+    }
+
+    #[test]
+    fn test_readable_schedule_parse() {
+        let check_parse = |vec_strs: Vec<String>, strs| {
+            let schedule = ReadableSchedule(
+                vec_strs
+                    .iter()
+                    .flat_map(|s| ReadableOffsetTime::from_str(s.as_str()))
+                    .collect::<Vec<_>>(),
+            );
+
+            let schedule2 = ReadableSchedule::from_str(strs).unwrap();
+            assert_eq!(schedule, schedule2);
+
+            let ConfigValue::Schedule(config_value) = ConfigValue::from(schedule) else {
+                unreachable!()
+            };
+            assert_eq!(config_value, vec_strs);
+            assert_eq!(
+                ReadableSchedule::from(ConfigValue::Schedule(config_value)),
+                schedule2
+            );
+        };
+
+        check_parse(
+            vec!["09:30 +00:00".to_owned(), "23:00 +00:00".to_owned()],
+            "[\"09:30 +00:00\", \"23:00 +00:00\"]",
+        );
+
+        check_parse(
+            vec!["11:30 +02:00".to_owned(), "13:00 +02:00".to_owned()],
+            "[\"11:30 +02:00\", \"13:00 +02:00\"]",
+        );
     }
 
     #[test]
