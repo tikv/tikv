@@ -779,6 +779,7 @@ where
             // ingested. check level 0 every time because we can not make sure
             // how does the number of level 0 files change.
             if self.ingest_maybe_stall() {
+                SNAP_INGEST_DELAY_COUNTER.inc();
                 break;
             }
             if let Some(Task::Apply { region_id, .. }) = self.pending_applies.front() {
@@ -803,6 +804,7 @@ where
                 }
             }
         }
+        SNAP_PENDING_APPLIES_GAUGE.set(self.pending_applies.len() as i64);
     }
 }
 

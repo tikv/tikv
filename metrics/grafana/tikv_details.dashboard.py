@@ -3774,6 +3774,36 @@ def Snapshot() -> RowPanel:
             ),
         ]
     )
+    layout.row(
+        [
+            graph_panel(
+                title="Snapshot pending applies",
+                description="The number of snapshots that are waiting to be applied",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_raftstore_snapshot_pending_applies",
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Snapshot ingest delays",
+                description="The number of snapshot ingestion delays caused by a high count of L0 files",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_raftstore_snapshot_ingest_delay",
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+    )
     return layout.row_panel
 
 
