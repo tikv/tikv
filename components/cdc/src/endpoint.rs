@@ -3028,7 +3028,7 @@ mod tests {
         let region_epoch = req.get_region_epoch().clone();
         let downstream = Downstream::new(
             "".to_string(),
-            region_epoch.clone(),
+            region_epoch,
             1,
             conn_id,
             ChangeDataRequestKvApi::TiDb,
