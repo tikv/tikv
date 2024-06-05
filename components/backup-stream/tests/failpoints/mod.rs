@@ -396,6 +396,7 @@ mod all {
         )
     }
 
+    #[test]
     fn failed_to_get_task_when_pausing() {
         let suite = SuiteBuilder::new_named("resume_error").nodes(1).build();
         suite.must_register_task(1, "resume_error");
