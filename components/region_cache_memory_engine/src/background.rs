@@ -1014,11 +1014,6 @@ fn next_to_match(
             break;
         }
 
-        // k1-10,  k1-8,  k1-5, k1-4, k1-3
-        //       9      7
-        //  range k1-3
-        //  disk  k1-4
-
         let (disk_user_key, disk_ts) = split_ts(disk_key).unwrap();
         if disk_user_key == user_key && disk_ts > ts {
             if let Ok(write) = parse_write(disk_iter.value())
@@ -1070,12 +1065,6 @@ fn next_to_match(
             );
             unreachable!()
         }
-
-        info!(
-            "next_to_match: skip rocksdb key";
-            "cache_key" => log_wrappers::Value(key),
-            "disk_key" => log_wrappers::Value(disk_key),
-        );
 
         assert!(disk_iter.next().unwrap());
     }
