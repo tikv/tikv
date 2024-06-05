@@ -506,6 +506,7 @@ dependencies = [
  "openssl",
  "pd_client",
  "pin-project",
+ "pprof",
  "prometheus",
  "prometheus-static-metric",
  "protobuf",

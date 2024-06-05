@@ -190,20 +190,13 @@ struct Source {
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 struct Record {
-    prefix: Arc<[u8]>,
     key: Vec<u8>,
     value: Vec<u8>,
 }
 
 impl Record {
     fn cmp_key(&self, other: &Self) -> std::cmp::Ordering {
-        if core::intrinsics::likely(Arc::ptr_eq(&self.prefix, &other.prefix)) {
-            self.key.cmp(&other.key)
-        } else {
-            self.prefix
-                .cmp(&other.prefix)
-                .then(self.key.cmp(&other.key))
-        }
+        self.key.cmp(&other.key)
     }
 }
 
@@ -356,25 +349,19 @@ where
         let load_stat = ext.load_statistic.is_some();
         eext.max_concurrency = ext.max_load_concurrency;
 
-        let common_prefix_len = common_prefix_len(&c.min_key, &c.max_key);
-        let common_prefix =
-            Arc::<[u8]>::from(c.min_key[..common_prefix_len].to_vec().into_boxed_slice());
-
         let items = super::util::execute_all_ext(
             c.source
                 .iter()
                 .cloned()
                 .map(|f| {
                     let source = &self.source;
-                    let common_prefix = common_prefix.clone();
                     Box::pin(async move {
                         let mut out = vec![];
                         let mut stat = LoadStatistic::default();
                         source
                             .load(f, load_stat.then_some(&mut stat), |k, v| {
                                 out.push(Record {
-                                    prefix: common_prefix.clone(),
-                                    key: k.strip_prefix(common_prefix.as_ref()).unwrap().to_owned(),
+                                    key: k.to_owned(),
                                     value: v.to_owned(),
                                 })
                             })
@@ -407,20 +394,11 @@ where
             .set_in_memory(true)
             .build(&"in-mem.sst")?;
 
-        let mut key_buf = vec![];
-        let mut last_prefix = None;
         for mut item in sorted_items {
             self.co.step().await;
-            if last_prefix == Some(Arc::as_ptr(&item.prefix)) {
-                key_buf.truncate(item.prefix.len());
-            } else {
-                last_prefix = Some(Arc::as_ptr(&item.prefix));
-                key_buf = item.prefix.to_vec();
-            }
-            key_buf.append(&mut item.key);
-            w.put(&key_buf, &item.value)?;
+            w.put(&item.key, &item.value)?;
             ext.with_compact_stat(|stat| {
-                stat.logical_key_bytes_out += key_buf.len() as u64;
+                stat.logical_key_bytes_out += item.key.len() as u64;
                 stat.logical_value_bytes_out += item.value.len() as u64;
             })
         }
@@ -452,7 +430,7 @@ where
         ext.with_compact_stat(|stat| stat.write_sst_duration += begin.saturating_elapsed());
 
         let begin = Instant::now();
-        let out_name = format!("{}-{}-{}.sst", c.region_id, c.min_ts, c.max_ts);
+        let out_name = format!("{}-{}-{}-{}.sst", c.min_ts, c.max_ts, c.cf, c.region_id);
         self.output
             .write(
                 &out_name,

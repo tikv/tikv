@@ -5,6 +5,7 @@ use std::{
 };
 
 use engine_rocks::RocksEngine;
+use engine_traits::CF_DEFAULT;
 use external_storage::{BackendConfig, BlobStore, S3Storage};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use kvproto::brpb::{StorageBackend, S3};
@@ -35,12 +36,6 @@ async fn playground() {
     let storage = storage.downcast::<BlobStore<S3Storage>>().unwrap();
     let now = Instant::now();
 
-    let guard = pprof::ProfilerGuardBuilder::default()
-        .frequency(99)
-        .blocklist(&["libc", "libgcc", "pthread", "vdso"])
-        .build()
-        .unwrap();
-
     let mut ext = LoadFromExt::default();
     ext.max_concurrent_fetch = 128;
     let meta = StreamyMetaStorage::load_from_ext(storage.as_ref(), ext).await;
@@ -49,10 +44,18 @@ async fn playground() {
         Err(err) => stream::once(futures::future::err(err)).right_stream(),
     }));
     println!("{:?}", now.elapsed());
-    let compaction = collect.next().await.unwrap();
+    let compaction = collect
+        .try_filter(|f| futures::future::ready(f.cf == CF_DEFAULT))
+        .next()
+        .await
+        .unwrap();
     println!("{:?}", now.elapsed());
     println!("{:?}", compaction);
-    drop(collect);
+    let guard = pprof::ProfilerGuardBuilder::default()
+        .frequency(99)
+        .blocklist(&["libc", "libgcc", "pthread", "vdso"])
+        .build()
+        .unwrap();
     let arc_store = Arc::from(*storage);
     let mut compact_worker = CompactWorker::<RocksEngine>::inplace(Arc::clone(&arc_store) as _);
     let mut load_stat = LoadStatistic::default();
