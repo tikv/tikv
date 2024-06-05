@@ -36,6 +36,8 @@ use crate::{
     RangeCacheMemoryEngine,
 };
 
+pub const MAX_SEQUENCE_NUMBER: u64 = (1 << 56) - 1;
+
 #[derive(PartialEq)]
 enum Direction {
     Uninit,
@@ -456,6 +458,27 @@ impl RangeCacheIterator {
         }
     }
 
+    fn reverse_to_backward(&mut self, guard: &epoch::Guard) {
+        self.direction = Direction::Backward;
+        self.find_user_key_before_saved(guard);
+    }
+
+    fn reverse_to_forward(&mut self, guard: &epoch::Guard) {
+        if !self.prefix_extractor.is_none() || !self.iter.valid() {
+            let seek_key = encode_seek_key(&self.saved_user_key, MAX_SEQUENCE_NUMBER);
+            self.iter.seek(&seek_key, guard);
+        }
+
+        self.direction = Direction::Forward;
+        while self.iter.valid() {
+            let InternalKey { user_key, .. } = decode_key(self.iter.key().as_slice());
+            if user_key >= self.saved_user_key.as_slice() {
+                return;
+            }
+            self.iter.next(guard);
+        }
+    }
+
     #[inline]
     fn collects_read_flow_stats(&mut self) {
         // Updating stats and perf context counters
@@ -504,8 +527,12 @@ impl Iterator for RangeCacheIterator {
 
     fn prev(&mut self) -> Result<bool> {
         assert!(self.valid);
-        assert!(self.direction == Direction::Backward);
         let guard = &epoch::pin();
+
+        if self.direction == Direction::Forward {
+            self.reverse_to_backward(guard);
+        }
+
         self.prev_internal(guard);
 
         self.local_stats.number_db_prev += 1;
@@ -671,7 +698,7 @@ mod tests {
     use tempfile::Builder;
     use tikv_util::config::VersionTrack;
 
-    use super::RangeCacheIterator;
+    use super::{RangeCacheIterator, MAX_SEQUENCE_NUMBER};
     use crate::{
         engine::{cf_to_id, SkiplistEngine},
         keys::{
@@ -2068,5 +2095,51 @@ mod tests {
         assert_eq!(3, statistics.get_ticker_count(Tickers::NumberDbSeekFound));
         assert_eq!(3, statistics.get_ticker_count(Tickers::NumberDbPrev));
         assert_eq!(3, statistics.get_ticker_count(Tickers::NumberDbPrevFound));
+    }
+
+    #[test]
+    fn test_reverse_direction() {
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        )));
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(range.clone());
+
+        let mut wb = engine.write_batch();
+        wb.prepare_for_range(range.clone());
+        wb.delete(b"a");
+        wb.delete(b"a");
+        wb.delete(b"a");
+        wb.delete(b"a");
+        wb.put(b"a", b"val_a");
+        wb.put(b"b", b"val_b");
+        wb.set_sequence_number(100);
+        wb.write();
+
+        let snap = engine
+            .snapshot(range.clone(), 100, MAX_SEQUENCE_NUMBER)
+            .unwrap();
+        let mut iter_opt = IterOptions::default();
+        iter_opt.set_upper_bound(&range.end, 0);
+        iter_opt.set_lower_bound(&range.start, 0);
+
+        let mut iter = snap.iterator_opt("default", iter_opt).unwrap();
+        iter.seek_to_last();
+        assert!(iter.valid().unwrap());
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b");
+
+        iter.prev();
+        assert!(iter.valid().unwrap());
+        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.value(), b"val_a");
+
+        iter.next();
+        assert!(iter.valid().unwrap());
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b");
+
+        iter.next();
+        assert!(!iter.valid().unwrap());
     }
 }
