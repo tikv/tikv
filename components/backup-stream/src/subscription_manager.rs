@@ -462,6 +462,7 @@ where
                     }
                 }
                 ObserveOp::ResolveRegions { callback, min_ts } => {
+                    fail::fail_point!("subscription_manager_resolve_regions");
                     let now = Instant::now();
                     let timedout = self.wait(Duration::from_secs(5)).await;
                     if timedout {
