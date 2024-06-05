@@ -674,7 +674,13 @@ impl BackgroundRunnerCore {
                     .pop_front()
                     .unwrap();
                 assert_eq!(r, range);
-                core.cached_write_batch.remove(&range).unwrap();
+                core.cached_write_batch
+                    .remove(&range)
+                    .expect(format!("cannot remove range {:?}", range).as_str());
+                info!(
+                    "remove range in cache write batch";
+                    "range" => ?range,
+                );
                 drop(core);
                 // Clear the range directly here to quickly free the memory.
                 self.delete_ranges(&[r]);
@@ -682,12 +688,8 @@ impl BackgroundRunnerCore {
             }
 
             if core.has_cached_write_batch(&range) {
-                let (cache_batch, skiplist_engine) = {
-                    (
-                        core.take_cache_write_batch(&range).unwrap(),
-                        core.engine().clone(),
-                    )
-                };
+                let (cache_batch, skiplist_engine) =
+                    { (core.take_cache_write_batch(&range), core.engine().clone()) };
                 drop(core);
                 let guard = &epoch::pin();
                 for (seq, entry) in cache_batch {
@@ -702,6 +704,13 @@ impl BackgroundRunnerCore {
                 }
                 fail::fail_point!("on_cached_write_batch_consumed");
             } else {
+                core.cached_write_batch
+                    .remove(&range)
+                    .expect(format!("cannot remove range {:?}", range).as_str());
+                info!(
+                    "remove range in cache write batch";
+                    "range" => ?range,
+                );
                 RangeCacheMemoryEngineCore::pending_range_completes_loading(&mut core, &range);
                 break;
             }
@@ -716,7 +725,13 @@ impl BackgroundRunnerCore {
             .pending_ranges_loading_data
             .pop_front()
             .unwrap();
-        core.cached_write_batch.remove(&range).unwrap();
+        core.cached_write_batch
+            .remove(&range)
+            .expect(format!("cannot get range {:?}", range).as_str());
+        info!(
+            "remove range in cache write batch";
+            "range" => ?range,
+        );
         assert_eq!(r, range);
     }
 
@@ -1228,11 +1243,13 @@ impl Runnable for BackgroundRunner {
                                                 core.memory_controller.clone(),
                                             );
 
-                                            info!(
-                                                "write to memory in load";
-                                                "key" => log_wrappers::Value(encoded_key.as_slice()),
-                                                "cf" => ?cf,
-                                            );
+                                            if PRINTF_LOG.load(Ordering::Relaxed) {
+                                                info!(
+                                                    "write to memory in load";
+                                                    "key" => log_wrappers::Value(encoded_key.as_slice()),
+                                                    "cf" => ?cf,
+                                                );
+                                            }
                                             handle.insert(encoded_key, val, guard);
 
                                             iter.next().unwrap();

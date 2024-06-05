@@ -206,14 +206,16 @@ impl RangeCacheMemoryEngineCore {
     }
 
     pub(crate) fn has_cached_write_batch(&self, cache_range: &CacheRange) -> bool {
-        self.cached_write_batch.contains_key(cache_range)
+        self.cached_write_batch
+            .get(cache_range)
+            .map_or(false, |entries| !entries.is_empty())
     }
 
     pub(crate) fn take_cache_write_batch(
         &mut self,
         cache_range: &CacheRange,
-    ) -> Option<Vec<(u64, RangeCacheWriteBatchEntry)>> {
-        self.cached_write_batch.remove(cache_range)
+    ) -> Vec<(u64, RangeCacheWriteBatchEntry)> {
+        std::mem::take(self.cached_write_batch.get_mut(cache_range).unwrap())
     }
 
     // ensure that the transfer from `pending_ranges_loading_data` to
@@ -422,10 +424,28 @@ impl RangeCacheMemoryEngine {
             info!(
                 "Range to load";
                 "Tag" => &range.tag,
+                "range" => ?range,
                 "Cached" => range_manager.ranges().len(),
                 "Pending" => range_manager.pending_ranges_loading_data.len(),
             );
-            assert!(core.cached_write_batch.get(&range).is_none());
+
+            if core
+                .cached_write_batch
+                .insert(range.clone(), vec![])
+                .is_some()
+            {
+                warn!(
+                    "cache write batch not empry";
+                    "range" => ?range,
+                );
+                unreachable!()
+            }
+
+            info!(
+                "insert in cached write batch";
+                "range" => ?range,
+            );
+
             if let Err(e) = self
                 .bg_worker_manager()
                 .schedule_task(BackgroundTask::LoadRange)
@@ -464,13 +484,14 @@ impl RangeCacheMemoryEngine {
             if !group_entries_to_cache.is_empty() {
                 let mut core = RwLockUpgradableReadGuard::upgrade(core);
                 for (range, write_batches) in group_entries_to_cache {
-                    core.cached_write_batch.entry(range).or_default().extend(
-                        write_batches.into_iter().map(|e| {
+                    core.cached_write_batch
+                        .get_mut(&range)
+                        .expect(format!("cannot get range {:?}", range).as_str())
+                        .extend(write_batches.into_iter().map(|e| {
                             let cur = *seq;
                             *seq += 1;
                             (cur, e)
-                        }),
-                    );
+                        }));
                 }
             }
             (entries_to_write, engine)
