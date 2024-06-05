@@ -469,7 +469,7 @@ where
                             "take" => ?now.saturating_elapsed(), "timedout" => %timedout);
                     }
                     let regions = leader_checker
-                        .resolve(self.subs.current_regions(), min_ts)
+                        .resolve(self.subs.current_regions(), min_ts, None)
                         .await;
                     let cps = self.subs.resolve_with(min_ts, regions);
                     let min_region = cps.iter().min_by_key(|rs| rs.checkpoint);
