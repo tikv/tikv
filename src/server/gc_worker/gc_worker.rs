@@ -1206,7 +1206,10 @@ impl<E: Engine> Drop for GcWorker<E> {
     }
 }
 
-impl<E: Engine<Local: KvEngine<DiskEngine = RocksEngine>>> GcWorker<E> {
+impl<E> GcWorker<E>
+where
+    E: Engine<Local: KvEngine<DiskEngine = RocksEngine>>,
+{
     pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
         &self,
         cfg: AutoGcConfig<S, R>,
