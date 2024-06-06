@@ -5,6 +5,9 @@ use std::io::{self, Error, ErrorKind};
 use async_trait::async_trait;
 use cloud::metrics;
 use futures::{future::TryFutureExt, Future};
+use http::Uri;
+use hyper::{client::HttpConnector, service::Service};
+use hyper_tls::HttpsConnector;
 use rusoto_core::{
     region::Region,
     request::{HttpClient, HttpConfig},
@@ -14,6 +17,7 @@ use rusoto_credential::{
 };
 use rusoto_sts::WebIdentityProvider;
 use tikv_util::{
+    info,
     stream::{retry_ext, RetryError, RetryExt},
     warn,
 };
@@ -43,20 +47,40 @@ impl RetryError for CredentialsErrorWrapper {
     }
 }
 
-pub fn new_http_client() -> io::Result<HttpClient> {
+#[derive(Clone)]
+pub struct DebugSrv<S>(S);
+
+impl<S: Service<Uri>> Service<Uri> for DebugSrv<S> {
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = S::Future;
+
+    fn poll_ready(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), Self::Error>> {
+        self.0.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: Uri) -> Self::Future {
+        info!("hyper connecting to uri"; "req" => ?req);
+        self.0.call(req)
+    }
+}
+
+pub fn new_http_client() -> io::Result<HttpClient<DebugSrv<HttpsConnector<HttpConnector>>>> {
     let mut http_config = HttpConfig::new();
     // This can greatly improve performance dealing with payloads greater
     // than 100MB. See https://github.com/rusoto/rusoto/pull/1227
     // for more information.
     http_config.read_buf_size(READ_BUF_SIZE);
+    let conn = hyper_tls::HttpsConnector::new();
     // It is important to explicitly create the client and not use a global
     // See https://github.com/tikv/tikv/issues/7236.
-    HttpClient::new_with_config(http_config).map_err(|e| {
-        Error::new(
-            ErrorKind::Other,
-            format!("create aws http client error: {}", e),
-        )
-    })
+    Ok(HttpClient::from_connector_with_config(
+        DebugSrv(conn),
+        http_config,
+    ))
 }
 
 pub fn get_region(region: &str, endpoint: &str) -> io::Result<Region> {
