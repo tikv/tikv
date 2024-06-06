@@ -1,11 +1,12 @@
 use core::slice::SlicePattern;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fmt::Debug,
     sync::{atomic::Ordering, Arc},
 };
 
 use bytes::Bytes;
+use collections::HashMap;
 use crossbeam::epoch;
 use engine_traits::{
     CacheRange, MiscExt, Mutable, RangeCacheEngine, Result, WriteBatch, WriteBatchExt,
@@ -42,6 +43,7 @@ pub(crate) const MEM_CONTROLLER_OVERHEAD: usize = 8;
 // delegate. It sets `range_cache_status` which is used to determine whether the
 // writes of this peer should be buffered.
 pub struct RangeCacheWriteBatch {
+    id: u64,
     // `range_cache_status` indicates whether the range is cached, loading data, or not cached. If
     // it is cached, we should buffer the write in `buffer` which is consumed during the write
     // is written in the kv engine. If it is loading data, we should buffer the write in
@@ -75,7 +77,9 @@ impl std::fmt::Debug for RangeCacheWriteBatch {
 
 impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
     fn from(engine: &RangeCacheMemoryEngine) -> Self {
+        let id = rand::random::<u64>();
         Self {
+            id,
             range_cache_status: RangeCacheStatus::NotInCache,
             buffer: Vec::new(),
             pending_range_in_loading_buffer: Vec::new(),
@@ -93,7 +97,9 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
 
 impl RangeCacheWriteBatch {
     pub fn with_capacity(engine: &RangeCacheMemoryEngine, cap: usize) -> Self {
+        let id = rand::random::<u64>();
         Self {
+            id,
             range_cache_status: RangeCacheStatus::NotInCache,
             buffer: Vec::with_capacity(cap),
             // cache_buffer should need small capacity
@@ -131,10 +137,12 @@ impl RangeCacheWriteBatch {
         let mut lock_modification: u64 = 0;
         // Some entries whose ranges may be marked as evicted above, but it does not
         // matter, they will be deleted later.
+        let mut have_entry = false;
         let res = entries_to_write
             .into_iter()
             .chain(std::mem::take(&mut self.buffer))
             .try_for_each(|e| {
+                have_entry = true;
                 let cur = seq;
                 seq += 1;
                 if is_lock_cf(e.cf) {
@@ -144,6 +152,17 @@ impl RangeCacheWriteBatch {
             });
         let duration = start.saturating_elapsed_secs();
         WRITE_DURATION_HISTOGRAM.observe(duration);
+
+        {
+            let mut core = self.engine.core.write();
+            let res = core
+                .mut_range_manager()
+                .ranges_being_written
+                .remove(&self.id);
+            if have_entry {
+                assert!(!res.unwrap().is_empty());
+            }
+        }
 
         if self
             .engine
@@ -586,7 +605,7 @@ impl WriteBatch for RangeCacheWriteBatch {
 
     fn prepare_for_range(&mut self, range: CacheRange) {
         let time = Instant::now();
-        self.set_range_cache_status(self.engine.prepare_for_apply(&range));
+        self.set_range_cache_status(self.engine.prepare_for_apply(self.id, &range));
         self.memory_usage_reach_hard_limit = false;
         self.current_range = Some(range);
         self.prepare_apply += time.saturating_elapsed();

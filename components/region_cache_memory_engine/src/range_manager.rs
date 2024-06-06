@@ -9,6 +9,7 @@ use std::{
     },
 };
 
+use collections::HashMap;
 use engine_rocks::RocksSnapshot;
 use engine_traits::{CacheRange, FailedReason};
 use kvproto::metapb;
@@ -148,6 +149,7 @@ pub struct RangeManager {
     pub(crate) pending_ranges_loading_data: VecDeque<(CacheRange, Arc<RocksSnapshot>, bool)>,
 
     ranges_in_gc: BTreeSet<CacheRange>,
+    pub(crate) ranges_being_written: HashMap<u64, Vec<CacheRange>>,
     range_evictions: AtomicU64,
 }
 
@@ -392,7 +394,11 @@ impl RangeManager {
 
     pub fn on_delete_ranges(&mut self, ranges: &[CacheRange]) {
         for r in ranges {
-            self.ranges_being_deleted.remove(r);
+            self.ranges_being_deleted.remove(&r);
+            info!(
+                "range eviction done";
+                "range" => ?r,
+            );
         }
     }
 

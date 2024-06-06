@@ -234,6 +234,19 @@ pub fn encode_key_for_eviction(range: &CacheRange) -> (InternalBytes, InternalBy
     (encoded_start, encoded_end)
 }
 
+#[inline]
+pub fn encode_key_for_eviction_for_lock_cf(range: &CacheRange) -> (InternalBytes, InternalBytes) {
+    // Both encoded_start and encoded_end should be the smallest key in the
+    // respective of user key, so that the eviction covers all versions of the range
+    // start and covers nothing of range end.
+
+    let encoded_start = encode_key(&range.start, u64::MAX, VALUE_TYPE_FOR_SEEK);
+
+    let encoded_end = encode_key(&range.end, u64::MAX, VALUE_TYPE_FOR_SEEK);
+
+    (encoded_start, encoded_end)
+}
+
 // mvcc_prefix is already mem-comparison encodede
 #[inline]
 pub fn encoding_for_filter(mvcc_prefix: &[u8], start_ts: TimeStamp) -> InternalBytes {
@@ -266,7 +279,9 @@ pub fn construct_value(i: u64, j: u64) -> String {
 #[cfg(test)]
 mod tests {
     use bytes::BufMut;
+    use engine_traits::CacheRange;
 
+    use super::encode_key_for_eviction;
     use crate::keys::{encode_key, ValueType};
 
     fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {
@@ -308,5 +323,18 @@ mod tests {
         // key2: k2_MAX_MAX_val
         let key2 = encode_key(&k, u64::MAX, ValueType::Value);
         assert!(key1.cmp(&key2).is_le());
+    }
+
+    #[test]
+    fn test_xx() {
+        let range_start = hex::decode(
+            "7A7480000000000000FF705F698000000000FF0000020380000000FF0000000403800000FF0000012A36000000FC",
+        ).unwrap();
+        let range_end = hex::decode("7A7480000000000000FF7200000000000000F8").unwrap();
+
+        let key = hex::decode("7A7480000000000000FF745F698000000000FF0000020380000000FF0000000403800000FF0000000003038000FF0000000000040380FF00000000000A3903FF8000000000000004FF0380000000000000FF0303800000000000FF0A39000000000000F900000000D107A100").unwrap();
+
+        let range = CacheRange::new(range_start.to_vec(), range_end.to_vec());
+        let (start, end) = encode_key_for_eviction(&range);
     }
 }

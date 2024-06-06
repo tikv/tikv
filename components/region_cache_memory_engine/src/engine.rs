@@ -1,11 +1,14 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fmt::{self, Debug},
     ops::Bound,
     result,
-    sync::{atomic::AtomicU64, Arc},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -16,7 +19,7 @@ use engine_traits::{
     SnapshotMiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
-use raftstore::coprocessor::RegionInfoProvider;
+use raftstore::{coprocessor::RegionInfoProvider, store::fsm::apply::PRINTF_LOG};
 use skiplist_rs::{
     base::{Entry, OwnedIter},
     SkipList,
@@ -27,7 +30,10 @@ use txn_types::TimeStamp;
 
 use crate::{
     background::{BackgroundTask, BgWorkManager, PdRangeHintService},
-    keys::{encode_key_for_eviction, encode_seek_key, InternalBytes},
+    keys::{
+        encode_key_for_eviction, encode_key_for_eviction_for_lock_cf, encode_seek_key,
+        InternalBytes,
+    },
     memory_controller::MemoryController,
     range_manager::{LoadFailedReason, RangeCacheStatus, RangeManager},
     read::{RangeCacheIterator, RangeCacheSnapshot, RangeCacheSnapshotMeta},
@@ -151,13 +157,24 @@ impl SkiplistEngine {
             "range" => ?range,
         );
         DATA_CFS.iter().for_each(|&cf| {
-            let (start, end) = encode_key_for_eviction(range);
+            let (start, end) = if cf == CF_LOCK {
+                encode_key_for_eviction_for_lock_cf(range)
+            } else {
+                encode_key_for_eviction(range)
+            };
             let handle = self.cf_handle(cf);
             let mut iter = handle.iterator();
             let guard = &epoch::pin();
             iter.seek(&start, guard);
             while iter.valid() && iter.key() < &end {
                 handle.remove(iter.key(), guard);
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    info!(
+                        "delete range";
+                        "key" => log_wrappers::Value(iter.key().as_slice()),
+                        "cf" => ?cf,
+                    );
+                }
                 iter.next(guard);
             }
             // guard will buffer 8 drop methods, flush here to clear the buffer.
@@ -359,13 +376,27 @@ impl RangeCacheMemoryEngine {
 
     // It handles the pending range and check whether to buffer write for this
     // range.
-    pub(crate) fn prepare_for_apply(&self, range: &CacheRange) -> RangeCacheStatus {
-        let core = self.core.upgradable_read();
-        let range_manager = core.range_manager();
+    pub(crate) fn prepare_for_apply(
+        &self,
+        write_batch_id: u64,
+        range: &CacheRange,
+    ) -> RangeCacheStatus {
+        let mut core = self.core.write();
+        let mut range_manager = core.mut_range_manager();
         if range_manager.pending_ranges_in_loading_contains(range) {
+            range_manager
+                .ranges_being_written
+                .entry(write_batch_id)
+                .or_default()
+                .push(range.clone());
             return RangeCacheStatus::Loading;
         }
         if range_manager.contains_range(range) {
+            range_manager
+                .ranges_being_written
+                .entry(write_batch_id)
+                .or_default()
+                .push(range.clone());
             return RangeCacheStatus::Cached;
         }
 
@@ -397,8 +428,6 @@ impl RangeCacheMemoryEngine {
                 }
             })
         {
-            let mut core = RwLockUpgradableReadGuard::upgrade(core);
-
             if overlapped {
                 core.mut_range_manager().pending_ranges.swap_remove(idx);
                 return RangeCacheStatus::NotInCache;
@@ -421,6 +450,13 @@ impl RangeCacheMemoryEngine {
             range_manager
                 .pending_ranges_loading_data
                 .push_back((range.clone(), rocks_snap, false));
+
+            range_manager
+                .ranges_being_written
+                .entry(write_batch_id)
+                .or_default()
+                .push(range.clone());
+
             info!(
                 "Range to load";
                 "Tag" => &range.tag,
@@ -581,6 +617,8 @@ impl RangeCacheMemoryEngine {
         };
         for range in ranges {
             let read_ts = TimeStamp::physical_now() - Duration::from_secs(40).as_millis() as u64;
+            let read_ts = TimeStamp::compose(read_ts, 0).into_inner();
+
             if let Ok(range_snap) = self.snapshot(range.0.clone(), read_ts, snap.sequence_number())
             {
                 ranges_to_audit.push((range_snap, range.1));

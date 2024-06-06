@@ -1861,7 +1861,6 @@ where
                 "cf" => ?cf,
                 "start_ts" => ?start_ts,
                 "key" => log_wrappers::hex_encode_upper(key),
-                "value" => log_wrappers::hex_encode_upper(value),
                 "index" => ctx.exec_log_index,
             );
         }
