@@ -489,7 +489,7 @@ pub struct BackgroundRunner {
     gc_range_remote: Remote<yatp::task::future::TaskCell>,
     gc_range_worker: Worker,
 
-    // RocksEngine is used to get the oldest snapshot no.
+    // RocksEngine is used to get the oldest snapshot sequence number.
     rocks_engine: Option<RocksEngine>,
 }
 
@@ -547,7 +547,7 @@ impl Runnable for BackgroundRunner {
             }
             BackgroundTask::Gc(t) => {
                 let seqno = (|| {
-                    fail::fail_point!("oldest_seqno_ingest", |t| {
+                    fail::fail_point!("in_memry_engine_gc_oldest_seqno", |t| {
                         Some(t.unwrap().parse::<u64>().unwrap())
                     });
 

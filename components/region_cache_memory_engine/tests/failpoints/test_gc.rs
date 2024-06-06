@@ -38,7 +38,7 @@ fn test_gc_worker() {
         (engine.cf_handle(CF_WRITE), engine.cf_handle(CF_DEFAULT))
     };
 
-    fail::cfg("oldest_seqno_ingest", "return(1000)").unwrap();
+    fail::cfg("in_memry_engine_gc_oldest_seqno", "return(1000)").unwrap();
 
     let start_ts = TimeStamp::physical_now() - Duration::from_secs(10).as_millis() as u64;
     let commit_ts1 = TimeStamp::physical_now() - Duration::from_secs(9).as_millis() as u64;
