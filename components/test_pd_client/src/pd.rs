@@ -923,12 +923,12 @@ pub struct TestPdClient {
     feature_gate: FeatureGate,
     trigger_leader_info_loss: AtomicBool,
 
-    pub gc_safepoints: RwLock<Vec<GcSafePoint>>,
+    pub gc_safepoints: RwLock<Vec<ServiceSafePoint>>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct GcSafePoint {
-    pub serivce: String,
+pub struct ServiceSafePoint {
+    pub service: String,
     pub ttl: Duration,
     pub safepoint: TimeStamp,
 }
@@ -1938,8 +1938,8 @@ impl PdClient for TestPdClient {
         ttl: Duration,
     ) -> PdFuture<()> {
         if ttl.as_secs() > 0 {
-            self.gc_safepoints.wl().push(GcSafePoint {
-                serivce: name,
+            self.gc_safepoints.wl().push(ServiceSafePoint {
+                service: name,
                 ttl,
                 safepoint,
             });

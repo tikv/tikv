@@ -983,7 +983,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     pub fn buffer_batch_get(
         &self,
         ctx: Context,
-        keys: Vec<Key>,
+        mut keys: Vec<Key>,
         start_ts: TimeStamp,
     ) -> impl Future<Output = Result<(Vec<Result<KvPair>>, KvGetStatistics)>> {
         let stage_begin_ts = Instant::now();
@@ -999,6 +999,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
             )
         });
         let priority_tag = get_priority_tag(priority);
+        keys.sort();
+        keys.dedup();
         let key_ranges = keys
             .iter()
             .map(|k| (k.as_encoded().to_vec(), k.as_encoded().to_vec()))
@@ -1066,7 +1068,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         let _guard = sample.observe_cpu();
                         let mut reader = MvccReader::new(
                             snapshot,
-                            Some(ScanMode::Forward),
+                            // TODO: compare the performance of Forward scan and multi get operations.
+                            None,
                             !ctx.get_not_fill_cache(),
                         );
                         // TODO: metrics
@@ -2242,9 +2245,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
                     if !snapshot.ext().is_max_ts_synced() {
                         return Err(Error::from(txn::Error::from(
-                            TxnErrorInner::MaxTimestampNotSynced {
+                            TxnErrorInner::RawKvMaxTimestampNotSynced {
                                 region_id: ctx.get_region_id(),
-                                start_ts: TimeStamp::zero(),
                             },
                         )));
                     }

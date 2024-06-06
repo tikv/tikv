@@ -3,7 +3,10 @@
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     result,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use engine_rocks::RocksSnapshot;
@@ -112,9 +115,8 @@ pub struct RangeManager {
     // Range before an eviction. It is recorded due to some undropped snapshot, which block the
     // evicted range deleting the relevant data.
     historical_ranges: BTreeMap<CacheRange, RangeMeta>,
-    // `ranges_being_deleted` contains two types of ranges: 1. the range is evicted and not finish
-    // the delete(or even not start to delete due to ongoing snapshot), 2. the range is loading
-    // data but memory acquirement is rejected.
+    // `ranges_being_deleted` contains ranges that are evicted but not finished the delete (or even
+    // not start to delete due to ongoing snapshot)
     pub(crate) ranges_being_deleted: BTreeSet<CacheRange>,
     // ranges that are cached now
     ranges: BTreeMap<CacheRange, RangeMeta>,
@@ -145,6 +147,7 @@ pub struct RangeManager {
     pub(crate) pending_ranges_loading_data: VecDeque<(CacheRange, Arc<RocksSnapshot>, bool)>,
 
     ranges_in_gc: BTreeSet<CacheRange>,
+    range_evictions: AtomicU64,
 }
 
 impl RangeManager {
@@ -310,6 +313,12 @@ impl RangeManager {
             return false;
         };
 
+        info!(
+            "evict range in cache range engine";
+            "range_start" => log_wrappers::Value(&evict_range.start),
+            "range_end" => log_wrappers::Value(&evict_range.end),
+        );
+        self.range_evictions.fetch_add(1, Ordering::Relaxed);
         let meta = self.ranges.remove(&range_key).unwrap();
         let (left_range, right_range) = range_key.split_off(evict_range);
         assert!((left_range.is_some() || right_range.is_some()) || &range_key == evict_range);
@@ -371,6 +380,10 @@ impl RangeManager {
         }
         self.pending_ranges.push(cache_range);
         Ok(())
+    }
+
+    pub fn get_and_reset_range_evictions(&self) -> u64 {
+        self.range_evictions.swap(0, Ordering::Relaxed)
     }
 }
 

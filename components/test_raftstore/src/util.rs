@@ -50,10 +50,11 @@ use raftstore::{
     RaftRouterCompactedEventSender, Result,
 };
 use rand::{seq::SliceRandom, RngCore};
-use region_cache_memory_engine::RangeCacheMemoryEngine;
+use region_cache_memory_engine::{RangeCacheEngineContext, RangeCacheMemoryEngine};
 use server::common::{ConfiguredRaftEngine, KvEngineBuilder};
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
+use test_util::eventually;
 use tikv::{
     config::*,
     server::KvEngineFactoryBuilder,
@@ -64,7 +65,12 @@ use tikv::{
 };
 pub use tikv_util::store::{find_peer, new_learner_peer, new_peer};
 use tikv_util::{
-    config::*, escape, mpsc::future, time::ThreadReadId, worker::LazyWorker, HandyRwLock,
+    config::*,
+    escape,
+    mpsc::future,
+    time::{Instant, ThreadReadId},
+    worker::LazyWorker,
+    HandyRwLock,
 };
 use txn_types::Key;
 
@@ -100,6 +106,23 @@ pub fn must_get<EK: KvEngine>(
         log_wrappers::hex_encode_upper(key),
         res
     )
+}
+
+pub fn eventually_get_equal<EK: KvEngine>(engine: &impl RawEngine<EK>, key: &[u8], value: &[u8]) {
+    eventually(
+        Duration::from_millis(100),
+        Duration::from_millis(2000),
+        || {
+            let res = engine
+                .get_value_cf("default", &keys::data_key(key))
+                .unwrap();
+            if let Some(res) = res.as_ref() {
+                value == &res[..]
+            } else {
+                false
+            }
+        },
+    );
 }
 
 pub fn must_get_equal<EK: KvEngine>(engine: &impl RawEngine<EK>, key: &[u8], value: &[u8]) {
@@ -694,7 +717,9 @@ where
     }
     let factory = builder.build();
     let disk_engine = factory.create_shared_db(dir.path()).unwrap();
-    let kv_engine: EK = KvEngineBuilder::build(&cfg.tikv.range_cache_engine, disk_engine, None);
+    let config = Arc::new(VersionTrack::new(cfg.tikv.range_cache_engine.clone()));
+    let kv_engine: EK =
+        KvEngineBuilder::build(RangeCacheEngineContext::new(config), disk_engine, None);
     let engines = Engines::new(kv_engine, raft_engine);
     (
         engines,
@@ -1511,17 +1536,33 @@ pub fn must_raw_put(client: &TikvClient, ctx: Context, key: Vec<u8>, value: Vec<
     put_req.set_context(ctx);
     put_req.key = key;
     put_req.value = value;
-    let put_resp = client.raw_put(&put_req).unwrap();
-    assert!(
-        !put_resp.has_region_error(),
-        "{:?}",
-        put_resp.get_region_error()
-    );
-    assert!(
-        put_resp.get_error().is_empty(),
-        "{:?}",
-        put_resp.get_error()
-    );
+
+    let retryable = |err: &kvproto::errorpb::Error| -> bool { err.has_max_timestamp_not_synced() };
+    let start = Instant::now_coarse();
+    loop {
+        let put_resp = client.raw_put(&put_req).unwrap();
+        if put_resp.has_region_error() {
+            let err = put_resp.get_region_error();
+            if retryable(err) && start.saturating_elapsed() < Duration::from_secs(5) {
+                debug!("must_raw_put meet region error"; "err" => ?err);
+                sleep_ms(100);
+                continue;
+            }
+            panic!(
+                "must_raw_put meet region error: {:?}, ctx: {:?}, key: {}, value {}",
+                err,
+                put_req.get_context(),
+                tikv_util::escape(&put_req.key),
+                tikv_util::escape(&put_req.value),
+            );
+        }
+        assert!(
+            put_resp.get_error().is_empty(),
+            "must_raw_put meet error: {:?}",
+            put_resp.get_error()
+        );
+        return;
+    }
 }
 
 pub fn must_raw_get(client: &TikvClient, ctx: Context, key: Vec<u8>) -> Option<Vec<u8>> {
