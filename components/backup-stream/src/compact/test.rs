@@ -6,13 +6,13 @@ use std::{
 
 use engine_rocks::RocksEngine;
 use engine_traits::CF_DEFAULT;
-use external_storage::{BackendConfig, BlobStore, S3Storage};
+use external_storage::{BackendConfig, BlobStore, S3Storage, WalkBlobStorage, WalkExternalStorage};
 use futures::stream::{self, StreamExt, TryStreamExt};
-use kvproto::brpb::{StorageBackend, S3};
+use kvproto::brpb::{Gcs, StorageBackend, S3};
 
 use super::{
     compaction::CollectCompaction,
-    execute::Execution,
+    execute::{Execution, LogToTerm},
     storage::{CompactStorage, LoadFromExt, MetaStorage},
 };
 use crate::compact::{
@@ -40,16 +40,16 @@ async fn playground() {
 
     let mut ext = LoadFromExt::default();
     ext.max_concurrent_fetch = 128;
-    let meta = StreamyMetaStorage::load_from_ext(storage.as_ref(), ext).await;
+    let meta = StreamyMetaStorage::load_from_ext(storage.as_ref(), ext);
     let stream = meta.flat_map(|file| match file {
         Ok(file) => stream::iter(file.logs).map(Ok).left_stream(),
         Err(err) => stream::once(futures::future::err(err)).right_stream(),
     });
-    let mut collect = CollectCompaction::new(
+    let collect = CollectCompaction::new(
         stream,
         CollectCompactionConfig {
-            compact_from_ts: 449823442605703184,
-            compact_to_ts: 449823755561146407,
+            compact_from_ts: 0,
+            compact_to_ts: u64::MAX,
         },
     );
     println!("{:?}", now.elapsed());
@@ -104,7 +104,33 @@ fn cli_playground() {
     let exec = Execution {
         from_ts: 449823442605703184,
         until_ts: 449823755561146407,
+        max_concurrent_compaction: 16,
         external_storage: backend,
     };
-    exec.run().unwrap();
+    exec.run(LogToTerm::default()).unwrap();
+}
+
+#[tokio::test]
+async fn gcloud() {
+    let mut backend = StorageBackend::new();
+    let mut gcs = Gcs::new();
+    gcs.bucket = "br-datasets".to_owned();
+    gcs.prefix = "pitr-compaction-test/log".to_owned();
+    gcs.credentials_blob = String::from_utf8(
+        std::fs::read("/root/.config/gcloud/application_default_credentials.json").unwrap(),
+    )
+    .unwrap();
+    backend.set_gcs(gcs);
+    let storage =
+        external_storage::create_walkable_storage(&backend, BackendConfig::default()).unwrap();
+
+    let now = Instant::now();
+    let mut ext = LoadFromExt::default();
+    ext.max_concurrent_fetch = 128;
+    let meta = StreamyMetaStorage::load_from_ext(storage.as_ref(), ext);
+    let mut stream = meta.flat_map(|file| match file {
+        Ok(file) => stream::iter(file.logs).map(Ok).left_stream(),
+        Err(err) => stream::once(futures::future::err(err)).right_stream(),
+    });
+    println!("{:?}", stream.take(20).try_collect::<Vec<_>>().await);
 }

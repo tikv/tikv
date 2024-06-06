@@ -267,7 +267,6 @@ impl Source {
 pub struct CompactWorker<DB> {
     source: Source,
     output: Arc<dyn ExternalStorage>,
-    max_load_concurrency: usize,
     co: Cooperate,
 
     // Note: maybe use the TiKV config to construct a DB?
@@ -302,7 +301,6 @@ impl<DB> CompactWorker<DB> {
                 inner: storage.clone(),
             },
             output: storage,
-            max_load_concurrency: 16,
             co: Cooperate::new(4096),
             _great_phantom: PhantomData,
         }
@@ -389,7 +387,7 @@ where
             .set_in_memory(true)
             .build(&"in-mem.sst")?;
 
-        for mut item in sorted_items {
+        for item in sorted_items {
             self.co.step().await;
             w.put(&item.key, &item.value)?;
             ext.with_compact_stat(|stat| {

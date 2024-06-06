@@ -6584,6 +6584,8 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "backup",
+ "backup-stream",
+ "base64 0.13.0",
  "cc",
  "cdc",
  "clap 2.33.0",

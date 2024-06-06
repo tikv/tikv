@@ -7,6 +7,7 @@
 
 mod checkpoint_manager;
 mod compact;
+pub use compact::execute as compact_logs;
 pub mod config;
 mod endpoint;
 pub mod errors;

@@ -213,7 +213,7 @@ impl<'a> StreamyMetaStorage<'a> {
         self.prefetch.push_back(fut);
     }
 
-    pub async fn load_from_ext(s: &'a dyn WalkExternalStorage, ext: LoadFromExt) -> Self {
+    pub fn load_from_ext(s: &'a dyn WalkExternalStorage, ext: LoadFromExt) -> Self {
         let files = s.walk(&METADATA_PREFIX);
         Self {
             prefetch: VecDeque::new(),

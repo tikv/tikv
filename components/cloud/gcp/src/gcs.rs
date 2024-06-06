@@ -3,21 +3,25 @@ use std::{fmt::Display, io};
 
 use async_trait::async_trait;
 use cloud::{
-    blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty},
+    blob::{
+        none_to_empty, BlobConfig, BlobObject, BlobStorage, BucketConf, PutResource,
+        StringNonEmpty, WalkBlobStorage,
+    },
     metrics,
 };
 use futures_util::{
     future::TryFutureExt,
     io::{self as async_io, AsyncRead, Cursor},
-    stream::{StreamExt, TryStreamExt},
+    stream::{self, StreamExt, TryStreamExt},
 };
 use http::HeaderValue;
-use hyper::{Body, Request, Response};
+use hyper::{body::Bytes, Body, Request, Response};
 pub use kvproto::brpb::Gcs as InputConfig;
 use tame_gcs::{
     common::{PredefinedAcl, StorageClass},
-    objects::{InsertObjectOptional, Metadata, Object},
+    objects::{InsertObjectOptional, ListOptional, ListResponse, Metadata, Object},
     types::{BucketName, ObjectId},
+    ApiResponse,
 };
 use tame_oauth::gcp::ServiceAccountInfo;
 use tikv_util::{
@@ -27,7 +31,7 @@ use tikv_util::{
 
 use crate::{
     client::{status_code_error, GcpClient, RequestError},
-    utils::retry,
+    utils::{self, retry},
 };
 
 const GOOGLE_APIS: &str = "https://www.googleapis.com";
@@ -112,7 +116,7 @@ pub struct GcsStorage {
     client: GcpClient,
 }
 
-trait ResultExt {
+pub trait ResultExt {
     type Ok;
 
     // Maps the error of this result as an `std::io::Error` with `Other` error
@@ -168,6 +172,15 @@ impl GcsStorage {
         }
 
         self.client.make_request(req, scope).await
+    }
+
+    fn maybe_strip_prefix_for_string(&self, key: String) -> String {
+        if let Some(prefix) = &self.config.bucket.prefix {
+            if key.starts_with(prefix.as_str()) {
+                return key[prefix.len()..].trim_start_matches('/').to_owned();
+            }
+        }
+        key
     }
 
     fn error_to_async_read<E>(kind: io::ErrorKind, e: E) -> cloud::blob::BlobStream<'static>
@@ -342,6 +355,76 @@ impl BlobStorage for GcsStorage {
     fn get_part(&self, name: &str, off: u64, len: u64) -> cloud::blob::BlobStream<'_> {
         // inclusive, bytes=0-499 -> [0, 499]
         self.get_range(name, Some(format!("bytes={}-{}", off, off + len - 1)))
+    }
+}
+
+struct GcsWalker<'cli, 'arg> {
+    cli: &'cli GcsStorage,
+    page_token: Option<String>,
+    prefix: &'arg str,
+}
+
+impl<'cli, 'arg> GcsWalker<'cli, 'arg> {
+    async fn one_page(&mut self) -> io::Result<Option<Vec<BlobObject>>> {
+        let mut opt = ListOptional::default();
+        let bucket =
+            BucketName::try_from(self.cli.config.bucket.bucket.to_string()).or_invalid_input(
+                format_args!("invalid bucket {}", self.cli.config.bucket.bucket),
+            )?;
+        let prefix = self.cli.maybe_prefix_key(&self.prefix);
+        opt.prefix = Some(&prefix);
+        opt.max_results = Some(128);
+        opt.page_token = self.page_token.as_deref();
+        let req = Object::list(&bucket, Some(opt)).or_io_error(format_args!(
+            "failed to list with prefix {} page_token {:?}",
+            self.prefix, self.page_token
+        ))?;
+        let res = self
+            .cli
+            .make_request(req.map(|_e| Body::empty()), tame_gcs::Scopes::ReadOnly)
+            .await
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        let resp = utils::read_from_http_body::<ListResponse>(res).await?;
+        self.page_token = resp.page_token;
+        if resp.objects.is_empty() {
+            return Ok(None);
+        }
+        let items = resp
+            .objects
+            .into_iter()
+            .map(|v| BlobObject {
+                key: self
+                    .cli
+                    .maybe_strip_prefix_for_string(v.name.unwrap_or_default()),
+            })
+            .collect::<Vec<_>>();
+        Ok(Some(items))
+    }
+}
+
+impl WalkBlobStorage for GcsStorage {
+    fn walk<'c, 'a: 'c, 'b: 'c>(
+        &'a self,
+        prefix: &'b str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn futures_util::stream::Stream<
+                    Item = std::result::Result<cloud::blob::BlobObject, io::Error>,
+                > + 'c,
+        >,
+    > {
+        let walker = GcsWalker {
+            cli: self,
+            page_token: None,
+            prefix,
+        };
+        let s = stream::try_unfold(walker, |mut w| async move {
+            let res = w.one_page().await?;
+            io::Result::Ok(res.map(|v| (v, w)))
+        })
+        .map_ok(|data| stream::iter(data.into_iter().map(Ok)))
+        .try_flatten();
+        Box::pin(s)
     }
 }
 

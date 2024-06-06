@@ -90,6 +90,9 @@ fn create_walkable_backend(
             s.set_multi_part_size(backend_config.s3_multi_part_size);
             Box::new(BlobStore::new(s)) as _
         }
+        Backend::Gcs(config) => {
+            Box::new(BlobStore::new(GcsStorage::from_input(config.clone())?)) as _
+        }
         #[allow(unreachable_patterns)]
         _ => return Err(walk_not_supported(backend.clone())),
     };
