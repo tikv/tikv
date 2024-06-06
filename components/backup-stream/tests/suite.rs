@@ -38,7 +38,7 @@ use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_raftstore::{new_server_cluster, Cluster, ServerCluster};
 use test_util::retry;
-use tikv::config::BackupStreamConfig;
+use tikv::config::{BackupStreamConfig, ResolvedTsConfig};
 use tikv_util::{
     codec::{
         number::NumberEncoder,
@@ -383,6 +383,7 @@ impl Suite {
             id,
             self.meta_store.clone(),
             cfg,
+            ResolvedTsConfig::default(),
             worker.scheduler(),
             ob,
             regions,
