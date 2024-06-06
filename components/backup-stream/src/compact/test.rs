@@ -12,10 +12,12 @@ use kvproto::brpb::{StorageBackend, S3};
 
 use super::{
     compaction::CollectCompaction,
+    execute::Execution,
     storage::{CompactStorage, LoadFromExt, MetaStorage},
 };
 use crate::compact::{
-    compaction::{CompactLogExt, CompactStatistic, CompactWorker, LoadStatistic},
+    compaction::{CollectCompactionConfig, CompactLogExt, CompactWorker},
+    statistic::{CompactStatistic, LoadStatistic},
     storage::StreamyMetaStorage,
 };
 
@@ -39,13 +41,20 @@ async fn playground() {
     let mut ext = LoadFromExt::default();
     ext.max_concurrent_fetch = 128;
     let meta = StreamyMetaStorage::load_from_ext(storage.as_ref(), ext).await;
-    let mut collect = CollectCompaction::new(meta.flat_map(|file| match file {
+    let stream = meta.flat_map(|file| match file {
         Ok(file) => stream::iter(file.logs).map(Ok).left_stream(),
         Err(err) => stream::once(futures::future::err(err)).right_stream(),
-    }));
+    });
+    let mut collect = CollectCompaction::new(
+        stream,
+        CollectCompactionConfig {
+            compact_from_ts: 449823442605703184,
+            compact_to_ts: 449823755561146407,
+        },
+    );
     println!("{:?}", now.elapsed());
     let compaction = collect
-        .try_filter(|f| futures::future::ready(f.cf == CF_DEFAULT))
+        .try_filter(|f| futures::future::ready(true))
         .next()
         .await
         .unwrap();
@@ -78,4 +87,24 @@ async fn playground() {
         .unwrap()
         .flamegraph(&mut file)
         .unwrap();
+}
+
+#[test]
+fn cli_playground() {
+    let mut backend = StorageBackend::new();
+    let mut s3 = S3::new();
+    s3.endpoint = "http://10.2.7.193:9000".to_owned();
+    s3.force_path_style = true;
+    s3.access_key = "minioadmin".to_owned();
+    s3.secret_access_key = "minioadmin".to_owned();
+    s3.bucket = "astro".to_owned();
+    s3.prefix = "tpcc-1000-incr".to_owned();
+    backend.set_s3(s3);
+
+    let exec = Execution {
+        from_ts: 449823442605703184,
+        until_ts: 449823755561146407,
+        external_storage: backend,
+    };
+    exec.run().unwrap();
 }

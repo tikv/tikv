@@ -1,9 +1,14 @@
 use std::{
-    collections::VecDeque, future::Future, pin::Pin, process::Output, sync::Arc, task::ready,
+    collections::VecDeque,
+    future::Future,
+    pin::Pin,
+    process::Output,
+    sync::Arc,
+    task::{ready, Context, Poll},
 };
 
 use chrono::format::Item;
-use external_storage::{BlobObject, ExternalStorage, WalkBlobStorage};
+use external_storage::{BlobObject, ExternalStorage, WalkBlobStorage, WalkExternalStorage};
 use futures::{
     future::{BoxFuture, FusedFuture, FutureExt, TryFutureExt},
     io::AsyncReadExt,
@@ -34,6 +39,8 @@ pub struct MetaStorage {
 pub struct MetaFile {
     pub name: Arc<str>,
     pub logs: Vec<LogFile>,
+    pub min_ts: u64,
+    pub max_ts: u64,
 }
 
 #[derive(Debug)]
@@ -48,6 +55,7 @@ pub struct LogFile {
     pub min_start_ts: u64,
     pub min_key: Arc<[u8]>,
     pub max_key: Arc<[u8]>,
+    pub is_meta: bool,
 }
 
 #[derive(Clone)]
@@ -67,16 +75,12 @@ impl std::fmt::Debug for LogFileId {
 }
 
 pub struct LoadFromExt {
-    pub from_ts: Option<TimeStamp>,
-    pub to_ts: Option<TimeStamp>,
     pub max_concurrent_fetch: usize,
 }
 
 impl Default for LoadFromExt {
     fn default() -> Self {
         Self {
-            from_ts: Default::default(),
-            to_ts: Default::default(),
             max_concurrent_fetch: 16,
         }
     }
@@ -101,29 +105,33 @@ impl MetaStorage {
 }
 
 pub struct StreamyMetaStorage<'a> {
-    prefetch:
-        VecDeque<Prefetch<Pin<Box<dyn Future<Output = Result<MetaFile>> + 'a>>, Result<MetaFile>>>,
+    prefetch: VecDeque<Prefetch<Pin<Box<dyn Future<Output = Result<MetaFile>> + 'a>>>>,
+    cached_stream_input: Option<Option<std::io::Result<BlobObject>>>,
     files: Pin<Box<dyn Stream<Item = std::io::Result<BlobObject>> + 'a>>,
     ext_storage: &'a dyn ExternalStorage,
     ext: LoadFromExt,
 }
 
 #[pin_project::pin_project(project = ProjCachedFuse)]
-enum Prefetch<F: Future<Output = T>, T> {
+enum Prefetch<F: Future> {
     Polling(#[pin] F),
-    Ready(T),
+    Ready(<F as Future>::Output),
 }
 
-impl<F: Future<Output = T>, T> Prefetch<F, T> {
-    fn must_cached(self) -> T {
+impl<F: Future> Prefetch<F> {
+    fn must_fetch(self) -> <F as Future>::Output {
         match self {
             Prefetch::Ready(v) => v,
             _ => panic!("must_cached call but the future not ready"),
         }
     }
+
+    fn new(f: F) -> Self {
+        Self::Polling(f)
+    }
 }
 
-impl<F: Future<Output = T>, T> Future for Prefetch<F, T> {
+impl<F: Future> Future for Prefetch<F> {
     type Output = ();
 
     fn poll(
@@ -144,7 +152,7 @@ impl<F: Future<Output = T>, T> Future for Prefetch<F, T> {
     }
 }
 
-impl<F: Future<Output = T>, T> FusedFuture for Prefetch<F, T> {
+impl<F: Future> FusedFuture for Prefetch<F> {
     fn is_terminated(&self) -> bool {
         match self {
             Prefetch::Polling(_) => false,
@@ -161,35 +169,55 @@ impl<'a> Stream for StreamyMetaStorage<'a> {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
         loop {
-            if self.prefetch.len() > self.ext.max_concurrent_fetch {
+            if let Some(input) = self.cached_stream_input.take() {
+                match input {
+                    Some(Ok(load)) => self.prefetch_file(cx, load),
+                    Some(Err(err)) => return Some(Err(err.into())).into(),
+                    None => return None.into(),
+                }
+            }
+
+            if self.prefetch.len() >= self.ext.max_concurrent_fetch {
+                assert!(
+                    self.cached_stream_input.is_none(),
+                    "{:?}",
+                    self.cached_stream_input
+                );
+
                 for fut in &mut self.prefetch {
                     if !fut.is_terminated() {
                         let _ = fut.poll_unpin(cx);
                     }
                 }
                 if self.prefetch[0].is_terminated() {
-                    return Some(self.prefetch.pop_front().unwrap().must_cached()).into();
+                    let file = self.prefetch.pop_front().unwrap().must_fetch();
+                    if let Poll::Ready(input) = self.files.poll_next_unpin(cx) {
+                        self.cached_stream_input = Some(input);
+                    }
+                    return Some(file).into();
+                } else {
+                    return Poll::Pending;
                 }
             }
 
-            let input = ready!(self.files.poll_next_unpin(cx));
-            let storage = self.ext_storage;
-            match input {
-                Some(Ok(load)) => self.prefetch.push_back(Prefetch::Polling(
-                    MetaFile::load_from(storage, load).boxed_local(),
-                )),
-                Some(Err(err)) => return Some(Err(err.into())).into(),
-                None => return None.into(),
-            }
+            self.cached_stream_input = Some(ready!(self.files.poll_next_unpin(cx)));
         }
     }
 }
 
 impl<'a> StreamyMetaStorage<'a> {
-    pub async fn load_from_ext(s: &'a dyn CompactStorage, ext: LoadFromExt) -> Self {
+    fn prefetch_file(&mut self, cx: &mut Context<'_>, load: BlobObject) {
+        let mut fut = Prefetch::new(MetaFile::load_from(self.ext_storage, load).boxed_local());
+        // start the execution of this future.
+        let _ = fut.poll_unpin(cx);
+        self.prefetch.push_back(fut);
+    }
+
+    pub async fn load_from_ext(s: &'a dyn WalkExternalStorage, ext: LoadFromExt) -> Self {
         let files = s.walk(&METADATA_PREFIX);
         Self {
             prefetch: VecDeque::new(),
+            cached_stream_input: None,
             files,
             ext_storage: s,
             ext,
@@ -209,6 +237,8 @@ impl MetaFile {
         let mut meta_file = kvproto::brpb::Metadata::new();
         meta_file.merge_from_bytes(&content)?;
         let mut log_files = vec![];
+        let min_ts = meta_file.min_ts;
+        let max_ts = meta_file.max_ts;
 
         for mut group in meta_file.take_file_groups().into_iter() {
             let name = Arc::from(group.path.clone().into_boxed_str());
@@ -226,6 +256,7 @@ impl MetaFile {
                     min_ts: log_file.min_ts,
                     max_key: Arc::from(log_file.take_end_key().into_boxed_slice()),
                     min_key: Arc::from(log_file.take_start_key().clone().into_boxed_slice()),
+                    is_meta: log_file.is_meta,
                     min_start_ts: log_file.min_begin_ts_in_default_cf,
                 })
             }
@@ -235,6 +266,8 @@ impl MetaFile {
         let result = Self {
             name: Arc::from(blob.key.to_owned().into_boxed_str()),
             logs: log_files,
+            min_ts,
+            max_ts,
         };
         Ok(result)
     }

@@ -1,7 +1,8 @@
-pub mod errors;
-pub mod storage;
-
 pub mod compaction;
+pub mod errors;
+pub mod execute;
+pub mod statistic;
+pub mod storage;
 
 #[cfg(test)]
 mod test;

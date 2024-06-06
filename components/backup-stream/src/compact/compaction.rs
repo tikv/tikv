@@ -26,9 +26,11 @@ use tikv_util::{
 };
 use tokio::{io::AsyncRead, sync::mpsc::Receiver};
 use tokio_stream::Stream;
+use txn_types::Key;
 
 use super::{
     errors::Result,
+    statistic::{CompactStatistic, LoadStatistic},
     storage::{LogFile, LogFileId},
     util::{Cooperate, ExecuteAllExt},
 };
@@ -39,8 +41,10 @@ pub struct Compaction {
     pub size: u64,
     pub region_id: u64,
     pub cf: &'static str,
-    pub max_ts: u64,
-    pub min_ts: u64,
+    pub input_max_ts: u64,
+    pub input_min_ts: u64,
+    pub compact_from_ts: u64,
+    pub compact_to_ts: u64,
     pub min_key: Arc<[u8]>,
     pub max_key: Arc<[u8]>,
 }
@@ -63,12 +67,18 @@ pub struct CollectCompaction<S: Stream<Item = Result<LogFile>>> {
     collector: CompactionCollector,
 }
 
+pub struct CollectCompactionConfig {
+    pub compact_from_ts: u64,
+    pub compact_to_ts: u64,
+}
+
 impl<S: Stream<Item = Result<LogFile>>> CollectCompaction<S> {
-    pub fn new(s: S) -> Self {
+    pub fn new(s: S, cfg: CollectCompactionConfig) -> Self {
         CollectCompaction {
             inner: s,
             last_compactions: None,
             collector: CompactionCollector {
+                cfg,
                 items: HashMap::new(),
                 compaction_size_threshold: ReadableSize::mb(128).0,
             },
@@ -85,6 +95,7 @@ struct CompactionCollectKey {
 struct CompactionCollector {
     items: HashMap<CompactionCollectKey, UnformedCompaction>,
     compaction_size_threshold: u64,
+    cfg: CollectCompactionConfig,
 }
 
 impl CompactionCollector {
@@ -94,6 +105,17 @@ impl CompactionCollector {
             region_id: file.region_id,
             cf: file.cf,
         };
+
+        // Skip out-of-range files and schema meta files.
+        // Meta files need to have a simpler format so other languages can easily open
+        // and rewrite it.
+        if file.is_meta
+            || file.max_ts < self.cfg.compact_from_ts
+            || file.min_ts > self.cfg.compact_to_ts
+        {
+            return None;
+        }
+
         match self.items.entry(key) {
             Entry::Occupied(mut o) => {
                 let key = *o.key();
@@ -115,10 +137,12 @@ impl CompactionCollector {
                         region_id: key.region_id,
                         cf: key.cf,
                         size: u.size,
-                        min_ts: u.min_ts,
-                        max_ts: u.max_ts,
+                        input_min_ts: u.min_ts,
+                        input_max_ts: u.max_ts,
                         min_key: u.min_key.clone(),
                         max_key: u.max_key.clone(),
+                        compact_from_ts: self.cfg.compact_from_ts,
+                        compact_to_ts: self.cfg.compact_to_ts,
                     };
                     o.remove();
                     return Some(c);
@@ -145,10 +169,12 @@ impl CompactionCollector {
             region_id: key.region_id,
             size: c.size,
             cf: key.cf,
-            max_ts: c.max_ts,
-            min_ts: c.min_ts,
+            input_max_ts: c.max_ts,
+            input_min_ts: c.min_ts,
             min_key: c.min_key,
             max_key: c.max_key,
+            compact_from_ts: self.cfg.compact_from_ts,
+            compact_to_ts: self.cfg.compact_to_ts,
         })
     }
 }
@@ -197,6 +223,11 @@ struct Record {
 impl Record {
     fn cmp_key(&self, other: &Self) -> std::cmp::Ordering {
         self.key.cmp(&other.key)
+    }
+
+    fn ts(&self) -> Result<u64> {
+        let ts = Key::decode_ts_from(&self.key)?.into_inner();
+        Ok(ts)
     }
 }
 
@@ -278,61 +309,25 @@ impl<DB> CompactWorker<DB> {
     }
 }
 
-#[derive(Default, Debug)]
-pub struct LoadStatistic {
-    pub files_in: u64,
-    pub keys_in: u64,
-    pub physical_bytes_in: u64,
-    pub logical_key_bytes_in: u64,
-    pub logical_value_bytes_in: u64,
-}
-
-impl LoadStatistic {
-    pub fn merge_with(&mut self, other: &Self) {
-        self.files_in += other.files_in;
-        self.keys_in += other.keys_in;
-        self.physical_bytes_in += other.physical_bytes_in;
-        self.logical_key_bytes_in += other.logical_key_bytes_in;
-        self.logical_value_bytes_in += other.logical_value_bytes_in;
-    }
-}
-
-#[derive(Default, Debug)]
-pub struct CompactStatistic {
-    pub keys_out: u64,
-    pub physical_bytes_out: u64,
-    pub logical_key_bytes_out: u64,
-    pub logical_value_bytes_out: u64,
-
-    pub write_sst_duration: Duration,
-    pub load_duration: Duration,
-    pub sort_duration: Duration,
-    pub save_duration: Duration,
-}
-
-impl CompactStatistic {
-    pub fn merge_with(&mut self, other: &Self) {
-        self.keys_out += other.keys_out;
-        self.physical_bytes_out += other.physical_bytes_out;
-        self.logical_key_bytes_out += other.logical_key_bytes_out;
-        self.logical_value_bytes_out += other.logical_value_bytes_out;
-        self.write_sst_duration += other.write_sst_duration;
-        self.load_duration += other.load_duration;
-        self.sort_duration += other.sort_duration;
-        self.save_duration += other.save_duration;
-    }
-}
-
 impl<DB: SstExt> CompactWorker<DB>
 where
     <<DB as SstExt>::SstWriter as SstWriter>::ExternalSstFileReader: 'static,
 {
     const COMPRESSION: Option<SstCompressionType> = Some(SstCompressionType::Lz4);
 
-    async fn merge_and_sort(&mut self, items: impl Iterator<Item = Vec<Record>>) -> Vec<Record> {
+    async fn pick_and_sort(
+        &mut self,
+        c: &Compaction,
+        items: impl Iterator<Item = Vec<Record>>,
+    ) -> Vec<Record> {
         let mut flatten_items = items
             .into_iter()
             .flat_map(|v| v.into_iter())
+            .filter(|v| {
+                v.ts()
+                    .map(|ts| ts >= c.compact_from_ts && ts < c.compact_to_ts)
+                    .unwrap_or(false)
+            })
             .collect::<Vec<_>>();
         flatten_items.sort_unstable_by(|k1, k2| k1.cmp_key(&k2));
         tokio::task::yield_now().await;
@@ -387,7 +382,7 @@ where
         cf: CfName,
         sorted_items: impl Iterator<Item = Record>,
         ext: &mut CompactLogExt<'_>,
-    ) -> Result<(impl ExternalSstFileInfo, impl std::io::Read + 'static)> {
+    ) -> Result<(u64, impl std::io::Read + 'static)> {
         let mut w = <DB as SstExt>::SstWriterBuilder::new()
             .set_cf(cf)
             .set_compression_type(Self::COMPRESSION)
@@ -408,7 +403,7 @@ where
             stat.physical_bytes_out += info.file_size();
         });
 
-        Ok((info, out))
+        Ok((info.file_size(), out))
     }
 
     pub async fn compact_ext(&mut self, c: Compaction, mut ext: CompactLogExt<'_>) -> Result<()> {
@@ -420,33 +415,33 @@ where
         ext.with_compact_stat(|stat| stat.load_duration += begin.saturating_elapsed());
 
         let begin = Instant::now();
-        let sorted_items = self.merge_and_sort(items).await;
+        let sorted_items = self.pick_and_sort(&c, items).await;
         ext.with_compact_stat(|stat| stat.sort_duration += begin.saturating_elapsed());
 
+        if sorted_items.is_empty() {
+            ext.with_compact_stat(|stat| stat.empty_generation += 1);
+            return Ok(());
+        }
+
         let begin = Instant::now();
-        let (info, out) = self
+        let (size, out) = self
             .write_sst(c.cf, sorted_items.into_iter(), &mut ext)
             .await?;
         ext.with_compact_stat(|stat| stat.write_sst_duration += begin.saturating_elapsed());
 
         let begin = Instant::now();
-        let out_name = format!("{}-{}-{}-{}.sst", c.min_ts, c.max_ts, c.cf, c.region_id);
+        let out_name = format!(
+            "compact-out/{}-{}-{}-{}.sst",
+            c.input_min_ts, c.input_max_ts, c.cf, c.region_id
+        );
         self.output
             .write(
                 &out_name,
                 external_storage::UnpinReader(Box::new(AllowStdIo::new(out))),
-                info.file_size(),
+                size,
             )
             .await?;
         ext.with_compact_stat(|stat| stat.save_duration += begin.saturating_elapsed());
         Ok(())
     }
-}
-
-fn common_prefix_len(k1: &[u8], k2: &[u8]) -> usize {
-    let mut n = 0;
-    while n < k1.len() && n < k2.len() && k1[n] == k2[n] {
-        n += 1;
-    }
-    n
 }

@@ -20,6 +20,10 @@ use crate::{
     NoopStorage, RestoreConfig, UnpinReader,
 };
 
+pub trait WalkExternalStorage: ExternalStorage + WalkBlobStorage {}
+
+impl<T: ExternalStorage + WalkBlobStorage> WalkExternalStorage for T {}
+
 pub fn create_storage(
     storage_backend: &StorageBackend,
     config: BackendConfig,
@@ -29,6 +33,31 @@ pub fn create_storage(
     } else {
         Err(bad_storage_backend(storage_backend))
     }
+}
+
+pub fn create_walkable_storage(
+    storage_backend: &StorageBackend,
+    config: BackendConfig,
+) -> io::Result<Box<dyn WalkExternalStorage>> {
+    if let Some(backend) = &storage_backend.backend {
+        create_walkable_backend(backend, config)
+    } else {
+        Err(bad_storage_backend(storage_backend))
+    }
+}
+
+fn walk_not_supported(backend: Backend) -> io::Error {
+    let storage_backend = StorageBackend {
+        backend: Some(backend),
+        ..Default::default()
+    };
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        format!(
+            "storage backend doesn't support walking {:?}",
+            storage_backend
+        ),
+    )
 }
 
 fn bad_storage_backend(storage_backend: &StorageBackend) -> io::Error {
@@ -48,6 +77,24 @@ fn bad_backend(backend: Backend) -> io::Error {
 
 fn blob_store<Blob: BlobStorage>(store: Blob) -> Box<dyn ExternalStorage> {
     Box::new(BlobStore::new(store)) as Box<dyn ExternalStorage>
+}
+
+fn create_walkable_backend(
+    backend: &Backend,
+    backend_config: BackendConfig,
+) -> io::Result<Box<dyn WalkExternalStorage>> {
+    let start = Instant::now();
+    let storage: Box<dyn WalkExternalStorage> = match backend {
+        Backend::S3(config) => {
+            let mut s = S3Storage::from_input(config.clone())?;
+            s.set_multi_part_size(backend_config.s3_multi_part_size);
+            Box::new(BlobStore::new(s)) as _
+        }
+        #[allow(unreachable_patterns)]
+        _ => return Err(walk_not_supported(backend.clone())),
+    };
+    record_storage_create(start, &*storage);
+    Ok(storage)
 }
 
 fn create_backend(
