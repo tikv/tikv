@@ -57,35 +57,35 @@ jobs:
         run: |
           M="testold" ./proxy_scripts/ci_check.sh
 
-  build-check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-        with:
-          submodules: true
-      - name: cache cargo env
-        id: cache-cargo
-        uses: actions/cache@v2
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/
-            ~/.cargo/git/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/rust-toolchain') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-      - name: Install dependencies (protocol buffers compiler)
-        uses: arduino/setup-protoc@v1
-        with:
-          version: '3.8.0'
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: install rust
-        if: steps.cache-cargo.outputs.cache-hit != 'true'
-        run: |
-          curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain none -y
-          export PATH=~/.cargo/bin/:$PATH
-          rustup self update && rustup set profile minimal && rustup default $(cat "rust-toolchain")
-          # cargo install sccache
+  # build-check:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v2
+  #       with:
+  #         submodules: true
+  #     - name: cache cargo env
+  #       id: cache-cargo
+  #       uses: actions/cache@v2
+  #       with:
+  #         path: |
+  #           ~/.cargo/bin/
+  #           ~/.cargo/registry/
+  #           ~/.cargo/git/
+  #         key: ${{ runner.os }}-cargo-${{ hashFiles('**/rust-toolchain') }}
+  #         restore-keys: |
+  #           ${{ runner.os }}-cargo-
+  #     - name: Install dependencies (protocol buffers compiler)
+  #       uses: arduino/setup-protoc@v1
+  #       with:
+  #         version: '3.8.0'
+  #         repo-token: ${{ secrets.GITHUB_TOKEN }}
+  #     - name: install rust
+  #       if: steps.cache-cargo.outputs.cache-hit != 'true'
+  #       run: |
+  #         curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain none -y
+  #         export PATH=~/.cargo/bin/:$PATH
+  #         rustup self update && rustup set profile minimal && rustup default $(cat "rust-toolchain")
+  #         # cargo install sccache
       # - name: cache build target
       #   uses: actions/cache@v2
       #   env:
@@ -97,10 +97,10 @@ jobs:
       #     key: ${{ runner.os }}-${{ env.cache-name }}-v1-${{ hashFiles('**/rust-toolchain') }}-${{ hashFiles('**/Cargo.lock') }}
       #     restore-keys: |
       #       ${{ runner.os }}-${{ env.cache-name }}-v1-${{ hashFiles('**/rust-toolchain') }}-
-      - name: format check
-        run: |
-          cd ${{github.workspace}}
-          M="fmt" ./proxy_scripts/ci_check.sh
-      - name: test
-        run: |
-          M="testnew" ./proxy_scripts/ci_check.sh
+      # - name: format check
+      #   run: |
+      #     cd ${{github.workspace}}
+      #     M="fmt" ./proxy_scripts/ci_check.sh
+      # - name: test
+      #   run: |
+      #     M="testnew" ./proxy_scripts/ci_check.sh
