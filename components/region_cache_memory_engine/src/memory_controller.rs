@@ -66,7 +66,8 @@ impl MemoryController {
 
         // We dont count the node overhead in the write batch to reduce complexity as
         // there overhead should be negligible
-        let mem_usage = self.allocated.fetch_add(n as i64, Ordering::Relaxed) as usize
+        let prev = self.allocated.fetch_add(n as i64, Ordering::Relaxed);
+        let mem_usage = if prev > 0 { prev } else { 0 } as usize
             + n
             + node_count * NODE_OVERHEAD_SIZE_EXPECTATION;
         if mem_usage >= self.config.value().hard_limit_threshold() {
