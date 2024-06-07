@@ -374,4 +374,56 @@ pub mod tests {
         rsm.collect_changed_ranges(&mut added, &mut removed);
         assert_eq!(&removed, &[CacheRange::from_region(&region_1)]);
     }
+
+    #[test]
+    fn test_collect_candidates_for_eviction() {
+        fn make_region_vec(rs: &[&Region]) -> TopRegions {
+            rs.iter().map(|&r| (r.clone(), 42)).collect::<Vec<_>>()
+        }
+
+        let region_1 = new_region(1, b"k1", b"k2", 0);
+        let region_2 = new_region(2, b"k3", b"k4", 0);
+        let region_3 = new_region(3, b"k5", b"k6", 0);
+        let region_4 = new_region(4, b"k7", b"k8", 0);
+        let region_5 = new_region(5, b"k9", b"k10", 0);
+        let region_6 = new_region(6, b"k11", b"k12", 0);
+
+        let all_regions = make_region_vec(&[
+            &region_1, &region_2, &region_3, &region_4, &region_5, &region_6,
+        ]);
+
+        let sim = Arc::new(RegionInfoSimulator {
+            regions: Mutex::new(all_regions.clone()),
+        });
+        // 10 ms min duration eviction for testing purposes.
+        let rsm = RangeStatsManager::new(5, Duration::from_millis(10), sim.clone());
+        let r_i_p: Arc<dyn RegionInfoProvider> = sim.clone();
+        let check_is_cached = move |range: &CacheRange| -> bool {
+            r_i_p
+                .find_region_by_key(&range.start[1..])
+                .unwrap()
+                .get_id()
+                <= 5
+        };
+        let mut _added = Vec::<CacheRange>::new();
+        let mut _removed = Vec::<CacheRange>::new();
+        rsm.collect_changed_ranges(&mut _added, &mut _removed);
+        let mut candidates_for_eviction = Vec::<(CacheRange, u64)>::new();
+        rsm.collect_candidates_for_eviction(&mut candidates_for_eviction, &check_is_cached);
+        assert!(candidates_for_eviction.is_empty());
+        std::thread::sleep(Duration::from_millis(100));
+        rsm.collect_candidates_for_eviction(&mut candidates_for_eviction, &check_is_cached);
+        let expected_candidates_for_eviction = all_regions
+            .iter()
+            .rev()
+            .filter_map(|(r, s)| {
+                if r.get_id() <= 5 {
+                    Some((CacheRange::from_region(r), *s))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(expected_candidates_for_eviction, candidates_for_eviction);
+    }
 }
