@@ -899,8 +899,11 @@ where
     ) {
         let label = "ingest";
         let timer = Instant::now_coarse();
+        let mut resp = IngestResponse::default();
+
         if let Err(err) = self.check_suspend() {
-            ctx.spawn(async move { crate::send_rpc_response!(Err(err), sink, label, timer) });
+            resp.set_error(ImportPbError::from(err).take_store_error());
+            ctx.spawn(async move { crate::send_rpc_response!(Ok(resp), sink, label, timer) });
             return;
         }
 
@@ -945,8 +948,10 @@ where
     ) {
         let label = "multi-ingest";
         let timer = Instant::now_coarse();
+        let mut resp = IngestResponse::default();
         if let Err(err) = self.check_suspend() {
-            ctx.spawn(async move { crate::send_rpc_response!(Err(err), sink, label, timer) });
+            resp.set_error(ImportPbError::from(err).take_store_error());
+            ctx.spawn(async move { crate::send_rpc_response!(Ok(resp), sink, label, timer) });
             return;
         }
 

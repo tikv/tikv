@@ -555,11 +555,14 @@ mod tests {
     use std::{
         collections::BTreeMap,
         fmt::Display,
-        sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender},
+        sync::{
+            mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender},
+            Arc,
+        },
         time::Duration,
     };
 
-    use engine_rocks::RocksEngine;
+    use engine_rocks::{BlobRunMode, RocksEngine};
     use engine_traits::{MiscExt, CF_WRITE};
     use futures::{executor::block_on, StreamExt};
     use kvproto::{
@@ -569,15 +572,19 @@ mod tests {
     use raftstore::{coprocessor::ObserveHandle, store::RegionSnapshot};
     use resolved_ts::TxnLocks;
     use test_raftstore::MockRaftStoreRouter;
-    use tikv::storage::{
-        kv::Engine,
-        txn::tests::{
-            must_acquire_pessimistic_lock, must_commit, must_prewrite_delete, must_prewrite_put,
-            must_prewrite_put_with_txn_soucre,
+    use tikv::{
+        config::DbConfig,
+        storage::{
+            kv::Engine,
+            txn::tests::{
+                must_acquire_pessimistic_lock, must_commit, must_prewrite_delete,
+                must_prewrite_put, must_prewrite_put_with_txn_soucre,
+            },
+            TestEngineBuilder,
         },
-        TestEngineBuilder,
     };
     use tikv_util::{
+        config::ReadableSize,
         memory::MemoryQuota,
         sys::thread::ThreadBuildWrapper,
         worker::{LazyWorker, Runnable},
@@ -1063,6 +1070,59 @@ mod tests {
         let res = rx1.recv_timeout(Duration::from_millis(200)).unwrap();
         res.unwrap_err();
 
+        worker.stop();
+    }
+
+    #[test]
+    fn test_scanner_with_titan() {
+        let mut cfg = DbConfig::default();
+        cfg.titan.enabled = true;
+        cfg.defaultcf.titan.blob_run_mode = BlobRunMode::Normal;
+        cfg.defaultcf.titan.min_blob_size = ReadableSize(0);
+        cfg.writecf.titan.blob_run_mode = BlobRunMode::Normal;
+        cfg.writecf.titan.min_blob_size = ReadableSize(0);
+        cfg.lockcf.titan.blob_run_mode = BlobRunMode::Normal;
+        cfg.lockcf.titan.min_blob_size = ReadableSize(0);
+        let mut engine = TestEngineBuilder::new().build_with_cfg(&cfg).unwrap();
+
+        must_prewrite_put(&mut engine, b"zkey", b"value", b"zkey", 100);
+        must_commit(&mut engine, b"zkey", 100, 110);
+        for cf in &[CF_WRITE, CF_DEFAULT] {
+            engine.kv_engine().unwrap().flush_cf(cf, true).unwrap();
+        }
+        must_prewrite_put(&mut engine, b"zkey", b"value", b"zkey", 150);
+        must_commit(&mut engine, b"zkey", 150, 160);
+        for cf in &[CF_WRITE, CF_DEFAULT] {
+            engine.kv_engine().unwrap().flush_cf(cf, true).unwrap();
+        }
+
+        let (mut worker, pool, mut initializer, _rx, mut drain) = mock_initializer(
+            usize::MAX,
+            usize::MAX,
+            1000,
+            engine.kv_engine(),
+            ChangeDataRequestKvApi::TiDb,
+            false,
+        );
+        initializer.checkpoint_ts = 120.into();
+        let snap = engine.snapshot(Default::default()).unwrap();
+
+        let th = pool.spawn(async move {
+            let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
+            initializer
+                .async_incremental_scan(snap, Region::default(), memory_quota)
+                .await
+                .unwrap();
+        });
+
+        let mut total_entries = 0;
+        while let Some((event, _)) = block_on(drain.drain().next()) {
+            if let CdcEvent::Event(e) = event {
+                total_entries += e.get_entries().get_entries().len();
+            }
+        }
+        assert_eq!(total_entries, 2);
+        block_on(th).unwrap();
         worker.stop();
     }
 }

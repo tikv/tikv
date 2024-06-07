@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "6.5.7"
+version = "6.5.9"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -350,7 +350,7 @@ server = { path = "components/server" }
 service = { path = "components/service" }
 snap_recovery = { path = "components/snap_recovery", default-features = false }
 sst_importer = { path = "components/sst_importer", default-features = false }
-test_backup = { path = "components/test_backup" }
+test_backup = { path = "components/test_backup", default-features = false }
 test_coprocessor = { path = "components/test_coprocessor", default-features = false }
 example_coprocessor_plugin = { path = "components/test_coprocessor_plugin/example_plugin" }
 test_pd = { path = "components/test_pd" }

@@ -42,7 +42,7 @@ use tikv_util::{
     warn,
     worker::Runnable,
 };
-use tokio::runtime::Runtime;
+use tokio::runtime::{Handle, Runtime};
 use txn_types::{Key, Lock, TimeStamp};
 
 use crate::{
@@ -773,7 +773,13 @@ impl<R: RegionInfoProvider> Progress<R> {
                         let ekey = get_min_end_key(end_key.as_ref(), region);
                         let skey = get_max_start_key(start_key.as_ref(), region);
                         assert!(!(skey == ekey && ekey.is_some()), "{:?} {:?}", skey, ekey);
-                        let leader = find_peer(region, store_id).unwrap().to_owned();
+                        let leader = if let Some(peer) = find_peer(region, store_id) {
+                            peer.to_owned()
+                        } else {
+                            // skip the region at this time, and would retry to backup the region in
+                            // finegrained step.
+                            continue;
+                        };
                         let backup_range = BackupRange {
                             start_key: skey,
                             end_key: ekey,
@@ -1097,6 +1103,13 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                 codec,
             ));
         }
+    }
+
+    /// Get the internal handle of the io thread pool used by the backup
+    /// endpoint. This is mainly shared for disk snapshot backup (so they
+    /// don't need to spawn on the gRPC pool.)
+    pub fn io_pool_handle(&self) -> &Handle {
+        self.io_pool.handle()
     }
 }
 

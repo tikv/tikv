@@ -806,6 +806,9 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
         i32::from(word_cnt!(rhs.int_cnt)),
         i32::from(word_cnt!(rhs.frac_cnt)),
     );
+
+    let old_r_int_word_cnt = r_int_word_cnt;
+
     let (int_word_to, frac_word_to) = (
         word_cnt!(lhs.int_cnt + rhs.int_cnt) as usize,
         l_frac_word_cnt + r_frac_word_cnt,
@@ -831,7 +834,7 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
             l_frac_word_cnt = 0;
             r_frac_word_cnt = 0;
         } else {
-            old_frac_word_to -= int_word_to as i32;
+            old_frac_word_to -= frac_word_to as i32;
             old_int_word_to = old_frac_word_to / 2;
             if l_frac_word_cnt <= r_frac_word_cnt {
                 l_frac_word_cnt -= old_int_word_to;
@@ -843,41 +846,43 @@ fn do_mul(lhs: &Decimal, rhs: &Decimal) -> Res<Decimal> {
         }
     }
 
-    let mut start_to = int_word_to + frac_word_to;
-    let (offset_min, offset_max) = (0, i32::from(WORD_BUF_LEN));
-    let r_start = num::clamp(r_int_word_cnt + r_frac_word_cnt, offset_min, offset_max) as usize;
-    let left_stop = num::clamp(l_int_word_cnt + l_frac_word_cnt, offset_min, offset_max) as usize;
-    for l_idx in (0..left_stop).rev() {
-        if start_to < r_start {
-            break;
-        }
+    let mut start_to = (int_word_to + frac_word_to - 1) as isize;
+    let r_start = old_r_int_word_cnt + r_frac_word_cnt - 1;
+    let r_stop = old_r_int_word_cnt - r_int_word_cnt;
+    let mut l_idx = l_int_word_cnt + l_frac_word_cnt - 1;
+
+    while l_idx >= 0 {
         let (mut carry, mut idx_to) = (0, start_to);
-        start_to -= 1;
-        for r_idx in (0..r_start).rev() {
-            idx_to -= 1;
-            let p = u64::from(lhs.word_buf[l_idx]) * u64::from(rhs.word_buf[r_idx]);
+        let mut r_idx = r_start;
+        while r_idx >= r_stop {
+            let p =
+                u64::from(lhs.word_buf[l_idx as usize]) * u64::from(rhs.word_buf[r_idx as usize]);
             let hi = p / u64::from(WORD_BASE);
             let lo = p - hi * u64::from(WORD_BASE);
             add(
-                dec.word_buf[idx_to],
+                dec.word_buf[idx_to as usize],
                 lo as u32,
                 &mut carry,
-                &mut dec.word_buf[idx_to],
+                &mut dec.word_buf[idx_to as usize],
             );
             carry += hi as u32;
+            r_idx -= 1;
+            idx_to -= 1;
         }
         while carry > 0 {
-            if idx_to == 0 {
+            if idx_to < 0 {
                 return Res::Overflow(dec);
             }
-            idx_to -= 1;
             add(
-                dec.word_buf[idx_to],
+                dec.word_buf[idx_to as usize],
                 0,
                 &mut carry,
-                &mut dec.word_buf[idx_to],
+                &mut dec.word_buf[idx_to as usize],
             );
+            idx_to -= 1;
         }
+        l_idx -= 1;
+        start_to -= 1;
     }
 
     // Now we have to check for -0.000 case
@@ -974,7 +979,7 @@ impl Decimal {
         Decimal {
             int_cnt,
             frac_cnt,
-            result_frac_cnt: 0,
+            result_frac_cnt: frac_cnt,
             negative,
             word_buf: [0; 9],
         }
@@ -1191,10 +1196,12 @@ impl Decimal {
                 res.word_buf[idx as usize] = 0;
             }
             res.frac_cnt = frac as u8;
+            res.result_frac_cnt = res.frac_cnt;
             return res;
         }
         if frac >= res.frac_cnt as i8 {
             res.frac_cnt = frac as u8;
+            res.result_frac_cnt = res.frac_cnt;
             return res;
         }
 
@@ -1337,6 +1344,7 @@ impl Decimal {
                     dec.int_cnt = 1;
                     dec.negative = false;
                     dec.frac_cnt = cmp::max(0, frac) as u8;
+                    dec.result_frac_cnt = dec.frac_cnt;
                     for i in 0..idx {
                         dec.word_buf[i as usize] = 0;
                     }
@@ -1350,6 +1358,7 @@ impl Decimal {
             dec.int_cnt += 1;
         }
         dec.frac_cnt = cmp::max(0, frac) as u8;
+        dec.result_frac_cnt = dec.frac_cnt;
         dec
     }
 
@@ -1663,35 +1672,39 @@ impl Decimal {
         if inner_idx != 0 {
             d.word_buf[word_idx] = word * TEN_POW[DIGITS_PER_WORD as usize - inner_idx];
         }
-        if end_idx < bs.len() && (bs[end_idx] == b'e' || bs[end_idx] == b'E') {
-            let exp = convert::bytes_to_int_without_context(&bs[end_idx + 1..])?;
-            if exp > i64::from(i32::MAX) / 2 {
-                return Ok(Res::Overflow(max_or_min_dec(
-                    d.negative,
-                    WORD_BUF_LEN * DIGITS_PER_WORD,
-                    0,
-                )));
-            }
-            if exp < i64::from(i32::MIN) / 2 && !d.is_overflow() {
-                return Ok(Res::Truncated(Self::zero()));
-            }
-            if !d.is_overflow() {
-                let is_truncated = d.is_truncated();
-                d = match d.unwrap().shift(exp as isize) {
-                    Res::Overflow(v) => Res::Overflow(max_or_min_dec(
-                        v.negative,
+        if end_idx < bs.len() {
+            if bs[end_idx] == b'e' || bs[end_idx] == b'E' {
+                let exp = convert::bytes_to_int_without_context(&bs[end_idx + 1..])?;
+                if exp > i64::from(i32::MAX) / 2 {
+                    d = Res::Overflow(max_or_min_dec(
+                        d.negative,
                         WORD_BUF_LEN * DIGITS_PER_WORD,
                         0,
-                    )),
-                    Res::Ok(v) => {
-                        if is_truncated {
-                            Res::Truncated(v)
-                        } else {
-                            Res::Ok(v)
+                    ));
+                }
+                if exp < i64::from(i32::MIN) / 2 && !d.is_overflow() {
+                    d = Res::Truncated(Self::zero());
+                }
+                if !d.is_overflow() {
+                    let is_truncated = d.is_truncated();
+                    d = match d.unwrap().shift(exp as isize) {
+                        Res::Overflow(v) => Res::Overflow(max_or_min_dec(
+                            v.negative,
+                            WORD_BUF_LEN * DIGITS_PER_WORD,
+                            0,
+                        )),
+                        Res::Ok(v) => {
+                            if is_truncated {
+                                Res::Truncated(v)
+                            } else {
+                                Res::Ok(v)
+                            }
                         }
-                    }
-                    res => res,
-                };
+                        res => res,
+                    };
+                }
+            } else if bs[end_idx..].iter().any(|c| !c.is_ascii_whitespace()) {
+                d = Res::Truncated(d.unwrap());
             }
         }
         if d.word_buf.iter().all(|c| *c == 0) {
@@ -1722,6 +1735,16 @@ impl Decimal {
     pub fn is_zero(&self) -> bool {
         let len = word_cnt!(self.int_cnt) + word_cnt!(self.frac_cnt);
         self.word_buf[0..len as usize].iter().all(|&x| x == 0)
+    }
+
+    #[cfg(test)]
+    pub fn result_frac_cnt(&self) -> u8 {
+        self.result_frac_cnt
+    }
+
+    #[cfg(test)]
+    pub fn frac_cnt(&self) -> u8 {
+        self.frac_cnt
     }
 }
 
@@ -2421,7 +2444,7 @@ mod tests {
 
     use super::{DEFAULT_DIV_FRAC_INCR, WORD_BUF_LEN, *};
     use crate::{
-        codec::error::ERR_DATA_OUT_OF_RANGE,
+        codec::error::*,
         expr::{EvalConfig, Flag},
     };
 
@@ -2957,11 +2980,17 @@ mod tests {
 
         for (dec_str, scale, half_exp, trunc_exp, ceil_exp) in cases {
             let dec = dec_str.parse::<Decimal>().unwrap();
-            let res = dec.round(scale, RoundMode::HalfEven).map(|d| d.to_string());
+            let round_dec = dec.round(scale, RoundMode::HalfEven);
+            assert_eq!(round_dec.frac_cnt, round_dec.result_frac_cnt);
+            let res = round_dec.map(|d| d.to_string());
             assert_eq!(res, half_exp.map(|s| s.to_owned()));
-            let res = dec.round(scale, RoundMode::Truncate).map(|d| d.to_string());
+            let round_dec = dec.round(scale, RoundMode::Truncate);
+            assert_eq!(round_dec.frac_cnt, round_dec.result_frac_cnt);
+            let res = round_dec.map(|d| d.to_string());
             assert_eq!(res, trunc_exp.map(|s| s.to_owned()));
-            let res = dec.round(scale, RoundMode::Ceiling).map(|d| d.to_string());
+            let round_dec = dec.round(scale, RoundMode::Ceiling);
+            assert_eq!(round_dec.frac_cnt, round_dec.result_frac_cnt);
+            let res = round_dec.map(|d| d.to_string());
             assert_eq!(res, ceil_exp.map(|s| s.to_owned()));
         }
     }
@@ -2972,8 +3001,8 @@ mod tests {
         let cases = vec![
             (WORD_BUF_LEN, b"12345" as &'static [u8], Res::Ok("12345")),
             (WORD_BUF_LEN, b"12345.", Res::Ok("12345")),
-            (WORD_BUF_LEN, b"123.45.", Res::Ok("123.45")),
-            (WORD_BUF_LEN, b"-123.45.", Res::Ok("-123.45")),
+            (WORD_BUF_LEN, b"123.45.", Res::Truncated("123.45")),
+            (WORD_BUF_LEN, b"-123.45.", Res::Truncated("-123.45")),
             (
                 WORD_BUF_LEN,
                 b".00012345000098765",
@@ -3021,8 +3050,11 @@ mod tests {
             (WORD_BUF_LEN, b"2.2E-1", Res::Ok("0.22")),
             (WORD_BUF_LEN, b"2.23E2", Res::Ok("223")),
             (WORD_BUF_LEN, b"2.23E2abc", Res::Ok("223")),
-            (WORD_BUF_LEN, b"2.23a2", Res::Ok("2.23")),
-            (WORD_BUF_LEN, b"223\xE0\x80\x80", Res::Ok("223")),
+            (WORD_BUF_LEN, b"2.23a2", Res::Truncated("2.23")),
+            (WORD_BUF_LEN, b"223\xE0\x80\x80", Res::Truncated("223")),
+            (WORD_BUF_LEN, b"223  ", Res::Ok("223")),
+            (WORD_BUF_LEN, b"223.2  ", Res::Ok("223.2")),
+            (WORD_BUF_LEN, b"223.2  .", Res::Truncated("223.2")),
             (WORD_BUF_LEN, b"1e -1", Res::Ok("0.1")),
             (WORD_BUF_LEN, b"1e001", Res::Ok("10")),
             (WORD_BUF_LEN, b"1e00", Res::Ok("1")),
@@ -3351,6 +3383,32 @@ mod tests {
             let res = (&lhs * &rhs).map(|d| d.to_string());
             assert_eq!(res, exp);
 
+            let res = (&rhs * &lhs).map(|d| d.to_string());
+            assert_eq!(res, exp);
+        }
+    }
+
+    #[test]
+    fn test_mul_truncated() {
+        let cases = vec![(
+            "999999999999999999999999999999999.9999",
+            "766507373740683764182618847769240.9770",
+            Res::Truncated(
+                "766507373740683764182618847769239999923349262625931623581738115223.07600000",
+            ),
+            Res::Truncated(
+                "766507373740683764182618847769240210492626259316235817381152230759.02300000",
+            ),
+        )];
+
+        for (lhs_str, rhs_str, exp_str, rev_exp_str) in cases {
+            let lhs: Decimal = lhs_str.parse().unwrap();
+            let rhs: Decimal = rhs_str.parse().unwrap();
+            let exp = exp_str.map(|s| s.to_owned());
+            let res = (&lhs * &rhs).map(|d| d.to_string());
+            assert_eq!(res, exp);
+
+            let exp = rev_exp_str.map(|s| s.to_owned());
             let res = (&rhs * &lhs).map(|d| d.to_string());
             assert_eq!(res, exp);
         }
@@ -3697,19 +3755,20 @@ mod tests {
 
     #[test]
     fn test_bytes_to_decimal() {
+        let mut ctx = EvalContext::default();
         let cases: Vec<(&[u8], Decimal)> = vec![
             (
                 b"123456.1",
-                ConvertTo::<Decimal>::convert(&123456.1, &mut EvalContext::default()).unwrap(),
+                ConvertTo::<Decimal>::convert(&123456.1, &mut ctx).unwrap(),
             ),
             (
                 b"-123456.1",
-                ConvertTo::<Decimal>::convert(&-123456.1, &mut EvalContext::default()).unwrap(),
+                ConvertTo::<Decimal>::convert(&-123456.1, &mut ctx).unwrap(),
             ),
             (b"123456", Decimal::from(123456)),
             (b"-123456", Decimal::from(-123456)),
+            (b"1  ", Decimal::from(1)),
         ];
-        let mut ctx = EvalContext::default();
         for (s, expect) in cases {
             let got: Decimal = s.convert(&mut ctx).unwrap();
             assert_eq!(got, expect, "from {:?}, expect: {} got: {}", s, expect, got);
@@ -3728,6 +3787,36 @@ mod tests {
         assert_eq!(val, max, "expect: {}, got: {}", val, max);
         assert_eq!(ctx.warnings.warning_cnt, 1);
         assert_eq!(ctx.warnings.warnings[0].get_code(), ERR_DATA_OUT_OF_RANGE);
+
+        // Truncate cases
+        let truncate_cases: Vec<(&[u8], Decimal)> = vec![
+            (
+                b"123.45.",
+                ConvertTo::<Decimal>::convert(&123.45, &mut ctx).unwrap(),
+            ),
+            (
+                b"-123.45.",
+                ConvertTo::<Decimal>::convert(&-123.45, &mut ctx).unwrap(),
+            ),
+            (
+                b"1.1.1.1.1",
+                ConvertTo::<Decimal>::convert(&1.1, &mut ctx).unwrap(),
+            ),
+            (b"1asf", Decimal::from(1)),
+            (b"1  1", Decimal::from(1)),
+        ];
+        for (s, expect) in truncate_cases {
+            let val: Result<Decimal> = s.convert(&mut ctx);
+            assert!(val.is_err(), "expected error, but got {:?}", val);
+            assert_eq!(val.unwrap_err().code(), WARN_DATA_TRUNCATED);
+
+            let mut truncate_as_warning_ctx = EvalContext::new(std::sync::Arc::new(
+                EvalConfig::from_flag(Flag::TRUNCATE_AS_WARNING),
+            ));
+            let got: Decimal = s.convert(&mut truncate_as_warning_ctx).unwrap();
+            assert_eq!(got, expect, "from {:?}, expect: {} got: {}", s, expect, got);
+            assert_eq!(truncate_as_warning_ctx.warnings.warning_cnt, 1);
+        }
     }
 
     #[test]
