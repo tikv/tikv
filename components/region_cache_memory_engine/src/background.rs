@@ -663,7 +663,11 @@ impl BackgroundRunnerCore {
     }
 
     // if `false` is returned, the load is canceled
-    fn on_snapshot_load_finished(&mut self, range: CacheRange) -> bool {
+    fn on_snapshot_load_finished(
+        &mut self,
+        range: CacheRange,
+        delete_range_scheduler: &Scheduler<BackgroundTask>,
+    ) -> bool {
         fail::fail_point!("on_snapshot_load_finished");
         loop {
             // Consume the cached write batch after the snapshot is acquired.
@@ -676,12 +680,20 @@ impl BackgroundRunnerCore {
                 .unwrap()
                 .2;
             if canceled {
+                info!(
+                    "snapshot load canceled";
+                    "range" => ?range,
+                );
                 let (r, ..) = core
                     .mut_range_manager()
                     .pending_ranges_loading_data
                     .pop_front()
                     .unwrap();
                 assert_eq!(r, range);
+                core.mut_range_manager()
+                    .ranges_being_deleted
+                    .insert(r.clone());
+
                 core.cached_write_batch
                     .remove(&range)
                     .expect(format!("cannot remove range {:?}", range).as_str());
@@ -689,9 +701,11 @@ impl BackgroundRunnerCore {
                     "remove range in cache write batch";
                     "range" => ?range,
                 );
-                drop(core);
-                // Clear the range directly here to quickly free the memory.
-                self.delete_ranges(&[r]);
+
+                delete_range_scheduler
+                    .schedule_force(BackgroundTask::DeleteRange(vec![r]))
+                    .unwrap();
+
                 return false;
             }
 
@@ -726,13 +740,21 @@ impl BackgroundRunnerCore {
         true
     }
 
-    fn on_snapshot_load_canceled(&mut self, range: CacheRange) {
+    fn on_snapshot_load_canceled(
+        &mut self,
+        range: CacheRange,
+        delete_range_scheduler: &Scheduler<BackgroundTask>,
+    ) {
         let mut core = self.engine.write();
         let (r, ..) = core
             .mut_range_manager()
             .pending_ranges_loading_data
             .pop_front()
             .unwrap();
+        core.mut_range_manager()
+            .ranges_being_deleted
+            .insert(r.clone());
+
         core.cached_write_batch
             .remove(&range)
             .expect(format!("cannot get range {:?}", range).as_str());
@@ -740,20 +762,11 @@ impl BackgroundRunnerCore {
             "remove range in cache write batch";
             "range" => ?range,
         );
-        assert_eq!(r, range);
-    }
 
-    fn delete_ranges(&mut self, ranges: &[CacheRange]) {
-        let skiplist_engine = self.engine.read().engine();
-        for r in ranges {
-            skiplist_engine.delete_range(r);
-        }
-        self.engine
-            .write()
-            .mut_range_manager()
-            .on_delete_ranges(ranges);
-        #[cfg(test)]
-        flush_epoch();
+        assert_eq!(r, range);
+        delete_range_scheduler
+            .schedule_force(BackgroundTask::DeleteRange(vec![r]))
+            .unwrap();
     }
 
     /// Eviction on soft limit reached:
@@ -762,7 +775,7 @@ impl BackgroundRunnerCore {
     /// keep evicting until either all candidates are evicted, or the total
     /// approximated size of evicted regions is equal to or greater than the
     /// excess memory usage.
-    fn evict_on_soft_limit_reached(&mut self) {
+    fn evict_on_soft_limit_reached(&mut self, delete_range_scheduler: &Scheduler<BackgroundTask>) {
         if self.range_stats_manager.is_none() {
             warn!("range stats manager is not initialized, cannot evict on soft limit reached");
             return;
@@ -783,6 +796,7 @@ impl BackgroundRunnerCore {
         range_stats_manager.collect_candidates_for_eviction(&mut ranges_to_evict, |range| {
             self.engine.read().range_manager().contains_range(range)
         });
+        let mut ranges_to_delete = vec![];
         // TODO (afeinberg): approximate size may differ from size in in-memory cache,
         // consider taking the actual size into account.
         for (range, approx_size) in &ranges_to_evict {
@@ -792,19 +806,19 @@ impl BackgroundRunnerCore {
             info!("evict on soft limit reached"; "range" => ?&range, "approx_size" => approx_size, "remaining" => remaining);
             let mut core = self.engine.write();
             if let Some(range) = core.mut_range_manager().evict_range(range) {
-                let skiplist_engine = core.engine();
-                drop(core);
-                skiplist_engine.delete_range(&range);
-                self.engine
-                    .write()
-                    .mut_range_manager()
-                    .on_delete_ranges(&[range]);
+                ranges_to_delete.push(range);
             }
             info!("evict on soft limit reached done";);
             remaining = remaining
                 .checked_sub(*approx_size as usize)
                 .unwrap_or_default();
             range_stats_manager.handle_range_evicted(range);
+        }
+
+        if !ranges_to_delete.is_empty() {
+            delete_range_scheduler
+                .schedule_force(BackgroundTask::DeleteRange(ranges_to_delete))
+                .unwrap();
         }
     }
 
@@ -815,7 +829,7 @@ impl BackgroundRunnerCore {
     ///
     /// See: [`RangeStatsManager::collect_changes_ranges`] for
     /// algorithm details.
-    fn top_regions_load_evict(&self) {
+    fn top_regions_load_evict(&self, delete_range_scheduler: &Scheduler<BackgroundTask>) {
         if self.range_stats_manager.is_none() {
             return;
         }
@@ -832,21 +846,20 @@ impl BackgroundRunnerCore {
         let mut ranges_to_add = Vec::<CacheRange>::with_capacity(256);
         let mut ranges_to_remove = Vec::<CacheRange>::with_capacity(256);
         range_stats_manager.collect_changed_ranges(&mut ranges_to_add, &mut ranges_to_remove);
-        info!("load_evict"; "ranges_to_add" => ?&ranges_to_add, "may_evict" => ?&ranges_to_remove);
+        let mut ranges_to_delete = vec![];
         for evict_range in ranges_to_remove {
             if self.memory_controller.reached_soft_limit() {
                 info!("load_evict: soft limit reached"; "evict_range" => ?&evict_range);
                 let mut core = self.engine.write();
                 if let Some(range) = core.mut_range_manager().evict_range(&evict_range) {
-                    let skiplist_engine = core.engine();
-                    drop(core);
-                    skiplist_engine.delete_range(&range);
-                    self.engine
-                        .write()
-                        .mut_range_manager()
-                        .on_delete_ranges(&[range]);
+                    ranges_to_delete.push(evict_range);
                 }
             }
+        }
+        if !ranges_to_delete.is_empty() {
+            delete_range_scheduler
+                .schedule_force(BackgroundTask::DeleteRange(ranges_to_delete))
+                .unwrap();
         }
         for cache_range in ranges_to_add {
             let mut core = self.engine.write();
@@ -1181,6 +1194,7 @@ impl Runnable for BackgroundRunner {
             }
             BackgroundTask::LoadRange => {
                 let mut core = self.core.clone();
+                let scheduler = self.delete_range_scheduler.clone();
                 let f = async move {
                     let skiplist_engine = {
                         let core = core.engine.read();
@@ -1203,7 +1217,7 @@ impl Runnable for BackgroundRunner {
                                 "snapshot load canceled due to memory reaching soft limit";
                                 "range" => ?range,
                             );
-                            core.on_snapshot_load_canceled(range);
+                            core.on_snapshot_load_canceled(range, &scheduler);
                             continue;
                         }
 
@@ -1292,13 +1306,16 @@ impl Runnable for BackgroundRunner {
 
                         let start = Instant::now();
                         if !snapshot_load() {
+                            info!(
+                                "snapshot load failed";
+                                "range" => ?range,
+                            );
                             // snapshot load failed, we should clear the dirty data
-                            core.delete_ranges(&[range.clone()]);
-                            core.on_snapshot_load_canceled(range);
+                            core.on_snapshot_load_canceled(range, &scheduler);
                             continue;
                         }
 
-                        if core.on_snapshot_load_finished(range.clone()) {
+                        if core.on_snapshot_load_finished(range.clone(), &scheduler) {
                             let duration = start.saturating_elapsed();
                             RANGE_LOAD_TIME_HISTOGRAM.observe(duration.as_secs_f64());
                             info!(
@@ -1321,13 +1338,16 @@ impl Runnable for BackgroundRunner {
                 //     "mem_usage(MB)" => ReadableSize(mem_usage as u64).as_mb()
                 // );
                 if mem_usage > self.core.memory_controller.soft_limit_threshold() {
-                    self.core.evict_on_soft_limit_reached();
+                    self.core
+                        .evict_on_soft_limit_reached(&self.delete_range_scheduler);
                 }
                 self.core.memory_controller.set_memory_checking(false);
             }
             BackgroundTask::DeleteRange(_) => unreachable!(),
             // TODO: Consider making this async.
-            BackgroundTask::TopRegionsLoadEvict => self.core.top_regions_load_evict(),
+            BackgroundTask::TopRegionsLoadEvict => self
+                .core
+                .top_regions_load_evict(&self.delete_range_scheduler),
             BackgroundTask::CleanLockTombstone(snapshot_seqno) => {
                 if snapshot_seqno < self.last_seqno {
                     return;
