@@ -4,7 +4,7 @@ use engine_rocks::RocksEngine;
 use external_storage::{BackendConfig, WalkExternalStorage};
 use futures::stream::{self, StreamExt};
 use kvproto::brpb::StorageBackend;
-
+use tikv_util::info;
 
 use super::{
     compaction::{
@@ -51,16 +51,9 @@ pub struct LogToTerm {
 
 impl ExecHooks for LogToTerm {
     fn before_compaction_start(&mut self, c: &Compaction, cid: CId) {
-        println!(
-            "Spawning compaction #{} @{} from {} to {} input {} size {} region {}",
-            cid,
-            c.cf,
-            c.input_min_ts,
-            c.input_max_ts,
-            c.source.len(),
-            c.size,
-            c.region_id
-        );
+        info!("spawning compaction."; "cid" => cid.0, 
+            "cf" => c.cf, "input_min_ts" => c.input_min_ts, "input_max_ts" => c.input_max_ts, 
+            "source" => c.source.len(), "size" => c.size, "region_id" => c.region_id);
     }
 
     fn after_compaction_end(&mut self, cid: CId, lst: LoadStatistic, cst: CompactStatistic) {
@@ -71,15 +64,12 @@ impl ExecHooks for LogToTerm {
         self.load_stat.merge_with(&lst);
         self.compact_stat.merge_with(&cst);
 
-        println!(
-            "finishing compaction #{} input {} take {:?} speed {:.2} KB/s",
-            cid, logical_input_size, total_take, speed
-        );
+        info!("finishing compaction"; "cid" => cid.0, "load_stat" => ?lst, "compact_stat" => ?cst, 
+            "speed" => %format_args!("{:.2} KB./s", speed), "total_take" => ?total_take);
     }
 
     fn after_finish(&mut self) {
-        println!("All compcations done.");
-        println!("{:?}\n{:?}", self.load_stat, self.compact_stat);
+        info!("All compcations done."; "load_stat" => ?self.load_stat, "compact_stat" => ?self.compact_stat);
     }
 }
 
