@@ -3,7 +3,7 @@
 use std::{io, marker::Unpin, pin::Pin, task::Poll};
 
 use async_trait::async_trait;
-use futures::stream::{Stream, TryStream};
+use futures::stream::Stream;
 use futures_io::AsyncRead;
 
 pub trait BlobConfig: 'static + Send + Sync {

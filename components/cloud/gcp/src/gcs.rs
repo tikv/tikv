@@ -215,7 +215,9 @@ impl GcsStorage {
                     if response.status().is_success() {
                         Ok(response.into_body().map_err(|e| {
                             io::Error::new(
-                                io::ErrorKind::Other,
+                                // Given the status is success, if the content stream has been cut down, 
+                                // there must be some network unavailable, which should generally be retryable.
+                                io::ErrorKind::Interrupted,
                                 format!("download from GCS error: {}", e),
                             )
                         }))

@@ -1,24 +1,27 @@
 use std::{
     any::Any,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Instant},
 };
 
 use engine_rocks::RocksEngine;
-use engine_traits::CF_DEFAULT;
-use external_storage::{BackendConfig, BlobStore, S3Storage, WalkBlobStorage, WalkExternalStorage};
+
+use external_storage::{BackendConfig, BlobStore, S3Storage, WalkExternalStorage};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use kvproto::brpb::{Gcs, StorageBackend, S3};
 
 use super::{
     compaction::CollectCompaction,
-    execute::{Execution, LogToTerm},
-    storage::{CompactStorage, LoadFromExt, MetaStorage},
+    execute::{Execution},
+    storage::{LoadFromExt},
 };
-use crate::compact::{
-    compaction::{CollectCompactionConfig, CompactLogExt, CompactWorker},
-    statistic::{CompactStatistic, LoadStatistic},
-    storage::StreamyMetaStorage,
+use crate::{
+    compact::{
+        compaction::{CollectCompactionConfig, CompactLogExt, CompactWorker},
+        statistic::{CompactStatistic, LoadStatistic},
+        storage::StreamyMetaStorage,
+    },
+    compact_logs::ExecHooks,
 };
 
 #[tokio::test]
@@ -54,7 +57,7 @@ async fn playground() {
     );
     println!("{:?}", now.elapsed());
     let compaction = collect
-        .try_filter(|f| futures::future::ready(true))
+        .try_filter(|_f| futures::future::ready(true))
         .next()
         .await
         .unwrap();
@@ -102,12 +105,34 @@ fn cli_playground() {
     backend.set_s3(s3);
 
     let exec = Execution {
-        from_ts: 449823442605703184,
-        until_ts: 449823755561146407,
+        from_ts: 0,
+        until_ts: u64::MAX,
         max_concurrent_compaction: 16,
         external_storage: backend,
     };
-    exec.run(LogToTerm::default()).unwrap();
+    #[derive(Default)]
+    struct EventuallyStatistic {
+        load_stat: LoadStatistic,
+        compact_stat: CompactStatistic,
+    }
+    impl ExecHooks for EventuallyStatistic {
+        fn after_compaction_end(
+            &mut self,
+            _cid: crate::compact_logs::CId,
+            lst: LoadStatistic,
+            cst: CompactStatistic,
+        ) {
+            self.load_stat.merge_with(&lst);
+            self.compact_stat.merge_with(&cst);
+        }
+
+        fn after_finish(&mut self) {
+            println!("All compcations done.");
+            println!("{:?}\n{:?}", self.load_stat, self.compact_stat);
+        }
+    }
+
+    exec.run(EventuallyStatistic::default()).unwrap();
 }
 
 #[tokio::test]
@@ -128,9 +153,33 @@ async fn gcloud() {
     let mut ext = LoadFromExt::default();
     ext.max_concurrent_fetch = 128;
     let meta = StreamyMetaStorage::load_from_ext(storage.as_ref(), ext);
-    let mut stream = meta.flat_map(|file| match file {
+    let stream = meta.flat_map(|file| match file {
         Ok(file) => stream::iter(file.logs).map(Ok).left_stream(),
         Err(err) => stream::once(futures::future::err(err)).right_stream(),
     });
-    println!("{:?}", stream.take(20).try_collect::<Vec<_>>().await);
+    let mut coll = CollectCompaction::new(
+        stream,
+        CollectCompactionConfig {
+            compact_from_ts: 0,
+            compact_to_ts: u64::MAX,
+        },
+    );
+    let compaction = coll.try_next().await;
+    println!("{:?}", compaction);
+    println!("{:?}", now.elapsed());
+    let mut load_stat = LoadStatistic::default();
+    let mut compact_stat = CompactStatistic::default();
+    let c_ext = CompactLogExt {
+        load_statistic: Some(&mut load_stat),
+        compact_statistic: Some(&mut compact_stat),
+        max_load_concurrency: 32,
+    };
+    drop(coll);
+    let arc_store: Arc<dyn WalkExternalStorage> = Arc::from(storage);
+    let mut compact_worker = CompactWorker::<RocksEngine>::inplace(Arc::clone(&arc_store) as _);
+    compact_worker
+        .compact_ext(compaction.unwrap().unwrap(), c_ext)
+        .await
+        .unwrap();
+    println!("{:?}\n{:?}", load_stat, compact_stat);
 }

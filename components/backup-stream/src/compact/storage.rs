@@ -2,25 +2,20 @@ use std::{
     collections::VecDeque,
     future::Future,
     pin::Pin,
-    process::Output,
     sync::Arc,
     task::{ready, Context, Poll},
 };
 
-use chrono::format::Item;
 use external_storage::{BlobObject, ExternalStorage, WalkBlobStorage, WalkExternalStorage};
 use futures::{
-    future::{BoxFuture, FusedFuture, FutureExt, TryFutureExt},
+    future::{FusedFuture, FutureExt, TryFutureExt},
     io::AsyncReadExt,
-    stream::{self, StreamExt, TryStream},
+    stream::StreamExt,
 };
-use tidb_query_datatype::codec::mysql::Time;
 use tokio_stream::Stream;
-use txn_types::TimeStamp;
 
 use super::{
     errors::{Error, Result},
-    util::select_vec,
 };
 use crate::utils;
 
@@ -29,11 +24,6 @@ pub trait CompactStorage: WalkBlobStorage + ExternalStorage {}
 impl<T: WalkBlobStorage + ExternalStorage> CompactStorage for T {}
 
 const METADATA_PREFIX: &'static str = "v1/backupmeta";
-
-#[derive(Debug)]
-pub struct MetaStorage {
-    pub files: Vec<MetaFile>,
-}
 
 #[derive(Debug)]
 pub struct MetaFile {
@@ -83,24 +73,6 @@ impl Default for LoadFromExt {
         Self {
             max_concurrent_fetch: 16,
         }
-    }
-}
-
-impl MetaStorage {
-    pub async fn load_from_ext(s: &dyn CompactStorage, ext: LoadFromExt) -> Result<Self> {
-        let mut files = s.walk(&METADATA_PREFIX);
-        let mut result = MetaStorage { files: vec![] };
-        let mut pending_futures = vec![];
-        while let Some(file) = files.next().await {
-            pending_futures.push(Box::pin(MetaFile::load_from(s, file?)));
-            if pending_futures.len() >= ext.max_concurrent_fetch {
-                result.files.push(select_vec(&mut pending_futures).await?);
-            }
-        }
-        for fut in pending_futures {
-            result.files.push(fut.await?);
-        }
-        Ok(result)
     }
 }
 

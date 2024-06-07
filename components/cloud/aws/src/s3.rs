@@ -15,11 +15,11 @@ use cloud::{
     metrics::CLOUD_REQUEST_HISTOGRAM_VEC,
 };
 use fail::fail_point;
-use futures::stream::{self, Stream, TryStream};
+use futures::stream::{self, Stream};
 use futures_util::{
     future::FutureExt,
     io::{AsyncRead, AsyncReadExt},
-    stream::{StreamExt, TryStreamExt},
+    stream::TryStreamExt,
 };
 pub use kvproto::brpb::S3 as InputConfig;
 use rusoto_core::{request::DispatchSignedRequest, ByteStream, RusotoError};

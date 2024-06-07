@@ -4,7 +4,7 @@ use engine_rocks::RocksEngine;
 use external_storage::{BackendConfig, WalkExternalStorage};
 use futures::stream::{self, StreamExt};
 use kvproto::brpb::StorageBackend;
-use tikv_util::sys::SysQuota;
+
 
 use super::{
     compaction::{

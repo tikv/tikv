@@ -1,6 +1,7 @@
 pub mod compaction;
 pub mod errors;
 pub mod execute;
+pub mod source;
 pub mod statistic;
 pub mod storage;
 
@@ -15,9 +16,9 @@ mod util {
         yield_every: usize,
     }
 
-    pub struct CooperateYield(bool);
+    pub struct Step(bool);
 
-    impl Future for CooperateYield {
+    impl Future for Step {
         type Output = ();
 
         fn poll(
@@ -42,13 +43,13 @@ mod util {
             }
         }
 
-        pub fn step(&mut self) -> CooperateYield {
+        pub fn step(&mut self) -> Step {
             self.work_count += 1;
             if self.work_count > self.yield_every {
                 self.work_count = 0;
-                CooperateYield(true)
+                Step(true)
             } else {
-                CooperateYield(false)
+                Step(false)
             }
         }
     }

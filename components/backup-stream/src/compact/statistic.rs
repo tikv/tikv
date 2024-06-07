@@ -7,6 +7,7 @@ pub struct LoadStatistic {
     pub physical_bytes_in: u64,
     pub logical_key_bytes_in: u64,
     pub logical_value_bytes_in: u64,
+    pub error_during_downloading: u64,
 }
 
 impl LoadStatistic {

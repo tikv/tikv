@@ -1,35 +1,18 @@
-use std::{
-    collections::{BTreeSet, HashMap},
-    marker::PhantomData,
-    pin::Pin,
-    process::Output,
-    sync::Arc,
-    task::ready,
-    time::Duration,
-};
+use std::{collections::HashMap, marker::PhantomData, sync::Arc, task::ready};
 
-use async_compression::futures::write::ZstdDecoder;
 use engine_traits::{
-    CfName, ExternalSstFileInfo, SstCompressionType, SstExt, SstMetaInfo, SstWriter,
-    SstWriterBuilder,
+    CfName, ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,
 };
 use external_storage::ExternalStorage;
-use futures::io::{AllowStdIo, AsyncReadExt, AsyncWriteExt, Cursor};
+use futures::io::AllowStdIo;
 use tikv_util::{
-    codec::{
-        self,
-        stream_event::{self, Iterator as KvStreamIter},
-    },
-    config::ReadableSize,
-    stream::block_on_external_io,
-    time::Instant,
+    codec::stream_event::Iterator as KvStreamIter, config::ReadableSize, time::Instant,
 };
-use tokio::{io::AsyncRead, sync::mpsc::Receiver};
 use tokio_stream::Stream;
-use txn_types::Key;
 
 use super::{
     errors::Result,
+    source::{Record, Source},
     statistic::{CompactStatistic, LoadStatistic},
     storage::{LogFile, LogFileId},
     util::{Cooperate, ExecuteAllExt},
@@ -209,61 +192,6 @@ impl<S: Stream<Item = Result<LogFile>>> Stream for CollectCompaction<S> {
     }
 }
 
-#[derive(Clone)]
-struct Source {
-    inner: Arc<dyn ExternalStorage>,
-}
-
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-struct Record {
-    key: Vec<u8>,
-    value: Vec<u8>,
-}
-
-impl Record {
-    fn cmp_key(&self, other: &Self) -> std::cmp::Ordering {
-        self.key.cmp(&other.key)
-    }
-
-    fn ts(&self) -> Result<u64> {
-        let ts = Key::decode_ts_from(&self.key)?.into_inner();
-        Ok(ts)
-    }
-}
-
-impl Source {
-    async fn load(
-        &self,
-        id: LogFileId,
-        mut stat: Option<&mut LoadStatistic>,
-        mut on_key_value: impl FnMut(&[u8], &[u8]),
-    ) -> Result<()> {
-        let mut content = vec![];
-        let mut decompress = ZstdDecoder::new(Cursor::new(&mut content));
-        let source = self.inner.read_part(&id.name, id.offset, id.length);
-        let n = futures::io::copy(source, &mut decompress).await?;
-        stat.as_mut().map(|stat| stat.physical_bytes_in += n);
-        decompress.flush().await?;
-        drop(decompress);
-
-        let mut co = Cooperate::new(4096);
-        let mut iter = stream_event::EventIterator::new(&content);
-        iter.next()?;
-        while iter.valid() {
-            co.step().await;
-            on_key_value(iter.key(), iter.value());
-            stat.as_mut().map(|stat| {
-                stat.keys_in += 1;
-                stat.logical_key_bytes_in += iter.key().len() as u64;
-                stat.logical_value_bytes_in += iter.value().len() as u64;
-            });
-            iter.next()?;
-        }
-        stat.as_mut().map(|stat| stat.files_in += 1);
-        Ok(())
-    }
-}
-
 pub struct CompactWorker<DB> {
     source: Source,
     output: Arc<dyn ExternalStorage>,
@@ -297,9 +225,7 @@ impl<'a> CompactLogExt<'a> {
 impl<DB> CompactWorker<DB> {
     pub fn inplace(storage: Arc<dyn ExternalStorage>) -> Self {
         Self {
-            source: Source {
-                inner: storage.clone(),
-            },
+            source: Source::new(Arc::clone(&storage)),
             output: storage,
             co: Cooperate::new(4096),
             _great_phantom: PhantomData,
