@@ -1,20 +1,11 @@
-use std::{
-    any::Any,
-    sync::Arc,
-    time::{Instant},
-};
+use std::{any::Any, sync::Arc, time::Instant};
 
 use engine_rocks::RocksEngine;
-
 use external_storage::{BackendConfig, BlobStore, S3Storage, WalkExternalStorage};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use kvproto::brpb::{Gcs, StorageBackend, S3};
 
-use super::{
-    compaction::CollectCompaction,
-    execute::{Execution},
-    storage::{LoadFromExt},
-};
+use super::{compaction::CollectCompaction, execute::Execution, storage::LoadFromExt};
 use crate::{
     compact::{
         compaction::{CollectCompactionConfig, CompactLogExt, CompactWorker},
@@ -43,6 +34,7 @@ async fn playground() {
 
     let mut ext = LoadFromExt::default();
     ext.max_concurrent_fetch = 128;
+    // Stream<Output = Result<LogFileMeta>>
     let meta = StreamyMetaStorage::load_from_ext(storage.as_ref(), ext);
     let stream = meta.flat_map(|file| match file {
         Ok(file) => stream::iter(file.logs).map(Ok).left_stream(),

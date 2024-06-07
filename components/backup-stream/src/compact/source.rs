@@ -73,48 +73,48 @@ impl CacheManager {
         &self,
         id: LogFileId,
         storage: &Arc<dyn ExternalStorage>,
-    ) -> std::io::Result<Vec<u8>> {
-        loop {
-            // (net_io, error)
-            let stat = Arc::new((AtomicU64::new(0), AtomicU64::new(0)));
-            let stat_ref = Arc::clone(&stat);
-            let ext = RetryExt::default().with_fail_hook(move |_err| stat_ref.0.inc_by(1));
-            let fetch = || {
-                let storage = storage.clone();
-                let id = id.clone();
-                let stat = Arc::clone(&stat);
-                async move {
-                    let path = self.base.join(id.name.as_ref());
-                    let local = std::fs::File::create(&path)?;
-                    let mut decompress = ZstdDecoder::new(AllowStdIo::new(local));
-                    let source = storage.read(&id.name);
-                    let n = futures::io::copy(source, &mut decompress).await?;
-                    stat.1.inc_by(n);
-                    decompress.flush().await?;
-                    std::result::Result::<_, RetryIo>::Ok(path)
-                }
-            };
-
-            let mut files = self.files.lock().unwrap();
-            if let Some(path_cell) = files.get(&id.name) {
-                let path_cell = Arc::clone(&path_cell);
-                drop(files);
-
-                let path = path_cell
-                    .get_or_try_init(|| retry_ext(fetch, ext).map_err(|err| err.0))
-                    .await?;
-                let mut f = std::fs::File::options()
-                    .read(true)
-                    .write(false)
-                    .open(path)?;
-                let mut v = vec![0u8; id.length as usize];
-                f.seek(futures_io::SeekFrom::Start(id.offset))?;
-                f.read_exact(&mut v[..])?;
-                return Ok(v);
+    ) -> std::io::Result<(Vec<u8>, u64, u64)> {
+        // (error_during_downloading, physical_bytes_in)
+        let stat = Arc::new((AtomicU64::new(0), AtomicU64::new(0)));
+        let stat_ref = Arc::clone(&stat);
+        let ext = RetryExt::default().with_fail_hook(move |_err| stat_ref.0.inc_by(1));
+        let fetch = || {
+            let storage = storage.clone();
+            let id = id.clone();
+            let stat = Arc::clone(&stat);
+            async move {
+                let path = self.base.join(id.name.as_ref());
+                let local = std::fs::File::create(&path)?;
+                let mut decompress = ZstdDecoder::new(AllowStdIo::new(local));
+                let source = storage.read(&id.name);
+                let n = futures::io::copy(source, &mut decompress).await?;
+                stat.1.inc_by(n);
+                decompress.flush().await?;
+                std::result::Result::<_, RetryIo>::Ok(path)
             }
+        };
 
-            files.insert(Arc::clone(&id.name), Arc::default());
-        }
+        let path_cell = {
+            let mut files = self.files.lock().unwrap();
+            if !files.contains_key(&id.name) {
+                files.insert(Arc::clone(&id.name), Arc::default());
+            }
+            Arc::clone(&files[&id.name])
+        };
+
+        let path = path_cell
+            .get_or_try_init(|| retry_ext(fetch, ext).map_err(|err| err.0))
+            .await?;
+        let mut f = std::fs::File::options()
+            .read(true)
+            .write(false)
+            .open(path)?;
+        // NOTE: initializing this is somehow costy. Maybe don't initialize this?
+        // (unsafe)
+        let mut v = vec![0u8; id.length as usize];
+        f.seek(futures_io::SeekFrom::Start(id.offset))?;
+        f.read_exact(&mut v[..])?;
+        Ok((v, stat.0.get(), stat.1.get()))
     }
 }
 
@@ -150,12 +150,11 @@ impl From<std::io::Error> for RetryIo {
 }
 
 impl Source {
-    pub async fn load(
+    pub async fn load_remote(
         &self,
         id: LogFileId,
-        mut stat: Option<&mut LoadStatistic>,
-        mut on_key_value: impl FnMut(&[u8], &[u8]),
-    ) -> Result<()> {
+        stat: &mut Option<&mut LoadStatistic>,
+    ) -> Result<Vec<u8>> {
         let error_during_downloading = Arc::new(AtomicU64::new(0));
         let counter = error_during_downloading.clone();
         let ext = RetryExt::default().with_fail_hook(move |_err| counter.inc_by(1));
@@ -176,6 +175,25 @@ impl Source {
             stat.physical_bytes_in += size;
             stat.error_during_downloading += error_during_downloading.get();
         });
+        Ok(content)
+    }
+
+    pub async fn load(
+        &self,
+        id: LogFileId,
+        mut stat: Option<&mut LoadStatistic>,
+        mut on_key_value: impl FnMut(&[u8], &[u8]),
+    ) -> Result<()> {
+        let content = if let Some(cache_mgr) = &self.cache_manager {
+            let (content, errors, loaded_bytes) = cache_mgr.load_file(id, &self.inner).await?;
+            stat.as_mut().map(|s| {
+                s.error_during_downloading += errors;
+                s.physical_bytes_in += loaded_bytes;
+            });
+            content
+        } else {
+            self.load_remote(id, &mut stat).await?
+        };
 
         let mut co = Cooperate::new(4096);
         let mut iter = stream_event::EventIterator::new(&content);
