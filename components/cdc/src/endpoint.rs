@@ -1111,7 +1111,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             let regions =
                 if hibernate_regions_compatible && gate.can_enable(FEATURE_RESOLVED_TS_STORE) {
                     CDC_RESOLVED_TS_ADVANCE_METHOD.set(1);
-                    leader_resolver.resolve(regions, min_ts).await
+                    leader_resolver.resolve(regions, min_ts, None).await
                 } else {
                     CDC_RESOLVED_TS_ADVANCE_METHOD.set(0);
                     leader_resolver
