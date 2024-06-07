@@ -3,7 +3,7 @@
 use std::{
     fmt,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering},
         Arc,
     },
 };
@@ -31,7 +31,7 @@ pub(crate) enum MemoryUsage {
 pub struct MemoryController {
     // Allocated memory for keys and values (node overhead is not included)
     // The number of writes that are buffered but not yet written.
-    allocated: AtomicUsize,
+    allocated: AtomicI64,
     config: Arc<VersionTrack<RangeCacheEngineConfig>>,
     memory_checking: AtomicBool,
     skiplist_engine: SkiplistEngine,
@@ -54,7 +54,7 @@ impl MemoryController {
         skiplist_engine: SkiplistEngine,
     ) -> Self {
         Self {
-            allocated: AtomicUsize::new(0),
+            allocated: AtomicI64::new(0),
             config,
             memory_checking: AtomicBool::new(false),
             skiplist_engine,
@@ -66,11 +66,11 @@ impl MemoryController {
 
         // We dont count the node overhead in the write batch to reduce complexity as
         // there overhead should be negligible
-        let mem_usage = self.allocated.fetch_add(n, Ordering::Relaxed)
+        let mem_usage = self.allocated.fetch_add(n as i64, Ordering::Relaxed) as usize
             + n
             + node_count * NODE_OVERHEAD_SIZE_EXPECTATION;
         if mem_usage >= self.config.value().hard_limit_threshold() {
-            self.allocated.fetch_sub(n, Ordering::Relaxed);
+            self.allocated.fetch_sub(n as i64, Ordering::Relaxed);
             return MemoryUsage::HardLimitReached(mem_usage - n);
         }
 
@@ -82,7 +82,7 @@ impl MemoryController {
     }
 
     pub(crate) fn release(&self, n: usize) {
-        self.allocated.fetch_sub(n, Ordering::Relaxed);
+        self.allocated.fetch_sub(n as i64, Ordering::Relaxed);
     }
 
     #[inline]
@@ -107,8 +107,9 @@ impl MemoryController {
 
     #[inline]
     pub(crate) fn mem_usage(&self) -> usize {
-        self.allocated.load(Ordering::Relaxed)
-            + self.skiplist_engine.node_count() * NODE_OVERHEAD_SIZE_EXPECTATION
+        let usage = self.allocated.load(Ordering::Relaxed)
+            + (self.skiplist_engine.node_count() * NODE_OVERHEAD_SIZE_EXPECTATION) as i64;
+        if usage > 0 { usage as usize } else { 0 }
     }
 }
 
