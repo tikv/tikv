@@ -1,6 +1,9 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{mpsc::sync_channel, Arc},
+    time::Duration,
+};
 
 use crossbeam::epoch;
 use engine_traits::{CacheRange, CF_DEFAULT, CF_WRITE};
@@ -39,6 +42,12 @@ fn test_gc_worker() {
     };
 
     fail::cfg("in_memry_engine_gc_oldest_seqno", "return(1000)").unwrap();
+
+    let (tx, rx) = sync_channel(0);
+    fail::cfg_callback("in_memory_engine_gc_finish", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
 
     let start_ts = TimeStamp::physical_now() - Duration::from_secs(10).as_millis() as u64;
     let commit_ts1 = TimeStamp::physical_now() - Duration::from_secs(9).as_millis() as u64;
@@ -104,7 +113,7 @@ fn test_gc_worker() {
         assert!(key_exist(&write, &key, guard));
     }
 
-    std::thread::sleep(Duration::from_secs_f32(1.5));
+    let _ = rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     let key = Key::from_raw(b"k");
     // now, the outdated mvcc versions should be gone

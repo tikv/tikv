@@ -581,6 +581,7 @@ impl Runnable for BackgroundRunner {
                         }
                         core.on_gc_finished(ranges);
                         metrics.flush();
+                        fail::fail_point!("in_memory_engine_gc_finish");
                     };
                     self.gc_range_remote.spawn(f);
                 }
