@@ -19,7 +19,10 @@ use engine_traits::{
     SnapshotMiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
-use raftstore::{coprocessor::RegionInfoProvider, store::fsm::apply::PRINTF_LOG};
+use raftstore::{
+    coprocessor::RegionInfoProvider,
+    store::fsm::apply::{PRINTF_LOCK, PRINTF_LOG},
+};
 use skiplist_rs::{
     base::{Entry, OwnedIter},
     SkipList,
@@ -168,7 +171,9 @@ impl SkiplistEngine {
             iter.seek(&start, guard);
             while iter.valid() && iter.key() < &end {
                 handle.remove(iter.key(), guard);
-                if PRINTF_LOG.load(Ordering::Relaxed) {
+                if PRINTF_LOG.load(Ordering::Relaxed)
+                    || (cf == CF_LOCK && PRINTF_LOCK.load(Ordering::Relaxed))
+                {
                     info!(
                         "delete range";
                         "key" => log_wrappers::Value(iter.key().as_slice()),
@@ -476,11 +481,6 @@ impl RangeCacheMemoryEngine {
                 );
                 unreachable!()
             }
-
-            info!(
-                "insert in cached write batch";
-                "range" => ?range,
-            );
 
             if let Err(e) = self
                 .bg_worker_manager()

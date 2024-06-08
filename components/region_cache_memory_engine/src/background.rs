@@ -28,7 +28,10 @@ use engine_traits::{
 use kvproto::metapb::Region;
 use parking_lot::{Mutex, RwLock};
 use pd_client::RpcClient;
-use raftstore::{coprocessor::RegionInfoProvider, store::fsm::apply::PRINTF_LOG};
+use raftstore::{
+    coprocessor::RegionInfoProvider,
+    store::fsm::apply::{PRINTF_LOCK, PRINTF_LOG},
+};
 use slog_global::{error, info, warn};
 use tikv_util::{
     config::ReadableSize,
@@ -697,10 +700,6 @@ impl BackgroundRunnerCore {
                 core.cached_write_batch
                     .remove(&range)
                     .expect(format!("cannot remove range {:?}", range).as_str());
-                info!(
-                    "remove range in cache write batch";
-                    "range" => ?range,
-                );
 
                 delete_range_scheduler
                     .schedule_force(BackgroundTask::DeleteRange(vec![r]))
@@ -729,10 +728,7 @@ impl BackgroundRunnerCore {
                 core.cached_write_batch
                     .remove(&range)
                     .expect(format!("cannot remove range {:?}", range).as_str());
-                info!(
-                    "remove range in cache write batch";
-                    "range" => ?range,
-                );
+
                 RangeCacheMemoryEngineCore::pending_range_completes_loading(&mut core, &range);
                 break;
             }
@@ -758,10 +754,6 @@ impl BackgroundRunnerCore {
         core.cached_write_batch
             .remove(&range)
             .expect(format!("cannot get range {:?}", range).as_str());
-        info!(
-            "remove range in cache write batch";
-            "range" => ?range,
-        );
 
         assert_eq!(r, range);
         delete_range_scheduler
@@ -1168,6 +1160,10 @@ impl Runnable for BackgroundRunner {
                                 }
                             }
                         }
+                        info!(
+                            "audit range done";
+                            "range" => ?range_snap.snapshot_meta.range,
+                        );
                     }
                 };
 
@@ -1283,13 +1279,17 @@ impl Runnable for BackgroundRunner {
                                                 core.memory_controller.clone(),
                                             );
 
-                                            if PRINTF_LOG.load(Ordering::Relaxed) {
+                                            if PRINTF_LOG.load(Ordering::Relaxed)
+                                                || (cf == CF_LOCK
+                                                    && PRINTF_LOCK.load(Ordering::Relaxed))
+                                            {
                                                 info!(
                                                     "write to memory in load";
                                                     "key" => log_wrappers::Value(encoded_key.as_slice()),
                                                     "cf" => ?cf,
                                                 );
                                             }
+
                                             handle.insert(encoded_key, val, guard);
 
                                             iter.next().unwrap();
@@ -1355,6 +1355,11 @@ impl Runnable for BackgroundRunner {
                 let core = self.core.clone();
 
                 let f = async move {
+                    info!(
+                        "begin lock tombstone";
+                        "seqno" => snapshot_seqno,
+                    );
+
                     let mut last_user_key = vec![];
                     let mut remove_rest = false;
                     let mut cached_to_remove: Option<Vec<u8>> = None;
@@ -1376,7 +1381,7 @@ impl Runnable for BackgroundRunner {
                         if user_key != last_user_key {
                             if let Some(remove) = cached_to_remove.take() {
                                 removed += 1;
-                                if PRINTF_LOG.load(Ordering::Relaxed) {
+                                if PRINTF_LOCK.load(Ordering::Relaxed) {
                                     info!(
                                         "clean lock";
                                         "key" => log_wrappers::Value(&remove),
@@ -1399,7 +1404,7 @@ impl Runnable for BackgroundRunner {
                             if v_type != ValueType::Deletion {
                                 let cached_to_remove_value =
                                     Lock::parse(iter.value().as_bytes().as_slice()).unwrap();
-                                if PRINTF_LOG.load(Ordering::Relaxed) {
+                                if PRINTF_LOCK.load(Ordering::Relaxed) {
                                     info!(
                                         "clean lock2";
                                         "key" => log_wrappers::Value(iter.key().as_bytes()),
@@ -1408,7 +1413,7 @@ impl Runnable for BackgroundRunner {
                                     );
                                 }
                             } else {
-                                if PRINTF_LOG.load(Ordering::Relaxed) {
+                                if PRINTF_LOCK.load(Ordering::Relaxed) {
                                     info!(
                                         "clean lock2";
                                         "key" => log_wrappers::Value(iter.key().as_bytes()),
@@ -1428,7 +1433,7 @@ impl Runnable for BackgroundRunner {
                     }
                     if let Some(remove) = cached_to_remove.take() {
                         removed += 1;
-                        if PRINTF_LOG.load(Ordering::Relaxed) {
+                        if PRINTF_LOCK.load(Ordering::Relaxed) {
                             info!(
                                 "clean lock";
                                 "key" => log_wrappers::Value(&remove),

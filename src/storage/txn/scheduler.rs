@@ -47,11 +47,13 @@ use kvproto::{
 };
 use parking_lot::{Mutex, MutexGuard, RwLockWriteGuard};
 use pd_client::{Feature, FeatureGate};
-use raftstore::store::{fsm::apply::PRINTF_LOG, TxnExt};
+use raftstore::store::{
+    fsm::apply::{PRINTF_LOG, TXN_LOG},
+    TxnExt,
+};
 use resource_control::{ResourceController, ResourceGroupManager, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory};
 use smallvec::{smallvec, SmallVec};
-use raftstore::store::fsm::apply::TXN_LOG;
 use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{
     memory::MemoryQuota, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,

@@ -93,7 +93,7 @@ use crate::{
     store::{
         async_io::{read::ReadTask, write::WriteMsg, write_router::WriteRouter},
         fsm::{
-            apply::{self, CatchUpLogs, PRINTF_LOG},
+            apply::{self, CatchUpLogs, PRINTF_LOG, TXN_LOG},
             store::PollContext,
             Apply, ApplyMetrics, ApplyTask, Proposal,
         },
@@ -114,7 +114,6 @@ use crate::{
     },
     Error, Result,
 };
-use crate::store::fsm::apply::TXN_LOG;
 
 const SHRINK_CACHE_CAPACITY: usize = 64;
 // 1s

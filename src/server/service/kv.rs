@@ -29,14 +29,13 @@ use protobuf::RepeatedField;
 use raft::eraftpb::MessageType;
 use raftstore::{
     store::{
-        fsm::apply::PRINTF_LOG,
+        fsm::apply::{PRINTF_LOG, TXN_LOG},
         memory::{MEMTRACE_APPLYS, MEMTRACE_RAFT_ENTRIES, MEMTRACE_RAFT_MESSAGES},
         metrics::{MESSAGE_RECV_BY_STORE, RAFT_ENTRIES_CACHES_GAUGE},
         CheckLeaderTask,
     },
     Error as RaftStoreError, Result as RaftStoreResult,
 };
-use raftstore::store::fsm::apply::TXN_LOG;
 use resource_control::ResourceGroupManager;
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::{RaftExtension, StageLatencyStats};
