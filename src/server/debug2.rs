@@ -9,7 +9,12 @@ use engine_traits::{
     CachedTablet, Iterable, Peekable, RaftEngine, TabletContext, TabletRegistry, CF_DEFAULT,
     CF_LOCK, CF_WRITE,
 };
+<<<<<<< HEAD
 use keys::{data_key, DATA_MAX_KEY, DATA_PREFIX_KEY};
+=======
+use futures::future::Future;
+use keys::{data_key, enc_end_key, enc_start_key, DATA_MAX_KEY, DATA_PREFIX_KEY};
+>>>>>>> 69b8ac5717 (raftstore-v2: consider unmatch between region range and tablet range for mvcc scan (#15455))
 use kvproto::{
     debugpb::Db as DbType,
     kvrpcpb::MvccInfo,
@@ -26,6 +31,34 @@ use crate::{
     server::debug::{Error, Result},
     storage::mvcc::{MvccInfoCollector, MvccInfoScanner},
 };
+
+// `key1` and `key2` should both be start_key or end_key.
+fn smaller_key<'a>(key1: &'a [u8], key2: &'a [u8], is_end_key: bool) -> &'a [u8] {
+    if is_end_key && key1.is_empty() {
+        return key2;
+    }
+    if is_end_key && key2.is_empty() {
+        return key1;
+    }
+    if key1 < key2 {
+        return key1;
+    }
+    key2
+}
+
+// `key1` and `key2` should both be start_key or end_key.
+fn larger_key<'a>(key1: &'a [u8], key2: &'a [u8], is_end_key: bool) -> &'a [u8] {
+    if is_end_key && key1.is_empty() {
+        return key1;
+    }
+    if is_end_key && key2.is_empty() {
+        return key2;
+    }
+    if key1 < key2 {
+        return key2;
+    }
+    key1
+}
 
 // return the region containing the seek_key or the next region if not existed
 fn seek_region(
@@ -89,11 +122,16 @@ impl MvccInfoIteratorV2 {
             )?;
 
             let tablet = tablet_cache.latest().unwrap();
+            let region_start_key = enc_start_key(first_region_state.get_region());
+            let region_end_key = enc_end_key(first_region_state.get_region());
+            let iter_start = larger_key(start, &region_start_key, false);
+            let iter_end = smaller_key(end, &region_end_key, true);
+            assert!(!iter_start.is_empty() && !iter_start.is_empty());
             let scanner = Some(
                 MvccInfoScanner::new(
                     |cf, opts| tablet.iterator_opt(cf, opts).map_err(|e| box_err!(e)),
-                    if start.is_empty() { None } else { Some(start) },
-                    if end.is_empty() { None } else { Some(end) },
+                    Some(iter_start),
+                    Some(iter_end),
                     MvccInfoCollector::default(),
                 )
                 .map_err(|e| -> Error { box_err!(e) })?,
@@ -162,19 +200,16 @@ impl Iterator for MvccInfoIteratorV2 {
                     )
                     .unwrap();
                     let tablet = tablet_cache.latest().unwrap();
+                    let region_start_key = enc_start_key(&self.cur_region);
+                    let region_end_key = enc_end_key(&self.cur_region);
+                    let iter_start = larger_key(&self.start, &region_start_key, false);
+                    let iter_end = smaller_key(&self.end, &region_end_key, true);
+                    assert!(!iter_start.is_empty() && !iter_start.is_empty());
                     self.scanner = Some(
                         MvccInfoScanner::new(
                             |cf, opts| tablet.iterator_opt(cf, opts).map_err(|e| box_err!(e)),
-                            if self.start.is_empty() {
-                                None
-                            } else {
-                                Some(self.start.as_bytes())
-                            },
-                            if self.end.is_empty() {
-                                None
-                            } else {
-                                Some(self.end.as_bytes())
-                            },
+                            Some(iter_start),
+                            Some(iter_end),
                             MvccInfoCollector::default(),
                         )
                         .unwrap(),
@@ -582,6 +617,7 @@ fn get_tablet_cache(
     }
 }
 
+<<<<<<< HEAD
 // `key1` and `key2` should both be start_key or end_key.
 fn smaller_key<'a>(key1: &'a [u8], key2: &'a [u8], end_key: bool) -> &'a [u8] {
     if end_key && key1.is_empty() {
@@ -595,40 +631,139 @@ fn smaller_key<'a>(key1: &'a [u8], key2: &'a [u8], end_key: bool) -> &'a [u8] {
     }
     key2
 }
+=======
+fn get_all_region_states_with_normal_state<ER: RaftEngine>(
+    raft_engine: &ER,
+) -> Vec<RegionLocalState> {
+    let mut region_states = vec![];
+    raft_engine
+        .for_each_raft_group::<raftstore::Error, _>(&mut |region_id| {
+            let region_state = raft_engine
+                .get_region_state(region_id, u64::MAX)
+                .unwrap()
+                .unwrap();
+            if region_state.state == PeerState::Normal {
+                region_states.push(region_state);
+            }
+            Ok(())
+        })
+        .unwrap();
 
-// `key1` and `key2` should both be start_key or end_key.
-fn larger_key<'a>(key1: &'a [u8], key2: &'a [u8], end_key: bool) -> &'a [u8] {
-    if end_key && key1.is_empty() {
-        return key1;
+    region_states
+}
+
+// This method devide all regions into `threads` of groups where each group has
+// similar data volume (estimated by region size) so that we use `threads` of
+// threads to execute them concurrently.
+// Note: we cannot guarantee that we can divde them into exactly `threads` of
+// groups for some cases, ex: [0, 0, 0, 0, 0, 100], we can at most return two
+// groups for this.
+fn deivde_regions_for_concurrency<ER: RaftEngine>(
+    raft_engine: &ER,
+    registry: &TabletRegistry<RocksEngine>,
+    threads: u64,
+) -> Result<Vec<Vec<metapb::Region>>> {
+    let region_states = get_all_region_states_with_normal_state(raft_engine);
+
+    if threads == 1 {
+        return Ok(vec![
+            region_states
+                .into_iter()
+                .map(|mut r| r.take_region())
+                .collect(),
+        ]);
     }
-    if end_key && key2.is_empty() {
-        return key2;
+
+    let mut regions_groups = vec![];
+    let mut region_sizes = vec![];
+    let mut total_size = 0;
+    for region_state in region_states {
+        let mut tablet_cache = get_tablet_cache(
+            registry,
+            region_state.get_region().get_id(),
+            Some(region_state.clone()),
+        )?;
+        let tablet = tablet_cache.latest().unwrap();
+        let region_size = box_try!(get_region_approximate_size(
+            tablet,
+            region_state.get_region(),
+            0
+        ));
+        region_sizes.push((region_size, region_state));
+        total_size += region_size;
     }
-    if key1 < key2 {
-        return key2;
+    region_sizes.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let group_size = (total_size + threads - 1) / threads;
+    let mut cur_group = vec![];
+    let mut cur_size = 0;
+    for (region_size, mut region_state) in region_sizes.into_iter() {
+        cur_group.push(region_state.take_region());
+        cur_size += region_size;
+        if cur_size >= group_size {
+            cur_size = 0;
+            regions_groups.push(cur_group);
+            cur_group = vec![];
+        }
     }
-    key1
+    if !cur_group.is_empty() {
+        regions_groups.push(cur_group);
+    }
+
+    assert!(regions_groups.len() <= threads as usize);
+    Ok(regions_groups)
+}
+
+#[cfg(any(test, feature = "testexport"))]
+pub fn new_debugger(path: &std::path::Path) -> DebuggerImplV2<raft_log_engine::RaftLogEngine> {
+    use crate::{config::TikvConfig, server::KvEngineFactoryBuilder};
+>>>>>>> 69b8ac5717 (raftstore-v2: consider unmatch between region range and tablet range for mvcc scan (#15455))
+
+    let mut cfg = TikvConfig::default();
+    cfg.storage.data_dir = path.to_str().unwrap().to_string();
+    cfg.raft_store.raftdb_path = cfg.infer_raft_db_path(None).unwrap();
+    cfg.raft_engine.mut_config().dir = cfg.infer_raft_engine_path(None).unwrap();
+    let cache = cfg.storage.block_cache.build_shared_cache();
+    let env = cfg.build_shared_rocks_env(None, None).unwrap();
+
+    let factory = KvEngineFactoryBuilder::new(env, &cfg, cache, None).build();
+    let reg = TabletRegistry::new(Box::new(factory), path).unwrap();
+
+    let raft_engine =
+        raft_log_engine::RaftLogEngine::new(cfg.raft_engine.config(), None, None).unwrap();
+
+    DebuggerImplV2::new(reg, raft_engine, ConfigController::default())
 }
 
 #[cfg(test)]
 mod tests {
+<<<<<<< HEAD
     use std::path::Path;
 
     use engine_traits::{RaftLogBatch, SyncMutable, CF_DEFAULT, CF_LOCK, CF_WRITE};
     use kvproto::{metapb, raft_serverpb::*};
     use raft::prelude::EntryType;
     use raft_log_engine::RaftLogEngine;
+=======
+    use collections::HashMap;
+    use engine_traits::{
+        RaftEngineReadOnly, RaftLogBatch, SyncMutable, ALL_CFS, CF_DEFAULT, CF_LOCK, CF_WRITE,
+        DATA_CFS,
+    };
+    use kvproto::{
+        metapb::{self, Peer, PeerRole},
+        raft_serverpb::*,
+    };
+    use raft::prelude::EntryType;
+    use raftstore::store::RAFT_INIT_LOG_INDEX;
+    use tikv_util::store::new_peer;
+>>>>>>> 69b8ac5717 (raftstore-v2: consider unmatch between region range and tablet range for mvcc scan (#15455))
 
     use super::*;
-    use crate::{
-        config::TikvConfig,
-        server::KvEngineFactoryBuilder,
-        storage::{txn::tests::must_prewrite_put, TestEngineBuilder},
-    };
 
-    const INITIAL_TABLET_INDEX: u64 = 5;
     const INITIAL_APPLY_INDEX: u64 = 5;
 
+<<<<<<< HEAD
     fn new_debugger(path: &Path) -> DebuggerImplV2<RaftLogEngine> {
         let mut cfg = TikvConfig::default();
         cfg.storage.data_dir = path.to_str().unwrap().to_string();
@@ -646,6 +781,70 @@ mod tests {
         let raft_engine = RaftLogEngine::new(cfg.raft_engine.config(), None, None).unwrap();
 
         DebuggerImplV2::new(reg, raft_engine, ConfigController::default())
+=======
+    impl<ER: RaftEngine> DebuggerImplV2<ER> {
+        fn set_store_id(&self, store_id: u64) {
+            let mut ident = self.get_store_ident().unwrap_or_default();
+            ident.set_store_id(store_id);
+            let mut lb = self.raft_engine.log_batch(3);
+            lb.put_store_ident(&ident).unwrap();
+            self.raft_engine.consume(&mut lb, true).unwrap();
+        }
+    }
+
+    fn init_region_state<ER: RaftEngine>(
+        raft_engine: &ER,
+        region_id: u64,
+        stores: &[u64],
+        mut learner: usize,
+    ) -> metapb::Region {
+        let mut region = metapb::Region::default();
+        region.set_id(region_id);
+        for (i, &store_id) in stores.iter().enumerate() {
+            let mut peer = metapb::Peer::default();
+            peer.set_id(i as u64);
+            peer.set_store_id(store_id);
+            if learner > 0 {
+                peer.set_role(PeerRole::Learner);
+                learner -= 1;
+            }
+            region.mut_peers().push(peer);
+        }
+        let mut region_state = RegionLocalState::default();
+        region_state.set_state(PeerState::Normal);
+        region_state.set_region(region.clone());
+        let mut lb = raft_engine.log_batch(3);
+        lb.put_region_state(region_id, INITIAL_APPLY_INDEX, &region_state)
+            .unwrap();
+        raft_engine.consume(&mut lb, true).unwrap();
+        region
+    }
+
+    fn init_raft_state<ER: RaftEngine>(
+        raft_engine: &ER,
+        region_id: u64,
+        last_index: u64,
+        commit_index: u64,
+        applied_index: u64,
+        admin_flush: Option<u64>,
+    ) {
+        let mut lb = raft_engine.log_batch(10);
+        let mut apply_state = RaftApplyState::default();
+        apply_state.set_applied_index(applied_index);
+        apply_state.set_commit_index(commit_index);
+        lb.put_apply_state(region_id, applied_index, &apply_state)
+            .unwrap();
+
+        let mut raft_state = RaftLocalState::default();
+        raft_state.set_last_index(last_index);
+        lb.put_raft_state(region_id, &raft_state).unwrap();
+
+        if let Some(admin_flush) = admin_flush {
+            lb.put_flushed_index(region_id, CF_RAFT, 5, admin_flush)
+                .unwrap();
+        }
+        raft_engine.consume(&mut lb, true).unwrap();
+>>>>>>> 69b8ac5717 (raftstore-v2: consider unmatch between region range and tablet range for mvcc scan (#15455))
     }
 
     #[test]
@@ -809,6 +1008,7 @@ mod tests {
         debugger.region_size(region_id, cfs.clone()).unwrap_err();
     }
 
+<<<<<<< HEAD
     // For simplicity, the format of the key is inline with data in
     // prepare_data_on_disk
     fn extract_key(key: &[u8]) -> &[u8] {
@@ -929,6 +1129,8 @@ mod tests {
         assert!(scanner.next().is_none());
     }
 
+=======
+>>>>>>> 69b8ac5717 (raftstore-v2: consider unmatch between region range and tablet range for mvcc scan (#15455))
     #[test]
     fn test_compact() {
         let dir = test_util::temp_dir("test-debugger", false);
