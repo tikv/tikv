@@ -10,7 +10,7 @@ use std::{
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::SyncSender,
-        Arc,
+        Arc, Mutex,
     },
     time::Duration,
     u64,
@@ -364,7 +364,7 @@ where
     pd_client: Option<Arc<T>>,
     pool: FuturePool,
 
-    range_cleaner: RangeCleaner<EK>,
+    range_cleaner: Arc<Mutex<RangeCleaner<EK>>>,
 }
 
 struct RangeCleaner<EK>
@@ -608,12 +608,12 @@ where
                     SNAP_GENERATOR_MAX_POOL_SIZE,
                 )
                 .build_future_pool(),
-            range_cleaner: RangeCleaner {
+            range_cleaner: Arc::new(Mutex::new(RangeCleaner {
                 use_delete_range: cfg.value().use_delete_range,
                 engine,
                 pending_delete_ranges: PendingDeleteRanges::default(),
                 mgr,
-            },
+            })),
         }
     }
 
@@ -662,8 +662,10 @@ where
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
-        self.range_cleaner
-            .clean_overlap_ranges(start_key, end_key)?;
+        {
+            let mut range_cleaner = self.range_cleaner.lock().unwrap();
+            range_cleaner.clean_overlap_ranges(start_key, end_key)?;
+        }
         check_abort(&abort)?;
         fail_point!("apply_snap_cleanup_range");
 
@@ -931,12 +933,19 @@ where
                 start_key,
                 end_key,
             } => {
-                fail_point!("on_region_worker_destroy", true, |_| {});
-                // try to delay the range deletion because
-                // there might be a coprocessor request related to this range
-                self.range_cleaner
-                    .insert_pending_delete_range(region_id, start_key, end_key);
-                self.range_cleaner.clean_stale_ranges();
+                let range_cleaner = self.range_cleaner.clone();
+                self.pool
+                    .spawn(async move {
+                        let mut range_cleaner = range_cleaner.lock().unwrap();
+                        fail_point!("on_region_worker_destroy", true, |_| {});
+                        // try to delay the range deletion because
+                        // there might be a coprocessor request related to this range
+                        range_cleaner.insert_pending_delete_range(region_id, start_key, end_key);
+                        range_cleaner.clean_stale_ranges();
+                    })
+                    .unwrap_or_else(|e| {
+                        error!("failed to destroy peer"; "region_id" => region_id, "err" => ?e);
+                    });
             }
         }
     }
@@ -952,7 +961,7 @@ where
         self.handle_pending_applies(true);
         self.clean_stale_tick += 1;
         if self.clean_stale_tick >= self.clean_stale_ranges_tick {
-            self.range_cleaner.clean_stale_ranges();
+            self.range_cleaner.lock().unwrap().clean_stale_ranges();
             self.clean_stale_tick = 0;
         }
     }
