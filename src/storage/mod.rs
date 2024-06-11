@@ -2245,9 +2245,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_ok.inc();
                     if !snapshot.ext().is_max_ts_synced() {
                         return Err(Error::from(txn::Error::from(
-                            TxnErrorInner::MaxTimestampNotSynced {
+                            TxnErrorInner::RawKvMaxTimestampNotSynced {
                                 region_id: ctx.get_region_id(),
-                                start_ts: TimeStamp::zero(),
                             },
                         )));
                     }
