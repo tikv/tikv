@@ -4906,6 +4906,20 @@ where
         region: metapb::Region,
         source: metapb::Region,
     ) {
+        let range = CacheRange::from_region(&region);
+
+        // if keys::enc_end_key(&region) == keys::enc_start_key(source) {
+        //     region.set_end_key(source.get_end_key().to_vec());
+        // } else {
+        //     region.set_start_key(source.get_start_key().to_vec());
+        // }
+
+        info!(
+            "evict range due to commit merge";
+            "range" => ?range,
+        );
+        self.ctx.engines.kv.evict_range(range);
+
         self.register_split_region_check_tick();
         let mut meta = self.ctx.store_meta.lock().unwrap();
 

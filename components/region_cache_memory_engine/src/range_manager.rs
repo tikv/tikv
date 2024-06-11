@@ -208,6 +208,13 @@ impl RangeManager {
         self.ranges.keys().any(|r| r.overlaps(range))
     }
 
+    pub fn overlap_or_contained_by_range(&self, range: &CacheRange) -> Option<CacheRange> {
+        self.ranges
+            .keys()
+            .find(|r| r.overlaps(range) || range.contains_range(r))
+            .cloned()
+    }
+
     fn overlap_with_evicting_range(&self, range: &CacheRange) -> bool {
         self.ranges_being_deleted.iter().any(|r| r.overlaps(range))
     }
@@ -309,25 +316,22 @@ impl RangeManager {
             .find(|&r| r.contains_range(evict_range))
             .cloned()
         else {
-            if let Some(range_key) = self
-                .ranges
-                .keys()
-                .find(|&r| r.overlaps(evict_range) || evict_range.contains_range(r))
-                .cloned()
-            {
-                info!(
-                    "evict range that overlaps";
-                    "evicted_range" => ?evict_range,
-                    "overlapped_range" => ?range_key,
-                );
-                let meta = self.ranges.remove(&range_key).unwrap();
-                self.ranges_being_deleted.insert(evict_range.clone());
-                if !meta.range_snapshot_list.is_empty() {
-                    assert!(self.historical_ranges.insert(range_key, meta).is_none());
-                    return None;
+            self.pending_ranges.retain(|r| {
+                if r.overlaps(evict_range)
+                    || evict_range.contains_range(r)
+                    || r.contains_range(evict_range)
+                {
+                    info!(
+                        "evict range that overlaps with pending range";
+                        "evicted_range" => ?evict_range,
+                        "overlapped_range" => ?r,
+                    );
+                    false
+                } else {
+                    true
                 }
-                return Some(range_key);
-            } else if let Some((range_key, _, canceled)) =
+            });
+            if let Some((range_key, _, canceled)) =
                 self.pending_ranges_loading_data.iter_mut().find(|(r, ..)| {
                     evict_range.overlaps(r)
                         || evict_range.contains_range(r)
@@ -342,6 +346,30 @@ impl RangeManager {
                 );
                 *canceled = true;
             }
+
+            if let Some(range_key) = self
+                .ranges
+                .keys()
+                .find(|&r| r.overlaps(evict_range) || evict_range.contains_range(r))
+                .cloned()
+            {
+                info!(
+                    "evict range that overlaps";
+                    "evicted_range" => ?evict_range,
+                    "overlapped_range" => ?range_key,
+                );
+                if range_key.overlaps(evict_range) {
+                    unreachable!();
+                }
+                let meta = self.ranges.remove(&range_key).unwrap();
+                self.ranges_being_deleted.insert(evict_range.clone());
+                if !meta.range_snapshot_list.is_empty() {
+                    assert!(self.historical_ranges.insert(range_key, meta).is_none());
+                    return None;
+                }
+                return Some(range_key);
+            }
+
             info!(
                 "evict a range that is not cached";
                 "range" => ?evict_range,

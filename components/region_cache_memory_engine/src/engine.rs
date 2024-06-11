@@ -405,6 +405,15 @@ impl RangeCacheMemoryEngine {
             return RangeCacheStatus::Cached;
         }
 
+        if let Some(overlapped_range) = range_manager.overlap_or_contained_by_range(range) {
+            error!(
+                "overlap or contained by range";
+                "range_in_cache" => ?overlapped_range,
+                "range_for_prepare" => ?range,
+            );
+            unreachable!()
+        }
+
         let mut overlapped = false;
         // check whether the range is in pending_range and we can schedule load task if
         // it is
