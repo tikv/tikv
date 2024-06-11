@@ -115,6 +115,44 @@ impl RangeCacheWriteBatch {
         }
     }
 
+    /// maybe_compact_lock_cf may send a CleanLockTombstone task if the
+    /// accumulated lock cf modification exceeds 8MB.
+    ///
+    /// NB: It need to acquire RocksDB mutex to get oldest snapshot, so do not
+    ///     call it on any RocksDB's callback, e.g., write batch callback.
+    pub fn maybe_compact_lock_cf(&self) {
+        if self.engine.lock_modification_bytes.load(Ordering::Relaxed) > ReadableSize::mb(8).0 {
+            if self
+                .engine
+                .lock_modification_bytes
+                .swap(0, Ordering::Relaxed)
+                > ReadableSize::mb(8).0
+            {
+                let rocks_engine = self.engine.rocks_engine.as_ref().unwrap();
+                let last_seqno = rocks_engine.get_latest_sequence_number();
+                let snapshot_seqno = self
+                    .engine
+                    .rocks_engine
+                    .as_ref()
+                    .unwrap()
+                    .get_oldest_snapshot_sequence_number()
+                    .unwrap_or(last_seqno);
+
+                if let Err(e) = self
+                    .engine
+                    .bg_worker_manager()
+                    .schedule_task(BackgroundTask::CleanLockTombstone(snapshot_seqno))
+                {
+                    error!(
+                        "schedule lock tombstone cleanup failed";
+                        "err" => ?e,
+                    );
+                    assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+                }
+            }
+        }
+    }
+
     /// Sets the sequence number for this batch. This should only be called
     /// prior to writing the batch.
     pub fn set_sequence_number(&mut self, seq: u64) -> Result<()> {
@@ -164,41 +202,9 @@ impl RangeCacheWriteBatch {
             }
         }
 
-        if self
-            .engine
+        self.engine
             .lock_modification_bytes
-            .fetch_add(lock_modification, Ordering::Relaxed)
-            + lock_modification
-            > ReadableSize::mb(8).0
-        {
-            if self
-                .engine
-                .lock_modification_bytes
-                .swap(0, Ordering::Relaxed)
-                > ReadableSize::mb(8).0
-            {
-                let rocks_engine = self.engine.rocks_engine.as_ref().unwrap();
-                let last_seqno = rocks_engine.get_latest_sequence_number();
-                let snapshot_seqno = self
-                    .engine
-                    .rocks_engine
-                    .as_ref()
-                    .unwrap()
-                    .get_oldest_snapshot_sequence_number()
-                    .unwrap_or(last_seqno);
-                if let Err(e) = self
-                    .engine
-                    .bg_worker_manager()
-                    .schedule_task(BackgroundTask::CleanLockTombstone(snapshot_seqno))
-                {
-                    error!(
-                        "schedule lock tombstone cleanup failed";
-                        "err" => ?e,
-                    );
-                    assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
-                }
-            }
-        }
+            .fetch_add(lock_modification, Ordering::Relaxed);
 
         if !ranges_to_delete.is_empty() {
             if let Err(e) = self
