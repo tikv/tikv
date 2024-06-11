@@ -39,7 +39,7 @@ pub fn put_data(
 }
 
 // Put data with write cf and related start cf and overwrite the write cf with
-// sequence number `seq_num2` which also points to the prevous default cf
+// sequence number `seq_num2` which also points to the previous default cf.
 pub fn put_data_with_overwrite(
     key: &[u8],
     value: &[u8],
