@@ -53,7 +53,6 @@ lazy_static! {
     pub static ref STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC: PerfContextTimeDuration =
         auto_flush_from!(STORE_PERF_CONTEXT_TIME_HISTOGRAM, PerfContextTimeDuration);
     pub static ref INGEST_EXTERNAL_FILE_TIME_HISTOGRAM: HistogramVec = register_histogram_vec!(
-        IngestExternalFileTimeDuration,
         "tikv_storage_ingest_external_file_duration_secs",
         "Bucketed histogram of ingest external file duration.",
         &["cf", "type"],

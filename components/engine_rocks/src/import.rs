@@ -15,8 +15,8 @@ use crate::{
 impl ImportExt for RocksEngine {
     type IngestExternalFileOptions = RocksIngestExternalFileOptions;
 
-    fn ingest_external_file_cf(&self, cf: &str, files: &[&str]) -> Result<()> {
-        let cf = util::get_cf_handle(self.as_inner(), cf)?;
+    fn ingest_external_file_cf(&self, cf_name: &str, files: &[&str]) -> Result<()> {
+        let cf = util::get_cf_handle(self.as_inner(), cf_name)?;
         let mut opts = RocksIngestExternalFileOptions::new();
         opts.move_files(true);
         opts.set_write_global_seqno(false);
@@ -44,11 +44,11 @@ impl ImportExt for RocksEngine {
         let time_cost = now.saturating_elapsed_secs();
         if did_nonblocking_memtable_flush {
             INGEST_EXTERNAL_FILE_TIME_HISTOGRAM
-                .with_label_values(&[cf, "non_block"])
+                .with_label_values(&[cf_name, "non_block"])
                 .observe(time_cost);
         } else {
             INGEST_EXTERNAL_FILE_TIME_HISTOGRAM
-                .with_label_values(&[cf, "block"])
+                .with_label_values(&[cf_name, "block"])
                 .observe(time_cost);
         }
         Ok(())
