@@ -654,6 +654,9 @@ where
                             // to make the batch larger. This can reduce the IOPS
                             // amplification if there are many trivial writes.
                             no_op_loop_count -= 1;
+                            // Sleep some time (50 microseconds) to avoid busy loop and
+                            // make the batch larger.
+                            std::thread::sleep(std::time::Duration::from_micros(50));
                             continue;
                         } else {
                             break;
