@@ -44,10 +44,12 @@ impl ImportExt for RocksEngine {
         let time_cost = now.saturating_elapsed_secs();
         if did_nonblocking_memtable_flush {
             INGEST_EXTERNAL_FILE_TIME_HISTOGRAM
-                .non_block
+                .with_label_values(&[cf, "non_block"])
                 .observe(time_cost);
         } else {
-            INGEST_EXTERNAL_FILE_TIME_HISTOGRAM.block.observe(time_cost);
+            INGEST_EXTERNAL_FILE_TIME_HISTOGRAM
+                .with_label_values(&[cf, "block"])
+                .observe(time_cost);
         }
         Ok(())
     }

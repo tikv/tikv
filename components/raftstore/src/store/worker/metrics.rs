@@ -277,6 +277,6 @@ lazy_static! {
         "tikv_raftstore_clear_overlap_region_duration_seconds",
         "Bucketed histogram of clear overlap region duration.",
         &["type"],
-        exponential_buckets(0.00001, 2.0, 26).unwrap()
+        exponential_buckets(0.005, 2.0, 20).unwrap()
     ).unwrap();
 }

@@ -1159,7 +1159,6 @@ impl Snapshot {
                     cb,
                 )?;
             } else {
-                let _timer = INGEST_SST_DURATION_SECONDS.start_coarse_timer();
                 let path = cf_file.path.to_str().unwrap(); // path is not used at all
                 let clone_file_paths = cf_file.clone_file_paths();
                 let clone_files = clone_file_paths
