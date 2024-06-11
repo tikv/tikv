@@ -1087,6 +1087,7 @@ mod test {
                 messenger: tx.downgrade(),
                 scan_pool_handle: spawn_executors_to(init, pool.handle()),
                 scans: FutureWaitGroup::new(),
+                advance_ts_interval: Duration::from_secs(1),
             };
             let events = Arc::new(Mutex::new(vec![]));
             let ob_events = Arc::clone(&events);
