@@ -7,6 +7,12 @@ license = "Apache-2.0"
 
 [features]
 testexport = []
+failpoints = ["fail/failpoints"]
+
+[[test]]
+name = "failpoints"
+path = "tests/failpoints/mod.rs"
+required-features = ["failpoints"]
 
 [dependencies]
 engine_traits = { workspace = true }
@@ -45,3 +51,4 @@ rand = "0.8"
 tempfile = "3.0"
 test_pd = { workspace = true }
 test_pd_client = { workspace = true }
+test_util = { workspace = true }
