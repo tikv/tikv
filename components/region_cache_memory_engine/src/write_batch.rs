@@ -104,11 +104,13 @@ impl RangeCacheWriteBatch {
         Ok(())
     }
 
-    fn write_impl(&mut self, seq: u64) -> Result<()> {
+    // `seq`` is the sequence number of the first key in this write batch. Seq is
+    // incremented for each key so that all keys have unique sequence numbers.
+    fn write_impl(&mut self, mut seq: u64) -> Result<()> {
         fail::fail_point!("on_write_impl");
         let ranges_to_delete = self.handle_ranges_to_evict();
         let (entries_to_write, engine) = self.engine.handle_pending_range_in_loading_buffer(
-            seq,
+            &mut seq,
             std::mem::take(&mut self.pending_range_in_loading_buffer),
         );
         let guard = &epoch::pin();
@@ -119,7 +121,8 @@ impl RangeCacheWriteBatch {
             .into_iter()
             .chain(std::mem::take(&mut self.buffer))
             .try_for_each(|e| {
-                e.write_to_memory(seq, &engine, self.memory_controller.clone(), guard)
+                seq += 1;
+                e.write_to_memory(seq - 1, &engine, self.memory_controller.clone(), guard)
             });
         let duration = start.saturating_elapsed_secs();
         WRITE_DURATION_HISTOGRAM.observe(duration);
