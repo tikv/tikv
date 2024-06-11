@@ -40,9 +40,15 @@ harness = false
 path = "benches/deadlock_detector/mod.rs"
 
 [[bench]]
+<<<<<<< HEAD
 name = "channel"
 path = "benches/channel/mod.rs"
 test = true
+=======
+name = "memory"
+harness = false
+path = "benches/memory/mod.rs"
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
 
 [features]
 default = ["failpoints", "testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
