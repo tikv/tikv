@@ -346,7 +346,6 @@ where
     T: PdClient + 'static,
 {
     batch_size: usize,
-
     ingest_copy_symlink: bool,
     clean_stale_tick: usize,
     clean_stale_check_interval: Duration,
@@ -362,12 +361,12 @@ where
     coprocessor_host: CoprocessorHost<EK>,
     router: R,
     pd_client: Option<Arc<T>>,
-    pool: FuturePool,
-
-    range_cleaner: Arc<Mutex<RangeCleaner<EK>>>,
+    snap_gen_pool: FuturePool,
+    region_cleanup_pool: FuturePool,
+    region_cleaner: Arc<Mutex<RegionCleaner<EK>>>,
 }
 
-struct RangeCleaner<EK>
+struct RegionCleaner<EK>
 where
     EK: KvEngine,
 {
@@ -385,7 +384,7 @@ where
     mgr: SnapManager,
 }
 
-impl<EK> RangeCleaner<EK>
+impl<EK> RegionCleaner<EK>
 where
     EK: KvEngine,
 {
@@ -600,7 +599,7 @@ where
             coprocessor_host,
             router,
             pd_client,
-            pool: YatpPoolBuilder::new(DefaultTicker::default())
+            snap_gen_pool: YatpPoolBuilder::new(DefaultTicker::default())
                 .name_prefix("snap-generator")
                 .thread_count(
                     1,
@@ -608,7 +607,11 @@ where
                     SNAP_GENERATOR_MAX_POOL_SIZE,
                 )
                 .build_future_pool(),
-            range_cleaner: Arc::new(Mutex::new(RangeCleaner {
+            region_cleanup_pool: YatpPoolBuilder::new(DefaultTicker::default())
+                .name_prefix("region-cleanup")
+                .thread_count(1, 1, 1)
+                .build_future_pool(),
+            region_cleaner: Arc::new(Mutex::new(RegionCleaner {
                 use_delete_range: cfg.value().use_delete_range,
                 engine,
                 pending_delete_ranges: PendingDeleteRanges::default(),
@@ -618,7 +621,7 @@ where
     }
 
     pub fn snap_generator_pool(&self) -> FuturePool {
-        self.pool.clone()
+        self.snap_gen_pool.clone()
     }
 
     fn region_state(&self, region_id: u64) -> Result<RegionLocalState> {
@@ -663,8 +666,8 @@ where
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
         {
-            let mut range_cleaner = self.range_cleaner.lock().unwrap();
-            range_cleaner.clean_overlap_ranges(start_key, end_key)?;
+            let mut region_cleaner = self.region_cleaner.lock().unwrap();
+            region_cleaner.clean_overlap_ranges(start_key, end_key)?;
         }
         check_abort(&abort)?;
         fail_point!("apply_snap_cleanup_range");
@@ -893,7 +896,7 @@ where
                     start: UnixSecs::now(),
                 };
                 let scheduled_time = Instant::now_coarse();
-                self.pool.spawn(async move {
+                self.snap_gen_pool.spawn(async move {
                     SNAP_GEN_WAIT_DURATION_HISTOGRAM
                         .observe(scheduled_time.saturating_elapsed_secs());
 
@@ -933,15 +936,15 @@ where
                 start_key,
                 end_key,
             } => {
-                let range_cleaner = self.range_cleaner.clone();
-                self.pool
+                fail_point!("on_region_worker_destroy", true, |_| {});
+                let region_cleaner = self.region_cleaner.clone();
+                self.region_cleanup_pool
                     .spawn(async move {
-                        let mut range_cleaner = range_cleaner.lock().unwrap();
-                        fail_point!("on_region_worker_destroy", true, |_| {});
+                        let mut region_cleaner = region_cleaner.lock().unwrap();
                         // try to delay the range deletion because
                         // there might be a coprocessor request related to this range
-                        range_cleaner.insert_pending_delete_range(region_id, start_key, end_key);
-                        range_cleaner.clean_stale_ranges();
+                        region_cleaner.insert_pending_delete_range(region_id, start_key, end_key);
+                        region_cleaner.clean_stale_ranges();
                     })
                     .unwrap_or_else(|e| {
                         error!("failed to destroy peer"; "region_id" => region_id, "err" => ?e);
@@ -961,7 +964,7 @@ where
         self.handle_pending_applies(true);
         self.clean_stale_tick += 1;
         if self.clean_stale_tick >= self.clean_stale_ranges_tick {
-            self.range_cleaner.lock().unwrap().clean_stale_ranges();
+            self.region_cleaner.lock().unwrap().clean_stale_ranges();
             self.clean_stale_tick = 0;
         }
     }
