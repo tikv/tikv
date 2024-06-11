@@ -1711,9 +1711,16 @@
           },
           "yaxes": [
             {
+<<<<<<< HEAD
               "format": "dtdurations",
               "label": "",
               "logBase": 1,
+=======
+              "decimals": null,
+              "format": "s",
+              "label": null,
+              "logBase": 2,
+>>>>>>> ea373bf92a (metrics: Show dropped raft messages (#17102))
               "max": null,
               "min": "0",
               "show": true
@@ -15384,12 +15391,25 @@
           "steppedLine": false,
           "targets": [
             {
+<<<<<<< HEAD
               "expr": "sum(rate(tikv_raftstore_raft_sent_message_total{k8s_cluster=\"$k8s_cluster\", tidb_cluster=\"$tidb_cluster\", instance=~\"$instance\"}[1m])) by (type)",
+=======
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_raftstore_raft_sent_message_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",status=\"accept\"}\n    [$__rate_interval]\n)) by (type) ",
+>>>>>>> ea373bf92a (metrics: Show dropped raft messages (#17102))
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "{{type}}",
+<<<<<<< HEAD
               "refId": "A",
               "step": 4
+=======
+              "metric": "",
+              "query": "sum(rate(\n    tikv_raftstore_raft_sent_message_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",status=\"accept\"}\n    [$__rate_interval]\n)) by (type) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+>>>>>>> ea373bf92a (metrics: Show dropped raft messages (#17102))
             }
           ],
           "thresholds": [],
@@ -15602,8 +15622,31 @@
               "format": "time_series",
               "intervalFactor": 2,
               "legendFormat": "{{type}}",
+<<<<<<< HEAD
               "refId": "A",
               "step": 4
+=======
+              "metric": "",
+              "query": "sum(rate(\n    tikv_raftstore_raft_dropped_message_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_raftstore_raft_sent_message_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",status=\"drop\"}\n    [$__rate_interval]\n)) by (type) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{type}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_raftstore_raft_sent_message_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",status=\"drop\"}\n    [$__rate_interval]\n)) by (type) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+>>>>>>> ea373bf92a (metrics: Show dropped raft messages (#17102))
             }
           ],
           "thresholds": [],
