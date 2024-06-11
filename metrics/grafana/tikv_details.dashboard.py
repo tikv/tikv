@@ -413,7 +413,7 @@ def Cluster() -> RowPanel:
             graph_panel(
                 title="Uptime",
                 description="TiKV uptime since the last restart",
-                yaxes=yaxes(left_format=UNITS.SECONDS),
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
                 targets=[
                     target(
                         expr=expr_operator(
@@ -2288,6 +2288,7 @@ def RaftMessage() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_raftstore_raft_sent_message_total",
+                            label_selectors=['status="accept"'],
                             by_labels=["type"],
                         ),
                     ),
@@ -2318,6 +2319,13 @@ def RaftMessage() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_raftstore_raft_dropped_message_total",
+                            by_labels=["type"],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_raft_sent_message_total",
+                            label_selectors=['status="drop"'],
                             by_labels=["type"],
                         ),
                     ),
