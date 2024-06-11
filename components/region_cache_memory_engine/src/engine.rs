@@ -5,7 +5,7 @@ use std::{
     fmt::{self, Debug},
     ops::Bound,
     result,
-    sync::Arc,
+    sync::{atomic::AtomicU64, Arc},
 };
 
 use crossbeam::epoch::{self, default_collector, Guard};
@@ -101,6 +101,10 @@ impl SkiplistHandle {
         &self,
     ) -> OwnedIter<Arc<SkipList<InternalBytes, InternalBytes>>, InternalBytes, InternalBytes> {
         self.0.owned_iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
@@ -249,6 +253,10 @@ pub struct RangeCacheMemoryEngine {
     memory_controller: Arc<MemoryController>,
     statistics: Arc<Statistics>,
     config: Arc<VersionTrack<RangeCacheEngineConfig>>,
+
+    // The increment amout of the lock cf. When reaching to a certain amount, a CleanLockTombstone
+    // task will be scheduled to clean lock cf tombstones.
+    pub(crate) lock_modification_bytes: Arc<AtomicU64>,
 }
 
 impl RangeCacheMemoryEngine {
@@ -274,6 +282,7 @@ impl RangeCacheMemoryEngine {
             memory_controller,
             statistics,
             config,
+            lock_modification_bytes: Arc::default(),
         }
     }
 

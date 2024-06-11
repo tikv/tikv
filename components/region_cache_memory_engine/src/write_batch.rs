@@ -1,11 +1,14 @@
 use core::slice::SlicePattern;
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::BTreeSet,
+    sync::{atomic::Ordering, Arc},
+};
 
 use bytes::Bytes;
 use crossbeam::epoch;
 use engine_traits::{
-    CacheRange, Mutable, RangeCacheEngine, Result, WriteBatch, WriteBatchExt, WriteOptions,
-    CF_DEFAULT,
+    CacheRange, MiscExt, Mutable, RangeCacheEngine, Result, WriteBatch, WriteBatchExt,
+    WriteOptions, CF_DEFAULT,
 };
 use tikv_util::{box_err, config::ReadableSize, debug, error, info, time::Instant, warn};
 
@@ -26,6 +29,7 @@ pub(crate) const NODE_OVERHEAD_SIZE_EXPECTATION: usize = 96;
 // As every key/value holds a Arc<MemoryController>, this overhead should be
 // taken into consideration.
 pub(crate) const MEM_CONTROLLER_OVERHEAD: usize = 8;
+const AMOUNT_TO_CLEAN_TOMBSTONE: u64 = ReadableSize::mb(16).0;
 
 // `prepare_for_range` should be called before raft command apply for each peer
 // delegate. It sets `range_cache_status` which is used to determine whether the
@@ -94,6 +98,45 @@ impl RangeCacheWriteBatch {
         }
     }
 
+    /// maybe_compact_lock_cf may send a CleanLockTombstone task if the
+    /// accumulated lock cf modification exceeds 8MB.
+    ///
+    /// NB: It need to acquire RocksDB mutex to get oldest snapshot, so do not
+    ///     call it on any RocksDB's callback, e.g., write batch callback.
+    pub fn maybe_compact_lock_cf(&self) {
+        if self.engine.lock_modification_bytes.load(Ordering::Relaxed) > AMOUNT_TO_CLEAN_TOMBSTONE {
+            // use swap to only allow one schedule per AMOUNT_TO_CLEAN_TOMBSTONE
+            if self
+                .engine
+                .lock_modification_bytes
+                .swap(0, Ordering::Relaxed)
+                > AMOUNT_TO_CLEAN_TOMBSTONE
+            {
+                let rocks_engine = self.engine.rocks_engine.as_ref().unwrap();
+                let last_seqno = rocks_engine.get_latest_sequence_number();
+                let snapshot_seqno = self
+                    .engine
+                    .rocks_engine
+                    .as_ref()
+                    .unwrap()
+                    .get_oldest_snapshot_sequence_number()
+                    .unwrap_or(last_seqno);
+
+                if let Err(e) = self
+                    .engine
+                    .bg_worker_manager()
+                    .schedule_task(BackgroundTask::CleanLockTombstone(snapshot_seqno))
+                {
+                    error!(
+                        "schedule lock tombstone cleanup failed";
+                        "err" => ?e,
+                    );
+                    assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+                }
+            }
+        }
+    }
+
     /// Sets the sequence number for this batch. This should only be called
     /// prior to writing the batch.
     pub fn set_sequence_number(&mut self, seq: u64) -> Result<()> {
@@ -113,16 +156,24 @@ impl RangeCacheWriteBatch {
         );
         let guard = &epoch::pin();
         let start = Instant::now();
+        let mut lock_modification: u64 = 0;
         // Some entries whose ranges may be marked as evicted above, but it does not
         // matter, they will be deleted later.
         let res = entries_to_write
             .into_iter()
             .chain(std::mem::take(&mut self.buffer))
             .try_for_each(|e| {
+                if is_lock_cf(e.cf) {
+                    lock_modification += e.data_size() as u64;
+                }
                 e.write_to_memory(seq, &engine, self.memory_controller.clone(), guard)
             });
         let duration = start.saturating_elapsed_secs();
         WRITE_DURATION_HISTOGRAM.observe(duration);
+
+        self.engine
+            .lock_modification_bytes
+            .fetch_add(lock_modification, Ordering::Relaxed);
 
         if !ranges_to_delete.is_empty() {
             if let Err(e) = self
@@ -335,14 +386,11 @@ impl RangeCacheWriteBatchEntry {
         guard: &epoch::Guard,
     ) -> Result<()> {
         let handle = skiplist_engine.cf_handle(id_to_cf(self.cf));
-        if is_lock_cf(self.cf) && matches!(self.inner, WriteBatchEntryInternal::Deletion) {
-            self.delete_in_lock_cf(seq, &handle, guard);
-        } else {
-            let (mut key, mut value) = self.encode(seq);
-            key.set_memory_controller(memory_controller.clone());
-            value.set_memory_controller(memory_controller);
-            handle.insert(key, value, guard);
-        }
+
+        let (mut key, mut value) = self.encode(seq);
+        key.set_memory_controller(memory_controller.clone());
+        value.set_memory_controller(memory_controller);
+        handle.insert(key, value, guard);
 
         Ok(())
     }
