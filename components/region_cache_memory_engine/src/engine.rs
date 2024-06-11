@@ -422,9 +422,10 @@ impl RangeCacheMemoryEngine {
                 for (range, write_batches) in group_entries_to_cache {
                     core.cached_write_batch.entry(range).or_default().extend(
                         write_batches.into_iter().map(|e| {
-                            let cur = *seq;
+                            // We should confirm the sequence number for cached entries, and
+                            // also increased for each of them.
                             *seq += 1;
-                            (cur, e)
+                            (*seq - 1, e)
                         }),
                     );
                 }
