@@ -6120,6 +6120,7 @@ dependencies = [
  "api_version",
  "collections",
  "engine_rocks",
+ "engine_traits",
  "futures 0.3.15",
  "kvproto",
  "pd_client",
