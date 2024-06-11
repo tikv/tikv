@@ -23,7 +23,7 @@ fn test_sequence_number_unique() {
     let r = CacheRange::new(b"k".to_vec(), b"k5".to_vec());
     engine.new_range(r.clone());
 
-    // mock that we have a loading range, and there are some keys written in it
+    // Mock that we have a loading range, and there are some keys written in it
     // during the load
     let r2 = CacheRange::new(b"k5".to_vec(), b"k7".to_vec());
     let r3 = CacheRange::new(b"k7".to_vec(), b"k9".to_vec());
@@ -86,7 +86,7 @@ fn test_sequence_number_unique() {
             user_key,
             sequence,
             v_type,
-        } = decode_key(&key.as_bytes());
+        } = decode_key(key.as_bytes());
         assert_eq!(sequence, seq);
         assert_eq!(user_key, &k);
         assert_eq!(v_type, ty);

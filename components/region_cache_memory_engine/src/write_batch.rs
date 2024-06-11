@@ -104,8 +104,9 @@ impl RangeCacheWriteBatch {
         Ok(())
     }
 
-    // `seq`` is the sequence number of the first key in this write batch. Seq is
-    // incremented for each key so that all keys have unique sequence numbers.
+    // Note: `seq` is the sequence number of the first key in this write batch in
+    // the RocksDB, which will be incremented automatically for each key, so
+    // that all keys have unique sequence numbers.
     fn write_impl(&mut self, mut seq: u64) -> Result<()> {
         fail::fail_point!("on_write_impl");
         let ranges_to_delete = self.handle_ranges_to_evict();
