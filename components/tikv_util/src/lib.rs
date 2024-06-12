@@ -9,6 +9,7 @@
 #[cfg(test)]
 extern crate test;
 
+use std::error::Error;
 use std::{
     cmp,
     collections::{

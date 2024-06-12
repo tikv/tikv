@@ -167,7 +167,7 @@ pub fn new_debug_executor(
     }
 }
 
-pub fn new_debug_client(host: &str, mgr: Arc<SecurityManager>) -> DebugClient {
+pub fn new_debug_client(host: &str, mgr: Arc<SecurityManager>) -> DebugClient<Channel> {
     let env = Arc::new(Environment::new(1));
     let cb = ChannelBuilder::new(env)
         .max_receive_message_len(1 << 30) // 1G.
@@ -1073,10 +1073,6 @@ impl DebugExecutor for DebugClient<Channel> {
     }
 
     fn check_region_consistency(&self, _: u64) {
-        unimplemented!()
-    }
-
-    fn check_local_mode(&self) {
         unimplemented!()
     }
 
