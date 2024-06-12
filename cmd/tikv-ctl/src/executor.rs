@@ -176,7 +176,7 @@ pub fn new_debug_client(host: &str, mgr: Arc<SecurityManager>) -> DebugClient<Ch
     //     .keepalive_timeout(Duration::from_secs(3));
 
     // let channel = mgr.connect(cb, host);
-    DebugClient::new(channel)
+    //DebugClient::new(channel)
     unimplemented!()
 }
 

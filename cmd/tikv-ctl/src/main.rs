@@ -626,7 +626,7 @@ fn main() {
                         println!("command fail requires host");
                         tikv_util::logger::exit_process_gracefully(-1);
                     }
-                    let client = new_debug_client(host.unwrap(), mgr);
+                    let mut client = new_debug_client(host.unwrap(), mgr);
                     match subcmd {
                         FailCmd::Inject { args, file } => {
                             let mut list = file.as_deref().map_or_else(Vec::new, read_fail_file);
@@ -770,7 +770,7 @@ fn split_region(
         .get_store(leader.get_store_id())
         .expect("get_store should success");
 
-    let tikv_client = {
+    let mut tikv_client = {
         let endpoint = Channel::from_shared(store.get_address().to_owned())
             .unwrap()
             .executor(tikv_util::RuntimeExec::new(handle.clone()));
