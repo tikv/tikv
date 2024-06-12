@@ -168,15 +168,16 @@ pub fn new_debug_executor(
 }
 
 pub fn new_debug_client(host: &str, mgr: Arc<SecurityManager>) -> DebugClient<Channel> {
-    let env = Arc::new(Environment::new(1));
-    let cb = ChannelBuilder::new(env)
-        .max_receive_message_len(1 << 30) // 1G.
-        .max_send_message_len(1 << 30)
-        .keepalive_time(Duration::from_secs(10))
-        .keepalive_timeout(Duration::from_secs(3));
+    // let env = Arc::new(Environment::new(1));
+    // let cb = ChannelBuilder::new(env)
+    //     .max_receive_message_len(1 << 30) // 1G.
+    //     .max_send_message_len(1 << 30)
+    //     .keepalive_time(Duration::from_secs(10))
+    //     .keepalive_timeout(Duration::from_secs(3));
 
-    let channel = mgr.connect(cb, host);
+    // let channel = mgr.connect(cb, host);
     DebugClient::new(channel)
+    unimplemented!()
 }
 
 pub trait DebugExecutor {
@@ -600,7 +601,7 @@ pub trait DebugExecutor {
     ) {
         self.check_local_mode();
         let rpc_client =
-            RpcClient::new(cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+            RpcClient::new(cfg, mgr, tokio::runtime::Handle::current()).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
         let regions = region_ids
             .into_iter()
@@ -648,7 +649,7 @@ pub trait DebugExecutor {
     ) {
         self.check_local_mode();
         let rpc_client =
-            RpcClient::new(cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+            RpcClient::new(cfg, mgr, tokio::runtime::Handle::current()).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
         let regions = region_ids
             .into_iter()
@@ -1332,7 +1333,7 @@ where
     }
 
     fn recreate_region(&self, mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64) {
-        let rpc_client = RpcClient::new(pd_cfg, None, mgr)
+        let rpc_client = RpcClient::new(pd_cfg, mgr, tokio::runtime::Handle::current())
             .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
         let mut region = match block_on(rpc_client.get_region_by_id(region_id)) {

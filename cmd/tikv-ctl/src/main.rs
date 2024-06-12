@@ -266,7 +266,7 @@ fn main() {
         } => {
             let pd_client = get_pd_rpc_client(opt.pd, Arc::clone(&mgr), runtime.handle().clone());
             let key = unescape(&key);
-            split_region(&pd_client, mgr, region_id, key);
+            split_region(&pd_client, mgr, region_id, key, runtime.handle().clone());
         }
         Cmd::ShowClusterId { data_dir } => {
             if opt.config.is_none() {
@@ -646,8 +646,7 @@ fn main() {
                                 inject_req.set_name(name);
                                 inject_req.set_actions(actions);
 
-                                let option = CallOption::default().timeout(Duration::from_secs(10));
-                                client.inject_fail_point_opt(&inject_req, option).unwrap();
+                                client.inject_fail_point(inject_req);
                             }
                         }
                         FailCmd::Recover { args, file } => {
@@ -659,14 +658,14 @@ fn main() {
                                 let mut recover_req = RecoverFailPointRequest::default();
                                 recover_req.set_name(name);
                                 let option = CallOption::default().timeout(Duration::from_secs(10));
-                                client.recover_fail_point_opt(&recover_req, option).unwrap();
+                                client.recover_fail_point(recover_req);
                             }
                         }
                         FailCmd::List {} => {
                             let list_req = ListFailPointsRequest::default();
                             let option = CallOption::default().timeout(Duration::from_secs(10));
-                            let resp = client.list_fail_points_opt(&list_req, option).unwrap();
-                            println!("{:?}", resp.get_entries());
+                            let resp = client.list_fail_points(list_req);
+                            //println!("{:?}", resp.get_entries());
                         }
                     }
                 }
@@ -747,7 +746,7 @@ fn get_pd_rpc_client(
     });
     let cfg = PdConfig::new(vec![pd]);
     cfg.validate().unwrap();
-    RpcClient::new(&cfg, None, handle).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
+    RpcClient::new(&cfg, mgr, handle).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
 }
 
 fn split_region(
@@ -790,7 +789,7 @@ fn split_region(
         .set_region_epoch(region.get_region_epoch().clone());
     req.set_split_key(key);
 
-    let resp = block_on(tikv_client.split_region(&req))
+    let resp = block_on(tikv_client.split_region(req))
         .expect("split_region should success")
         .into_inner();
     if resp.has_region_error() {
