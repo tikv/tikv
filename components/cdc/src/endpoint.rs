@@ -35,7 +35,10 @@ use raftstore::{
 };
 use resolved_ts::{LeadershipResolver, Resolver};
 use security::SecurityManager;
-use tikv::{config::CdcConfig, storage::Statistics};
+use tikv::{
+    config::{CdcConfig, ResolvedTsConfig},
+    storage::Statistics,
+};
 use tikv_util::{
     debug, defer, error, impl_display_as_debug, info,
     memory::MemoryQuota,
@@ -332,6 +335,7 @@ pub struct Endpoint<T, E> {
     concurrency_manager: ConcurrencyManager,
 
     config: CdcConfig,
+    resolved_ts_config: ResolvedTsConfig,
     api_version: ApiVersion,
 
     // Incremental scan
@@ -361,6 +365,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
     pub fn new(
         cluster_id: u64,
         config: &CdcConfig,
+        resolved_ts_config: &ResolvedTsConfig,
         api_version: ApiVersion,
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
@@ -435,6 +440,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             max_scan_batch_bytes,
             max_scan_batch_size,
             config: config.clone(),
+            resolved_ts_config: resolved_ts_config.clone(),
             api_version,
             workers,
             scan_concurrency_semaphore,
@@ -1057,6 +1063,7 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
         let causal_ts_provider = self.causal_ts_provider.clone();
         // We use channel to deliver leader_resolver in async block.
         let (leader_resolver_tx, leader_resolver_rx) = bounded(1);
+        let advance_ts_interval = self.resolved_ts_config.advance_ts_interval.0;
 
         let fut = async move {
             let _ = timeout.compat().await;
@@ -1111,7 +1118,9 @@ impl<T: 'static + RaftStoreRouter<E>, E: KvEngine> Endpoint<T, E> {
             let regions =
                 if hibernate_regions_compatible && gate.can_enable(FEATURE_RESOLVED_TS_STORE) {
                     CDC_RESOLVED_TS_ADVANCE_METHOD.set(1);
-                    leader_resolver.resolve(regions, min_ts, None).await
+                    leader_resolver
+                        .resolve(regions, min_ts, Some(advance_ts_interval))
+                        .await
                 } else {
                     CDC_RESOLVED_TS_ADVANCE_METHOD.set(0);
                     leader_resolver
@@ -1404,6 +1413,7 @@ mod tests {
         let ep = Endpoint::new(
             DEFAULT_CLUSTER_ID,
             cfg,
+            &ResolvedTsConfig::default(),
             api_version,
             pd_client,
             task_sched.clone(),
