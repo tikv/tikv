@@ -21,6 +21,37 @@ make_auto_flush_static_metric! {
     }
 }
 
+make_static_metric! {
+    pub label_enum CFName {
+        default,
+        lock,
+        write,
+        raft
+    }
+
+    pub label_enum IngestType {
+        block,
+        non_block,
+    }
+
+    pub struct IngestExternalFileTimeDuration : Histogram {
+        "cf" => CFName,
+        "type" => IngestType
+    }
+}
+
+impl From<&str> for CFName {
+    fn from(s: &str) -> Self {
+        match s {
+            "DEFAULT" | "default" => CFName::default,
+            "WRITE" | "write" => CFName::write,
+            "LOCK" | "lock" => CFName::lock,
+            "RAFT" | "raft" => CFName::raft,
+            _ => CFName::default,
+        }
+    }
+}
+
 lazy_static! {
     pub static ref APPLY_PERF_CONTEXT_TIME_HISTOGRAM: HistogramVec = register_histogram_vec!(
         "tikv_raftstore_apply_perf_context_time_duration_secs",
@@ -52,11 +83,13 @@ lazy_static! {
         auto_flush_from!(APPLY_PERF_CONTEXT_TIME_HISTOGRAM, PerfContextTimeDuration);
     pub static ref STORE_PERF_CONTEXT_TIME_HISTOGRAM_STATIC: PerfContextTimeDuration =
         auto_flush_from!(STORE_PERF_CONTEXT_TIME_HISTOGRAM, PerfContextTimeDuration);
-    pub static ref INGEST_EXTERNAL_FILE_TIME_HISTOGRAM: HistogramVec = register_histogram_vec!(
-        "tikv_storage_ingest_external_file_duration_secs",
-        "Bucketed histogram of ingest external file duration.",
-        &["cf", "type"],
-        exponential_buckets(0.005, 2.0, 20).unwrap()
-    )
-    .unwrap();
+    pub static ref INGEST_EXTERNAL_FILE_TIME_HISTOGRAM: IngestExternalFileTimeDuration =
+        register_static_histogram_vec!(
+            IngestExternalFileTimeDuration,
+            "tikv_storage_ingest_external_file_duration_secs",
+            "Bucketed histogram of ingest external file duration.",
+            &["cf", "type"],
+            exponential_buckets(0.005, 2.0, 20).unwrap()
+        )
+        .unwrap();
 }
