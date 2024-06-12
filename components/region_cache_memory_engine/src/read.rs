@@ -440,7 +440,7 @@ impl RangeCacheIterator {
     }
 
     fn reverse_to_forward(&mut self, guard: &epoch::Guard) {
-        if !self.prefix_extractor.is_none() || !self.iter.valid() {
+        if self.prefix_extractor.is_some() || !self.iter.valid() {
             let seek_key = encode_seek_key(&self.saved_user_key, MAX_SEQUENCE_NUMBER);
             self.iter.seek(&seek_key, guard);
         }
