@@ -1,4 +1,3 @@
-use core::slice::SlicePattern;
 use std::{
     collections::BTreeSet,
     sync::{atomic::Ordering, Arc},
@@ -15,7 +14,7 @@ use tikv_util::{box_err, config::ReadableSize, error, info, time::Instant, warn}
 use crate::{
     background::BackgroundTask,
     engine::{cf_to_id, id_to_cf, is_lock_cf, SkiplistEngine},
-    keys::{encode_key, encode_seek_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
+    keys::{encode_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
     memory_controller::{MemoryController, MemoryUsage},
     metrics::WRITE_DURATION_HISTOGRAM,
     range_manager::{RangeCacheStatus, RangeManager},
@@ -579,6 +578,7 @@ impl Mutable for RangeCacheWriteBatch {
 
 #[cfg(test)]
 mod tests {
+    use core::slice::SlicePattern;
     use std::{sync::Arc, time::Duration};
 
     use engine_rocks::util::new_engine;
@@ -593,8 +593,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        background::flush_epoch, config::RangeCacheConfigManager, RangeCacheEngineConfig,
-        RangeCacheEngineContext,
+        background::flush_epoch, config::RangeCacheConfigManager, keys::encode_seek_key,
+        RangeCacheEngineConfig, RangeCacheEngineContext,
     };
 
     // We should not use skiplist.get directly as we only cares keys without

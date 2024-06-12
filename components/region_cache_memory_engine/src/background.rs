@@ -728,6 +728,7 @@ impl Runnable for BackgroundRunner {
                 if snapshot_seqno < self.last_seqno {
                     return;
                 }
+                self.last_seqno = snapshot_seqno;
                 let core = self.core.clone();
 
                 let f = async move {
@@ -1063,8 +1064,8 @@ pub mod tests {
     use crossbeam::epoch;
     use engine_rocks::util::new_engine;
     use engine_traits::{
-        CacheRange, IterOptions, Iterable, Iterator, Mutable, RangeCacheEngine, SyncMutable,
-        WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+        CacheRange, IterOptions, Iterable, Iterator, RangeCacheEngine, SyncMutable, CF_DEFAULT,
+        CF_LOCK, CF_WRITE, DATA_CFS,
     };
     use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
@@ -1073,7 +1074,7 @@ pub mod tests {
     use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
-    use super::{BackgroundTask, Filter, PdRangeHintService};
+    use super::{Filter, PdRangeHintService};
     use crate::{
         background::BackgroundRunner,
         config::RangeCacheConfigManager,
@@ -2045,47 +2046,5 @@ pub mod tests {
         verify(range1, true, 6);
         verify(range2, true, 6);
         assert_eq!(mem_controller.mem_usage(), 1680);
-    }
-
-    #[test]
-    fn test_clean_up_tombstone() {
-        let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test()));
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(config.clone()));
-        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
-        engine.new_range(range.clone());
-        let mut wb = engine.write_batch();
-        wb.prepare_for_range(range.clone());
-        wb.put_cf("lock", b"k", b"val").unwrap();
-        wb.put_cf("lock", b"k1", b"val").unwrap();
-        wb.put_cf("lock", b"k2", b"val").unwrap();
-        wb.delete_cf("lock", b"k").unwrap();
-        wb.delete_cf("lock", b"k1").unwrap();
-        wb.delete_cf("lock", b"k2").unwrap();
-        wb.put_cf("lock", b"k", b"val2").unwrap();
-        wb.set_sequence_number(100).unwrap();
-        wb.write().unwrap();
-
-        let mut wb = engine.write_batch();
-        wb.prepare_for_range(range.clone());
-        wb.put_cf("lock", b"k", b"val").unwrap();
-        wb.put_cf("lock", b"k1", b"val").unwrap();
-        wb.put_cf("lock", b"k2", b"val").unwrap();
-        wb.delete_cf("lock", b"k").unwrap();
-        wb.delete_cf("lock", b"k1").unwrap();
-        wb.delete_cf("lock", b"k2").unwrap();
-        wb.set_sequence_number(120).unwrap();
-        wb.write().unwrap();
-
-        let lock_handle = engine.core.read().engine().cf_handle("lock");
-        assert_eq!(lock_handle.len(), 13);
-
-        engine
-            .bg_worker_manager()
-            .schedule_task(BackgroundTask::CleanLockTombstone(110))
-            .unwrap();
-
-        std::thread::sleep(Duration::from_secs(1));
-
-        assert_eq!(lock_handle.len(), 7);
     }
 }

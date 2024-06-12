@@ -6,10 +6,11 @@ use std::{
 };
 
 use crossbeam::epoch;
-use engine_traits::{CacheRange, CF_DEFAULT, CF_WRITE};
+use engine_traits::{CacheRange, Mutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_WRITE};
 use region_cache_memory_engine::{
-    encoding_for_filter, test_util::put_data, InternalBytes, RangeCacheEngineConfig,
-    RangeCacheEngineContext, RangeCacheMemoryEngine, SkiplistHandle,
+    decode_key, encoding_for_filter, test_util::put_data, BackgroundTask, InternalBytes,
+    InternalKey, RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
+    SkiplistHandle, ValueType,
 };
 use tikv_util::config::{ReadableDuration, VersionTrack};
 use txn_types::{Key, TimeStamp};
@@ -124,4 +125,82 @@ fn test_gc_worker() {
 
     let key = encoding_for_filter(key.as_encoded(), TimeStamp::new(commit_ts4));
     assert!(key_exist(&write, &key, guard));
+}
+
+#[test]
+fn test_clean_up_tombstone() {
+    let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test()));
+    let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(config.clone()));
+    let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+
+    let (tx, rx) = sync_channel(0);
+    fail::cfg_callback("clean_lock_tombstone_done", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+
+    engine.new_range(range.clone());
+    let mut wb = engine.write_batch();
+    wb.prepare_for_range(range.clone());
+    wb.put_cf("lock", b"k", b"val").unwrap();
+    wb.put_cf("lock", b"k1", b"val").unwrap();
+    wb.put_cf("lock", b"k2", b"val").unwrap();
+    wb.delete_cf("lock", b"k").unwrap();
+    wb.delete_cf("lock", b"k1").unwrap();
+    wb.delete_cf("lock", b"k2").unwrap();
+    wb.put_cf("lock", b"k", b"val2").unwrap(); // seq 107
+    wb.set_sequence_number(100).unwrap();
+    wb.write().unwrap();
+
+    let mut wb = engine.write_batch();
+    wb.prepare_for_range(range.clone());
+    wb.put_cf("lock", b"k", b"val").unwrap(); // seq 120
+    wb.put_cf("lock", b"k1", b"val").unwrap(); // seq 121
+    wb.put_cf("lock", b"k2", b"val").unwrap(); // seq 122
+    wb.delete_cf("lock", b"k").unwrap(); // seq 123
+    wb.delete_cf("lock", b"k1").unwrap(); // seq 124
+    wb.delete_cf("lock", b"k2").unwrap(); // seq 125
+    wb.set_sequence_number(120).unwrap();
+    wb.write().unwrap();
+
+    let lock_handle = engine.core().read().engine().cf_handle("lock");
+    assert_eq!(lock_handle.len(), 13);
+
+    engine
+        .bg_worker_manager()
+        .schedule_task(BackgroundTask::CleanLockTombstone(107))
+        .unwrap();
+
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    let mut iter = engine.core().read().engine().cf_handle("lock").iterator();
+
+    let mut first = true;
+    let guard = &epoch::pin();
+    for (k, seq, ty) in [
+        (b"k".to_vec(), 123, ValueType::Deletion),
+        (b"k".to_vec(), 120, ValueType::Value),
+        (b"k".to_vec(), 106, ValueType::Value),
+        (b"k1".to_vec(), 124, ValueType::Deletion),
+        (b"k1".to_vec(), 121, ValueType::Value),
+        (b"k2".to_vec(), 125, ValueType::Deletion),
+        (b"k2".to_vec(), 122, ValueType::Value),
+    ] {
+        if first {
+            iter.seek_to_first(guard);
+            first = false;
+        } else {
+            iter.next(guard);
+        }
+
+        let key = iter.key();
+        let InternalKey {
+            user_key,
+            sequence,
+            v_type,
+        } = decode_key(key.as_bytes());
+        assert_eq!(sequence, seq);
+        assert_eq!(user_key, &k);
+        assert_eq!(v_type, ty);
+    }
 }
