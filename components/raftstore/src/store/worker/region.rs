@@ -935,10 +935,10 @@ where
                 start_key,
                 end_key,
             } => {
-                fail_point!("on_region_worker_destroy", true, |_| {});
                 let region_cleaner = self.region_cleaner.clone();
                 self.region_cleanup_pool
                     .spawn(async move {
+                        fail_point!("on_region_worker_destroy", region_id == 1000, |_| {});
                         let mut region_cleaner = region_cleaner.lock().unwrap();
                         // try to delay the range deletion because
                         // there might be a coprocessor request related to this range
@@ -946,7 +946,7 @@ where
                         region_cleaner.clean_stale_ranges();
                     })
                     .unwrap_or_else(|e| {
-                        error!("failed to destroy peer"; "region_id" => region_id, "err" => ?e);
+                        error!("failed to destroy region"; "region_id" => region_id, "err" => ?e);
                     });
             }
         }
