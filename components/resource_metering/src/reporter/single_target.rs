@@ -99,7 +99,8 @@ impl SingleTargetDataSink {
 
         if self.client.is_none() {
             let channel = {
-                tonic::transport::Channel::from_shared(self.address.clone())
+                let addr = tikv_util::format_url(&self.address);
+                tonic::transport::Channel::from_shared(addr)
                     .unwrap()
                     .http2_keep_alive_interval(Duration::from_secs(10))
                     .keep_alive_timeout(Duration::from_secs(3))

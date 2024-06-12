@@ -46,7 +46,8 @@ impl Client {
         addr: &str,
         handle: tokio::runtime::Handle,
     ) -> Self {
-        let channel = Channel::from_shared(addr.to_owned())
+        let addr = tikv_util::format_url(addr);
+        let channel = Channel::from_shared(addr)
             .unwrap()
             .http2_keep_alive_interval(Duration::from_secs(10))
             .keep_alive_timeout(Duration::from_secs(3))

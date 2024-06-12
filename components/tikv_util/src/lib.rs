@@ -600,6 +600,14 @@ where
     }
 }
 
+pub fn format_url(addr: &str) -> String {
+    if !addr.starts_with("http") {
+        format!("http://{}", addr)
+    } else {
+        addr.to_owned()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{

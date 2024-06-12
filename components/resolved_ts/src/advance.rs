@@ -535,7 +535,8 @@ async fn get_tikv_client(
     // the check leader requests may be large but not frequent, compress it to
     // reduce the traffic.
     let channel: Channel = {
-        let endpoint = tonic::transport::Channel::from_shared(store.peer_address.clone())
+        let addr = tikv_util::format_url(&store.peer_address);
+        let endpoint = tonic::transport::Channel::from_shared(addr)
             .unwrap()
             .http2_keep_alive_interval(Duration::from_secs(10))
             .keep_alive_timeout(Duration::from_secs(3))

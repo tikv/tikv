@@ -840,8 +840,9 @@ impl PdConnector {
     ) -> Result<(PdClientStub<tonic::transport::Channel>, GetMembersResponse)> {
         info!("connecting to PD endpoint"; "endpoints" => addr);
         // let addr_trim = trim_http_prefix(addr);
+        let addr = tikv_util::format_url(addr);
         let channel = {
-            let endpoint = tonic::transport::Channel::from_shared(addr.to_owned())
+            let endpoint = tonic::transport::Channel::from_shared(addr)
                 .unwrap()
                 .http2_keep_alive_interval(Duration::from_secs(10))
                 .keep_alive_timeout(Duration::from_secs(3))

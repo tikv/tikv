@@ -89,7 +89,8 @@ impl ClientPool {
                     None => return None,
                 };
 
-                let ch = Channel::from_shared(addr.to_owned())
+                let addr = tikv_util::format_url(addr);
+                let ch = Channel::from_shared(addr)
                     .unwrap()
                     .initial_stream_window_size(cfg.grpc_stream_initial_window_size.0 as u32)
                     .http2_keep_alive_interval(cfg.grpc_keepalive_time.into())
