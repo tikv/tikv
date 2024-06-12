@@ -3652,8 +3652,8 @@ def Snapshot() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="99% Snapshot generation wait duration",
-                description="The time snapshot generation tasks waited to be scheduled. ",
+                title="99% Snapshot generation/apply wait duration",
+                description="The time snapshot generation/apply tasks spent waiting to be executed.",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 targets=[
                     target(
@@ -3662,7 +3662,15 @@ def Snapshot() -> RowPanel:
                             "tikv_raftstore_snapshot_generation_wait_duration_seconds",
                             by_labels=["instance"],
                         ),
-                        legend_format="{{instance}}",
+                        legend_format="{{instance}}-generate",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_raftstore_snapshot_apply_wait_duration_seconds",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}-apply",
                     ),
                 ],
             ),
@@ -3778,25 +3786,12 @@ def Snapshot() -> RowPanel:
         [
             graph_panel(
                 title="Snapshot pending applies",
-                description="The number of snapshots that are waiting to be applied",
+                description="The number of snapshots waiting to be applied",
                 yaxes=yaxes(left_format=UNITS.SHORT),
                 targets=[
                     target(
                         expr=expr_simple(
                             "tikv_raftstore_snapshot_pending_applies",
-                        ),
-                        legend_format="{{instance}}",
-                    ),
-                ],
-            ),
-            graph_panel(
-                title="Snapshot ingest delays",
-                description="The number of snapshot ingestion delays caused by a high count of L0 files",
-                yaxes=yaxes(left_format=UNITS.SHORT),
-                targets=[
-                    target(
-                        expr=expr_simple(
-                            "tikv_raftstore_snapshot_ingest_delay",
                         ),
                         legend_format="{{instance}}",
                     ),

@@ -19,6 +19,9 @@ make_auto_flush_static_metric! {
     //               |
     //               V
     // |success|abort|fail|delay|ignore|
+    //
+    // ingest_delay is used to records occurrences of delayed ingestions
+    // during snapshot apply (e.g. due to high L0 file count).
     pub label_enum SnapStatus {
         all,
         start,
@@ -27,6 +30,7 @@ make_auto_flush_static_metric! {
         fail,
         delay,
         ignore,
+        ingest_delay,
     }
 
     pub struct SnapCounter: LocalIntCounter {
@@ -148,14 +152,15 @@ lazy_static! {
         exponential_buckets(0.00001, 2.0, 26).unwrap()
     )
     .unwrap();
+    pub static ref SNAP_APPLY_WAIT_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_raftstore_snapshot_apply_wait_duration_seconds",
+        "Bucketed histogram of raftstore snapshot apply wait duration",
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
+    )
+    .unwrap();
     pub static ref SNAP_PENDING_APPLIES_GAUGE: IntGauge = register_int_gauge!(
         "tikv_raftstore_snapshot_pending_applies",
         "Total number of snapshots that are waiting to be applied",
-    )
-    .unwrap();
-    pub static ref SNAP_INGEST_DELAY_COUNTER: IntCounter = register_int_counter!(
-        "tikv_raftstore_snapshot_ingest_delay",
-        "Total number of snapshot ingestion delays caused by a high count of level 0 files",
     )
     .unwrap();
     pub static ref CHECK_SPILT_HISTOGRAM: Histogram = register_histogram!(
