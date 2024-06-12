@@ -715,16 +715,27 @@ where
         let wopts = WriteOptions::default();
         for cf in self.engine.cf_names() {
             // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
-            let strategy = if cf == CF_LOCK {
-                DeleteStrategy::DeleteByKey
+            let (strategy, observer) = if cf == CF_LOCK {
+                (
+                    DeleteStrategy::DeleteByKey,
+                    &CLEAR_OVERLAP_REGION_DURATION.by_key,
+                )
             } else if self.use_delete_range {
-                DeleteStrategy::DeleteByRange
+                (
+                    DeleteStrategy::DeleteByRange,
+                    &CLEAR_OVERLAP_REGION_DURATION.by_range,
+                )
             } else {
-                DeleteStrategy::DeleteByWriter {
-                    sst_path: self.mgr.get_temp_path_for_ingest(),
-                }
+                (
+                    DeleteStrategy::DeleteByWriter {
+                        sst_path: self.mgr.get_temp_path_for_ingest(),
+                    },
+                    &CLEAR_OVERLAP_REGION_DURATION.by_ingest_files,
+                )
             };
+            let start = Instant::now();
             box_try!(self.engine.delete_ranges_cf(&wopts, cf, strategy, ranges));
+            observer.observe(start.saturating_elapsed_secs());
         }
 
         Ok(())

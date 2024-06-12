@@ -2540,8 +2540,10 @@ checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 name = "hybrid_engine"
 version = "0.0.1"
 dependencies = [
+ "crossbeam",
  "engine_rocks",
  "engine_traits",
+ "fail",
  "lazy_static",
  "online_config",
  "prometheus",
