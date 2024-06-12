@@ -733,7 +733,7 @@ impl Runnable for BackgroundRunner {
 
                 let f = async move {
                     info!(
-                        "begin lock tombstone";
+                        "begin to cleanup tombstones in lock cf";
                         "seqno" => snapshot_seqno,
                     );
 
@@ -789,7 +789,7 @@ impl Runnable for BackgroundRunner {
                     }
 
                     info!(
-                        "cleanup lock tombstone";
+                        "cleanup tombstones in lock cf";
                         "seqno" => snapshot_seqno,
                         "total" => total,
                         "removed" => removed,

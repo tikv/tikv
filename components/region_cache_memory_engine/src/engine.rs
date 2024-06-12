@@ -258,8 +258,9 @@ pub struct RangeCacheMemoryEngine {
     statistics: Arc<Statistics>,
     config: Arc<VersionTrack<RangeCacheEngineConfig>>,
 
-    // The increment amout of the lock cf. When reaching to a certain amount, a CleanLockTombstone
-    // task will be scheduled to clean lock cf tombstones.
+    // The increment amount of tombstones in the lock cf.
+    // When reaching to the threshold, a CleanLockTombstone task will be scheduled to clean lock cf
+    // tombstones.
     pub(crate) lock_modification_bytes: Arc<AtomicU64>,
 }
 
