@@ -98,7 +98,7 @@ impl RangeCacheWriteBatch {
     }
 
     /// Trigger a CleanLockTombstone task if the accumulated lock cf
-    /// modification exceeds the threshold, by default, 16MB.
+    /// modification exceeds the threshold (16MB).
     ///
     /// NB: It need to acquire RocksDB mutex to get oldest snapshot, so do not
     ///     call it on any RocksDB's callback, e.g., write batch callback.
