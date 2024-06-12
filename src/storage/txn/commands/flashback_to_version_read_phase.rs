@@ -45,6 +45,7 @@ pub fn new_flashback_rollback_lock_cmd(
     end_key: Option<Key>,
     ctx: Context,
 ) -> TypedCommand<()> {
+    info!("flashback to version rollback lock"; "start_key" => %start_key, "end_key" => ?end_key, "version" => version);
     FlashbackToVersionReadPhase::new(
         start_ts,
         TimeStamp::zero(),
@@ -67,6 +68,7 @@ pub fn new_flashback_write_cmd(
     end_key: Option<Key>,
     ctx: Context,
 ) -> TypedCommand<()> {
+    info!("flashback to version write"; "start_key" => %start_key, "end_key" => ?end_key, "version" => version);
     FlashbackToVersionReadPhase::new(
         start_ts,
         commit_ts,
@@ -183,6 +185,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                         &self.start_key,
                         self.end_key.as_ref(),
                         self.version,
+                        self.ctx.get_region_id(),
                     )? {
                         first_key
                     } else {
@@ -213,6 +216,8 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                     }));
                 }
                 if next_write_key == self.start_key {
+                    info!("flashback to version fake prewrite"; "key_to_commit" => %next_write_key, "end_key" => ?self.end_key, 
+                    "version" => self.version, "region_id" => self.ctx.get_region_id(), "start_ts" => self.start_ts, "commit_ts" => self.commit_ts);
                     // The start key from the client is actually a range which is used to limit the
                     // upper bound of this flashback when scanning data, so it may not be a real
                     // key. In the Prewrite Phase, we make sure that the start
@@ -225,6 +230,7 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                         &self.start_key,
                         self.end_key.as_ref(),
                         self.version,
+                        self.ctx.get_region_id(),
                     )? {
                         first_key
                     } else {
@@ -243,6 +249,8 @@ impl<S: Snapshot> ReadCommand<S> for FlashbackToVersionReadPhase {
                         self.start_ts,
                         self.commit_ts,
                         self.ctx.get_region_id(),
+                        &self.start_key,
+                        self.end_key.as_ref(),
                     )? {
                         statistics.add(&reader.statistics);
                         return Ok(ProcessResult::Res);
