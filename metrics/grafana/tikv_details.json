@@ -2129,7 +2129,7 @@
               "decimals": null,
               "format": "s",
               "label": null,
-              "logBase": 1,
+              "logBase": 2,
               "max": null,
               "min": null,
               "show": true
@@ -21857,7 +21857,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_raftstore_raft_sent_message_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type) ",
+              "expr": "sum(rate(\n    tikv_raftstore_raft_sent_message_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",status=\"accept\"}\n    [$__rate_interval]\n)) by (type) ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -21865,7 +21865,7 @@
               "intervalFactor": 1,
               "legendFormat": "{{type}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_raftstore_raft_sent_message_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type) ",
+              "query": "sum(rate(\n    tikv_raftstore_raft_sent_message_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",status=\"accept\"}\n    [$__rate_interval]\n)) by (type) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -22132,6 +22132,21 @@
               "legendFormat": "{{type}}",
               "metric": "",
               "query": "sum(rate(\n    tikv_raftstore_raft_dropped_message_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (type) ",
+              "refId": "",
+              "step": 10,
+              "target": ""
+            },
+            {
+              "datasource": "${DS_TEST-CLUSTER}",
+              "expr": "sum(rate(\n    tikv_raftstore_raft_sent_message_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",status=\"drop\"}\n    [$__rate_interval]\n)) by (type) ",
+              "format": "time_series",
+              "hide": false,
+              "instant": false,
+              "interval": "",
+              "intervalFactor": 1,
+              "legendFormat": "{{type}}",
+              "metric": "",
+              "query": "sum(rate(\n    tikv_raftstore_raft_sent_message_total\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",status=\"drop\"}\n    [$__rate_interval]\n)) by (type) ",
               "refId": "",
               "step": 10,
               "target": ""
