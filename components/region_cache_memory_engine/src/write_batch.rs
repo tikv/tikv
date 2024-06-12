@@ -104,11 +104,14 @@ impl RangeCacheWriteBatch {
         Ok(())
     }
 
-    fn write_impl(&mut self, seq: u64) -> Result<()> {
+    // Note: `seq` is the sequence number of the first key in this write batch in
+    // the RocksDB, which will be incremented automatically for each key, so
+    // that all keys have unique sequence numbers.
+    fn write_impl(&mut self, mut seq: u64) -> Result<()> {
         fail::fail_point!("on_write_impl");
         let ranges_to_delete = self.handle_ranges_to_evict();
         let (entries_to_write, engine) = self.engine.handle_pending_range_in_loading_buffer(
-            seq,
+            &mut seq,
             std::mem::take(&mut self.pending_range_in_loading_buffer),
         );
         let guard = &epoch::pin();
@@ -119,7 +122,8 @@ impl RangeCacheWriteBatch {
             .into_iter()
             .chain(std::mem::take(&mut self.buffer))
             .try_for_each(|e| {
-                e.write_to_memory(seq, &engine, self.memory_controller.clone(), guard)
+                seq += 1;
+                e.write_to_memory(seq - 1, &engine, self.memory_controller.clone(), guard)
             });
         let duration = start.saturating_elapsed_secs();
         WRITE_DURATION_HISTOGRAM.observe(duration);
@@ -657,7 +661,7 @@ mod tests {
         wb.delete(b"aaa").unwrap();
         wb.set_sequence_number(2).unwrap();
         _ = wb.write();
-        let snapshot = engine.snapshot(r, u64::MAX, 2).unwrap();
+        let snapshot = engine.snapshot(r, u64::MAX, 3).unwrap();
         assert_eq!(
             snapshot.get_value(&b"bbb"[..]).unwrap().unwrap(),
             &b"ccc"[..]
@@ -699,7 +703,7 @@ mod tests {
         wb.put(b"k10", b"val10").unwrap();
         wb.set_sequence_number(2).unwrap();
         let _ = wb.write();
-        let snapshot = engine.snapshot(r1.clone(), u64::MAX, 2).unwrap();
+        let snapshot = engine.snapshot(r1.clone(), u64::MAX, 5).unwrap();
         assert_eq!(
             snapshot.get_value(&b"k01"[..]).unwrap().unwrap(),
             &b"val1"[..]
@@ -712,9 +716,9 @@ mod tests {
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.prepare_for_range(r1.clone());
         wb.delete(b"k01").unwrap();
-        wb.set_sequence_number(3).unwrap();
+        wb.set_sequence_number(5).unwrap();
         let _ = wb.write();
-        let snapshot = engine.snapshot(r1, u64::MAX, 3).unwrap();
+        let snapshot = engine.snapshot(r1, u64::MAX, 6).unwrap();
         assert!(snapshot.get_value(&b"k01"[..]).unwrap().is_none(),);
     }
 
@@ -850,9 +854,9 @@ mod tests {
         // should be fine as this amount should be at most MB level.
         assert_eq!(1096, memory_controller.mem_usage());
 
-        let snap1 = engine.snapshot(r1.clone(), 1000, 1000).unwrap();
+        let snap1 = engine.snapshot(r1.clone(), 1000, 1010).unwrap();
         assert_eq!(snap1.get_value(b"kk01").unwrap().unwrap(), &val1);
-        let snap2 = engine.snapshot(r2.clone(), 1000, 1000).unwrap();
+        let snap2 = engine.snapshot(r2.clone(), 1000, 1010).unwrap();
         assert_eq!(snap2.get_value(b"kk11").unwrap().unwrap(), &val1);
 
         assert_eq!(
@@ -860,11 +864,11 @@ mod tests {
             FailedReason::NotCached
         );
 
-        let snap4 = engine.snapshot(r4.clone(), 1000, 1000).unwrap();
+        let snap4 = engine.snapshot(r4.clone(), 1000, 1010).unwrap();
         assert_eq!(snap4.get_value(b"kk32").unwrap().unwrap(), &val3);
 
         assert_eq!(
-            engine.snapshot(r5.clone(), 1000, 1000).unwrap_err(),
+            engine.snapshot(r5.clone(), 1000, 1010).unwrap_err(),
             FailedReason::NotCached
         );
 
