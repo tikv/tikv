@@ -669,7 +669,6 @@ mod tests {
             encode_seek_key, InternalBytes, ValueType,
         },
         perf_context::PERF_CONTEXT,
-        read::MAX_SEQUENCE_NUMBER,
         statistics::Tickers,
         RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
         RangeCacheWriteBatch,
@@ -2129,8 +2128,8 @@ mod tests {
 
         let mut wb = engine.write_batch();
         wb.prepare_for_range(CacheRange::new(b"".to_vec(), b"z".to_vec()));
-        wb.put(b"b", b"f");
-        wb.set_sequence_number(200);
+        wb.put(b"b", b"f").unwrap();
+        wb.set_sequence_number(200).unwrap();
 
         iter.seek(b"a").unwrap();
         assert_eq!(iter.key(), b"a");
@@ -2140,7 +2139,7 @@ mod tests {
         assert_eq!(iter.key(), b"c");
         assert_eq!(iter.value(), b"d");
 
-        iter.seek_for_prev(b"b");
+        iter.seek_for_prev(b"b").unwrap();
         assert_eq!(iter.key(), b"a");
         assert_eq!(iter.value(), b"b");
 
@@ -2176,18 +2175,66 @@ mod tests {
 
     #[test]
     fn test_reverse_direction() {
-        let (engine, _, mut iter) = set_up_for_iteator(100, 104, |wb| {
+        let (engine, ..) = set_up_for_iteator(100, 100, |wb| {
             wb.put(b"a", b"val_a1").unwrap(); // seq 100
             wb.put(b"b", b"val_b1").unwrap(); // seq 101
             wb.put(b"c", b"val_c1").unwrap(); // seq 102
+
             wb.put(b"a", b"val_a2").unwrap(); // seq 103
             wb.put(b"b", b"val_b2").unwrap(); // seq 104
+
             wb.put(b"c", b"val_c2").unwrap(); // seq 105
             wb.put(b"a", b"val_a3").unwrap(); // seq 106
             wb.put(b"b", b"val_b3").unwrap(); // seq 107
             wb.put(b"c", b"val_c3").unwrap(); // seq 108
         });
 
+        // For sequence number 102
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        let snap = engine.snapshot(range.clone(), 100, 102).unwrap();
+        let mut iter_opt = IterOptions::default();
+        iter_opt.set_upper_bound(&range.end, 0);
+        iter_opt.set_lower_bound(&range.start, 0);
+
+        let mut iter = snap.iterator_opt("default", iter_opt.clone()).unwrap();
+        iter.seek(b"c").unwrap();
+        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.value(), b"val_c1");
+
+        iter.prev().unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b1");
+
+        iter.seek(b"b").unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b1");
+
+        iter.prev().unwrap();
+        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.value(), b"val_a1");
+
+        iter.next().unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b1");
+
+        iter.seek_for_prev(b"a").unwrap();
+        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.value(), b"val_a1");
+
+        iter.next().unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b1");
+
+        iter.next().unwrap();
+        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.value(), b"val_c1");
+
+        iter.next().unwrap();
+        assert!(!iter.valid().unwrap());
+
+        // For sequence number 104
+        let snap = engine.snapshot(range.clone(), 100, 104).unwrap();
+        let mut iter = snap.iterator_opt("default", iter_opt.clone()).unwrap();
         iter.seek(b"c").unwrap();
         assert_eq!(iter.key(), b"c");
         assert_eq!(iter.value(), b"val_c1");
@@ -2196,9 +2243,67 @@ mod tests {
         assert_eq!(iter.key(), b"b");
         assert_eq!(iter.value(), b"val_b2");
 
+        iter.seek(b"b").unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b2");
+
+        iter.prev().unwrap();
+        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.value(), b"val_a2");
+
+        iter.next().unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b2");
+
+        iter.seek_for_prev(b"a").unwrap();
+        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.value(), b"val_a2");
+
+        iter.next().unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b2");
+
         iter.next().unwrap();
         assert_eq!(iter.key(), b"c");
         assert_eq!(iter.value(), b"val_c1");
+
+        iter.next().unwrap();
+        assert!(!iter.valid().unwrap());
+
+        // For sequence number 108
+        let snap = engine.snapshot(range.clone(), 100, 108).unwrap();
+        let mut iter = snap.iterator_opt("default", iter_opt.clone()).unwrap();
+        iter.seek(b"c").unwrap();
+        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.value(), b"val_c3");
+
+        iter.prev().unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b3");
+
+        iter.seek(b"b").unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b3");
+
+        iter.prev().unwrap();
+        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.value(), b"val_a3");
+
+        iter.next().unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b3");
+
+        iter.seek_for_prev(b"a").unwrap();
+        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.value(), b"val_a3");
+
+        iter.next().unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b3");
+
+        iter.next().unwrap();
+        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.value(), b"val_c3");
 
         iter.next().unwrap();
         assert!(!iter.valid().unwrap());
