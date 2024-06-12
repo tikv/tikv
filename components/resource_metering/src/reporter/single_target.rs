@@ -9,9 +9,10 @@ use std::{
     time::Duration,
 };
 
-use futures::SinkExt;
-use grpcio::{CallOption, ChannelBuilder, Environment, WriteFlags};
-use kvproto::resource_usage_agent::{ResourceUsageAgentClient, ResourceUsageRecord};
+use futures::stream;
+use kvproto::resource_usage_agent::{
+    resource_usage_agent_client::ResourceUsageAgentClient, ResourceUsageRecord,
+};
 use tikv_util::{
     warn,
     worker::{Builder as WorkerBuilder, LazyWorker, Runnable, Scheduler},
@@ -48,8 +49,8 @@ pub struct SingleTargetDataSink {
     data_sink_reg: DataSinkRegHandle,
     data_sink: Option<DataSinkGuard>,
 
-    env: Arc<Environment>,
-    client: Option<ResourceUsageAgentClient>,
+    client: Option<ResourceUsageAgentClient<tonic::transport::Channel>>,
+    spawn_handle: tokio::runtime::Handle,
     limiter: Limiter,
 
     address: String,
@@ -58,7 +59,7 @@ pub struct SingleTargetDataSink {
 impl SingleTargetDataSink {
     pub fn new(
         address: String,
-        env: Arc<Environment>,
+        spawn_handle: tokio::runtime::Handle,
         data_sink_reg: DataSinkRegHandle,
         scheduler: Scheduler<Task>,
     ) -> Self {
@@ -67,10 +68,10 @@ impl SingleTargetDataSink {
             data_sink_reg,
             data_sink: None,
 
-            env,
             client: None,
-            limiter: Limiter::default(),
+            spawn_handle,
 
+            limiter: Limiter::default(),
             address: String::default(),
         };
 
@@ -98,46 +99,32 @@ impl SingleTargetDataSink {
 
         if self.client.is_none() {
             let channel = {
-                let cb = ChannelBuilder::new(self.env.clone())
-                    .keepalive_time(Duration::from_secs(10))
-                    .keepalive_timeout(Duration::from_secs(3));
-                cb.connect(&self.address)
+                tonic::transport::Channel::from_shared(self.address.clone())
+                    .unwrap()
+                    .http2_keep_alive_interval(Duration::from_secs(10))
+                    .keep_alive_timeout(Duration::from_secs(3))
+                    .connect_lazy()
             };
             self.client = Some(ResourceUsageAgentClient::new(channel));
         }
 
-        let client = self.client.as_ref().unwrap();
-        let call_opt = CallOption::default().timeout(Duration::from_secs(2));
-        let call = client.report_opt(call_opt);
-        if let Err(err) = &call {
-            IGNORED_DATA_COUNTER
-                .with_label_values(&["report"])
-                .inc_by(records.len() as _);
-            warn!("failed to call report"; "err" => ?err);
-            return;
-        }
-        let (mut tx, rx) = call.unwrap();
-        client.spawn(async move {
+        let mut client = self.client.as_ref().unwrap().clone();
+        self.spawn_handle.spawn(async move {
             let _hd = handle;
-
             let _t = REPORT_DURATION_HISTOGRAM.start_timer();
+            let record_len = records.len();
             REPORT_DATA_COUNTER
                 .with_label_values(&["to_send"])
-                .inc_by(records.len() as _);
-            for record in records.iter() {
-                if let Err(err) = tx.send((record.clone(), WriteFlags::default())).await {
-                    warn!("failed to send records"; "error" => ?err);
-                    return;
-                }
-                REPORT_DATA_COUNTER.with_label_values(&["sent"]).inc();
+                .inc_by(record_len as _);
+
+            let records = records.as_ref().clone();
+            let res = client.report(stream::iter(records)).await;
+            if let Err(e) = res {
+                warn!("failed to send records"; "error" => ?e);
             }
-            if let Err(err) = tx.close().await {
-                warn!("failed to close a grpc call"; "error" => ?err);
-                return;
-            }
-            if let Err(err) = rx.await {
-                warn!("failed to receive from a grpc call"; "error" => ?err);
-            }
+            REPORT_DATA_COUNTER
+                .with_label_values(&["sent"])
+                .inc_by(record_len as _);
         });
     }
 
@@ -252,7 +239,7 @@ impl Drop for Guard {
 /// This function is intended to simplify external use.
 pub fn init_single_target(
     address: String,
-    env: Arc<Environment>,
+    handle: tokio::runtime::Handle,
     data_sink_reg: DataSinkRegHandle,
 ) -> (AddressChangeNotifier, Box<LazyWorker<Task>>) {
     let mut single_target_worker = WorkerBuilder::new("resource-metering-single-target-data-sink")
@@ -260,8 +247,12 @@ pub fn init_single_target(
         .create()
         .lazy_build("resource-metering-single-target-data-sink");
     let single_target_scheduler = single_target_worker.scheduler();
-    let single_target =
-        SingleTargetDataSink::new(address, env, data_sink_reg, single_target_scheduler.clone());
+    let single_target = SingleTargetDataSink::new(
+        address,
+        handle,
+        data_sink_reg,
+        single_target_scheduler.clone(),
+    );
     single_target_worker.start(single_target);
     (
         AddressChangeNotifier::new(single_target_scheduler),

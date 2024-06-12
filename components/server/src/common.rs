@@ -314,15 +314,15 @@ impl TikvServerCore {
 
     pub fn connect_to_pd_cluster(
         config: &mut TikvConfig,
-        env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
+        spawn_handle: tokio::runtime::Handle,
     ) -> Arc<RpcClient> {
         let pd_client = Arc::new(
-            RpcClient::new(&config.pd, Some(env), security_mgr)
+            RpcClient::new(&config.pd, security_mgr, spawn_handle)
                 .unwrap_or_else(|e| fatal!("failed to create rpc client: {}", e)),
         );
 
-        let cluster_id = pd_client
+        let cluster_id: u64 = pd_client
             .get_cluster_id()
             .unwrap_or_else(|e| fatal!("failed to get cluster id: {}", e));
         if cluster_id == DEFAULT_CLUSTER_ID {

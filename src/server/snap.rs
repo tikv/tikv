@@ -4,15 +4,17 @@ use std::{
     fmt::{self, Display, Formatter},
     io::{Error as IoError, ErrorKind, Read, Write},
     pin::Pin,
+    result::Result as StdResult,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::{Duration, Instant as StdInstant},
 };
 
 use file_system::{IoType, WithIoType};
 use futures::{
+    channel::oneshot::Sender,
     compat::Future01CompatExt,
     future::{select, Either, Future, TryFutureExt},
     pin_mut,
@@ -21,17 +23,12 @@ use futures::{
     task::{Context, Poll},
 };
 use futures_util::FutureExt;
-use grpcio::{
-    ChannelBuilder, ClientStreamingSink, DuplexSink, Environment, RequestStream, RpcStatus,
-    RpcStatusCode, WriteFlags,
-};
 use kvproto::{
     pdpb::SnapshotStat,
     raft_serverpb::{
-        Done, RaftMessage, RaftSnapshotData, SnapshotChunk, TabletSnapshotRequest,
-        TabletSnapshotResponse,
+        RaftMessage, RaftSnapshotData, SnapshotChunk, TabletSnapshotRequest, TabletSnapshotResponse,
     },
-    tikvpb::TikvClient,
+    tikvpb::tikv_client::TikvClient,
 };
 use protobuf::Message;
 use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
@@ -46,6 +43,7 @@ use tikv_util::{
     DeferContext,
 };
 use tokio::runtime::{Builder as RuntimeBuilder, Runtime};
+use tonic::transport::Channel;
 
 use super::{metrics::*, Config, Error, Result};
 use crate::{server::tablet_snap::NoSnapshotCache, tikv_util::sys::thread::ThreadBuildWrapper};
@@ -76,12 +74,14 @@ fn get_snap_timeout(size: u64) -> Duration {
 /// A task for either receiving Snapshot or sending Snapshot
 pub enum Task {
     Recv {
-        stream: RequestStream<SnapshotChunk>,
-        sink: ClientStreamingSink<Done>,
+        stream: tonic::Streaming<SnapshotChunk>,
+        tx: Sender<StdResult<(), tonic::Status>>,
     },
     RecvTablet {
-        stream: RequestStream<TabletSnapshotRequest>,
-        sink: DuplexSink<TabletSnapshotResponse>,
+        stream: tonic::Streaming<TabletSnapshotRequest>,
+        tx: futures::channel::mpsc::UnboundedSender<
+            StdResult<TabletSnapshotResponse, tonic::Status>,
+        >,
     },
     Send {
         addr: String,
@@ -115,12 +115,11 @@ struct SnapChunk {
 pub const SNAP_CHUNK_LEN: usize = 1024 * 1024;
 
 impl Stream for SnapChunk {
-    type Item = Result<(SnapshotChunk, WriteFlags)>;
+    type Item = Result<SnapshotChunk>;
 
     fn poll_next(mut self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if let Some(t) = self.first.take() {
-            let write_flags = WriteFlags::default().buffer_hint(true);
-            return Poll::Ready(Some(Ok((t, write_flags))));
+            return Poll::Ready(Some(Ok(t)));
         }
 
         let mut buf = match self.remain_bytes {
@@ -134,10 +133,31 @@ impl Stream for SnapChunk {
                 self.remain_bytes -= buf.len();
                 let mut chunk = SnapshotChunk::default();
                 chunk.set_data(buf);
-                Poll::Ready(Some(Ok((chunk, WriteFlags::default().buffer_hint(true)))))
+                Poll::Ready(Some(Ok(chunk)))
             }
             Err(e) => Poll::Ready(Some(Err(box_err!("failed to read snapshot chunk: {}", e)))),
         }
+    }
+}
+
+struct SnapChunkWrapper {
+    chunk: Arc<Mutex<SnapChunk>>,
+}
+
+impl SnapChunkWrapper {
+    fn new(chunk: Arc<Mutex<SnapChunk>>) -> Self {
+        Self { chunk }
+    }
+}
+
+impl Stream for SnapChunkWrapper {
+    type Item = SnapshotChunk;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let mut chunk = self.chunk.lock().unwrap();
+        Pin::new(&mut *chunk)
+            .poll_next(cx)
+            .map(|i| i.map(|r| r.unwrap()))
     }
 }
 
@@ -152,12 +172,12 @@ pub struct SendStat {
 /// It will first send the normal raft snapshot message and then send the
 /// snapshot file.
 pub fn send_snap(
-    env: Arc<Environment>,
     mgr: SnapManager,
     security_mgr: Arc<SecurityManager>,
     cfg: &Config,
     addr: &str,
     msg: RaftMessage,
+    handle: tokio::runtime::Handle,
 ) -> Result<impl Future<Output = Result<SendStat>>> {
     assert!(msg.get_message().has_snapshot());
     let timer = Instant::now();
@@ -201,48 +221,29 @@ pub fn send_snap(
         }
     };
 
-    let cb = ChannelBuilder::new(env)
-        .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
-        .keepalive_time(cfg.grpc_keepalive_time.0)
-        .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
-        .default_compression_algorithm(cfg.grpc_compression_algorithm())
-        .default_gzip_compression_level(cfg.grpc_gzip_compression_level)
-        .default_grpc_min_message_size_to_compress(cfg.grpc_min_message_size_to_compress);
+    let channel = Channel::from_shared(addr.to_owned())
+        .unwrap()
+        .initial_stream_window_size(cfg.grpc_stream_initial_window_size.0 as u32)
+        .http2_keep_alive_interval(cfg.grpc_keepalive_time.0)
+        .keep_alive_timeout(cfg.grpc_keepalive_timeout.0)
+        .executor(tikv_util::RuntimeExec::new(handle))
+        .connect_lazy();
 
-    let channel = security_mgr.connect(cb, addr);
-    let client = TikvClient::new(channel);
-    let (sink, receiver) = client.snapshot()?;
+    // let channel = security_mgr.connect(cb, addr);
+    let mut client = TikvClient::new(channel);
 
     let send_task = async move {
-        let send_and_recv = async {
-            let mut sink = sink.sink_map_err(Error::from);
+        let chunks = Arc::new(Mutex::new(chunks));
+        let task = client
+            .snapshot(SnapChunkWrapper::new(chunks.clone()))
+            .map_err(Error::Tonic);
 
-            #[cfg(feature = "failpoints")]
-            {
-                fail::fail_point!("snap_send_error", |_| {
-                    Err(Error::Other(box_err!("snap_send_error")))
-                });
-                let should_delay = (|| {
-                    fail::fail_point!("snap_send_timer_delay", |_| { true });
-                    false
-                })();
-                if should_delay {
-                    _ = GLOBAL_TIMER_HANDLE
-                        .delay(StdInstant::now() + Duration::from_secs(1))
-                        .compat()
-                        .await;
-                }
-            }
-            sink.send_all(&mut chunks).await?;
-            sink.close().await?;
-            Ok(receiver.map_err(Error::from).await)
-        };
         let wait_timeout = GLOBAL_TIMER_HANDLE
             .delay(StdInstant::now() + get_snap_timeout(total_size))
             .compat();
         let recv_result = {
-            pin_mut!(send_and_recv, wait_timeout);
-            match select(send_and_recv, wait_timeout).await {
+            pin_mut!(task, wait_timeout);
+            match select(task, wait_timeout).await {
                 Either::Left((r, _)) => r,
                 Either::Right((..)) => Err(Error::Other(box_err!("send snapshot timeout"))),
             }
@@ -252,7 +253,7 @@ pub fn send_snap(
         drop(client);
 
         fail_point!("snapshot_delete_after_send");
-        mgr.delete_snapshot(&key, &chunks.snap, true);
+        mgr.delete_snapshot(&key, &chunks.lock().unwrap().snap, true);
         match recv_result {
             Ok(_) => {
                 let cost = UnixSecs::now().into_inner().saturating_sub(snap_start);
@@ -357,8 +358,8 @@ impl RecvSnapContext {
 }
 
 fn recv_snap<R: RaftExtension + 'static>(
-    stream: RequestStream<SnapshotChunk>,
-    sink: ClientStreamingSink<Done>,
+    stream: tonic::Streaming<SnapshotChunk>,
+    tx: Sender<StdResult<(), tonic::Status>>,
     snap_mgr: SnapManager,
     raft_router: R,
 ) -> impl Future<Output = Result<()>> {
@@ -398,17 +399,17 @@ fn recv_snap<R: RaftExtension + 'static>(
     };
     async move {
         match recv_task.await {
-            Ok(()) => sink.success(Done::default()).await.map_err(Error::from),
+            Ok(()) => tx.send(Ok(())),
             Err(e) => {
-                let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
-                sink.fail(status).await.map_err(Error::from)
+                let status = tonic::Status::unknown(format!("{:?}", e));
+                tx.send(Err(status))
             }
         }
+        .map_err(|e| Error::Tonic(tonic::Status::unknown(format!("{:?}", e))))
     }
 }
 
 pub struct Runner<R: RaftExtension> {
-    env: Arc<Environment>,
     snap_mgr: SnapManager,
     pool: Runtime,
     raft_router: R,
@@ -417,6 +418,7 @@ pub struct Runner<R: RaftExtension> {
     cfg: Config,
     sending_count: Arc<AtomicUsize>,
     recving_count: Arc<AtomicUsize>,
+    grpc_handle: tokio::runtime::Handle,
 }
 
 impl<R: RaftExtension + 'static> Runner<R> {
@@ -424,16 +426,15 @@ impl<R: RaftExtension + 'static> Runner<R> {
     // within a raft group with raftstore-v2. It is set be true to enable runner
     // to receive tablet snapshot from v2.
     pub fn new(
-        env: Arc<Environment>,
         snap_mgr: SnapManager,
         r: R,
         security_mgr: Arc<SecurityManager>,
         cfg: Arc<VersionTrack<Config>>,
+        grpc_handle: tokio::runtime::Handle,
     ) -> Self {
         let cfg_tracker = cfg.clone().tracker("snap-sender".to_owned());
         let config = cfg.value().clone();
         let snap_worker = Runner {
-            env,
             snap_mgr,
             pool: RuntimeBuilder::new_multi_thread()
                 .thread_name(thd_name!("snap-sender"))
@@ -447,6 +448,7 @@ impl<R: RaftExtension + 'static> Runner<R> {
             cfg: config,
             sending_count: Arc::new(AtomicUsize::new(0)),
             recving_count: Arc::new(AtomicUsize::new(0)),
+            grpc_handle,
         };
         snap_worker
     }
@@ -472,17 +474,14 @@ impl<R: RaftExtension + 'static> Runner<R> {
         }
     }
 
-    fn receiving_busy(&self) -> Option<RpcStatus> {
+    fn receiving_busy(&self) -> Option<tonic::Status> {
         let task_num = self.recving_count.load(Ordering::SeqCst);
         if task_num >= self.cfg.concurrent_recv_snap_limit {
             warn!("too many recving snapshot tasks, ignore");
-            return Some(RpcStatus::with_message(
-                RpcStatusCode::RESOURCE_EXHAUSTED,
-                format!(
-                    "the number of received snapshot tasks {} exceeded the limitation {}",
-                    task_num, self.cfg.concurrent_recv_snap_limit
-                ),
-            ));
+            return Some(tonic::Status::resource_exhausted(format!(
+                "the number of received snapshot tasks {} exceeded the limitation {}",
+                task_num, self.cfg.concurrent_recv_snap_limit
+            )));
         }
 
         None
@@ -492,11 +491,13 @@ impl<R: RaftExtension + 'static> Runner<R> {
 impl<R: RaftExtension + 'static> Runnable for Runner<R> {
     type Task = Task;
 
-    fn run(&mut self, task: Task) {
+    fn run(&mut self, mut task: Task) {
         match task {
-            Task::Recv { stream, sink } => {
+            Task::Recv { stream, tx } => {
                 if let Some(status) = self.receiving_busy() {
-                    self.pool.spawn(sink.fail(status));
+                    if let Err(e) = tx.send(Err(status)) {
+                        warn!("report RecvTablet result failed"; "err" => ?e);
+                    }
                     return;
                 }
 
@@ -507,7 +508,7 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                 let recving_count = Arc::clone(&self.recving_count);
                 recving_count.fetch_add(1, Ordering::SeqCst);
                 let task = async move {
-                    let result = recv_snap(stream, sink, snap_mgr, raft_router).await;
+                    let result = recv_snap(stream, tx, snap_mgr, raft_router).await;
                     recving_count.fetch_sub(1, Ordering::SeqCst);
                     if let Err(e) = result {
                         error!("failed to recv snapshot"; "err" => %e);
@@ -515,48 +516,48 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                 };
                 self.pool.spawn(task);
             }
-            Task::RecvTablet { stream, sink } => {
-                let tablet_snap_mgr = match self.snap_mgr.tablet_snap_manager() {
-                    Some(s) => s.clone(),
-                    None => {
-                        let status = RpcStatus::with_message(
-                            RpcStatusCode::UNIMPLEMENTED,
-                            "tablet snap is not supported".to_string(),
-                        );
-                        self.pool.spawn(sink.fail(status).map(|_| ()));
-                        return;
-                    }
-                };
-
-                if let Some(status) = self.receiving_busy() {
-                    self.pool.spawn(sink.fail(status));
-                    return;
-                }
-
-                SNAP_TASK_COUNTER_STATIC.recv_v2.inc();
-
-                let raft_router = self.raft_router.clone();
-                let recving_count = self.recving_count.clone();
-                recving_count.fetch_add(1, Ordering::SeqCst);
-                let limiter = self.snap_mgr.limiter().clone();
-                let snap_mgr_v1 = self.snap_mgr.clone();
-                let task = async move {
-                    let result = crate::server::tablet_snap::recv_snap(
-                        stream,
-                        sink,
-                        tablet_snap_mgr,
-                        raft_router,
-                        NoSnapshotCache, // do not use cache in v1
-                        limiter,
-                        Some(snap_mgr_v1),
-                    )
-                    .await;
-                    recving_count.fetch_sub(1, Ordering::SeqCst);
-                    if let Err(e) = result {
-                        error!("failed to recv snapshot"; "err" => %e);
-                    }
-                };
-                self.pool.spawn(task);
+            Task::RecvTablet { stream, tx } => {
+                // let tablet_snap_mgr = match self.snap_mgr.tablet_snap_manager() {
+                // Some(s) => s.clone(),
+                // None => {
+                // let status = tonic::Status::unimplemented("tablet snap is not supported");
+                // if let Err(e) = tx.send(Err(status)) {
+                // warn!("report RecvTablet result failed"; "err" => ?e);
+                // }
+                // return;
+                // }
+                // };
+                //
+                // if let Some(status) = self.receiving_busy() {
+                // self.pool.spawn(sink.fail(status));
+                // return;
+                // }
+                //
+                // SNAP_TASK_COUNTER_STATIC.recv_v2.inc();
+                //
+                // let raft_router = self.raft_router.clone();
+                // let recving_count = self.recving_count.clone();
+                // recving_count.fetch_add(1, Ordering::SeqCst);
+                // let limiter = self.snap_mgr.limiter().clone();
+                // let snap_mgr_v1 = self.snap_mgr.clone();
+                // let task = async move {
+                // let result = crate::server::tablet_snap::recv_snap(
+                // stream,
+                // sink,
+                // tablet_snap_mgr,
+                // raft_router,
+                // NoSnapshotCache, // do not use cache in v1
+                // limiter,
+                // Some(snap_mgr_v1),
+                // )
+                // .await;
+                // recving_count.fetch_sub(1, Ordering::SeqCst);
+                // if let Err(e) = result {
+                // error!("failed to recv snapshot"; "err" => %e);
+                // }
+                // };
+                // self.pool.spawn(task);
+                todo!()
             }
             Task::Send { addr, msg, cb } => {
                 fail_point!("send_snapshot");
@@ -572,12 +573,18 @@ impl<R: RaftExtension + 'static> Runnable for Runner<R> {
                 }
                 SNAP_TASK_COUNTER_STATIC.send.inc();
 
-                let env = Arc::clone(&self.env);
                 let mgr = self.snap_mgr.clone();
                 let security_mgr = Arc::clone(&self.security_mgr);
                 let sending_count = Arc::clone(&self.sending_count);
                 sending_count.fetch_add(1, Ordering::SeqCst);
-                let send_task = send_snap(env, mgr, security_mgr, &self.cfg.clone(), &addr, msg);
+                let send_task = send_snap(
+                    mgr,
+                    security_mgr,
+                    &self.cfg.clone(),
+                    &addr,
+                    msg,
+                    self.grpc_handle.clone(),
+                );
                 let task = async move {
                     let res = match send_task {
                         Err(e) => Err(e),

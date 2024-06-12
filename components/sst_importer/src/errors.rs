@@ -19,6 +19,7 @@ pub fn error_inc(type_: &str, err: &Error) {
     let label = match err {
         Error::Io(..) => "io",
         Error::Grpc(..) => "grpc",
+        Error::Tonic(..) => "grpc",
         Error::Uuid(..) => "uuid",
         Error::RocksDb(..) => "rocksdb",
         Error::EngineTraits(..) => "engine_traits",
@@ -45,6 +46,9 @@ pub enum Error {
 
     #[error("{0}")]
     Grpc(#[from] GrpcError),
+
+    #[error("{0}")]
+    Tonic(#[from] tonic::Status),
 
     #[error("{0}")]
     Uuid(#[from] UuidError),
@@ -198,7 +202,7 @@ impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self {
             Error::Io(_) => error_code::sst_importer::IO,
-            Error::Grpc(_) => error_code::sst_importer::GRPC,
+            Error::Grpc(_) | Error::Tonic(_) => error_code::sst_importer::GRPC,
             Error::Uuid(_) => error_code::sst_importer::UUID,
             Error::Future(_) => error_code::sst_importer::FUTURE,
             Error::RocksDb(_) => error_code::sst_importer::ROCKSDB,

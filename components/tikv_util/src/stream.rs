@@ -14,6 +14,7 @@ use bytes::Bytes;
 use futures::stream::{self, Stream};
 use futures_util::io::AsyncRead;
 use http::status::StatusCode;
+use pin_project::pin_project;
 use rand::{thread_rng, Rng};
 use rusoto_core::{request::HttpDispatchError, RusotoError};
 use tokio::{runtime::Builder, time::sleep};
@@ -208,6 +209,32 @@ impl<E> RetryError for RusotoError<E> {
 impl RetryError for HttpDispatchError {
     fn is_retryable(&self) -> bool {
         true
+    }
+}
+
+// a stream wrapper with a drop guard.
+#[pin_project]
+pub struct GuardedStream<G, S> {
+    _guard: G,
+    #[pin]
+    stream: S,
+}
+
+impl<G, S> GuardedStream<G, S> {
+    pub fn new(guard: G, stream: S) -> Self {
+        Self {
+            _guard: guard,
+            stream,
+        }
+    }
+}
+
+impl<G, S: Stream> Stream for GuardedStream<G, S> {
+    type Item = <S as Stream>::Item;
+
+    fn poll_next(self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+        this.stream.poll_next(cx)
     }
 }
 

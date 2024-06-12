@@ -4,13 +4,14 @@ use std::sync::Arc;
 
 use futures::{
     channel::mpsc::{channel, Sender},
-    SinkExt, StreamExt,
+    stream, StreamExt,
 };
-use grpcio::{RpcContext, ServerStreamingSink, WriteFlags};
 use kvproto::resource_usage_agent::{
-    ResourceMeteringPubSub, ResourceMeteringRequest, ResourceUsageRecord,
+    resource_metering_pub_sub_server::ResourceMeteringPubSub, ResourceMeteringRequest,
+    ResourceUsageRecord,
 };
-use tikv_util::{info, warn};
+use tikv_util::{info, stream::GuardedStream};
+use tonic::{self, codegen::BoxStream};
 
 use super::DataSinkRegHandle;
 use crate::{
@@ -39,50 +40,41 @@ impl PubSubService {
     }
 }
 
+#[tonic::async_trait]
 impl ResourceMeteringPubSub for PubSubService {
-    fn subscribe(
-        &mut self,
-        ctx: RpcContext<'_>,
-        _: ResourceMeteringRequest,
-        mut sink: ServerStreamingSink<ResourceUsageRecord>,
-    ) {
-        info!("accept a new subscriber"; "from" => ?ctx.peer());
+    async fn subscribe(
+        &self,
+        _request: tonic::Request<ResourceMeteringRequest>,
+    ) -> std::result::Result<
+        tonic::Response<tonic::codegen::BoxStream<ResourceUsageRecord>>,
+        tonic::Status,
+    > {
+        info!("accept a new subscriber"; "from" => /* TODO ?ctx.peer()*/ "unknown");
 
         // The `tx` is for the reporter and the `rx` is for the gRPC stream sender.
         //
         // The reporter calls `tx.try_send` roughly every minute. If the the gRPC
         // stream sender does not send data out over the network in time, it discards
         // the incoming records to prevent memory overflow.
-        let (tx, mut rx) = channel(1);
-
+        let (tx, rx) = channel(1);
         let data_sink = DataSinkImpl { tx };
         let handle = self.data_sink_reg_handle.register(Box::new(data_sink));
 
-        let report_task = async move {
-            let _h = handle;
+        let stream = rx.flat_map(|r: Arc<Vec<ResourceUsageRecord>>| {
+            let _t = REPORT_DURATION_HISTOGRAM.start_timer();
+            let records = r.as_ref().clone();
+            REPORT_DATA_COUNTER
+                .with_label_values(&["to_send"])
+                .inc_by(records.len() as _);
+            stream::iter(records).map(|r| {
+                REPORT_DATA_COUNTER.with_label_values(&["sent"]).inc();
+                Ok(r)
+            })
+        });
 
-            loop {
-                let records = rx.next().await;
-                if records.is_none() {
-                    break;
-                }
-
-                let _t = REPORT_DURATION_HISTOGRAM.start_timer();
-                let records = records.unwrap();
-                REPORT_DATA_COUNTER
-                    .with_label_values(&["to_send"])
-                    .inc_by(records.len() as _);
-                for record in records.iter() {
-                    if let Err(err) = sink.send((record.clone(), WriteFlags::default())).await {
-                        warn!("failed to send records to the pubsub subscriber"; "error" => ?err);
-                        return;
-                    }
-                    REPORT_DATA_COUNTER.with_label_values(&["sent"]).inc();
-                }
-            }
-        };
-
-        ctx.spawn(report_task);
+        Ok(tonic::Response::new(
+            Box::pin(GuardedStream::new(handle, stream)) as BoxStream<ResourceUsageRecord>,
+        ))
     }
 }
 

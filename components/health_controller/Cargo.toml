@@ -6,7 +6,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
-grpcio-health = { workspace = true }
+futures = "0.3"
 kvproto = { workspace = true }
 ordered-float = "2.6"
 parking_lot = "0.12.1"
@@ -15,3 +15,5 @@ prometheus-static-metric = "0.5"
 slog = { workspace = true }
 slog-global = { workspace = true }
 tikv_util = { workspace = true }
+tonic = { workspace = true }
+tonic-health = { workspace = true }

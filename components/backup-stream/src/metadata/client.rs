@@ -294,7 +294,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
         }
         let r = &r[0];
         let err = prost::Message::decode(r.value())?;
-        //let err = protobuf::parse_from_bytes(r.value())?;
+        // let err = protobuf::parse_from_bytes(r.value())?;
         Ok(Some(err))
     }
 
@@ -311,7 +311,7 @@ impl<Store: MetaStore> MetadataClient<Store> {
         }
         let r = &r[0];
         let err = prost::Message::decode(r.value())?;
-        //let err = protobuf::parse_from_bytes(r.value())?;
+        // let err = protobuf::parse_from_bytes(r.value())?;
         Ok(Some(err))
     }
 
@@ -375,7 +375,8 @@ impl<Store: MetaStore> MetadataClient<Store> {
         if items.is_empty() {
             return Ok(None);
         }
-        //let info = protobuf::parse_from_bytes::<StreamBackupTaskInfo>(items[0].value())?;
+        // let info =
+        // protobuf::parse_from_bytes::<StreamBackupTaskInfo>(items[0].value())?;
         let info = prost::Message::decode(items[0].value())?;
         let is_paused = self.check_task_paused(name).await?;
 

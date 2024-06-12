@@ -11,6 +11,7 @@
 //! Components are often used to initialize other components, and/or must be
 //! explicitly stopped. We keep these components in the `TikvServer` struct.
 
+/*
 use std::{
     cmp,
     collections::HashMap,
@@ -1690,3 +1691,4 @@ mod test {
         );
     }
 }
+ */

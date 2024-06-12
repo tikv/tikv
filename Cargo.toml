@@ -183,6 +183,8 @@ tokio = { version = "1.17", features = ["full"] }
 tokio-openssl = "0.6"
 tokio-timer = { workspace = true }
 toml = "0.5"
+tonic = { workspace = true }
+tonic-health = { workspace = true }
 tracing-active-tree = { workspace = true }
 tracker = { workspace = true }
 txn_types = { workspace = true }
@@ -425,8 +427,8 @@ grpcio = { git = "https://github.com/glorv/grpc-rs", branch = "prost", default-f
 grpcio-health = { git = "https://github.com/glorv/grpc-rs", branch = "prost", default-features = false, features = [
   "prost-codec",
 ] }
-tipb = { git = "https://github.com/glorv/tipb", branch = "prost", default-features = false, features = ["grpcio-prost-codec"] }
-kvproto = { git = "https://github.com/glorv/kvproto", branch = "tonic-prost", features = ["grpcio-prost"] }
+tipb = { git = "https://github.com/glorv/tipb", branch = "prost", default-features = false, features = ["tonic-prost-codec"] }
+kvproto = { git = "https://github.com/glorv/kvproto", branch = "tonic-prost", features = ["tonic-prost"] }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
@@ -446,6 +448,11 @@ tracing = { version = "0.1.39", default-features = false, features = [
 openssl = "0.10"
 openssl-sys = "0.9"
 prost = "0.12"
+tonic = "0.11"
+tonic-health = { git = "https://github.com/glorv/tonic", branch = "patch-health" }
+
+tokio = { version = "1.5", features = ["rt-multi-thread"] }
+tokio-stream = "0.1"
 
 [profile.dev.package.grpcio-sys]
 debug = false

@@ -32,5 +32,6 @@ tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1", features = ["sync"] }
 tokio-timer = { workspace = true }
+tonic = { workspace = true }
 txn_types = { workspace = true }
 yatp = { workspace = true }

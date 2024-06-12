@@ -4,7 +4,6 @@
 use api_version::KvFormat;
 use kvproto::kvrpcpb::*;
 use tikv_util::{
-    future::poll_future_notify,
     mpsc::future::{Sender, WakePolicy},
     time::Instant,
 };
@@ -294,7 +293,7 @@ fn future_batch_get_command<E: Engine, L: LockManager, F: KvFormat>(
             }
         }
     };
-    poll_future_notify(f);
+    tokio::spawn(f);
 }
 
 fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
@@ -350,5 +349,5 @@ fn future_batch_raw_get_command<E: Engine, L: LockManager, F: KvFormat>(
             }
         }
     };
-    poll_future_notify(f);
+    tokio::spawn(f);
 }

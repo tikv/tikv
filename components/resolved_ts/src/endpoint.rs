@@ -12,7 +12,6 @@ use std::{
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use futures::channel::oneshot::{channel, Receiver, Sender};
-use grpcio::Environment;
 use kvproto::{kvrpcpb::LeaderInfo, metapb::Region, raft_cmdpb::AdminCmdType};
 use online_config::{self, ConfigChange, ConfigManager, OnlineConfig};
 use pd_client::PdClient;
@@ -653,24 +652,28 @@ where
         store_meta: Arc<Mutex<S>>,
         pd_client: Arc<dyn PdClient>,
         concurrency_manager: ConcurrencyManager,
-        env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
+        grpc_handle: tokio::runtime::Handle,
     ) -> Self {
         let (region_read_progress, store_id) = {
             let meta = store_meta.lock().unwrap();
             (meta.region_read_progress().clone(), meta.store_id())
         };
-        let advance_worker =
-            AdvanceTsWorker::new(pd_client.clone(), scheduler.clone(), concurrency_manager);
+        let advance_worker = AdvanceTsWorker::new(
+            pd_client.clone(),
+            scheduler.clone(),
+            concurrency_manager,
+            grpc_handle.clone(),
+        );
         let scanner_pool = ScannerPool::new(cfg.scan_lock_pool_size, cdc_handle);
         let store_resolver_gc_interval = Duration::from_secs(60);
         let leader_resolver = LeadershipResolver::new(
             store_id,
             pd_client.clone(),
-            env,
             security_mgr,
             region_read_progress.clone(),
             store_resolver_gc_interval,
+            grpc_handle,
         );
         let scan_concurrency_semaphore = Arc::new(Semaphore::new(cfg.incremental_scan_concurrency));
         let ep = Self {

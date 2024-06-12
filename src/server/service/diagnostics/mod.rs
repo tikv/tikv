@@ -11,13 +11,9 @@ use futures::{
     sink::SinkExt,
     stream::StreamExt,
 };
-use grpcio::{
-    Result as GrpcResult, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink,
-    WriteFlags,
-};
 use kvproto::diagnosticspb::{
-    search_log_request::Target as SearchLogRequestTarget, Diagnostics, SearchLogRequest,
-    SearchLogResponse, ServerInfoRequest, ServerInfoResponse, ServerInfoType,
+    diagnostics_server::Diagnostics, search_log_request::Target as SearchLogRequestTarget,
+    SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse, ServerInfoType,
 };
 use tikv_util::{
     sys::{ioload, SystemExt},
@@ -53,61 +49,43 @@ impl Service {
     }
 }
 
+#[tonic::async_trait]
 impl Diagnostics for Service {
-    fn search_log(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: SearchLogRequest,
-        mut sink: ServerStreamingSink<SearchLogResponse>,
-    ) {
+    async fn search_log(
+        &self,
+        request: tonic::Request<SearchLogRequest>,
+    ) -> std::result::Result<
+        tonic::Response<tonic::codegen::BoxStream<SearchLogResponse>>,
+        tonic::Status,
+    > {
+        let req = request.into_inner();
         let log_file = if req.get_target() == SearchLogRequestTarget::Normal {
             self.log_file.to_owned()
         } else {
             self.slow_log_file.to_owned()
         };
 
-        let stream = self.pool.spawn(async move {
+        let join_handle = self.pool.spawn(async move {
             log::search(log_file, req)
-                .map(|stream| stream.map(|resp| (resp, WriteFlags::default().buffer_hint(true))))
-                .map_err(|e| {
-                    grpcio::Error::RpcFailure(RpcStatus::with_message(
-                        RpcStatusCode::UNKNOWN,
-                        format!("{:?}", e),
-                    ))
+                .map(|stream| {
+                    stream.map(|resp| {
+                        let res: std::result::Result<_, tonic::Status> = Ok(resp);
+                        res
+                    })
                 })
+                .map_err(|e| tonic::Status::unknown(format!("{:?}", e)))
         });
 
-        let f = self
-            .pool
-            .spawn(async move {
-                match stream.await.unwrap() {
-                    Ok(s) => {
-                        let res = async move {
-                            sink.send_all(&mut s.map(Ok)).await?;
-                            sink.close().await?;
-                            GrpcResult::Ok(())
-                        }
-                        .await;
-                        if let Err(e) = res {
-                            error!("search log RPC error"; "error" => ?e);
-                        }
-                    }
-                    Err(e) => {
-                        error!("search log RPC error"; "error" => ?e);
-                    }
-                }
-            })
-            .map(|res| res.unwrap());
+        let stream = join_handle.await.unwrap()?;
 
-        ctx.spawn(f);
+        Ok(tonic::Response::new(Box::pin(stream) as _))
     }
 
-    fn server_info(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: ServerInfoRequest,
-        sink: UnarySink<ServerInfoResponse>,
-    ) {
+    async fn server_info(
+        &self,
+        request: tonic::Request<ServerInfoRequest>,
+    ) -> std::result::Result<tonic::Response<ServerInfoResponse>, tonic::Status> {
+        let req = request.into_inner();
         let tp = req.get_tp();
 
         let collect = async move {
@@ -153,13 +131,7 @@ impl Diagnostics for Service {
             resp
         };
 
-        let f = self.pool.spawn(collect).then(|res| async move {
-            let res = sink.success(res.unwrap()).map_err(Error::from).await;
-            if let Err(e) = res {
-                debug!("Diagnostics rpc failed"; "err" => ?e);
-            }
-        });
-
-        ctx.spawn(f);
+        let resp = self.pool.spawn(collect).await.unwrap();
+        Ok(tonic::Response::new(resp))
     }
 }

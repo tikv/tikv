@@ -2,8 +2,13 @@
 
 use core::panic;
 use std::{
+    future::Future,
     pin::Pin,
-    sync::{atomic::AtomicU64, Arc, RwLock},
+    result::Result as StdResult,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, RwLock,
+    },
     thread,
     time::Duration,
 };
@@ -11,27 +16,25 @@ use std::{
 use collections::HashSet;
 use fail::fail_point;
 use futures::{
-    channel::mpsc::UnboundedSender,
+    channel::mpsc::{self, UnboundedSender},
     compat::Future01CompatExt,
     executor::block_on,
     future::{self, TryFutureExt},
-    stream::{Stream, TryStreamExt},
+    sink::SinkExt,
+    stream::{Stream, StreamExt, TryStreamExt},
     task::{Context, Poll, Waker},
 };
-use grpcio::{
-    CallOption, ChannelBuilder, ClientCStreamReceiver, ClientDuplexReceiver, ClientDuplexSender,
-    Environment, Error::RpcFailure, MetadataBuilder, Result as GrpcResult, RpcStatusCode,
-};
+use grpcio::{CallOption, MetadataBuilder};
 use kvproto::{
-    meta_storagepb::MetaStorageClient as MetaStorageStub,
+    meta_storagepb::meta_storage_client::MetaStorageClient as MetaStorageStub,
     metapb::BucketStats,
     pdpb::{
-        ErrorType, GetMembersRequest, GetMembersResponse, Member, PdClient as PdClientStub,
-        RegionHeartbeatRequest, RegionHeartbeatResponse, ReportBucketsRequest,
-        ReportBucketsResponse, ResponseHeader,
+        pd_client::PdClient as PdClientStub, ErrorType, GetMembersRequest, GetMembersResponse,
+        Member, RegionHeartbeatRequest, RegionHeartbeatResponse, ReportBucketsRequest,
+        ResponseHeader,
     },
     resource_manager::{
-        ResourceManagerClient as ResourceManagerStub, TokenBucketsRequest, TokenBucketsResponse,
+        resource_manager_client::ResourceManagerClient as ResourceManagerStub, TokenBucketsRequest,
     },
 };
 use security::SecurityManager;
@@ -39,7 +42,9 @@ use tikv_util::{
     box_err, debug, error, info, slow_log, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn, Either,
     HandyRwLock,
 };
+use tokio::task::JoinHandle;
 use tokio_timer::timer::Handle;
+use tonic::{transport::Channel, Status};
 
 use super::{
     metrics::*, tso::TimestampOracle, BucketMeta, Config, Error, FeatureGate, PdFuture, Result,
@@ -90,18 +95,18 @@ impl TargetInfo {
 }
 
 pub struct Inner {
-    env: Arc<Environment>,
-    pub hb_sender: Either<
-        Option<ClientDuplexSender<RegionHeartbeatRequest>>,
-        UnboundedSender<RegionHeartbeatRequest>,
+    pub spawn_handle: tokio::runtime::Handle,
+    pub hb_sender: UnboundedSender<RegionHeartbeatRequest>,
+    pub hb_receiver: Either<
+        Option<
+            JoinHandle<
+                StdResult<tonic::Response<tonic::Streaming<RegionHeartbeatResponse>>, Status>,
+            >,
+        >,
+        Waker,
     >,
-    pub hb_receiver: Either<Option<ClientDuplexReceiver<RegionHeartbeatResponse>>, Waker>,
-    pub buckets_sender: Either<
-        Option<ClientDuplexSender<ReportBucketsRequest>>,
-        UnboundedSender<ReportBucketsRequest>,
-    >,
-    pub buckets_resp: Option<ClientCStreamReceiver<ReportBucketsResponse>>,
-    pub client_stub: PdClientStub,
+    pub buckets_sender: UnboundedSender<ReportBucketsRequest>,
+    pub client_stub: PdClientStub<Channel>,
     target: TargetInfo,
     members: GetMembersResponse,
     security_mgr: Arc<SecurityManager>,
@@ -109,14 +114,8 @@ pub struct Inner {
     pub pending_heartbeat: Arc<AtomicU64>,
     pub pending_buckets: Arc<AtomicU64>,
     pub tso: TimestampOracle,
-    pub meta_storage: MetaStorageStub,
-
-    pub rg_sender: Either<
-        Option<ClientDuplexSender<TokenBucketsRequest>>,
-        UnboundedSender<TokenBucketsRequest>,
-    >,
-    pub rg_resp: Option<ClientDuplexReceiver<TokenBucketsResponse>>,
-
+    pub meta_storage: MetaStorageStub<Channel>,
+    pub rg_sender: UnboundedSender<TokenBucketsRequest>,
     last_try_reconnect: Instant,
     bo: ExponentialBackoff,
 }
@@ -128,7 +127,10 @@ impl Inner {
 }
 
 pub struct HeartbeatReceiver {
-    receiver: Option<ClientDuplexReceiver<RegionHeartbeatResponse>>,
+    receiver: Option<tonic::Streaming<RegionHeartbeatResponse>>,
+    handler: Option<
+        JoinHandle<StdResult<tonic::Response<tonic::Streaming<RegionHeartbeatResponse>>, Status>>,
+    >,
     inner: Arc<Client>,
 }
 
@@ -137,7 +139,7 @@ impl Stream for HeartbeatReceiver {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
-            if let Some(ref mut receiver) = self.receiver {
+            if let Some(receiver) = &mut self.receiver {
                 match Pin::new(receiver).poll_next(cx) {
                     Poll::Ready(Some(Ok(item))) => return Poll::Ready(Some(Ok(item))),
                     Poll::Pending => return Poll::Pending,
@@ -145,18 +147,31 @@ impl Stream for HeartbeatReceiver {
                     _ => {}
                 }
             }
-
             self.receiver.take();
 
+            if let Some(handler) = &mut self.handler {
+                match Pin::new(handler).poll(cx) {
+                    Poll::Ready(r) => match r {
+                        Ok(Ok(r)) => self.receiver = Some(r.into_inner()),
+                        Err(e) => {
+                            panic!("receive heartbeat resp failed: {:?}", e);
+                        }
+                        _ => {}
+                    },
+                    Poll::Pending => return Poll::Pending,
+                }
+            };
+            self.handler.take();
+
             let mut inner = self.inner.inner.wl();
-            let mut receiver = None;
-            if let Either::Left(ref mut recv) = inner.hb_receiver {
-                receiver = recv.take();
+            let mut handler = None;
+            if let Either::Left(h) = &mut inner.hb_receiver {
+                handler = h.take();
             }
-            if receiver.is_some() {
+            if handler.is_some() {
                 debug!("heartbeat receiver is refreshed");
                 drop(inner);
-                self.receiver = receiver;
+                self.handler = handler;
             } else {
                 inner.hb_receiver = Either::Right(cx.waker().clone());
                 return Poll::Pending;
@@ -175,9 +190,9 @@ pub struct Client {
 
 impl Client {
     pub(crate) fn new(
-        env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
-        client_stub: PdClientStub,
+        client_stub: PdClientStub<Channel>,
+        task_handle: tokio::runtime::Handle,
         members: GetMembersResponse,
         target: TargetInfo,
         tso: TimestampOracle,
@@ -189,43 +204,120 @@ impl Client {
                 .with_label_values(&[&target.via])
                 .set(1);
         }
-        let (hb_tx, hb_rx) = client_stub
-            .region_heartbeat_opt(target.call_option())
-            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
-        let (buckets_tx, buckets_resp) = client_stub
-            .report_buckets_opt(target.call_option())
-            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "report_buckets", e));
-        let meta_storage =
-            kvproto::meta_storagepb::MetaStorageClient::new(client_stub.client.channel().clone());
-        let resource_manager = kvproto::resource_manager::ResourceManagerClient::new(
-            client_stub.client.channel().clone(),
-        );
-        let (rg_sender, rg_rx) = resource_manager
-            .acquire_token_buckets_opt(target.call_option())
-            .unwrap_or_else(|e| {
-                panic!("fail to request PD {} err {:?}", "acquire_token_buckets", e)
-            });
+        let (hb_tx, hb_rx) = mpsc::unbounded();
+        let mut last_report = u64::MAX;
+        let pending_heartbeat = Arc::new(AtomicU64::default());
+        let pending_heartbeat1 = pending_heartbeat.clone();
+
+        let mut stub = client_stub.clone();
+        let hb_resp = task_handle.spawn(async move {
+            stub.region_heartbeat(hb_rx.map(move |h| {
+                let last = pending_heartbeat1.fetch_sub(1, Ordering::Relaxed);
+                // Sender will update pending at every send operation, so as long as
+                // pending task is increasing, pending count should be reported by
+                // sender.
+                if last + 10 < last_report || last == 1 {
+                    PD_PENDING_HEARTBEAT_GAUGE.set(last as i64 - 1);
+                    last_report = last;
+                }
+                if last > last_report {
+                    last_report = last - 1;
+                }
+                h
+            }))
+            .await
+        });
+
+        let (buckets_tx, buckets_rx) = mpsc::unbounded();
+        let pending_buckets = Arc::new(AtomicU64::default());
+        let pending_buckets1 = pending_buckets.clone();
+        let mut last_report = u64::MAX;
+        let mut stub = client_stub.clone();
+        task_handle.spawn(async move {
+            let res = stub
+                .report_buckets(buckets_rx.map(move |r| {
+                    let last = pending_buckets1.fetch_sub(1, Ordering::Relaxed);
+                    // Sender will update pending at every send operation, so as long as
+                    // pending task is increasing, pending count should be reported by
+                    // sender.
+                    if last + 10 < last_report || last == 1 {
+                        PD_PENDING_BUCKETS_GAUGE.set(last as i64 - 1);
+                        last_report = last;
+                    }
+                    if last > last_report {
+                        last_report = last - 1;
+                    }
+                    r
+                }))
+                .await;
+            warn!("region buckets stream exited: {:?}", res);
+        });
+
+        // TODO: find a way to support clone a channel.
+        // let channel = unsafe {
+        //     let ch: &Channel = std::mem::transmute(&client_stub);
+        //     ch.clone()
+        // };
+        // let meta_storage =
+        //     kvproto::meta_storagepb::meta_storage_client::MetaStorageClient::new(channel.clone());
+        // let mut resource_manager =
+        // kvproto::resource_manager::resource_manager_client::ResourceManagerClient::new(
+        //     channel,
+        // );
+
+        let meta_storage = unsafe {
+            let c: &kvproto::meta_storagepb::meta_storage_client::MetaStorageClient<Channel> =
+                std::mem::transmute(&client_stub);
+            c.clone()
+        };
+
+        let mut resource_manager = unsafe {
+            let c: &kvproto::resource_manager::resource_manager_client::ResourceManagerClient<
+                Channel,
+            > = std::mem::transmute(&client_stub);
+            c.clone()
+        };
+
+        let (rg_sender, rg_rx) = mpsc::unbounded();
+        task_handle.spawn(async move {
+            match resource_manager.acquire_token_buckets(rg_rx).await {
+                Ok(s) => {
+                    let s = s.into_inner();
+                    s.for_each(|r| {
+                        if let Err(e) = &r {
+                            warn!("receive resource_manager token buckets meet error: {:?}", e);
+                        }
+                        futures::future::ready(())
+                    })
+                    .await;
+                }
+                Err(e) => {
+                    error!(
+                        "receive resource_manager token buckets response failed: {:?}",
+                        e
+                    );
+                }
+            };
+        });
         Client {
             timer: GLOBAL_TIMER_HANDLE.clone(),
             inner: RwLock::new(Inner {
-                env,
-                hb_sender: Either::Left(Some(hb_tx)),
-                hb_receiver: Either::Left(Some(hb_rx)),
-                buckets_sender: Either::Left(Some(buckets_tx)),
-                buckets_resp: Some(buckets_resp),
+                spawn_handle: task_handle,
+                hb_sender: hb_tx,
+                hb_receiver: Either::Left(Some(hb_resp)),
+                buckets_sender: buckets_tx,
                 client_stub,
                 members,
                 target,
                 security_mgr,
                 on_reconnect: None,
-                pending_heartbeat: Arc::default(),
-                pending_buckets: Arc::default(),
+                pending_heartbeat,
+                pending_buckets,
                 last_try_reconnect: Instant::now(),
                 bo: ExponentialBackoff::new(retry_interval),
                 tso,
                 meta_storage,
-                rg_sender: Either::Left(Some(rg_sender)),
-                rg_resp: Some(rg_rx),
+                rg_sender,
             }),
             feature_gate: FeatureGate::default(),
             enable_forwarding,
@@ -234,7 +326,7 @@ impl Client {
 
     fn update_client(
         &self,
-        client_stub: PdClientStub,
+        client_stub: PdClientStub<Channel>,
         target: TargetInfo,
         members: GetMembersResponse,
         tso: TimestampOracle,
@@ -242,48 +334,131 @@ impl Client {
         let start_refresh = Instant::now();
         let mut inner = self.inner.wl();
 
-        let (hb_tx, hb_rx) = client_stub
-            .region_heartbeat_opt(target.call_option())
-            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_heartbeat", e));
+        let (hb_tx, hb_rx) = mpsc::unbounded();
+        let mut last_report = u64::MAX;
+        let pending_heartbeat = inner.pending_heartbeat.clone();
+        let mut stub = client_stub.clone();
+        let hb_resp = inner.spawn_handle.spawn(async move {
+            stub.region_heartbeat(hb_rx.map(move |h| {
+                let last = pending_heartbeat.fetch_sub(1, Ordering::Relaxed);
+                // Sender will update pending at every send operation, so as long as
+                // pending task is increasing, pending count should be reported by
+                // sender.
+                if last + 10 < last_report || last == 1 {
+                    PD_PENDING_HEARTBEAT_GAUGE.set(last as i64 - 1);
+                    last_report = last;
+                }
+                if last > last_report {
+                    last_report = last - 1;
+                }
+                h
+            }))
+            .await
+        });
         info!("heartbeat sender and receiver are stale, refreshing ...");
 
         // Try to cancel an unused heartbeat sender.
-        if let Either::Left(Some(ref mut r)) = inner.hb_sender {
-            r.cancel();
-        }
-        inner.hb_sender = Either::Left(Some(hb_tx));
-        let prev_receiver = std::mem::replace(&mut inner.hb_receiver, Either::Left(Some(hb_rx)));
-        let _ = prev_receiver.right().map(|t| t.wake());
+        let mut old_tx = std::mem::replace(&mut inner.hb_sender, hb_tx);
+        inner
+            .spawn_handle
+            .spawn(async move { old_tx.close().await });
 
-        let (buckets_tx, buckets_resp) = client_stub
-            .report_buckets_opt(target.call_option())
-            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "region_buckets", e));
+        match std::mem::replace(&mut inner.hb_receiver, Either::Left(Some(hb_resp))) {
+            Either::Left(Some(h)) => {
+                inner.spawn_handle.spawn(async move {
+                    match h.await {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(e)) => warn!("send region heartbeat failed: {:?}", e),
+                        Err(e) => warn!("close region heartbeat sender failed: {:?}", e),
+                    }
+                });
+            }
+            Either::Right(w) => {
+                w.wake();
+            }
+            _ => {}
+        };
+
+        let (buckets_tx, buckets_rx) = mpsc::unbounded();
+        let pending_buckets1 = inner.pending_buckets.clone();
+        let mut last_report = u64::MAX;
+        let mut stub = client_stub.clone();
+        inner.spawn_handle.spawn(async move {
+            let res = stub
+                .report_buckets(buckets_rx.map(move |r| {
+                    let last = pending_buckets1.fetch_sub(1, Ordering::Relaxed);
+                    // Sender will update pending at every send operation, so as long as
+                    // pending task is increasing, pending count should be reported by
+                    // sender.
+                    if last + 10 < last_report || last == 1 {
+                        PD_PENDING_BUCKETS_GAUGE.set(last as i64 - 1);
+                        last_report = last;
+                    }
+                    if last > last_report {
+                        last_report = last - 1;
+                    }
+                    r
+                }))
+                .await;
+            warn!("region buckets stream exited: {:?}", res);
+        });
         info!("buckets sender and receiver are stale, refreshing ...");
-        // Try to cancel an unused buckets sender.
-        if let Either::Left(Some(ref mut r)) = inner.buckets_sender {
-            r.cancel();
-        }
-        inner.buckets_sender = Either::Left(Some(buckets_tx));
-        inner.buckets_resp = Some(buckets_resp);
+        let mut old_sender = std::mem::replace(&mut inner.buckets_sender, buckets_tx);
+        inner
+            .spawn_handle
+            .spawn(async move { old_sender.close().await });
 
-        inner.meta_storage = MetaStorageStub::new(client_stub.client.channel().clone());
-        let resource_manager = ResourceManagerStub::new(client_stub.client.channel().clone());
+        // TODO: find a way to support clone a channel.
+        // let channel = unsafe {
+        //     let ch: &Channel = std::mem::transmute(&client_stub);
+        //     ch.clone()
+        // };
+        // inner.meta_storage = MetaStorageStub::new(channel.clone());
+
+        let meta_storage = unsafe {
+            let c: &MetaStorageStub<Channel> = std::mem::transmute(&client_stub);
+            c.clone()
+        };
+        inner.meta_storage = meta_storage;
+
+        let mut resource_manager = unsafe {
+            let c: &ResourceManagerStub<Channel> = std::mem::transmute(&client_stub);
+            c.clone()
+        };
+        // let mut resource_manager = ResourceManagerStub::new(channel);
+
         inner.client_stub = client_stub;
         inner.members = members;
         inner.tso = tso;
 
-        let (rg_tx, rg_rx) = resource_manager
-            .acquire_token_buckets_opt(target.call_option())
-            .unwrap_or_else(|e| {
-                panic!("fail to request PD {} err {:?}", "acquire_token_buckets", e)
-            });
+        let (rg_tx, rg_rx) = mpsc::unbounded();
         info!("acquire_token_buckets sender and receiver are stale, refreshing ...");
         // Try to cancel an unused token buckets sender.
-        if let Either::Left(Some(ref mut r)) = inner.rg_sender {
-            r.cancel();
-        }
-        inner.rg_sender = Either::Left(Some(rg_tx));
-        inner.rg_resp = Some(rg_rx);
+        let mut old_tx = std::mem::replace(&mut inner.rg_sender, rg_tx);
+        inner
+            .spawn_handle
+            .spawn(async move { old_tx.close().await });
+        inner.spawn_handle.spawn(async move {
+            match resource_manager.acquire_token_buckets(rg_rx).await {
+                Ok(s) => {
+                    let s = s.into_inner();
+                    s.for_each(|r| {
+                        if let Err(e) = &r {
+                            warn!("receive resource_manager token buckets meet error: {:?}", e);
+                        }
+                        futures::future::ready(())
+                    })
+                    .await;
+                }
+                Err(e) => {
+                    error!(
+                        "receive resource_manager token buckets response failed: {:?}",
+                        e
+                    );
+                }
+            };
+        });
+
         if let Some(ref on_reconnect) = inner.on_reconnect {
             on_reconnect();
         }
@@ -320,6 +495,7 @@ impl Client {
     {
         let recv = HeartbeatReceiver {
             receiver: None,
+            handler: None,
             inner: self.clone(),
         };
         Box::pin(
@@ -376,7 +552,8 @@ impl Client {
                 PD_RECONNECT_COUNTER_VEC.cancel.inc();
                 return Err(box_err!("cancel reconnection due to too small interval"));
             }
-            let connector = PdConnector::new(inner.env.clone(), inner.security_mgr.clone());
+            let connector =
+                PdConnector::new(inner.security_mgr.clone(), inner.spawn_handle.clone());
             let members = inner.members.clone();
             async move {
                 let direct_connected = self.inner.rl().target_info().direct_connected();
@@ -520,39 +697,58 @@ where
     }
 }
 
-pub fn call_option_inner(inner: &Inner) -> CallOption {
-    inner
-        .target_info()
-        .call_option()
-        .timeout(Duration::from_secs(REQUEST_TIMEOUT))
+macro_rules! sync_request {
+    ($client:expr, $req:expr, $retry:expr, $func:ident) => {
+        {
+            let mut retry = $retry;
+            loop {
+                let mut stub = $client.inner.rl().client_stub.clone();
+                match block_on(stub.$func($req.clone())) {
+                    Ok(r) => {
+                        break Ok(r.into_inner());
+                    }
+                    Err(e) => {
+                        error!("request failed"; "err" => ?e);
+                        if retry == 0 {
+                            break Err(Error::Tonic(e));
+                        }
+                    }
+                }
+                // try reconnect
+                retry -= 1;
+                if let Err(e) = block_on($client.reconnect(true)) {
+                    error!(?e; "reconnect failed");
+                    std::thread::sleep(crate::util::REQUEST_RECONNECT_INTERVAL);
+                }
+            }
+        }
+    };
 }
 
 /// Do a request in synchronized fashion.
-pub fn sync_request<F, R>(client: &Client, mut retry: usize, func: F) -> Result<R>
+pub fn sync_request<'a, F, Req, Res, T>(
+    client: &Client,
+    req: &Req,
+    mut retry: usize,
+    func: F,
+) -> Result<Res>
 where
-    F: Fn(&PdClientStub, CallOption) -> GrpcResult<R>,
+    F: Fn(PdClientStub<Channel>, &Req) -> T,
+    Req: Send + Clone + 'static,
+    T: Future<Output = StdResult<tonic::Response<Res>, Status>> + 'a,
+    Res: Send + 'static,
 {
     loop {
-        let ret = {
-            // Drop the read lock immediately to prevent the deadlock between the caller
-            // thread which may hold the read lock and wait for PD client thread
-            // completing the request and the PD client thread which may block
-            // on acquiring the write lock.
-            let (client_stub, option) = {
-                let inner = client.inner.rl();
-                (inner.client_stub.clone(), call_option_inner(&inner))
-            };
-
-            func(&client_stub, option).map_err(Error::Grpc)
-        };
-        match ret {
+        let mut stub = client.inner.rl().client_stub.clone();
+        let task = func(stub, req);
+        match block_on(task) {
             Ok(r) => {
-                return Ok(r);
+                return Ok(r.into_inner());
             }
             Err(e) => {
-                error!(?e; "request failed");
+                error!("request failed"; "err" => ?e);
                 if retry == 0 {
-                    return Err(e);
+                    return Err(Error::Tonic(e));
                 }
             }
         }
@@ -566,7 +762,7 @@ where
 }
 
 pub type StubTuple = (
-    PdClientStub,
+    PdClientStub<Channel>,
     TargetInfo,
     GetMembersResponse,
     // Only used by RpcClient, not by RpcClientV2.
@@ -575,13 +771,16 @@ pub type StubTuple = (
 
 #[derive(Clone)]
 pub struct PdConnector {
-    pub(crate) env: Arc<Environment>,
     security_mgr: Arc<SecurityManager>,
+    handle: tokio::runtime::Handle,
 }
 
 impl PdConnector {
-    pub fn new(env: Arc<Environment>, security_mgr: Arc<SecurityManager>) -> PdConnector {
-        PdConnector { env, security_mgr }
+    pub fn new(security_mgr: Arc<SecurityManager>, handle: tokio::runtime::Handle) -> PdConnector {
+        PdConnector {
+            security_mgr,
+            handle,
+        }
     }
 
     pub async fn validate_endpoints(&self, cfg: &Config, build_tso: bool) -> Result<StubTuple> {
@@ -635,18 +834,23 @@ impl PdConnector {
         }
     }
 
-    pub async fn connect(&self, addr: &str) -> Result<(PdClientStub, GetMembersResponse)> {
+    pub async fn connect(
+        &self,
+        addr: &str,
+    ) -> Result<(PdClientStub<tonic::transport::Channel>, GetMembersResponse)> {
         info!("connecting to PD endpoint"; "endpoints" => addr);
-        let addr_trim = trim_http_prefix(addr);
+        // let addr_trim = trim_http_prefix(addr);
         let channel = {
-            let cb = ChannelBuilder::new(self.env.clone())
-                .max_send_message_len(-1)
-                .max_receive_message_len(-1)
-                .keepalive_time(Duration::from_secs(10))
-                .keepalive_timeout(Duration::from_secs(3))
-                .max_reconnect_backoff(Duration::from_secs(5))
-                .initial_reconnect_backoff(Duration::from_secs(1));
-            self.security_mgr.connect(cb, addr_trim)
+            let endpoint = tonic::transport::Channel::from_shared(addr.to_owned())
+                .unwrap()
+                .http2_keep_alive_interval(Duration::from_secs(10))
+                .keep_alive_timeout(Duration::from_secs(3))
+                .executor(tikv_util::RuntimeExec::new(self.handle.clone()));
+            self.handle
+                .spawn(async move { endpoint.connect().await })
+                .await
+                .unwrap()
+                .map_err(|e| Error::Tonic(tonic::Status::unknown(format!("{:?}", e))))?
         };
         fail_point!("cluster_id_is_not_ready", |_| {
             Ok((
@@ -654,19 +858,15 @@ impl PdConnector {
                 GetMembersResponse::default(),
             ))
         });
-        let client = PdClientStub::new(channel.clone());
-        let option = CallOption::default().timeout(Duration::from_secs(REQUEST_TIMEOUT));
+        let mut client = PdClientStub::new(channel.clone());
         let timer = Instant::now();
-        let response = client
-            .get_members_async_opt(&GetMembersRequest::default(), option)
-            .unwrap_or_else(|e| panic!("fail to request PD {} err {:?}", "get_members", e))
-            .await;
+        let response = client.get_members(GetMembersRequest::default()).await;
         PD_REQUEST_HISTOGRAM_VEC
             .get_members
             .observe(timer.saturating_elapsed_secs());
         match response {
-            Ok(resp) => Ok((client, resp)),
-            Err(e) => Err(Error::Grpc(e)),
+            Ok(resp) => Ok((client, resp.into_inner())),
+            Err(e) => Err(Error::Tonic(e)),
         }
     }
 
@@ -760,7 +960,7 @@ impl PdConnector {
                     Some(TimestampOracle::new(
                         resp.get_header().get_cluster_id(),
                         &client,
-                        info.call_option(),
+                        self.handle.clone(),
                     )?)
                 } else {
                     None
@@ -779,7 +979,7 @@ impl PdConnector {
                             Some(TimestampOracle::new(
                                 resp.get_header().get_cluster_id(),
                                 &client,
-                                info.call_option(),
+                                self.handle.clone(),
                             )?)
                         } else {
                             None
@@ -798,7 +998,10 @@ impl PdConnector {
     pub async fn connect_member(
         &self,
         peer: &Member,
-    ) -> Result<(Option<(PdClientStub, String, GetMembersResponse)>, bool)> {
+    ) -> Result<(
+        Option<(PdClientStub<Channel>, String, GetMembersResponse)>,
+        bool,
+    )> {
         let mut network_fail_num = 0;
         let mut has_network_error = false;
         let client_urls = peer.get_client_urls();
@@ -808,13 +1011,11 @@ impl PdConnector {
                     info!("connected to PD member"; "endpoints" => ep);
                     return Ok((Some((client, ep.clone(), resp)), false));
                 }
-                Err(Error::Grpc(e)) => {
-                    if let RpcFailure(ref status) = e {
-                        if status.code() == RpcStatusCode::UNAVAILABLE
-                            || status.code() == RpcStatusCode::DEADLINE_EXCEEDED
-                        {
-                            network_fail_num += 1;
-                        }
+                Err(Error::Tonic(e)) => {
+                    if e.code() == tonic::Code::Unavailable
+                        || e.code() == tonic::Code::DeadlineExceeded
+                    {
+                        network_fail_num += 1;
                     }
                     error!("failed to connect to PD member"; "endpoints" => ep, "error" => ?e);
                 }
@@ -831,7 +1032,7 @@ impl PdConnector {
     async fn reconnect_leader(
         &self,
         leader: &Member,
-    ) -> Result<(Option<(PdClientStub, String)>, bool)> {
+    ) -> Result<(Option<(PdClientStub<Channel>, String)>, bool)> {
         fail_point!("connect_leader", |_| Ok((None, true)));
         let mut retry_times = MAX_RETRY_TIMES;
         let timer = Instant::now();
@@ -864,28 +1065,18 @@ impl PdConnector {
         &self,
         members: &[Member],
         leader: &Member,
-    ) -> Result<Option<(PdClientStub, TargetInfo)>> {
+    ) -> Result<Option<(PdClientStub<Channel>, TargetInfo)>> {
         // Try to connect the PD cluster follower.
         for m in members.iter().filter(|m| *m != leader) {
             let (res, _) = self.connect_member(m).await?;
             match res {
-                Some((client, ep, resp)) => {
+                Some((mut client, ep, resp)) => {
                     let leader = resp.get_leader();
                     let client_urls = leader.get_client_urls();
                     for leader_url in client_urls {
                         let target = TargetInfo::new(leader_url.clone(), &ep);
                         let timer = Instant::now();
-                        let response = client
-                            .get_members_async_opt(
-                                &GetMembersRequest::default(),
-                                target
-                                    .call_option()
-                                    .timeout(Duration::from_secs(REQUEST_TIMEOUT)),
-                            )
-                            .unwrap_or_else(|e| {
-                                panic!("fail to request PD {} err {:?}", "get_members", e)
-                            })
-                            .await;
+                        let response = client.get_members(GetMembersRequest::default()).await;
                         PD_REQUEST_HISTOGRAM_VEC
                             .get_members
                             .observe(timer.saturating_elapsed_secs());

@@ -224,7 +224,7 @@ impl<RE> Debug for RocksEngine<RE> {
     }
 }
 
-impl<RE: RaftExtension + 'static> Engine for RocksEngine<RE> {
+impl<RE: RaftExtension + Sync + 'static> Engine for RocksEngine<RE> {
     type Snap = Arc<RocksSnapshot>;
     type Local = BaseRocksEngine;
 

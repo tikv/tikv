@@ -18,12 +18,14 @@ use futures::{
     sink::SinkExt,
     stream::{StreamExt, TryStreamExt},
 };
-use grpcio::{
-    ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult,
-    RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
-};
 use health_controller::HealthController;
-use kvproto::{coprocessor::*, kvrpcpb::*, mpp::*, raft_serverpb::*, tikvpb::*};
+use kvproto::{
+    coprocessor::*,
+    kvrpcpb::*,
+    mpp::*,
+    raft_serverpb::*,
+    tikvpb::{tikv_server::Tikv, *},
+};
 use raft::eraftpb::MessageType;
 use raftstore::{
     store::{
@@ -92,6 +94,7 @@ pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     grpc_thread_load: Arc<ThreadLoadPool>,
 
     proxy: Proxy,
+    handle: tokio::runtime::Handle,
 
     // Go `server::Config` to get more details.
     reject_messages_on_memory_ratio: f64,
@@ -123,6 +126,7 @@ impl<E: Engine + Clone, L: LockManager + Clone, F: KvFormat> Clone for Service<E
             enable_req_batch: self.enable_req_batch,
             grpc_thread_load: self.grpc_thread_load.clone(),
             proxy: self.proxy.clone(),
+            handle: self.handle.clone(),
             reject_messages_on_memory_ratio: self.reject_messages_on_memory_ratio,
             resource_manager: self.resource_manager.clone(),
             health_controller: self.health_controller.clone(),
@@ -146,6 +150,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         grpc_thread_load: Arc<ThreadLoadPool>,
         enable_req_batch: bool,
         proxy: Proxy,
+        handle: tokio::runtime::Handle,
         reject_messages_on_memory_ratio: f64,
         resource_manager: Option<Arc<ResourceGroupManager>>,
         health_controller: HealthController,
@@ -167,6 +172,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
             enable_req_batch,
             grpc_thread_load,
             proxy,
+            handle,
             reject_messages_on_memory_ratio,
             resource_manager,
             health_controller,
@@ -200,79 +206,116 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         ch.feed(msg, false);
         Ok(())
     }
+}
 
-    fn get_store_id_from_metadata(ctx: &RpcContext<'_>) -> Option<u64> {
-        let metadata = ctx.request_headers();
-        for i in 0..metadata.len() {
-            let (key, value) = metadata.get(i).unwrap();
-            if key == MetadataSourceStoreId::KEY {
-                let store_id = MetadataSourceStoreId::parse(value);
-                return Some(store_id);
-            }
+fn get_store_id_from_metadata<T>(req: &tonic::Request<T>) -> Option<&str> {
+    req.metadata()
+        .get("tikv-store-id")
+        .and_then(|v| v.to_str().ok())
+}
+
+fn to_tonic_result<T>(
+    res: Result<T, Error>,
+    fn_name: &str,
+) -> Result<tonic::Response<T>, tonic::Status> {
+    match res {
+        Ok(r) => Ok(tonic::Response::new(r)),
+        Err(e) => {
+            log_net_error!(&e, "kv rpc failed"; "request" => fn_name);
+            Err(tonic::Status::unknown(format!("{:?}", e)))
         }
-        None
     }
 }
 
 macro_rules! reject_if_cluster_id_mismatch {
-    ($req:expr, $self:ident, $ctx:expr, $sink:expr) => {
+    ($req:expr, $service:expr) => {
         let req_cluster_id = $req.get_context().get_cluster_id();
-        if req_cluster_id > 0 && req_cluster_id != $self.cluster_id {
+        if req_cluster_id > 0 && req_cluster_id != $service.cluster_id {
             // Reject the request if the cluster IDs do not match.
             warn!("unexpected request with different cluster id is received"; "req" => ?&$req);
-            let e = RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT,
-            "the cluster id of the request does not match the TiKV cluster".to_string());
-            $ctx.spawn($sink.fail(e).unwrap_or_else(|_| {}),);
-            return;
+            let err = tonic::Status::invalid_argument("the cluster id of the request does not match the TiKV cluster");
+            return Err(err);
         }
     };
 }
 
 macro_rules! handle_request {
-    ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident) => {
-        handle_request!($fn_name, $future_name, $req_ty, $resp_ty, no_time_detail);
+    ($fn_name:ident, $future_name:ident, $service:expr, $request:expr) => {
+        handle_request!($fn_name, $future_name, $service, $request, no_time_detail)
     };
-    ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident, $time_detail: tt) => {
-        fn $fn_name(&mut self, ctx: RpcContext<'_>, req: $req_ty, sink: UnarySink<$resp_ty>) {
-            reject_if_cluster_id_mismatch!(req, self, ctx, sink);
-            forward_unary!(self.proxy, $fn_name, ctx, req, sink);
-            let begin_instant = Instant::now();
+    ($fn_name:ident, $future_name:ident, $service:expr, $request:expr, $time_detail:tt) => {{
+        reject_if_cluster_id_mismatch!($request.get_ref(), $service);
+        // forward_unary!(self.proxy, $fn_name, ctx, req, sink);
+        let begin_instant = Instant::now();
 
-            let source = req.get_context().get_request_source().to_owned();
-            let resource_control_ctx = req.get_context().get_resource_control_context();
-            let mut resource_group_priority = ResourcePriority::unknown;
-            if let Some(resource_manager) = &self.resource_manager {
-                resource_manager.consume_penalty(resource_control_ctx);
-                resource_group_priority= ResourcePriority::from(resource_control_ctx.override_priority);
-            }
-            GRPC_RESOURCE_GROUP_COUNTER_VEC
-                    .with_label_values(&[resource_control_ctx.get_resource_group_name(), resource_control_ctx.get_resource_group_name()])
-                    .inc();
-            let resp = $future_name(&self.storage, req);
-            let task = async move {
-                let resp = resp.await?;
-                let elapsed = begin_instant.saturating_elapsed();
-                set_total_time!(resp, elapsed, $time_detail);
-                sink.success(resp).await?;
-                GRPC_MSG_HISTOGRAM_STATIC
-                    .$fn_name
-                    .get(resource_group_priority)
-                    .observe(elapsed.as_secs_f64());
-                record_request_source_metrics(source, elapsed);
-                ServerResult::Ok(())
-            }
-            .map_err(|e| {
-                log_net_error!(e, "kv rpc failed";
-                    "request" => stringify!($fn_name)
-                );
-                GRPC_MSG_FAIL_COUNTER.$fn_name.inc();
-            })
-            .map(|_|());
-
-            ctx.spawn(task);
+        let source = $request
+            .get_ref()
+            .get_context()
+            .get_request_source()
+            .to_owned();
+        let resource_control_ctx = $request
+            .get_ref()
+            .get_context()
+            .get_resource_control_context();
+        let mut resource_group_priority = ResourcePriority::unknown;
+        if let Some(resource_manager) = &$service.resource_manager {
+            resource_manager.consume_penalty(resource_control_ctx);
+            resource_group_priority =
+                ResourcePriority::from(resource_control_ctx.override_priority);
         }
-    }
+        GRPC_RESOURCE_GROUP_COUNTER_VEC
+            .with_label_values(&[
+                resource_control_ctx.get_resource_group_name(),
+                resource_control_ctx.get_resource_group_name(),
+            ])
+            .inc();
+        let resp = $future_name(&$service.storage, $request.into_inner()).await?;
+        let elapsed = begin_instant.saturating_elapsed();
+        set_total_time!(resp, elapsed, $time_detail);
+        GRPC_MSG_HISTOGRAM_STATIC
+            .$fn_name
+            .get(resource_group_priority)
+            .observe(elapsed.as_secs_f64());
+        record_request_source_metrics(source, elapsed);
+        Ok(tonic::Response::new(resp))
+    }};
 }
+// macro_rules! handle_request1 {
+// ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident) => {
+// handle_request!($fn_name, $future_name, $req_ty, $resp_ty, no_time_detail);
+// };
+// ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident,
+// $time_detail: tt) => { async fn $fn_name(&self, req: tonic::Request<$req_ty>)
+// -> std::result::Result< tonic::Response<$resp_ty>,
+// tonic::Status,
+// > {
+// reject_if_cluster_id_mismatch!(req.get_ref(), self);
+// forward_unary!(self.proxy, $fn_name, ctx, req, sink);
+// let begin_instant = Instant::now();
+//
+// let source = req.get_ref().get_context().get_request_source().to_owned();
+// let resource_control_ctx =
+// req.get_ref().get_context().get_resource_control_context();
+// let mut resource_group_priority = ResourcePriority::unknown;
+// if let Some(resource_manager) = &self.resource_manager {
+// resource_manager.consume_penalty(resource_control_ctx);
+// resource_group_priority=
+// ResourcePriority::from(resource_control_ctx.override_priority); }
+// GRPC_RESOURCE_GROUP_COUNTER_VEC
+// .with_label_values(&[resource_control_ctx.get_resource_group_name(),
+// resource_control_ctx.get_resource_group_name()]) .inc();
+// let resp = $future_name(&self.storage, req.into_inner()).await?;
+// let elapsed = begin_instant.saturating_elapsed();
+// set_total_time!(resp, elapsed, $time_detail);
+// GRPC_MSG_HISTOGRAM_STATIC
+// .$fn_name
+// .get(resource_group_priority)
+// .observe(elapsed.as_secs_f64());
+// record_request_source_metrics(source, elapsed);
+// Ok(tonic::Response::new(resp))
+// }
+// }
+// }
 
 macro_rules! set_total_time {
     ($resp:ident, $duration:expr,no_time_detail) => {};
@@ -289,254 +332,309 @@ macro_rules! set_total_time {
     };
 }
 
+#[tonic::async_trait]
 impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
-    handle_request!(kv_get, future_get, GetRequest, GetResponse, has_time_detail);
-    handle_request!(kv_scan, future_scan, ScanRequest, ScanResponse);
-    handle_request!(
-        kv_prewrite,
-        future_prewrite,
-        PrewriteRequest,
-        PrewriteResponse,
-        has_time_detail
-    );
-    handle_request!(
-        kv_pessimistic_lock,
-        future_acquire_pessimistic_lock,
-        PessimisticLockRequest,
-        PessimisticLockResponse,
-        has_time_detail
-    );
-    handle_request!(
-        kv_pessimistic_rollback,
-        future_pessimistic_rollback,
-        PessimisticRollbackRequest,
-        PessimisticRollbackResponse,
-        has_time_detail
-    );
-    handle_request!(
-        kv_commit,
-        future_commit,
-        CommitRequest,
-        CommitResponse,
-        has_time_detail
-    );
-    handle_request!(kv_cleanup, future_cleanup, CleanupRequest, CleanupResponse);
-    handle_request!(
-        kv_batch_get,
-        future_batch_get,
-        BatchGetRequest,
-        BatchGetResponse
-    );
-    handle_request!(
-        kv_batch_rollback,
-        future_batch_rollback,
-        BatchRollbackRequest,
-        BatchRollbackResponse,
-        has_time_detail
-    );
-    handle_request!(
-        kv_txn_heart_beat,
-        future_txn_heart_beat,
-        TxnHeartBeatRequest,
-        TxnHeartBeatResponse,
-        has_time_detail
-    );
-    handle_request!(
-        kv_check_txn_status,
-        future_check_txn_status,
-        CheckTxnStatusRequest,
-        CheckTxnStatusResponse,
-        has_time_detail
-    );
-    handle_request!(
-        kv_check_secondary_locks,
-        future_check_secondary_locks,
-        CheckSecondaryLocksRequest,
-        CheckSecondaryLocksResponse,
-        has_time_detail
-    );
-    handle_request!(
-        kv_scan_lock,
-        future_scan_lock,
-        ScanLockRequest,
-        ScanLockResponse,
-        has_time_detail
-    );
-    handle_request!(
-        kv_resolve_lock,
-        future_resolve_lock,
-        ResolveLockRequest,
-        ResolveLockResponse,
-        has_time_detail
-    );
-    handle_request!(
-        kv_delete_range,
-        future_delete_range,
-        DeleteRangeRequest,
-        DeleteRangeResponse
-    );
-    handle_request!(
-        mvcc_get_by_key,
-        future_mvcc_get_by_key,
-        MvccGetByKeyRequest,
-        MvccGetByKeyResponse
-    );
-    handle_request!(
-        mvcc_get_by_start_ts,
-        future_mvcc_get_by_start_ts,
-        MvccGetByStartTsRequest,
-        MvccGetByStartTsResponse
-    );
-    handle_request!(raw_get, future_raw_get, RawGetRequest, RawGetResponse);
-    handle_request!(
-        raw_batch_get,
-        future_raw_batch_get,
-        RawBatchGetRequest,
-        RawBatchGetResponse
-    );
-    handle_request!(raw_scan, future_raw_scan, RawScanRequest, RawScanResponse);
-    handle_request!(
-        raw_batch_scan,
-        future_raw_batch_scan,
-        RawBatchScanRequest,
-        RawBatchScanResponse
-    );
-    handle_request!(raw_put, future_raw_put, RawPutRequest, RawPutResponse);
-    handle_request!(
-        raw_batch_put,
-        future_raw_batch_put,
-        RawBatchPutRequest,
-        RawBatchPutResponse
-    );
-    handle_request!(
-        raw_delete,
-        future_raw_delete,
-        RawDeleteRequest,
-        RawDeleteResponse
-    );
-    handle_request!(
-        raw_batch_delete,
-        future_raw_batch_delete,
-        RawBatchDeleteRequest,
-        RawBatchDeleteResponse
-    );
-    handle_request!(
-        raw_delete_range,
-        future_raw_delete_range,
-        RawDeleteRangeRequest,
-        RawDeleteRangeResponse
-    );
-    handle_request!(
-        raw_get_key_ttl,
-        future_raw_get_key_ttl,
-        RawGetKeyTtlRequest,
-        RawGetKeyTtlResponse
-    );
-
-    handle_request!(
-        raw_compare_and_swap,
-        future_raw_compare_and_swap,
-        RawCasRequest,
-        RawCasResponse
-    );
-
-    handle_request!(
-        raw_checksum,
-        future_raw_checksum,
-        RawChecksumRequest,
-        RawChecksumResponse
-    );
-
-    handle_request!(kv_flush, future_flush, FlushRequest, FlushResponse);
-
-    handle_request!(
-        kv_buffer_batch_get,
-        future_buffer_batch_get,
-        BufferBatchGetRequest,
-        BufferBatchGetResponse
-    );
-
-    fn kv_import(&mut self, _: RpcContext<'_>, _: ImportRequest, _: UnarySink<ImportResponse>) {
-        unimplemented!();
+    async fn kv_get(
+        &self,
+        request: tonic::Request<GetRequest>,
+    ) -> std::result::Result<tonic::Response<GetResponse>, tonic::Status> {
+        handle_request!(kv_get, future_get, self, request, has_time_detail)
+    }
+    async fn kv_scan(
+        &self,
+        request: tonic::Request<ScanRequest>,
+    ) -> std::result::Result<tonic::Response<ScanResponse>, tonic::Status> {
+        handle_request!(kv_scan, future_scan, self, request)
+    }
+    async fn kv_prewrite(
+        &self,
+        request: tonic::Request<PrewriteRequest>,
+    ) -> std::result::Result<tonic::Response<PrewriteResponse>, tonic::Status> {
+        handle_request!(kv_prewrite, future_prewrite, self, request, has_time_detail)
+    }
+    async fn kv_pessimistic_lock(
+        &self,
+        request: tonic::Request<PessimisticLockRequest>,
+    ) -> std::result::Result<tonic::Response<PessimisticLockResponse>, tonic::Status> {
+        handle_request!(
+            kv_pessimistic_lock,
+            future_acquire_pessimistic_lock,
+            self,
+            request,
+            has_time_detail
+        )
+    }
+    async fn kv_pessimistic_rollback(
+        &self,
+        request: tonic::Request<PessimisticRollbackRequest>,
+    ) -> std::result::Result<tonic::Response<PessimisticRollbackResponse>, tonic::Status> {
+        handle_request!(
+            kv_pessimistic_rollback,
+            future_pessimistic_rollback,
+            self,
+            request,
+            has_time_detail
+        )
+    }
+    async fn kv_txn_heart_beat(
+        &self,
+        request: tonic::Request<TxnHeartBeatRequest>,
+    ) -> std::result::Result<tonic::Response<TxnHeartBeatResponse>, tonic::Status> {
+        handle_request!(
+            kv_txn_heart_beat,
+            future_txn_heart_beat,
+            self,
+            request,
+            has_time_detail
+        )
+    }
+    async fn kv_check_txn_status(
+        &self,
+        request: tonic::Request<CheckTxnStatusRequest>,
+    ) -> std::result::Result<tonic::Response<CheckTxnStatusResponse>, tonic::Status> {
+        handle_request!(
+            kv_check_txn_status,
+            future_check_txn_status,
+            self,
+            request,
+            has_time_detail
+        )
+    }
+    async fn kv_check_secondary_locks(
+        &self,
+        request: tonic::Request<CheckSecondaryLocksRequest>,
+    ) -> std::result::Result<tonic::Response<CheckSecondaryLocksResponse>, tonic::Status> {
+        handle_request!(
+            kv_check_secondary_locks,
+            future_check_secondary_locks,
+            self,
+            request,
+            has_time_detail
+        )
+    }
+    async fn kv_commit(
+        &self,
+        request: tonic::Request<CommitRequest>,
+    ) -> std::result::Result<tonic::Response<CommitResponse>, tonic::Status> {
+        handle_request!(kv_commit, future_commit, self, request, has_time_detail)
+    }
+    async fn kv_cleanup(
+        &self,
+        request: tonic::Request<CleanupRequest>,
+    ) -> std::result::Result<tonic::Response<CleanupResponse>, tonic::Status> {
+        handle_request!(kv_cleanup, future_cleanup, self, request)
+    }
+    async fn kv_batch_get(
+        &self,
+        request: tonic::Request<BatchGetRequest>,
+    ) -> std::result::Result<tonic::Response<BatchGetResponse>, tonic::Status> {
+        handle_request!(kv_batch_get, future_batch_get, self, request)
+    }
+    async fn kv_batch_rollback(
+        &self,
+        request: tonic::Request<BatchRollbackRequest>,
+    ) -> std::result::Result<tonic::Response<BatchRollbackResponse>, tonic::Status> {
+        handle_request!(
+            kv_batch_rollback,
+            future_batch_rollback,
+            self,
+            request,
+            has_time_detail
+        )
+    }
+    async fn kv_scan_lock(
+        &self,
+        request: tonic::Request<ScanLockRequest>,
+    ) -> std::result::Result<tonic::Response<ScanLockResponse>, tonic::Status> {
+        handle_request!(
+            kv_scan_lock,
+            future_scan_lock,
+            self,
+            request,
+            has_time_detail
+        )
+    }
+    async fn kv_resolve_lock(
+        &self,
+        request: tonic::Request<ResolveLockRequest>,
+    ) -> std::result::Result<tonic::Response<ResolveLockResponse>, tonic::Status> {
+        handle_request!(
+            kv_resolve_lock,
+            future_resolve_lock,
+            self,
+            request,
+            has_time_detail
+        )
     }
 
-    fn kv_gc(&mut self, ctx: RpcContext<'_>, _: GcRequest, sink: UnarySink<GcResponse>) {
-        let e = RpcStatus::new(RpcStatusCode::UNIMPLEMENTED);
-        ctx.spawn(
-            sink.fail(e)
-                .unwrap_or_else(|e| error!("kv rpc failed"; "err" => ?e)),
-        );
+    async fn kv_delete_range(
+        &self,
+        request: tonic::Request<DeleteRangeRequest>,
+    ) -> std::result::Result<tonic::Response<DeleteRangeResponse>, tonic::Status> {
+        handle_request!(kv_delete_range, future_delete_range, self, request)
     }
 
-    fn kv_prepare_flashback_to_version(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: PrepareFlashbackToVersionRequest,
-        sink: UnarySink<PrepareFlashbackToVersionResponse>,
-    ) {
-        reject_if_cluster_id_mismatch!(req, self, ctx, sink);
+    async fn kv_flush(
+        &self,
+        request: tonic::Request<FlushRequest>,
+    ) -> std::result::Result<tonic::Response<FlushResponse>, tonic::Status> {
+        handle_request!(kv_flush, future_flush, self, request)
+    }
+    async fn kv_buffer_batch_get(
+        &self,
+        request: tonic::Request<BufferBatchGetRequest>,
+    ) -> std::result::Result<tonic::Response<BufferBatchGetResponse>, tonic::Status> {
+        handle_request!(kv_buffer_batch_get, future_buffer_batch_get, self, request)
+    }
+    /// Raw commands; no transaction support.
+    async fn raw_get(
+        &self,
+        request: tonic::Request<RawGetRequest>,
+    ) -> std::result::Result<tonic::Response<RawGetResponse>, tonic::Status> {
+        handle_request!(raw_get, future_raw_get, self, request)
+    }
+    async fn raw_batch_get(
+        &self,
+        request: tonic::Request<RawBatchGetRequest>,
+    ) -> std::result::Result<tonic::Response<RawBatchGetResponse>, tonic::Status> {
+        handle_request!(raw_batch_get, future_raw_batch_get, self, request)
+    }
+    async fn raw_put(
+        &self,
+        request: tonic::Request<RawPutRequest>,
+    ) -> std::result::Result<tonic::Response<RawPutResponse>, tonic::Status> {
+        handle_request!(raw_put, future_raw_put, self, request)
+    }
+    async fn raw_batch_put(
+        &self,
+        request: tonic::Request<RawBatchPutRequest>,
+    ) -> std::result::Result<tonic::Response<RawBatchPutResponse>, tonic::Status> {
+        handle_request!(raw_batch_put, future_raw_batch_put, self, request)
+    }
+    async fn raw_delete(
+        &self,
+        request: tonic::Request<RawDeleteRequest>,
+    ) -> std::result::Result<tonic::Response<RawDeleteResponse>, tonic::Status> {
+        handle_request!(raw_delete, future_raw_delete, self, request)
+    }
+    async fn raw_batch_delete(
+        &self,
+        request: tonic::Request<RawBatchDeleteRequest>,
+    ) -> std::result::Result<tonic::Response<RawBatchDeleteResponse>, tonic::Status> {
+        handle_request!(raw_batch_delete, future_raw_batch_delete, self, request)
+    }
+    async fn raw_scan(
+        &self,
+        request: tonic::Request<RawScanRequest>,
+    ) -> std::result::Result<tonic::Response<RawScanResponse>, tonic::Status> {
+        handle_request!(raw_scan, future_raw_scan, self, request)
+    }
+    async fn raw_delete_range(
+        &self,
+        request: tonic::Request<RawDeleteRangeRequest>,
+    ) -> std::result::Result<tonic::Response<RawDeleteRangeResponse>, tonic::Status> {
+        handle_request!(raw_delete_range, future_raw_delete_range, self, request)
+    }
+    async fn raw_batch_scan(
+        &self,
+        request: tonic::Request<RawBatchScanRequest>,
+    ) -> std::result::Result<tonic::Response<RawBatchScanResponse>, tonic::Status> {
+        handle_request!(raw_batch_scan, future_raw_batch_scan, self, request)
+    }
+    /// Get TTL of the key. Returns 0 if TTL is not set for the key.
+    async fn raw_get_key_ttl(
+        &self,
+        request: tonic::Request<RawGetKeyTtlRequest>,
+    ) -> std::result::Result<tonic::Response<RawGetKeyTtlResponse>, tonic::Status> {
+        handle_request!(raw_get_key_ttl, future_raw_get_key_ttl, self, request)
+    }
+    /// Compare if the value in database equals to
+    /// `RawCASRequest.previous_value` before putting the new value. If not,
+    /// this request will have no effect and the value in the database will be
+    /// returned.
+    async fn raw_compare_and_swap(
+        &self,
+        request: tonic::Request<RawCasRequest>,
+    ) -> std::result::Result<tonic::Response<RawCasResponse>, tonic::Status> {
+        handle_request!(
+            raw_compare_and_swap,
+            future_raw_compare_and_swap,
+            self,
+            request
+        )
+    }
+    async fn raw_checksum(
+        &self,
+        request: tonic::Request<RawChecksumRequest>,
+    ) -> std::result::Result<tonic::Response<RawChecksumResponse>, tonic::Status> {
+        handle_request!(raw_checksum, future_raw_checksum, self, request)
+    }
+
+    /// Commands for debugging transactions.
+    async fn mvcc_get_by_key(
+        &self,
+        request: tonic::Request<MvccGetByKeyRequest>,
+    ) -> std::result::Result<tonic::Response<MvccGetByKeyResponse>, tonic::Status> {
+        handle_request!(mvcc_get_by_key, future_mvcc_get_by_key, self, request)
+    }
+    async fn mvcc_get_by_start_ts(
+        &self,
+        request: tonic::Request<MvccGetByStartTsRequest>,
+    ) -> std::result::Result<tonic::Response<MvccGetByStartTsResponse>, tonic::Status> {
+        handle_request!(
+            mvcc_get_by_start_ts,
+            future_mvcc_get_by_start_ts,
+            self,
+            request
+        )
+    }
+
+    async fn kv_prepare_flashback_to_version(
+        &self,
+        request: tonic::Request<PrepareFlashbackToVersionRequest>,
+    ) -> std::result::Result<tonic::Response<PrepareFlashbackToVersionResponse>, tonic::Status>
+    {
+        reject_if_cluster_id_mismatch!(request.get_ref(), self);
         let begin_instant = Instant::now();
 
+        let req = request.into_inner();
         let source = req.get_context().get_request_source().to_owned();
-        let resp = future_prepare_flashback_to_version(self.storage.clone(), req);
-        let task = async move {
-            let resp = resp.await?;
-            let elapsed = begin_instant.saturating_elapsed();
-            sink.success(resp).await?;
-            GRPC_MSG_HISTOGRAM_STATIC
-                .kv_prepare_flashback_to_version
-                .unknown
-                .observe(elapsed.as_secs_f64());
-            record_request_source_metrics(source, elapsed);
-            ServerResult::Ok(())
-        }
-        .map_err(|e| {
-            log_net_error!(e, "kv rpc failed";
-                "request" => stringify!($fn_name)
-            );
-            GRPC_MSG_FAIL_COUNTER.kv_prepare_flashback_to_version.inc();
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
+        let resp = future_prepare_flashback_to_version(self.storage.clone(), req).await;
+        let elapsed = begin_instant.saturating_elapsed();
+        GRPC_MSG_HISTOGRAM_STATIC
+            .kv_prepare_flashback_to_version
+            .unknown
+            .observe(elapsed.as_secs_f64());
+        record_request_source_metrics(source, elapsed);
+        to_tonic_result(resp, "kv_prepare_flashback_to_version")
     }
 
-    fn kv_flashback_to_version(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: FlashbackToVersionRequest,
-        sink: UnarySink<FlashbackToVersionResponse>,
-    ) {
-        reject_if_cluster_id_mismatch!(req, self, ctx, sink);
+    async fn kv_flashback_to_version(
+        &self,
+        request: tonic::Request<FlashbackToVersionRequest>,
+    ) -> std::result::Result<tonic::Response<FlashbackToVersionResponse>, tonic::Status> {
+        reject_if_cluster_id_mismatch!(request.get_ref(), self);
         let begin_instant = Instant::now();
-
+        let req = request.into_inner();
         let source = req.get_context().get_request_source().to_owned();
         let resp = future_flashback_to_version(self.storage.clone(), req);
-        let task = async move {
-            let resp = resp.await?;
-            let elapsed = begin_instant.saturating_elapsed();
-            sink.success(resp).await?;
-            GRPC_MSG_HISTOGRAM_STATIC
-                .kv_flashback_to_version
-                .unknown
-                .observe(elapsed.as_secs_f64());
-            record_request_source_metrics(source, elapsed);
-            ServerResult::Ok(())
-        }
-        .map_err(|e| {
-            log_net_error!(e, "kv rpc failed";
-                "request" => stringify!($fn_name)
-            );
-            GRPC_MSG_FAIL_COUNTER.kv_flashback_to_version.inc();
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
+        let resp = resp.await?;
+        let elapsed = begin_instant.saturating_elapsed();
+        GRPC_MSG_HISTOGRAM_STATIC
+            .kv_flashback_to_version
+            .unknown
+            .observe(elapsed.as_secs_f64());
+        record_request_source_metrics(source, elapsed);
+        Ok(tonic::Response::new(resp))
     }
 
-    fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
-        reject_if_cluster_id_mismatch!(req, self, ctx, sink);
-        forward_unary!(self.proxy, coprocessor, ctx, req, sink);
+    async fn coprocessor(
+        &self,
+        request: tonic::Request<Request>,
+    ) -> std::result::Result<tonic::Response<Response>, tonic::Status> {
+        reject_if_cluster_id_mismatch!(request.get_ref(), self);
+        // forward_unary!(self.proxy, coprocessor, ctx, req, sink);
+        let req = request.into_inner();
         let source = req.get_context().get_request_source().to_owned();
         let resource_control_ctx = req.get_context().get_resource_control_context();
         let mut resource_group_priority = ResourcePriority::unknown;
@@ -554,36 +652,26 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             .inc();
 
         let begin_instant = Instant::now();
-        let future = future_copr(&self.copr, Some(ctx.peer()), req);
-        let task = async move {
-            let resp = future.await?.consume();
-            let elapsed = begin_instant.saturating_elapsed();
-            sink.success(resp).await?;
-            GRPC_MSG_HISTOGRAM_STATIC
-                .coprocessor
-                .get(resource_group_priority)
-                .observe(elapsed.as_secs_f64());
-            record_request_source_metrics(source, elapsed);
-            ServerResult::Ok(())
+        // TODO let peer = "".to_owned();
+        let resp = future_copr(&self.copr, None, req).await;
+        let elapsed = begin_instant.saturating_elapsed();
+        GRPC_MSG_HISTOGRAM_STATIC
+            .coprocessor
+            .get(resource_group_priority)
+            .observe(elapsed.as_secs_f64());
+        record_request_source_metrics(source, elapsed);
+        match resp {
+            Ok(mut r) => Ok(tonic::Response::new(r.consume())),
+            Err(e) => Err(e.into()),
         }
-        .map_err(|e| {
-            log_net_error!(e, "kv rpc failed";
-                "request" => "coprocessor"
-            );
-            GRPC_MSG_FAIL_COUNTER.coprocessor.inc();
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
     }
 
-    fn raw_coprocessor(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: RawCoprocessorRequest,
-        sink: UnarySink<RawCoprocessorResponse>,
-    ) {
-        reject_if_cluster_id_mismatch!(req, self, ctx, sink);
+    async fn raw_coprocessor(
+        &self,
+        request: tonic::Request<RawCoprocessorRequest>,
+    ) -> std::result::Result<tonic::Response<RawCoprocessorResponse>, tonic::Status> {
+        let req = request.into_inner();
+        reject_if_cluster_id_mismatch!(&req, self);
         let source = req.get_context().get_request_source().to_owned();
         let resource_control_ctx = req.get_context().get_resource_control_context();
         let mut resource_group_priority = ResourcePriority::unknown;
@@ -600,36 +688,22 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             .inc();
 
         let begin_instant = Instant::now();
-        let future = future_raw_coprocessor(&self.copr_v2, &self.storage, req);
-        let task = async move {
-            let resp = future.await?;
-            let elapsed = begin_instant.saturating_elapsed();
-            sink.success(resp).await?;
-            GRPC_MSG_HISTOGRAM_STATIC
-                .raw_coprocessor
-                .get(resource_group_priority)
-                .observe(elapsed.as_secs_f64());
-            record_request_source_metrics(source, elapsed);
-            ServerResult::Ok(())
-        }
-        .map_err(|e| {
-            log_net_error!(e, "kv rpc failed";
-                "request" => "coprocessor_v2"
-            );
-            GRPC_MSG_FAIL_COUNTER.raw_coprocessor.inc();
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
+        let resp = future_raw_coprocessor(&self.copr_v2, &self.storage, req).await;
+        let elapsed = begin_instant.saturating_elapsed();
+        GRPC_MSG_HISTOGRAM_STATIC
+            .raw_coprocessor
+            .get(resource_group_priority)
+            .observe(elapsed.as_secs_f64());
+        record_request_source_metrics(source, elapsed);
+        to_tonic_result(resp, "raw_coprocessor")
     }
 
-    fn unsafe_destroy_range(
-        &mut self,
-        ctx: RpcContext<'_>,
-        mut req: UnsafeDestroyRangeRequest,
-        sink: UnarySink<UnsafeDestroyRangeResponse>,
-    ) {
+    async fn unsafe_destroy_range(
+        &self,
+        request: tonic::Request<UnsafeDestroyRangeRequest>,
+    ) -> std::result::Result<tonic::Response<UnsafeDestroyRangeResponse>, tonic::Status> {
         let begin_instant = Instant::now();
+        let mut req = request.into_inner();
 
         // DestroyRange is a very dangerous operation. We don't allow passing MIN_KEY as
         // start, or MAX_KEY as end here.
@@ -645,43 +719,34 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             cb,
         );
 
-        let task = async move {
-            let res = match res {
-                Err(e) => Err(e),
-                Ok(_) => f.await?,
-            };
-            let mut resp = UnsafeDestroyRangeResponse::default();
-            // Region error is impossible here.
-            if let Err(e) = res {
-                resp.set_error(format!("{}", e));
-            }
-            let elapsed = begin_instant.saturating_elapsed();
-            sink.success(resp).await?;
-            GRPC_MSG_HISTOGRAM_STATIC
-                .unsafe_destroy_range
-                .unknown
-                .observe(elapsed.as_secs_f64());
-            record_request_source_metrics(source, elapsed);
-            ServerResult::Ok(())
+        let res = match res {
+            Err(e) => Err(e),
+            Ok(_) => match f.await {
+                Ok(r) => r,
+                Err(_) => return Err(tonic::Status::cancelled("task canceled")),
+            },
+        };
+        let mut resp = UnsafeDestroyRangeResponse::default();
+        // Region error is impossible here.
+        if let Err(e) = res {
+            resp.set_error(format!("{}", e));
         }
-        .map_err(|e| {
-            log_net_error!(e, "kv rpc failed";
-                "request" => "unsafe_destroy_range"
-            );
-            GRPC_MSG_FAIL_COUNTER.unsafe_destroy_range.inc();
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
+        let elapsed = begin_instant.saturating_elapsed();
+        GRPC_MSG_HISTOGRAM_STATIC
+            .unsafe_destroy_range
+            .unknown
+            .observe(elapsed.as_secs_f64());
+        record_request_source_metrics(source, elapsed);
+        Ok(tonic::Response::new(resp))
     }
 
-    fn coprocessor_stream(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: Request,
-        mut sink: ServerStreamingSink<Response>,
-    ) {
-        reject_if_cluster_id_mismatch!(req, self, ctx, sink);
+    async fn coprocessor_stream(
+        &self,
+        request: tonic::Request<Request>,
+    ) -> std::result::Result<tonic::Response<tonic::codegen::BoxStream<Response>>, tonic::Status>
+    {
+        let req = request.into_inner();
+        reject_if_cluster_id_mismatch!(req, self);
         let begin_instant = Instant::now();
         let resource_control_ctx = req.get_context().get_resource_control_context();
         let mut resource_group_priority = ResourcePriority::unknown;
@@ -697,44 +762,26 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             ])
             .inc();
 
-        let mut stream = self
+        // TODO
+        let peer = "".to_owned();
+        let stream = self
             .copr
-            .parse_and_handle_stream_request(req, Some(ctx.peer()))
-            .map(|resp| {
-                GrpcResult::<(Response, WriteFlags)>::Ok((
-                    resp,
-                    WriteFlags::default().buffer_hint(true),
-                ))
-            });
-        let future = async move {
-            match sink.send_all(&mut stream).await.map_err(Error::from) {
-                Ok(_) => {
-                    GRPC_MSG_HISTOGRAM_STATIC
-                        .coprocessor_stream
-                        .get(resource_group_priority)
-                        .observe(begin_instant.saturating_elapsed().as_secs_f64());
-                    let _ = sink.close().await;
-                }
-                Err(e) => {
-                    info!("kv rpc failed";
-                        "request" => "coprocessor_stream",
-                        "err" => ?e
-                    );
-                    GRPC_MSG_FAIL_COUNTER.coprocessor_stream.inc();
-                }
-            }
-        };
+            .parse_and_handle_stream_request(req, Some(peer))
+            .map(|i| Ok(i));
 
-        ctx.spawn(future);
+        GRPC_MSG_HISTOGRAM_STATIC
+            .coprocessor_stream
+            .get(resource_group_priority)
+            .observe(begin_instant.saturating_elapsed().as_secs_f64());
+
+        Ok(tonic::Response::new(Box::pin(stream) as _))
     }
 
-    fn raft(
-        &mut self,
-        ctx: RpcContext<'_>,
-        stream: RequestStream<RaftMessage>,
-        sink: ClientStreamingSink<Done>,
-    ) {
-        let source_store_id = Self::get_store_id_from_metadata(&ctx);
+    async fn raft(
+        &self,
+        request: tonic::Request<tonic::Streaming<RaftMessage>>,
+    ) -> std::result::Result<tonic::Response<Done>, tonic::Status> {
+        let source_store_id = get_store_id_from_metadata(&request);
         let message_received =
             source_store_id.map(|x| MESSAGE_RECV_BY_STORE.with_label_values(&[&format!("{}", x)]));
         info!(
@@ -746,48 +793,29 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let ch = self.storage.get_engine().raft_extension();
         let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
 
-        let res = async move {
-            let mut stream = stream.map_err(Error::from);
-            while let Some(msg) = stream.try_next().await? {
-                RAFT_MESSAGE_RECV_COUNTER.inc();
-                let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
-                if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
-                    Self::handle_raft_message(store_id, &ch, msg, reject)
-                {
-                    // Return an error here will break the connection, only do that for
-                    // `StoreNotMatch` to let tikv to resolve a correct address from PD
-                    return Err(Error::from(err));
-                }
-                if let Some(ref counter) = message_received {
-                    counter.inc();
-                }
+        let mut stream = request.into_inner();
+        while let Some(msg) = stream.try_next().await? {
+            RAFT_MESSAGE_RECV_COUNTER.inc();
+            let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
+            if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
+                Self::handle_raft_message(store_id, &ch, msg, reject)
+            {
+                // Return an error here will break the connection, only do that for
+                // `StoreNotMatch` to let tikv to resolve a correct address from PD
+                return Err(tonic::Status::unknown(format!("{:?}", err)));
             }
-            Ok::<(), Error>(())
-        };
-
-        ctx.spawn(async move {
-            let status = match res.await {
-                Err(e) => {
-                    let msg = format!("{:?}", e);
-                    error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
-                    RpcStatus::with_message(RpcStatusCode::UNKNOWN, msg)
-                }
-                Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN),
-            };
-            let _ = sink
-                .fail(status)
-                .map_err(|e| error!("KvService::raft send response fail"; "err" => ?e))
-                .await;
-        });
+            if let Some(ref counter) = message_received {
+                counter.inc();
+            }
+        }
+        Ok(tonic::Response::new(Done::default()))
     }
 
-    fn batch_raft(
-        &mut self,
-        ctx: RpcContext<'_>,
-        stream: RequestStream<BatchRaftMessage>,
-        sink: ClientStreamingSink<Done>,
-    ) {
-        let source_store_id = Self::get_store_id_from_metadata(&ctx);
+    async fn batch_raft(
+        &self,
+        request: tonic::Request<tonic::Streaming<BatchRaftMessage>>,
+    ) -> std::result::Result<tonic::Response<Done>, tonic::Status> {
+        let source_store_id = get_store_id_from_metadata(&request);
         let message_received =
             source_store_id.map(|x| MESSAGE_RECV_BY_STORE.with_label_values(&[&format!("{}", x)]));
         info!(
@@ -799,92 +827,72 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let ch = self.storage.get_engine().raft_extension();
         let reject_messages_on_memory_ratio = self.reject_messages_on_memory_ratio;
 
-        let res = async move {
-            let mut stream = stream.map_err(Error::from);
-            while let Some(mut batch_msg) = stream.try_next().await? {
-                let len = batch_msg.get_msgs().len();
-                RAFT_MESSAGE_RECV_COUNTER.inc_by(len as u64);
-                RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
-                let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
-                for msg in batch_msg.take_msgs().into_iter() {
-                    if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
-                        Self::handle_raft_message(store_id, &ch, msg, reject)
-                    {
-                        // Return an error here will break the connection, only do that for
-                        // `StoreNotMatch` to let tikv to resolve a correct address from PD
-                        return Err(Error::from(err));
-                    }
-                }
-                if let Some(ref counter) = message_received {
-                    counter.inc_by(len as u64);
+        let mut stream = request.into_inner();
+        while let Some(mut batch_msg) = stream.try_next().await? {
+            let len = batch_msg.get_msgs().len();
+            RAFT_MESSAGE_RECV_COUNTER.inc_by(len as u64);
+            RAFT_MESSAGE_BATCH_SIZE.observe(len as f64);
+            let reject = needs_reject_raft_append(reject_messages_on_memory_ratio);
+            for msg in batch_msg.take_msgs().into_iter() {
+                if let Err(err @ RaftStoreError::StoreNotMatch { .. }) =
+                    Self::handle_raft_message(store_id, &ch, msg, reject)
+                {
+                    error!("dispatch raft msg from gRPC to raftstore fail"; "err" => ?err);
+                    // Return an error here will break the connection, only do that for
+                    // `StoreNotMatch` to let tikv to resolve a correct address from PD
+                    return Err(tonic::Status::unknown(format!("{:?}", err)));
                 }
             }
-            Ok::<(), Error>(())
-        };
-
-        ctx.spawn(async move {
-            let status = match res.await {
-                Err(e) => {
-                    fail_point!("on_batch_raft_stream_drop_by_err");
-                    let msg = format!("{:?}", e);
-                    error!("dispatch raft msg from gRPC to raftstore fail"; "err" => %msg);
-                    RpcStatus::with_message(RpcStatusCode::UNKNOWN, msg)
-                }
-                Ok(_) => RpcStatus::new(RpcStatusCode::UNKNOWN),
-            };
-            let _ = sink
-                .fail(status)
-                .map_err(|e| error!("KvService::batch_raft send response fail"; "err" => ?e))
-                .await;
-        });
+            if let Some(ref counter) = message_received {
+                counter.inc_by(len as u64);
+            }
+        }
+        Ok(tonic::Response::new(Done::default()))
     }
 
-    fn snapshot(
-        &mut self,
-        ctx: RpcContext<'_>,
-        stream: RequestStream<SnapshotChunk>,
-        sink: ClientStreamingSink<Done>,
-    ) {
-        let task = SnapTask::Recv { stream, sink };
+    async fn snapshot(
+        &self,
+        request: tonic::Request<tonic::Streaming<SnapshotChunk>>,
+    ) -> std::result::Result<tonic::Response<Done>, tonic::Status> {
+        let (tx, rx) = futures::channel::oneshot::channel();
+        let stream = request.into_inner();
+        let task = SnapTask::Recv { stream, tx };
         if let Err(e) = self.snap_scheduler.schedule(task) {
-            let err_msg = format!("{}", e);
-            let sink = match e.into_inner() {
-                SnapTask::Recv { sink, .. } => sink,
-                _ => unreachable!(),
-            };
-            let status = RpcStatus::with_message(RpcStatusCode::RESOURCE_EXHAUSTED, err_msg);
-            ctx.spawn(sink.fail(status).map(|_| ()));
+            let status = tonic::Status::resource_exhausted(format!("{}", e));
+            return Err(status);
         }
+
+        rx.await
+            .map(|_| tonic::Response::new(Done::default()))
+            .map_err(|e| tonic::Status::cancelled(format!("{:?}", e)))
     }
 
-    fn tablet_snapshot(
-        &mut self,
-        ctx: RpcContext<'_>,
-        stream: RequestStream<TabletSnapshotRequest>,
-        sink: DuplexSink<TabletSnapshotResponse>,
-    ) {
-        let task = SnapTask::RecvTablet { stream, sink };
+    async fn tablet_snapshot(
+        &self,
+        request: tonic::Request<tonic::Streaming<TabletSnapshotRequest>>,
+    ) -> std::result::Result<
+        tonic::Response<tonic::codegen::BoxStream<TabletSnapshotResponse>>,
+        tonic::Status,
+    > {
+        let (tx, rx) = futures::channel::mpsc::unbounded();
+        let stream = request.into_inner();
+        let task = SnapTask::RecvTablet { stream, tx };
         if let Err(e) = self.snap_scheduler.schedule(task) {
-            let err_msg = format!("{}", e);
-            let sink = match e.into_inner() {
-                SnapTask::Recv { sink, .. } => sink,
-                _ => unreachable!(),
-            };
-            let status = RpcStatus::with_message(RpcStatusCode::RESOURCE_EXHAUSTED, err_msg);
-            ctx.spawn(sink.fail(status).map(|_| ()));
+            let status = tonic::Status::resource_exhausted(format!("{}", e));
+            return Err(status);
         }
+        return Ok(tonic::Response::new(Box::pin(rx) as _));
     }
 
     #[allow(clippy::collapsible_else_if)]
-    fn split_region(
-        &mut self,
-        ctx: RpcContext<'_>,
-        mut req: SplitRegionRequest,
-        sink: UnarySink<SplitRegionResponse>,
-    ) {
-        forward_unary!(self.proxy, split_region, ctx, req, sink);
+    async fn split_region(
+        &self,
+        request: tonic::Request<SplitRegionRequest>,
+    ) -> std::result::Result<tonic::Response<SplitRegionResponse>, tonic::Status> {
+        // forward_unary!(self.proxy, split_region, ctx, req, sink);
         let begin_instant = Instant::now();
 
+        let mut req = request.into_inner();
         let region_id = req.get_context().get_region_id();
         let mut split_keys = if req.is_raw_kv {
             if !req.get_split_key().is_empty() {
@@ -907,75 +915,64 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         };
         split_keys.sort();
         let engine = self.storage.get_engine();
-        let f = engine.raft_extension().split(
-            region_id,
-            req.take_context().take_region_epoch(),
-            split_keys,
-            ctx.peer(),
-        );
-
-        let task = async move {
-            let res = f.await;
-            let mut resp = SplitRegionResponse::default();
-            match res {
-                Ok(regions) => {
-                    if regions.len() < 2 {
-                        error!(
-                            "invalid split response";
-                            "region_id" => region_id,
-                            "resp" => ?regions
-                        );
-                        resp.mut_region_error().set_message(format!(
-                            "Internal Error: invalid response: {:?}",
-                            regions
-                        ));
-                    } else {
-                        if regions.len() == 2 {
-                            resp.set_left(regions[0].clone());
-                            resp.set_right(regions[1].clone());
-                        }
-                        resp.set_regions(regions.into());
+        let res = engine
+            .raft_extension()
+            .split(
+                region_id,
+                req.take_context().take_region_epoch(),
+                split_keys,
+                "".into(),
+            )
+            .await;
+        let mut resp = SplitRegionResponse::default();
+        match res {
+            Ok(regions) => {
+                if regions.len() < 2 {
+                    error!(
+                        "invalid split response";
+                        "region_id" => region_id,
+                        "resp" => ?regions
+                    );
+                    resp.mut_region_error()
+                        .set_message(format!("Internal Error: invalid response: {:?}", regions));
+                } else {
+                    if regions.len() == 2 {
+                        resp.set_left(regions[0].clone());
+                        resp.set_right(regions[1].clone());
                     }
-                }
-                Err(e) => {
-                    let err: crate::storage::Result<()> = Err(e.into());
-                    if let Some(err) = extract_region_error(&err) {
-                        resp.set_region_error(err)
-                    } else {
-                        resp.mut_region_error()
-                            .set_message(format!("failed to split: {:?}", err));
-                    }
+                    resp.set_regions(regions.into());
                 }
             }
-            GRPC_MSG_HISTOGRAM_STATIC
-                .split_region
-                .unknown
-                .observe(begin_instant.saturating_elapsed().as_secs_f64());
-            sink.success(resp).await?;
-            ServerResult::Ok(())
+            Err(e) => {
+                let err: crate::storage::Result<()> = Err(e.into());
+                if let Some(err) = extract_region_error(&err) {
+                    resp.set_region_error(err)
+                } else {
+                    resp.mut_region_error()
+                        .set_message(format!("failed to split: {:?}", err));
+                }
+            }
         }
-        .map_err(|e| {
-            log_net_error!(e, "kv rpc failed";
-                "request" => "split_region"
-            );
-            GRPC_MSG_FAIL_COUNTER.split_region.inc();
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
+        GRPC_MSG_HISTOGRAM_STATIC
+            .split_region
+            .unknown
+            .observe(begin_instant.saturating_elapsed().as_secs_f64());
+        Ok(tonic::Response::new(resp))
     }
 
-    fn batch_commands(
-        &mut self,
-        ctx: RpcContext<'_>,
-        stream: RequestStream<BatchCommandsRequest>,
-        mut sink: DuplexSink<BatchCommandsResponse>,
-    ) {
-        forward_duplex!(self.proxy, batch_commands, ctx, stream, sink);
+    async fn batch_commands(
+        &self,
+        request: tonic::Request<tonic::Streaming<BatchCommandsRequest>>,
+    ) -> std::result::Result<
+        tonic::Response<tonic::codegen::BoxStream<BatchCommandsResponse>>,
+        tonic::Status,
+    > {
+        // forward_duplex!(self.proxy, batch_commands, ctx, stream, sink);
 
         let (tx, rx) = unbounded(WakePolicy::TillReach(GRPC_MSG_NOTIFY_SIZE));
-        let ctx = Arc::new(ctx);
-        let peer = ctx.peer();
+        // TODO
+        // let peer = ctx.peer();
+        let peer = "";
         let storage = self.storage.clone();
         let copr = self.copr.clone();
         let copr_v2 = self.copr_v2.clone();
@@ -989,6 +986,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             self.health_feedback_seq.clone(),
             self.health_feedback_interval,
         );
+        let mut stream = request.into_inner();
         let request_handler = stream.try_for_each(move |mut req| {
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
@@ -1010,11 +1008,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
                         &resource_manager,
                     )
                 {
-                    let e = RpcStatus::with_message(
-                        RpcStatusCode::INVALID_ARGUMENT,
-                        server_err.to_string(),
-                    );
-                    return future::err(GrpcError::RpcFailure(e));
+                    let e = tonic::Status::invalid_argument(server_err.to_string());
+                    return future::err(e);
                 }
                 if let Some(batch) = batcher.as_mut() {
                     batch.maybe_commit(&storage, &tx);
@@ -1025,7 +1020,8 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             }
             future::ok(())
         });
-        ctx.spawn(request_handler.unwrap_or_else(|e| error!("batch_commands error"; "err" => %e)));
+        self.handle
+            .spawn(request_handler.unwrap_or_else(|e| error!("batch_commands error"; "err" => %e)));
 
         let grpc_thread_load = Arc::clone(&self.grpc_thread_load);
         let response_retriever = BatchReceiver::new(
@@ -1043,177 +1039,95 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             r.set_transport_layer_load(grpc_thread_load.total_load() as u64);
             health_feedback_attacher.attach_if_needed(&mut r);
             if let Some(err @ Error::ClusterIDMisMatch { .. }) = item.server_err {
-                let e = RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, err.to_string());
-                GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Err(GrpcError::RpcFailure(e))
+                let e = tonic::Status::invalid_argument(err.to_string());
+                Err(e)
             } else {
-                GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
-                    r,
-                    WriteFlags::default().buffer_hint(false),
-                ))
+                Ok(r)
             }
         });
 
-        let send_task = async move {
-            if let Err(e) = sink.send_all(&mut response_retriever).await {
-                let e = RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, e.to_string());
-                sink.fail(e).await?;
-            } else {
-                sink.close().await?;
-            }
-            Ok(())
-        }
-        .map_err(|e: grpcio::Error| {
-            info!("kv rpc failed";
-                "request" => "batch_commands",
-                "err" => ?e
-            );
-        })
-        .map(|_| ());
-
-        ctx.spawn(send_task);
+        Ok(tonic::Response::new(Box::pin(response_retriever) as _))
     }
 
-    fn batch_coprocessor(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        _req: BatchRequest,
-        _sink: ServerStreamingSink<BatchResponse>,
-    ) {
-        unimplemented!()
-    }
-
-    fn dispatch_mpp_task(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        _req: DispatchTaskRequest,
-        _sink: UnarySink<DispatchTaskResponse>,
-    ) {
-        unimplemented!()
-    }
-
-    fn cancel_mpp_task(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        _req: CancelTaskRequest,
-        _sink: UnarySink<CancelTaskResponse>,
-    ) {
-        unimplemented!()
-    }
-
-    fn establish_mpp_connection(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        _req: EstablishMppConnectionRequest,
-        _sink: ServerStreamingSink<MppDataPacket>,
-    ) {
-        unimplemented!()
-    }
-
-    fn check_leader(
-        &mut self,
-        ctx: RpcContext<'_>,
-        mut request: CheckLeaderRequest,
-        sink: UnarySink<CheckLeaderResponse>,
-    ) {
+    async fn check_leader(
+        &self,
+        request: tonic::Request<CheckLeaderRequest>,
+    ) -> std::result::Result<tonic::Response<CheckLeaderResponse>, tonic::Status> {
         let begin_instant = Instant::now();
-        let addr = ctx.peer();
-        let ts = request.get_ts();
-        let leaders = request.take_regions().into();
+        // TODO: let addr = ctx.peer();
+        let addr = "";
+        let mut req = request.into_inner();
+        let ts = req.get_ts();
+        let leaders = req.take_regions().into();
         let (cb, resp) = paired_future_callback();
         let check_leader_scheduler = self.check_leader_scheduler.clone();
-        let task = async move {
-            check_leader_scheduler
-                .schedule(CheckLeaderTask::CheckLeader { leaders, cb })
-                .map_err(|e| Error::Other(format!("{}", e).into()))?;
-            let regions = resp.await?;
-            GRPC_MSG_HISTOGRAM_STATIC
-                .check_leader
-                .unknown
-                .observe(begin_instant.saturating_elapsed().as_secs_f64());
-            let mut resp = CheckLeaderResponse::default();
-            resp.set_ts(ts);
-            resp.set_regions(regions);
-            if let Err(e) = sink.success(resp).await {
-                // CheckLeader has a built-in fast-success mechanism, so `RemoteStopped`
-                // can be treated as a general situation.
-                if let GrpcError::RemoteStopped = e {
-                    return ServerResult::Ok(());
-                }
-                return Err(Error::from(e));
+        if let Err(e) = self
+            .check_leader_scheduler
+            .schedule(CheckLeaderTask::CheckLeader { leaders, cb })
+        {
+            return Err(tonic::Status::unknown(format!("{}", e)));
+        }
+        let regions = match resp.await {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(tonic::Status::cancelled(format!("{}", e)));
             }
-            let elapsed = begin_instant.saturating_elapsed();
-            GRPC_MSG_HISTOGRAM_STATIC
-                .check_leader
-                .unknown
-                .observe(elapsed.as_secs_f64());
-            ServerResult::Ok(())
-        }
-        .map_err(move |e| {
-            // CheckLeader only needs quorum responses, remote may drops
-            // requests early.
-            info!("call CheckLeader failed"; "err" => ?e, "address" => addr);
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
+        };
+        GRPC_MSG_HISTOGRAM_STATIC
+            .check_leader
+            .unknown
+            .observe(begin_instant.saturating_elapsed().as_secs_f64());
+        let mut resp = CheckLeaderResponse::default();
+        resp.set_ts(ts);
+        resp.set_regions(regions);
+        Ok(tonic::Response::new(resp))
     }
 
-    fn get_store_safe_ts(
-        &mut self,
-        ctx: RpcContext<'_>,
-        mut request: StoreSafeTsRequest,
-        sink: UnarySink<StoreSafeTsResponse>,
-    ) {
-        let key_range = request.take_key_range();
+    async fn get_store_safe_ts(
+        &self,
+        request: tonic::Request<StoreSafeTsRequest>,
+    ) -> std::result::Result<tonic::Response<StoreSafeTsResponse>, tonic::Status> {
+        let key_range = request.into_inner().take_key_range();
         let (cb, resp) = paired_future_callback();
-        let check_leader_scheduler = self.check_leader_scheduler.clone();
-        let task = async move {
-            check_leader_scheduler
-                .schedule(CheckLeaderTask::GetStoreTs { key_range, cb })
-                .map_err(|e| Error::Other(format!("{}", e).into()))?;
-            let store_safe_ts = resp.await?;
-            let mut resp = StoreSafeTsResponse::default();
-            resp.set_safe_ts(store_safe_ts);
-            sink.success(resp).await?;
-            ServerResult::Ok(())
+        if let Err(e) = self
+            .check_leader_scheduler
+            .schedule(CheckLeaderTask::GetStoreTs { key_range, cb })
+        {
+            return Err(tonic::Status::unknown(format!("{}", e)));
         }
-        .map_err(|e| {
-            warn!("call GetStoreSafeTS failed"; "err" => ?e);
-        })
-        .map(|_| ());
-
-        ctx.spawn(task);
+        let store_safe_ts = match resp.await {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(tonic::Status::cancelled(format!("{}", e)));
+            }
+        };
+        let mut resp = StoreSafeTsResponse::default();
+        resp.set_safe_ts(store_safe_ts);
+        Ok(tonic::Response::new(resp))
     }
 
-    fn get_lock_wait_info(
-        &mut self,
-        ctx: RpcContext<'_>,
-        _request: GetLockWaitInfoRequest,
-        sink: UnarySink<GetLockWaitInfoResponse>,
-    ) {
+    async fn get_lock_wait_info(
+        &self,
+        _request: tonic::Request<GetLockWaitInfoRequest>,
+    ) -> std::result::Result<tonic::Response<GetLockWaitInfoResponse>, tonic::Status> {
         let (cb, f) = paired_future_callback();
         self.storage.dump_wait_for_entries(cb);
-        let task = async move {
-            let res = f.await?;
-            let mut response = GetLockWaitInfoResponse::default();
-            response.set_entries(res);
-            sink.success(response).await?;
-            ServerResult::Ok(())
-        }
-        .map_err(|e| {
-            warn!("call dump_wait_for_entries failed"; "err" => ?e);
-        })
-        .map(|_| ());
-        ctx.spawn(task);
+        let res = match f.await {
+            Ok(r) => r,
+            Err(e) => {
+                return Err(tonic::Status::cancelled(format!("{}", e)));
+            }
+        };
+        let mut response = GetLockWaitInfoResponse::default();
+        response.set_entries(res);
+        Ok(tonic::Response::new(response))
     }
 
-    fn get_health_feedback(
-        &mut self,
-        ctx: RpcContext<'_>,
-        request: GetHealthFeedbackRequest,
-        sink: UnarySink<GetHealthFeedbackResponse>,
-    ) {
-        reject_if_cluster_id_mismatch!(request, self, ctx, sink);
+    async fn get_health_feedback(
+        &self,
+        request: tonic::Request<GetHealthFeedbackRequest>,
+    ) -> std::result::Result<tonic::Response<GetHealthFeedbackResponse>, tonic::Status> {
+        reject_if_cluster_id_mismatch!(request.get_ref(), self);
         let attacher = HealthFeedbackAttacher::new(
             self.store_id,
             self.health_controller.clone(),
@@ -1223,13 +1137,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
 
         let mut resp = GetHealthFeedbackResponse::default();
         resp.set_health_feedback(attacher.gen_health_feedback_pb());
-        let task = sink
-            .success(resp)
-            .map_err(|e| {
-                warn!("get_health_feedback failed"; "err" => ?e);
-            })
-            .map(|_| ());
-        ctx.spawn(task);
+        Ok(tonic::Response::new(resp))
     }
 }
 
@@ -1264,7 +1172,7 @@ fn response_batch_commands_request<F, T>(
             _ => {}
         };
     };
-    poll_future_notify(task);
+    tokio::spawn(task);
 }
 
 // If error is returned, there could be some unexpected errors like cluster id
@@ -1789,9 +1697,7 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
 }
 
 async fn future_gc(_: GcRequest) -> ServerResult<GcResponse> {
-    Err(Error::Grpc(GrpcError::RpcFailure(RpcStatus::new(
-        RpcStatusCode::UNIMPLEMENTED,
-    ))))
+    Err(Error::Tonic(tonic::Status::unimplemented("")))
 }
 
 fn future_delete_range<E: Engine, L: LockManager, F: KvFormat>(

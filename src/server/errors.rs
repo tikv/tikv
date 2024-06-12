@@ -32,6 +32,9 @@ pub enum Error {
     Grpc(#[from] GrpcError),
 
     #[error("{0:?}")]
+    Tonic(#[from] tonic::Status),
+
+    #[error("{0:?}")]
     Codec(#[from] CodecError),
 
     #[error("{0:?}")]
@@ -72,6 +75,15 @@ pub enum Error {
 
     #[error("cluster of request={request_id} does not match TiKV cluster id={cluster_id}")]
     ClusterIDMisMatch { request_id: u64, cluster_id: u64 },
+}
+
+impl From<Error> for tonic::Status {
+    fn from(err: Error) -> Self {
+        match err {
+            Error::Tonic(s) => s,
+            e @ _ => tonic::Status::unknown(format!("{:?}", e)),
+        }
+    }
 }
 
 pub type Result<T> = result::Result<T, Error>;

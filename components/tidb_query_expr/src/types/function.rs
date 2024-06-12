@@ -353,7 +353,6 @@ pub fn extract_metadata_from_val<T: prost::Message + Default>(val: &[u8]) -> Res
     if val.is_empty() {
         Ok(T::default())
     } else {
-        <T as prost::Message>::decode(val)
-            .map_err(|e| other_err!("Decode metadata failed: {}", e))
+        <T as prost::Message>::decode(val).map_err(|e| other_err!("Decode metadata failed: {}", e))
     }
 }

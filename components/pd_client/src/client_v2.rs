@@ -39,7 +39,8 @@ use grpcio::{
 use kvproto::{
     metapb,
     pdpb::{
-        self, GetMembersResponse, PdClient as PdClientStub, RegionHeartbeatRequest,
+        pd_client::PdClient as PdClientStub,
+        self, GetMembersResponse, RegionHeartbeatRequest,
         RegionHeartbeatResponse, ReportBucketsRequest, TsoRequest, TsoResponse,
     },
     replication_modepb::{ReplicationStatus, StoreDrAutoSyncStatus},
@@ -79,7 +80,7 @@ struct ConnectContext {
 
 #[derive(Clone)]
 struct RawClient {
-    stub: PdClientStub,
+    stub: PdClientStub<Channel>,
     target_info: TargetInfo,
     members: GetMembersResponse,
 }

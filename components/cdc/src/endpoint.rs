@@ -421,10 +421,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         observer: CdcObserver,
         store_meta: Arc<StdMutex<S>>,
         concurrency_manager: ConcurrencyManager,
-        env: Arc<Environment>,
+        _env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
         sink_memory_quota: Arc<MemoryQuota>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+        grpc_handle: tokio::runtime::Handle,
     ) -> Endpoint<T, E, S> {
         let workers = Builder::new_multi_thread()
             .thread_name("cdcwkr")
@@ -467,10 +468,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let leader_resolver = LeadershipResolver::new(
             store_meta.lock().unwrap().store_id(),
             pd_client.clone(),
-            env,
             security_mgr,
             region_read_progress,
             store_resolver_gc_interval,
+            grpc_handle,
         );
         let ep = Endpoint {
             cluster_id,
@@ -1515,7 +1516,6 @@ mod tests {
         let leader_resolver = LeadershipResolver::new(
             1,
             pd_client.clone(),
-            env.clone(),
             security_mgr.clone(),
             region_read_progress,
             store_resolver_gc_interval,

@@ -21,7 +21,7 @@ use futures::{
 };
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
-    debugpb::{Db as DbType, *},
+    debugpb::{debug_client::DebugClient, Db as DbType, *},
     kvrpcpb::{KeyRange, MvccInfo},
     metapb::{Peer, Region},
     raft_cmdpb::RaftCmdRequest,
@@ -51,6 +51,7 @@ use tikv::{
     },
 };
 use tikv_util::escape;
+use tonic::transport::Channel;
 
 use crate::util::*;
 
@@ -727,85 +728,393 @@ pub trait DebugExecutor {
     fn get_region_read_progress(&self, region_id: u64, log: bool, min_start_ts: u64);
 }
 
+// impl DebugExecutor for DebugClient {
+// fn check_local_mode(&self) {
+// println!("This command is only for local mode");
+// tikv_util::logger::exit_process_gracefully(-1);
+// }
+//
+// fn get_all_regions_in_store(&self) -> Vec<u64> {
+// self.get_all_regions_in_store(&GetAllRegionsInStoreRequest::default())
+// .unwrap_or_else(|e| perror_and_exit("DebugClient::get_all_regions_in_store",
+// e)) .take_regions()
+// }
+//
+// fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8> {
+// let mut req = GetRequest::default();
+// req.set_db(DbType::Kv);
+// req.set_cf(cf.to_owned());
+// req.set_key(key);
+// self.get(&req)
+// .unwrap_or_else(|e| perror_and_exit("DebugClient::get", e))
+// .take_value()
+// }
+//
+// fn get_region_size(&self, region: u64, cfs: Vec<&str>) -> Vec<(String,
+// usize)> { let cfs = cfs.into_iter().map(ToOwned::to_owned).
+// collect::<Vec<_>>(); let mut req = RegionSizeRequest::default();
+// req.set_cfs(cfs.into());
+// req.set_region_id(region);
+// self.region_size(&req)
+// .unwrap_or_else(|e| perror_and_exit("DebugClient::region_size", e))
+// .take_entries()
+// .into_iter()
+// .map(|mut entry| (entry.take_cf(), entry.get_size() as usize))
+// .collect()
+// }
+//
+// fn get_region_info(&self, region: u64) -> RegionInfo {
+// let mut req = RegionInfoRequest::default();
+// req.set_region_id(region);
+// let mut resp = self
+// .region_info(&req)
+// .unwrap_or_else(|e| perror_and_exit("DebugClient::region_info", e));
+//
+// let mut region_info = RegionInfo::default();
+// if resp.has_raft_local_state() {
+// region_info.raft_local_state = Some(resp.take_raft_local_state());
+// }
+// if resp.has_raft_apply_state() {
+// region_info.raft_apply_state = Some(resp.take_raft_apply_state());
+// }
+// if resp.has_region_local_state() {
+// region_info.region_local_state = Some(resp.take_region_local_state());
+// }
+// region_info
+// }
+//
+// fn get_raft_log(&self, region: u64, index: u64) -> Entry {
+// let mut req = RaftLogRequest::default();
+// req.set_region_id(region);
+// req.set_log_index(index);
+// self.raft_log(&req)
+// .unwrap_or_else(|e| perror_and_exit("DebugClient::raft_log", e))
+// .take_entry()
+// }
+//
+// fn get_mvcc_infos(&self, from: Vec<u8>, to: Vec<u8>, limit: u64) ->
+// MvccInfoStream { let mut req = ScanMvccRequest::default();
+// req.set_from_key(from);
+// req.set_to_key(to);
+// req.set_limit(limit);
+// Box::pin(
+// self.scan_mvcc(&req)
+// .unwrap()
+// .map_err(|e| e.to_string())
+// .map_ok(|mut resp| (resp.take_key(), resp.take_info())),
+// )
+// }
+//
+// fn raw_scan_impl(&self, _: &[u8], _: &[u8], _: usize, _: &str) {
+// unimplemented!();
+// }
+//
+// fn do_compaction(
+// &self,
+// db: DbType,
+// cf: &str,
+// from: &[u8],
+// to: &[u8],
+// threads: u32,
+// bottommost: BottommostLevelCompaction,
+// ) {
+// let mut req = CompactRequest::default();
+// req.set_db(db);
+// req.set_cf(cf.to_owned());
+// req.set_from_key(from.to_owned());
+// req.set_to_key(to.to_owned());
+// req.set_threads(threads);
+// req.set_bottommost_level_compaction(bottommost.into());
+// self.compact(&req)
+// .unwrap_or_else(|e| perror_and_exit("DebugClient::compact", e));
+// }
+//
+// fn dump_metrics(&self, tags: Vec<&str>) {
+// let mut req = GetMetricsRequest::default();
+// req.set_all(true);
+// if tags.len() == 1 && tags[0] == METRICS_PROMETHEUS {
+// req.set_all(false);
+// }
+// let mut resp = self
+// .get_metrics(&req)
+// .unwrap_or_else(|e| perror_and_exit("DebugClient::metrics", e));
+// for tag in tags {
+// println!("tag:{}", tag);
+// let metrics = match tag {
+// METRICS_ROCKSDB_KV => resp.take_rocksdb_kv(),
+// METRICS_ROCKSDB_RAFT => resp.take_rocksdb_raft(),
+// METRICS_JEMALLOC => resp.take_jemalloc(),
+// METRICS_PROMETHEUS => resp.take_prometheus(),
+// _ => String::from(
+// "unsupported tag, should be one of
+// prometheus/jemalloc/rocksdb_raft/rocksdb_kv", ),
+// };
+// println!("{}", metrics);
+// }
+// }
+//
+// fn set_region_tombstone(&self, _: Vec<Region>) {
+// unimplemented!("only available for local mode");
+// }
+//
+// fn set_region_tombstone_by_id(&self, _: Vec<u64>) {
+// unimplemented!("only available for local mode");
+// }
+//
+// fn recover_regions(&self, _: Vec<Region>, _: bool) {
+// unimplemented!("only available for local mode");
+// }
+//
+// fn recover_all(&self, _: usize, _: bool) {
+// unimplemented!("only available for local mode");
+// }
+//
+// fn print_bad_regions(&self) {
+// unimplemented!("only available for local mode");
+// }
+//
+// fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>, _: bool) {
+// unimplemented!("only available for local mode");
+// }
+//
+// fn drop_unapplied_raftlog(&self, _: Option<Vec<u64>>) {
+// unimplemented!("only available for local mode");
+// }
+//
+// fn recreate_region(&self, _: Arc<SecurityManager>, _: &PdConfig, _: u64) {
+// unimplemented!("only available for local mode");
+// }
+//
+// fn check_region_consistency(&self, region_id: u64) {
+// let mut req = RegionConsistencyCheckRequest::default();
+// req.set_region_id(region_id);
+// self.check_region_consistency(&req)
+// .unwrap_or_else(|e| perror_and_exit("DebugClient::check_region_consistency",
+// e)); println!("success!");
+// }
+//
+// fn modify_tikv_config(&self, config_name: &str, config_value: &str) {
+// let mut req = ModifyTikvConfigRequest::default();
+// req.set_config_name(config_name.to_owned());
+// req.set_config_value(config_value.to_owned());
+// self.modify_tikv_config(&req)
+// .unwrap_or_else(|e| perror_and_exit("DebugClient::modify_tikv_config", e));
+// println!("success");
+// }
+//
+// fn dump_region_properties(&self, region_id: u64) {
+// let mut req = GetRegionPropertiesRequest::default();
+// req.set_region_id(region_id);
+// let resp = self
+// .get_region_properties(&req)
+// .unwrap_or_else(|e| perror_and_exit("DebugClient::get_region_properties",
+// e)); for prop in resp.get_props() {
+// println!("{}: {}", prop.get_name(), prop.get_value());
+// }
+// }
+//
+// fn dump_range_properties(&self, start: Vec<u8>, end: Vec<u8>) {
+// let mut req = GetRangePropertiesRequest::default();
+// req.set_start_key(start);
+// req.set_end_key(end);
+// let resp = self
+// .get_range_properties(&req)
+// .unwrap_or_else(|e| perror_and_exit("DebugClient::get_range_properties", e));
+// for prop in resp.get_properties() {
+// println!("{}: {}", prop.get_key(), prop.get_value())
+// }
+// }
+//
+// fn dump_store_info(&self) {
+// let req = GetStoreInfoRequest::default();
+// let resp = self
+// .get_store_info(&req)
+// .unwrap_or_else(|e| perror_and_exit("DebugClient::get_store_info", e));
+// println!("store id: {}", resp.get_store_id());
+// println!("api version: {:?}", resp.get_api_version())
+// }
+//
+// fn dump_cluster_info(&self) {
+// let req = GetClusterInfoRequest::default();
+// let resp = self
+// .get_cluster_info(&req)
+// .unwrap_or_else(|e| perror_and_exit("DebugClient::get_cluster_info", e));
+// println!("{}", resp.get_cluster_id())
+// }
+//
+// fn reset_to_version(&self, version: u64) {
+// let mut req = ResetToVersionRequest::default();
+// req.set_ts(version);
+// self.reset_to_version(&req)
+// .unwrap_or_else(|e| perror_and_exit("DebugClient::get_cluster_info", e));
+// }
+//
+// fn flashback_to_version(
+// &self,
+// version: u64,
+// region_id: u64,
+// key_range: KeyRange,
+// start_ts: u64,
+// commit_ts: u64,
+// ) -> Result<(), (KeyRange, grpcio::Error)> {
+// let mut req = FlashbackToVersionRequest::default();
+// req.set_version(version);
+// req.set_region_id(region_id);
+// req.set_start_key(key_range.get_start_key().to_owned());
+// req.set_end_key(key_range.get_end_key().to_owned());
+// req.set_start_ts(start_ts);
+// req.set_commit_ts(commit_ts);
+// match self.flashback_to_version(&req) {
+// Ok(_) => Ok(()),
+// Err(err) => {
+// println!(
+// "flashback key_range {:?} with start_ts {:?}, commit_ts {:?} need to retry,
+// err is {:?}", key_range, start_ts, commit_ts, err
+// );
+// Err((key_range, err))
+// }
+// }
+// }
+//
+// fn get_region_read_progress(&self, region_id: u64, log: bool, min_start_ts:
+// u64) { let mut req = GetRegionReadProgressRequest::default();
+// req.set_region_id(region_id);
+// req.set_log_locks(log);
+// req.set_min_start_ts(min_start_ts);
+// let opt = grpcio::CallOption::default().timeout(Duration::from_secs(10));
+// let resp = self
+// .get_region_read_progress_opt(&req, opt)
+// .unwrap_or_else(|e| perror_and_exit("DebugClient::get_region_read_progress",
+// e)); if !resp.get_error().is_empty() {
+// println!("error: {}", resp.get_error());
+// }
+// let fields = [
+// ("Region read progress:", "".to_owned()),
+// ("exist", resp.get_region_read_progress_exist().to_string()),
+// ("safe_ts", resp.get_safe_ts().to_string()),
+// ("applied_index", resp.get_applied_index().to_string()),
+// ("read_state.ts", resp.get_read_state_ts().to_string()),
+// (
+// "read_state.apply_index",
+// resp.get_read_state_apply_index().to_string(),
+// ),
+// (
+// "pending front item (oldest) ts",
+// resp.get_pending_front_ts().to_string(),
+// ),
+// (
+// "pending front item (oldest) applied index",
+// resp.get_pending_front_applied_index().to_string(),
+// ),
+// (
+// "pending back item (latest) ts",
+// resp.get_pending_back_ts().to_string(),
+// ),
+// (
+// "pending back item (latest) applied index",
+// resp.get_pending_back_applied_index().to_string(),
+// ),
+// ("paused", resp.get_region_read_progress_paused().to_string()),
+// ("discarding", resp.get_discard().to_string()),
+// (
+// "duration since resolved-ts last called update_safe_ts()",
+// match resp.get_duration_to_last_update_safe_ts_ms() {
+// u64::MAX => "none".to_owned(),
+// x => format!("{} ms", x),
+// },
+// ),
+// (
+// "duration to last consume_leader_info()",
+// match resp.get_duration_to_last_consume_leader_ms() {
+// u64::MAX => "none".to_owned(),
+// x => format!("{} ms", x),
+// },
+// ),
+// ("Resolver:", "".to_owned()),
+// ("exist", resp.get_resolver_exist().to_string()),
+// ("resolved_ts", resp.get_resolved_ts().to_string()),
+// (
+// "tracked index",
+// resp.get_resolver_tracked_index().to_string(),
+// ),
+// ("number of locks", resp.get_num_locks().to_string()),
+// (
+// "number of transactions",
+// resp.get_num_transactions().to_string(),
+// ),
+// ("stopped", resp.get_resolver_stopped().to_string()),
+// ];
+// for (name, value) in &fields {
+// if value.is_empty() {
+// println!("{}", name);
+// } else {
+// println!("    {}: {}, ", name, value);
+// }
+// }
+// }
+// }
+
 impl DebugExecutor for DebugClient {
     fn check_local_mode(&self) {
-        println!("This command is only for local mode");
-        tikv_util::logger::exit_process_gracefully(-1);
+        unimplemented!()
+    }
+
+    fn print_bad_regions(&self) {
+        unimplemented!()
+    }
+
+    fn drop_unapplied_raftlog(&self, region_ids: Option<Vec<u64>>) {
+        unimplemented!()
+    }
+
+    /// Recreate the region with metadata from pd, but alloc new id for it.
+    fn recreate_region(&self, sec_mgr: Arc<SecurityManager>, pd_cfg: &PdConfig, region_id: u64) {
+        unimplemented!()
+    }
+
+    fn check_region_consistency(&self, _: u64) {
+        unimplemented!()
+    }
+
+    fn check_local_mode(&self) {
+        unimplemented!()
     }
 
     fn get_all_regions_in_store(&self) -> Vec<u64> {
-        self.get_all_regions_in_store(&GetAllRegionsInStoreRequest::default())
-            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_all_regions_in_store", e))
-            .take_regions()
+        unimplemented!()
     }
 
     fn get_value_by_key(&self, cf: &str, key: Vec<u8>) -> Vec<u8> {
-        let mut req = GetRequest::default();
-        req.set_db(DbType::Kv);
-        req.set_cf(cf.to_owned());
-        req.set_key(key);
-        self.get(&req)
-            .unwrap_or_else(|e| perror_and_exit("DebugClient::get", e))
-            .take_value()
+        unimplemented!()
     }
 
     fn get_region_size(&self, region: u64, cfs: Vec<&str>) -> Vec<(String, usize)> {
-        let cfs = cfs.into_iter().map(ToOwned::to_owned).collect::<Vec<_>>();
-        let mut req = RegionSizeRequest::default();
-        req.set_cfs(cfs.into());
-        req.set_region_id(region);
-        self.region_size(&req)
-            .unwrap_or_else(|e| perror_and_exit("DebugClient::region_size", e))
-            .take_entries()
-            .into_iter()
-            .map(|mut entry| (entry.take_cf(), entry.get_size() as usize))
-            .collect()
+        unimplemented!()
     }
 
     fn get_region_info(&self, region: u64) -> RegionInfo {
-        let mut req = RegionInfoRequest::default();
-        req.set_region_id(region);
-        let mut resp = self
-            .region_info(&req)
-            .unwrap_or_else(|e| perror_and_exit("DebugClient::region_info", e));
-
-        let mut region_info = RegionInfo::default();
-        if resp.has_raft_local_state() {
-            region_info.raft_local_state = Some(resp.take_raft_local_state());
-        }
-        if resp.has_raft_apply_state() {
-            region_info.raft_apply_state = Some(resp.take_raft_apply_state());
-        }
-        if resp.has_region_local_state() {
-            region_info.region_local_state = Some(resp.take_region_local_state());
-        }
-        region_info
+        unimplemented!()
     }
 
     fn get_raft_log(&self, region: u64, index: u64) -> Entry {
-        let mut req = RaftLogRequest::default();
-        req.set_region_id(region);
-        req.set_log_index(index);
-        self.raft_log(&req)
-            .unwrap_or_else(|e| perror_and_exit("DebugClient::raft_log", e))
-            .take_entry()
+        unimplemented!()
     }
 
     fn get_mvcc_infos(&self, from: Vec<u8>, to: Vec<u8>, limit: u64) -> MvccInfoStream {
-        let mut req = ScanMvccRequest::default();
-        req.set_from_key(from);
-        req.set_to_key(to);
-        req.set_limit(limit);
-        Box::pin(
-            self.scan_mvcc(&req)
-                .unwrap()
-                .map_err(|e| e.to_string())
-                .map_ok(|mut resp| (resp.take_key(), resp.take_info())),
-        )
+        unimplemented!()
     }
 
-    fn raw_scan_impl(&self, _: &[u8], _: &[u8], _: usize, _: &str) {
-        unimplemented!();
+    fn raw_scan_impl(&self, from_key: &[u8], end_key: &[u8], limit: usize, cf: &str) {
+        unimplemented!()
+    }
+
+    fn remove_fail_stores(
+        &self,
+        store_ids: Vec<u64>,
+        region_ids: Option<Vec<u64>>,
+        promote_learner: bool,
+    ) {
+        unimplemented!()
     }
 
     fn do_compaction(
@@ -817,239 +1126,66 @@ impl DebugExecutor for DebugClient {
         threads: u32,
         bottommost: BottommostLevelCompaction,
     ) {
-        let mut req = CompactRequest::default();
-        req.set_db(db);
-        req.set_cf(cf.to_owned());
-        req.set_from_key(from.to_owned());
-        req.set_to_key(to.to_owned());
-        req.set_threads(threads);
-        req.set_bottommost_level_compaction(bottommost.into());
-        self.compact(&req)
-            .unwrap_or_else(|e| perror_and_exit("DebugClient::compact", e));
+        unimplemented!()
     }
 
-    fn dump_metrics(&self, tags: Vec<&str>) {
-        let mut req = GetMetricsRequest::default();
-        req.set_all(true);
-        if tags.len() == 1 && tags[0] == METRICS_PROMETHEUS {
-            req.set_all(false);
-        }
-        let mut resp = self
-            .get_metrics(&req)
-            .unwrap_or_else(|e| perror_and_exit("DebugClient::metrics", e));
-        for tag in tags {
-            println!("tag:{}", tag);
-            let metrics = match tag {
-                METRICS_ROCKSDB_KV => resp.take_rocksdb_kv(),
-                METRICS_ROCKSDB_RAFT => resp.take_rocksdb_raft(),
-                METRICS_JEMALLOC => resp.take_jemalloc(),
-                METRICS_PROMETHEUS => resp.take_prometheus(),
-                _ => String::from(
-                    "unsupported tag, should be one of prometheus/jemalloc/rocksdb_raft/rocksdb_kv",
-                ),
-            };
-            println!("{}", metrics);
-        }
+    fn set_region_tombstone(&self, regions: Vec<Region>) {
+        unimplemented!()
     }
 
-    fn set_region_tombstone(&self, _: Vec<Region>) {
-        unimplemented!("only available for local mode");
+    fn set_region_tombstone_by_id(&self, regions: Vec<u64>) {
+        unimplemented!()
     }
 
-    fn set_region_tombstone_by_id(&self, _: Vec<u64>) {
-        unimplemented!("only available for local mode");
+    fn recover_regions(&self, regions: Vec<Region>, read_only: bool) {
+        unimplemented!()
     }
 
-    fn recover_regions(&self, _: Vec<Region>, _: bool) {
-        unimplemented!("only available for local mode");
-    }
-
-    fn recover_all(&self, _: usize, _: bool) {
-        unimplemented!("only available for local mode");
-    }
-
-    fn print_bad_regions(&self) {
-        unimplemented!("only available for local mode");
-    }
-
-    fn remove_fail_stores(&self, _: Vec<u64>, _: Option<Vec<u64>>, _: bool) {
-        unimplemented!("only available for local mode");
-    }
-
-    fn drop_unapplied_raftlog(&self, _: Option<Vec<u64>>) {
-        unimplemented!("only available for local mode");
-    }
-
-    fn recreate_region(&self, _: Arc<SecurityManager>, _: &PdConfig, _: u64) {
-        unimplemented!("only available for local mode");
-    }
-
-    fn check_region_consistency(&self, region_id: u64) {
-        let mut req = RegionConsistencyCheckRequest::default();
-        req.set_region_id(region_id);
-        self.check_region_consistency(&req)
-            .unwrap_or_else(|e| perror_and_exit("DebugClient::check_region_consistency", e));
-        println!("success!");
+    fn recover_all(&self, threads: usize, read_only: bool) {
+        unimplemented!()
     }
 
     fn modify_tikv_config(&self, config_name: &str, config_value: &str) {
-        let mut req = ModifyTikvConfigRequest::default();
-        req.set_config_name(config_name.to_owned());
-        req.set_config_value(config_value.to_owned());
-        self.modify_tikv_config(&req)
-            .unwrap_or_else(|e| perror_and_exit("DebugClient::modify_tikv_config", e));
-        println!("success");
+        unimplemented!()
+    }
+
+    fn dump_metrics(&self, tags: Vec<&str>) {
+        unimplemented!()
     }
 
     fn dump_region_properties(&self, region_id: u64) {
-        let mut req = GetRegionPropertiesRequest::default();
-        req.set_region_id(region_id);
-        let resp = self
-            .get_region_properties(&req)
-            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_region_properties", e));
-        for prop in resp.get_props() {
-            println!("{}: {}", prop.get_name(), prop.get_value());
-        }
+        unimplemented!()
     }
 
     fn dump_range_properties(&self, start: Vec<u8>, end: Vec<u8>) {
-        let mut req = GetRangePropertiesRequest::default();
-        req.set_start_key(start);
-        req.set_end_key(end);
-        let resp = self
-            .get_range_properties(&req)
-            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_range_properties", e));
-        for prop in resp.get_properties() {
-            println!("{}: {}", prop.get_key(), prop.get_value())
-        }
+        unimplemented!()
     }
 
     fn dump_store_info(&self) {
-        let req = GetStoreInfoRequest::default();
-        let resp = self
-            .get_store_info(&req)
-            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_store_info", e));
-        println!("store id: {}", resp.get_store_id());
-        println!("api version: {:?}", resp.get_api_version())
+        unimplemented!()
     }
 
     fn dump_cluster_info(&self) {
-        let req = GetClusterInfoRequest::default();
-        let resp = self
-            .get_cluster_info(&req)
-            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_cluster_info", e));
-        println!("{}", resp.get_cluster_id())
+        unimplemented!()
     }
 
     fn reset_to_version(&self, version: u64) {
-        let mut req = ResetToVersionRequest::default();
-        req.set_ts(version);
-        self.reset_to_version(&req)
-            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_cluster_info", e));
+        unimplemented!()
     }
 
     fn flashback_to_version(
         &self,
-        version: u64,
-        region_id: u64,
-        key_range: KeyRange,
-        start_ts: u64,
-        commit_ts: u64,
+        _version: u64,
+        _region_id: u64,
+        _key_range: KeyRange,
+        _start_ts: u64,
+        _commit_ts: u64,
     ) -> Result<(), (KeyRange, grpcio::Error)> {
-        let mut req = FlashbackToVersionRequest::default();
-        req.set_version(version);
-        req.set_region_id(region_id);
-        req.set_start_key(key_range.get_start_key().to_owned());
-        req.set_end_key(key_range.get_end_key().to_owned());
-        req.set_start_ts(start_ts);
-        req.set_commit_ts(commit_ts);
-        match self.flashback_to_version(&req) {
-            Ok(_) => Ok(()),
-            Err(err) => {
-                println!(
-                    "flashback key_range {:?} with start_ts {:?}, commit_ts {:?} need to retry, err is {:?}",
-                    key_range, start_ts, commit_ts, err
-                );
-                Err((key_range, err))
-            }
-        }
+        unimplemented!()
     }
 
     fn get_region_read_progress(&self, region_id: u64, log: bool, min_start_ts: u64) {
-        let mut req = GetRegionReadProgressRequest::default();
-        req.set_region_id(region_id);
-        req.set_log_locks(log);
-        req.set_min_start_ts(min_start_ts);
-        let opt = grpcio::CallOption::default().timeout(Duration::from_secs(10));
-        let resp = self
-            .get_region_read_progress_opt(&req, opt)
-            .unwrap_or_else(|e| perror_and_exit("DebugClient::get_region_read_progress", e));
-        if !resp.get_error().is_empty() {
-            println!("error: {}", resp.get_error());
-        }
-        let fields = [
-            ("Region read progress:", "".to_owned()),
-            ("exist", resp.get_region_read_progress_exist().to_string()),
-            ("safe_ts", resp.get_safe_ts().to_string()),
-            ("applied_index", resp.get_applied_index().to_string()),
-            ("read_state.ts", resp.get_read_state_ts().to_string()),
-            (
-                "read_state.apply_index",
-                resp.get_read_state_apply_index().to_string(),
-            ),
-            (
-                "pending front item (oldest) ts",
-                resp.get_pending_front_ts().to_string(),
-            ),
-            (
-                "pending front item (oldest) applied index",
-                resp.get_pending_front_applied_index().to_string(),
-            ),
-            (
-                "pending back item (latest) ts",
-                resp.get_pending_back_ts().to_string(),
-            ),
-            (
-                "pending back item (latest) applied index",
-                resp.get_pending_back_applied_index().to_string(),
-            ),
-            ("paused", resp.get_region_read_progress_paused().to_string()),
-            ("discarding", resp.get_discard().to_string()),
-            (
-                "duration since resolved-ts last called update_safe_ts()",
-                match resp.get_duration_to_last_update_safe_ts_ms() {
-                    u64::MAX => "none".to_owned(),
-                    x => format!("{} ms", x),
-                },
-            ),
-            (
-                "duration to last consume_leader_info()",
-                match resp.get_duration_to_last_consume_leader_ms() {
-                    u64::MAX => "none".to_owned(),
-                    x => format!("{} ms", x),
-                },
-            ),
-            ("Resolver:", "".to_owned()),
-            ("exist", resp.get_resolver_exist().to_string()),
-            ("resolved_ts", resp.get_resolved_ts().to_string()),
-            (
-                "tracked index",
-                resp.get_resolver_tracked_index().to_string(),
-            ),
-            ("number of locks", resp.get_num_locks().to_string()),
-            (
-                "number of transactions",
-                resp.get_num_transactions().to_string(),
-            ),
-            ("stopped", resp.get_resolver_stopped().to_string()),
-        ];
-        for (name, value) in &fields {
-            if value.is_empty() {
-                println!("{}", name);
-            } else {
-                println!("    {}: {}, ", name, value);
-            }
-        }
+        unimplemented!()
     }
 }
 

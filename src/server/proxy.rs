@@ -17,9 +17,10 @@ use std::{
 };
 
 use collections::HashMap;
-use grpcio::{CallOption, Channel, ChannelBuilder, Environment, MetadataBuilder, RpcContext};
-use kvproto::tikvpb::TikvClient;
+use grpcio::{CallOption, ChannelBuilder, Environment, MetadataBuilder, RpcContext};
+use kvproto::tikvpb::tikv_client::TikvClient;
 use security::SecurityManager;
+use tonic::transport::Channel;
 
 use crate::server::Config;
 
@@ -58,7 +59,7 @@ pub fn build_forward_option(target_address: &str) -> CallOption {
 #[derive(Clone)]
 struct Client {
     channel: Channel,
-    client: TikvClient,
+    client: TikvClient<Channel>,
 }
 
 pub struct ClientPool {
@@ -87,16 +88,14 @@ impl ClientPool {
                     Some(e) => e,
                     None => return None,
                 };
-                let cb = ChannelBuilder::new(env)
-                    .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
-                    .max_receive_message_len(-1)
-                    .max_send_message_len(-1)
-                    // Memory should be limited by incomming connections already.
-                    // And maintaining a shared resource quota doesn't seem easy.
-                    .keepalive_time(cfg.grpc_keepalive_time.into())
-                    .keepalive_timeout(cfg.grpc_keepalive_timeout.into())
-                    .raw_cfg_int(CString::new("connection id").unwrap(), self.last_pos as i32);
-                let ch = mgr.connect(cb, addr);
+
+                let ch = Channel::from_shared(addr.to_owned())
+                    .unwrap()
+                    .initial_stream_window_size(cfg.grpc_stream_initial_window_size.0 as u32)
+                    .http2_keep_alive_interval(cfg.grpc_keepalive_time.into())
+                    .keep_alive_timeout(cfg.grpc_keepalive_timeout.into())
+                    .connect_lazy();
+
                 let client = Client {
                     client: TikvClient::new(ch.clone()),
                     channel: ch,
@@ -138,32 +137,34 @@ impl Proxy {
     /// Get a client and do work on the client.
     pub fn call_on<C>(&mut self, addr: &str, callback: C) -> impl Future<Output = ()>
     where
-        C: FnOnce(&TikvClient) + Send + 'static,
+        C: FnOnce(&TikvClient<Channel>) + Send + 'static,
     {
-        let client = match self.pool.get_mut(addr) {
-            Some(p) => p.get_connection(&self.env, &self.mgr, &self.cfg, addr),
-            None => {
-                let p = ClientPool::with_capacity(self.cfg.forward_max_connections_per_address);
-                self.pool.insert(addr.to_string(), p);
-                self.pool
-                    .get_mut(addr)
-                    .unwrap()
-                    .get_connection(&self.env, &self.mgr, &self.cfg, addr)
-            }
-        };
+        futures::future::ready(())
+        // let client = match self.pool.get_mut(addr) {
+        //     Some(p) => p.get_connection(&self.env, &self.mgr, &self.cfg,
+        // addr),     None => {
+        //         let p =
+        // ClientPool::with_capacity(self.cfg.
+        // forward_max_connections_per_address);         self.pool.
+        // insert(addr.to_string(), p);         self.pool
+        //             .get_mut(addr)
+        //             .unwrap()
+        //             .get_connection(&self.env, &self.mgr, &self.cfg, addr)
+        //     }
+        // };
 
-        async move {
-            let c = match client {
-                Some(c) => c,
-                None => return,
-            };
+        // async move {
+        //     let c = match client {
+        //         Some(c) => c,
+        //         None => return,
+        //     };
 
-            // To make it simplied, we rely on gRPC to handle the lifecycle of a
-            // Connection.
-            if c.channel.wait_for_connected(Duration::from_secs(3)).await {
-                callback(&c.client)
-            }
-        }
+        //     // To make it simplied, we rely on gRPC to handle the lifecycle
+        // of a     // Connection.
+        //     if c.channel.wait_for_connected(Duration::from_secs(3)).await {
+        //         callback(&c.client)
+        //     }
+        // }
     }
 }
 

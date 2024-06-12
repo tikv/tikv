@@ -8,9 +8,10 @@ use futures::{
     sink::SinkExt,
     stream::{StreamExt, TryStreamExt},
 };
-use grpcio::{ChannelBuilder, EnvBuilder, Environment, WriteFlags};
-use kvproto::deadlock::*;
+use grpcio::{EnvBuilder, Environment};
+use kvproto::deadlock::{deadlock_client::DeadlockClient, *};
 use security::SecurityManager;
+use tonic::transport::Channel;
 
 use super::{Error, Result};
 
@@ -34,16 +35,23 @@ pub fn env() -> Arc<Environment> {
 
 #[derive(Clone)]
 pub struct Client {
-    client: DeadlockClient,
+    client: DeadlockClient<Channel>,
     sender: Option<UnboundedSender<DeadlockRequest>>,
 }
 
 impl Client {
-    pub fn new(env: Arc<Environment>, security_mgr: Arc<SecurityManager>, addr: &str) -> Self {
-        let cb = ChannelBuilder::new(env)
-            .keepalive_time(Duration::from_secs(10))
-            .keepalive_timeout(Duration::from_secs(3));
-        let channel = security_mgr.connect(cb, addr);
+    pub fn new(
+        env: Arc<Environment>,
+        security_mgr: Arc<SecurityManager>,
+        addr: &str,
+        handle: tokio::runtime::Handle,
+    ) -> Self {
+        let channel = Channel::from_shared(addr.to_owned())
+            .unwrap()
+            .http2_keep_alive_interval(Duration::from_secs(10))
+            .keep_alive_timeout(Duration::from_secs(3))
+            .executor(tikv_util::RuntimeExec::new(handle))
+            .connect_lazy();
         let client = DeadlockClient::new(channel);
         Self {
             client,
@@ -53,28 +61,13 @@ impl Client {
 
     pub fn register_detect_handler(
         &mut self,
-        cb: Callback,
-    ) -> (DeadlockFuture<()>, DeadlockFuture<()>) {
+    ) -> DeadlockFuture<tonic::Response<tonic::Streaming<DeadlockResponse>>> {
         let (tx, rx) = mpsc::unbounded();
-        let (sink, receiver) = self.client.detect().unwrap();
-        let send_task = Box::pin(async move {
-            let mut sink = sink.sink_map_err(Error::Grpc);
-
-            sink.send_all(&mut rx.map(|r| Ok((r, WriteFlags::default()))))
-                .await
-                .map(|_| {
-                    info!("cancel detect sender");
-                    sink.get_mut().cancel();
-                })
-        });
+        let mut client = self.client.clone();
+        let send_task = Box::pin(async move { client.detect(rx).await.map_err(Error::Tonic) });
         self.sender = Some(tx);
 
-        let recv_task = Box::pin(receiver.map_err(Error::Grpc).try_for_each(move |resp| {
-            cb(resp);
-            future::ok(())
-        }));
-
-        (send_task, recv_task)
+        send_task
     }
 
     pub fn detect(&self, req: DeadlockRequest) -> Result<()> {

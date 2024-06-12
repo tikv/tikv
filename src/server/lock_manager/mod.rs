@@ -64,6 +64,8 @@ pub struct LockManager {
     in_memory: Arc<AtomicBool>,
 
     wake_up_delay_duration_ms: Arc<AtomicU64>,
+
+    grpc_handle: tokio::runtime::Handle,
 }
 
 impl Clone for LockManager {
@@ -78,12 +80,13 @@ impl Clone for LockManager {
             pipelined: self.pipelined.clone(),
             in_memory: self.in_memory.clone(),
             wake_up_delay_duration_ms: self.wake_up_delay_duration_ms.clone(),
+            grpc_handle: self.grpc_handle.clone(),
         }
     }
 }
 
 impl LockManager {
-    pub fn new(cfg: &Config) -> Self {
+    pub fn new(cfg: &Config, grpc_handle: tokio::runtime::Handle) -> Self {
         let waiter_mgr_worker = FutureWorker::new("waiter-manager");
         let detector_worker = FutureWorker::new("deadlock-detector");
 
@@ -99,6 +102,7 @@ impl LockManager {
             wake_up_delay_duration_ms: Arc::new(AtomicU64::new(
                 cfg.wake_up_delay_duration.as_millis(),
             )),
+            grpc_handle,
         }
     }
 
@@ -172,6 +176,7 @@ impl LockManager {
             security_mgr,
             self.waiter_mgr_scheduler.clone(),
             cfg,
+            self.grpc_handle.clone(),
         );
         self.detector_worker
             .as_mut()

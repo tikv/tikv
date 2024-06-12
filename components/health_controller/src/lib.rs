@@ -44,9 +44,13 @@ use std::{
     },
 };
 
-use grpcio_health::HealthService;
+use futures::executor::block_on;
 use kvproto::pdpb::SlowTrend as SlowTrendPb;
 use parking_lot::{Mutex, RwLock};
+use tonic_health::{
+    server::{health_reporter, HealthReporter, HealthService},
+    ServingStatus as GrpcServingStatus,
+};
 pub use types::{LatencyInspector, RaftstoreDuration};
 
 struct ServingStatus {
@@ -55,11 +59,11 @@ struct ServingStatus {
 }
 
 impl ServingStatus {
-    fn to_serving_status_pb(&self) -> grpcio_health::ServingStatus {
+    fn to_serving_status_pb(&self) -> GrpcServingStatus {
         match (self.is_serving, self.unhealthy_modules.is_empty()) {
-            (true, true) => grpcio_health::ServingStatus::Serving,
-            (true, false) => grpcio_health::ServingStatus::ServiceUnknown,
-            (false, _) => grpcio_health::ServingStatus::NotServing,
+            (true, true) => GrpcServingStatus::Serving,
+            (true, false) => GrpcServingStatus::Unknown,
+            (false, _) => GrpcServingStatus::NotServing,
         }
     }
 }
@@ -92,18 +96,21 @@ struct HealthControllerInner {
     /// * Otherwise, the TiKV instance is regarded operational and the serving
     ///   status is set to `Serving`.
     health_service: HealthService,
+    reporter: Mutex<HealthReporter>,
     current_serving_status: Mutex<ServingStatus>,
 }
 
 impl HealthControllerInner {
     fn new() -> Self {
-        let health_service = HealthService::default();
-        health_service.set_serving_status("", grpcio_health::ServingStatus::NotServing);
+        let (mut reporter, health_service) = health_reporter();
+        let _ = block_on(reporter.set_service_status("", GrpcServingStatus::NotServing));
+
         Self {
             raftstore_slow_score: AtomicU64::new(f64::to_bits(1.0)),
             raftstore_slow_trend: RollingRetriever::new(),
 
             health_service,
+            reporter: Mutex::new(reporter),
             current_serving_status: Mutex::new(ServingStatus {
                 is_serving: false,
                 unhealthy_modules: HashSet::default(),
@@ -124,12 +131,12 @@ impl HealthControllerInner {
             return;
         }
         if status.unhealthy_modules.len() == 1 && status.is_serving {
-            debug_assert_eq!(
-                status.to_serving_status_pb(),
-                grpcio_health::ServingStatus::ServiceUnknown
+            debug_assert_eq!(status.to_serving_status_pb(), GrpcServingStatus::Unknown);
+            let _ = block_on(
+                self.reporter
+                    .lock()
+                    .set_service_status("", GrpcServingStatus::Unknown),
             );
-            self.health_service
-                .set_serving_status("", grpcio_health::ServingStatus::ServiceUnknown);
         }
     }
 
@@ -147,12 +154,12 @@ impl HealthControllerInner {
             return;
         }
         if status.unhealthy_modules.is_empty() && status.is_serving {
-            debug_assert_eq!(
-                status.to_serving_status_pb(),
-                grpcio_health::ServingStatus::Serving
+            debug_assert_eq!(status.to_serving_status_pb(), GrpcServingStatus::Serving);
+            block_on(
+                self.reporter
+                    .lock()
+                    .set_service_status("", GrpcServingStatus::Serving),
             );
-            self.health_service
-                .set_serving_status("", grpcio_health::ServingStatus::Serving);
         }
     }
 
@@ -168,13 +175,16 @@ impl HealthControllerInner {
             return;
         }
         status.is_serving = is_serving;
-        self.health_service
-            .set_serving_status("", status.to_serving_status_pb());
+        block_on(
+            self.reporter
+                .lock()
+                .set_service_status("", status.to_serving_status_pb()),
+        );
     }
 
     /// Gets the current serving status that is being reported by
     /// `health_service`, if it's not shutdown.
-    fn get_serving_status(&self) -> grpcio_health::ServingStatus {
+    fn get_serving_status(&self) -> GrpcServingStatus {
         let status = self.current_serving_status.lock();
         status.to_serving_status_pb()
     }
@@ -194,10 +204,6 @@ impl HealthControllerInner {
 
     fn get_raftstore_slow_trend(&self) -> SlowTrendPb {
         self.raftstore_slow_trend.get_cloned()
-    }
-
-    fn shutdown(&self) {
-        self.health_service.shutdown();
     }
 }
 
@@ -234,7 +240,7 @@ impl HealthController {
         self.inner.health_service.clone()
     }
 
-    pub fn get_serving_status(&self) -> grpcio_health::ServingStatus {
+    pub fn get_serving_status(&self) -> GrpcServingStatus {
         self.inner.get_serving_status()
     }
 
@@ -244,9 +250,7 @@ impl HealthController {
         self.inner.set_is_serving(is_serving);
     }
 
-    pub fn shutdown(&self) {
-        self.inner.shutdown();
-    }
+    pub fn shutdown(&self) {}
 }
 
 // Make clippy happy.

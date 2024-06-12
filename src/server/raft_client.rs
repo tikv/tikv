@@ -17,20 +17,20 @@ use std::{
 use collections::{HashMap, HashSet};
 use crossbeam::queue::ArrayQueue;
 use futures::{
-    channel::oneshot,
+    channel::{
+        mpsc::{SendError, UnboundedSender},
+        oneshot,
+    },
     compat::Future01CompatExt,
     ready,
     task::{Context, Poll, Waker},
     Future, Sink,
 };
 use futures_timer::Delay;
-use grpcio::{
-    CallOption, Channel, ChannelBuilder, ClientCStreamReceiver, ClientCStreamSender, Environment,
-    MetadataBuilder, RpcStatusCode, WriteFlags,
-};
+use grpcio::{CallOption, Environment, MetadataBuilder};
 use kvproto::{
     raft_serverpb::{Done, RaftMessage, RaftSnapshotData},
-    tikvpb::{BatchRaftMessage, TikvClient},
+    tikvpb::{tikv_client::TikvClient, BatchRaftMessage},
 };
 use protobuf::Message;
 use raft::SnapshotStatus;
@@ -44,6 +44,7 @@ use tikv_util::{
     timer::GLOBAL_TIMER_HANDLE,
     worker::Scheduler,
 };
+use tonic::transport::{Channel, Endpoint};
 use yatp::{task::future::TaskCell, ThreadPool};
 
 use crate::server::{
@@ -183,10 +184,8 @@ trait Buffer {
     /// Flushes the message to grpc.
     ///
     /// `sender` should be able to accept messages.
-    fn flush(
-        &mut self,
-        sender: &mut ClientCStreamSender<Self::OutputMessage>,
-    ) -> grpcio::Result<()>;
+    fn flush(&mut self, sender: &mut UnboundedSender<Self::OutputMessage>)
+    -> Result<(), SendError>;
 
     /// If the buffer is not full, suggest whether sender should wait
     /// for next message.
@@ -284,12 +283,9 @@ impl Buffer for BatchMessageBuffer {
     }
 
     #[inline]
-    fn flush(&mut self, sender: &mut ClientCStreamSender<BatchRaftMessage>) -> grpcio::Result<()> {
+    fn flush(&mut self, sender: &mut UnboundedSender<BatchRaftMessage>) -> Result<(), SendError> {
         let batch = mem::take(&mut self.batch);
-        let res = Pin::new(sender).start_send((
-            batch,
-            WriteFlags::default().buffer_hint(self.overflowing.is_some()),
-        ));
+        let res = Pin::new(sender).start_send(batch);
 
         self.size = 0;
         if let Some(more) = self.overflowing.take() {
@@ -352,12 +348,12 @@ impl Buffer for MessageBuffer {
     }
 
     #[inline]
-    fn flush(&mut self, sender: &mut ClientCStreamSender<RaftMessage>) -> grpcio::Result<()> {
+    fn flush(
+        &mut self,
+        sender: &mut UnboundedSender<Self::OutputMessage>,
+    ) -> Result<(), SendError> {
         if let Some(msg) = self.batch.pop_front() {
-            Pin::new(sender).start_send((
-                msg,
-                WriteFlags::default().buffer_hint(!self.batch.is_empty()),
-            ))
+            Pin::new(sender).start_send(msg)
         } else {
             Ok(())
         }
@@ -408,17 +404,9 @@ fn report_unreachable(router: &impl RaftExtension, msg: &RaftMessage) {
     router.report_peer_unreachable(msg.region_id, to_peer.id);
 }
 
-fn grpc_error_is_unimplemented(e: &grpcio::Error) -> bool {
-    if let grpcio::Error::RpcFailure(ref status) = e {
-        status.code() == RpcStatusCode::UNIMPLEMENTED
-    } else {
-        false
-    }
-}
-
 /// Struct tracks the lifetime of a `raft` or `batch_raft` RPC.
 struct AsyncRaftSender<R, M, B> {
-    sender: ClientCStreamSender<M>,
+    sender: UnboundedSender<M>,
     queue: Arc<Queue>,
     buffer: B,
     router: R,
@@ -500,9 +488,9 @@ where
     R: RaftExtension + Unpin + 'static,
     B: Buffer<OutputMessage = M> + Unpin,
 {
-    type Output = grpcio::Result<()>;
+    type Output = Result<(), SendError>;
 
-    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<grpcio::Result<()>> {
+    fn poll(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
         let s = &mut *self;
         loop {
             s.fill_msg(ctx);
@@ -561,7 +549,7 @@ enum RaftCallRes {
 
 struct RaftCall<R, M, B> {
     sender: AsyncRaftSender<R, M, B>,
-    receiver: ClientCStreamReceiver<Done>,
+    receiver: tokio::task::JoinHandle<Result<tonic::Response<Done>, tonic::Status>>,
     lifetime: Option<oneshot::Sender<RaftCallRes>>,
     store_id: u64,
 }
@@ -573,7 +561,7 @@ where
 {
     async fn poll(&mut self) {
         let res = futures::join!(&mut self.sender, &mut self.receiver);
-        if let (Ok(()), Ok(Done { .. })) = res {
+        if let (Ok(()), Ok(Ok(_))) = res {
             info!("connection close"; "store_id" => self.store_id, "addr" => %self.sender.addr);
             if let Some(tx) = self.lifetime.take() {
                 let _ = tx.send(RaftCallRes::Disconnected);
@@ -584,17 +572,7 @@ where
         let (sink_err, recv_err) = (res.0.err(), res.1.err());
         error!("connection aborted"; "store_id" => self.store_id, "sink_error" => ?sink_err, "receiver_err" => ?recv_err, "addr" => %self.sender.addr);
         if let Some(tx) = self.lifetime.take() {
-            let should_fallback = [sink_err, recv_err]
-                .iter()
-                .any(|e| e.as_ref().map_or(false, grpc_error_is_unimplemented));
-
-            let res = if should_fallback {
-                // Asks backend to fallback.
-                RaftCallRes::Fallback
-            } else {
-                RaftCallRes::Disconnected
-            };
-            let _ = tx.send(res);
+            let _ = tx.send(RaftCallRes::Disconnected);
         }
     }
 }
@@ -639,6 +617,7 @@ struct StreamBackEnd<S, R> {
     store_id: u64,
     queue: Arc<Queue>,
     builder: ConnectionBuilder<S, R>,
+    handle: tokio::runtime::Handle,
 }
 
 impl<S, R> StreamBackEnd<S, R>
@@ -695,34 +674,34 @@ where
             .inc_by(len as u64);
     }
 
-    fn connect(&self, addr: &str) -> Channel {
+    fn connect(&self, addr: &str, handle: tokio::runtime::Handle) -> Endpoint {
         info!("server: new connection with tikv endpoint"; "addr" => addr, "store_id" => self.store_id);
 
         let cfg = self.builder.cfg.value();
-        let cb = ChannelBuilder::new(self.builder.env.clone())
-            .stream_initial_window_size(cfg.grpc_stream_initial_window_size.0 as i32)
-            .keepalive_time(cfg.grpc_keepalive_time.0)
-            .keepalive_timeout(cfg.grpc_keepalive_timeout.0)
-            .default_compression_algorithm(cfg.grpc_compression_algorithm())
-            .default_gzip_compression_level(cfg.grpc_gzip_compression_level)
-            .default_grpc_min_message_size_to_compress(cfg.grpc_min_message_size_to_compress)
-            .max_reconnect_backoff(cfg.raft_client_max_backoff.0)
-            .initial_reconnect_backoff(cfg.raft_client_initial_reconnect_backoff.0)
-            // hack: so it's different args, grpc will always create a new connection.
-            .raw_cfg_int(
-                CString::new("random id").unwrap(),
-                CONN_ID.fetch_add(1, Ordering::SeqCst),
-            );
-        self.builder.security_mgr.connect(cb, addr)
+
+        Channel::from_shared(addr.to_owned())
+            .unwrap()
+            .initial_stream_window_size(cfg.grpc_stream_initial_window_size.0 as u32)
+            .http2_keep_alive_interval(cfg.grpc_keepalive_time.0)
+            .keep_alive_timeout(cfg.grpc_keepalive_timeout.0)
+            .executor(tikv_util::RuntimeExec::new(handle))
     }
 
-    fn batch_call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<RaftCallRes> {
-        let (batch_sink, batch_stream) = client.batch_raft_opt(self.get_call_option()).unwrap();
+    fn batch_call(
+        &self,
+        client: &TikvClient<Channel>,
+        addr: String,
+    ) -> oneshot::Receiver<RaftCallRes> {
+        let (raft_tx, raft_rx) = futures::channel::mpsc::unbounded();
+        let mut client = client.clone();
+        let send_handle = self
+            .handle
+            .spawn(async move { client.batch_raft(raft_rx).await });
 
         let (tx, rx) = oneshot::channel();
         let mut call = RaftCall {
             sender: AsyncRaftSender {
-                sender: batch_sink,
+                sender: raft_tx,
                 queue: self.queue.clone(),
                 buffer: BatchMessageBuffer::new(&self.builder.cfg, self.builder.loads.clone()),
                 router: self.builder.router.clone(),
@@ -730,24 +709,26 @@ where
                 addr,
                 flush_timeout: None,
             },
-            receiver: batch_stream,
+            receiver: send_handle,
             lifetime: Some(tx),
             store_id: self.store_id,
         };
         // TODO: verify it will be notified if client is dropped while env still alive.
-        client.spawn(async move {
+        self.handle.spawn(async move {
             call.poll().await;
         });
         rx
     }
 
-    fn call(&self, client: &TikvClient, addr: String) -> oneshot::Receiver<RaftCallRes> {
-        let (sink, stream) = client.raft_opt(self.get_call_option()).unwrap();
+    fn call(&self, client: &TikvClient<Channel>, addr: String) -> oneshot::Receiver<RaftCallRes> {
+        let mut client = client.clone();
+        let (raft_tx, raft_rx) = futures::channel::mpsc::unbounded();
+        let join_handle = self.handle.spawn(async move { client.raft(raft_rx).await });
 
         let (tx, rx) = oneshot::channel();
         let mut call = RaftCall {
             sender: AsyncRaftSender {
-                sender: sink,
+                sender: raft_tx,
                 queue: self.queue.clone(),
                 buffer: MessageBuffer::new(),
                 router: self.builder.router.clone(),
@@ -755,11 +736,11 @@ where
                 addr,
                 flush_timeout: None,
             },
-            receiver: stream,
+            receiver: join_handle,
             lifetime: Some(tx),
             store_id: self.store_id,
         };
-        client.spawn(async move {
+        self.handle.spawn(async move {
             call.poll().await;
         });
         rx
@@ -851,38 +832,50 @@ async fn start<S, R>(
             .as_ref()
             .map_or(true, |(_, prev_addr)| prev_addr != &addr)
         {
-            addr_channel = Some((back_end.connect(&addr), addr.clone()));
+            addr_channel = Some((
+                back_end.connect(&addr, back_end.handle.clone()),
+                addr.clone(),
+            ));
         }
-        let channel = addr_channel.as_ref().unwrap().0.clone();
+        let endpoint = addr_channel.as_ref().unwrap().0.clone();
 
         debug!("connecting to store"; "store_id" => back_end.store_id, "addr" => %addr);
-        if !channel.wait_for_connected(backoff_duration).await {
-            error!("wait connect timeout"; "store_id" => back_end.store_id, "addr" => addr);
+        let channel = match back_end
+            .handle
+            .spawn(async move { endpoint.connect().await })
+            .await
+            .unwrap()
+        {
+            Ok(c) => {
+                let wait_conn_duration = begin.unwrap_or_else(Instant::now).elapsed();
+                info!("connection established";
+                    "store_id" => back_end.store_id,
+                    "addr" => %addr,
+                    "cost" => ?wait_conn_duration,
+                    "msg_count" => ?back_end.queue.len(),
+                    "try_count" => try_count,
+                );
+                RAFT_CLIENT_WAIT_CONN_READY_DURATION_HISTOGRAM_VEC
+                    .with_label_values(&[addr.as_str()])
+                    .observe(duration_to_sec(wait_conn_duration));
+                begin = None;
+                try_count = 0;
+                c
+            }
+            Err(e) => {
+                error!("wait connect timeout"; "store_id" => back_end.store_id, "addr" => addr, "err" => ?e);
 
-            // Clears pending messages to avoid consuming high memory when one node is
-            // shutdown.
-            back_end.clear_pending_message("unreachable");
+                // Clears pending messages to avoid consuming high memory when one node is
+                // shutdown.
+                back_end.clear_pending_message("unreachable");
 
-            back_end
-                .builder
-                .router
-                .report_store_unreachable(back_end.store_id);
-            continue;
-        } else {
-            let wait_conn_duration = begin.unwrap_or_else(Instant::now).elapsed();
-            info!("connection established";
-                "store_id" => back_end.store_id,
-                "addr" => %addr,
-                "cost" => ?wait_conn_duration,
-                "msg_count" => ?back_end.queue.len(),
-                "try_count" => try_count,
-            );
-            RAFT_CLIENT_WAIT_CONN_READY_DURATION_HISTOGRAM_VEC
-                .with_label_values(&[addr.as_str()])
-                .observe(duration_to_sec(wait_conn_duration));
-            begin = None;
-            try_count = 0;
-        }
+                back_end
+                    .builder
+                    .router
+                    .report_store_unreachable(back_end.store_id);
+                continue;
+            }
+        };
 
         let client = TikvClient::new(channel);
         let f = back_end.batch_call(&client, addr.clone());
@@ -975,6 +968,7 @@ pub struct RaftClient<S, R> {
     future_pool: Arc<ThreadPool<TaskCell>>,
     builder: ConnectionBuilder<S, R>,
     last_hash: (u64, u64),
+    handle: tokio::runtime::Handle,
 }
 
 impl<S, R> RaftClient<S, R>
@@ -982,7 +976,11 @@ where
     S: StoreAddrResolver + Send + 'static,
     R: RaftExtension + Unpin + Send + 'static,
 {
-    pub fn new(self_store_id: u64, builder: ConnectionBuilder<S, R>) -> Self {
+    pub fn new(
+        self_store_id: u64,
+        builder: ConnectionBuilder<S, R>,
+        handle: tokio::runtime::Handle,
+    ) -> Self {
         let future_pool = Arc::new(
             yatp::Builder::new(thd_name!("raft-stream"))
                 .max_thread_count(1)
@@ -997,6 +995,7 @@ where
             future_pool,
             builder,
             last_hash: (0, 0),
+            handle,
         }
     }
 
@@ -1029,6 +1028,7 @@ where
                         store_id,
                         queue: queue.clone(),
                         builder: self.builder.clone(),
+                        handle: self.handle.clone(),
                     };
                     self.future_pool
                         .spawn(start(back_end, conn_id, self.pool.clone()));
@@ -1195,6 +1195,7 @@ where
             future_pool: self.future_pool.clone(),
             builder: self.builder.clone(),
             last_hash: (0, 0),
+            handle: self.handle.clone(),
         }
     }
 }

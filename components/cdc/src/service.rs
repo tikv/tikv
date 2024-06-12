@@ -14,7 +14,8 @@ use kvproto::{
         change_data_request::{
             KvApi as ChangeDataRequestKvApi, Request as ChangeDataRequest_oneof_request,
         },
-        ChangeData, ChangeDataEvent, ChangeDataRequest,
+        change_data_server::ChangeData,
+        ChangeDataEvent, ChangeDataRequest,
     },
     kvrpcpb::ApiVersion,
 };
@@ -486,25 +487,26 @@ impl Service {
     }
 }
 
-impl ChangeData for Service {
-    fn event_feed(
-        &mut self,
-        ctx: RpcContext<'_>,
-        stream: RequestStream<ChangeDataRequest>,
-        sink: DuplexSink<ChangeDataEvent>,
-    ) {
-        self.handle_event_feed(ctx, stream, sink, false);
-    }
-
-    fn event_feed_v2(
-        &mut self,
-        ctx: RpcContext<'_>,
-        stream: RequestStream<ChangeDataRequest>,
-        sink: DuplexSink<ChangeDataEvent>,
-    ) {
-        self.handle_event_feed(ctx, stream, sink, true);
-    }
-}
+impl ChangeData for Service {}
+// impl ChangeData for Service {
+// fn event_feed(
+// &mut self,
+// ctx: RpcContext<'_>,
+// stream: RequestStream<ChangeDataRequest>,
+// sink: DuplexSink<ChangeDataEvent>,
+// ) {
+// self.handle_event_feed(ctx, stream, sink, false);
+// }
+//
+// fn event_feed_v2(
+// &mut self,
+// ctx: RpcContext<'_>,
+// stream: RequestStream<ChangeDataRequest>,
+// sink: DuplexSink<ChangeDataEvent>,
+// ) {
+// self.handle_event_feed(ctx, stream, sink, true);
+// }
+// }
 
 #[cfg(feature = "failpoints")]
 async fn sleep_before_drain_change_event() {

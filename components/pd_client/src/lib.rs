@@ -4,13 +4,14 @@
 
 #[allow(unused_extern_crates)]
 extern crate tikv_alloc;
-
-mod client;
-mod client_v2;
+// mod client_v2;
 mod feature_gate;
 pub mod metrics;
 mod tso;
+#[macro_use]
 mod util;
+
+mod client;
 
 mod config;
 pub mod errors;
@@ -33,7 +34,7 @@ use txn_types::TimeStamp;
 
 pub use self::{
     client::RpcClient,
-    client_v2::{PdClient as PdClientV2, RpcClient as RpcClientV2},
+    // client_v2::{PdClient as PdClientV2, RpcClient as RpcClientV2},
     config::Config,
     errors::{Error, Result},
     feature_gate::{Feature, FeatureGate},

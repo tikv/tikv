@@ -15,13 +15,10 @@ use concurrency_manager::ConcurrencyManager;
 use engine_traits::KvEngine;
 use fail::fail_point;
 use futures::{compat::Future01CompatExt, future::select_all, FutureExt, TryFutureExt};
-use grpcio::{
-    ChannelBuilder, CompressionAlgorithms, Environment, Error as GrpcError, RpcStatusCode,
-};
 use kvproto::{
     kvrpcpb::{CheckLeaderRequest, CheckLeaderResponse},
     metapb::{Peer, PeerRole},
-    tikvpb::TikvClient,
+    tikvpb::tikv_client::TikvClient,
 };
 use pd_client::PdClient;
 use protobuf::Message;
@@ -41,6 +38,7 @@ use tokio::{
     runtime::{Builder, Runtime},
     sync::{Mutex, Notify},
 };
+use tonic::transport::Channel;
 use txn_types::TimeStamp;
 
 use crate::{endpoint::Task, metrics::*, TsSource};
@@ -54,6 +52,7 @@ pub struct AdvanceTsWorker {
     timer: SteadyTimer,
     worker: Runtime,
     scheduler: Scheduler<Task>,
+    grpc_handle: tokio::runtime::Handle,
     /// The concurrency manager for transactions. It's needed for CDC to check
     /// locks when calculating resolved_ts.
     pub(crate) concurrency_manager: ConcurrencyManager,
@@ -67,6 +66,7 @@ impl AdvanceTsWorker {
         pd_client: Arc<dyn PdClient>,
         scheduler: Scheduler<Task>,
         concurrency_manager: ConcurrencyManager,
+        grpc_handle: tokio::runtime::Handle,
     ) -> Self {
         let worker = Builder::new_multi_thread()
             .thread_name("advance-ts")
@@ -80,6 +80,7 @@ impl AdvanceTsWorker {
             pd_client,
             worker,
             timer: SteadyTimer::default(),
+            grpc_handle,
             concurrency_manager,
             last_pd_tso: Arc::new(std::sync::Mutex::new(None)),
         }
@@ -157,9 +158,8 @@ impl AdvanceTsWorker {
 }
 
 pub struct LeadershipResolver {
-    tikv_clients: Mutex<HashMap<u64, TikvClient>>,
+    tikv_clients: Mutex<HashMap<u64, TikvClient<Channel>>>,
     pd_client: Arc<dyn PdClient>,
-    env: Arc<Environment>,
     security_mgr: Arc<SecurityManager>,
     region_read_progress: RegionReadProgressRegistry,
     store_id: u64,
@@ -172,22 +172,22 @@ pub struct LeadershipResolver {
 
     gc_interval: Duration,
     last_gc_time: Instant,
+    grpc_handle: tokio::runtime::Handle,
 }
 
 impl LeadershipResolver {
     pub fn new(
         store_id: u64,
         pd_client: Arc<dyn PdClient>,
-        env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
         region_read_progress: RegionReadProgressRegistry,
         gc_interval: Duration,
+        grpc_handle: tokio::runtime::Handle,
     ) -> LeadershipResolver {
         LeadershipResolver {
             tikv_clients: Mutex::default(),
             store_id,
             pd_client,
-            env,
             security_mgr,
             region_read_progress,
 
@@ -197,6 +197,7 @@ impl LeadershipResolver {
             checking_regions: HashSet::default(),
             last_gc_time: Instant::now_coarse(),
             gc_interval,
+            grpc_handle,
         }
     }
 
@@ -306,7 +307,6 @@ impl LeadershipResolver {
             }
         });
 
-        let env = &self.env;
         let pd_client = &self.pd_client;
         let security_mgr = &self.security_mgr;
         let tikv_clients = &self.tikv_clients;
@@ -322,23 +322,23 @@ impl LeadershipResolver {
             if req.regions.is_empty() {
                 continue;
             }
-            let env = env.clone();
             let to_store = *store_id;
             let region_num = req.regions.len() as u32;
             CHECK_LEADER_REQ_SIZE_HISTOGRAM.observe((leader_info_size * region_num) as f64);
             CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
 
+            let handle = self.grpc_handle.clone();
             // Check leadership for `regions` on `to_store`.
             let rpc = async move {
                 PENDING_CHECK_LEADER_REQ_COUNT.inc();
                 defer!(PENDING_CHECK_LEADER_REQ_COUNT.dec());
-                let client = get_tikv_client(
+                let mut client = get_tikv_client(
                     to_store,
                     pd_client,
                     security_mgr,
-                    env,
                     tikv_clients,
                     timeout,
+                    handle,
                 )
                 .await
                 .map_err(|e| (to_store, e.retryable(), format!("[get tikv client] {}", e)))?;
@@ -359,24 +359,14 @@ impl LeadershipResolver {
                         .observe(elapsed.as_secs_f64());
                 });
 
-                let rpc = match client.check_leader_async(req) {
-                    Ok(rpc) => rpc,
-                    Err(GrpcError::RpcFailure(status))
-                        if status.code() == RpcStatusCode::UNIMPLEMENTED =>
-                    {
-                        // Some stores like TiFlash don't implement it.
-                        return Ok((to_store, CheckLeaderResponse::default()));
-                    }
-                    Err(e) => return Err((to_store, true, format!("[rpc create failed]{}", e))),
-                };
-
+                let rpc = client.check_leader(req.clone());
                 PENDING_CHECK_LEADER_REQ_SENT_COUNT.inc();
                 defer!(PENDING_CHECK_LEADER_REQ_SENT_COUNT.dec());
                 let resp = tokio::time::timeout(timeout, rpc)
                     .map_err(|e| (to_store, true, format!("[timeout] {}", e)))
                     .await?
                     .map_err(|e| (to_store, true, format!("[rpc failed] {}", e)))?;
-                Ok((to_store, resp))
+                Ok((to_store, resp.into_inner()))
             }
             .boxed();
             check_leader_rpcs.push(rpc);
@@ -525,10 +515,10 @@ async fn get_tikv_client(
     store_id: u64,
     pd_client: &Arc<dyn PdClient>,
     security_mgr: &SecurityManager,
-    env: Arc<Environment>,
-    tikv_clients: &Mutex<HashMap<u64, TikvClient>>,
+    tikv_clients: &Mutex<HashMap<u64, TikvClient<Channel>>>,
     timeout: Duration,
-) -> pd_client::Result<TikvClient> {
+    handle: tokio::runtime::Handle,
+) -> pd_client::Result<TikvClient<Channel>> {
     {
         let clients = tikv_clients.lock().await;
         if let Some(client) = clients.get(&store_id).cloned() {
@@ -544,16 +534,25 @@ async fn get_tikv_client(
     // hack: so it's different args, grpc will always create a new connection.
     // the check leader requests may be large but not frequent, compress it to
     // reduce the traffic.
-    let cb = ChannelBuilder::new(env.clone())
-        .raw_cfg_int(
-            CString::new("random id").unwrap(),
-            CONN_ID.fetch_add(1, Ordering::SeqCst),
-        )
-        .default_compression_algorithm(CompressionAlgorithms::GRPC_COMPRESS_GZIP)
-        .default_gzip_compression_level(DEFAULT_GRPC_GZIP_COMPRESSION_LEVEL)
-        .default_grpc_min_message_size_to_compress(DEFAULT_GRPC_MIN_MESSAGE_SIZE_TO_COMPRESS);
-
-    let channel = security_mgr.connect(cb, &store.peer_address);
+    let channel: Channel = {
+        let endpoint = tonic::transport::Channel::from_shared(store.peer_address.clone())
+            .unwrap()
+            .http2_keep_alive_interval(Duration::from_secs(10))
+            .keep_alive_timeout(Duration::from_secs(3))
+            .executor(tikv_util::RuntimeExec::new(handle.clone()));
+        match handle
+            .spawn(async move { endpoint.connect().await })
+            .await
+            .unwrap()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                return Err(pd_client::Error::Tonic(tonic::Status::invalid_argument(
+                    format!("{:?}", e),
+                )));
+            }
+        }
+    };
     let cli = TikvClient::new(channel);
     clients.insert(store_id, cli.clone());
     RTS_TIKV_CLIENT_INIT_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
@@ -656,7 +655,6 @@ mod tests {
         let mut leader_resolver = LeadershipResolver::new(
             1, // store id
             Arc::new(MockPdClient {}),
-            env.clone(),
             Arc::new(SecurityManager::default()),
             RegionReadProgressRegistry::new(),
             Duration::from_secs(1),

@@ -191,8 +191,19 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "58982858be7540a465c790b95aaea6710e5139bf8956b1d1344d014fa40100b0"
 dependencies = [
- "async-stream-impl",
+ "async-stream-impl 0.2.0",
  "futures-core",
+]
+
+[[package]]
+name = "async-stream"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd56dd203fef61ac097dd65721a419ddccb106b2d2b70ba60a6b529f03961a51"
+dependencies = [
+ "async-stream-impl 0.3.5",
+ "futures-core",
+ "pin-project-lite",
 ]
 
 [[package]]
@@ -204,6 +215,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 1.0.103",
+]
+
+[[package]]
+name = "async-stream-impl"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16e62a023e7c117e27523144c5d2459f4397fcc3cab0085af8e2224f643a0193"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.58",
 ]
 
 [[package]]
@@ -283,6 +305,51 @@ dependencies = [
  "tokio",
  "url",
  "uuid 0.8.2",
+]
+
+[[package]]
+name = "axum"
+version = "0.6.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b829e4e32b91e643de6eafe82b1d90675f5874230191a4ffbc1b336dec4d6bf"
+dependencies = [
+ "async-trait",
+ "axum-core",
+ "bitflags 1.3.2",
+ "bytes",
+ "futures-util",
+ "http",
+ "http-body",
+ "hyper",
+ "itoa 1.0.11",
+ "matchit",
+ "memchr",
+ "mime",
+ "percent-encoding",
+ "pin-project-lite",
+ "rustversion",
+ "serde",
+ "sync_wrapper",
+ "tower",
+ "tower-layer",
+ "tower-service",
+]
+
+[[package]]
+name = "axum-core"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "759fa577a247914fd3f7f76d62972792636412fbfd634cd452f6a385a74d2d2c"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-util",
+ "http",
+ "http-body",
+ "mime",
+ "rustversion",
+ "tower-layer",
+ "tower-service",
 ]
 
 [[package]]
@@ -457,6 +524,7 @@ dependencies = [
  "log_wrappers",
  "online_config",
  "pd_client",
+ "pin-project",
  "prometheus",
  "raft",
  "raftstore",
@@ -475,6 +543,7 @@ dependencies = [
  "tikv_util",
  "tokio",
  "tokio-stream",
+ "tonic",
  "txn_types",
  "yatp",
 ]
@@ -2467,7 +2536,7 @@ dependencies = [
 name = "health_controller"
 version = "0.1.0"
 dependencies = [
- "grpcio-health",
+ "futures 0.3.15",
  "kvproto",
  "ordered-float",
  "parking_lot 0.12.1",
@@ -2476,6 +2545,8 @@ dependencies = [
  "slog",
  "slog-global",
  "tikv_util",
+ "tonic",
+ "tonic-health",
 ]
 
 [[package]]
@@ -2658,6 +2729,18 @@ dependencies = [
  "tokio",
  "tokio-openssl",
  "tower-layer",
+]
+
+[[package]]
+name = "hyper-timeout"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbb958482e8c7be4bc3cf272a766a2b0bf1a6755e7a6ae777f017a31d11b13b1"
+dependencies = [
+ "hyper",
+ "pin-project-lite",
+ "tokio",
+ "tokio-io-timeout",
 ]
 
 [[package]]
@@ -2916,6 +2999,7 @@ dependencies = [
  "protobuf",
  "protobuf-build",
  "raft-proto",
+ "tonic",
 ]
 
 [[package]]
@@ -3102,6 +3186,12 @@ name = "matches"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ffc5c5338469d4d3ea17d269fa8ea3512ad247247c30bd2df69e68309ed0a08"
+
+[[package]]
+name = "matchit"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e7465ac9959cc2b1404e8e2367b43684a6d13790fe23056cc8c6c5a6b7bcb94"
 
 [[package]]
 name = "md5"
@@ -3772,6 +3862,7 @@ dependencies = [
  "tikv_util",
  "tokio",
  "tokio-timer",
+ "tonic",
  "txn_types",
  "yatp",
 ]
@@ -4272,6 +4363,7 @@ dependencies = [
  "quote",
  "regex",
  "syn 1.0.103",
+ "tonic-build",
 ]
 
 [[package]]
@@ -4861,7 +4953,6 @@ dependencies = [
  "engine_traits",
  "fail",
  "futures 0.3.15",
- "grpcio",
  "hex 0.4.2",
  "kvproto",
  "lazy_static",
@@ -4885,6 +4976,7 @@ dependencies = [
  "tikv_kv",
  "tikv_util",
  "tokio",
+ "tonic",
  "txn_types",
 ]
 
@@ -4929,7 +5021,6 @@ dependencies = [
  "collections",
  "crossbeam",
  "futures 0.3.15",
- "grpcio",
  "kvproto",
  "lazy_static",
  "libc 0.2.151",
@@ -4945,6 +5036,8 @@ dependencies = [
  "slog",
  "slog-global",
  "tikv_util",
+ "tokio",
+ "tonic",
 ]
 
 [[package]]
@@ -5507,7 +5600,6 @@ dependencies = [
  "signal-hook",
  "slog",
  "slog-global",
- "snap_recovery",
  "tempfile",
  "tikv",
  "tikv_alloc",
@@ -5842,6 +5934,7 @@ dependencies = [
  "tikv_alloc",
  "tikv_util",
  "tokio",
+ "tonic",
  "txn_types",
  "uuid 0.8.2",
 ]
@@ -6679,7 +6772,7 @@ version = "8.2.0-alpha"
 dependencies = [
  "anyhow",
  "api_version",
- "async-stream",
+ "async-stream 0.2.0",
  "async-trait",
  "backtrace",
  "batch-system",
@@ -6798,6 +6891,8 @@ dependencies = [
  "tokio-openssl",
  "tokio-timer",
  "toml",
+ "tonic",
+ "tonic-health",
  "tracing-active-tree",
  "tracker",
  "txn_types",
@@ -6858,6 +6953,7 @@ dependencies = [
  "time 0.1.43",
  "tokio",
  "toml",
+ "tonic",
  "txn_types",
 ]
 
@@ -6990,6 +7086,7 @@ dependencies = [
  "gag",
  "grpcio",
  "http",
+ "hyper",
  "kvproto",
  "lazy_static",
  "libc 0.2.151",
@@ -7029,6 +7126,7 @@ dependencies = [
  "tokio-executor",
  "tokio-timer",
  "toml",
+ "tonic",
  "tracker",
  "url",
  "utime",
@@ -7090,12 +7188,12 @@ version = "0.0.1"
 source = "git+https://github.com/glorv/tipb?branch=prost#80fe149495e2edcbe484cd54cdfd50ae07cf4aa1"
 dependencies = [
  "futures 0.3.15",
- "grpcio",
  "lazy_static",
  "prost 0.12.6",
  "prost-derive 0.12.6",
  "protobuf",
  "protobuf-build",
+ "tonic",
 ]
 
 [[package]]
@@ -7133,6 +7231,16 @@ source = "git+https://github.com/tikv/tokio?branch=tokio-timer-hotfix#4394380fa3
 dependencies = [
  "crossbeam-utils",
  "futures 0.1.31",
+]
+
+[[package]]
+name = "tokio-io-timeout"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30b74022ada614a1b4834de765f9bb43877f910cc8ce4be40e89042c9223a8bf"
+dependencies = [
+ "pin-project-lite",
+ "tokio",
 ]
 
 [[package]]
@@ -7212,6 +7320,78 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75cf45bb0bef80604d001caaec0d09da99611b3c0fd39d3080468875cdb65645"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "tonic"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76c4eb7a4e9ef9d4763600161f12f5070b92a578e1b634db88a6887844c91a13"
+dependencies = [
+ "async-stream 0.3.5",
+ "async-trait",
+ "axum",
+ "base64 0.21.0",
+ "bytes",
+ "h2",
+ "http",
+ "http-body",
+ "hyper",
+ "hyper-timeout",
+ "percent-encoding",
+ "pin-project",
+ "prost 0.12.6",
+ "tokio",
+ "tokio-stream",
+ "tower",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
+name = "tonic-build"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be4ef6dd70a610078cb4e338a0f79d06bc759ff1b22d2120c2ff02ae264ba9c2"
+dependencies = [
+ "prettyplease 0.2.6",
+ "proc-macro2",
+ "prost-build 0.12.6",
+ "quote",
+ "syn 2.0.58",
+]
+
+[[package]]
+name = "tonic-health"
+version = "0.11.0"
+source = "git+https://github.com/glorv/tonic?branch=patch-health#ab0af7c68b28ba3cdba2e1ab0ae17850246c7d36"
+dependencies = [
+ "async-stream 0.3.5",
+ "prost 0.12.6",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+]
+
+[[package]]
+name = "tower"
+version = "0.4.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8fa9be0de6cf49e536ce1851f987bd21a43b771b09473c3549a6c853db37c1c"
+dependencies = [
+ "futures-core",
+ "futures-util",
+ "indexmap 1.6.2",
+ "pin-project",
+ "pin-project-lite",
+ "rand 0.8.5",
+ "slab",
+ "tokio",
+ "tokio-util",
+ "tower-layer",
+ "tower-service",
+ "tracing",
 ]
 
 [[package]]

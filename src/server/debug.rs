@@ -74,6 +74,19 @@ pub enum Error {
     FlashbackFailed(String),
 }
 
+impl From<Error> for tonic::Status {
+    fn from(value: Error) -> Self {
+        use Error::*;
+        match value {
+            InvalidArgument(s) => tonic::Status::invalid_argument(s),
+            NotFound(s) => tonic::Status::not_found(s),
+            Other(e) => tonic::Status::unknown(format!("{:?}", e)),
+            EngineTrait(e) => tonic::Status::internal(format!("{:?}", e)),
+            FlashbackFailed(e) => tonic::Status::internal(e),
+        }
+    }
+}
+
 /// Describes the meta information of a Region.
 #[derive(PartialEq, Debug, Default)]
 pub struct RegionInfo {

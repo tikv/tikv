@@ -74,7 +74,7 @@ pub fn send_write_sst(
         context: None,
         chunk: Some(write_request::Chunk::Meta(meta.clone())),
     };
-    
+
     let mut batch = WriteBatch::default();
     let mut pairs = vec![];
 
@@ -269,6 +269,6 @@ pub fn local_storage(tmp: &TempDir) -> StorageBackend {
     let mut local = Local::default();
     local.set_path(tmp.path().to_str().unwrap().to_owned());
     StorageBackend {
-        backend: Some(kvproto::backup::storage_backend::Backend::Local(local))
+        backend: Some(kvproto::backup::storage_backend::Backend::Local(local)),
     }
 }

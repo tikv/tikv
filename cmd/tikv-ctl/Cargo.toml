@@ -75,6 +75,7 @@ tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread", "time"] }
 toml = "0.5"
+tonic = { workspace = true }
 txn_types = { workspace = true }
 
 [build-dependencies]

@@ -407,7 +407,7 @@ where
 impl<E, S> Engine for RaftKv<E, S>
 where
     E: KvEngine,
-    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
+    S: RaftStoreRouter<E> + LocalReadRouter<E> + Sync + 'static,
 {
     type Snap = RegionSnapshot<E::Snapshot>;
     type Local = E;

@@ -44,10 +44,11 @@ use grpcio::{EnvBuilder, Environment};
 use health_controller::HealthController;
 use hybrid_engine::HybridEngine;
 use kvproto::{
-    backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
-    debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
-    kvrpcpb::ApiVersion, logbackup::create_log_backup, recover_data::create_recover_data,
-    resource_usage_agent::create_resource_metering_pub_sub,
+    backup::backup_server::BackupServer, cdcpb::change_data_server::ChangeDataServer,
+    deadlock::deadlock_server::DeadlockServer, debugpb::debug_server::DebugServer,
+    diagnosticspb::diagnostics_server::DiagnosticsServer,
+    import_sstpb::import_sst_server::ImportSstServer, kvrpcpb::ApiVersion,
+    resource_usage_agent::resource_metering_pub_sub_server::ResourceMeteringPubSubServer,
 };
 use pd_client::{
     meta_storage::{Checked, Sourced},
@@ -81,7 +82,6 @@ use resolved_ts::{LeadershipResolver, Task};
 use resource_control::ResourceGroupManager;
 use security::SecurityManager;
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
-use snap_recovery::RecoveryService;
 use tikv::{
     config::{
         ConfigController, DbConfigManger, DbType, LogConfigManager, MemoryConfigManager, TikvConfig,
@@ -286,13 +286,13 @@ where
     coprocessor_host: Option<CoprocessorHost<EK>>,
     concurrency_manager: ConcurrencyManager,
     env: Arc<Environment>,
+    grpc_tonic_runtime: tokio::runtime::Runtime,
     check_leader_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
-    br_snap_recovery_mode: bool, // use for br snapshot recovery
     resolved_ts_scheduler: Option<Scheduler<Task>>,
     grpc_service_mgr: GrpcServiceManager,
     snap_br_rejector: Option<Arc<PrepareDiskSnapObserver>>,
@@ -351,35 +351,16 @@ where
                 })
                 .build(),
         );
+        let grpc_tonic_runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(config.server.grpc_concurrency)
+            .enable_all()
+            .build()
+            .unwrap();
         let pd_client = TikvServerCore::connect_to_pd_cluster(
             &mut config,
-            env.clone(),
             Arc::clone(&security_mgr),
+            grpc_tonic_runtime.handle().clone(),
         );
-        // check if TiKV need to run in snapshot recovery mode
-        let is_recovering_marked = match pd_client.is_recovering_marked() {
-            Err(e) => {
-                warn!(
-                    "failed to get recovery mode from PD";
-                    "error" => ?e,
-                );
-                false
-            }
-            Ok(marked) => marked,
-        };
-
-        if is_recovering_marked {
-            // Run a TiKV server in recovery modeß
-            info!("TiKV running in Snapshot Recovery Mode");
-            snap_recovery::init_cluster::enter_snap_recovery_mode(&mut config);
-            // connect_to_pd_cluster retreived the cluster id from pd
-            let cluster_id = config.server.cluster_id;
-            snap_recovery::init_cluster::start_recovery(
-                config.clone(),
-                cluster_id,
-                pd_client.clone(),
-            );
-        }
 
         // Initialize and check config
         let cfg_controller = TikvServerCore::init_config(config);
@@ -496,13 +477,13 @@ where
             coprocessor_host,
             concurrency_manager,
             env,
+            grpc_tonic_runtime,
             check_leader_worker,
             sst_worker: None,
             quota_limiter,
             resource_manager,
             causal_ts_provider,
             tablet_registry: None,
-            br_snap_recovery_mode: is_recovering_marked,
             resolved_ts_scheduler: None,
             grpc_service_mgr: GrpcServiceManager::new(tx),
             snap_br_rejector: None,
@@ -583,7 +564,10 @@ where
             .engine
             .set_txn_extra_scheduler(Arc::new(txn_extra_scheduler));
 
-        let lock_mgr = LockManager::new(&self.core.config.pessimistic_txn);
+        let lock_mgr = LockManager::new(
+            &self.core.config.pessimistic_txn,
+            self.grpc_tonic_runtime.handle().clone(),
+        );
         cfg_controller.register(
             tikv::config::Module::PessimisticTxn,
             Box::new(lock_mgr.config_manager()),
@@ -666,7 +650,7 @@ where
         self.core.to_stop.push(reporter_worker);
         let (address_change_notifier, single_target_worker) = resource_metering::init_single_target(
             self.core.config.resource_metering.receiver_address.clone(),
-            self.env.clone(),
+            self.grpc_tonic_runtime.handle().clone(),
             data_sink_reg_handle.clone(),
         );
         self.core.to_stop.push(single_target_worker);
@@ -879,6 +863,7 @@ where
             gc_worker.clone(),
             check_leader_scheduler,
             self.env.clone(),
+            self.grpc_tonic_runtime.handle().clone(),
             unified_read_pool,
             debug_thread_pool,
             health_controller,
@@ -926,10 +911,10 @@ where
             let leadership_resolver = LeadershipResolver::new(
                 raft_server.id(),
                 self.pd_client.clone(),
-                self.env.clone(),
                 self.security_mgr.clone(),
                 region_read_progress,
                 Duration::from_secs(60),
+                self.grpc_tonic_runtime.handle().clone(),
             );
 
             let backup_stream_endpoint = backup_stream::Endpoint::new(
@@ -1094,6 +1079,7 @@ where
             self.security_mgr.clone(),
             cdc_memory_quota.clone(),
             self.causal_ts_provider.clone(),
+            self.grpc_tonic_runtime.handle().clone(),
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.core.to_stop.push(cdc_worker);
@@ -1107,8 +1093,8 @@ where
                 engines.store_meta.clone(),
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
-                server.env(),
                 self.security_mgr.clone(),
+                self.grpc_tonic_runtime.handle().clone(),
             );
             self.resolved_ts_scheduler = Some(rts_worker.scheduler());
             rts_worker.start_with_timer(rts_endpoint);
@@ -1169,7 +1155,7 @@ where
 
         if servers
             .server
-            .register_service(create_import_sst(import_service))
+            .register_service(ImportSstServer::new(import_service))
             .is_some()
         {
             fatal!("failed to register import service");
@@ -1206,7 +1192,7 @@ where
         info!("start register debug service");
         if servers
             .server
-            .register_service(create_debug(debug_service))
+            .register_service(DebugServer::new(debug_service))
             .is_some()
         {
             fatal!("failed to register debug service");
@@ -1220,7 +1206,7 @@ where
         );
         if servers
             .server
-            .register_service(create_diagnostics(diag_service))
+            .register_service(DiagnosticsServer::new(diag_service))
             .is_some()
         {
             fatal!("failed to register diagnostics service");
@@ -1229,7 +1215,7 @@ where
         // Lock manager.
         if servers
             .server
-            .register_service(create_deadlock(servers.lock_mgr.deadlock_service()))
+            .register_service(DeadlockServer::new(servers.lock_mgr.deadlock_service()))
             .is_some()
         {
             fatal!("failed to register deadlock service");
@@ -1260,15 +1246,11 @@ where
             self.causal_ts_provider.clone(),
             self.resource_manager.clone(),
         );
-        let env = backup::disk_snap::Env::new(
-            Arc::new(Mutex::new(self.router.clone())),
-            self.snap_br_rejector.take().unwrap(),
-            Some(backup_endpoint.io_pool_handle().clone()),
-        );
-        let backup_service = backup::Service::new(backup_scheduler, env);
+
+        let backup_service = backup::Service::new(backup_scheduler);
         if servers
             .server
-            .register_service(create_backup(backup_service))
+            .register_service(BackupServer::new(backup_service))
             .is_some()
         {
             fatal!("failed to register backup service");
@@ -1286,44 +1268,19 @@ where
         );
         if servers
             .server
-            .register_service(create_change_data(cdc_service))
+            .register_service(ChangeDataServer::new(cdc_service))
             .is_some()
         {
             fatal!("failed to register cdc service");
         }
         if servers
             .server
-            .register_service(create_resource_metering_pub_sub(
+            .register_service(ResourceMeteringPubSubServer::new(
                 servers.rsmeter_pubsub_service.clone(),
             ))
             .is_some()
         {
             warn!("failed to register resource metering pubsub service");
-        }
-
-        if let Some(sched) = servers.backup_stream_scheduler.take() {
-            let pitr_service = backup_stream::Service::new(sched);
-            if servers
-                .server
-                .register_service(create_log_backup(pitr_service))
-                .is_some()
-            {
-                fatal!("failed to register log backup service");
-            }
-        }
-
-        // the present tikv in recovery mode, start recovery service
-        if self.br_snap_recovery_mode {
-            let recovery_service =
-                RecoveryService::new(engines.engines.clone(), self.router.clone());
-
-            if servers
-                .server
-                .register_service(create_recover_data(recovery_service))
-                .is_some()
-            {
-                fatal!("failed to register recovery service");
-            }
         }
     }
 

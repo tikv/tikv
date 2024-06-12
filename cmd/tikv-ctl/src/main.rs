@@ -35,7 +35,7 @@ use kvproto::{
     encryptionpb::EncryptionMethod,
     kvrpcpb::SplitRegionRequest,
     raft_serverpb::{SnapshotMeta, StoreIdent},
-    tikvpb::TikvClient,
+    tikvpb::tikv_client::TikvClient,
 };
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use protobuf::Message;
@@ -51,6 +51,7 @@ use tikv::{
     storage::config::EngineType,
 };
 use tikv_util::{escape, run_and_wait_child_process, sys::thread::StdThreadBuildWrapper, unescape};
+use tonic::transport::Channel;
 use txn_types::Key;
 
 use crate::{cmd::*, executor::*, util::*};
@@ -88,6 +89,12 @@ fn main() {
         },
     );
     let mgr = new_security_mgr(&opt);
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .thread_name("tikv-ctl")
+        .enable_all()
+        .build()
+        .unwrap();
 
     let cmd = match opt.cmd {
         Some(cmd) => cmd,
@@ -134,7 +141,7 @@ fn main() {
             let data_dir = opt.data_dir.as_deref();
             assert!(data_dir.is_some(), "--data-dir must be specified");
             let data_dir = data_dir.expect("--data-dir must be specified");
-            let pd_client = get_pd_rpc_client(Some(pd), Arc::clone(&mgr));
+            let pd_client = get_pd_rpc_client(Some(pd), Arc::clone(&mgr), runtime.handle().clone());
             print_bad_ssts(data_dir, manifest.as_deref(), pd_client, &cfg);
         }
         Cmd::DumpSnapMeta { file } => {
@@ -243,7 +250,7 @@ fn main() {
             threads,
             bottommost,
         } => {
-            let pd_client = get_pd_rpc_client(opt.pd, Arc::clone(&mgr));
+            let pd_client = get_pd_rpc_client(opt.pd, Arc::clone(&mgr), runtime.handle().clone());
             let db_type = if db == "kv" { DbType::Kv } else { DbType::Raft };
             let cfs = cf.iter().map(|s| s.as_ref()).collect();
             let from_key = from.map(|k| unescape(&k));
@@ -257,7 +264,7 @@ fn main() {
             region: region_id,
             key,
         } => {
-            let pd_client = get_pd_rpc_client(opt.pd, Arc::clone(&mgr));
+            let pd_client = get_pd_rpc_client(opt.pd, Arc::clone(&mgr), runtime.handle().clone());
             let key = unescape(&key);
             split_region(&pd_client, mgr, region_id, key);
         }
@@ -374,7 +381,7 @@ fn main() {
         } => {
             let start_key = from_hex(&start).unwrap();
             let end_key = from_hex(&end).unwrap();
-            let pd_client = get_pd_rpc_client(opt.pd, Arc::clone(&mgr));
+            let pd_client = get_pd_rpc_client(opt.pd, Arc::clone(&mgr), runtime.handle().clone());
             flashback_whole_cluster(
                 &pd_client,
                 &cfg,
@@ -725,7 +732,11 @@ fn dump_snap_meta_file(path: &str) {
     }
 }
 
-fn get_pd_rpc_client(pd: Option<String>, mgr: Arc<SecurityManager>) -> RpcClient {
+fn get_pd_rpc_client(
+    pd: Option<String>,
+    mgr: Arc<SecurityManager>,
+    handle: tokio::runtime::Handle,
+) -> RpcClient {
     let pd = pd.unwrap_or_else(|| {
         clap::Error {
             message: String::from("--pd is required for this command"),
@@ -736,10 +747,16 @@ fn get_pd_rpc_client(pd: Option<String>, mgr: Arc<SecurityManager>) -> RpcClient
     });
     let cfg = PdConfig::new(vec![pd]);
     cfg.validate().unwrap();
-    RpcClient::new(&cfg, None, mgr).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
+    RpcClient::new(&cfg, None, handle).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e))
 }
 
-fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64, key: Vec<u8>) {
+fn split_region(
+    pd_client: &RpcClient,
+    mgr: Arc<SecurityManager>,
+    region_id: u64,
+    key: Vec<u8>,
+    handle: tokio::runtime::Handle,
+) {
     let region = block_on(pd_client.get_region_by_id(region_id))
         .expect("get_region_by_id should success")
         .expect("must have the region");
@@ -755,8 +772,15 @@ fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64
         .expect("get_store should success");
 
     let tikv_client = {
-        let cb = ChannelBuilder::new(Arc::new(Environment::new(1)));
-        let channel = mgr.connect(cb, store.get_address());
+        let endpoint = Channel::from_shared(store.get_address().to_owned())
+            .unwrap()
+            .executor(tikv_util::RuntimeExec::new(handle.clone()));
+
+        let channel =
+            futures::executor::block_on(handle.spawn(async move { endpoint.connect().await }))
+                .expect("join failed, tokio runtime exited")
+                .expect("build tikv client failed");
+
         TikvClient::new(channel)
     };
 
@@ -766,9 +790,9 @@ fn split_region(pd_client: &RpcClient, mgr: Arc<SecurityManager>, region_id: u64
         .set_region_epoch(region.get_region_epoch().clone());
     req.set_split_key(key);
 
-    let resp = tikv_client
-        .split_region(&req)
-        .expect("split_region should success");
+    let resp = block_on(tikv_client.split_region(&req))
+        .expect("split_region should success")
+        .into_inner();
     if resp.has_region_error() {
         println!("split_region internal error: {:?}", resp.get_region_error());
         return;

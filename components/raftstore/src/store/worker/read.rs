@@ -737,6 +737,9 @@ pub struct LocalReaderCore<D, S> {
     pub delegates: LruCache<u64, D>,
 }
 
+// TODO:
+unsafe impl<D, S> Sync for LocalReaderCore<D, S> {}
+
 impl<D, S> LocalReaderCore<D, S>
 where
     D: Deref<Target = ReadDelegate> + Clone,

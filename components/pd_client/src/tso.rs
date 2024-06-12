@@ -13,18 +13,21 @@
 //! other future receives `TsoResponse`s from the PD server and allocates
 //! timestamps for the requests.
 
-use std::{cell::RefCell, collections::VecDeque, pin::Pin, rc::Rc, thread};
+use std::{
+    collections::VecDeque,
+    pin::Pin,
+    sync::{Arc, Mutex},
+    thread,
+};
 
 use futures::{
-    executor::block_on,
-    join,
     prelude::*,
     task::{AtomicWaker, Context, Poll},
 };
-use grpcio::{CallOption, WriteFlags};
-use kvproto::pdpb::{PdClient, TsoRequest, TsoResponse};
-use tikv_util::{box_err, info, sys::thread::StdThreadBuildWrapper};
+use kvproto::pdpb::{pd_client::PdClient, TsoRequest, TsoResponse};
+use tikv_util::{box_err, info, sys::thread::StdThreadBuildWrapper, warn};
 use tokio::sync::{mpsc, oneshot, watch};
+use tonic::transport::Channel;
 use txn_types::TimeStamp;
 
 use crate::{metrics::PD_PENDING_TSO_REQUEST_GAUGE, Error, Result};
@@ -54,24 +57,22 @@ pub struct TimestampOracle {
 impl TimestampOracle {
     pub(crate) fn new(
         cluster_id: u64,
-        pd_client: &PdClient,
-        call_option: CallOption,
+        pd_client: &PdClient<Channel>,
+        spawn_handle: tokio::runtime::Handle,
     ) -> Result<TimestampOracle> {
         let (request_tx, request_rx) = mpsc::channel(MAX_BATCH_SIZE);
-        let (rpc_sender, rpc_receiver) = pd_client.tso_opt(call_option)?;
         let (close_tx, close_rx) = watch::channel(());
+        let pd_client = pd_client.clone();
 
         // Start a background thread to handle TSO requests and responses
         thread::Builder::new()
             .name("tso-worker".into())
             .spawn_wrapper(move || {
-                block_on(run_tso(
-                    cluster_id,
-                    rpc_sender.sink_err_into(),
-                    rpc_receiver.err_into(),
-                    request_rx,
-                    close_tx,
-                ))
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(run_tso(cluster_id, pd_client, request_rx, close_tx));
             })
             .expect("unable to create tso worker thread");
 
@@ -111,55 +112,63 @@ impl TimestampOracle {
 
 async fn run_tso(
     cluster_id: u64,
-    mut rpc_sender: impl Sink<(TsoRequest, WriteFlags), Error = Error> + Unpin,
-    mut rpc_receiver: impl Stream<Item = Result<TsoResponse>> + Unpin,
-    mut request_rx: mpsc::Receiver<TimestampRequest>,
+    mut pd_client: PdClient<Channel>,
+    request_rx: mpsc::Receiver<TimestampRequest>,
     close_tx: watch::Sender<()>,
 ) {
     // The `TimestampRequest`s which are waiting for the responses from the PD
     // server
-    let pending_requests = Rc::new(RefCell::new(VecDeque::with_capacity(MAX_PENDING_COUNT)));
+    let pending_requests = Arc::new(Mutex::new(VecDeque::with_capacity(MAX_PENDING_COUNT)));
 
     // When there are too many pending requests, the `send_request` future will
     // refuse to fetch more requests from the bounded channel. This waker is
     // used to wake up the sending future if the queue containing pending
     // requests is no longer full.
-    let sending_future_waker = Rc::new(AtomicWaker::new());
+    let sending_future_waker = Arc::new(AtomicWaker::new());
 
-    let mut request_stream = TsoRequestStream {
+    let request_stream = TsoRequestStream {
         cluster_id,
-        request_rx: &mut request_rx,
+        request_rx,
         pending_requests: pending_requests.clone(),
         self_waker: sending_future_waker.clone(),
-    }
-    .map(Ok);
-
-    let send_requests = async move {
-        rpc_sender.send_all(&mut request_stream).await?;
-        rpc_sender.close().await?;
-        Ok(())
     };
 
-    let receive_and_handle_responses = async move {
-        while let Some(Ok(resp)) = rpc_receiver.next().await {
-            let mut pending_requests = pending_requests.borrow_mut();
-
-            // Wake up the sending future blocked by too many pending requests as we are
-            // consuming some of them here.
-            if pending_requests.len() >= MAX_PENDING_COUNT {
-                sending_future_waker.wake();
-            }
-
-            allocate_timestamps(&resp, &mut pending_requests)?;
-            PD_PENDING_TSO_REQUEST_GAUGE.set(pending_requests.len() as i64);
+    let mut resp_stream = match pd_client.tso(request_stream).await {
+        Ok(r) => r.into_inner(),
+        Err(e) => {
+            warn!("send TSO request failed"; "err" => ?e);
+            let _ = close_tx.send(());
+            return;
         }
-        Ok(())
     };
 
-    let (send_res, recv_res): (Result<()>, Result<()>) =
-        join!(send_requests, receive_and_handle_responses);
+    let ret = loop {
+        match resp_stream.next().await {
+            Some(Ok(resp)) => {
+                let mut pending_requests = pending_requests.lock().unwrap();
+
+                // Wake up the sending future blocked by too many pending requests as we are
+                // consuming some of them here.
+                if pending_requests.len() >= MAX_PENDING_COUNT {
+                    sending_future_waker.wake();
+                }
+
+                if let Err(e) = allocate_timestamps(&resp, &mut pending_requests) {
+                    break Err(e);
+                }
+                PD_PENDING_TSO_REQUEST_GAUGE.set(pending_requests.len() as i64);
+            }
+            Some(Err(e)) => {
+                break Err(Error::Tonic(e));
+            }
+            None => {
+                break Ok(());
+            }
+        }
+    };
+
     let _ = close_tx.send(());
-    info!("TSO worker terminated"; "sender_cause" => ?send_res.err(), "receiver_cause" => ?recv_res.err());
+    info!("TSO worker terminated"; "recv_res" => ?ret);
 }
 
 struct RequestGroup {
@@ -167,19 +176,19 @@ struct RequestGroup {
     requests: Vec<TimestampRequest>,
 }
 
-struct TsoRequestStream<'a> {
+struct TsoRequestStream {
     cluster_id: u64,
-    request_rx: &'a mut mpsc::Receiver<TimestampRequest>,
-    pending_requests: Rc<RefCell<VecDeque<RequestGroup>>>,
-    self_waker: Rc<AtomicWaker>,
+    request_rx: mpsc::Receiver<TimestampRequest>,
+    pending_requests: Arc<Mutex<VecDeque<RequestGroup>>>,
+    self_waker: Arc<AtomicWaker>,
 }
 
-impl<'a> Stream for TsoRequestStream<'a> {
-    type Item = (TsoRequest, WriteFlags);
+impl Stream for TsoRequestStream {
+    type Item = TsoRequest;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let pending_requests = self.pending_requests.clone();
-        let mut pending_requests = pending_requests.borrow_mut();
+        let mut pending_requests = pending_requests.lock().unwrap();
 
         if pending_requests.len() < MAX_PENDING_COUNT {
             let mut requests = Vec::new();
@@ -206,8 +215,7 @@ impl<'a> Stream for TsoRequestStream<'a> {
                 pending_requests.push_back(request_group);
                 PD_PENDING_TSO_REQUEST_GAUGE.set(pending_requests.len() as i64);
 
-                let write_flags = WriteFlags::default().buffer_hint(false);
-                return Poll::Ready(Some((req, write_flags)));
+                return Poll::Ready(Some(req));
             }
         }
 

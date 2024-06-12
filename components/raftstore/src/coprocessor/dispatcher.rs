@@ -157,14 +157,14 @@ pub trait ClonableObserver: 'static + Send {
     type Ob: ?Sized + Send;
     fn inner(&self) -> &Self::Ob;
     fn inner_mut(&mut self) -> &mut Self::Ob;
-    fn box_clone(&self) -> Box<dyn ClonableObserver<Ob = Self::Ob> + Send>;
+    fn box_clone(&self) -> Box<dyn ClonableObserver<Ob = Self::Ob> + Send + Sync>;
 }
 
 macro_rules! impl_box_observer {
     ($name:ident, $ob:ident, $wrapper:ident) => {
-        pub struct $name(Box<dyn ClonableObserver<Ob = dyn $ob> + Send>);
+        pub struct $name(Box<dyn ClonableObserver<Ob = dyn $ob> + Send + Sync>);
         impl $name {
-            pub fn new<T: 'static + $ob + Clone>(observer: T) -> $name {
+            pub fn new<T: 'static + $ob + Clone + Sync>(observer: T) -> $name {
                 $name(Box::new($wrapper { inner: observer }))
             }
         }
@@ -174,9 +174,9 @@ macro_rules! impl_box_observer {
             }
         }
         impl Deref for $name {
-            type Target = Box<dyn ClonableObserver<Ob = dyn $ob> + Send>;
+            type Target = Box<dyn ClonableObserver<Ob = dyn $ob> + Send + Sync>;
 
-            fn deref(&self) -> &Box<dyn ClonableObserver<Ob = dyn $ob> + Send> {
+            fn deref(&self) -> &Box<dyn ClonableObserver<Ob = dyn $ob> + Send + Sync> {
                 &self.0
             }
         }
@@ -184,7 +184,7 @@ macro_rules! impl_box_observer {
         struct $wrapper<T: $ob + Clone> {
             inner: T,
         }
-        impl<T: 'static + $ob + Clone> ClonableObserver for $wrapper<T> {
+        impl<T: 'static + $ob + Clone + Sync> ClonableObserver for $wrapper<T> {
             type Ob = dyn $ob;
             fn inner(&self) -> &Self::Ob {
                 &self.inner as _
@@ -194,7 +194,7 @@ macro_rules! impl_box_observer {
                 &mut self.inner as _
             }
 
-            fn box_clone(&self) -> Box<dyn ClonableObserver<Ob = Self::Ob> + Send> {
+            fn box_clone(&self) -> Box<dyn ClonableObserver<Ob = Self::Ob> + Send + Sync> {
                 Box::new($wrapper {
                     inner: self.inner.clone(),
                 })
@@ -206,9 +206,9 @@ macro_rules! impl_box_observer {
 // This is the same as impl_box_observer_g except $ob has a typaram
 macro_rules! impl_box_observer_g {
     ($name:ident, $ob:ident, $wrapper:ident) => {
-        pub struct $name<E: KvEngine>(Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send>);
-        impl<E: KvEngine + 'static + Send> $name<E> {
-            pub fn new<T: 'static + $ob<E> + Clone>(observer: T) -> $name<E> {
+        pub struct $name<E: KvEngine>(Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send + Sync>);
+        impl<E: KvEngine + 'static + Send + Sync> $name<E> {
+            pub fn new<T: 'static + $ob<E> + Sync + Clone>(observer: T) -> $name<E> {
                 $name(Box::new($wrapper {
                     inner: observer,
                     _phantom: PhantomData,
@@ -221,9 +221,9 @@ macro_rules! impl_box_observer_g {
             }
         }
         impl<E: KvEngine> Deref for $name<E> {
-            type Target = Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send>;
+            type Target = Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send + Sync>;
 
-            fn deref(&self) -> &Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send> {
+            fn deref(&self) -> &Box<dyn ClonableObserver<Ob = dyn $ob<E>> + Send + Sync> {
                 &self.0
             }
         }
@@ -232,7 +232,7 @@ macro_rules! impl_box_observer_g {
             inner: T,
             _phantom: PhantomData<E>,
         }
-        impl<E: KvEngine + 'static + Send, T: 'static + $ob<E> + Clone> ClonableObserver
+        impl<E: KvEngine + 'static + Send, T: 'static + $ob<E> + Clone + Sync> ClonableObserver
             for $wrapper<E, T>
         {
             type Ob = dyn $ob<E>;
@@ -244,7 +244,7 @@ macro_rules! impl_box_observer_g {
                 &mut self.inner as _
             }
 
-            fn box_clone(&self) -> Box<dyn ClonableObserver<Ob = Self::Ob> + Send> {
+            fn box_clone(&self) -> Box<dyn ClonableObserver<Ob = Self::Ob> + Send + Sync> {
                 Box::new($wrapper {
                     inner: self.inner.clone(),
                     _phantom: PhantomData,
@@ -483,7 +483,10 @@ where
 }
 
 impl<E: KvEngine> CoprocessorHost<E> {
-    pub fn new<C: StoreHandle + Clone + Send + 'static>(ch: C, cfg: Config) -> CoprocessorHost<E> {
+    pub fn new<C: StoreHandle + Clone + Send + Sync + 'static>(
+        ch: C,
+        cfg: Config,
+    ) -> CoprocessorHost<E> {
         // TODO load coprocessors from configuration
         let mut registry = Registry::default();
         registry.register_split_check_observer(

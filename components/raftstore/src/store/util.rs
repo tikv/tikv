@@ -762,7 +762,7 @@ pub(crate) fn u64_to_timespec(u: u64) -> Timespec {
 }
 
 pub fn get_entry_header(entry: &Entry) -> RaftRequestHeader {
-    use prost::{Message};
+    // use prost::{Message};
     if entry.get_entry_type() != EntryType::EntryNormal {
         return RaftRequestHeader::default();
     }

@@ -10,15 +10,15 @@ use std::{
 use collections::HashMap;
 use engine_traits::KvEngine;
 use futures::{
-    future::{self, FutureExt, TryFutureExt},
+    future::{self, TryFutureExt},
     sink::SinkExt,
-    stream::TryStreamExt,
+    stream::{StreamExt, TryStreamExt},
 };
-use grpcio::{
-    self, DuplexSink, Environment, RequestStream, RpcContext, RpcStatus, RpcStatusCode, UnarySink,
-    WriteFlags,
+use grpcio::Environment;
+use kvproto::{
+    deadlock::{deadlock_server::Deadlock, *},
+    metapb::Region,
 };
-use kvproto::{deadlock::*, metapb::Region};
 use pd_client::{PdClient, INVALID_ID};
 use raft::StateRole;
 use raftstore::{
@@ -397,8 +397,10 @@ pub enum Task {
     },
     /// The detect request of other nodes.
     DetectRpc {
-        stream: RequestStream<DeadlockRequest>,
-        sink: DuplexSink<DeadlockResponse>,
+        stream: tonic::Streaming<DeadlockRequest>,
+        tx: futures::channel::mpsc::UnboundedSender<
+            std::result::Result<DeadlockResponse, tonic::Status>,
+        >,
     },
     /// If the node has the leader region and the role of the node changes,
     /// a `ChangeRole` task will be scheduled.
@@ -632,6 +634,8 @@ where
     /// Used to schedule Deadlock msgs to the waiter manager.
     waiter_mgr_scheduler: WaiterMgrScheduler,
 
+    grpc_handle: tokio::runtime::Handle,
+
     inner: Rc<RefCell<Inner>>,
 }
 
@@ -654,6 +658,7 @@ where
         security_mgr: Arc<SecurityManager>,
         waiter_mgr_scheduler: WaiterMgrScheduler,
         cfg: &Config,
+        grpc_handle: tokio::runtime::Handle,
     ) -> Self {
         assert!(store_id != INVALID_ID);
         Self {
@@ -665,6 +670,7 @@ where
             resolver,
             security_mgr,
             waiter_mgr_scheduler,
+            grpc_handle,
             inner: Rc::new(RefCell::new(Inner {
                 role: Role::Follower,
                 detect_table: DetectTable::new(cfg.wait_for_lock_timeout.into()),
@@ -784,23 +790,46 @@ where
             Arc::clone(&self.env),
             Arc::clone(&self.security_mgr),
             leader_addr,
+            self.grpc_handle.clone(),
         );
         let waiter_mgr_scheduler = self.waiter_mgr_scheduler.clone();
-        let (send, recv) = leader_client.register_detect_handler(Box::new(move |mut resp| {
-            let entry = resp.take_entry();
-            let txn = entry.txn.into();
-            let lock = LockDigest {
-                ts: entry.wait_for_txn.into(),
-                hash: entry.key_hash,
+        let send = leader_client.register_detect_handler();
+        let handler = spawn_local(send.map_err(|e| error!("leader client failed"; "err" => ?e)));
+        spawn_local(async move {
+            let stream = match handler.await {
+                Ok(Ok(resp)) => resp.into_inner(),
+                Ok(Err(e)) => {
+                    warn!("send detect failed"; "err" => ?e);
+                    return;
+                }
+                Err(e) => {
+                    warn!("join send detect failed"; "err" => ?e);
+                    return;
+                }
             };
-            let mut wait_chain: Vec<_> = resp.take_wait_chain().into();
-            let key = entry.get_key().to_vec();
-            wait_chain.push(entry);
-            waiter_mgr_scheduler.deadlock(txn, key, lock, resp.get_deadlock_key_hash(), wait_chain)
-        }));
-        spawn_local(send.map_err(|e| error!("leader client failed"; "err" => ?e)));
-        // No need to log it again.
-        spawn_local(recv.map_err(|_| ()));
+
+            let _ = stream
+                .try_for_each(|mut resp| {
+                    let entry = resp.take_entry();
+                    let txn = entry.txn.into();
+                    let lock = LockDigest {
+                        ts: entry.wait_for_txn.into(),
+                        hash: entry.key_hash,
+                    };
+                    let mut wait_chain: Vec<_> = resp.take_wait_chain().into();
+                    let key = entry.get_key().to_vec();
+                    wait_chain.push(entry);
+                    waiter_mgr_scheduler.deadlock(
+                        txn,
+                        key,
+                        lock,
+                        resp.get_deadlock_key_hash(),
+                        wait_chain,
+                    );
+                    future::ok(())
+                })
+                .await;
+        });
 
         self.leader_client = Some(leader_client);
         info!("reconnect leader succeeded"; "leader_id" => leader_id);
@@ -927,27 +956,29 @@ where
     /// Handles detect requests of other nodes.
     fn handle_detect_rpc(
         &self,
-        stream: RequestStream<DeadlockRequest>,
-        sink: DuplexSink<DeadlockResponse>,
+        stream: tonic::Streaming<DeadlockRequest>,
+        mut tx: futures::channel::mpsc::UnboundedSender<
+            std::result::Result<DeadlockResponse, tonic::Status>,
+        >,
     ) {
         // TODO: Support batch checking.
         if !self.is_leader() {
-            let status = RpcStatus::with_message(
-                RpcStatusCode::FAILED_PRECONDITION,
-                "I'm not the leader of deadlock detector".to_string(),
-            );
-            spawn_local(sink.fail(status).map_err(|_| ()));
+            let status =
+                tonic::Status::failed_precondition("I'm not the leader of deadlock detector");
+            spawn_local(async move {
+                let _ = tx.send(Err(status)).await;
+            });
             ERROR_COUNTER_METRICS.not_leader.inc();
             return;
         }
 
         let inner = Rc::clone(&self.inner);
-        let mut s = stream.map_err(Error::Grpc).try_filter_map(move |mut req| {
+        let mut s = stream.try_filter_map(move |mut req| {
             // It's possible the leader changes after registering this handler.
             let mut inner = inner.borrow_mut();
             if inner.role != Role::Leader {
                 ERROR_COUNTER_METRICS.not_leader.inc();
-                return future::ready(Err(Error::Other(box_err!("leader changed"))));
+                return future::ready(Err(tonic::Status::internal("leader changed")));
             }
             let WaitForEntry {
                 txn,
@@ -971,7 +1002,7 @@ where
                         resp.set_entry(req.take_entry());
                         resp.set_deadlock_key_hash(deadlock_key_hash);
                         resp.set_wait_chain(wait_chain.into());
-                        Some((resp, WriteFlags::default()))
+                        Some(resp)
                     } else {
                         None
                     }
@@ -993,14 +1024,14 @@ where
             };
             future::ok(res)
         });
-        let send_task = async move {
-            let mut sink = sink.sink_map_err(Error::from);
-            sink.send_all(&mut s).await?;
-            sink.close().await?;
-            Result::Ok(())
-        }
-        .map_err(|e| warn!("deadlock detect rpc stream disconnected"; "error" => ?e));
-        spawn_local(send_task);
+        spawn_local(async move {
+            while let Some(m) = s.next().await {
+                if let Err(e) = tx.send(m).await {
+                    warn!("deadlock detect rpc stream disconnected"; "error" => ?e);
+                    return;
+                }
+            }
+        });
     }
 
     fn handle_change_role(&mut self, role: Role) {
@@ -1030,8 +1061,8 @@ where
             } => {
                 self.handle_detect(tp, txn_ts, wait_info, diag_ctx);
             }
-            Task::DetectRpc { stream, sink } => {
-                self.handle_detect_rpc(stream, sink);
+            Task::DetectRpc { stream, tx } => {
+                self.handle_detect_rpc(stream, tx);
             }
             Task::ChangeRole(role) => self.handle_change_role(role),
             Task::ChangeTtl(ttl) => self.handle_change_ttl(ttl),
@@ -1058,50 +1089,51 @@ impl Service {
     }
 }
 
+#[tonic::async_trait]
 impl Deadlock for Service {
     // TODO: remove it
-    fn get_wait_for_entries(
-        &mut self,
-        ctx: RpcContext<'_>,
-        _req: WaitForEntriesRequest,
-        sink: UnarySink<WaitForEntriesResponse>,
-    ) {
+    async fn get_wait_for_entries(
+        &self,
+        request: tonic::Request<WaitForEntriesRequest>,
+    ) -> std::result::Result<tonic::Response<WaitForEntriesResponse>, tonic::Status> {
         let (cb, f) = paired_future_callback();
         if !self.waiter_mgr_scheduler.dump_wait_table(cb) {
-            let status = RpcStatus::with_message(
-                RpcStatusCode::RESOURCE_EXHAUSTED,
-                "waiter manager has stopped".to_owned(),
-            );
-            ctx.spawn(sink.fail(status).map(|_| ()))
-        } else {
-            ctx.spawn(
-                f.map_err(Error::from)
-                    .map_ok(|v| {
-                        let mut resp = WaitForEntriesResponse::default();
-                        resp.set_entries(v.into());
-                        resp
-                    })
-                    .and_then(|resp| sink.success(resp).map_err(Error::Grpc))
-                    .unwrap_or_else(|e| debug!("get_wait_for_entries failed"; "err" => ?e)),
-            );
+            return Err(tonic::Status::resource_exhausted(
+                "waiter manager has stopped",
+            ));
+        }
+        match f.await {
+            Ok(v) => {
+                let mut resp = WaitForEntriesResponse::default();
+                resp.set_entries(v.into());
+                Ok(tonic::Response::new(resp))
+            }
+            Err(e) => Err(tonic::Status::cancelled(format!(
+                "get_wait_for_entries failed: {:?}",
+                e
+            ))),
         }
     }
 
-    fn detect(
-        &mut self,
-        ctx: RpcContext<'_>,
-        stream: RequestStream<DeadlockRequest>,
-        sink: DuplexSink<DeadlockResponse>,
-    ) {
-        let task = Task::DetectRpc { stream, sink };
-        if let Err(Stopped(Task::DetectRpc { sink, .. })) = self.detector_scheduler.0.schedule(task)
-        {
-            let status = RpcStatus::with_message(
-                RpcStatusCode::RESOURCE_EXHAUSTED,
-                "deadlock detector has stopped".to_owned(),
-            );
-            ctx.spawn(sink.fail(status).map(|_| ()));
+    async fn detect(
+        &self,
+        request: tonic::Request<tonic::Streaming<DeadlockRequest>>,
+    ) -> std::result::Result<
+        tonic::Response<tonic::codegen::BoxStream<DeadlockResponse>>,
+        tonic::Status,
+    > {
+        let (tx, rx) = futures::channel::mpsc::unbounded();
+        let task = Task::DetectRpc {
+            stream: request.into_inner(),
+            tx,
+        };
+        if let Err(_) = self.detector_scheduler.0.schedule(task) {
+            return Err(tonic::Status::resource_exhausted(
+                "deadlock detector has stopped",
+            ));
         }
+
+        Ok(tonic::Response::new(Box::pin(rx) as _))
     }
 }
 

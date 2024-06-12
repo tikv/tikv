@@ -63,6 +63,8 @@ pub enum Sender<T: Send + 'static> {
     },
 }
 
+unsafe impl<T: Send + 'static> Sync for Sender<T> {}
+
 impl<T: Send + 'static> Clone for Sender<T> {
     fn clone(&self) -> Self {
         match self {

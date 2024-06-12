@@ -18,6 +18,7 @@ use std::{
     convert::AsRef,
     env,
     fs::File,
+    future::Future,
     ops::{Deref, DerefMut},
     path::{Path, PathBuf},
     sync::{
@@ -576,6 +577,26 @@ pub fn set_vec_capacity<T>(v: &mut Vec<T>, cap: usize) {
         cmp::Ordering::Less => v.shrink_to(cap),
         cmp::Ordering::Greater => v.reserve_exact(cap - v.len()),
         cmp::Ordering::Equal => {}
+    }
+}
+
+pub struct RuntimeExec {
+    handle: tokio::runtime::Handle,
+}
+
+impl RuntimeExec {
+    pub fn new(handle: tokio::runtime::Handle) -> Self {
+        Self { handle }
+    }
+}
+
+impl<F> hyper::rt::Executor<F> for RuntimeExec
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    fn execute(&self, fut: F) {
+        self.handle.spawn(fut);
     }
 }
 

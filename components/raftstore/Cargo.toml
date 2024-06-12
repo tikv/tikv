@@ -63,8 +63,8 @@ parking_lot = "0.12"
 pd_client = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
-protobuf = { version = "2.8", features = ["bytes"] }
 prost = { workspace = true }
+protobuf = { version = "2.8", features = ["bytes"] }
 raft = { workspace = true }
 raft-proto = { workspace = true }
 rand = "0.8.3"

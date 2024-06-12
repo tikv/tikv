@@ -236,12 +236,17 @@ impl<'a> SimpleWriteReqDecoder<'a> {
         index: u64,
         term: u64,
     ) -> Result<SimpleWriteReqDecoder<'a>, RaftCmdRequest> {
-        use prost::encoding::{WireType, message::merge, DecodeContext};
+        use prost::encoding::{message::merge, DecodeContext, WireType};
         match buf.first().cloned() {
             Some(MAGIC_PREFIX) => {
                 let mut header = RaftRequestHeader::default();
                 buf = &buf[1..];
-                if let Err(e) = merge(WireType::LengthDelimited, &mut header, &mut buf, DecodeContext::default()) {
+                if let Err(e) = merge(
+                    WireType::LengthDelimited,
+                    &mut header,
+                    &mut buf,
+                    DecodeContext::default(),
+                ) {
                     slog_panic!(
                         logger,
                         "data corrupted";
@@ -250,10 +255,7 @@ impl<'a> SimpleWriteReqDecoder<'a> {
                         "error" => ?e
                     );
                 }
-                Ok(SimpleWriteReqDecoder {
-                    header,
-                    buf,
-                })
+                Ok(SimpleWriteReqDecoder { header, buf })
             }
             _ => Err(fallback(buf, index, term)),
         }
@@ -470,7 +472,7 @@ fn encode(simple_write: SimpleWrite<'_>, buf: &mut Vec<u8>) {
 
 #[inline]
 fn decode<'a>(buf: &mut &'a [u8]) -> Option<SimpleWrite<'a>> {
-    use prost::encoding::{WireType, message::merge, DecodeContext};
+    use prost::encoding::{message::merge, DecodeContext, WireType};
     let (tag, left) = buf.split_first()?;
     match *tag {
         PUT_TAG => {
@@ -504,7 +506,12 @@ fn decode<'a>(buf: &mut &'a [u8]) -> Option<SimpleWrite<'a>> {
             let mut ssts: Vec<SstMeta> = Vec::with_capacity(len as usize);
             for _ in 0..len {
                 let mut sst = SstMeta::default();
-                if let Err(e) = merge(WireType::LengthDelimited, &mut sst, &mut left, DecodeContext::default()) {
+                if let Err(e) = merge(
+                    WireType::LengthDelimited,
+                    &mut sst,
+                    &mut left,
+                    DecodeContext::default(),
+                ) {
                     panic!("data corrupted {:?}", e);
                 }
                 ssts.push(sst);

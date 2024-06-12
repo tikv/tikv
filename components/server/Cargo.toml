@@ -77,12 +77,11 @@ serde_json = "1.0"
 service = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }
-snap_recovery = { workspace = true }
 tempfile = "3.0"
 tikv = { workspace = true }
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
-tokio = { version = "1.5", features = ["rt-multi-thread"] }
+tokio = { workspace = true }
 toml = "0.5"
 txn_types = { workspace = true }
 yatp = { workspace = true }

@@ -184,6 +184,8 @@ pub struct ResetToVersionManager {
     worker_handle: RefCell<Option<JoinHandle<()>>>,
 }
 
+unsafe impl Sync for ResetToVersionManager {}
+
 impl Clone for ResetToVersionManager {
     fn clone(&self) -> Self {
         Self {

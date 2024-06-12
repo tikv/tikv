@@ -7,10 +7,6 @@ use futures::{
     sink::SinkExt,
     stream::{self, TryStreamExt},
 };
-use grpcio::{
-    Error as GrpcError, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink,
-    WriteFlags,
-};
 use kvproto::debugpb::{self, get_range_properties_response::RangeProperty, *};
 use raftstore::store::fsm::store::StoreRegionMeta;
 use tikv_kv::RaftExtension;
@@ -19,26 +15,14 @@ use tokio::runtime::Handle;
 
 use crate::server::debug::{Debugger, Error, Result};
 
-fn error_to_status(e: Error) -> RpcStatus {
-    let (code, msg) = match e {
-        Error::NotFound(msg) => (RpcStatusCode::NOT_FOUND, msg),
-        Error::InvalidArgument(msg) => (RpcStatusCode::INVALID_ARGUMENT, msg),
-        Error::Other(e) => (RpcStatusCode::UNKNOWN, format!("{:?}", e)),
-        Error::EngineTrait(e) => (RpcStatusCode::UNKNOWN, format!("{:?}", e)),
-        Error::FlashbackFailed(msg) => (RpcStatusCode::UNKNOWN, msg),
-    };
-    RpcStatus::with_message(code, msg)
-}
-
-fn on_grpc_error(tag: &'static str, e: &GrpcError) {
-    error!("{} failed: {:?}", tag, e);
-}
-
-fn error_to_grpc_error(tag: &'static str, e: Error) -> GrpcError {
-    let status = error_to_status(e);
-    let e = GrpcError::RpcFailure(status);
-    on_grpc_error(tag, &e);
-    e
+fn error_to_tonic_status(e: Error) -> tonic::Status {
+    match e {
+        Error::NotFound(msg) => tonic::Status::not_found(msg),
+        Error::InvalidArgument(msg) => tonic::Status::invalid_argument(msg),
+        Error::Other(e) => tonic::Status::unknown(format!("{:?}", e)),
+        Error::EngineTrait(e) => tonic::Status::unknown(format!("{:?}", e)),
+        Error::FlashbackFailed(msg) => tonic::Status::unknown(msg),
+    }
 }
 
 pub type Callback<T> = Box<dyn FnOnce(T) + Send>;
@@ -116,37 +100,21 @@ where
             resolved_ts_scheduler,
         }
     }
-
-    fn handle_response<F, P>(
-        &self,
-        ctx: RpcContext<'_>,
-        sink: UnarySink<P>,
-        resp: F,
-        tag: &'static str,
-    ) where
-        P: Send + 'static,
-        F: Future<Output = Result<P>> + Send + 'static,
-    {
-        let ctx_task = async move {
-            match resp.await {
-                Ok(resp) => sink.success(resp).await?,
-                Err(e) => sink.fail(error_to_status(e)).await?,
-            }
-            Ok(())
-        };
-        ctx.spawn(ctx_task.unwrap_or_else(move |e| on_grpc_error(tag, &e)));
-    }
 }
 
-impl<T, D, S> debugpb::Debug for Service<T, D, S>
+#[tonic::async_trait]
+impl<T, D, S> debugpb::debug_server::Debug for Service<T, D, S>
 where
-    T: RaftExtension + 'static,
-    D: Debugger + Clone + Send + 'static,
-    S: StoreRegionMeta,
+    T: RaftExtension + Sync + 'static,
+    D: Debugger + Clone + Send + Sync + 'static,
+    S: StoreRegionMeta + Sync + 'static,
 {
-    fn get(&mut self, ctx: RpcContext<'_>, mut req: GetRequest, sink: UnarySink<GetResponse>) {
+    async fn get(
+        &self,
+        request: tonic::Request<GetRequest>,
+    ) -> std::result::Result<tonic::Response<GetResponse>, tonic::Status> {
         const TAG: &str = "debug_get";
-
+        let mut req = request.into_inner();
         let db = req.get_db();
         let cf = req.take_cf();
         let key = req.take_key();
@@ -155,24 +123,22 @@ where
         let join = self
             .pool
             .spawn(async move { debugger.get(db, &cf, key.as_slice()) });
-        let f = async move {
-            let value = join.await.unwrap()?;
-            let mut resp = GetResponse::default();
-            resp.set_value(value);
-            Ok(resp)
-        };
-
-        self.handle_response(ctx, sink, f, TAG);
+        match join.await.unwrap() {
+            Ok(value) => {
+                let mut resp = GetResponse::default();
+                resp.set_value(value);
+                Ok(tonic::Response::new(resp))
+            }
+            Err(e) => Err(error_to_tonic_status(e)),
+        }
     }
 
-    fn raft_log(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: RaftLogRequest,
-        sink: UnarySink<RaftLogResponse>,
-    ) {
+    async fn raft_log(
+        &self,
+        request: tonic::Request<RaftLogRequest>,
+    ) -> std::result::Result<tonic::Response<RaftLogResponse>, tonic::Status> {
         const TAG: &str = "debug_raft_log";
-
+        let req = request.into_inner();
         let region_id = req.get_region_id();
         let log_index = req.get_log_index();
         let debugger = self.debugger.clone();
@@ -180,56 +146,52 @@ where
         let join = self
             .pool
             .spawn(async move { debugger.raft_log(region_id, log_index) });
-        let f = async move {
-            let entry = join.await.unwrap()?;
-            let mut resp = RaftLogResponse::default();
-            resp.set_entry(entry);
-            Ok(resp)
-        };
-
-        self.handle_response(ctx, sink, f, TAG);
+        match join.await.unwrap() {
+            Ok(v) => {
+                let mut resp = RaftLogResponse::default();
+                resp.set_entry(v);
+                Ok(tonic::Response::new(resp))
+            }
+            Err(e) => Err(error_to_tonic_status(e)),
+        }
     }
 
-    fn region_info(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: RegionInfoRequest,
-        sink: UnarySink<RegionInfoResponse>,
-    ) {
+    async fn region_info(
+        &self,
+        request: tonic::Request<RegionInfoRequest>,
+    ) -> std::result::Result<tonic::Response<RegionInfoResponse>, tonic::Status> {
         const TAG: &str = "debug_region_log";
-
+        let req = request.into_inner();
         let region_id = req.get_region_id();
         let debugger = self.debugger.clone();
 
         let join = self
             .pool
             .spawn(async move { debugger.region_info(region_id) });
-        let f = async move {
-            let region_info = join.await.unwrap()?;
-            let mut resp = RegionInfoResponse::default();
-            if let Some(raft_local_state) = region_info.raft_local_state {
-                resp.set_raft_local_state(raft_local_state);
+        match join.await.unwrap() {
+            Ok(region_info) => {
+                let mut resp = RegionInfoResponse::default();
+                if let Some(raft_local_state) = region_info.raft_local_state {
+                    resp.set_raft_local_state(raft_local_state);
+                }
+                if let Some(raft_apply_state) = region_info.raft_apply_state {
+                    resp.set_raft_apply_state(raft_apply_state);
+                }
+                if let Some(region_state) = region_info.region_local_state {
+                    resp.set_region_local_state(region_state);
+                }
+                Ok(tonic::Response::new(resp))
             }
-            if let Some(raft_apply_state) = region_info.raft_apply_state {
-                resp.set_raft_apply_state(raft_apply_state);
-            }
-            if let Some(region_state) = region_info.region_local_state {
-                resp.set_region_local_state(region_state);
-            }
-            Ok(resp)
-        };
-
-        self.handle_response(ctx, sink, f, TAG);
+            Err(e) => Err(error_to_tonic_status(e)),
+        }
     }
 
-    fn region_size(
-        &mut self,
-        ctx: RpcContext<'_>,
-        mut req: RegionSizeRequest,
-        sink: UnarySink<RegionSizeResponse>,
-    ) {
+    async fn region_size(
+        &self,
+        request: tonic::Request<RegionSizeRequest>,
+    ) -> std::result::Result<tonic::Response<RegionSizeResponse>, tonic::Status> {
         const TAG: &str = "debug_region_size";
-
+        let mut req = request.into_inner();
         let region_id = req.get_region_id();
         let cfs = req.take_cfs().into();
         let debugger = self.debugger.clone();
@@ -237,68 +199,64 @@ where
         let join = self
             .pool
             .spawn(async move { debugger.region_size(region_id, cfs) });
-        let f = async move {
-            let entries = join.await.unwrap()?;
-            let mut resp = RegionSizeResponse::default();
-            resp.set_entries(
-                entries
-                    .into_iter()
-                    .map(|(cf, size)| {
-                        let mut entry = region_size_response::Entry::default();
-                        entry.set_cf(cf);
-                        entry.set_size(size as u64);
-                        entry
-                    })
-                    .collect(),
-            );
-            Ok(resp)
-        };
-
-        self.handle_response(ctx, sink, f, TAG);
+        match join.await.unwrap() {
+            Ok(entries) => {
+                let mut resp = RegionSizeResponse::default();
+                resp.set_entries(
+                    entries
+                        .into_iter()
+                        .map(|(cf, size)| {
+                            let mut entry = region_size_response::Entry::default();
+                            entry.set_cf(cf);
+                            entry.set_size(size as u64);
+                            entry
+                        })
+                        .collect(),
+                );
+                Ok(tonic::Response::new(resp))
+            }
+            Err(e) => Err(error_to_tonic_status(e)),
+        }
     }
 
-    fn scan_mvcc(
-        &mut self,
-        _: RpcContext<'_>,
-        mut req: ScanMvccRequest,
-        mut sink: ServerStreamingSink<ScanMvccResponse>,
-    ) {
+    async fn scan_mvcc(
+        &self,
+        request: tonic::Request<ScanMvccRequest>,
+    ) -> std::result::Result<
+        tonic::Response<tonic::codegen::BoxStream<ScanMvccResponse>>,
+        tonic::Status,
+    > {
         let debugger = self.debugger.clone();
+        let mut req = request.into_inner();
         let from = req.take_from_key();
         let to = req.take_to_key();
         let limit = req.get_limit();
 
-        let future = async move {
-            let iter = debugger.scan_mvcc(&from, &to, limit);
-            if iter.is_err() {
-                return;
+        let iter = match debugger.scan_mvcc(&from, &to, limit) {
+            Ok(i) => i,
+            Err(e) => {
+                return Err(error_to_tonic_status(e));
             }
-            let mut s = stream::iter(iter.unwrap())
-                .map_err(|e| box_err!(e))
-                .map_err(|e| error_to_grpc_error("scan_mvcc", e))
-                .map_ok(|(key, mvcc_info)| {
-                    let mut resp = ScanMvccResponse::default();
-                    resp.set_key(key);
-                    resp.set_info(mvcc_info);
-                    (resp, WriteFlags::default())
-                });
-            if let Err(e) = sink.send_all(&mut s).await {
-                on_grpc_error("scan_mvcc", &e);
-                return;
-            }
-            let _ = sink.close().await;
         };
-        self.pool.spawn(future);
+
+        let s = stream::iter(iter)
+            .map_err(|e| box_err!(e))
+            .map_err(|e| error_to_tonic_status(e))
+            .map_ok(|(key, mvcc_info)| {
+                let mut resp = ScanMvccResponse::default();
+                resp.set_key(key);
+                resp.set_info(mvcc_info);
+                resp
+            });
+        Ok(tonic::Response::new(Box::pin(s) as _))
     }
 
-    fn compact(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: CompactRequest,
-        sink: UnarySink<CompactResponse>,
-    ) {
+    async fn compact(
+        &self,
+        request: tonic::Request<CompactRequest>,
+    ) -> std::result::Result<tonic::Response<CompactResponse>, tonic::Status> {
         let debugger = self.debugger.clone();
-
+        let req = request.into_inner();
         let res = self.pool.spawn(async move {
             debugger
                 .compact(
@@ -312,21 +270,19 @@ where
                 .map(|_| CompactResponse::default())
         });
 
-        let f = async move { res.await.unwrap() };
-
-        self.handle_response(ctx, sink, f, "debug_compact");
+        match res.await.unwrap() {
+            Ok(r) => Ok(tonic::Response::new(r)),
+            Err(e) => Err(error_to_tonic_status(e)),
+        }
     }
 
-    fn inject_fail_point(
-        &mut self,
-        ctx: RpcContext<'_>,
-        mut req: InjectFailPointRequest,
-        sink: UnarySink<InjectFailPointResponse>,
-    ) {
+    async fn inject_fail_point(
+        &self,
+        request: tonic::Request<InjectFailPointRequest>,
+    ) -> std::result::Result<tonic::Response<InjectFailPointResponse>, tonic::Status> {
         const TAG: &str = "debug_inject_fail_point";
-
-        let f = self
-            .pool
+        let mut req = request.into_inner();
+        self.pool
             .spawn(async move {
                 let name = req.take_name();
                 if name.is_empty() {
@@ -338,21 +294,19 @@ where
                 }
                 Ok(InjectFailPointResponse::default())
             })
-            .map(|res| res.unwrap());
-
-        self.handle_response(ctx, sink, f, TAG);
+            .await
+            .unwrap()
+            .map(|r| tonic::Response::new(r))
+            .map_err(error_to_tonic_status)
     }
 
-    fn recover_fail_point(
-        &mut self,
-        ctx: RpcContext<'_>,
-        mut req: RecoverFailPointRequest,
-        sink: UnarySink<RecoverFailPointResponse>,
-    ) {
+    async fn recover_fail_point(
+        &self,
+        request: tonic::Request<RecoverFailPointRequest>,
+    ) -> std::result::Result<tonic::Response<RecoverFailPointResponse>, tonic::Status> {
         const TAG: &str = "debug_recover_fail_point";
-
-        let f = self
-            .pool
+        let mut req = request.into_inner();
+        self.pool
             .spawn(async move {
                 let name = req.take_name();
                 if name.is_empty() {
@@ -361,21 +315,19 @@ where
                 fail::remove(name);
                 Ok(RecoverFailPointResponse::default())
             })
-            .map(|res| res.unwrap());
-
-        self.handle_response(ctx, sink, f, TAG);
+            .await
+            .unwrap()
+            .map(|r| tonic::Response::new(r))
+            .map_err(error_to_tonic_status)
     }
 
-    fn list_fail_points(
-        &mut self,
-        ctx: RpcContext<'_>,
-        _: ListFailPointsRequest,
-        sink: UnarySink<ListFailPointsResponse>,
-    ) {
+    async fn list_fail_points(
+        &self,
+        _request: tonic::Request<ListFailPointsRequest>,
+    ) -> std::result::Result<tonic::Response<ListFailPointsResponse>, tonic::Status> {
         const TAG: &str = "debug_list_fail_points";
 
-        let f = self
-            .pool
+        self.pool
             .spawn(async move {
                 let list = fail::list().into_iter().map(|(name, actions)| {
                     let mut entry = list_fail_points_response::Entry::default();
@@ -387,22 +339,20 @@ where
                 resp.set_entries(list.collect());
                 Ok(resp)
             })
-            .map(|res| res.unwrap());
-
-        self.handle_response(ctx, sink, f, TAG);
+            .await
+            .unwrap()
+            .map(|r| tonic::Response::new(r))
+            .map_err(error_to_tonic_status)
     }
 
-    fn get_metrics(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: GetMetricsRequest,
-        sink: UnarySink<GetMetricsResponse>,
-    ) {
+    async fn get_metrics(
+        &self,
+        request: tonic::Request<GetMetricsRequest>,
+    ) -> std::result::Result<tonic::Response<GetMetricsResponse>, tonic::Status> {
         const TAG: &str = "debug_get_metrics";
-
+        let req = request.into_inner();
         let debugger = self.debugger.clone();
-        let f = self
-            .pool
+        self.pool
             .spawn(async move {
                 let mut resp = GetMetricsResponse::default();
                 resp.set_store_id(debugger.get_store_ident()?.store_id);
@@ -414,66 +364,61 @@ where
                 }
                 Ok(resp)
             })
-            .map(|res| res.unwrap());
-
-        self.handle_response(ctx, sink, f, TAG);
+            .await
+            .unwrap()
+            .map(|r| tonic::Response::new(r))
+            .map_err(error_to_tonic_status)
     }
 
-    fn check_region_consistency(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: RegionConsistencyCheckRequest,
-        sink: UnarySink<RegionConsistencyCheckResponse>,
-    ) {
+    async fn check_region_consistency(
+        &self,
+        request: tonic::Request<RegionConsistencyCheckRequest>,
+    ) -> std::result::Result<tonic::Response<RegionConsistencyCheckResponse>, tonic::Status> {
+        let req = request.into_inner();
         let region_id = req.get_region_id();
         let f = self.raft_router.check_consistency(region_id);
         let task = async move {
             box_try!(f.await);
             Ok(())
         };
-        let f = self
-            .pool
+        self.pool
             .spawn(task)
-            .map(|res| res.unwrap())
-            .map_ok(|_| RegionConsistencyCheckResponse::default());
-        self.handle_response(ctx, sink, f, "check_region_consistency");
+            .await
+            .unwrap()
+            .map(|_| tonic::Response::new(RegionConsistencyCheckResponse::default()))
+            .map_err(error_to_tonic_status)
     }
 
-    fn modify_tikv_config(
-        &mut self,
-        ctx: RpcContext<'_>,
-        mut req: ModifyTikvConfigRequest,
-        sink: UnarySink<ModifyTikvConfigResponse>,
-    ) {
+    async fn modify_tikv_config(
+        &self,
+        request: tonic::Request<ModifyTikvConfigRequest>,
+    ) -> std::result::Result<tonic::Response<ModifyTikvConfigResponse>, tonic::Status> {
         const TAG: &str = "modify_tikv_config";
-
+        let mut req = request.into_inner();
         let config_name = req.take_config_name();
         let config_value = req.take_config_value();
         let debugger = self.debugger.clone();
 
-        let f = self
-            .pool
+        self.pool
             .spawn(async move { debugger.modify_tikv_config(&config_name, &config_value) })
-            .map(|res| res.unwrap())
-            .map_ok(|_| ModifyTikvConfigResponse::default());
-
-        self.handle_response(ctx, sink, f, TAG);
+            .await
+            .unwrap()
+            .map(|_| tonic::Response::new(ModifyTikvConfigResponse::default()))
+            .map_err(error_to_tonic_status)
     }
 
-    fn get_region_properties(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: GetRegionPropertiesRequest,
-        sink: UnarySink<GetRegionPropertiesResponse>,
-    ) {
+    async fn get_region_properties(
+        &self,
+        request: tonic::Request<GetRegionPropertiesRequest>,
+    ) -> std::result::Result<tonic::Response<GetRegionPropertiesResponse>, tonic::Status> {
         const TAG: &str = "get_region_properties";
         let debugger = self.debugger.clone();
-
-        let f = self
-            .pool
+        let req = request.into_inner();
+        self.pool
             .spawn(async move { debugger.get_region_properties(req.get_region_id()) })
-            .map(|res| res.unwrap())
-            .map_ok(|props| {
+            .await
+            .unwrap()
+            .map(|props| {
                 let mut resp = GetRegionPropertiesResponse::default();
                 for (name, value) in props {
                     let mut prop = Property::default();
@@ -481,52 +426,45 @@ where
                     prop.set_value(value);
                     resp.mut_props().push(prop);
                 }
-                resp
-            });
-
-        self.handle_response(ctx, sink, f, TAG);
+                tonic::Response::new(resp)
+            })
+            .map_err(error_to_tonic_status)
     }
 
-    fn get_range_properties(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: GetRangePropertiesRequest,
-        sink: UnarySink<GetRangePropertiesResponse>,
-    ) {
+    async fn get_range_properties(
+        &self,
+        request: tonic::Request<GetRangePropertiesRequest>,
+    ) -> std::result::Result<tonic::Response<GetRangePropertiesResponse>, tonic::Status> {
         const TAG: &str = "get_range_properties";
         let debugger = self.debugger.clone();
-
-        let f =
-            self.pool
-                .spawn(async move {
-                    debugger.get_range_properties(req.get_start_key(), req.get_end_key())
-                })
-                .map(|res| res.unwrap())
-                .map_ok(|props| {
-                    let mut resp = GetRangePropertiesResponse::default();
-                    for (key, value) in props {
-                        let mut prop = RangeProperty::default();
-                        prop.set_key(key);
-                        prop.set_value(value);
-                        resp.mut_properties().push(prop)
-                    }
-                    resp
-                });
-
-        self.handle_response(ctx, sink, f, TAG);
+        let req = request.into_inner();
+        self.pool
+            .spawn(async move {
+                debugger.get_range_properties(req.get_start_key(), req.get_end_key())
+            })
+            .await
+            .unwrap()
+            .map(|props| {
+                let mut resp = GetRangePropertiesResponse::default();
+                for (key, value) in props {
+                    let mut prop = RangeProperty::default();
+                    prop.set_key(key);
+                    prop.set_value(value);
+                    resp.mut_properties().push(prop)
+                }
+                tonic::Response::new(resp)
+            })
+            .map_err(error_to_tonic_status)
     }
 
-    fn get_store_info(
-        &mut self,
-        ctx: RpcContext<'_>,
-        _: GetStoreInfoRequest,
-        sink: UnarySink<GetStoreInfoResponse>,
-    ) {
+    async fn get_store_info(
+        &self,
+        _request: tonic::Request<GetStoreInfoRequest>,
+    ) -> std::result::Result<tonic::Response<GetStoreInfoResponse>, tonic::Status> {
         const TAG: &str = "debug_get_store_id";
         let debugger = self.debugger.clone();
 
-        let f = self
-            .pool
+        self.pool
             .spawn(async move {
                 let mut resp = GetStoreInfoResponse::default();
                 match debugger.get_store_ident() {
@@ -538,22 +476,20 @@ where
                 }
                 Ok(resp)
             })
-            .map(|res| res.unwrap());
-
-        self.handle_response(ctx, sink, f, TAG);
+            .await
+            .unwrap()
+            .map(|resp| tonic::Response::new(resp))
+            .map_err(error_to_tonic_status)
     }
 
-    fn get_cluster_info(
-        &mut self,
-        ctx: RpcContext<'_>,
-        _: GetClusterInfoRequest,
-        sink: UnarySink<GetClusterInfoResponse>,
-    ) {
+    async fn get_cluster_info(
+        &self,
+        _request: tonic::Request<GetClusterInfoRequest>,
+    ) -> std::result::Result<tonic::Response<GetClusterInfoResponse>, tonic::Status> {
         const TAG: &str = "debug_get_cluster_id";
         let debugger = self.debugger.clone();
 
-        let f = self
-            .pool
+        self.pool
             .spawn(async move {
                 let mut resp = GetClusterInfoResponse::default();
                 match debugger.get_store_ident() {
@@ -562,22 +498,20 @@ where
                 }
                 Ok(resp)
             })
-            .map(|res| res.unwrap());
-
-        self.handle_response(ctx, sink, f, TAG);
+            .await
+            .unwrap()
+            .map(|resp| tonic::Response::new(resp))
+            .map_err(error_to_tonic_status)
     }
 
-    fn get_all_regions_in_store(
-        &mut self,
-        ctx: RpcContext<'_>,
-        _: GetAllRegionsInStoreRequest,
-        sink: UnarySink<GetAllRegionsInStoreResponse>,
-    ) {
+    async fn get_all_regions_in_store(
+        &self,
+        _request: tonic::Request<GetAllRegionsInStoreRequest>,
+    ) -> std::result::Result<tonic::Response<GetAllRegionsInStoreResponse>, tonic::Status> {
         const TAG: &str = "debug_get_all_regions_in_store";
         let debugger = self.debugger.clone();
 
-        let f = self
-            .pool
+        self.pool
             .spawn(async move {
                 let mut resp = GetAllRegionsInStoreResponse::default();
                 match debugger.get_all_regions_in_store() {
@@ -586,30 +520,28 @@ where
                 }
                 Ok(resp)
             })
-            .map(|res| res.unwrap());
-
-        self.handle_response(ctx, sink, f, TAG);
+            .await
+            .unwrap()
+            .map(|resp| tonic::Response::new(resp))
+            .map_err(error_to_tonic_status)
     }
 
-    fn reset_to_version(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        req: ResetToVersionRequest,
-        sink: UnarySink<ResetToVersionResponse>,
-    ) {
+    async fn reset_to_version(
+        &self,
+        request: tonic::Request<ResetToVersionRequest>,
+    ) -> std::result::Result<tonic::Response<ResetToVersionResponse>, tonic::Status> {
+        let req = request.into_inner();
         self.debugger.reset_to_version(req.get_ts());
-        sink.success(ResetToVersionResponse::default());
+        Ok(tonic::Response::new(ResetToVersionResponse::default()))
     }
 
-    fn flashback_to_version(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: FlashbackToVersionRequest,
-        sink: UnarySink<FlashbackToVersionResponse>,
-    ) {
+    async fn flashback_to_version(
+        &self,
+        request: tonic::Request<FlashbackToVersionRequest>,
+    ) -> std::result::Result<tonic::Response<FlashbackToVersionResponse>, tonic::Status> {
         let debugger = self.debugger.clone();
-        let f = self
-            .pool
+        let req = request.into_inner();
+        self.pool
             .spawn(async move {
                 let check = debugger.key_range_flashback_to_version(
                     req.get_version(),
@@ -624,53 +556,56 @@ where
                     Err(err) => Err(err),
                 }
             })
-            .map(|res| res.unwrap());
-
-        self.handle_response(ctx, sink, f, "debug_flashback_to_version");
+            .await
+            .unwrap()
+            .map(|resp| tonic::Response::new(resp))
+            .map_err(error_to_tonic_status)
     }
 
-    fn get_region_read_progress(
-        &mut self,
-        ctx: RpcContext<'_>,
-        req: GetRegionReadProgressRequest,
-        sink: UnarySink<GetRegionReadProgressResponse>,
-    ) {
-        let store_meta = self.store_meta.lock().unwrap();
-        let rrp = store_meta.region_read_progress();
+    async fn get_region_read_progress(
+        &self,
+        request: tonic::Request<GetRegionReadProgressRequest>,
+    ) -> std::result::Result<tonic::Response<GetRegionReadProgressResponse>, tonic::Status> {
+        let req = request.into_inner();
         let mut resp = GetRegionReadProgressResponse::default();
-        rrp.with(|registry| {
-            let region = registry.get(&req.get_region_id());
-            if let Some(r) = region {
-                resp.set_region_read_progress_exist(true);
-                resp.set_safe_ts(r.safe_ts());
-                let core = r.get_core();
-                resp.set_applied_index(core.applied_index());
-                resp.set_region_read_progress_paused(core.paused());
-                if let Some(back) = core.pending_items().back() {
-                    resp.set_pending_back_ts(back.ts);
-                    resp.set_pending_back_applied_index(back.idx);
+        {
+            let store_meta = self.store_meta.lock().unwrap();
+            let rrp = store_meta.region_read_progress();
+
+            rrp.with(|registry| {
+                let region = registry.get(&req.get_region_id());
+                if let Some(r) = region {
+                    resp.set_region_read_progress_exist(true);
+                    resp.set_safe_ts(r.safe_ts());
+                    let core = r.get_core();
+                    resp.set_applied_index(core.applied_index());
+                    resp.set_region_read_progress_paused(core.paused());
+                    if let Some(back) = core.pending_items().back() {
+                        resp.set_pending_back_ts(back.ts);
+                        resp.set_pending_back_applied_index(back.idx);
+                    }
+                    if let Some(front) = core.pending_items().front() {
+                        resp.set_pending_front_ts(front.ts);
+                        resp.set_pending_front_applied_index(front.idx)
+                    }
+                    resp.set_read_state_ts(core.read_state().ts);
+                    resp.set_read_state_apply_index(core.read_state().idx);
+                    resp.set_discard(core.discarding());
+                    resp.set_duration_to_last_consume_leader_ms(
+                        core.last_instant_of_consume_leader()
+                            .map(|t| t.saturating_elapsed().as_millis() as u64)
+                            .unwrap_or(u64::MAX),
+                    );
+                    resp.set_duration_to_last_update_safe_ts_ms(
+                        core.last_instant_of_update_ts()
+                            .map(|t| t.saturating_elapsed().as_millis() as u64)
+                            .unwrap_or(u64::MAX),
+                    );
+                } else {
+                    resp.set_region_read_progress_exist(false);
                 }
-                if let Some(front) = core.pending_items().front() {
-                    resp.set_pending_front_ts(front.ts);
-                    resp.set_pending_front_applied_index(front.idx)
-                }
-                resp.set_read_state_ts(core.read_state().ts);
-                resp.set_read_state_apply_index(core.read_state().idx);
-                resp.set_discard(core.discarding());
-                resp.set_duration_to_last_consume_leader_ms(
-                    core.last_instant_of_consume_leader()
-                        .map(|t| t.saturating_elapsed().as_millis() as u64)
-                        .unwrap_or(u64::MAX),
-                );
-                resp.set_duration_to_last_update_safe_ts_ms(
-                    core.last_instant_of_update_ts()
-                        .map(|t| t.saturating_elapsed().as_millis() as u64)
-                        .unwrap_or(u64::MAX),
-                );
-            } else {
-                resp.set_region_read_progress_exist(false);
-            }
-        });
+            });
+        }
 
         // get from resolver
         let (cb, f) = paired_future_callback();
@@ -680,39 +615,35 @@ where
             req.get_min_start_ts(),
             cb,
         ) {
-            let f = async move {
-                let res = f.await;
-                match res {
-                    Err(e) => {
-                        resp.set_error("get resolved-ts info failed".to_owned());
-                        error!("tikv-ctl get resolved-ts info failed"; "err" => ?e);
-                    }
-                    Ok(Some((
-                        stopped,
-                        resolved_ts,
-                        resolver_tracked_index,
-                        num_locks,
-                        num_transactions,
-                    ))) => {
-                        resp.set_resolver_exist(true);
-                        resp.set_resolver_stopped(stopped);
-                        resp.set_resolved_ts(resolved_ts);
-                        resp.set_resolver_tracked_index(resolver_tracked_index);
-                        resp.set_num_locks(num_locks);
-                        resp.set_num_transactions(num_transactions);
-                    }
-                    Ok(None) => {
-                        resp.set_resolver_exist(false);
-                    }
+            let res = f.await;
+            match res {
+                Err(e) => {
+                    resp.set_error("get resolved-ts info failed".to_owned());
+                    error!("tikv-ctl get resolved-ts info failed"; "err" => ?e);
                 }
+                Ok(Some((
+                    stopped,
+                    resolved_ts,
+                    resolver_tracked_index,
+                    num_locks,
+                    num_transactions,
+                ))) => {
+                    resp.set_resolver_exist(true);
+                    resp.set_resolver_stopped(stopped);
+                    resp.set_resolved_ts(resolved_ts);
+                    resp.set_resolver_tracked_index(resolver_tracked_index);
+                    resp.set_num_locks(num_locks);
+                    resp.set_num_transactions(num_transactions);
+                }
+                Ok(None) => {
+                    resp.set_resolver_exist(false);
+                }
+            }
 
-                Ok(resp)
-            };
-            self.handle_response(ctx, sink, f, "debug_get_region_read_progress");
+            Ok(tonic::Response::new(resp))
         } else {
             resp.set_error("resolved-ts is not enabled".to_owned());
-            let f = async move { Ok(resp) };
-            self.handle_response(ctx, sink, f, "debug_get_region_read_progress");
+            Ok(tonic::Response::new(resp))
         }
     }
 }

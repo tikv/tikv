@@ -17,6 +17,8 @@ pub enum Error {
     #[error("{0}")]
     Grpc(#[from] grpcio::Error),
     #[error("{0}")]
+    Tonic(#[from] tonic::Status),
+    #[error("{0}")]
     StreamDisconnect(#[from] SendError),
     #[error("unknown error {0:?}")]
     Other(#[from] Box<dyn error::Error + Sync + Send>),
@@ -41,6 +43,7 @@ impl Error {
     pub fn retryable(&self) -> bool {
         match self {
             Error::Grpc(_)
+            | Error::Tonic(_)
             | Error::ClusterNotBootstrapped(_)
             | Error::StreamDisconnect(_)
             | Error::DataCompacted(_) => true,
@@ -60,7 +63,7 @@ impl ErrorCodeExt for Error {
             Error::ClusterBootstrapped(_) => error_code::pd::CLUSTER_BOOTSTRAPPED,
             Error::ClusterNotBootstrapped(_) => error_code::pd::CLUSTER_NOT_BOOTSTRAPPED,
             Error::Incompatible => error_code::pd::INCOMPATIBLE,
-            Error::Grpc(_) => error_code::pd::GRPC,
+            Error::Grpc(_) | Error::Tonic(_) => error_code::pd::GRPC,
             Error::StreamDisconnect(_) => error_code::pd::STREAM_DISCONNECT,
             Error::RegionNotFound(_) => error_code::pd::REGION_NOT_FOUND,
             Error::StoreTombstone(_) => error_code::pd::STORE_TOMBSTONE,
