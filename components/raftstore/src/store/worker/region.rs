@@ -1258,6 +1258,7 @@ pub(crate) mod tests {
                     region_id: id,
                     status,
                     peer_id: 1,
+                    create_time: Instant::now(),
                 })
                 .unwrap();
         };
