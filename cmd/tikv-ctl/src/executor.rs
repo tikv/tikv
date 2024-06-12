@@ -1054,7 +1054,7 @@ pub trait DebugExecutor {
 // }
 // }
 
-impl DebugExecutor for DebugClient {
+impl DebugExecutor for DebugClient<Channel> {
     fn check_local_mode(&self) {
         unimplemented!()
     }
