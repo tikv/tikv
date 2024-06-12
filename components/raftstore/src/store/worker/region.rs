@@ -340,32 +340,6 @@ where
     }
 }
 
-pub struct Runner<EK, R, T>
-where
-    EK: KvEngine,
-    T: PdClient + 'static,
-{
-    batch_size: usize,
-    ingest_copy_symlink: bool,
-    clean_stale_tick: usize,
-    clean_stale_check_interval: Duration,
-    clean_stale_ranges_tick: usize,
-
-    tiflash_stores: HashMap<u64, bool>,
-    // we may delay some apply tasks if level 0 files to write stall threshold,
-    // pending_applies records all delayed apply task, and will check again later
-    pending_applies: VecDeque<Task<EK::Snapshot>>,
-
-    engine: EK,
-    mgr: SnapManager,
-    coprocessor_host: CoprocessorHost<EK>,
-    router: R,
-    pd_client: Option<Arc<T>>,
-    snap_gen_pool: FuturePool,
-    region_cleanup_pool: FuturePool,
-    region_cleaner: Arc<Mutex<RegionCleaner<EK>>>,
-}
-
 struct RegionCleaner<EK>
 where
     EK: KvEngine,
@@ -565,9 +539,34 @@ where
             };
             box_try!(self.engine.delete_ranges_cf(&wopts, cf, strategy, ranges));
         }
-
         Ok(())
     }
+}
+
+pub struct Runner<EK, R, T>
+where
+    EK: KvEngine,
+    T: PdClient + 'static,
+{
+    batch_size: usize,
+    ingest_copy_symlink: bool,
+    clean_stale_tick: usize,
+    clean_stale_check_interval: Duration,
+    clean_stale_ranges_tick: usize,
+
+    tiflash_stores: HashMap<u64, bool>,
+    // we may delay some apply tasks if level 0 files to write stall threshold,
+    // pending_applies records all delayed apply task, and will check again later
+    pending_applies: VecDeque<Task<EK::Snapshot>>,
+
+    engine: EK,
+    mgr: SnapManager,
+    coprocessor_host: CoprocessorHost<EK>,
+    router: R,
+    pd_client: Option<Arc<T>>,
+    snap_gen_pool: FuturePool,
+    region_cleanup_pool: FuturePool,
+    region_cleaner: Arc<Mutex<RegionCleaner<EK>>>,
 }
 
 impl<EK, R, T> Runner<EK, R, T>
