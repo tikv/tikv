@@ -54,7 +54,6 @@ use tikv_util::{
     deadline::Deadline, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
 };
 use tracker::{get_tls_tracker_token, set_tls_tracker_token, TrackerToken};
-use txn_types::TimeStamp;
 
 use crate::{
     server::lock_manager::waiter_manager,
@@ -1714,9 +1713,8 @@ pub async fn get_raw_ext(
         match cmd {
             Command::RawCompareAndSwap(_) | Command::RawAtomicStore(_) => {
                 if !max_ts_synced {
-                    return Err(ErrorInner::MaxTimestampNotSynced {
+                    return Err(ErrorInner::RawKvMaxTimestampNotSynced {
                         region_id: cmd.ctx().get_region_id(),
-                        start_ts: TimeStamp::zero(),
                     }
                     .into());
                 }
