@@ -8,6 +8,7 @@
 //! raft db and then invoking callback or sending msgs if any.
 
 use std::{
+    collections::VecDeque,
     fmt, mem,
     sync::Arc,
     thread::{self, JoinHandle},
@@ -26,6 +27,7 @@ use kvproto::{
     metapb::RegionEpoch,
     raft_serverpb::{RaftLocalState, RaftMessage},
 };
+use ordered_float::OrderedFloat;
 use parking_lot::Mutex;
 use protobuf::Message;
 use raft::eraftpb::Entry;
@@ -565,6 +567,66 @@ where
     }
 }
 
+struct BatchRecorder {
+    batch_limit_size: usize,
+    capacity: usize,
+    history: VecDeque<usize>,
+    sum: usize,
+    avg: usize,
+    trend: OrderedFloat<f64>,
+}
+
+impl BatchRecorder {
+    fn new(limit_size: usize) -> Self {
+        Self {
+            batch_limit_size: limit_size,
+            history: VecDeque::new(),
+            capacity: 30, // default
+            sum: 0,
+            avg: 0,
+            trend: OrderedFloat(1.0),
+        }
+    }
+
+    fn record(&mut self, size: usize) {
+        self.history.push_back(size);
+        self.sum += size;
+
+        if self.history.len() < self.capacity {
+            return;
+        }
+        let _ = self
+            .sum
+            .saturating_sub(self.history.pop_front().unwrap_or(0));
+
+        let prev_avg = self.avg;
+        self.avg = self.sum / self.history.len();
+        if prev_avg > 0 {
+            // The trend ranges from 0.5 to 2.0.
+            self.trend = std::cmp::max(
+                OrderedFloat(2.0),
+                OrderedFloat((self.avg as f64) / (prev_avg as f64)),
+            );
+            self.trend = self.trend.min(OrderedFloat(0.5));
+        } else {
+            self.trend = OrderedFloat(1.0);
+        }
+    }
+
+    fn update_batch_size_limit(&mut self, limit_size: usize) {
+        self.batch_limit_size = limit_size;
+    }
+
+    fn should_spin(&self, batch_size: usize) -> bool {
+        batch_size < self.batch_limit_size
+    }
+
+    fn spin_duration(&self) -> std::time::Duration {
+        let trend: f64 = self.trend.into();
+        std::time::Duration::from_micros(25 * (1.0 / trend) as u64)
+    }
+}
+
 pub struct Worker<EK, ER, N, T>
 where
     EK: KvEngine,
@@ -581,11 +643,11 @@ where
     batch: WriteTaskBatch<EK, ER>,
     cfg_tracker: Tracker<Config>,
     raft_write_size_limit: usize,
-    raft_write_batch_size_thd: usize,
     metrics: StoreWriteMetrics,
     message_metrics: RaftSendMessageMetrics,
     perf_context: ER::PerfContext,
     pending_latency_inspect: Vec<(Instant, Vec<LatencyInspector>)>,
+    pending_batch_recorder: BatchRecorder,
 }
 
 impl<EK, ER, N, T> Worker<EK, ER, N, T>
@@ -620,11 +682,13 @@ where
             batch,
             cfg_tracker,
             raft_write_size_limit: cfg.value().raft_write_size_limit.0 as usize,
-            raft_write_batch_size_thd: cfg.value().raft_write_batch_size_thd.0 as usize,
             metrics: StoreWriteMetrics::new(cfg.value().waterfall_metrics),
             message_metrics: RaftSendMessageMetrics::default(),
             perf_context,
             pending_latency_inspect: vec![],
+            pending_batch_recorder: BatchRecorder::new(
+                cfg.value().raft_write_batch_size_thd.0 as usize,
+            ),
         }
     }
 
@@ -647,8 +711,10 @@ where
                         stopped |= self.handle_msg(msg);
                     }
                     Err(TryRecvError::Empty) => {
-                        if self.batch.get_raft_size() < self.raft_write_batch_size_thd
-                            && no_op_loop_count > 0
+                        if no_op_loop_count > 0
+                            && self
+                                .pending_batch_recorder
+                                .should_spin(self.batch.get_raft_size())
                         {
                             // If the size of the batch is small enough, we spin for a while
                             // to make the batch larger. This can reduce the IOPS
@@ -656,7 +722,7 @@ where
                             no_op_loop_count -= 1;
                             // Sleep some time (50 microseconds) to avoid busy loop and
                             // make the batch larger.
-                            std::thread::sleep(std::time::Duration::from_micros(50));
+                            std::thread::sleep(self.pending_batch_recorder.spin_duration());
                             continue;
                         } else {
                             break;
@@ -677,7 +743,9 @@ where
             STORE_WRITE_HANDLE_MSG_DURATION_HISTOGRAM
                 .observe(duration_to_sec(handle_begin.saturating_elapsed()));
 
-            STORE_WRITE_TRIGGER_SIZE_HISTOGRAM.observe(self.batch.get_raft_size() as f64);
+            let cur_batch_size = self.batch.get_raft_size();
+            self.pending_batch_recorder.record(cur_batch_size);
+            STORE_WRITE_TRIGGER_SIZE_HISTOGRAM.observe(cur_batch_size as f64);
 
             self.write_to_db(true);
 
@@ -898,7 +966,8 @@ where
         // update config
         if let Some(incoming) = self.cfg_tracker.any_new() {
             self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
-            self.raft_write_batch_size_thd = incoming.raft_write_batch_size_thd.0 as usize;
+            self.pending_batch_recorder
+                .update_batch_size_limit(incoming.raft_write_batch_size_thd.0 as usize);
             self.metrics.waterfall_metrics = incoming.waterfall_metrics;
         }
     }
