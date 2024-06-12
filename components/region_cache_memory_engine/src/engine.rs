@@ -418,7 +418,7 @@ impl RangeCacheMemoryEngine {
     // cached and which writes should be written directly.
     pub(crate) fn handle_pending_range_in_loading_buffer(
         &self,
-        seq: u64,
+        seq: &mut u64,
         pending_range_in_loading_buffer: Vec<RangeCacheWriteBatchEntry>,
     ) -> (Vec<RangeCacheWriteBatchEntry>, SkiplistEngine) {
         if !pending_range_in_loading_buffer.is_empty() {
@@ -429,10 +429,14 @@ impl RangeCacheMemoryEngine {
             if !group_entries_to_cache.is_empty() {
                 let mut core = RwLockUpgradableReadGuard::upgrade(core);
                 for (range, write_batches) in group_entries_to_cache {
-                    core.cached_write_batch
-                        .entry(range)
-                        .or_default()
-                        .extend(write_batches.into_iter().map(|e| (seq, e)));
+                    core.cached_write_batch.entry(range).or_default().extend(
+                        write_batches.into_iter().map(|e| {
+                            // We should confirm the sequence number for cached entries, and
+                            // also increased for each of them.
+                            *seq += 1;
+                            (*seq - 1, e)
+                        }),
+                    );
                 }
             }
             (entries_to_write, engine)
@@ -446,11 +450,11 @@ impl RangeCacheMemoryEngine {
         &self.bg_work_manager
     }
 
-    pub(crate) fn memory_controller(&self) -> Arc<MemoryController> {
+    pub fn memory_controller(&self) -> Arc<MemoryController> {
         self.memory_controller.clone()
     }
 
-    pub(crate) fn statistics(&self) -> Arc<Statistics> {
+    pub fn statistics(&self) -> Arc<Statistics> {
         self.statistics.clone()
     }
 }

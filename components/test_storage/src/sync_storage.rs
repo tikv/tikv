@@ -7,6 +7,7 @@ use std::{
 
 use api_version::{ApiV1, KvFormat};
 use collections::HashMap;
+use engine_traits::KvEngine;
 use futures::executor::block_on;
 use kvproto::{
     kvrpcpb::{ChecksumAlgorithm, Context, GetRequest, KeyRange, LockInfo, RawGetRequest},
@@ -130,15 +131,6 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
             gc_worker,
             store: storage,
         })
-    }
-
-    pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
-        &mut self,
-        cfg: AutoGcConfig<S, R>,
-    ) {
-        self.gc_worker
-            .start_auto_gc(cfg, Arc::new(AtomicU64::new(0)))
-            .unwrap();
     }
 
     pub fn get_storage(&self) -> Storage<E, MockLockManager, F> {
@@ -521,5 +513,20 @@ impl<E: Engine, F: KvFormat> SyncTestStorage<E, F> {
             self.store
                 .raw_checksum(ctx, ChecksumAlgorithm::Crc64Xor, ranges),
         )
+    }
+}
+
+impl<E, F> SyncTestStorage<E, F>
+where
+    E: Engine<Local: KvEngine<DiskEngine = engine_rocks::RocksEngine>>,
+    F: KvFormat,
+{
+    pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
+        &mut self,
+        cfg: AutoGcConfig<S, R>,
+    ) {
+        self.gc_worker
+            .start_auto_gc(cfg, Arc::new(AtomicU64::new(0)))
+            .unwrap();
     }
 }
