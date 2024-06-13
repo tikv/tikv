@@ -3917,6 +3917,7 @@ where
         })();
         let mut meta = self.ctx.store_meta.lock().unwrap();
         meta.damaged_regions.remove(&self.fsm.region_id());
+        meta.damaged_regions.shrink_to_fit();
         let is_latest_initialized = {
             if let Some(latest_region_info) = meta.regions.get(&region_id) {
                 util::is_region_initialized(latest_region_info)

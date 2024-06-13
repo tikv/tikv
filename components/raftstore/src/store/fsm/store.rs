@@ -2827,7 +2827,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 // `damaged_ranges` are already non-overlapping.
                 stats
                     .mut_damaged_regions_id()
-                    .extend(meta.damaged_regions.iter().map(|id| *id));
+                    .extend(meta.damaged_regions.iter());
             }
             completed_apply_peers_count = meta.completed_apply_peers_count;
             busy_apply_peers_count = meta.busy_apply_peers.len() as u64;
