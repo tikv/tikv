@@ -67,6 +67,8 @@ pub struct Endpoint<E: Engine> {
     /// The soft time limit of handling Coprocessor requests.
     max_handle_duration: Duration,
 
+    semaphore_waiter_limit: usize,
+
     slow_log_threshold: Duration,
 
     _phantom: PhantomData<E>,
@@ -102,6 +104,7 @@ impl<E: Engine> Endpoint<E> {
             stream_batch_row_limit: cfg.end_point_stream_batch_row_limit,
             stream_channel_size: cfg.end_point_stream_channel_size,
             max_handle_duration: cfg.end_point_request_max_handle_duration.0,
+            semaphore_waiter_limit: cfg.end_point_semaphore_waiter_limit,
             slow_log_threshold: cfg.end_point_slow_log_threshold.0,
             _phantom: Default::default(),
         }
@@ -360,6 +363,7 @@ impl<E: Engine> Endpoint<E> {
     /// `RequestHandler` to process the request and produce a result.
     async fn handle_unary_request_impl(
         semaphore: Option<Arc<Semaphore>>,
+        semaphore_waiter_limit: usize,
         mut tracker: Box<Tracker>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
     ) -> Result<MemoryTraceGuard<coppb::Response>> {
@@ -392,12 +396,21 @@ impl<E: Engine> Endpoint<E> {
         let handle_request_future = check_deadline(handler.handle_request(), deadline);
         let handle_request_future = track(handle_request_future, &mut tracker);
 
-        let deadline_res = if let Some(semaphore) = &semaphore {
-            limit_concurrency(handle_request_future, semaphore, LIGHT_TASK_THRESHOLD).await
+        let result = if let Some(semaphore) = &semaphore {
+            limit_concurrency(
+                handle_request_future,
+                semaphore,
+                semaphore_waiter_limit,
+                LIGHT_TASK_THRESHOLD,
+            )
+            .await
+            .and_then(|deadline_res| deadline_res.map_err(Error::from).and_then(|res| res))
         } else {
-            handle_request_future.await
+            handle_request_future
+                .await
+                .map_err(Error::from)
+                .and_then(|res| res)
         };
-        let result = deadline_res.map_err(Error::from).and_then(|res| res);
 
         // There might be errors when handling requests. In this case, we still need its
         // execution metrics.
@@ -440,8 +453,13 @@ impl<E: Engine> Endpoint<E> {
         let res = self
             .read_pool
             .spawn_handle(
-                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
-                    .in_resource_metering_tag(resource_tag),
+                Self::handle_unary_request_impl(
+                    self.semaphore.clone(),
+                    self.semaphore_waiter_limit,
+                    tracker,
+                    handler_builder,
+                )
+                .in_resource_metering_tag(resource_tag),
                 priority,
                 task_id,
             )

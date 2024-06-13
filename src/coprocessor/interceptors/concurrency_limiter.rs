@@ -13,6 +13,7 @@ use tokio::sync::{Semaphore, SemaphorePermit};
 use tikv_util::time::Instant;
 
 use crate::coprocessor::metrics::*;
+use crate::coprocessor::{Error, Result};
 
 /// Limits the concurrency of heavy tasks by limiting the time spent on executing `fut`
 /// before forcing to acquire a semaphore permit.
@@ -22,13 +23,15 @@ use crate::coprocessor::metrics::*;
 pub fn limit_concurrency<'a, F: Future + 'a>(
     fut: F,
     semaphore: &'a Semaphore,
+    semaphore_waiter_limit: usize,
     time_limit_without_permit: Duration,
-) -> impl Future<Output = F::Output> + 'a {
+) -> impl Future<Output = Result<F::Output>> + 'a {
     ConcurrencyLimiter::new(
         semaphore
             .acquire()
             .map(|permit| permit.expect("the semaphore never be closed")),
         fut,
+        semaphore_waiter_limit,
         time_limit_without_permit,
     )
 }
@@ -43,6 +46,7 @@ where
     permit_fut: PF,
     #[pin]
     fut: F,
+    semaphore_waiter_limit: usize,
     time_limit_without_permit: Duration,
     execution_time: Duration,
     state: LimitationState<'a>,
@@ -60,10 +64,16 @@ where
     PF: Future<Output = SemaphorePermit<'a>>,
     F: Future,
 {
-    fn new(permit_fut: PF, fut: F, time_limit_without_permit: Duration) -> Self {
+    fn new(
+        permit_fut: PF,
+        fut: F,
+        semaphore_waiter_limit: usize,
+        time_limit_without_permit: Duration,
+    ) -> Self {
         ConcurrencyLimiter {
             permit_fut,
             fut,
+            semaphore_waiter_limit,
             time_limit_without_permit,
             execution_time: Duration::default(),
             state: LimitationState::NotLimited,
@@ -77,7 +87,7 @@ where
     PF: Future<Output = SemaphorePermit<'a>>,
     F: Future,
 {
-    type Output = F::Output;
+    type Output = Result<F::Output>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
@@ -89,6 +99,10 @@ where
                         COPR_ACQUIRE_SEMAPHORE_TYPE.acquired.inc();
                     }
                     Poll::Pending => {
+                        if COPR_WAITING_FOR_SEMAPHORE.get() as usize > *this.semaphore_waiter_limit
+                        {
+                            return Poll::Ready(Err(Error::MaxPendingTasksExceeded));
+                        }
                         *this.state = LimitationState::Acquiring;
                         COPR_WAITING_FOR_SEMAPHORE.inc();
                         return Poll::Pending;
@@ -113,7 +127,7 @@ where
                 if let LimitationState::NotLimited = this.state {
                     COPR_ACQUIRE_SEMAPHORE_TYPE.unacquired.inc();
                 }
-                Poll::Ready(res)
+                Poll::Ready(Ok(res))
             }
             Poll::Pending => {
                 *this.execution_time += now.saturating_elapsed();
@@ -149,7 +163,7 @@ mod tests {
         let smp2 = smp.clone();
         assert!(
             tokio::spawn(timeout(Duration::from_millis(250), async move {
-                limit_concurrency(work(2), &*smp2, Duration::from_millis(500)).await
+                limit_concurrency(work(2), &*smp2, 1024, Duration::from_millis(500)).await
             }))
             .await
             .is_ok()
@@ -159,19 +173,17 @@ mod tests {
         // it starts with t1
         smp.add_permits(1);
         let smp2 = smp.clone();
-        let mut t1 =
-            tokio::spawn(
-                async move { limit_concurrency(work(8), &*smp2, Duration::default()).await },
-            )
-            .fuse();
+        let mut t1 = tokio::spawn(async move {
+            limit_concurrency(work(8), &*smp2, 1024, Duration::default()).await
+        })
+        .fuse();
 
         sleep(Duration::from_millis(100)).await;
         let smp2 = smp.clone();
-        let mut t2 =
-            tokio::spawn(
-                async move { limit_concurrency(work(2), &*smp2, Duration::default()).await },
-            )
-            .fuse();
+        let mut t2 = tokio::spawn(async move {
+            limit_concurrency(work(2), &*smp2, 1024, Duration::default()).await
+        })
+        .fuse();
 
         let deadline = sleep(Duration::from_millis(1500)).fuse();
         futures::pin_mut!(deadline);

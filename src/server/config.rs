@@ -42,6 +42,8 @@ const DEFAULT_ENDPOINT_STREAM_BATCH_ROW_LIMIT: usize = 128;
 // At least 4 long coprocessor requests are allowed to run concurrently.
 const MIN_ENDPOINT_MAX_CONCURRENCY: usize = 4;
 
+const DEFAULT_ENDPOINT_SEMAPHORE_WAITER_LIMIT: usize = isize::MAX as usize;
+
 const DEFAULT_SNAP_MAX_BYTES_PER_SEC: u64 = 100 * 1024 * 1024;
 
 const DEFAULT_MAX_GRPC_SEND_MSG_LEN: i32 = 10 * 1024 * 1024;
@@ -133,6 +135,8 @@ pub struct Config {
     pub end_point_request_max_handle_duration: ReadableDuration,
     #[online_config(skip)]
     pub end_point_max_concurrency: usize,
+    #[online_config(skip)]
+    pub end_point_semaphore_waiter_limit: usize,
     pub snap_max_write_bytes_per_sec: ReadableSize,
     pub snap_max_total_size: ReadableSize,
     #[online_config(skip)]
@@ -234,6 +238,7 @@ impl Default for Config {
                 DEFAULT_ENDPOINT_REQUEST_MAX_HANDLE_SECS,
             ),
             end_point_max_concurrency: cmp::max(cpu_num as usize, MIN_ENDPOINT_MAX_CONCURRENCY),
+            end_point_semaphore_waiter_limit: DEFAULT_ENDPOINT_SEMAPHORE_WAITER_LIMIT,
             snap_max_write_bytes_per_sec: ReadableSize(DEFAULT_SNAP_MAX_BYTES_PER_SEC),
             snap_max_total_size: ReadableSize(0),
             stats_concurrency: 1,
