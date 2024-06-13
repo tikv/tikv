@@ -24,7 +24,9 @@ use tikv_util::{config::VersionTrack, info};
 
 use crate::{
     background::{BackgroundTask, BgWorkManager, PdRangeHintService},
-    keys::{encode_key_for_eviction, InternalBytes},
+    keys::{
+        encode_key_for_boundary_with_mvcc, encode_key_for_boundary_without_mvcc, InternalBytes,
+    },
     memory_controller::MemoryController,
     range_manager::{LoadFailedReason, RangeCacheStatus, RangeManager},
     read::{RangeCacheIterator, RangeCacheSnapshot},
@@ -148,7 +150,12 @@ impl SkiplistEngine {
 
     pub(crate) fn delete_range(&self, range: &CacheRange) {
         DATA_CFS.iter().for_each(|&cf| {
-            let (start, end) = encode_key_for_eviction(range);
+            let (start, end) = if cf == CF_LOCK {
+                encode_key_for_boundary_without_mvcc(range)
+            } else {
+                encode_key_for_boundary_with_mvcc(range)
+            };
+
             let handle = self.cf_handle(cf);
             let mut iter = handle.iterator();
             let guard = &epoch::pin();
@@ -522,10 +529,17 @@ impl Iterable for RangeCacheMemoryEngine {
 pub mod tests {
     use std::sync::Arc;
 
-    use engine_traits::CacheRange;
-    use tikv_util::config::VersionTrack;
+    use crossbeam::epoch;
+    use engine_traits::{CacheRange, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use tikv_util::config::{ReadableSize, VersionTrack};
 
-    use crate::{RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine};
+    use super::SkiplistEngine;
+    use crate::{
+        keys::{construct_key, construct_user_key, encode_key},
+        memory_controller::MemoryController,
+        InternalBytes, RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
+        ValueType,
+    };
 
     #[test]
     fn test_overlap_with_pending() {
@@ -561,5 +575,104 @@ pub mod tests {
                     .pending_ranges_loading_data
                     .is_empty()
         );
+    }
+
+    #[test]
+    fn test_delete_range() {
+        let delete_range_cf = |cf| {
+            let skiplist = SkiplistEngine::default();
+            let handle = skiplist.cf_handle(cf);
+
+            let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig {
+                enabled: true,
+                gc_interval: Default::default(),
+                soft_limit_threshold: Some(ReadableSize(300)),
+                hard_limit_threshold: Some(ReadableSize(500)),
+            }));
+            let mem_controller = Arc::new(MemoryController::new(config.clone(), skiplist.clone()));
+
+            let guard = &epoch::pin();
+
+            let insert_kv = |k, mvcc, v: &[u8], seq| {
+                let user_key = construct_key(k, mvcc);
+                let mut key = encode_key(&user_key, seq, ValueType::Value);
+                let mut val = InternalBytes::from_vec(v.to_vec());
+                key.set_memory_controller(mem_controller.clone());
+                val.set_memory_controller(mem_controller.clone());
+                handle.insert(key, val, guard);
+            };
+
+            insert_kv(0, 1, b"val", 100);
+            insert_kv(1, 2, b"val", 101);
+            insert_kv(1, 3, b"val", 102);
+            insert_kv(2, 2, b"val", 103);
+            insert_kv(9, 2, b"val", 104);
+            insert_kv(10, 2, b"val", 105);
+
+            let start = construct_user_key(1);
+            let end = construct_user_key(10);
+            let range = CacheRange::new(start, end);
+            skiplist.delete_range(&range);
+
+            let mut iter = handle.iterator();
+            iter.seek_to_first(guard);
+            let expect = construct_key(0, 1);
+            let expect = encode_key(&expect, 100, ValueType::Value);
+            assert_eq!(iter.key(), &expect);
+            iter.next(guard);
+
+            let expect = construct_key(10, 2);
+            let expect = encode_key(&expect, 105, ValueType::Value);
+            assert_eq!(iter.key(), &expect);
+            iter.next(guard);
+            assert!(!iter.valid());
+        };
+        delete_range_cf(CF_DEFAULT);
+        delete_range_cf(CF_WRITE);
+    }
+
+    #[test]
+    fn test_delete_range_for_lock_cf() {
+        let skiplist = SkiplistEngine::default();
+        let lock_handle = skiplist.cf_handle(CF_LOCK);
+
+        let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig {
+            enabled: true,
+            gc_interval: Default::default(),
+            soft_limit_threshold: Some(ReadableSize(300)),
+            hard_limit_threshold: Some(ReadableSize(500)),
+        }));
+        let mem_controller = Arc::new(MemoryController::new(config.clone(), skiplist.clone()));
+
+        let guard = &epoch::pin();
+
+        let insert_kv = |k, v: &[u8], seq| {
+            let mut key = encode_key(k, seq, ValueType::Value);
+            let mut val = InternalBytes::from_vec(v.to_vec());
+            key.set_memory_controller(mem_controller.clone());
+            val.set_memory_controller(mem_controller.clone());
+            lock_handle.insert(key, val, guard);
+        };
+
+        insert_kv(b"k", b"val", 100);
+        insert_kv(b"k1", b"val1", 101);
+        insert_kv(b"k2", b"val2", 102);
+        insert_kv(b"k3", b"val3", 103);
+        insert_kv(b"k4", b"val4", 104);
+
+        let range = CacheRange::new(b"k1".to_vec(), b"k4".to_vec());
+        skiplist.delete_range(&range);
+
+        let mut iter = lock_handle.iterator();
+        iter.seek_to_first(guard);
+        let expect = encode_key(b"k", 100, ValueType::Value);
+        assert_eq!(iter.key(), &expect);
+
+        iter.next(guard);
+        let expect = encode_key(b"k4", 104, ValueType::Value);
+        assert_eq!(iter.key(), &expect);
+
+        iter.next(guard);
+        assert!(!iter.valid());
     }
 }

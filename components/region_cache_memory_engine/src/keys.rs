@@ -216,12 +216,12 @@ pub fn encode_seek_for_prev_key(key: &[u8], seq: u64) -> InternalBytes {
 
 // range keys deos not contain mvcc version and sequence number
 #[inline]
-pub fn encode_key_for_eviction(range: &CacheRange) -> (InternalBytes, InternalBytes) {
+pub fn encode_key_for_boundary_with_mvcc(range: &CacheRange) -> (InternalBytes, InternalBytes) {
     // Both encoded_start and encoded_end should be the smallest key in the
-    // respective of user key, so that the eviction covers all versions of the range
-    // start and covers nothing of range end.
+    // respective of user key (with mvcc version), so that the iterations covers all
+    // versions of the range start and covers nothing of range end.
 
-    // we could avoid one clone, but this code is clearer.
+    // todo: can we avoid one clone
     let start_mvcc_key = Key::from_encoded(range.start.to_vec())
         .append_ts(TimeStamp::max())
         .into_encoded();
@@ -231,6 +231,19 @@ pub fn encode_key_for_eviction(range: &CacheRange) -> (InternalBytes, InternalBy
         .append_ts(TimeStamp::max())
         .into_encoded();
     let encoded_end = encode_key(&end_mvcc_key, u64::MAX, VALUE_TYPE_FOR_SEEK);
+
+    (encoded_start, encoded_end)
+}
+
+#[inline]
+pub fn encode_key_for_boundary_without_mvcc(range: &CacheRange) -> (InternalBytes, InternalBytes) {
+    // Both encoded_start and encoded_end should be the smallest key in the
+    // respective of user key (without mvcc version), so that the iterations covers
+    // all versions of the range start and covers nothing of range end.
+
+    // todo: can we avoid one clone
+    let encoded_start = encode_key(&range.start, u64::MAX, VALUE_TYPE_FOR_SEEK);
+    let encoded_end = encode_key(&range.end, u64::MAX, VALUE_TYPE_FOR_SEEK);
 
     (encoded_start, encoded_end)
 }
@@ -253,10 +266,9 @@ pub fn construct_user_key(i: u64) -> Vec<u8> {
 #[cfg(test)]
 pub fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {
     let k = format!("k{:08}", i);
-    let mut key = k.as_bytes().to_vec();
-    // mvcc version should be make bit-wise reverse so that k-100 is less than k-99
-    key.put_u64(!mvcc);
-    key
+    Key::from_encoded(k.as_bytes().to_vec())
+        .append_ts(TimeStamp::new(mvcc))
+        .into_encoded()
 }
 
 #[cfg(test)]
