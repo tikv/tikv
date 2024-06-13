@@ -18,8 +18,9 @@ use tikv::{coprocessor::checksum_crc64_xor, storage::txn::TxnEntry};
 use tikv_util::{
     self, box_err, error,
     time::{Instant, Limiter},
+    warn,
 };
-use txn_types::KvPair;
+use txn_types::{Key, KvPair};
 
 use crate::{backup_file_name, metrics::*, utils::KeyValueCodec, Error, Result};
 
@@ -214,6 +215,7 @@ impl<EK: KvEngine> BackupWriterBuilder<EK> {
 pub struct BackupWriter<EK: KvEngine> {
     name: String,
     default: Writer<<EK as SstExt>::SstWriter>,
+    default_sort_buffer: Vec<(Vec<u8>, Vec<u8>)>,
     write: Writer<<EK as SstExt>::SstWriter>,
     limiter: Limiter,
     sst_max_size: u64,
@@ -249,6 +251,7 @@ impl<EK: KvEngine> BackupWriter<EK> {
         Ok(BackupWriter {
             name,
             default: Writer::new(default),
+            default_sort_buffer: vec![],
             write: Writer::new(write),
             limiter,
             sst_max_size,
@@ -266,12 +269,34 @@ impl<EK: KvEngine> BackupWriter<EK> {
             match &e {
                 TxnEntry::Commit { default, write, .. } => {
                     // Default may be empty if value is small.
-                    if !default.0.is_empty() {
-                        self.default.write(&default.0, &default.1)?;
-                        value_in_default = true;
+                    let res = (|| {
+
+                        if !default.0.is_empty() {
+                            if !self.default_sort_buffer.is_empty()
+                                && Key::truncate_ts_for(&default.0).ok()
+                                    != self
+                                        .default_sort_buffer
+                                        .last()
+                                        .and_then(|(k, _)| Key::truncate_ts_for(k).ok())
+                            {
+                                self.default_sort_buffer
+                                    .sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+                                for (k, v) in self.default_sort_buffer.drain(..) {
+                                    self.default.write(&k, &v)?;
+                                }
+                            }
+
+                            self.default_sort_buffer.push(default.clone());
+                            value_in_default = true;
+                        }
+                        assert!(!write.0.is_empty());
+                        self.write.write(&write.0, &write.1)?;
+
+                        Result::Ok(())
+                    })();
+                    if let Err(err) = res {
+                        return Err(err);
                     }
-                    assert!(!write.0.is_empty());
-                    self.write.write(&write.0, &write.1)?;
                 }
                 TxnEntry::Prewrite { .. } => {
                     return Err(Error::Other("prewrite is not supported".into()));
@@ -287,8 +312,15 @@ impl<EK: KvEngine> BackupWriter<EK> {
     }
 
     /// Save buffered SST files to the given external storage.
-    pub async fn save(self, storage: &dyn ExternalStorage) -> Result<Vec<File>> {
+    pub async fn save(mut self, storage: &dyn ExternalStorage) -> Result<Vec<File>> {
         let start = Instant::now();
+        if !self.default_sort_buffer.is_empty() {
+            self.default_sort_buffer
+                .sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
+            for (k, v) in self.default_sort_buffer.drain(..) {
+                self.default.write(&k, &v)?;
+            }
+        }
         let mut files = Vec::with_capacity(2);
         let write_written = !self.write.is_empty() || !self.default.is_empty();
         if !self.default.is_empty() {
