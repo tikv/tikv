@@ -268,6 +268,12 @@ pub trait FilterFactory {
     fn generate(&self, node_id: u64) -> Vec<Box<dyn Filter>>;
 }
 
+impl<F: Fn(u64) -> Fl, Fl: Filter + 'static> FilterFactory for F {
+    fn generate(&self, node_id: u64) -> Vec<Box<dyn Filter>> {
+        vec![Box::new(self(node_id)) as _]
+    }
+}
+
 #[derive(Default)]
 pub struct DefaultFilterFactory<F: Filter + Default>(PhantomData<F>);
 

@@ -28,14 +28,23 @@ use strum::{EnumCount, EnumVariantNames};
 use tikv_util::{deadline::Deadline, escape, memory::HeapSize, time::Instant};
 use tracker::{get_tls_tracker_token, TrackerToken};
 
-use super::{local_metrics::TimeTracker, region_meta::RegionMeta, FetchedLogs, RegionSnapshot};
+use super::{
+    local_metrics::TimeTracker, region_meta::RegionMeta,
+    snapshot_backup::SnapshotBrWaitApplyRequest, FetchedLogs, RegionSnapshot,
+};
 use crate::store::{
     fsm::apply::{CatchUpLogs, ChangeObserver, TaskRes as ApplyTaskRes},
     metrics::RaftEventDurationType,
+<<<<<<< HEAD
     peer::{
         SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
         UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
         UnsafeRecoveryWaitApplySyncer,
+=======
+    unsafe_recovery::{
+        UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
+        UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryWaitApplySyncer,
+>>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
     },
     util::{KeysInfoFormatter, LatencyInspector},
     worker::{Bucket, BucketRange},
@@ -530,7 +539,7 @@ where
     UnsafeRecoveryDestroy(UnsafeRecoveryExecutePlanSyncer),
     UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
-    SnapshotRecoveryWaitApply(SnapshotRecoveryWaitApplySyncer),
+    SnapshotBrWaitApply(SnapshotBrWaitApplyRequest),
     CheckPendingAdmin(UnboundedSender<CheckAdminResponse>),
 }
 

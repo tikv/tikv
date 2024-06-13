@@ -2752,7 +2752,11 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
+<<<<<<< HEAD
 source = "git+https://github.com/pingcap/kvproto.git?branch=release-7.1#f4a2db6417b657c65ea5d65374c954e3afa5acf0"
+=======
+source = "git+https://github.com/pingcap/kvproto.git#932639606bcf3db9676627d55430e1dd10670570"
+>>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -5770,6 +5774,7 @@ dependencies = [
  "grpcio",
  "kvproto",
  "protobuf",
+ "raftstore",
  "rand 0.8.5",
  "tempfile",
  "test_raftstore",
