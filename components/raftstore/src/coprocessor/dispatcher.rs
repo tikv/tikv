@@ -575,13 +575,20 @@ impl<E: KvEngine> CoprocessorHost<E> {
     }
 
     // (index, term) is for the applying entry.
-    pub fn pre_exec(&self, region: &Region, cmd: &RaftCmdRequest, index: u64, term: u64) -> bool {
+    pub fn pre_exec(
+        &self,
+        region: &Region,
+        cmd: &RaftCmdRequest,
+        index: u64,
+        term: u64,
+        apply_state: &RaftApplyState,
+    ) -> bool {
         let mut ctx = ObserverContext::new(region);
         if !cmd.has_admin_request() {
             let query = cmd.get_requests();
             for observer in &self.registry.query_observers {
                 let observer = observer.observer.inner();
-                if observer.pre_exec_query(&mut ctx, query, index, term) {
+                if observer.pre_exec_query(&mut ctx, query, index, term, apply_state) {
                     return true;
                 }
             }
@@ -590,7 +597,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
             let admin = cmd.get_admin_request();
             for observer in &self.registry.admin_observers {
                 let observer = observer.observer.inner();
-                if observer.pre_exec_admin(&mut ctx, admin, index, term) {
+                if observer.pre_exec_admin(&mut ctx, admin, index, term, apply_state) {
                     return true;
                 }
             }
@@ -886,6 +893,32 @@ impl<E: KvEngine> CoprocessorHost<E> {
         }
     }
 
+    pub fn post_compact_log_from_underlying_engine(
+        &self,
+        region_id: u64,
+        do_write: bool,
+        compact_index: u64,
+        compact_term: u64,
+        max_compact_index: u64,
+        max_compact_term: u64,
+        request_applied_index: u64,
+        raftstore_applied_index: u64,
+    ) {
+        for observer in &self.registry.region_change_observers {
+            let observer = observer.observer.inner();
+            observer.post_compact_log_from_underlying_engine(
+                region_id,
+                do_write,
+                compact_index,
+                compact_term,
+                max_compact_index,
+                max_compact_term,
+                request_applied_index,
+                raftstore_applied_index,
+            );
+        }
+    }
+
     pub fn shutdown(&self) {
         for entry in &self.registry.admin_observers {
             entry.observer.inner().stop();
@@ -988,6 +1021,7 @@ mod tests {
             _: &AdminRequest,
             _: u64,
             _: u64,
+            _: &RaftApplyState,
         ) -> bool {
             self.called
                 .fetch_add(ObserverIndex::PreExecAdmin as usize, Ordering::SeqCst);
@@ -1043,6 +1077,7 @@ mod tests {
             _: &[Request],
             _: u64,
             _: u64,
+            _: &RaftApplyState,
         ) -> bool {
             self.called
                 .fetch_add(ObserverIndex::PreExecQuery as usize, Ordering::SeqCst);
@@ -1310,14 +1345,15 @@ mod tests {
         assert_all!([&ob.called], &[index]);
 
         let mut query_req = RaftCmdRequest::default();
+        let apply_state = RaftApplyState::default();
         query_req.set_requests(vec![Request::default()].into());
-        host.pre_exec(&region, &query_req, 0, 0);
+        host.pre_exec(&region, &query_req, 0, 0, &apply_state);
         index += ObserverIndex::PreExecQuery as usize;
         assert_all!([&ob.called], &[index]);
 
         let mut admin_req = RaftCmdRequest::default();
         admin_req.set_admin_request(AdminRequest::default());
-        host.pre_exec(&region, &admin_req, 0, 0);
+        host.pre_exec(&region, &admin_req, 0, 0, &apply_state);
         index += ObserverIndex::PreExecAdmin as usize;
         assert_all!([&ob.called], &[index]);
 
