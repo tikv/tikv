@@ -321,9 +321,11 @@ impl RangeManager {
         let mut overlapped_ranges = vec![];
         for r in self.ranges.keys() {
             if r.contains_range(evict_range) {
-                return self
-                    .evict_within_range(evict_range, &r.clone())
-                    .map_or(vec![], |r| vec![r]);
+                if self.evict_within_range(evict_range, &r.clone()) {
+                    return vec![evict_range.clone()];
+                } else {
+                    return vec![];
+                }
             } else if r.overlaps(evict_range) {
                 overlapped_ranges.push(r.clone());
             }
@@ -339,17 +341,13 @@ impl RangeManager {
 
         overlapped_ranges
             .into_iter()
-            .filter_map(|r| self.evict_within_range(&r, &r))
+            .filter(|r| self.evict_within_range(&r, &r))
             .collect()
     }
 
-    // If there no ongoing snapshot, the evicted_range can be deleted now, so Some
-    // will be returned.
-    fn evict_within_range(
-        &mut self,
-        evict_range: &CacheRange,
-        cached_range: &CacheRange,
-    ) -> Option<CacheRange> {
+    // Return true means there is no ongoing snapshot, the evicted_range can be
+    // deleted now.
+    fn evict_within_range(&mut self, evict_range: &CacheRange, cached_range: &CacheRange) -> bool {
         assert!(cached_range.contains_range(evict_range));
         info!(
             "evict range in cache range engine";
@@ -371,23 +369,18 @@ impl RangeManager {
             self.ranges.insert(right_range, right_meta);
         }
 
-        self.ranges_being_deleted.insert(cached_range.clone());
+        self.ranges_being_deleted.insert(evict_range.clone());
 
         if !meta.range_snapshot_list.is_empty() {
             self.historical_ranges.insert(cached_range.clone(), meta);
-            return None;
+            return false;
         }
 
         // we also need to check with previous historical_ranges
-        if !self
+        !self
             .historical_ranges
             .keys()
             .any(|r| r.overlaps(evict_range))
-        {
-            Some(evict_range.clone())
-        } else {
-            None
-        }
     }
 
     pub fn has_ranges_in_gc(&self) -> bool {

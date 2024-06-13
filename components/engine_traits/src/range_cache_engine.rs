@@ -231,5 +231,15 @@ mod tests {
         let r2 = CacheRange::new(b"k1".to_vec(), b"k6".to_vec());
         assert!(r1.overlaps(&r2));
         assert!(r2.overlaps(&r1));
+
+        let r1 = CacheRange::new(b"k1".to_vec(), b"k2".to_vec());
+        let r2 = CacheRange::new(b"k2".to_vec(), b"k3".to_vec());
+        assert!(!r1.overlaps(&r2));
+        assert!(!r2.overlaps(&r1));
+
+        let r1 = CacheRange::new(b"k1".to_vec(), b"k2".to_vec());
+        let r2 = CacheRange::new(b"k3".to_vec(), b"k4".to_vec());
+        assert!(!r1.overlaps(&r2));
+        assert!(!r2.overlaps(&r1));
     }
 }
