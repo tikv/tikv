@@ -357,8 +357,8 @@ impl RangeManager {
             "cached_range" => ?cached_range,
         );
         self.range_evictions.fetch_add(1, Ordering::Relaxed);
-        let meta = self.ranges.remove(&cached_range).unwrap();
-        let (left_range, right_range) = cached_range.split_off(&evict_range);
+        let meta = self.ranges.remove(cached_range).unwrap();
+        let (left_range, right_range) = cached_range.split_off(evict_range);
         assert!((left_range.is_some() || right_range.is_some()) || evict_range == cached_range);
 
         if let Some(left_range) = left_range {
@@ -382,7 +382,7 @@ impl RangeManager {
         if !self
             .historical_ranges
             .keys()
-            .any(|r| r.overlaps(&evict_range))
+            .any(|r| r.overlaps(evict_range))
         {
             Some(evict_range.clone())
         } else {
