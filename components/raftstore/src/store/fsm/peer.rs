@@ -1261,9 +1261,16 @@ where
             }
             CasualMessage::SnapshotApplied { peer_id, tombstone } => {
                 self.fsm.has_ready = true;
-                // If failed on applying snapshot, it should tomebstone the peer.
-                self.fsm.peer.should_tombstone =
-                    tombstone && self.fsm.peer.peer_id() == peer_id && !self.fsm.peer.is_leader();
+                // If failed on applying snapshot, it should record the peer as an invalid peer.
+                if tombstone && self.fsm.peer.peer_id() == peer_id && !self.fsm.peer.is_leader() {
+                    info!(
+                        "mark the region damaged on applying snapshot";
+                        "region_id" => self.region_id(),
+                        "peer_id" => peer_id,
+                    );
+                    let mut meta = self.ctx.store_meta.lock().unwrap();
+                    meta.damaged_regions.insert(self.region_id());
+                }
                 if self.fsm.peer.should_destroy_after_apply_snapshot() {
                     info!(
                         "destroy peer due to manually cancel";
@@ -2242,11 +2249,6 @@ where
             self.fsm.hibernate_state.group_state() == GroupState::Chaos,
             |_| {}
         );
-        fail_point!(
-            "on_raft_base_tick_skip_tombstone_peer",
-            self.fsm.peer.should_tombstone,
-            |_| {}
-        );
 
         if self.fsm.peer.pending_remove {
             self.fsm.peer.mut_store().flush_entry_cache_metrics();
@@ -2267,11 +2269,6 @@ where
         // the pending conf change check because first index has been updated to
         // a value that is larger than last index.
         if self.fsm.peer.is_handling_snapshot() || self.fsm.peer.has_pending_snapshot() {
-            // If failed on applying snapshot, send ConfChange to the leader to make the
-            // peer removed.
-            if self.fsm.peer.should_tombstone {
-                self.fsm.peer.send_forcely_remove_peer_msg(self.ctx);
-            }
             // need to check if snapshot is applied.
             self.fsm.has_ready = true;
             self.fsm.missing_ticks = 0;
@@ -2963,36 +2960,6 @@ where
         });
     }
 
-    // Trigger the `ConfChange` command to remove the abnormal peer as expected.
-    fn on_forcely_remove_peer_request(&mut self, msg: RaftMessage) {
-        if !self.fsm.peer.is_leader() {
-            return;
-        }
-
-        if !msg.get_extra_msg().get_index() == u64::MAX {
-            // Unexpected message.
-            return;
-        }
-
-        // Request from the source peer.
-        let mut req = AdminRequest::default();
-        req.set_cmd_type(AdminCmdType::ChangePeer);
-        req.mut_change_peer()
-            .set_change_type(ConfChangeType::RemoveNode);
-        req.mut_change_peer().set_peer(msg.get_from_peer().clone());
-        let mut request =
-            new_admin_request(self.fsm.peer.region().get_id(), self.fsm.peer.peer.clone());
-        request
-            .mut_header()
-            .set_region_epoch(self.fsm.peer.region().get_region_epoch().clone());
-        request.set_admin_request(req);
-        self.propose_raft_command_internal(
-            request,
-            Callback::None,
-            DiskFullOpt::AllowedOnAlmostFull,
-        );
-    }
-
     fn on_extra_message(&mut self, mut msg: RaftMessage) {
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
@@ -3055,9 +3022,6 @@ where
                 if self.ctx.cfg.enable_v2_compatible_learner {
                     self.on_gc_peer_request(msg);
                 }
-            }
-            ExtraMessageType::MsgForcelyRemovePeerRequest => {
-                self.on_forcely_remove_peer_request(msg);
             }
             // It's v2 only message and ignore does no harm.
             ExtraMessageType::MsgGcPeerResponse | ExtraMessageType::MsgFlushMemtable => (),
@@ -3897,8 +3861,6 @@ where
         fail_point!("destroy_peer");
         // Mark itself as pending_remove
         self.fsm.peer.pending_remove = true;
-        // Reset itself to avoid further access.
-        self.fsm.peer.should_tombstone = false;
 
         // try to decrease the RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE count.
         self.fsm.peer.disable_apply_unpersisted_log(0);
@@ -3958,6 +3920,7 @@ where
             );
         })();
         let mut meta = self.ctx.store_meta.lock().unwrap();
+        meta.damaged_regions.remove(&self.fsm.region_id());
         let is_latest_initialized = {
             if let Some(latest_region_info) = meta.regions.get(&region_id) {
                 util::is_region_initialized(latest_region_info)

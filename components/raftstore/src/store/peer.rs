@@ -927,9 +927,6 @@ where
     /// this peer has raft log gaps and whether should be marked busy on
     /// apply.
     pub last_leader_committed_idx: Option<u64>,
-
-    /// Check whether the peer should be destroyed.
-    pub should_tombstone: bool,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1081,7 +1078,6 @@ where
             snapshot_recovery_state: None,
             busy_on_apply: Some(false),
             last_leader_committed_idx: None,
-            should_tombstone: false,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -5855,25 +5851,6 @@ where
                     self.raft_group.raft.raft_log.applied,
                 );
             }
-        }
-    }
-
-    pub fn send_forcely_remove_peer_msg<T: Transport>(&self, ctx: &mut PollContext<EK, ER, T>) {
-        let mut msg = ExtraMessage::default();
-        msg.set_type(ExtraMessageType::MsgForcelyRemovePeerRequest);
-        // Forcely set the index with `u64::max_value()` to make sure the remove
-        // message can be handled correctly.
-        msg.set_index(u64::MAX);
-        let leader_id = self.leader_id();
-        let leader = self.get_peer_from_cache(leader_id);
-        if let Some(leader) = leader {
-            self.send_extra_message(msg, &mut ctx.trans, &leader);
-            info!(
-                "send forcely remove peer to leader after applying snapshot failed";
-                "region_id" => self.region_id,
-                "peer_id" => self.peer.get_id(),
-                "leader_id" => leader_id,
-            );
         }
     }
 
