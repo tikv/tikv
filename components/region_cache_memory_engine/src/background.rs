@@ -1856,7 +1856,7 @@ pub mod tests {
         assert_eq!(1, element_count(&default));
         assert_eq!(2, element_count(&write));
 
-        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
+        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone(), None);
 
         worker.core.gc_range(&range, 20, 200);
         assert_eq!(1, element_count(&default));
