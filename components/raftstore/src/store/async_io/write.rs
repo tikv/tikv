@@ -567,27 +567,47 @@ where
     }
 }
 
-struct BatchRecorder {
-    batch_size_thd: usize,
+/// WriteBatchRecorder is a sliding window, used to record the batch size
+/// and calculate the spin interval.
+/// If the batch size is smaller than the threshold, it will return a
+/// recommended spin duration for the caller as a hint to wait for more writes.
+/// The spin interval is calculated based on the trend of the change of the
+/// batch size. The range of the trend is [0.5, 2.0]. If the batch size is
+/// increasing, the trend will be larger than 1.0, and the spin interval will be
+/// shorter.
+struct WriteBatchRecorder {
+    batch_size_hint: usize,
     capacity: usize,
     history: VecDeque<usize>,
     sum: usize,
     avg: usize,
     trend: OrderedFloat<f64>,
+    /// Spin interval in microseconds.
     spin_interval: u64,
+    /// The count of spinning.
+    spin_count: u64,
+    /// The max count of spinning.
+    spin_max_count: u64,
 }
 
-impl BatchRecorder {
-    fn new(batch_size_thd: usize, spin_interval: u64) -> Self {
+impl WriteBatchRecorder {
+    fn new(batch_size_hint: usize, spin_interval: u64) -> Self {
         Self {
-            batch_size_thd,
+            batch_size_hint,
             history: VecDeque::new(),
             capacity: 30, // default
             sum: 0,
             avg: 0,
             trend: OrderedFloat(1.0),
             spin_interval,
+            spin_count: 0,
+            spin_max_count: 3,
         }
+    }
+
+    fn update_config(&mut self, batch_size: usize, spin_interval: u64) {
+        self.batch_size_hint = batch_size;
+        self.spin_interval = spin_interval;
     }
 
     fn record(&mut self, size: usize) {
@@ -615,18 +635,21 @@ impl BatchRecorder {
         }
     }
 
-    fn update_config(&mut self, batch_size: usize, spin_interval: u64) {
-        self.batch_size_thd = batch_size;
-        self.spin_interval = spin_interval;
+    fn reset_spin_count(&mut self) {
+        self.spin_count = 0;
     }
 
     fn should_spin(&self, batch_size: usize) -> bool {
-        batch_size < self.batch_size_thd
+        batch_size < self.batch_size_hint && self.spin_count < self.spin_max_count
     }
 
-    fn spin_duration(&self) -> std::time::Duration {
+    fn spin_for_a_while(&mut self) {
+        self.spin_count += 1;
+
         let trend: f64 = self.trend.into();
-        std::time::Duration::from_micros(self.spin_interval * (1.0 / trend) as u64)
+        std::thread::sleep(std::time::Duration::from_micros(
+            self.spin_interval * (1.0 / trend) as u64,
+        ));
     }
 }
 
@@ -650,7 +673,7 @@ where
     message_metrics: RaftSendMessageMetrics,
     perf_context: ER::PerfContext,
     pending_latency_inspect: Vec<(Instant, Vec<LatencyInspector>)>,
-    pending_batch_recorder: BatchRecorder,
+    pending_batch_recorder: WriteBatchRecorder,
 }
 
 impl<EK, ER, N, T> Worker<EK, ER, N, T>
@@ -689,7 +712,7 @@ where
             message_metrics: RaftSendMessageMetrics::default(),
             perf_context,
             pending_latency_inspect: vec![],
-            pending_batch_recorder: BatchRecorder::new(
+            pending_batch_recorder: WriteBatchRecorder::new(
                 cfg.value().raft_write_batch_size_thd.0 as usize,
                 cfg.value().raft_write_batch_size_spin,
             ),
@@ -708,25 +731,22 @@ where
                 Err(_) => return,
             };
 
-            let mut no_op_loop_count = 3;
+            // Reset the spin count.
+            self.pending_batch_recorder.reset_spin_count();
             while self.batch.get_raft_size() < self.raft_write_size_limit {
                 match self.receiver.try_recv() {
                     Ok(msg) => {
                         stopped |= self.handle_msg(msg);
                     }
                     Err(TryRecvError::Empty) => {
-                        if no_op_loop_count > 0
-                            && self
-                                .pending_batch_recorder
-                                .should_spin(self.batch.get_raft_size())
+                        // If the size of the batch is small enough, we spin for a while
+                        // to make the batch larger. This can reduce the IOPS
+                        // amplification if there are many trivial writes.
+                        if self
+                            .pending_batch_recorder
+                            .should_spin(self.batch.get_raft_size())
                         {
-                            // If the size of the batch is small enough, we spin for a while
-                            // to make the batch larger. This can reduce the IOPS
-                            // amplification if there are many trivial writes.
-                            no_op_loop_count -= 1;
-                            // Sleep some time (50 microseconds) to avoid busy loop and
-                            // make the batch larger.
-                            std::thread::sleep(self.pending_batch_recorder.spin_duration());
+                            self.pending_batch_recorder.spin_for_a_while();
                             continue;
                         } else {
                             break;
