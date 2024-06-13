@@ -568,23 +568,25 @@ where
 }
 
 struct BatchRecorder {
-    batch_limit_size: usize,
+    batch_size_thd: usize,
     capacity: usize,
     history: VecDeque<usize>,
     sum: usize,
     avg: usize,
     trend: OrderedFloat<f64>,
+    spin_interval: u64,
 }
 
 impl BatchRecorder {
-    fn new(limit_size: usize) -> Self {
+    fn new(batch_size_thd: usize, spin_interval: u64) -> Self {
         Self {
-            batch_limit_size: limit_size,
+            batch_size_thd,
             history: VecDeque::new(),
             capacity: 30, // default
             sum: 0,
             avg: 0,
             trend: OrderedFloat(1.0),
+            spin_interval,
         }
     }
 
@@ -613,17 +615,18 @@ impl BatchRecorder {
         }
     }
 
-    fn update_batch_size_limit(&mut self, limit_size: usize) {
-        self.batch_limit_size = limit_size;
+    fn update_config(&mut self, batch_size: usize, spin_interval: u64) {
+        self.batch_size_thd = batch_size;
+        self.spin_interval = spin_interval;
     }
 
     fn should_spin(&self, batch_size: usize) -> bool {
-        batch_size < self.batch_limit_size
+        batch_size < self.batch_size_thd
     }
 
     fn spin_duration(&self) -> std::time::Duration {
         let trend: f64 = self.trend.into();
-        std::time::Duration::from_micros(25 * (1.0 / trend) as u64)
+        std::time::Duration::from_micros(self.spin_interval * (1.0 / trend) as u64)
     }
 }
 
@@ -688,6 +691,7 @@ where
             pending_latency_inspect: vec![],
             pending_batch_recorder: BatchRecorder::new(
                 cfg.value().raft_write_batch_size_thd.0 as usize,
+                cfg.value().raft_write_batch_size_spin,
             ),
         }
     }
@@ -966,8 +970,10 @@ where
         // update config
         if let Some(incoming) = self.cfg_tracker.any_new() {
             self.raft_write_size_limit = incoming.raft_write_size_limit.0 as usize;
-            self.pending_batch_recorder
-                .update_batch_size_limit(incoming.raft_write_batch_size_thd.0 as usize);
+            self.pending_batch_recorder.update_config(
+                incoming.raft_write_batch_size_thd.0 as usize,
+                incoming.raft_write_batch_size_spin,
+            );
             self.metrics.waterfall_metrics = incoming.waterfall_metrics;
         }
     }
