@@ -144,7 +144,9 @@ impl Stream for HeartbeatReceiver {
                     Poll::Ready(Some(Ok(item))) => return Poll::Ready(Some(Ok(item))),
                     Poll::Pending => return Poll::Pending,
                     // If it's None or there's error, we need to update receiver.
-                    _ => {}
+                    _ => {
+                        info!("heartbeat stream finished, need to renew!");
+                    }
                 }
             }
             self.receiver.take();
@@ -156,12 +158,17 @@ impl Stream for HeartbeatReceiver {
                         Err(e) => {
                             panic!("receive heartbeat resp failed: {:?}", e);
                         }
-                        _ => {}
+                        _ => {
+                            info!("join heartbeat stream failed, wait retry connect pd.");
+                        }
                     },
                     Poll::Pending => return Poll::Pending,
                 }
             };
             self.handler.take();
+            if self.receiver.is_some() {
+                continue;
+            }
 
             let mut inner = self.inner.inner.wl();
             let mut handler = None;
@@ -375,6 +382,7 @@ impl Client {
             }
             Either::Right(w) => {
                 w.wake();
+                info!("wake heartbeat stream receiver!");
             }
             _ => {}
         };
