@@ -586,13 +586,12 @@ impl Mutable for RangeCacheWriteBatch {
 
 #[cfg(test)]
 mod tests {
-    use core::slice::SlicePattern;
     use std::{sync::Arc, time::Duration};
 
     use engine_rocks::util::new_engine;
     use engine_traits::{
-        CacheRange, FailedReason, KvEngine, Peekable, RangeCacheEngine, WriteBatch, CF_LOCK,
-        CF_WRITE, DATA_CFS,
+        CacheRange, FailedReason, KvEngine, Peekable, RangeCacheEngine, WriteBatch, CF_WRITE,
+        DATA_CFS,
     };
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use skiplist_rs::SkipList;
@@ -601,8 +600,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        background::flush_epoch, config::RangeCacheConfigManager, keys::encode_seek_key,
-        RangeCacheEngineConfig, RangeCacheEngineContext,
+        background::flush_epoch, config::RangeCacheConfigManager, RangeCacheEngineConfig,
+        RangeCacheEngineContext,
     };
 
     // We should not use skiplist.get directly as we only cares keys without
