@@ -4030,7 +4030,11 @@ dependencies = [
 [[package]]
 name = "raft"
 version = "0.7.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
+=======
+source = "git+https://github.com/tikv/raft-rs?branch=master#f60fb9e143e5b93f7db8917ea376cda04effcbb4"
+>>>>>>> 19e1d949eb (raftstore: fix an OOM issue by paginate scan unapplied config changes (#15806))
 dependencies = [
  "bytes",
  "fxhash",
@@ -4088,7 +4092,11 @@ dependencies = [
 [[package]]
 name = "raft-proto"
 version = "0.7.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/raft-rs?branch=master#2357cb22760719bcd107a90d1e64ef505bdb1e15"
+=======
+source = "git+https://github.com/tikv/raft-rs?branch=master#f60fb9e143e5b93f7db8917ea376cda04effcbb4"
+>>>>>>> 19e1d949eb (raftstore: fix an OOM issue by paginate scan unapplied config changes (#15806))
 dependencies = [
  "bytes",
  "protobuf",
