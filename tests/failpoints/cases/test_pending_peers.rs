@@ -247,15 +247,22 @@ fn test_on_apply_snap_failed() {
     // Mock applying snapshot failed on peer 3.
     fail::cfg("region_apply_snap_io_err", "return").unwrap();
     pd_client.must_add_peer(region_id, new_peer(3, 3));
-    sleep_ms(100);
-    let pending_peers = pd_client.get_pending_peers();
     // Region worker is failed on applying snapshot.
-    assert_eq!(pending_peers[&3], new_peer(3, 3));
+    test_util::eventually(Duration::from_millis(100), Duration::from_secs(1), || {
+        let pending_peers = pd_client.get_pending_peers();
+        pending_peers[&3] == new_peer(3, 3)
+    });
     must_get_none(&cluster.get_engine(3), b"k1");
-    cluster.must_send_store_heartbeat(3);
-    sleep_ms(100);
     // Check that the region is marked as damaged.
-    let stats = cluster.pd_client.get_store_stats(3).unwrap();
+    test_util::eventually(Duration::from_millis(100), Duration::from_secs(1), || {
+        cluster.must_send_store_heartbeat(3);
+        if let Some(stats) = pd_client.get_store_stats(3) {
+            !stats.damaged_regions_id.is_empty()
+        } else {
+            false
+        }
+    });
+    let stats = pd_client.get_store_stats(3).unwrap();
     assert!(stats.damaged_regions_id.contains(&region_id));
     fail::remove("region_apply_snap_io_err");
 }
