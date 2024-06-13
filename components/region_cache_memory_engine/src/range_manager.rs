@@ -341,7 +341,7 @@ impl RangeManager {
 
         overlapped_ranges
             .into_iter()
-            .filter(|r| self.evict_within_range(&r, &r))
+            .filter(|r| self.evict_within_range(r, r))
             .collect()
     }
 
