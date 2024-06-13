@@ -6,14 +6,17 @@ use engine_traits::{ImportExt, IngestExternalFileOptions, Result};
 use rocksdb::{
     set_external_sst_file_global_seq_no, IngestExternalFileOptions as RawIngestExternalFileOptions,
 };
+use tikv_util::time::Instant;
 
-use crate::{engine::RocksEngine, r2e, util};
+use crate::{
+    engine::RocksEngine, perf_context_metrics::INGEST_EXTERNAL_FILE_TIME_HISTOGRAM, r2e, util,
+};
 
 impl ImportExt for RocksEngine {
     type IngestExternalFileOptions = RocksIngestExternalFileOptions;
 
-    fn ingest_external_file_cf(&self, cf: &str, files: &[&str]) -> Result<()> {
-        let cf = util::get_cf_handle(self.as_inner(), cf)?;
+    fn ingest_external_file_cf(&self, cf_name: &str, files: &[&str]) -> Result<()> {
+        let cf = util::get_cf_handle(self.as_inner(), cf_name)?;
         let mut opts = RocksIngestExternalFileOptions::new();
         opts.move_files(true);
         opts.set_write_global_seqno(false);
@@ -28,15 +31,28 @@ impl ImportExt for RocksEngine {
                 .map_err(|e| format!("sync {}: {:?}", file, e))
                 .map_err(r2e)
         })?;
+        let now = Instant::now_coarse();
         // This is calling a specially optimized version of
         // ingest_external_file_cf. In cases where the memtable needs to be
         // flushed it avoids blocking writers while doing the flush. The unused
         // return value here just indicates whether the fallback path requiring
         // the manual memtable flush was taken.
-        let _did_nonblocking_memtable_flush = self
+        let did_nonblocking_memtable_flush = self
             .as_inner()
             .ingest_external_file_optimized(cf, &opts.0, files)
             .map_err(r2e)?;
+        let time_cost = now.saturating_elapsed_secs();
+        if did_nonblocking_memtable_flush {
+            INGEST_EXTERNAL_FILE_TIME_HISTOGRAM
+                .get(cf_name.into())
+                .non_block
+                .observe(time_cost);
+        } else {
+            INGEST_EXTERNAL_FILE_TIME_HISTOGRAM
+                .get(cf_name.into())
+                .block
+                .observe(time_cost);
+        }
         Ok(())
     }
 }
