@@ -106,8 +106,9 @@ impl RangeCacheWriteBatch {
     /// Trigger a CleanLockTombstone task if the accumulated lock cf
     /// modification exceeds the threshold (16MB).
     ///
-    /// NB: It need to acquire RocksDB mutex to get oldest snapshot, so do not
-    ///     call it on any RocksDB's callback, e.g., write batch callback.
+    /// NB: Acquiring the RocksDB mutex is necessary to get the oldest snapshot,
+    ///     so avoid calling this in any RocksDB callback (e.g., write batch
+    ///     callback) to prevent potential deadlocks.
     pub fn maybe_compact_lock_cf(&self) {
         if self.engine.lock_modification_bytes.load(Ordering::Relaxed) > AMOUNT_TO_CLEAN_TOMBSTONE {
             // Use `swap` to only allow one schedule when multiple writers reaches the limit
