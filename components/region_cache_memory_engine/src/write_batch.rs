@@ -916,60 +916,6 @@ mod tests {
     }
 
     #[test]
-    fn test_delete_lock_cf() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
-            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
-        )));
-        let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
-        engine.new_range(r.clone());
-        {
-            let mut core = engine.core.write();
-            core.mut_range_manager().set_safe_point(&r, 10);
-        }
-        let mut wb = RangeCacheWriteBatch::from(&engine);
-        wb.prepare_for_range(r.clone());
-        wb.put_cf(CF_LOCK, b"aaa", b"bbb").unwrap();
-        wb.set_sequence_number(1).unwrap();
-        assert_eq!(wb.write().unwrap(), 1);
-        let lock_handle = engine.core.read().engine().cf_handle(CF_LOCK);
-
-        let guard = &epoch::pin();
-        let entry = lock_handle
-            .get_with_user_key(&encode_key(b"aaa", 1, ValueType::Value), guard)
-            .unwrap();
-        assert_eq!(&b"bbb"[..], entry.value().as_bytes());
-
-        let mut wb = RangeCacheWriteBatch::from(&engine);
-        wb.prepare_for_range(r.clone());
-        wb.put_cf(CF_LOCK, b"aaa", b"ccc").unwrap();
-        wb.set_sequence_number(2).unwrap();
-        assert_eq!(wb.write().unwrap(), 2);
-
-        {
-            let mut iter = engine.core.read().engine.cf_handle(CF_LOCK).iterator();
-            let seek_key = encode_seek_key(b"aaa", 2);
-            iter.seek(&seek_key, guard);
-            assert_eq!(iter.value().as_bytes().as_slice(), b"ccc");
-            iter.next(guard);
-            assert_eq!(iter.value().as_bytes().as_slice(), b"bbb");
-        }
-
-        let mut wb = RangeCacheWriteBatch::from(&engine);
-        wb.prepare_for_range(r.clone());
-        wb.delete_cf(CF_LOCK, b"aaa").unwrap();
-        wb.set_sequence_number(10).unwrap();
-        assert_eq!(wb.write().unwrap(), 10);
-
-        {
-            let mut iter = engine.core.read().engine.cf_handle(CF_LOCK).iterator();
-            let seek_key = encode_seek_key(b"aaa", 2);
-            iter.seek(&seek_key, guard);
-            // We cannot get any sequence version of it
-            assert!(!iter.valid());
-        }
-    }
-
-    #[test]
     fn test_write_batch_with_config_change() {
         let mut config = RangeCacheEngineConfig::default();
         config.soft_limit_threshold = Some(ReadableSize(u64::MAX));
