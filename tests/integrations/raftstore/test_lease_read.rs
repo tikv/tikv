@@ -8,7 +8,12 @@ use std::time::Duration;
 use std::{mem, thread};
 
 use engine_rocks::RocksSnapshot;
+<<<<<<< HEAD
 use kvproto::metapb;
+=======
+use kvproto::{metapb, raft_serverpb::RaftMessage};
+use more_asserts::assert_le;
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))
 use pd_client::PdClient;
 use raft::eraftpb::{ConfChangeType, MessageType};
 use raftstore::store::{Callback, RegionSnapshot};
@@ -713,3 +718,187 @@ fn test_read_index_after_write() {
             >= applied_index
     );
 }
+<<<<<<< HEAD
+=======
+
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_infinite_lease() {
+    let mut cluster = new_cluster(0, 3);
+    // Avoid triggering the log compaction in this test case.
+    cluster.cfg.raft_store.raft_log_gc_threshold = 100;
+    // Increase the Raft tick interval to make this test case running reliably.
+    // Use large election timeout to make leadership stable.
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(10_000));
+    // Override max leader lease to 2 seconds.
+    let max_lease = Duration::from_secs(2);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration(max_lease);
+
+    let peer = new_peer(1, 1);
+    cluster.pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    let key = b"k";
+    cluster.must_put(key, b"v0");
+    for id in 2..=cluster.engines.len() as u64 {
+        cluster.pd_client.must_add_peer(region_id, new_peer(id, id));
+        must_get_equal(&cluster.get_engine(id), key, b"v0");
+    }
+
+    // Force `peer` to become leader.
+    let region = cluster.get_region(key);
+    let region_id = region.get_id();
+    cluster.must_transfer_leader(region_id, peer.clone());
+
+    let detector = LeaseReadFilter::default();
+    cluster.add_send_filter(CloneFilterFactory(detector.clone()));
+
+    // Issue a read request and check the value on response.
+    must_read_on_peer(&mut cluster, peer.clone(), region.clone(), key, b"v0");
+    assert_eq!(detector.ctx.rl().len(), 0);
+
+    // Wait for the leader lease to expire.
+    thread::sleep(max_lease);
+
+    // Check if renew-lease-tick proposed a read index and renewed the leader lease.
+    assert_eq!(cluster.leader_of_region(region_id), Some(peer.clone()));
+    assert_eq!(detector.ctx.rl().len(), 1);
+    // Issue a read request to verify the lease.
+    must_read_on_peer(&mut cluster, peer.clone(), region, key, b"v0");
+    assert_eq!(cluster.leader_of_region(region_id), Some(peer));
+    assert_eq!(detector.ctx.rl().len(), 1);
+
+    // renew-lease-tick shouldn't propose any request if the leader lease is not
+    // expired.
+    for _ in 0..4 {
+        cluster.must_put(key, b"v0");
+        thread::sleep(max_lease / 4);
+    }
+    assert_eq!(detector.ctx.rl().len(), 1);
+}
+
+// LocalReader will try to renew lease in advance, so the region that has
+// continuous reads should not go to hibernate.
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_local_read_renew_lease() {
+    let mut cluster = new_cluster(0, 3);
+    cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(500);
+    let (base_tick_ms, election_ticks) = (50, 10);
+    configure_for_lease_read(&mut cluster.cfg, Some(50), Some(10));
+    cluster.pd_client.disable_default_operator();
+    let region_id = cluster.run_conf_change();
+
+    let key = b"k";
+    cluster.must_put(key, b"v0");
+    for id in 2..=3 {
+        cluster.pd_client.must_add_peer(region_id, new_peer(id, id));
+        must_get_equal(&cluster.get_engine(id), key, b"v0");
+    }
+
+    // Write the initial value for a key.
+    let key = b"k";
+    cluster.must_put(key, b"v1");
+    // Force `peer` to become leader.
+    let region = cluster.get_region(key);
+    let region_id = region.get_id();
+    let peer = new_peer(1, 1);
+    cluster.must_transfer_leader(region_id, peer.clone());
+
+    let detector = LeaseReadFilter::default();
+    cluster.add_send_filter(CloneFilterFactory(detector.clone()));
+
+    // election_timeout_ticks * base_tick_interval * 3
+    let hibernate_wait = election_ticks * Duration::from_millis(base_tick_ms) * 3;
+    let request_wait = Duration::from_millis(base_tick_ms);
+    let max_renew_lease_time = 3;
+    let round = hibernate_wait.as_millis() / request_wait.as_millis();
+    for i in 0..round {
+        // Issue a read request and check the value on response.
+        must_read_on_peer(&mut cluster, peer.clone(), region.clone(), key, b"v1");
+        // Plus 1 to prevent case failure when test machine is too slow.
+        assert_le!(detector.ctx.rl().len(), max_renew_lease_time + 1, "{}", i);
+        thread::sleep(request_wait);
+    }
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+#[test_case(test_raftstore_v2::new_node_cluster)]
+fn test_node_lease_restart_during_isolation() {
+    let mut cluster = new_cluster(0, 3);
+    let election_timeout = configure_for_lease_read(&mut cluster.cfg, Some(500), Some(3));
+    cluster.cfg.raft_store.allow_unsafe_vote_after_start = false;
+    cluster.run();
+    sleep_ms(election_timeout.as_millis() as _);
+    let mut region;
+    let start = Instant::now_coarse();
+    let key = b"k";
+    loop {
+        region = cluster.get_region(key);
+        if region.get_peers().len() == 3
+            && region
+                .get_peers()
+                .iter()
+                .all(|p| p.get_role() == metapb::PeerRole::Voter)
+        {
+            break;
+        }
+        if start.saturating_elapsed() > Duration::from_secs(5) {
+            panic!("timeout");
+        }
+    }
+
+    let region_id = region.get_id();
+    let peer1 = find_peer(&region, 1).unwrap();
+    let peer2 = find_peer(&region, 2).unwrap();
+
+    cluster.must_put(key, b"v0");
+    cluster.must_transfer_leader(region_id, peer1.clone());
+    must_read_on_peer(&mut cluster, peer1.clone(), region.clone(), key, b"v0");
+    cluster.must_transfer_leader(region_id, peer2.clone());
+    must_read_on_peer(&mut cluster, peer2.clone(), region.clone(), key, b"v0");
+
+    cluster.add_send_filter(IsolationFilterFactory::new(2));
+
+    // Restart node 3.
+    cluster.stop_node(3);
+    cluster.run_node(3).unwrap();
+
+    // Let peer1 start election.
+    let mut timeout = RaftMessage::default();
+    timeout.mut_message().set_to(peer1.get_id());
+    timeout
+        .mut_message()
+        .set_msg_type(MessageType::MsgTimeoutNow);
+    timeout
+        .mut_message()
+        .set_msg_type(MessageType::MsgTimeoutNow);
+    timeout.set_region_id(region.get_id());
+    timeout.set_from_peer(peer2.clone());
+    timeout.set_to_peer(peer1.clone());
+    timeout.set_region_epoch(region.get_region_epoch().clone());
+    cluster.send_raft_msg(timeout).unwrap();
+
+    let (tx, rx) = mpsc::channel();
+    let append_resp_notifier = Box::new(MessageTypeNotifier::new(
+        MessageType::MsgAppendResponse,
+        tx,
+        Arc::from(AtomicBool::new(true)),
+    ));
+    cluster.sim.wl().add_send_filter(3, append_resp_notifier);
+    let timeout = Duration::from_secs(5);
+    rx.recv_timeout(timeout).unwrap();
+
+    let mut put = new_request(
+        region.get_id(),
+        region.get_region_epoch().clone(),
+        vec![new_put_cmd(key, b"v1")],
+        false,
+    );
+    put.mut_header().set_peer(peer1.clone());
+    let resp = cluster.call_command(put, timeout).unwrap();
+    assert!(!resp.get_header().has_error(), "{:?}", resp);
+    must_read_on_peer(&mut cluster, peer1.clone(), region.clone(), key, b"v1");
+    must_error_read_on_peer(&mut cluster, peer2.clone(), region.clone(), key, timeout);
+}
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))

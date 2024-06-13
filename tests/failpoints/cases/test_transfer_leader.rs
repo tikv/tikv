@@ -3,10 +3,24 @@
 use std::{sync::Arc, thread, time::Duration};
 
 use grpcio::{ChannelBuilder, Environment};
+<<<<<<< HEAD
 use kvproto::kvrpcpb::*;
 use kvproto::tikvpb::TikvClient;
 use test_raftstore::*;
 use tikv_util::HandyRwLock;
+=======
+use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
+use pd_client::PdClient;
+use raft::eraftpb::MessageType;
+use test_raftstore::*;
+use test_raftstore_macro::test_case;
+use tikv::storage::Snapshot;
+use tikv_util::{
+    config::{ReadableDuration, ReadableSize},
+    HandyRwLock,
+};
+use txn_types::{Key, LastChange, PessimisticLock};
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))
 
 /// When a follower applies log slowly, leader should not transfer leader
 /// to it. Otherwise, new leader may wait a long time to serve read/write
