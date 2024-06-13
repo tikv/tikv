@@ -4492,19 +4492,26 @@ where
         fail_point!("peer_check_stale_state", state != StaleState::Valid, |_| {});
         match state {
             StaleState::Valid => (),
-            StaleState::LeaderMissing => {
-                warn!(
-                    "leader missing longer than abnormal_leader_missing_duration";
-                    "region_id" => self.fsm.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                    "expect" => %self.ctx.cfg.abnormal_leader_missing_duration,
-                );
-                self.ctx
-                    .raft_metrics
-                    .leader_missing
-                    .lock()
-                    .unwrap()
-                    .insert(self.region_id());
+            StaleState::LeaderMissing | StaleState::MaybeLeaderMissing => {
+                if state == StaleState::LeaderMissing {
+                    warn!(
+                        "leader missing longer than abnormal_leader_missing_duration";
+                        "region_id" => self.fsm.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "expect" => %self.ctx.cfg.abnormal_leader_missing_duration,
+                    );
+                    self.ctx
+                        .raft_metrics
+                        .leader_missing
+                        .lock()
+                        .unwrap()
+                        .insert(self.region_id());
+                }
+
+                // It's very likely that this is a stale peer. To prevent
+                // resolved ts from being blocked for too long, we check stale
+                // peer eagerly.
+                self.fsm.peer.bcast_check_stale_peer_message(self.ctx);
             }
             StaleState::ToValidate => {
                 // for peer B in case 1 above
