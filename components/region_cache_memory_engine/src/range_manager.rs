@@ -298,30 +298,57 @@ impl RangeManager {
         vec![]
     }
 
-    // return whether the range can be already removed
-    pub(crate) fn evict_range(&mut self, evict_range: &CacheRange) -> bool {
-        let Some(range_key) = self
-            .ranges
-            .keys()
-            .find(|&r| r.contains_range(evict_range))
-            .cloned()
-        else {
+    // return ranges that can be deleted now (not ongoing snapshot)
+    // note: `evict_range` may cover multiple cached ranges
+    pub(crate) fn evict_range(&mut self, evict_range: &CacheRange) -> Vec<CacheRange> {
+        info!(
+            "try to evict range";
+            "evict_range" => ?evict_range,
+        );
+
+        let mut overlapped_ranges = vec![];
+        for r in self.ranges.keys() {
+            if r.contains_range(evict_range) {
+                return self
+                    .evict_within_range(evict_range, &r.clone())
+                    .map_or(vec![], |r| vec![r]);
+            } else if r.overlaps(evict_range) {
+                overlapped_ranges.push(r.clone());
+            }
+        }
+
+        if overlapped_ranges.is_empty() {
             info!(
                 "evict a range that is not cached";
                 "range" => ?evict_range,
             );
-            return false;
-        };
+            return vec![];
+        }
 
+        overlapped_ranges
+            .into_iter()
+            .filter_map(|r| self.evict_within_range(&r, &r))
+            .collect()
+    }
+
+    // If there no ongoing snapshot, the evicted_range can be deleted now. However,
+    // the `evicted_range` may contains multiple ranges, so we return the overlapped
+    // part.
+    fn evict_within_range(
+        &mut self,
+        evict_range: &CacheRange,
+        cached_range: &CacheRange,
+    ) -> Option<CacheRange> {
+        assert!(cached_range.contains_range(evict_range));
         info!(
             "evict range in cache range engine";
-            "range_start" => log_wrappers::Value(&evict_range.start),
-            "range_end" => log_wrappers::Value(&evict_range.end),
+            "evict_range" => ?evict_range,
+            "cached_range" => ?cached_range,
         );
         self.range_evictions.fetch_add(1, Ordering::Relaxed);
-        let meta = self.ranges.remove(&range_key).unwrap();
-        let (left_range, right_range) = range_key.split_off(evict_range);
-        assert!((left_range.is_some() || right_range.is_some()) || &range_key == evict_range);
+        let meta = self.ranges.remove(&cached_range).unwrap();
+        let (left_range, right_range) = cached_range.split_off(&evict_range);
+        assert!((left_range.is_some() || right_range.is_some()) || evict_range == cached_range);
 
         if let Some(left_range) = left_range {
             let left_meta = RangeMeta::derive_from(self.id_allocator.allocate_id(), &meta);
@@ -333,18 +360,23 @@ impl RangeManager {
             self.ranges.insert(right_range, right_meta);
         }
 
-        self.ranges_being_deleted.insert(evict_range.clone());
+        self.ranges_being_deleted.insert(cached_range.clone());
 
         if !meta.range_snapshot_list.is_empty() {
-            self.historical_ranges.insert(range_key, meta);
-            return false;
+            self.historical_ranges.insert(cached_range.clone(), meta);
+            return None;
         }
 
         // we also need to check with previous historical_ranges
-        !self
+        if !self
             .historical_ranges
             .keys()
-            .any(|r| r.overlaps(evict_range))
+            .any(|r| r.overlaps(&evict_range))
+        {
+            Some(evict_range.clone())
+        } else {
+            None
+        }
     }
 
     pub fn has_ranges_in_gc(&self) -> bool {
@@ -452,7 +484,7 @@ mod tests {
         assert!(range_mgr.ranges_being_deleted.contains(&r_left));
         assert!(range_mgr.ranges.get(&r_left).is_none());
 
-        assert!(!range_mgr.evict_range(&r_right));
+        assert!(range_mgr.evict_range(&r_right).is_empty());
         assert!(range_mgr.historical_ranges.get(&r_right).is_none());
     }
 
@@ -528,5 +560,83 @@ mod tests {
             range_mgr.load_range(r).unwrap_err(),
             LoadFailedReason::PendingRange
         );
+    }
+
+    #[test]
+    fn test_evict_ranges() {
+        {
+            let mut range_mgr = RangeManager::default();
+            let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+            let r2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
+            let r3 = CacheRange::new(b"k40".to_vec(), b"k50".to_vec());
+            range_mgr.new_range(r1.clone());
+            range_mgr.new_range(r2.clone());
+            range_mgr.new_range(r3.clone());
+            range_mgr.contains_range(&r1);
+            range_mgr.contains_range(&r2);
+            range_mgr.contains_range(&r3);
+
+            let r4 = CacheRange::new(b"k00".to_vec(), b"k05".to_vec());
+            let r5 = CacheRange::new(b"k05".to_vec(), b"k10".to_vec());
+            assert_eq!(range_mgr.evict_range(&r4), vec![r4]);
+            assert_eq!(
+                range_mgr.ranges().keys().collect::<Vec<_>>(),
+                vec![&r5, &r2, &r3]
+            );
+
+            let r6 = CacheRange::new(b"k24".to_vec(), b"k27".to_vec());
+            let r7 = CacheRange::new(b"k20".to_vec(), b"k24".to_vec());
+            let r8 = CacheRange::new(b"k27".to_vec(), b"k30".to_vec());
+            assert_eq!(range_mgr.evict_range(&r6), vec![r6]);
+            assert_eq!(
+                range_mgr.ranges().keys().collect::<Vec<_>>(),
+                vec![&r5, &r7, &r8, &r3]
+            );
+        }
+
+        {
+            let mut range_mgr = RangeManager::default();
+            let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+            let r2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
+            let r3 = CacheRange::new(b"k40".to_vec(), b"k50".to_vec());
+            range_mgr.new_range(r1.clone());
+            range_mgr.new_range(r2.clone());
+            range_mgr.new_range(r3.clone());
+            range_mgr.contains_range(&r1);
+            range_mgr.contains_range(&r2);
+            range_mgr.contains_range(&r3);
+
+            let r4 = CacheRange::new(b"k".to_vec(), b"k51".to_vec());
+            assert_eq!(range_mgr.evict_range(&r4), vec![r1, r2, r3]);
+            assert!(range_mgr.ranges().is_empty());
+        }
+
+        {
+            let mut range_mgr = RangeManager::default();
+            let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+            let r2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
+            let r3 = CacheRange::new(b"k40".to_vec(), b"k50".to_vec());
+            range_mgr.new_range(r1.clone());
+            range_mgr.new_range(r2.clone());
+            range_mgr.new_range(r3.clone());
+
+            let r4 = CacheRange::new(b"k25".to_vec(), b"k55".to_vec());
+            assert_eq!(range_mgr.evict_range(&r4), vec![r2, r3]);
+            assert_eq!(range_mgr.ranges().len(), 1);
+        }
+
+        {
+            let mut range_mgr = RangeManager::default();
+            let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+            let r2 = CacheRange::new(b"k30".to_vec(), b"k40".to_vec());
+            let r3 = CacheRange::new(b"k50".to_vec(), b"k60".to_vec());
+            range_mgr.new_range(r1.clone());
+            range_mgr.new_range(r2.clone());
+            range_mgr.new_range(r3.clone());
+
+            let r4 = CacheRange::new(b"k25".to_vec(), b"k75".to_vec());
+            assert_eq!(range_mgr.evict_range(&r4), vec![r2, r3]);
+            assert_eq!(range_mgr.ranges().len(), 1);
+        }
     }
 }

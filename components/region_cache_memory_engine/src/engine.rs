@@ -296,12 +296,13 @@ impl RangeCacheMemoryEngine {
     /// immediately due to some ongoing snapshots.
     pub fn evict_range(&self, range: &CacheRange) {
         let mut core = self.core.write();
-        if core.range_manager.evict_range(range) {
+        let ranges_to_delete = core.range_manager.evict_range(range);
+        if !ranges_to_delete.is_empty() {
             drop(core);
             // The range can be deleted directly.
             if let Err(e) = self
                 .bg_worker_manager()
-                .schedule_task(BackgroundTask::DeleteRange(vec![range.clone()]))
+                .schedule_task(BackgroundTask::DeleteRange(ranges_to_delete))
             {
                 error!(
                     "schedule delete range failed";

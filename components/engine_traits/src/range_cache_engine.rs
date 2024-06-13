@@ -136,8 +136,30 @@ impl CacheRange {
         self.start.as_slice() <= key && key < self.end.as_slice()
     }
 
+    // note: overlaps also includes contain
     pub fn overlaps(&self, other: &CacheRange) -> bool {
         self.start < other.end && other.start < self.end
+    }
+
+    // return the proper subset range of `range1` and `range2`
+    pub fn overlapped_part(range1: &CacheRange, range2: &CacheRange) -> Option<CacheRange> {
+        if !range1.overlaps(range2) {
+            return None;
+        }
+
+        let start = if range1.start >= range2.start {
+            &range1.start
+        } else {
+            &range2.start
+        };
+
+        let end = if range1.end <= range2.end {
+            &range1.end
+        } else {
+            &range2.end
+        };
+
+        Some(CacheRange::new(start.clone(), end.clone()))
     }
 
     pub fn split_off(&self, range: &CacheRange) -> (Option<CacheRange>, Option<CacheRange>) {
@@ -202,5 +224,33 @@ mod tests {
         let (left, right) = r1.split_off(&r2);
         assert_eq!(left.unwrap(), r3);
         assert_eq!(right.unwrap(), r4);
+    }
+
+    #[test]
+    fn test_overlap() {
+        let r1 = CacheRange::new(b"k1".to_vec(), b"k6".to_vec());
+        let r2 = CacheRange::new(b"k2".to_vec(), b"k4".to_vec());
+        assert!(r1.overlaps(&r2));
+        assert!(r2.overlaps(&r1));
+
+        let r1 = CacheRange::new(b"k1".to_vec(), b"k6".to_vec());
+        let r2 = CacheRange::new(b"k2".to_vec(), b"k7".to_vec());
+        assert!(r1.overlaps(&r2));
+        assert!(r2.overlaps(&r1));
+
+        let r1 = CacheRange::new(b"k1".to_vec(), b"k6".to_vec());
+        let r2 = CacheRange::new(b"k1".to_vec(), b"k4".to_vec());
+        assert!(r1.overlaps(&r2));
+        assert!(r2.overlaps(&r1));
+
+        let r1 = CacheRange::new(b"k1".to_vec(), b"k6".to_vec());
+        let r2 = CacheRange::new(b"k2".to_vec(), b"k6".to_vec());
+        assert!(r1.overlaps(&r2));
+        assert!(r2.overlaps(&r1));
+
+        let r1 = CacheRange::new(b"k1".to_vec(), b"k6".to_vec());
+        let r2 = CacheRange::new(b"k1".to_vec(), b"k6".to_vec());
+        assert!(r1.overlaps(&r2));
+        assert!(r2.overlaps(&r1));
     }
 }
