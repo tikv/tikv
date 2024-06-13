@@ -232,6 +232,7 @@ fn test_on_apply_snap_failed() {
     cluster.cfg.raft_store.raft_base_tick_interval = ReadableDuration::millis(5);
     cluster.cfg.raft_store.raft_store_max_leader_lease = ReadableDuration::millis(100);
     cluster.cfg.raft_store.pd_heartbeat_tick_interval = ReadableDuration::millis(100);
+    cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(100);
 
     let pd_client = Arc::clone(&cluster.pd_client);
     // Disable default max peer count check.
@@ -253,9 +254,9 @@ fn test_on_apply_snap_failed() {
         pending_peers[&3] == new_peer(3, 3)
     });
     must_get_none(&cluster.get_engine(3), b"k1");
+    cluster.must_send_store_heartbeat(3);
     // Check that the region is marked as damaged.
     test_util::eventually(Duration::from_millis(100), Duration::from_secs(1), || {
-        cluster.must_send_store_heartbeat(3);
         if let Some(stats) = pd_client.get_store_stats(3) {
             !stats.damaged_regions_id.is_empty()
         } else {
