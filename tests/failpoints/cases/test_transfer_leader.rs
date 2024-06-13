@@ -11,7 +11,13 @@ use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{kvrpcpb::*, tikvpb::TikvClient};
 use pd_client::PdClient;
+<<<<<<< HEAD
 use test_raftstore::*;
+=======
+use raft::eraftpb::MessageType;
+use test_raftstore::*;
+use test_raftstore_macro::test_case;
+>>>>>>> fac3d728d2 (raftstore,raftstore-v2: fix unsafe vote after start (#15085))
 use tikv::storage::Snapshot;
 use tikv_util::HandyRwLock;
 use txn_types::{Key, PessimisticLock};
