@@ -26,7 +26,10 @@ use yatp::Remote;
 
 use crate::{
     engine::{RangeCacheMemoryEngineCore, SkiplistHandle},
-    keys::{decode_key, encode_key, encoding_for_filter, InternalBytes, InternalKey, ValueType},
+    keys::{
+        decode_key, encode_key, encode_key_for_eviction, encoding_for_filter, InternalBytes,
+        InternalKey, ValueType,
+    },
     memory_controller::{MemoryController, MemoryUsage},
     metrics::{
         GC_FILTERED_STATIC, RANGE_CACHE_COUNT, RANGE_CACHE_MEMORY_USAGE, RANGE_GC_TIME_HISTOGRAM,
@@ -340,8 +343,9 @@ impl BackgroundRunnerCore {
 
         let mut iter = write_cf_handle.iterator();
         let guard = &epoch::pin();
-        iter.seek_to_first(guard);
-        while iter.valid() {
+        let (start_key, end_key) = encode_key_for_eviction(range);
+        iter.seek(&start_key, guard);
+        while iter.valid() && iter.key() < &end_key {
             let k = iter.key();
             let v = iter.value();
             if let Err(e) = filter.filter(k.as_bytes(), v.as_bytes()) {
@@ -364,6 +368,7 @@ impl BackgroundRunnerCore {
             "below_safe_point_unique_keys" => filter.metrics.unique_key,
             "below_safe_point_version" => filter.metrics.versions,
             "below_safe_point_delete_version" => filter.metrics.delete_versions,
+            "current_safe_point" => safe_ts,
         );
 
         std::mem::take(&mut filter.metrics)
@@ -1498,6 +1503,147 @@ pub mod tests {
         worker.core.gc_range(&range, 19, 100);
         assert_eq!(0, element_count(&write));
         assert_eq!(0, element_count(&default));
+    }
+
+    // The GC of one range should not impact other ranges
+    #[test]
+    fn test_gc_one_range() {
+        let config = RangeCacheEngineConfig::config_for_test();
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+            VersionTrack::new(config),
+        )));
+        let memory_controller = engine.memory_controller();
+        let (write, default, range1, range2) = {
+            let mut core = engine.core().write();
+
+            let start1 = Key::from_raw(b"k00").into_encoded();
+            let end1 = Key::from_raw(b"k10").into_encoded();
+            let range1 = CacheRange::new(start1, end1);
+            core.mut_range_manager().new_range(range1.clone());
+
+            let start2 = Key::from_raw(b"k30").into_encoded();
+            let end2 = Key::from_raw(b"k40").into_encoded();
+            let range2 = CacheRange::new(start2, end2);
+            core.mut_range_manager().new_range(range2.clone());
+
+            let engine = core.engine();
+            (
+                engine.cf_handle(CF_WRITE),
+                engine.cf_handle(CF_DEFAULT),
+                range1,
+                range2,
+            )
+        };
+
+        put_data(
+            b"k05",
+            b"val1",
+            10,
+            11,
+            10,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+
+        put_data(
+            b"k05",
+            b"val2",
+            12,
+            13,
+            14,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+
+        put_data(
+            b"k05",
+            b"val1",
+            14,
+            15,
+            18,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+
+        put_data(
+            b"k35",
+            b"val1",
+            10,
+            11,
+            12,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+
+        put_data(
+            b"k35",
+            b"val2",
+            12,
+            13,
+            16,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+
+        put_data(
+            b"k35",
+            b"val1",
+            14,
+            15,
+            20,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+
+        let encode_key = |key, commit_ts, seq_num| -> InternalBytes {
+            let raw_write_k = Key::from_raw(key)
+                .append_ts(TimeStamp::new(commit_ts))
+                .into_encoded();
+            encode_key(&raw_write_k, seq_num, ValueType::Value)
+        };
+
+        let verify = |key, mvcc, seq, handle: &SkiplistHandle| {
+            let guard = &epoch::pin();
+            let key = encode_key(key, mvcc, seq);
+            let mut iter = handle.iterator();
+            iter.seek(&key, guard);
+            assert_eq!(iter.key(), &key);
+            iter.next(guard);
+            assert!(!iter.valid() || !iter.key().same_user_key_with(&key));
+        };
+
+        assert_eq!(6, element_count(&default));
+        assert_eq!(6, element_count(&write));
+
+        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
+        worker.core.gc_range(&range1, 100, 100);
+
+        verify(b"k05", 15, 18, &write);
+        verify(b"k05", 14, 19, &default);
+
+        assert_eq!(4, element_count(&default));
+        assert_eq!(4, element_count(&write));
+
+        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
+        worker.core.gc_range(&range2, 100, 100);
+
+        verify(b"k35", 15, 20, &write);
+        verify(b"k35", 14, 21, &default);
+
+        assert_eq!(2, element_count(&default));
+        assert_eq!(2, element_count(&write));
     }
 
     #[test]
