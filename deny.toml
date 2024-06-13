@@ -99,7 +99,3 @@ exceptions = [
 unknown-git = "deny"
 unknown-registry = "deny"
 allow-org = { github = ["tikv", "pingcap", "rust-lang"] }
-# Allow list.
-allow-git = [
-    "https://github.com/LykxSassinator/kvproto.git",
-]
