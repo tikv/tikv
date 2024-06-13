@@ -1272,10 +1272,6 @@ where
                     meta.damaged_regions.insert(self.region_id());
                 }
                 if self.fsm.peer.should_destroy_after_apply_snapshot() {
-                    info!(
-                        "destroy peer due to manually cancel";
-                        "peer_id" => peer_id,
-                    );
                     self.maybe_destroy();
                 }
             }
