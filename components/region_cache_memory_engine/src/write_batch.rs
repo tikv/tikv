@@ -28,6 +28,12 @@ pub(crate) const NODE_OVERHEAD_SIZE_EXPECTATION: usize = 96;
 // As every key/value holds a Arc<MemoryController>, this overhead should be
 // taken into consideration.
 pub(crate) const MEM_CONTROLLER_OVERHEAD: usize = 8;
+// A threshold that when the lock cf increment bytes exceed it, a
+// CleanLockTombstone will be scheduled to cleanup the lock tombstones.
+// It's somewhat like RocksDB flush memtables when the memtable reaches to a
+// certain bytes so that the compactions may cleanup some tombstones. By
+// default, the memtable size for lock cf is 32MB. As not all ranges will be
+// cached in the memory, just use half of it here.
 const AMOUNT_TO_CLEAN_TOMBSTONE: u64 = ReadableSize::mb(16).0;
 
 // `prepare_for_range` should be called before raft command apply for each peer
