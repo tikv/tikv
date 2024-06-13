@@ -298,8 +298,20 @@ impl RangeManager {
         vec![]
     }
 
-    // return ranges that can be deleted now (not ongoing snapshot)
-    // note: `evict_range` may cover multiple cached ranges
+    /// Return ranges that can be deleted now (not ongoing snapshot).
+    // There are two cases based on the relationship between `evict_range` and
+    // cached ranges:
+    // 1. `evict_range` is contained(including equals) by a cached range (only one
+    //    due to non-overlapping in cached ranges)
+    // 2. `evict_range` is overlapped with (including contain but not be contained)
+    //    one or more cached ranges
+    //
+    // For 1, if the `evict_range` is a proper subset of the cached_range, we will
+    // split the cached_range so that only the `evict_range` part will be evicted
+    // and deleted.
+    //
+    // For 2, this is caused by some special operations such as merge and delete
+    // range. So, conservertively, we evict all ranges overlap with it.
     pub(crate) fn evict_range(&mut self, evict_range: &CacheRange) -> Vec<CacheRange> {
         info!(
             "try to evict range";
@@ -331,9 +343,8 @@ impl RangeManager {
             .collect()
     }
 
-    // If there no ongoing snapshot, the evicted_range can be deleted now. However,
-    // the `evicted_range` may contains multiple ranges, so we return the overlapped
-    // part.
+    // If there no ongoing snapshot, the evicted_range can be deleted now, so Some
+    // will be returned.
     fn evict_within_range(
         &mut self,
         evict_range: &CacheRange,

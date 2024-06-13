@@ -141,27 +141,6 @@ impl CacheRange {
         self.start < other.end && other.start < self.end
     }
 
-    // return the proper subset range of `range1` and `range2`
-    pub fn overlapped_part(range1: &CacheRange, range2: &CacheRange) -> Option<CacheRange> {
-        if !range1.overlaps(range2) {
-            return None;
-        }
-
-        let start = if range1.start >= range2.start {
-            &range1.start
-        } else {
-            &range2.start
-        };
-
-        let end = if range1.end <= range2.end {
-            &range1.end
-        } else {
-            &range2.end
-        };
-
-        Some(CacheRange::new(start.clone(), end.clone()))
-    }
-
     pub fn split_off(&self, range: &CacheRange) -> (Option<CacheRange>, Option<CacheRange>) {
         assert!(self.contains_range(range));
         let left = if self.start != range.start {
