@@ -321,7 +321,9 @@ mod tests {
 
         let value_type_byte = encoded_bytes.as_slice()[encoded_bytes.as_slice().len() - 8];
         assert_eq!(value_type_byte, ValueType::Value as u8);
-        let seq_lsb = encoded_bytes.as_slice()[encoded_bytes.as_slice().len() - 7];
-        assert_eq!(seq_lsb, 7u8);
+        let mut seq_bytes = vec![0u8; 7];
+        seq_bytes.copy_from_slice(&encoded_bytes.as_slice()[encoded_bytes.as_slice().len() - 7..]);
+        seq_bytes.push(0);
+        assert_eq!(u64::from_le_bytes(seq_bytes.try_into().unwrap()), 7);
     }
 }
