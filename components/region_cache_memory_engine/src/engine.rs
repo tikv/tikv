@@ -15,6 +15,7 @@ use engine_traits::{
     CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
+use raftstore::coprocessor::RegionInfoProvider;
 use skiplist_rs::{
     base::{Entry, OwnedIter},
     SkipList,
@@ -273,6 +274,13 @@ pub struct RangeCacheMemoryEngine {
 
 impl RangeCacheMemoryEngine {
     pub fn new(range_cache_engine_context: RangeCacheEngineContext) -> Self {
+        RangeCacheMemoryEngine::with_region_info_provider(range_cache_engine_context, None)
+    }
+
+    pub fn with_region_info_provider(
+        range_cache_engine_context: RangeCacheEngineContext,
+        region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
+    ) -> Self {
         info!("init range cache memory engine";);
         let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
         let skiplist_engine = { core.read().engine().clone() };
@@ -289,7 +297,10 @@ impl RangeCacheMemoryEngine {
             core.clone(),
             pd_client,
             config.value().gc_interval.0,
+            config.value().load_evict_interval.0,
+            config.value().expected_region_size(),
             memory_controller.clone(),
+            region_info_provider,
         ));
 
         Self {
@@ -301,6 +312,10 @@ impl RangeCacheMemoryEngine {
             config,
             lock_modification_bytes: Arc::default(),
         }
+    }
+
+    pub fn expected_region_size(&self) -> usize {
+        self.config.value().expected_region_size()
     }
 
     pub fn new_range(&self, range: CacheRange) {
@@ -591,8 +606,10 @@ pub mod tests {
             let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig {
                 enabled: true,
                 gc_interval: Default::default(),
+                load_evict_interval: Default::default(),
                 soft_limit_threshold: Some(ReadableSize(300)),
                 hard_limit_threshold: Some(ReadableSize(500)),
+                expected_region_size: Some(ReadableSize::mb(20)),
             }));
             let mem_controller = Arc::new(MemoryController::new(config.clone(), skiplist.clone()));
 
@@ -644,8 +661,10 @@ pub mod tests {
         let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig {
             enabled: true,
             gc_interval: Default::default(),
+            load_evict_interval: Default::default(),
             soft_limit_threshold: Some(ReadableSize(300)),
             hard_limit_threshold: Some(ReadableSize(500)),
+            expected_region_size: Some(ReadableSize::mb(20)),
         }));
         let mem_controller = Arc::new(MemoryController::new(config.clone(), skiplist.clone()));
 

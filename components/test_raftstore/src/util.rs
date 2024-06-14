@@ -723,6 +723,7 @@ where
         RangeCacheEngineContext::new(config, pd_client),
         disk_engine,
         None,
+        None,
     );
     let engines = Engines::new(kv_engine, raft_engine);
     (
