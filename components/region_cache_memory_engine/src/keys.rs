@@ -221,7 +221,7 @@ pub fn encode_key_for_boundary_with_mvcc(range: &CacheRange) -> (InternalBytes, 
     // respective of user key (with mvcc version), so that the iterations covers all
     // versions of the range start and covers nothing of range end.
 
-    // todo: can we avoid one clone
+    // TODO: can we avoid one clone
     let start_mvcc_key = Key::from_encoded(range.start.to_vec())
         .append_ts(TimeStamp::max())
         .into_encoded();
@@ -241,7 +241,7 @@ pub fn encode_key_for_boundary_without_mvcc(range: &CacheRange) -> (InternalByte
     // respective of user key (without mvcc version), so that the iterations covers
     // all versions of the range start and covers nothing of range end.
 
-    // todo: can we avoid one clone
+    // TODO: can we avoid one clone
     let encoded_start = encode_key(&range.start, u64::MAX, VALUE_TYPE_FOR_SEEK);
     let encoded_end = encode_key(&range.end, u64::MAX, VALUE_TYPE_FOR_SEEK);
 
@@ -264,10 +264,10 @@ pub fn construct_user_key(i: u64) -> Vec<u8> {
 }
 
 #[cfg(test)]
-pub fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {
+pub fn construct_key(i: u64, ts: u64) -> Vec<u8> {
     let k = format!("k{:08}", i);
     Key::from_encoded(k.as_bytes().to_vec())
-        .append_ts(TimeStamp::new(mvcc))
+        .append_ts(TimeStamp::new(ts))
         .into_encoded()
 }
 
