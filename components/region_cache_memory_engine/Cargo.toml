@@ -15,37 +15,37 @@ path = "tests/failpoints/mod.rs"
 required-features = ["failpoints"]
 
 [dependencies]
-engine_traits = { workspace = true }
-collections = { workspace = true }
-skiplist-rs = { git = "https://github.com/tikv/skiplist-rs.git", branch = "main" }
 bytes = "1.0"
+collections = { workspace = true }
 crossbeam = "0.8"
-futures = { version = "0.3", features = ["compat"] }
-tikv_util = { workspace = true }
-txn_types = { workspace = true }
-kvproto = { workspace = true }
-log_wrappers = { workspace = true }
-pd_client = { workspace = true }
 dashmap = "5.1"
+engine_rocks = { workspace = true }
+engine_traits = { workspace = true }
+fail = "0.5"
+futures = { version = "0.3", features = ["compat"] }
+hex = "0.4"
+keys = { workspace = true }
+kvproto = { workspace = true }
+lazy_static = "1.4.0"
+libc = "0.2"
+log_wrappers = { workspace = true }
+online_config = { workspace = true }
+parking_lot = "0.12"
+pd_client = { workspace = true }
+prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
+prometheus-static-metric = "0.5"
+rand = "0.8"
 security = { workspace = true }
 serde = "1.0"
 serde_derive = "1.0"
 serde_json = "1.0"
-slog-global = { workspace = true }
+skiplist-rs = { git = "https://github.com/tikv/skiplist-rs.git", branch = "main" }
 slog = { workspace = true }
-engine_rocks = { workspace = true }
-fail = "0.5"
-yatp = { workspace = true }
-parking_lot = "0.12"
-keys = { workspace = true }
-prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
-prometheus-static-metric = "0.5"
-lazy_static = "1.4.0"
-hex = "0.4"
+slog-global = { workspace = true }
 thiserror = "1.0"
-online_config = { workspace = true }
-libc = "0.2"
-rand = "0.8"
+tikv_util = { workspace = true }
+txn_types = { workspace = true }
+yatp = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.0"

@@ -318,8 +318,8 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
             }
             None => {
                 // We can't find background pre-handle task, maybe:
-                // 1. We can't get snapshot from snap manager at that time.
-                //    This is abnormal case.
+                // 1. We can't get snapshot from snap manager at that time. This is abnormal
+                //    case.
                 // 2. We disabled background pre handling.
                 info!("pre-handled snapshot not found";
                     "peer_id" => peer_id,

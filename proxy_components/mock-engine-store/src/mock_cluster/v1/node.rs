@@ -5,6 +5,7 @@ use std::{
     sync::{atomic::AtomicU64, Arc, Mutex},
 };
 
+use health_controller::HealthController;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
@@ -38,7 +39,7 @@ use test_pd_client::TestPdClient;
 use tikv::{
     config::{ConfigController, Module},
     import::SstImporter,
-    server::{raftkv::ReplicaReadLockChecker, Node, Result as ServerResult},
+    server::{raftkv::ReplicaReadLockChecker, MultiRaftServer, Result as ServerResult},
 };
 use tikv_util::{
     box_err,
@@ -186,7 +187,7 @@ type SimulateChannelTransport<EK> = SimulateTransport<ChannelTransport, EK>;
 pub struct NodeCluster {
     trans: ChannelTransport,
     pd_client: Arc<TestPdClient>,
-    nodes: HashMap<u64, Node<TestPdClient, TiFlashEngine, ProxyRaftEngine>>,
+    nodes: HashMap<u64, MultiRaftServer<TestPdClient, TiFlashEngine, ProxyRaftEngine>>,
     snap_mgrs: HashMap<u64, SnapManager>,
     cfg_controller: Option<ConfigController>,
     simulate_trans: HashMap<u64, SimulateChannelTransport<TiFlashEngine>>,
@@ -245,7 +246,7 @@ impl NodeCluster {
     pub fn get_node(
         &mut self,
         node_id: u64,
-    ) -> Option<&mut Node<TestPdClient, TiFlashEngine, ProxyRaftEngine>> {
+    ) -> Option<&mut MultiRaftServer<TestPdClient, TiFlashEngine, ProxyRaftEngine>> {
         self.nodes.get_mut(&node_id)
     }
 
@@ -286,7 +287,7 @@ impl Simulator<TiFlashEngine> for NodeCluster {
             )
             .unwrap();
         let bg_worker = WorkerBuilder::new("background").thread_count(2).create();
-        let mut node = Node::new(
+        let mut node = MultiRaftServer::new(
             system,
             &cfg.server,
             Arc::new(VersionTrack::new(raft_store)),
@@ -294,7 +295,7 @@ impl Simulator<TiFlashEngine> for NodeCluster {
             Arc::clone(&self.pd_client),
             Arc::default(),
             bg_worker.clone(),
-            None,
+            HealthController::new(),
             None,
         );
 

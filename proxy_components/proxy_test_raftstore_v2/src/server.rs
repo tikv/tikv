@@ -17,7 +17,6 @@ use engine_test::raft::RaftTestEngine;
 use engine_traits::{KvEngine, RaftEngine, TabletRegistry};
 use futures::{executor::block_on, Future};
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
-use grpcio_health::HealthService;
 use kvproto::{
     deadlock_grpc::create_deadlock,
     debugpb_grpc::DebugClient,

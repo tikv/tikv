@@ -847,7 +847,7 @@ where
             self.pd_client.clone(),
             state,
             self.core.background_worker.clone(),
-            health_controller.clone(),
+            HealthController::new(),
             None,
         );
         raft_server

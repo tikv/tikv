@@ -17,8 +17,6 @@ use std::{
 
 use api_version::{dispatch_api_version, KvFormat};
 use concurrency_manager::ConcurrencyManager;
-
-use health_controller::HealthController;
 use encryption_export::data_key_manager_from_config;
 use engine_rocks::{from_rocks_compression_type, RocksEngine, RocksStatistics};
 use engine_rocks_helper::sst_recovery::{RecoveryRunner, DEFAULT_CHECK_INTERVAL};
@@ -40,16 +38,11 @@ use engine_traits::{
     Engines, KvEngine, MiscExt, RaftEngine, SingletonFactory, TabletContext, TabletRegistry,
     CF_DEFAULT, CF_WRITE,
 };
-
-use region_cache_memory_engine::{
-    config::RangeCacheConfigManager, RangeCacheEngineContext, RangeCacheMemoryEngine,
-    RangeCacheMemoryEngineStatistics,
-};
 use error_code::ErrorCodeExt;
 use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IOMetricsManager};
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
-use grpcio_health::HealthService;
+use health_controller::HealthController;
 use kvproto::{
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
 };
@@ -68,6 +61,10 @@ use raftstore::{
         AutoSplitController, CheckLeaderRunner, LocalReader, SnapManager, SnapManagerBuilder,
         SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
+};
+use region_cache_memory_engine::{
+    config::RangeCacheConfigManager, RangeCacheEngineContext, RangeCacheMemoryEngine,
+    RangeCacheMemoryEngineStatistics,
 };
 use resource_control::{
     ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
@@ -93,7 +90,8 @@ use tikv::{
         service::{DebugService, DiagnosticsService},
         tablet_snap::NoSnapshotCache,
         ttl::TtlChecker,
-        KvEngineFactoryBuilder, MultiRaftServer, RaftKv, Server, CPU_CORES_QUOTA_GAUGE, GRPC_THREAD_PREFIX,
+        KvEngineFactoryBuilder, MultiRaftServer, RaftKv, Server, CPU_CORES_QUOTA_GAUGE,
+        GRPC_THREAD_PREFIX,
     },
     storage::{
         self,
@@ -692,20 +690,20 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
             router.clone(),
             config.coprocessor.clone(),
         ));
-        
+
         // Region stats manager collects region heartbeat for use by in-memory engine.
         let region_stats_manager_enabled_cb: Arc<dyn Fn() -> bool + Send + Sync> =
-        if cfg!(feature = "memory-engine") {
-            let cfg_controller_clone = cfg_controller.clone();
-            Arc::new(move || {
-                cfg_controller_clone
-                    .get_current()
-                    .range_cache_engine
-                    .enabled
-            })
-        } else {
-            Arc::new(|| false)
-        };
+            if cfg!(feature = "memory-engine") {
+                let cfg_controller_clone = cfg_controller.clone();
+                Arc::new(move || {
+                    cfg_controller_clone
+                        .get_current()
+                        .range_cache_engine
+                        .enabled
+                })
+            } else {
+                Arc::new(|| false)
+            };
         let region_info_accessor = RegionInfoAccessor::new(
             coprocessor_host.as_mut().unwrap(),
             region_stats_manager_enabled_cb,
@@ -1151,7 +1149,6 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
             )
             .unwrap_or_else(|e| fatal!("failed to validate raftstore config {}", e));
         let raft_store = Arc::new(VersionTrack::new(self.core.config.raft_store.clone()));
-        let health_service = HealthService::default();
         let mut default_store = kvproto::metapb::Store::default();
 
         if !self.proxy_config.server.engine_store_version.is_empty() {
@@ -1183,7 +1180,7 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
             state,
             self.core.background_worker.clone(),
             health_controller.clone(),
-            None,
+            Some(default_store),
         );
         node.try_bootstrap_store(engines.engines.clone())
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
@@ -1286,7 +1283,6 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
             self.core.encryption_key_manager.clone(),
         );
         tiflash_ob.register_to(self.coprocessor_host.as_mut().unwrap());
-
 
         cfg_controller.register(
             tikv::config::Module::Server,
