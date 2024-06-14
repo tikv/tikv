@@ -69,6 +69,16 @@ make_static_metric! {
     pub struct LocalReadRejectCounter : LocalIntCounter {
        "reason" => RejectReason,
     }
+
+    pub label_enum ClearOverlapRegionType {
+        by_key,
+        by_range,
+        by_ingest_files,
+    }
+
+    pub struct ClearOverlapRegionDuration : Histogram {
+        "type" => ClearOverlapRegionType,
+    }
 }
 
 pub struct LocalReadMetrics {
@@ -276,4 +286,12 @@ lazy_static! {
         "Total number of renewing lease in advance from local reader."
     )
     .unwrap();
+
+    pub static ref CLEAR_OVERLAP_REGION_DURATION: ClearOverlapRegionDuration = register_static_histogram_vec!(
+        ClearOverlapRegionDuration,
+        "tikv_raftstore_clear_overlap_region_duration_seconds",
+        "Bucketed histogram of clear overlap region duration.",
+        &["type"],
+        exponential_buckets(0.005, 2.0, 20).unwrap()
+    ).unwrap();
 }

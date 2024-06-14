@@ -737,6 +737,18 @@ def Server() -> RowPanel:
     )
     layout.row(
         [
+            graph_panel_histogram_quantiles(
+                title="Clear overlap region duration",
+                description="Bucketed histogram of clear overlap region duration.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_raftstore_clear_overlap_region_duration_seconds",
+                by_labels=["type"],
+                hide_count=True,
+            ),
+        ]
+    )
+    layout.row(
+        [
             heatmap_panel(
                 title="Written key size",
                 description="The key size for every put of apply worker",
@@ -5845,10 +5857,11 @@ def RocksDB() -> RowPanel:
             ),
             graph_panel_histogram_quantiles(
                 title="Ingest SST duration seconds",
-                description="The time consumed when ingesting SST files",
+                description="Bucketed histogram of ingest external SST files duration.",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
-                metric="tikv_snapshot_ingest_sst_duration_seconds",
+                metric="tikv_storage_ingest_external_file_duration_secs",
                 label_selectors=['db="$db"'],
+                by_labels=["cf", "type"],
                 hide_count=True,
             ),
         ]
