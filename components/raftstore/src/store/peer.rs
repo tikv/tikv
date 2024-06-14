@@ -2950,7 +2950,13 @@ where
             if for_witness {
                 // inform next round to check apply status
                 ctx.router
-                    .send_casual_msg(snap_region.get_id(), CasualMessage::SnapshotApplied)
+                    .send_casual_msg(
+                        snap_region.get_id(),
+                        CasualMessage::SnapshotApplied {
+                            peer_id: self.peer.get_id(),
+                            tombstone: false,
+                        },
+                    )
                     .unwrap();
             }
             // When applying snapshot, there is no log applied and not compacted yet.
