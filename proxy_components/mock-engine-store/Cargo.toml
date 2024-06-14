@@ -40,6 +40,7 @@ causal_ts = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true, default-features = false }
 crossbeam = "0.8"
+health_controller = { workspace = true }
 encryption = { workspace = true, default-features = false }
 openssl = { workspace = true } # TODO only for feature
 encryption_export = { workspace = true, default-features = false }

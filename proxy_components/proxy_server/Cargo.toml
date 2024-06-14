@@ -81,7 +81,11 @@ online_config = { workspace = true }
 openssl = { workspace = true }
 pd_client = { workspace = true, default-features = false }
 pin-project = "1.0"
-pprof = { version = "0.11", default-features = false, features = ["flamegraph", "protobuf-codec", "cpp"] }
+pprof = { version = "0.13", default-features = false, features = [
+  "flamegraph",
+  "protobuf-codec",
+  "cpp",
+] }
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }

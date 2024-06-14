@@ -3399,15 +3399,6 @@ dependencies = [
 
 [[package]]
 name = "memmap2"
-version = "0.5.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83faa42c0a078c393f6b29d5db232d8be22776a891f8f56e5284faee4a20b327"
-dependencies = [
- "libc 0.2.151",
-]
-
-[[package]]
-name = "memmap2"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "45fd3a57831bf88bc63f8cebc0cf956116276e97fef3966103e96416209f7c92"
@@ -3567,6 +3558,7 @@ dependencies = [
  "futures 0.3.15",
  "grpcio",
  "grpcio-health",
+ "health_controller",
  "int-enum",
  "keys",
  "kvproto",
@@ -4386,29 +4378,6 @@ checksum = "7170ef9988bc169ba16dd36a7fa041e5c4cbeb6a35b76d4c03daded371eae7c0"
 
 [[package]]
 name = "pprof"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "196ded5d4be535690899a4631cc9f18cdc41b7ebf24a79400f46f48e49a11059"
-dependencies = [
- "backtrace",
- "cfg-if 1.0.0",
- "findshlibs",
- "inferno",
- "libc 0.2.151",
- "log",
- "nix 0.26.2",
- "once_cell",
- "parking_lot 0.12.1",
- "protobuf",
- "protobuf-codegen-pure",
- "smallvec",
- "symbolic-demangle 10.2.1",
- "tempfile",
- "thiserror",
-]
-
-[[package]]
-name = "pprof"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef5c97c51bd34c7e742402e216abdeb44d415fbe6ae41d56b114723e953711cb"
@@ -4425,7 +4394,7 @@ dependencies = [
  "protobuf",
  "protobuf-codegen-pure",
  "smallvec",
- "symbolic-demangle 12.8.0",
+ "symbolic-demangle",
  "tempfile",
  "thiserror",
 ]
@@ -4723,7 +4692,7 @@ dependencies = [
  "openssl",
  "pd_client",
  "pin-project",
- "pprof 0.11.1",
+ "pprof",
  "prometheus",
  "protobuf",
  "raft",
@@ -4915,7 +4884,7 @@ dependencies = [
  "libc 0.2.151",
  "log",
  "lz4-sys",
- "memmap2 0.9.3",
+ "memmap2",
  "nix 0.26.2",
  "num-derive 0.4.0",
  "num-traits",
@@ -6485,37 +6454,14 @@ dependencies = [
 
 [[package]]
 name = "symbolic-common"
-version = "10.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b55cdc318ede251d0957f07afe5fed912119b8c1bc5a7804151826db999e737"
-dependencies = [
- "debugid",
- "memmap2 0.5.10",
- "stable_deref_trait",
- "uuid 1.7.0",
-]
-
-[[package]]
-name = "symbolic-common"
 version = "12.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1cccfffbc6bb3bb2d3a26cd2077f4d055f6808d266f9d4d158797a4c60510dfe"
 dependencies = [
  "debugid",
- "memmap2 0.9.3",
+ "memmap2",
  "stable_deref_trait",
  "uuid 1.7.0",
-]
-
-[[package]]
-name = "symbolic-demangle"
-version = "10.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79be897be8a483a81fff6a3a4e195b4ac838ef73ca42d348b3f722da9902e489"
-dependencies = [
- "cpp_demangle",
- "rustc-demangle",
- "symbolic-common 10.2.1",
 ]
 
 [[package]]
@@ -6524,8 +6470,9 @@ version = "12.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76a99812da4020a67e76c4eb41f08c87364c14170495ff780f30dd519c221a68"
 dependencies = [
+ "cpp_demangle",
  "rustc-demangle",
- "symbolic-common 12.8.0",
+ "symbolic-common",
 ]
 
 [[package]]
@@ -7297,7 +7244,7 @@ dependencies = [
  "pd_client",
  "pin-project",
  "pnet_datalink",
- "pprof 0.13.0",
+ "pprof",
  "procinfo 0.4.2 (git+https://github.com/tikv/procinfo-rs?rev=7693954bd1dd86eb1709572fd7b62fd5f7ff2ea1)",
  "prometheus",
  "prometheus-static-metric",
