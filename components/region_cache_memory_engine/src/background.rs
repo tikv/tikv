@@ -220,8 +220,12 @@ impl BgWorkManager {
         );
         let scheduler = worker.start_with_timer("range-cache-engine-background", runner);
 
-        let (h, tx) =
-            BgWorkManager::start_tick(scheduler.clone(), pd_client, gc_interval, load_evict_interval);
+        let (h, tx) = BgWorkManager::start_tick(
+            scheduler.clone(),
+            pd_client,
+            gc_interval,
+            load_evict_interval,
+        );
 
         Self {
             worker,
@@ -1821,7 +1825,12 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
+        let worker = BackgroundRunner::new(
+            engine.core.clone(),
+            memory_controller.clone(),
+            None,
+            engine.expected_region_size(),
+        );
         worker.core.gc_range(&range1, 100, 100);
 
         verify(b"k05", 15, 18, &write);
@@ -1830,7 +1839,12 @@ pub mod tests {
         assert_eq!(4, element_count(&default));
         assert_eq!(4, element_count(&write));
 
-        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
+        let worker = BackgroundRunner::new(
+            engine.core.clone(),
+            memory_controller.clone(),
+            None,
+            engine.expected_region_size(),
+        );
         worker.core.gc_range(&range2, 100, 100);
 
         verify(b"k35", 15, 20, &write);
@@ -2421,8 +2435,10 @@ pub mod tests {
         let (tx, pd_client_rx) = channel();
         let pd_client = Arc::new(MockPdClient { tx: Mutex::new(tx) });
         let gc_interval = Duration::from_millis(100);
+        let load_evict_interval = Duration::from_millis(200);
         let (scheduler, mut rx) = dummy_scheduler();
-        let (handle, stop) = BgWorkManager::start_tick(scheduler, pd_client, gc_interval);
+        let (handle, stop) =
+            BgWorkManager::start_tick(scheduler, pd_client, gc_interval, load_evict_interval);
 
         let Some(BackgroundTask::Gc(GcTask { safe_point })) =
             rx.recv_timeout(10 * gc_interval).unwrap()

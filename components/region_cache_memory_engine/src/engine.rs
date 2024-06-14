@@ -606,8 +606,10 @@ pub mod tests {
             let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig {
                 enabled: true,
                 gc_interval: Default::default(),
+                load_evict_interval: Default::default(),
                 soft_limit_threshold: Some(ReadableSize(300)),
                 hard_limit_threshold: Some(ReadableSize(500)),
+                expected_region_size: Some(ReadableSize::mb(20)),
             }));
             let mem_controller = Arc::new(MemoryController::new(config.clone(), skiplist.clone()));
 
@@ -659,8 +661,10 @@ pub mod tests {
         let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig {
             enabled: true,
             gc_interval: Default::default(),
+            load_evict_interval: Default::default(),
             soft_limit_threshold: Some(ReadableSize(300)),
             hard_limit_threshold: Some(ReadableSize(500)),
+            expected_region_size: Some(ReadableSize::mb(20)),
         }));
         let mem_controller = Arc::new(MemoryController::new(config.clone(), skiplist.clone()));
 
