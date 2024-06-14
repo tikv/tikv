@@ -24,7 +24,6 @@ use futures::{
     prelude::*,
 };
 use http::header::{HeaderValue, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE};
-use hybrid_engine::AUDIT_MODE;
 use hyper::{
     self, header,
     server::{
@@ -782,20 +781,6 @@ where
                                 Ok(make_response(
                                     StatusCode::OK,
                                     "Successfully turn off printf log",
-                                ))
-                            }
-                            (Method::PUT, "/turn_on_audit") => {
-                                AUDIT_MODE.store(true, Ordering::Relaxed);
-                                Ok(make_response(
-                                    StatusCode::OK,
-                                    "Successfully turn on audit",
-                                ))
-                            }
-                            (Method::PUT, "/turn_off_audit") => {
-                                AUDIT_MODE.store(false, Ordering::Relaxed);
-                                Ok(make_response(
-                                    StatusCode::OK,
-                                    "Successfully turn off audit",
                                 ))
                             }
                             (Method::GET, "/async_tasks") => Self::dump_async_trace(),

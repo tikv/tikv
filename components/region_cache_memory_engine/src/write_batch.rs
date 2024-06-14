@@ -237,19 +237,10 @@ impl RangeCacheWriteBatch {
         let mut ranges = vec![];
         let range_manager = core.mut_range_manager();
         for r in std::mem::take(&mut self.ranges_to_evict) {
-            if range_manager.contains_range(&r) {
-                if let Some(evict_range) = range_manager.evict_range(&r) {
-                    ranges.push(evict_range);
-                    continue;
-                }
-            }
-
-            if let Some((.., canceled)) = range_manager
-                .pending_ranges_loading_data
-                .iter_mut()
-                .find(|(range, ..)| range.contains_range(&r))
-            {
-                *canceled = true;
+            let mut ranges_to_delete = range_manager.evict_range(&r);
+            if !ranges_to_delete.is_empty() {
+                ranges.append(&mut ranges_to_delete);
+                continue;
             }
         }
         ranges
@@ -556,16 +547,6 @@ impl WriteBatch for RangeCacheWriteBatch {
             .iter()
             .map(RangeCacheWriteBatchEntry::data_size)
             .sum()
-    }
-
-    fn post_write(&mut self) {
-        // let handle = self.engine.core().read().engine().cf_handle("lock");
-        // let guard = &epoch::pin();
-        // self.lock_delete_entries.iter().for_each(|(e, seq)| {
-        //     assert!(e.lock_delete());
-        //     e.delete_in_lock_cf(*seq, &handle, guard)
-        // });
-        // self.lock_delete_entries.clear();
     }
 
     fn count(&self) -> usize {

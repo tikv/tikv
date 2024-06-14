@@ -608,7 +608,6 @@ where
             let seq = self.kv_wb_mut().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
-            self.kv_wb_mut().post_write();
 
             if let Some(seqno) = seqno.as_mut() {
                 seqno.post_write(seq)

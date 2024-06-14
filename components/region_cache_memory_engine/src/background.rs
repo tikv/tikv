@@ -797,9 +797,7 @@ impl BackgroundRunnerCore {
             }
             info!("evict on soft limit reached"; "range" => ?&range, "approx_size" => approx_size, "remaining" => remaining);
             let mut core = self.engine.write();
-            if let Some(range) = core.mut_range_manager().evict_range(range) {
-                ranges_to_delete.push(range);
-            }
+            ranges_to_delete.append(&mut core.mut_range_manager().evict_range(range));
             info!("evict on soft limit reached done";);
             remaining = remaining
                 .checked_sub(*approx_size as usize)
@@ -843,9 +841,7 @@ impl BackgroundRunnerCore {
             if self.memory_controller.reached_soft_limit() {
                 info!("load_evict: soft limit reached"; "evict_range" => ?&evict_range);
                 let mut core = self.engine.write();
-                if let Some(range) = core.mut_range_manager().evict_range(&evict_range) {
-                    ranges_to_delete.push(evict_range);
-                }
+                ranges_to_delete.append(&mut core.mut_range_manager().evict_range(&evict_range));
             }
         }
         if !ranges_to_delete.is_empty() {

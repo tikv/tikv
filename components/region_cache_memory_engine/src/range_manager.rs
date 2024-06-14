@@ -309,111 +309,88 @@ impl RangeManager {
     }
 
     // return whether the range can be already removed
-    pub(crate) fn evict_range(&mut self, evict_range: &CacheRange) -> Option<CacheRange> {
-        let Some(range_key) = self
-            .ranges
-            .keys()
-            .find(|&r| r.contains_range(evict_range))
-            .cloned()
-        else {
-            self.pending_ranges.retain(|r| {
-                if r.overlaps(evict_range)
-                    || evict_range.contains_range(r)
-                    || r.contains_range(evict_range)
-                {
+    pub(crate) fn evict_range(&mut self, evict_range: &CacheRange) -> Vec<CacheRange> {
+        info!(
+            "try to evict range";
+            "evict_range" => ?evict_range,
+        );
+
+        self.pending_ranges_loading_data
+            .iter_mut()
+            .for_each(|(r, _, canceled)| {
+                if evict_range.overlaps(r) {
                     info!(
-                        "evict range that overlaps with pending range";
+                        "evict range that overlaps with loading range";
                         "evicted_range" => ?evict_range,
                         "overlapped_range" => ?r,
                     );
-                    false
-                } else {
-                    true
+                    *canceled = true;
                 }
             });
-            if let Some((range_key, _, canceled)) =
-                self.pending_ranges_loading_data.iter_mut().find(|(r, ..)| {
-                    evict_range.overlaps(r)
-                        || evict_range.contains_range(r)
-                        || r.contains_range(evict_range)
-                })
-            {
-                // The range may be loading now
-                info!(
-                    "evict range that overlaps with loading range";
-                    "evicted_range" => ?evict_range,
-                    "overlapped_range" => ?range_key,
-                );
-                *canceled = true;
-            }
 
-            if let Some(range_key) = self
-                .ranges
-                .keys()
-                .find(|&r| r.overlaps(evict_range) || evict_range.contains_range(r))
-                .cloned()
-            {
-                info!(
-                    "evict range that overlaps";
-                    "evicted_range" => ?evict_range,
-                    "overlapped_range" => ?range_key,
-                );
-                if range_key.overlaps(evict_range) {
-                    unreachable!();
+        let mut overlapped_ranges = vec![];
+        for r in self.ranges.keys() {
+            if r.contains_range(evict_range) {
+                if self.evict_within_range(evict_range, &r.clone()) {
+                    return vec![evict_range.clone()];
+                } else {
+                    return vec![];
                 }
-                let meta = self.ranges.remove(&range_key).unwrap();
-                self.ranges_being_deleted.insert(evict_range.clone());
-                if !meta.range_snapshot_list.is_empty() {
-                    assert!(self.historical_ranges.insert(range_key, meta).is_none());
-                    return None;
-                }
-                return Some(range_key);
+            } else if r.overlaps(evict_range) {
+                overlapped_ranges.push(r.clone());
             }
+        }
 
+        if overlapped_ranges.is_empty() {
             info!(
                 "evict a range that is not cached";
                 "range" => ?evict_range,
             );
-            return None;
-        };
+            return vec![];
+        }
 
+        overlapped_ranges
+            .into_iter()
+            .filter(|r| self.evict_within_range(r, r))
+            .collect()
+    }
+
+    // Return true means there is no ongoing snapshot, the evicted_range can be
+    // deleted now.
+    fn evict_within_range(&mut self, evict_range: &CacheRange, cached_range: &CacheRange) -> bool {
+        assert!(cached_range.contains_range(evict_range));
         info!(
             "evict range in cache range engine";
-            "range_start" => log_wrappers::Value(&evict_range.start),
-            "range_end" => log_wrappers::Value(&evict_range.end),
+            "evict_range" => ?evict_range,
+            "cached_range" => ?cached_range,
         );
         self.range_evictions.fetch_add(1, Ordering::Relaxed);
-        let meta = self.ranges.remove(&range_key).unwrap();
-        let (left_range, right_range) = range_key.split_off(evict_range);
-        assert!((left_range.is_some() || right_range.is_some()) || &range_key == evict_range);
+        let meta = self.ranges.remove(cached_range).unwrap();
+        let (left_range, right_range) = cached_range.split_off(evict_range);
+        assert!((left_range.is_some() || right_range.is_some()) || evict_range == cached_range);
 
         if let Some(left_range) = left_range {
             let left_meta = RangeMeta::derive_from(self.id_allocator.allocate_id(), &meta);
-            assert!(self.ranges.insert(left_range, left_meta).is_none());
+            self.ranges.insert(left_range, left_meta);
         }
 
         if let Some(right_range) = right_range {
             let right_meta = RangeMeta::derive_from(self.id_allocator.allocate_id(), &meta);
-            assert!(self.ranges.insert(right_range, right_meta).is_none());
+            self.ranges.insert(right_range, right_meta);
         }
 
         self.ranges_being_deleted.insert(evict_range.clone());
 
         if !meta.range_snapshot_list.is_empty() {
-            assert!(self.historical_ranges.insert(range_key, meta).is_none());
-            return None;
+            self.historical_ranges.insert(cached_range.clone(), meta);
+            return false;
         }
 
         // we also need to check with previous historical_ranges
-        if !self
+        !self
             .historical_ranges
             .keys()
             .any(|r| r.overlaps(evict_range))
-        {
-            Some(evict_range.clone())
-        } else {
-            None
-        }
     }
 
     pub fn has_ranges_in_gc(&self) -> bool {
