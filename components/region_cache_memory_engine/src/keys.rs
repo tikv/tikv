@@ -218,7 +218,7 @@ pub fn encode_seek_for_prev_key(key: &[u8], seq: u64) -> InternalBytes {
 #[inline]
 pub fn encode_key_for_boundary_with_mvcc(range: &CacheRange) -> (InternalBytes, InternalBytes) {
     // Both encoded_start and encoded_end should be the smallest key in the
-    // respective of user key (with mvcc version), so that the iterations covers all
+    // respective of user key (with mvcc version), so that the iterations cover all
     // versions of the range start and covers nothing of range end.
 
     // TODO: can we avoid one clone
@@ -238,7 +238,7 @@ pub fn encode_key_for_boundary_with_mvcc(range: &CacheRange) -> (InternalBytes, 
 #[inline]
 pub fn encode_key_for_boundary_without_mvcc(range: &CacheRange) -> (InternalBytes, InternalBytes) {
     // Both encoded_start and encoded_end should be the smallest key in the
-    // respective of user key (without mvcc version), so that the iterations covers
+    // respective of user key (without mvcc version), so that the iterations cover
     // all versions of the range start and covers nothing of range end.
 
     // TODO: can we avoid one clone
