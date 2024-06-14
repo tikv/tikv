@@ -9,6 +9,7 @@ use std::{
     },
 };
 
+use collections::HashMap;
 use engine_rocks::RocksSnapshot;
 use engine_traits::{CacheRange, FailedReason};
 use tikv_util::info;
@@ -147,6 +148,18 @@ pub struct RangeManager {
     pub(crate) pending_ranges_loading_data: VecDeque<(CacheRange, Arc<RocksSnapshot>, bool)>,
 
     ranges_in_gc: BTreeSet<CacheRange>,
+    // Record the ranges that are being written.
+    //
+    // It is used to avoid the conccurency issue between delete range and write to memory: after
+    // the range is evicted or failed to load, the range is recorded in `ranges_being_deleted`
+    // which means no further write of it is allowed, and a DeleteRange task of the range will be
+    // scheduled to cleanup the dirty data. However, it is possible that the apply thread is
+    // writting data for this range. Therefore, we have to delay the DeleteRange task until the
+    // range leaves the `ranges_being_written`.
+    //
+    // `u64` means write batch id, so when the write batch is consumed by the in-memory engine, all
+    // ranges in it are cleared from `ranges_being_written`.
+    ranges_being_written: HashMap<u64, Vec<CacheRange>>,
     range_evictions: AtomicU64,
 }
 
@@ -359,6 +372,30 @@ impl RangeManager {
 
     pub fn set_ranges_in_gc(&mut self, ranges_in_gc: BTreeSet<CacheRange>) {
         self.ranges_in_gc = ranges_in_gc;
+    }
+
+    pub(crate) fn range_overlapped_with_ranges_being_written(&self, range: &CacheRange) -> bool {
+        self.ranges_being_written
+            .iter()
+            .any(|(_, range)| range.iter().any(|range| range.overlaps(&r)))
+    }
+
+    pub(crate) fn set_range_in_being_written(&mut self, write_batch_id: u64, range: &CacheRange) {
+        self.ranges_being_written
+            .entry(write_batch_id)
+            .or_default()
+            .push(range.clone())
+    }
+
+    pub(crate) fn clear_ranges_in_being_written(
+        &mut self,
+        write_batch_id: u64,
+        has_entry_applied: bool,
+    ) {
+        let ranges = self.ranges_being_written.remove(&write_batch_id);
+        if has_entry_applied {
+            assert!(!ranges.unwrap().is_empty());
+        }
     }
 
     pub fn on_gc_finished(&mut self, range: BTreeSet<CacheRange>) {

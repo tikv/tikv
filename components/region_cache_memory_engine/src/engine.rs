@@ -5,7 +5,10 @@ use std::{
     fmt::{self, Debug},
     ops::Bound,
     result,
-    sync::{atomic::AtomicU64, Arc},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use crossbeam::epoch::{self, default_collector, Guard};
@@ -202,6 +205,15 @@ impl RangeCacheMemoryEngineCore {
         &mut self.range_manager
     }
 
+    // `cached_range` must not exist in the `cached_write_batch`
+    pub(crate) fn init_cached_write_batch(&mut self, cache_range: &CacheRange) {
+        assert!(
+            self.cached_write_batch
+                .insert(cache_range.clone(), vec![])
+                .is_none()
+        );
+    }
+
     pub(crate) fn has_cached_write_batch(&self, cache_range: &CacheRange) -> bool {
         self.cached_write_batch.contains_key(cache_range)
     }
@@ -209,8 +221,18 @@ impl RangeCacheMemoryEngineCore {
     pub(crate) fn take_cache_write_batch(
         &mut self,
         cache_range: &CacheRange,
-    ) -> Option<Vec<(u64, RangeCacheWriteBatchEntry)>> {
-        self.cached_write_batch.remove(cache_range)
+    ) -> Vec<(u64, RangeCacheWriteBatchEntry)> {
+        std::mem::take(self.cached_write_batch.get_mut(cache_range).unwrap())
+    }
+
+    pub(crate) fn remove_cache_write_batch(&mut self, cache_range: &CacheRange) {
+        self.cached_write_batch.remove(cache_range).expect(
+            format!(
+                "range cannot be found in cached_write_batch: {:?}",
+                cache_range
+            )
+            .as_str(),
+        );
     }
 
     // ensure that the transfer from `pending_ranges_loading_data` to
@@ -262,6 +284,8 @@ pub struct RangeCacheMemoryEngine {
     // When reaching to the threshold, a CleanLockTombstone task will be scheduled to clean lock cf
     // tombstones.
     pub(crate) lock_modification_bytes: Arc<AtomicU64>,
+
+    write_batch_id_allocator: Arc<AtomicU64>,
 }
 
 impl RangeCacheMemoryEngine {
@@ -288,6 +312,7 @@ impl RangeCacheMemoryEngine {
             statistics,
             config,
             lock_modification_bytes: Arc::default(),
+            write_batch_id_allocator: Arc::default(),
         }
     }
 
@@ -328,13 +353,19 @@ impl RangeCacheMemoryEngine {
 
     // It handles the pending range and check whether to buffer write for this
     // range.
-    pub(crate) fn prepare_for_apply(&self, range: &CacheRange) -> RangeCacheStatus {
-        let core = self.core.upgradable_read();
-        let range_manager = core.range_manager();
+    pub(crate) fn prepare_for_apply(
+        &self,
+        write_batch_id: u64,
+        range: &CacheRange,
+    ) -> RangeCacheStatus {
+        let mut core = self.core.write();
+        let range_manager = core.mut_range_manager();
         if range_manager.pending_ranges_in_loading_contains(range) {
+            range_manager.set_range_in_being_written(write_batch_id, range);
             return RangeCacheStatus::Loading;
         }
         if range_manager.contains_range(range) {
+            range_manager.set_range_in_being_written(write_batch_id, range);
             return RangeCacheStatus::Cached;
         }
 
@@ -366,8 +397,6 @@ impl RangeCacheMemoryEngine {
                 }
             })
         {
-            let mut core = RwLockUpgradableReadGuard::upgrade(core);
-
             if overlapped {
                 core.mut_range_manager().pending_ranges.swap_remove(idx);
                 return RangeCacheStatus::NotInCache;
@@ -390,12 +419,19 @@ impl RangeCacheMemoryEngine {
             range_manager
                 .pending_ranges_loading_data
                 .push_back((range.clone(), rocks_snap, false));
+
+            range_manager.set_range_in_being_written(write_batch_id, range);
+
             info!(
                 "Range to load";
                 "Tag" => &range.tag,
                 "Cached" => range_manager.ranges().len(),
                 "Pending" => range_manager.pending_ranges_loading_data.len(),
             );
+
+            // init cached write batch to cache the writes before loading complete
+            core.init_cached_write_batch(range);
+
             if let Err(e) = self
                 .bg_worker_manager()
                 .schedule_task(BackgroundTask::LoadRange)
@@ -461,6 +497,11 @@ impl RangeCacheMemoryEngine {
 
     pub fn statistics(&self) -> Arc<Statistics> {
         self.statistics.clone()
+    }
+
+    pub fn alloc_write_batch_id(&self) -> u64 {
+        self.write_batch_id_allocator
+            .fetch_add(1, Ordering::Relaxed)
     }
 }
 
@@ -536,7 +577,7 @@ pub mod tests {
         engine.load_range(range1).unwrap();
 
         let range2 = CacheRange::new(b"k1".to_vec(), b"k5".to_vec());
-        engine.prepare_for_apply(&range2);
+        engine.prepare_for_apply(1, &range2);
         assert!(
             engine.core.read().range_manager().pending_ranges.is_empty()
                 && engine
@@ -551,7 +592,7 @@ pub mod tests {
         engine.load_range(range1).unwrap();
 
         let range2 = CacheRange::new(b"k2".to_vec(), b"k5".to_vec());
-        engine.prepare_for_apply(&range2);
+        engine.prepare_for_apply(1, &range2);
         assert!(
             engine.core.read().range_manager().pending_ranges.is_empty()
                 && engine

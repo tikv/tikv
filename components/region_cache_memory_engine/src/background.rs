@@ -113,6 +113,7 @@ impl Display for GcTask {
 pub struct BgWorkManager {
     worker: Worker,
     scheduler: Scheduler<BackgroundTask>,
+    delete_range_scheduler: Scheduler<BackgroundTask>,
     tick_stopper: Option<(JoinHandle<()>, Sender<bool>)>,
     core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
 }
@@ -203,7 +204,8 @@ impl BgWorkManager {
         memory_controller: Arc<MemoryController>,
     ) -> Self {
         let worker = Worker::new("range-cache-background-worker");
-        let runner = BackgroundRunner::new(core.clone(), memory_controller);
+        let (runner, delete_range_scheduler) =
+            BackgroundRunner::new(core.clone(), memory_controller);
         let scheduler = worker.start_with_timer("range-cache-engine-background", runner);
 
         let scheduler_clone = scheduler.clone();
@@ -213,13 +215,19 @@ impl BgWorkManager {
         Self {
             worker,
             scheduler,
+            delete_range_scheduler,
             tick_stopper: Some((handle, tx)),
             core,
         }
     }
 
     pub fn schedule_task(&self, task: BackgroundTask) -> Result<(), ScheduleError<BackgroundTask>> {
-        self.scheduler.schedule_force(task)
+        match task {
+            task @ BackgroundTask::DeleteRange(_) => {
+                self.delete_range_scheduler.schedule_force(task)
+            }
+            task @ _ => self.scheduler.schedule_force(task),
+        }
     }
 
     pub fn start_bg_hint_service(&self, range_hint_service: PdRangeHintService) {
@@ -393,7 +401,11 @@ impl BackgroundRunnerCore {
     }
 
     // if `false` is returned, the load is canceled
-    fn on_snapshot_load_finished(&mut self, range: CacheRange) -> bool {
+    fn on_snapshot_load_finished(
+        &mut self,
+        range: CacheRange,
+        delete_range_scheduler: &Scheduler<BackgroundTask>,
+    ) -> bool {
         fail::fail_point!("on_snapshot_load_finished");
         loop {
             // Consume the cached write batch after the snapshot is acquired.
@@ -412,19 +424,24 @@ impl BackgroundRunnerCore {
                     .pop_front()
                     .unwrap();
                 assert_eq!(r, range);
-                drop(core);
-                // Clear the range directly here to quickly free the memory.
-                self.delete_ranges(&[r]);
+                core.mut_range_manager()
+                    .ranges_being_deleted
+                    .insert(r.clone());
+
+                core.cached_write_batch
+                    .remove(&range)
+                    .expect(format!("cannot remove range {:?}", range).as_str());
+
+                delete_range_scheduler
+                    .schedule_force(BackgroundTask::DeleteRange(vec![r]))
+                    .unwrap();
+
                 return false;
             }
 
             if core.has_cached_write_batch(&range) {
-                let (cache_batch, skiplist_engine) = {
-                    (
-                        core.take_cache_write_batch(&range).unwrap(),
-                        core.engine().clone(),
-                    )
-                };
+                let (cache_batch, skiplist_engine) =
+                    { (core.take_cache_write_batch(&range), core.engine().clone()) };
                 drop(core);
                 let guard = &epoch::pin();
                 for (seq, entry) in cache_batch {
@@ -439,6 +456,7 @@ impl BackgroundRunnerCore {
                 }
                 fail::fail_point!("on_cached_write_batch_consumed");
             } else {
+                core.remove_cache_write_batch(&range);
                 RangeCacheMemoryEngineCore::pending_range_completes_loading(&mut core, &range);
                 break;
             }
@@ -446,7 +464,11 @@ impl BackgroundRunnerCore {
         true
     }
 
-    fn on_snapshot_load_canceled(&mut self, range: CacheRange) {
+    fn on_snapshot_load_canceled(
+        &mut self,
+        range: CacheRange,
+        delete_range_scheduler: &Scheduler<BackgroundTask>,
+    ) {
         let mut core = self.engine.write();
         let (r, ..) = core
             .mut_range_manager()
@@ -454,19 +476,16 @@ impl BackgroundRunnerCore {
             .pop_front()
             .unwrap();
         assert_eq!(r, range);
-    }
 
-    fn delete_ranges(&mut self, ranges: &[CacheRange]) {
-        let skiplist_engine = self.engine.read().engine();
-        for r in ranges {
-            skiplist_engine.delete_range(r);
-        }
-        self.engine
-            .write()
-            .mut_range_manager()
-            .on_delete_ranges(ranges);
-        #[cfg(test)]
-        flush_epoch();
+        core.mut_range_manager()
+            .ranges_being_deleted
+            .insert(r.clone());
+
+        core.remove_cache_write_batch(&range);
+
+        delete_range_scheduler
+            .schedule_force(BackgroundTask::DeleteRange(vec![r]))
+            .unwrap();
     }
 }
 
@@ -493,7 +512,7 @@ pub struct BackgroundRunner {
     range_load_remote: Remote<yatp::task::future::TaskCell>,
     range_load_worker: Worker,
 
-    delete_range_remote: Remote<yatp::task::future::TaskCell>,
+    delete_range_scheduler: Scheduler<BackgroundTask>,
     delete_range_worker: Worker,
 
     gc_range_remote: Remote<yatp::task::future::TaskCell>,
@@ -521,7 +540,7 @@ impl BackgroundRunner {
     pub fn new(
         engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
         memory_controller: Arc<MemoryController>,
-    ) -> Self {
+    ) -> (Self, Scheduler<BackgroundTask>) {
         let range_load_worker = Builder::new("background-range-load-worker")
             // Range load now is implemented sequentially, so we must use exactly one thread to handle it.
             // todo(SpadeA): if the load speed is a bottleneck, we may consider to use multiple threads to load ranges.
@@ -529,8 +548,10 @@ impl BackgroundRunner {
             .create();
         let range_load_remote = range_load_worker.remote();
 
-        let delete_range_worker = Worker::new("background-delete-range_worker");
-        let delete_range_remote = delete_range_worker.remote();
+        let delete_range_worker = Worker::new("background-delete-range-worker");
+        let delete_range_runner = DeleteRangeRunner::new(engine.clone());
+        let delete_range_scheduler =
+            delete_range_worker.start_with_timer("delete-range-runner", delete_range_runner);
 
         let lock_cleanup_worker = Worker::new("lock-cleanup-worker");
         let lock_cleanup_remote = lock_cleanup_worker.remote();
@@ -540,22 +561,25 @@ impl BackgroundRunner {
             .thread_count(1)
             .create();
         let gc_range_remote = gc_range_worker.remote();
-        Self {
-            core: BackgroundRunnerCore {
-                engine,
-                memory_controller,
+        (
+            Self {
+                core: BackgroundRunnerCore {
+                    engine,
+                    memory_controller,
+                },
+                range_load_worker,
+                range_load_remote,
+                delete_range_worker,
+                delete_range_scheduler: delete_range_scheduler.clone(),
+                gc_range_worker,
+                gc_range_remote,
+                lock_cleanup_remote,
+                lock_cleanup_worker,
+                last_seqno: 0,
+                rocks_engine: None,
             },
-            range_load_worker,
-            range_load_remote,
-            delete_range_worker,
-            delete_range_remote,
-            gc_range_worker,
-            gc_range_remote,
-            lock_cleanup_remote,
-            lock_cleanup_worker,
-            last_seqno: 0,
-            rocks_engine: None,
-        }
+            delete_range_scheduler,
+        )
     }
 }
 
@@ -610,6 +634,7 @@ impl Runnable for BackgroundRunner {
             }
             BackgroundTask::LoadRange => {
                 let mut core = self.core.clone();
+                let delete_range_scheduler = self.delete_range_scheduler.clone();
                 let f = async move {
                     let skiplist_engine = {
                         let core = core.engine.read();
@@ -632,7 +657,7 @@ impl Runnable for BackgroundRunner {
                                 "snapshot load canceled due to memory reaching soft limit";
                                 "range" => ?range,
                             );
-                            core.on_snapshot_load_canceled(range);
+                            core.on_snapshot_load_canceled(range, &delete_range_scheduler);
                             continue;
                         }
 
@@ -692,13 +717,15 @@ impl Runnable for BackgroundRunner {
 
                         let start = Instant::now();
                         if !snapshot_load() {
-                            // snapshot load failed, we should clear the dirty data
-                            core.delete_ranges(&[range.clone()]);
-                            core.on_snapshot_load_canceled(range);
+                            info!(
+                                "snapshot load failed";
+                                "range" => ?range,
+                            );
+                            core.on_snapshot_load_canceled(range, &delete_range_scheduler);
                             continue;
                         }
 
-                        if core.on_snapshot_load_finished(range.clone()) {
+                        if core.on_snapshot_load_finished(range.clone(), &delete_range_scheduler) {
                             let duration = start.saturating_elapsed();
                             RANGE_LOAD_TIME_HISTOGRAM.observe(duration.as_secs_f64());
                             info!(
@@ -724,11 +751,7 @@ impl Runnable for BackgroundRunner {
                 }
                 self.core.memory_controller.set_memory_checking(false);
             }
-            BackgroundTask::DeleteRange(ranges) => {
-                let mut core = self.core.clone();
-                let f = async move { core.delete_ranges(&ranges) };
-                self.delete_range_remote.spawn(f);
-            }
+            BackgroundTask::DeleteRange(_) => unreachable!(),
             BackgroundTask::CleanLockTombstone(snapshot_seqno) => {
                 if snapshot_seqno < self.last_seqno {
                     return;
@@ -838,6 +861,82 @@ impl RunnableWithTimer for BackgroundRunner {
 
     fn get_interval(&self) -> Duration {
         Duration::from_secs(1)
+    }
+}
+
+pub struct DeleteRangeRunner {
+    engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
+    // It is possible that when `DeleteRangeRunner` begins to delete a range, the range is being
+    // written by apply thread. In this case, we have to delay the delete range task to avoid race
+    // condition between them. Periodically, these ranges will be checked to see if it is ready to
+    // be deleted.
+    delay_ranges: Vec<CacheRange>,
+}
+
+impl DeleteRangeRunner {
+    fn new(engine: Arc<RwLock<RangeCacheMemoryEngineCore>>) -> Self {
+        Self {
+            engine,
+            delay_ranges: vec![],
+        }
+    }
+
+    fn delete_ranges(&mut self, ranges: &[CacheRange]) {
+        let skiplist_engine = self.engine.read().engine();
+        for r in ranges {
+            skiplist_engine.delete_range(r);
+        }
+        self.engine
+            .write()
+            .mut_range_manager()
+            .on_delete_ranges(ranges);
+        #[cfg(test)]
+        flush_epoch();
+    }
+}
+
+impl Runnable for DeleteRangeRunner {
+    type Task = BackgroundTask;
+    fn run(&mut self, task: Self::Task) {
+        match task {
+            BackgroundTask::DeleteRange(ranges) => {
+                let (mut ranges_to_delay, ranges_to_delete) = {
+                    let core = self.engine.read();
+                    let mut ranges_to_delay = vec![];
+                    let mut ranges_to_delete = vec![];
+                    for r in ranges {
+                        // If the range is overlapped with ranges in `ranges_being_written`, the
+                        // range has to be delayed to delete. See comment on `delay_ranges`.
+                        if core
+                            .range_manager
+                            .range_overlapped_with_ranges_being_written(&r)
+                        {
+                            ranges_to_delay.push(r);
+                        } else {
+                            ranges_to_delete.push(r);
+                        }
+                    }
+                    (ranges_to_delay, ranges_to_delete)
+                };
+                self.delay_ranges.append(&mut ranges_to_delay);
+                self.delete_ranges(&ranges_to_delete);
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl RunnableWithTimer for DeleteRangeRunner {
+    fn on_timeout(&mut self) {
+        if self.delay_ranges.is_empty() {
+            return;
+        }
+        let ranges = std::mem::take(&mut self.delay_ranges);
+        self.run(BackgroundTask::DeleteRange(ranges));
+    }
+
+    fn get_interval(&self) -> Duration {
+        Duration::from_millis(500)
     }
 }
 
@@ -1401,7 +1500,7 @@ pub mod tests {
         iter_opts.set_lower_bound(&range.start, 0);
         iter_opts.set_upper_bound(&range.end, 0);
 
-        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
+        let (worker, _) = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
         worker.core.gc_range(&range, 40, 100);
 
         let mut iter = snap.iterator_opt("write", iter_opts).unwrap();
@@ -1470,7 +1569,7 @@ pub mod tests {
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
 
-        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
+        let (worker, _) = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
 
         // gc should not hanlde keys with larger seqno than oldest seqno
         worker.core.gc_range(&range, 13, 10);
@@ -1627,7 +1726,7 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
+        let (worker, _) = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
         worker.core.gc_range(&range1, 100, 100);
 
         verify(b"k05", 15, 18, &write);
@@ -1636,7 +1735,7 @@ pub mod tests {
         assert_eq!(4, element_count(&default));
         assert_eq!(4, element_count(&write));
 
-        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
+        let (worker, _) = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
         worker.core.gc_range(&range2, 100, 100);
 
         verify(b"k35", 15, 20, &write);
@@ -1678,7 +1777,7 @@ pub mod tests {
         assert_eq!(1, element_count(&default));
         assert_eq!(2, element_count(&write));
 
-        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
+        let (worker, _) = BackgroundRunner::new(engine.core.clone(), memory_controller.clone());
 
         worker.core.gc_range(&range, 20, 200);
         assert_eq!(1, element_count(&default));
@@ -1770,7 +1869,7 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller);
+        let (worker, _) = BackgroundRunner::new(engine.core.clone(), memory_controller);
         let s1 = engine.snapshot(range.clone(), 10, u64::MAX);
         let s2 = engine.snapshot(range.clone(), 11, u64::MAX);
         let s3 = engine.snapshot(range.clone(), 20, u64::MAX);
@@ -1826,8 +1925,8 @@ pub mod tests {
             core.mut_range_manager().pending_ranges.push(r1.clone());
             core.mut_range_manager().pending_ranges.push(r2.clone());
         }
-        engine.prepare_for_apply(&r1);
-        engine.prepare_for_apply(&r2);
+        engine.prepare_for_apply(1, &r1);
+        engine.prepare_for_apply(1, &r2);
 
         // concurrent write to rocksdb, but the key will not be loaded in the memory
         // engine
@@ -1888,7 +1987,7 @@ pub mod tests {
         engine.new_range(r1);
         engine.new_range(r2);
 
-        let mut runner = BackgroundRunner::new(engine.core.clone(), memory_controller);
+        let (mut runner, _) = BackgroundRunner::new(engine.core.clone(), memory_controller);
         let ranges = runner.core.ranges_for_gc().unwrap();
         assert_eq!(2, ranges.len());
 
@@ -1946,7 +2045,7 @@ pub mod tests {
         // Wait for the watch to fire.
         std::thread::sleep(Duration::from_millis(200));
         let r1 = CacheRange::try_from(&label_rule.data[0]).unwrap();
-        engine.prepare_for_apply(&r1);
+        engine.prepare_for_apply(1, &r1);
 
         // Wait for the range to be loaded.
         std::thread::sleep(Duration::from_secs(1));
@@ -2046,7 +2145,7 @@ pub mod tests {
 
         for r in [&range1, &range2, &range3, &range4] {
             engine.load_range(r.clone()).unwrap();
-            engine.prepare_for_apply(r);
+            engine.prepare_for_apply(1, r);
         }
 
         // ensure all ranges are finshed
@@ -2124,7 +2223,7 @@ pub mod tests {
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
         // After loading range1, the memory usage should be 140*6=840
         engine.load_range(range1.clone()).unwrap();
-        engine.prepare_for_apply(&range1);
+        engine.prepare_for_apply(1, &range1);
 
         let range2 = CacheRange::new(construct_user_key(3), construct_user_key(5));
         let key = construct_key(3, 10);
@@ -2149,7 +2248,7 @@ pub mod tests {
         assert_eq!(config.value().hard_limit_threshold(), 2000);
 
         engine.load_range(range2.clone()).unwrap();
-        engine.prepare_for_apply(&range2);
+        engine.prepare_for_apply(1, &range2);
 
         // ensure all ranges are finshed
         {
