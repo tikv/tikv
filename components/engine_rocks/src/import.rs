@@ -1,11 +1,14 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::fs::File;
-
 use engine_traits::{ImportExt, IngestExternalFileOptions, Result};
+<<<<<<< HEAD
 use rocksdb::{
     set_external_sst_file_global_seq_no, IngestExternalFileOptions as RawIngestExternalFileOptions,
 };
+=======
+use rocksdb::IngestExternalFileOptions as RawIngestExternalFileOptions;
+use tikv_util::time::Instant;
+>>>>>>> dd37a4703d (raftstore: gc abnormal snapshots and destroy peer if failed to apply snapshots. (#16992))
 
 use crate::{engine::RocksEngine, r2e, util};
 
@@ -17,6 +20,7 @@ impl ImportExt for RocksEngine {
         let mut opts = RocksIngestExternalFileOptions::new();
         opts.move_files(true);
         opts.set_write_global_seqno(false);
+<<<<<<< HEAD
         files.iter().try_for_each(|file| -> Result<()> {
             let f = File::open(file)?;
             // Prior to v5.2.0, TiKV use `write_global_seqno=true` for ingestion. For
@@ -28,6 +32,11 @@ impl ImportExt for RocksEngine {
                 .map_err(|e| format!("sync {}: {:?}", file, e))
                 .map_err(r2e)
         })?;
+=======
+        // Note: no need reset the global seqno to 0 for compatibility as #16992
+        // enable the TiKV to handle the case on applying abnormal snapshot.
+        let now = Instant::now_coarse();
+>>>>>>> dd37a4703d (raftstore: gc abnormal snapshots and destroy peer if failed to apply snapshots. (#16992))
         // This is calling a specially optimized version of
         // ingest_external_file_cf. In cases where the memtable needs to be
         // flushed it avoids blocking writers while doing the flush. The unused
