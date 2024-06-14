@@ -30,7 +30,7 @@ fn key_exist(sl: &SkiplistHandle, key: &InternalBytes, guard: &epoch::Guard) -> 
 fn test_gc_worker() {
     let mut config = RangeCacheEngineConfig::config_for_test();
     config.gc_interval = ReadableDuration(Duration::from_secs(1));
-    let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+    let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
         VersionTrack::new(config),
     )));
     let memory_controller = engine.memory_controller();
@@ -42,7 +42,7 @@ fn test_gc_worker() {
         (engine.cf_handle(CF_WRITE), engine.cf_handle(CF_DEFAULT))
     };
 
-    fail::cfg("in_memry_engine_gc_oldest_seqno", "return(1000)").unwrap();
+    fail::cfg("in_memory_engine_gc_oldest_seqno", "return(1000)").unwrap();
 
     let (tx, rx) = sync_channel(0);
     fail::cfg_callback("in_memory_engine_gc_finish", move || {
@@ -130,7 +130,8 @@ fn test_gc_worker() {
 #[test]
 fn test_clean_up_tombstone() {
     let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test()));
-    let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(config.clone()));
+    let engine =
+        RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(config.clone()));
     let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
 
     let (tx, rx) = sync_channel(0);

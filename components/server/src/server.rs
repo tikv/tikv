@@ -1677,7 +1677,7 @@ where
             self.core.config.range_cache_engine.clone(),
         ));
         let range_cache_engine_context =
-            RangeCacheEngineContext::new(range_cache_engine_config.clone());
+            RangeCacheEngineContext::new(range_cache_engine_config.clone(), self.pd_client.clone());
         let range_cache_engine_statistics = range_cache_engine_context.statistics();
         let kv_engine: EK = KvEngineBuilder::build(
             range_cache_engine_context,
