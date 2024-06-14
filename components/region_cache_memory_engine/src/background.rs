@@ -13,10 +13,11 @@ use engine_traits::{
     CF_DEFAULT, CF_WRITE, DATA_CFS,
 };
 use parking_lot::RwLock;
-use pd_client::RpcClient;
+use pd_client::{PdClient, RpcClient};
 use slog_global::{error, info, warn};
 use tikv_util::{
     config::ReadableSize,
+    future::block_on_timeout,
     keybuilder::KeyBuilder,
     time::Instant,
     worker::{Builder, Runnable, RunnableWithTimer, ScheduleError, Scheduler, Worker},
@@ -27,8 +28,8 @@ use yatp::Remote;
 use crate::{
     engine::{RangeCacheMemoryEngineCore, SkiplistHandle},
     keys::{
-        decode_key, encode_key, encode_key_for_eviction, encoding_for_filter, InternalBytes,
-        InternalKey, ValueType,
+        decode_key, encode_key, encode_key_for_boundary_with_mvcc, encoding_for_filter,
+        InternalBytes, InternalKey, ValueType,
     },
     memory_controller::{MemoryController, MemoryUsage},
     metrics::{
@@ -200,6 +201,7 @@ impl PdRangeHintService {
 impl BgWorkManager {
     pub fn new(
         core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
+        pd_client: Arc<dyn PdClient>,
         gc_interval: Duration,
         memory_controller: Arc<MemoryController>,
     ) -> Self {
@@ -208,15 +210,13 @@ impl BgWorkManager {
             BackgroundRunner::new(core.clone(), memory_controller);
         let scheduler = worker.start_with_timer("range-cache-engine-background", runner);
 
-        let scheduler_clone = scheduler.clone();
-
-        let (handle, tx) = BgWorkManager::start_tick(scheduler_clone, gc_interval);
+        let (h, tx) = BgWorkManager::start_tick(scheduler.clone(), pd_client, gc_interval);
 
         Self {
             worker,
             scheduler,
             delete_range_scheduler,
-            tick_stopper: Some((handle, tx)),
+            tick_stopper: Some((h, tx)),
             core,
         }
     }
@@ -244,15 +244,31 @@ impl BgWorkManager {
 
     fn start_tick(
         scheduler: Scheduler<BackgroundTask>,
+        pd_client: Arc<dyn PdClient>,
         gc_interval: Duration,
     ) -> (JoinHandle<()>, Sender<bool>) {
         let (tx, rx) = bounded(0);
+        // TODO: Instead of spawning a new thread, we should run this task
+        //       in a shared background thread.
         let h = std::thread::spawn(move || {
             let ticker = tick(gc_interval);
-            loop {
+            // 5 seconds should be long enough for getting a TSO from PD.
+            let tso_timeout = std::cmp::min(gc_interval, Duration::from_secs(5));
+            'LOOP: loop {
                 select! {
                     recv(ticker) -> _ => {
-                        let safe_point = TimeStamp::physical_now() - gc_interval.as_millis() as u64;
+                        let now = match block_on_timeout(pd_client.get_tso(), tso_timeout) {
+                            Ok(Ok(ts)) => ts,
+                            err => {
+                                error!(
+                                    "schedule range cache engine gc failed ";
+                                    "timeout_duration" => ?tso_timeout,
+                                    "error" => ?err,
+                                );
+                                continue 'LOOP;
+                            }
+                        };
+                        let safe_point = now.physical() - gc_interval.as_millis() as u64;
                         let safe_point = TimeStamp::compose(safe_point, 0).into_inner();
                         if let Err(e) = scheduler.schedule(BackgroundTask::Gc(GcTask {safe_point})) {
                             error!(
@@ -351,7 +367,7 @@ impl BackgroundRunnerCore {
 
         let mut iter = write_cf_handle.iterator();
         let guard = &epoch::pin();
-        let (start_key, end_key) = encode_key_for_eviction(range);
+        let (start_key, end_key) = encode_key_for_boundary_with_mvcc(range);
         iter.seek(&start_key, guard);
         while iter.valid() && iter.key() < &end_key {
             let k = iter.key();
@@ -604,7 +620,7 @@ impl Runnable for BackgroundRunner {
             }
             BackgroundTask::Gc(t) => {
                 let seqno = (|| {
-                    fail::fail_point!("in_memry_engine_gc_oldest_seqno", |t| {
+                    fail::fail_point!("in_memory_engine_gc_oldest_seqno", |t| {
                         Some(t.unwrap().parse::<u64>().unwrap())
                     });
 
@@ -1175,7 +1191,13 @@ impl Filter {
 
 #[cfg(test)]
 pub mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::{
+        sync::{
+            mpsc::{channel, Sender},
+            Arc, Mutex,
+        },
+        time::Duration,
+    };
 
     use crossbeam::epoch;
     use engine_rocks::util::new_engine;
@@ -1183,14 +1205,18 @@ pub mod tests {
         CacheRange, IterOptions, Iterable, Iterator, RangeCacheEngine, SyncMutable, CF_DEFAULT,
         CF_LOCK, CF_WRITE, DATA_CFS,
     };
+    use futures::future::ready;
     use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use pd_client::PdClient;
     use tempfile::Builder;
-    use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
+    use tikv_util::{
+        config::{ReadableDuration, ReadableSize, VersionTrack},
+        worker::dummy_scheduler,
+    };
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
-    use super::{Filter, PdRangeHintService};
+    use super::*;
     use crate::{
         background::BackgroundRunner,
         config::RangeCacheConfigManager,
@@ -1435,7 +1461,7 @@ pub mod tests {
 
     #[test]
     fn test_filter_with_delete() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let memory_controller = engine.memory_controller();
@@ -1526,7 +1552,7 @@ pub mod tests {
 
     #[test]
     fn test_gc() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let memory_controller = engine.memory_controller();
@@ -1620,7 +1646,7 @@ pub mod tests {
     #[test]
     fn test_gc_one_range() {
         let config = RangeCacheEngineConfig::config_for_test();
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(config),
         )));
         let memory_controller = engine.memory_controller();
@@ -1759,7 +1785,7 @@ pub mod tests {
 
     #[test]
     fn test_gc_for_overwrite_write() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let memory_controller = engine.memory_controller();
@@ -1798,7 +1824,7 @@ pub mod tests {
 
     #[test]
     fn test_snapshot_block_gc() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let memory_controller = engine.memory_controller();
@@ -1909,9 +1935,9 @@ pub mod tests {
 
     #[test]
     fn test_background_worker_load() {
-        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
-            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
-        )));
+        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
+            Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test())),
+        ));
         let path = Builder::new().prefix("test_load").tempdir().unwrap();
         let path_str = path.path().to_str().unwrap();
         let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
@@ -1990,7 +2016,7 @@ pub mod tests {
 
     #[test]
     fn test_ranges_for_gc() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let memory_controller = engine.memory_controller();
@@ -2019,9 +2045,9 @@ pub mod tests {
     // 4. Verify that only the labeled key range has been loaded.
     #[test]
     fn test_load_from_pd_hint_service() {
-        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
-            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
-        )));
+        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
+            Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test())),
+        ));
         let path = Builder::new()
             .prefix("test_load_from_pd_hint_service")
             .tempdir()
@@ -2104,7 +2130,8 @@ pub mod tests {
         config.soft_limit_threshold = Some(ReadableSize(1000));
         config.hard_limit_threshold = Some(ReadableSize(1500));
         let config = Arc::new(VersionTrack::new(config));
-        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(config));
+        let mut engine =
+            RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(config));
         let path = Builder::new()
             .prefix("test_snapshot_load_reaching_limit")
             .tempdir()
@@ -2211,7 +2238,8 @@ pub mod tests {
         config.soft_limit_threshold = Some(ReadableSize(1000));
         config.hard_limit_threshold = Some(ReadableSize(1500));
         let config = Arc::new(VersionTrack::new(config));
-        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(config.clone()));
+        let mut engine =
+            RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(config.clone()));
         let path = Builder::new()
             .prefix("test_snapshot_load_reaching_limit")
             .tempdir()
@@ -2303,5 +2331,41 @@ pub mod tests {
         verify(range1, true, 6);
         verify(range2, true, 6);
         assert_eq!(mem_controller.mem_usage(), 1680);
+    }
+
+    #[test]
+    fn test_gc_use_pd_tso() {
+        struct MockPdClient {
+            tx: Mutex<Sender<()>>,
+        }
+        impl PdClient for MockPdClient {
+            fn get_tso(&self) -> pd_client::PdFuture<txn_types::TimeStamp> {
+                self.tx.lock().unwrap().send(()).unwrap();
+                Box::pin(ready(Ok(TimeStamp::compose(TimeStamp::physical_now(), 0))))
+            }
+        }
+
+        let start_time = TimeStamp::compose(TimeStamp::physical_now(), 0);
+        let (tx, pd_client_rx) = channel();
+        let pd_client = Arc::new(MockPdClient { tx: Mutex::new(tx) });
+        let gc_interval = Duration::from_millis(100);
+        let (scheduler, mut rx) = dummy_scheduler();
+        let (handle, stop) = BgWorkManager::start_tick(scheduler, pd_client, gc_interval);
+
+        let Some(BackgroundTask::Gc(GcTask { safe_point })) =
+            rx.recv_timeout(10 * gc_interval).unwrap()
+        else {
+            panic!("must be a GcTask");
+        };
+        let safe_point = TimeStamp::from(safe_point);
+        // Make sure it is a reasonable timestamp.
+        assert!(safe_point > start_time, "{safe_point}, {start_time}");
+        let now = TimeStamp::compose(TimeStamp::physical_now(), 0);
+        assert!(safe_point < now, "{safe_point}, {now}");
+        // Must get ts from PD.
+        pd_client_rx.try_recv().unwrap();
+
+        stop.send(true).unwrap();
+        handle.join().unwrap();
     }
 }
