@@ -28,8 +28,8 @@ use yatp::Remote;
 use crate::{
     engine::{RangeCacheMemoryEngineCore, SkiplistHandle},
     keys::{
-        decode_key, encode_key, encode_key_for_eviction, encoding_for_filter, InternalBytes,
-        InternalKey, ValueType,
+        decode_key, encode_key, encode_key_for_boundary_with_mvcc, encoding_for_filter,
+        InternalBytes, InternalKey, ValueType,
     },
     memory_controller::{MemoryController, MemoryUsage},
     metrics::{
@@ -359,7 +359,7 @@ impl BackgroundRunnerCore {
 
         let mut iter = write_cf_handle.iterator();
         let guard = &epoch::pin();
-        let (start_key, end_key) = encode_key_for_eviction(range);
+        let (start_key, end_key) = encode_key_for_boundary_with_mvcc(range);
         iter.seek(&start_key, guard);
         while iter.valid() && iter.key() < &end_key {
             let k = iter.key();
