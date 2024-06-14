@@ -17,8 +17,8 @@ use crate::{memory_controller::MemoryController, write_batch::MEM_CONTROLLER_OVE
 #[derive(Debug)]
 pub struct InternalBytes {
     bytes: Bytes,
-    // memory_limiter **must** be set when used as key/values being interted into skiplist as
-    // keys/values.
+    // memory_limiter **must** be set when used as key/values being inserted
+    // into skiplist as keys/values.
     memory_controller: Option<Arc<MemoryController>>,
 }
 
@@ -27,8 +27,8 @@ impl Drop for InternalBytes {
         let size = self.bytes.len() + MEM_CONTROLLER_OVERHEAD;
         let controller = self.memory_controller.take();
         if let Some(controller) = controller {
-            // Reclaim the memory though the bytes have not been drop. This time gap should
-            // not matter.
+            // Reclaim the memory though the bytes have not been drop. This time
+            // gap should not matter.
             controller.release(size);
         }
     }
@@ -96,12 +96,12 @@ impl Ord for InternalBytes {
             return c;
         }
 
-        let n1 = u64::from_be_bytes(
+        let n1 = u64::from_le_bytes(
             self.bytes[(self.bytes.len() - ENC_KEY_SEQ_LENGTH)..]
                 .try_into()
                 .unwrap(),
         );
-        let n2 = u64::from_be_bytes(
+        let n2 = u64::from_le_bytes(
             other.bytes[(other.bytes.len() - ENC_KEY_SEQ_LENGTH)..]
                 .try_into()
                 .unwrap(),
@@ -165,7 +165,7 @@ impl<'a> From<&'a [u8]> for InternalKey<'a> {
 pub fn decode_key(encoded_key: &[u8]) -> InternalKey<'_> {
     assert!(encoded_key.len() >= ENC_KEY_SEQ_LENGTH);
     let seq_offset = encoded_key.len() - ENC_KEY_SEQ_LENGTH;
-    let num = u64::from_be_bytes(
+    let num = u64::from_le_bytes(
         encoded_key[seq_offset..seq_offset + ENC_KEY_SEQ_LENGTH]
             .try_into()
             .unwrap(),
@@ -180,9 +180,9 @@ pub fn decode_key(encoded_key: &[u8]) -> InternalKey<'_> {
 }
 
 /// Format for an internal key (used by the skip list.)
-/// ```
-/// contents:      key of size n     | value type | sequence number shifted by 8 bits
-/// byte position:         0 ..  n-1 | n          |  n + 1 .. n + 7
+///
+/// ```text
+/// Format: | user key (n bytes) | value type (1 bytes) | sequence number (7 bytes) |
 /// ```
 /// value type 0 encodes deletion, value type 1 encodes value.
 ///
@@ -193,7 +193,8 @@ pub fn encode_internal_bytes(key: &[u8], seq: u64, v_type: ValueType) -> Interna
     assert!(seq == u64::MAX || seq >> ((ENC_KEY_SEQ_LENGTH - 1) * 8) == 0);
     let mut e = Vec::with_capacity(key.len() + ENC_KEY_SEQ_LENGTH);
     e.put(key);
-    e.put_u64((seq << 8) | v_type as u64);
+    // RocksDB encodes u64 in little endian.
+    e.put_u64_le((seq << 8) | v_type as u64);
     InternalBytes::from_vec(e)
 }
 
@@ -234,7 +235,7 @@ pub fn encode_key_for_eviction(range: &CacheRange) -> (InternalBytes, InternalBy
     (encoded_start, encoded_end)
 }
 
-// mvcc_prefix is already mem-comparison encodede
+// mvcc_prefix is already mem-comparison encoded.
 #[inline]
 pub fn encoding_for_filter(mvcc_prefix: &[u8], start_ts: TimeStamp) -> InternalBytes {
     let default_key = Key::from_encoded_slice(mvcc_prefix)
@@ -267,6 +268,7 @@ pub fn construct_value(i: u64, j: u64) -> String {
 mod tests {
     use bytes::BufMut;
 
+    use super::*;
     use crate::keys::{encode_key, ValueType};
 
     fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {
@@ -308,5 +310,20 @@ mod tests {
         // key2: k2_MAX_MAX_val
         let key2 = encode_key(&k, u64::MAX, ValueType::Value);
         assert!(key1.cmp(&key2).is_le());
+    }
+
+    #[test]
+    fn test_encode_decode() {
+        let encoded_bytes = encode_internal_bytes(b"foo", 7, ValueType::Value);
+        let key = decode_key(encoded_bytes.as_slice());
+        assert_eq!(key.sequence, 7);
+        assert_eq!(key.v_type, ValueType::Value as _);
+
+        let value_type_byte = encoded_bytes.as_slice()[encoded_bytes.as_slice().len() - 8];
+        assert_eq!(value_type_byte, ValueType::Value as u8);
+        let mut seq_bytes = vec![0u8; 7];
+        seq_bytes.copy_from_slice(&encoded_bytes.as_slice()[encoded_bytes.as_slice().len() - 7..]);
+        seq_bytes.push(0);
+        assert_eq!(u64::from_le_bytes(seq_bytes.try_into().unwrap()), 7);
     }
 }
