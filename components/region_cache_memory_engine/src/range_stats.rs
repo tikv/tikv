@@ -17,8 +17,6 @@ use parking_lot::Mutex;
 use raftstore::coprocessor::RegionInfoProvider;
 use tikv_util::info;
 
-use crate::background::EXPECTED_AVERAGE_REGION_SIZE;
-
 #[derive(Clone)]
 pub(crate) struct RangeStatsManager {
     num_regions: Arc<AtomicUsize>,
@@ -27,6 +25,7 @@ pub(crate) struct RangeStatsManager {
     checking_top_regions: Arc<AtomicBool>,
     region_loaded_at: Arc<ShardedLock<BTreeMap<u64, Instant>>>,
     evict_min_duration: Duration,
+    expected_region_size: usize,
 }
 
 /// Do not evict a region if has been cached for less than this duration.
@@ -43,6 +42,7 @@ impl RangeStatsManager {
     pub fn new(
         num_regions: usize,
         evict_min_duration: Duration,
+        expected_region_size: usize,
         info_provider: Arc<dyn RegionInfoProvider>,
     ) -> Self {
         RangeStatsManager {
@@ -52,6 +52,7 @@ impl RangeStatsManager {
             checking_top_regions: Arc::new(AtomicBool::new(false)),
             region_loaded_at: Arc::new(ShardedLock::new(BTreeMap::new())),
             evict_min_duration,
+            expected_region_size,
         }
     }
 
@@ -152,20 +153,20 @@ impl RangeStatsManager {
     /// usage:
     ///
     /// If `curr_memory_usage` is LESS THAN `threshold` by 3 *
-    /// [`EXPECTED_AVERAGE_REGION_SIZE`] bytes, *increase* the maximum
-    /// by `threshold - curr_memory_usage / 3 * EXPECTED_AVERAGE_REGION_SIZE`.
+    /// self.expected_region_size bytes, *increase* the maximum
+    /// by `threshold - curr_memory_usage / 3 * self.expected_region_size`.
     ///
     /// If `curr_memory_usage` is GREATER THAN `threshold`, *decrease* the
     /// maximum by `(curr_memory_usage - threshold) /
-    /// EXPECTED_AVERAGE_REGION_SIZE`.
+    /// self.expected_region_size`.
     pub fn adjust_max_num_regions(&self, curr_memory_usage: usize, threshold: usize) {
         match curr_memory_usage.cmp(&threshold) {
             cmp::Ordering::Less => {
                 let room_to_grow = threshold - curr_memory_usage;
-                if room_to_grow > EXPECTED_AVERAGE_REGION_SIZE * 3 {
+                if room_to_grow > self.expected_region_size * 3 {
                     let curr_num_regions = self.max_num_regions();
                     let next_num_regions =
-                        curr_num_regions + room_to_grow / (EXPECTED_AVERAGE_REGION_SIZE * 3);
+                        curr_num_regions + room_to_grow / (self.expected_region_size * 3);
                     info!("increasing number of top regions to cache";
                         "from" => curr_num_regions,
                         "to" => next_num_regions,
@@ -177,7 +178,7 @@ impl RangeStatsManager {
                 let to_shrink_by = curr_memory_usage - threshold;
                 let curr_num_regions = self.max_num_regions();
                 let next_num_regions = curr_num_regions
-                    .checked_sub(1.max(to_shrink_by / EXPECTED_AVERAGE_REGION_SIZE))
+                    .checked_sub(1.max(to_shrink_by / self.expected_region_size))
                     .unwrap_or(1)
                     .max(1);
                 info!("decreasing number of top regions to cache";
@@ -272,6 +273,7 @@ pub mod tests {
     use tikv_util::box_err;
 
     use super::*;
+    use crate::RangeCacheEngineConfig;
 
     struct RegionInfoSimulator {
         regions: Mutex<TopRegions>,
@@ -329,7 +331,12 @@ pub mod tests {
             regions: Mutex::new(vec![(region_1.clone(), 42)]),
         });
         // 10 ms min duration eviction for testing purposes.
-        let rsm = RangeStatsManager::new(5, Duration::from_millis(10), sim.clone());
+        let rsm = RangeStatsManager::new(
+            5,
+            Duration::from_millis(10),
+            RangeCacheEngineConfig::config_for_test().expected_region_size(),
+            sim.clone(),
+        );
         let mut added = Vec::<CacheRange>::new();
         let mut removed = Vec::<CacheRange>::new();
         rsm.collect_changed_ranges(&mut added, &mut removed);
@@ -396,7 +403,12 @@ pub mod tests {
             regions: Mutex::new(all_regions.clone()),
         });
         // 10 ms min duration eviction for testing purposes.
-        let rsm = RangeStatsManager::new(5, Duration::from_millis(10), sim.clone());
+        let rsm = RangeStatsManager::new(
+            5,
+            Duration::from_millis(10),
+            RangeCacheEngineConfig::config_for_test().expected_region_size(),
+            sim.clone(),
+        );
         let r_i_p: Arc<dyn RegionInfoProvider> = sim.clone();
         let check_is_cached = move |range: &CacheRange| -> bool {
             r_i_p

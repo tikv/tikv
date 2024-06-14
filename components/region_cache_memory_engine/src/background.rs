@@ -207,11 +207,17 @@ impl BgWorkManager {
         pd_client: Arc<dyn PdClient>,
         gc_interval: Duration,
         load_evict_interval: Duration,
+        expected_region_size: usize,
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
         let worker = Worker::new("range-cache-background-worker");
-        let runner = BackgroundRunner::new(core.clone(), memory_controller, region_info_provider);
+        let runner = BackgroundRunner::new(
+            core.clone(),
+            memory_controller,
+            region_info_provider,
+            expected_region_size,
+        );
         let scheduler = worker.start_with_timer("range-cache-engine-background", runner);
 
         let (h, tx) =
@@ -656,16 +662,12 @@ impl Drop for BackgroundRunner {
     }
 }
 
-// The expected average region size in bytes: used to estimate the number of top
-// regions to cache (using `soft limit threshold /
-// `EXPECTED_AVERAGE_REGION_SIZE`)`.
-pub const EXPECTED_AVERAGE_REGION_SIZE: usize = 96_000_000;
-
 impl BackgroundRunner {
     pub fn new(
         engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
+        expected_region_size: usize,
     ) -> Self {
         let range_load_worker = Builder::new("background-range-load-worker")
             // Range load now is implemented sequentially, so we must use exactly one thread to handle it.
@@ -689,10 +691,14 @@ impl BackgroundRunner {
         let load_evict_worker = Worker::new("background-region-load-evict-worker");
         let load_evict_remote = load_evict_worker.remote();
 
-        let num_regions_to_cache =
-            memory_controller.soft_limit_threshold() / EXPECTED_AVERAGE_REGION_SIZE;
-        let range_stats_manager = region_info_provider.map(|r_i_p| {
-            RangeStatsManager::new(num_regions_to_cache, DEFAULT_EVICT_MIN_DURATION, r_i_p)
+        let num_regions_to_cache = memory_controller.soft_limit_threshold() / expected_region_size;
+        let range_stats_manager = region_info_provider.map(|region_info_provider| {
+            RangeStatsManager::new(
+                num_regions_to_cache,
+                DEFAULT_EVICT_MIN_DURATION,
+                expected_region_size,
+                region_info_provider,
+            )
         });
         Self {
             core: BackgroundRunnerCore {
@@ -1579,7 +1585,12 @@ pub mod tests {
         iter_opts.set_lower_bound(&range.start, 0);
         iter_opts.set_upper_bound(&range.end, 0);
 
-        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone(), None);
+        let worker = BackgroundRunner::new(
+            engine.core.clone(),
+            memory_controller.clone(),
+            None,
+            engine.expected_region_size(),
+        );
         worker.core.gc_range(&range, 40, 100);
 
         let mut iter = snap.iterator_opt("write", iter_opts).unwrap();
@@ -1648,7 +1659,12 @@ pub mod tests {
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
 
-        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone(), None);
+        let worker = BackgroundRunner::new(
+            engine.core.clone(),
+            memory_controller.clone(),
+            None,
+            engine.expected_region_size(),
+        );
 
         // gc should not hanlde keys with larger seqno than oldest seqno
         worker.core.gc_range(&range, 13, 10);
@@ -1856,7 +1872,12 @@ pub mod tests {
         assert_eq!(1, element_count(&default));
         assert_eq!(2, element_count(&write));
 
-        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller.clone(), None);
+        let worker = BackgroundRunner::new(
+            engine.core.clone(),
+            memory_controller.clone(),
+            None,
+            engine.expected_region_size(),
+        );
 
         worker.core.gc_range(&range, 20, 200);
         assert_eq!(1, element_count(&default));
@@ -1948,7 +1969,12 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let worker = BackgroundRunner::new(engine.core.clone(), memory_controller, None);
+        let worker = BackgroundRunner::new(
+            engine.core.clone(),
+            memory_controller,
+            None,
+            engine.expected_region_size(),
+        );
         let s1 = engine.snapshot(range.clone(), 10, u64::MAX);
         let s2 = engine.snapshot(range.clone(), 11, u64::MAX);
         let s3 = engine.snapshot(range.clone(), 20, u64::MAX);
@@ -2066,7 +2092,12 @@ pub mod tests {
         engine.new_range(r1);
         engine.new_range(r2);
 
-        let mut runner = BackgroundRunner::new(engine.core.clone(), memory_controller, None);
+        let mut runner = BackgroundRunner::new(
+            engine.core.clone(),
+            memory_controller,
+            None,
+            engine.expected_region_size(),
+        );
         let ranges = runner.core.ranges_for_gc().unwrap();
         assert_eq!(2, ranges.len());
 

@@ -298,6 +298,7 @@ impl RangeCacheMemoryEngine {
             pd_client,
             config.value().gc_interval.0,
             config.value().load_evict_interval.0,
+            config.value().expected_region_size(),
             memory_controller.clone(),
             region_info_provider,
         ));
@@ -311,6 +312,10 @@ impl RangeCacheMemoryEngine {
             config,
             lock_modification_bytes: Arc::default(),
         }
+    }
+
+    pub fn expected_region_size(&self) -> usize {
+        self.config.value().expected_region_size()
     }
 
     pub fn new_range(&self, range: CacheRange) {

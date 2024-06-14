@@ -52,6 +52,7 @@ pub struct RangeCacheEngineConfig {
     pub load_evict_interval: ReadableDuration,
     pub soft_limit_threshold: Option<ReadableSize>,
     pub hard_limit_threshold: Option<ReadableSize>,
+    pub expected_region_size: Option<ReadableSize>,
 }
 
 impl Default for RangeCacheEngineConfig {
@@ -59,9 +60,13 @@ impl Default for RangeCacheEngineConfig {
         Self {
             enabled: false,
             gc_interval: ReadableDuration(Duration::from_secs(180)),
-            load_evict_interval: ReadableDuration(Duration::from_secs(360)),
+            load_evict_interval: ReadableDuration(Duration::from_secs(300)), /* Each load/evict
+                                                                              * operation should
+                                                                              * run within five
+                                                                              * minutes. */
             soft_limit_threshold: None,
             hard_limit_threshold: None,
+            expected_region_size: None,
         }
     }
 }
@@ -103,13 +108,22 @@ impl RangeCacheEngineConfig {
         self.hard_limit_threshold.map_or(0, |r| r.0 as usize)
     }
 
+    pub fn expected_region_size(&self) -> usize {
+        self.expected_region_size.map_or(
+            raftstore::coprocessor::config::SPLIT_SIZE.0 as usize,
+            |r: ReadableSize| r.0 as usize,
+        )
+    }
+
     pub fn config_for_test() -> RangeCacheEngineConfig {
         RangeCacheEngineConfig {
             enabled: true,
             gc_interval: ReadableDuration(Duration::from_secs(180)),
-            load_evict_interval: ReadableDuration(Duration::from_secs(360)),
+            load_evict_interval: ReadableDuration(Duration::from_secs(300)), /* Should run within
+                                                                              * five minutes */
             soft_limit_threshold: Some(ReadableSize::gb(1)),
             hard_limit_threshold: Some(ReadableSize::gb(2)),
+            expected_region_size: Some(ReadableSize::mb(20)),
         }
     }
 }
