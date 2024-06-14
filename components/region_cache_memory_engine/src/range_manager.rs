@@ -103,11 +103,11 @@ impl IdAllocator {
 // eviction range is k3-k5. k1-k10 will be splitted to three ranges: k1-k3,
 // k3-k5, and k5-k10.
 // k1-k3 and k5-k10 will be new ranges inserted in self.ranges with meta dervied
-// from meta of k1-k10 (only safe_ts and can_read will be derived). k1-k10 will
-// be removed from self.ranges and inserted to self.historical_ranges. Then,
-// k3-k5 will be in the self.evicted_ranges. Now, we cannot remove the data of
-// k3-k5 as there may be some snapshot of k1-k10. After these snapshot are
-// dropped, k3-k5 can be acutally removed.
+// from meta of k1-k10 (only safe_ts will be derived). k1-k10 will be removed
+// from self.ranges and inserted to self.historical_ranges. Then, k3-k5 will be
+// in the self.evicted_ranges. Now, we cannot remove the data of k3-k5 as there
+// may be some snapshot of k1-k10. After these snapshot are dropped, k3-k5 can
+// be acutally removed.
 #[derive(Default)]
 pub struct RangeManager {
     // Each new range will increment it by one.
@@ -298,12 +298,12 @@ impl RangeManager {
         vec![]
     }
 
-    /// Return ranges that can be deleted now (not ongoing snapshot).
+    /// Return ranges that can be deleted now (no ongoing snapshot).
     // There are two cases based on the relationship between `evict_range` and
     // cached ranges:
-    // 1. `evict_range` is contained(including equals) by a cached range (only one
-    //    due to non-overlapping in cached ranges)
-    // 2. `evict_range` is overlapped with (including contain but not be contained)
+    // 1. `evict_range` is contained(including equals) by a cached range (at most
+    //    one due to non-overlapping in cached ranges)
+    // 2. `evict_range` is overlapped with (including contains but not be contained)
     //    one or more cached ranges
     //
     // For 1, if the `evict_range` is a proper subset of the cached_range, we will
