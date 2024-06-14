@@ -46,7 +46,7 @@ use crate::{
         },
         snap::{plain_file_used, Error, Result, SNAPSHOT_CFS},
         transport::CasualRouter,
-        ApplyOptions, CasualMessage, Config, SnapEntry, SnapKey, SnapManager,
+        ApplyOptions, CasualMessage, Config, SnapEntry, SnapError, SnapKey, SnapManager,
     },
 };
 
@@ -179,7 +179,7 @@ impl PendingDeleteRanges {
     ) -> Vec<(u64, Vec<u8>, Vec<u8>, u64)> {
         let ranges = self.find_overlap_ranges(start_key, end_key);
 
-        for &(_, ref s_key, ..) in &ranges {
+        for (_, s_key, ..) in &ranges {
             self.ranges.remove(s_key).unwrap();
         }
         ranges
@@ -454,6 +454,9 @@ where
     fn apply_snap(&mut self, region_id: u64, peer_id: u64, abort: Arc<AtomicUsize>) -> Result<()> {
         info!("begin apply snap data"; "region_id" => region_id, "peer_id" => peer_id);
         fail_point!("region_apply_snap", |_| { Ok(()) });
+        fail_point!("region_apply_snap_io_err", |_| {
+            Err(SnapError::Other(box_err!("io error")))
+        });
         check_abort(&abort)?;
 
         let mut region_state = self.region_state(region_id)?;
@@ -521,10 +524,11 @@ where
 
         let start = Instant::now();
 
-        match self.apply_snap(region_id, peer_id, Arc::clone(&status)) {
+        let tombstone = match self.apply_snap(region_id, peer_id, Arc::clone(&status)) {
             Ok(()) => {
                 status.swap(JOB_STATUS_FINISHED, Ordering::SeqCst);
                 SNAP_COUNTER.apply.success.inc();
+                false
             }
             Err(Error::Abort) => {
                 warn!("applying snapshot is aborted"; "region_id" => region_id);
@@ -535,18 +539,29 @@ where
                     JOB_STATUS_CANCELLING
                 );
                 SNAP_COUNTER.apply.abort.inc();
+                // The snapshot is applied abort, it's not necessary to tombstone the peer.
+                false
             }
             Err(e) => {
-                error!(%e; "failed to apply snap!!!");
+                warn!("failed to apply snap!!!"; "region_id" => region_id, "err" => %e);
+                self.coprocessor_host
+                    .cancel_apply_snapshot(region_id, peer_id);
                 status.swap(JOB_STATUS_FAILED, Ordering::SeqCst);
                 SNAP_COUNTER.apply.fail.inc();
+                // As the snapshot failed, the related peer should be marked tombstone.
+                // And as for the abnormal snapshot, it will be automatically cleaned up by
+                // the CleanupWorker later.
+                true
             }
-        }
+        };
 
         SNAP_HISTOGRAM
             .apply
             .observe(start.saturating_elapsed_secs());
-        let _ = self.router.send(region_id, CasualMessage::SnapshotApplied);
+        let _ = self.router.send(
+            region_id,
+            CasualMessage::SnapshotApplied { peer_id, tombstone },
+        );
     }
 
     /// Tries to clean up files in pending ranges overlapping with the given
@@ -715,16 +730,27 @@ where
         let wopts = WriteOptions::default();
         for cf in self.engine.cf_names() {
             // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
-            let strategy = if cf == CF_LOCK {
-                DeleteStrategy::DeleteByKey
+            let (strategy, observer) = if cf == CF_LOCK {
+                (
+                    DeleteStrategy::DeleteByKey,
+                    &CLEAR_OVERLAP_REGION_DURATION.by_key,
+                )
             } else if self.use_delete_range {
-                DeleteStrategy::DeleteByRange
+                (
+                    DeleteStrategy::DeleteByRange,
+                    &CLEAR_OVERLAP_REGION_DURATION.by_range,
+                )
             } else {
-                DeleteStrategy::DeleteByWriter {
-                    sst_path: self.mgr.get_temp_path_for_ingest(),
-                }
+                (
+                    DeleteStrategy::DeleteByWriter {
+                        sst_path: self.mgr.get_temp_path_for_ingest(),
+                    },
+                    &CLEAR_OVERLAP_REGION_DURATION.by_ingest_files,
+                )
             };
+            let start = Instant::now();
             box_try!(self.engine.delete_ranges_cf(&wopts, cf, strategy, ranges));
+            observer.observe(start.saturating_elapsed_secs());
         }
 
         Ok(())
@@ -800,6 +826,7 @@ where
                 {
                     new_batch = false;
                     self.handle_apply(region_id, peer_id, status);
+                    self.mgr.set_pending_apply_count(self.pending_applies.len());
                 }
             }
         }
@@ -884,6 +911,7 @@ where
                 SNAP_COUNTER.apply.all.inc();
                 // to makes sure applying snapshots in order.
                 self.pending_applies.push_back(task);
+                self.mgr.set_pending_apply_count(self.pending_applies.len());
                 self.handle_pending_applies(false);
                 if !self.pending_applies.is_empty() {
                     // delay the apply and retry later
@@ -1275,7 +1303,7 @@ pub(crate) mod tests {
         let wait_apply_finish = |ids: &[u64]| {
             for id in ids {
                 match receiver.recv_timeout(Duration::from_secs(5)) {
-                    Ok((region_id, CasualMessage::SnapshotApplied)) => {
+                    Ok((region_id, CasualMessage::SnapshotApplied { .. })) => {
                         assert_eq!(region_id, *id);
                     }
                     msg => panic!("expected {} SnapshotApplied, but got {:?}", id, msg),
@@ -1289,22 +1317,6 @@ pub(crate) mod tests {
                         .unwrap()
                         .get_state(),
                     PeerState::Normal
-                )
-            }
-        };
-
-        #[allow(dead_code)]
-        let must_not_finish = |ids: &[u64]| {
-            for id in ids {
-                let region_key = keys::region_state_key(*id);
-                assert_eq!(
-                    engine
-                        .kv
-                        .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
-                        .unwrap()
-                        .unwrap()
-                        .get_state(),
-                    PeerState::Applying
                 )
             }
         };
@@ -1447,6 +1459,21 @@ pub(crate) mod tests {
 
         #[cfg(feature = "failpoints")]
         {
+            let must_not_finish = |ids: &[u64]| {
+                for id in ids {
+                    let region_key = keys::region_state_key(*id);
+                    assert_eq!(
+                        engine
+                            .kv
+                            .get_msg_cf::<RegionLocalState>(CF_RAFT, &region_key)
+                            .unwrap()
+                            .unwrap()
+                            .get_state(),
+                        PeerState::Applying
+                    )
+                }
+            };
+
             engine.kv.compact_files_in_range(None, None, None).unwrap();
             fail::cfg("handle_new_pending_applies", "return").unwrap();
             gen_and_apply_snap(7);

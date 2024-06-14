@@ -333,7 +333,8 @@ impl<I: Iterator> Cursor<I> {
     pub fn seek_to_first(&mut self, statistics: &mut CfStatistics) -> bool {
         assert!(!self.prefix_seek);
         self.mark_unread();
-        let _guard = StatsCollector::new(StatsKind::Seek, statistics);
+        let _guard =
+            StatsCollector::new(self.iter.metrics_collector(), StatsKind::Seek, statistics);
         self.iter.seek_to_first().expect("Invalid Iterator")
     }
 
@@ -341,14 +342,16 @@ impl<I: Iterator> Cursor<I> {
     pub fn seek_to_last(&mut self, statistics: &mut CfStatistics) -> bool {
         assert!(!self.prefix_seek);
         self.mark_unread();
-        let _guard = StatsCollector::new(StatsKind::Seek, statistics);
+        let _guard =
+            StatsCollector::new(self.iter.metrics_collector(), StatsKind::Seek, statistics);
         self.iter.seek_to_last().expect("Invalid Iterator")
     }
 
     #[inline]
     pub fn internal_seek(&mut self, key: &Key, statistics: &mut CfStatistics) -> Result<bool> {
         self.mark_unread();
-        let _guard = StatsCollector::new(StatsKind::Seek, statistics);
+        let _guard =
+            StatsCollector::new(self.iter.metrics_collector(), StatsKind::Seek, statistics);
         self.iter.seek(key)
     }
 
@@ -359,21 +362,27 @@ impl<I: Iterator> Cursor<I> {
         statistics: &mut CfStatistics,
     ) -> Result<bool> {
         self.mark_unread();
-        let _guard = StatsCollector::new(StatsKind::SeekForPrev, statistics);
+        let _guard = StatsCollector::new(
+            self.iter.metrics_collector(),
+            StatsKind::SeekForPrev,
+            statistics,
+        );
         self.iter.seek_for_prev(key)
     }
 
     #[inline]
     pub fn next(&mut self, statistics: &mut CfStatistics) -> bool {
         self.mark_unread();
-        let _guard = StatsCollector::new(StatsKind::Next, statistics);
+        let _guard =
+            StatsCollector::new(self.iter.metrics_collector(), StatsKind::Next, statistics);
         self.iter.next().expect("Invalid Iterator")
     }
 
     #[inline]
     pub fn prev(&mut self, statistics: &mut CfStatistics) -> bool {
         self.mark_unread();
-        let _guard = StatsCollector::new(StatsKind::Prev, statistics);
+        let _guard =
+            StatsCollector::new(self.iter.metrics_collector(), StatsKind::Prev, statistics);
         self.iter.prev().expect("Invalid Iterator")
     }
 
@@ -605,7 +614,7 @@ mod tests {
             (b"a9".to_vec(), b"v9".to_vec()),
         ];
 
-        for &(ref k, ref v) in &base_data {
+        for (k, v) in &base_data {
             engine.put(&data_key(k), v).unwrap();
         }
         (r, base_data)

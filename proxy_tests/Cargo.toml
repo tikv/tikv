@@ -10,11 +10,11 @@ path = "proxy/mod.rs"
 required-features = ["failpoints", "testexport"]
 
 [features]
-default = ["failpoints", "testexport", "test-engine-kv-rocksdb", "cloud-aws", "cloud-gcp", "cloud-azure"]
+default = ["failpoints", "testexport", "test-engine-kv-rocksdb"]
 failpoints = ["fail/failpoints", "tikv/failpoints"]
-cloud-aws = ["encryption_export/cloud-aws"]
-cloud-gcp = ["encryption_export/cloud-gcp"]
-cloud-azure = ["encryption_export/cloud-azure"]
+# cloud-aws = ["encryption_export/cloud-aws"]
+# cloud-gcp = ["encryption_export/cloud-gcp"]
+# cloud-azure = ["encryption_export/cloud-azure"]
 testexport = ["raftstore/testexport", "raftstore-v2/testexport", "tikv/testexport", "engine_tiflash/testexport", "engine_store_ffi/testexport"]
 profiling = ["profiler/profiling"]
 

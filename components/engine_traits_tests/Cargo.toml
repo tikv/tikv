@@ -4,6 +4,7 @@ version = "0.0.1"
 description = "Engine-agnostic tests for the engine_traits interface"
 edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [lib]
 doctest = false
@@ -32,5 +33,5 @@ engine_traits = { workspace = true }
 kvproto = { workspace = true }
 panic_hook = { workspace = true }
 tempfile = "3.0"
-test_util = { workspace = true }
 tikv_alloc = { workspace = true }
+test_util = { workspace = true }

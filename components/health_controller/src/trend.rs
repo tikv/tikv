@@ -6,6 +6,7 @@ use std::{
 };
 
 use prometheus::IntGauge;
+use tikv_util::info;
 
 pub struct SampleValue {
     value: u64,
@@ -660,7 +661,7 @@ impl CurvesComposer {
 
 pub struct RequestPerSecRecorder {
     previous_ts: Instant,
-    inited: bool,
+    initialized: bool,
 }
 
 impl Default for RequestPerSecRecorder {
@@ -673,7 +674,7 @@ impl RequestPerSecRecorder {
     pub fn new() -> Self {
         Self {
             previous_ts: Instant::now(),
-            inited: false,
+            initialized: false,
         }
     }
 
@@ -683,12 +684,12 @@ impl RequestPerSecRecorder {
         observed_request_count: u64,
         now: Instant,
     ) -> Option<f64> {
-        if !self.inited {
-            self.inited = true;
+        if !self.initialized {
+            self.initialized = true;
             self.previous_ts = now;
             None
         } else {
-            self.inited = true;
+            self.initialized = true;
             let secs = now.saturating_duration_since(self.previous_ts).as_secs();
             self.previous_ts = now;
             if secs == 0 {

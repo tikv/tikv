@@ -923,12 +923,12 @@ pub struct TestPdClient {
     feature_gate: FeatureGate,
     trigger_leader_info_loss: AtomicBool,
 
-    pub gc_safepoints: RwLock<Vec<GcSafePoint>>,
+    pub gc_safepoints: RwLock<Vec<ServiceSafePoint>>,
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct GcSafePoint {
-    pub serivce: String,
+pub struct ServiceSafePoint {
+    pub service: String,
     pub ttl: Duration,
     pub safepoint: TimeStamp,
 }
@@ -1446,12 +1446,12 @@ impl TestPdClient {
         let status = cluster.replication_status.as_mut().unwrap();
         if state.is_none() {
             status.set_mode(ReplicationMode::Majority);
-            let mut dr = status.mut_dr_auto_sync();
+            let dr = status.mut_dr_auto_sync();
             dr.state_id += 1;
             return;
         }
         status.set_mode(ReplicationMode::DrAutoSync);
-        let mut dr = status.mut_dr_auto_sync();
+        let dr = status.mut_dr_auto_sync();
         dr.state_id += 1;
         dr.set_state(state.unwrap());
         dr.available_stores = available_stores;
@@ -1938,8 +1938,8 @@ impl PdClient for TestPdClient {
         ttl: Duration,
     ) -> PdFuture<()> {
         if ttl.as_secs() > 0 {
-            self.gc_safepoints.wl().push(GcSafePoint {
-                serivce: name,
+            self.gc_safepoints.wl().push(ServiceSafePoint {
+                service: name,
                 ttl,
                 safepoint,
             });

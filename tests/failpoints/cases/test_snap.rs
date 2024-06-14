@@ -1009,3 +1009,145 @@ fn test_retry_corrupted_snapshot() {
 
     must_get_equal(&cluster.get_engine(3), b"k1", b"v1");
 }
+
+#[test]
+fn test_send_snapshot_timeout() {
+    let mut cluster = new_server_cluster(1, 5);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(20);
+    cluster.cfg.raft_store.raft_log_gc_count_limit = Some(8);
+    cluster.cfg.raft_store.merge_max_log_gap = 3;
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.disable_default_operator();
+
+    cluster.run();
+    cluster.must_transfer_leader(1, new_peer(1, 1));
+    cluster.stop_node(4);
+    cluster.stop_node(5);
+    (0..10).for_each(|_| cluster.must_put(b"k2", b"v2"));
+    // Sleep for a while to ensure all logs are compacted.
+    thread::sleep(Duration::from_millis(100));
+
+    fail::cfg("snap_send_duration_timeout", "return(100)").unwrap();
+
+    // Let store 4 inform leader to generate a snapshot.
+    cluster.run_node(4).unwrap();
+    must_get_equal(&cluster.get_engine(4), b"k2", b"v2");
+
+    // add a delay to let send snapshot fail due to timeout.
+    fail::cfg("snap_send_timer_delay", "return(1000)").unwrap();
+    cluster.run_node(5).unwrap();
+    thread::sleep(Duration::from_millis(150));
+    must_get_none(&cluster.get_engine(5), b"k2");
+
+    // only delay once, the snapshot should success after retry.
+    fail::cfg("snap_send_timer_delay", "1*return(1000)").unwrap();
+    thread::sleep(Duration::from_millis(500));
+    must_get_equal(&cluster.get_engine(5), b"k2", b"v2");
+
+    fail::remove("snap_send_timer_delay");
+    fail::remove("snap_send_duration_timeout");
+}
+
+// Test that snapshots that failed to be sent are cleaned up.
+#[test]
+fn test_snapshot_cleanup_on_send_error() {
+    let mut cluster = new_server_cluster(0, 3);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+
+    let r = cluster.run_conf_change();
+
+    pd_client.must_add_peer(r, new_peer(2, 2));
+    cluster.must_put(b"k1", b"v1");
+
+    // Simulate an error on the gprc stream so that the leader fails to send
+    // the first snapshot to peer 3.
+    fail::cfg("snap_send_error", "return").unwrap();
+    pd_client.must_add_peer(r, new_peer(3, 3));
+
+    // Snapshot files are identified by a snap key which consists of region,
+    // term, and applied index. By performing a new put here, we advance the
+    // applied index on the leader and make it generate a new snapshot file.
+    cluster.must_put(b"k2", b"v2");
+
+    // After removing the failpoint, the new snapshot will be sent to peer 3,
+    // but we want to make sure that the old snapshot gets cleaned up as well.
+    fail::remove("snap_send_error");
+    cluster.must_put(b"k3", b"v3");
+
+    must_get_equal(&cluster.get_engine(3), b"k3", b"v3");
+
+    // Check that all snapshots on the leader have been deleted.
+    must_empty_dir(cluster.get_snap_dir(1));
+}
+
+#[test]
+fn test_snapshot_receiver_busy() {
+    let mut cluster = new_server_cluster(0, 2);
+    // Test that a snapshot generation is paused when the receiver is busy. To
+    // trigger the scenario, two regions are set up to send snapshots to the
+    // same store concurrently while configuring the receiving limit to 1.
+    cluster.cfg.server.concurrent_recv_snap_limit = 1;
+
+    cluster.cfg.rocksdb.titan.enabled = Some(true);
+    cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::secs(60);
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    // Disable default max peer count check.
+    pd_client.disable_default_operator();
+
+    let r1 = cluster.run_conf_change();
+    cluster.must_put(b"k1", b"v1");
+    cluster.must_put(b"k3", b"v3");
+
+    // Do a split to create the second region.
+    let region = cluster.get_region(b"k1");
+    cluster.must_split(&region, b"k2");
+
+    let r2 = cluster.get_region(b"k1").id;
+
+    // When a snapshot receiver is busy, we want the snapshot generation to
+    // pause and wait until the receiver becomes available. For the two regions
+    // in this test, there should only be two snapshot generations in total.
+    fail::cfg("before_region_gen_snap", "2*print()->panic()").unwrap();
+
+    // Pause the failpoint to stall the first snapshot send task.
+    fail::cfg("receiving_snapshot_net_error", "pause").unwrap();
+    pd_client.must_add_peer(r1, new_peer(2, 2));
+
+    // Wait for the first snapshot to be received and paused.
+    let (tx, rx) = mpsc::channel();
+    let tx = Mutex::new(tx);
+    fail::cfg_callback("receiving_snapshot_callback", move || {
+        let _ = tx.lock().unwrap().send(());
+    })
+    .unwrap();
+    rx.recv_timeout(Duration::from_secs(2)).unwrap();
+
+    // Unblock the first snapshot task when the precheck fails on the second
+    // snapshot task.
+    fail::cfg_callback("snap_gen_precheck_failed", || {
+        fail::remove("receiving_snapshot_net_error");
+    })
+    .unwrap();
+
+    // Add the second region to store 2. The second region's snapshot precheck
+    // will fail because the first snapshot task is still in progress. The
+    // precheck failure will remove the receiving_snapshot_net_error failpoint,
+    // unblocking the first snapshot task and eventually the second one.
+    pd_client.must_add_peer(r2, new_peer(2, 1002));
+
+    // Ensure that both regions work.
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k3", b"v3");
+
+    cluster.must_put(b"k11", b"v11");
+    must_get_equal(&cluster.get_engine(2), b"k11", b"v11");
+
+    cluster.must_put(b"k4", b"v4");
+    must_get_equal(&cluster.get_engine(2), b"k4", b"v4");
+
+    fail::remove("before_region_gen_snap");
+    fail::remove("receiving_snapshot_callback");
+    fail::remove("snap_gen_precheck_failed");
+}

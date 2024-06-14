@@ -1,7 +1,14 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
 // #[PerformanceCriticalPath]: TiKV gRPC APIs implementation
-use std::{mem, sync::Arc, time::Duration};
+use std::{
+    mem,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use api_version::KvFormat;
 use fail::fail_point;
@@ -15,6 +22,7 @@ use grpcio::{
     ClientStreamingSink, DuplexSink, Error as GrpcError, RequestStream, Result as GrpcResult,
     RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink, UnarySink, WriteFlags,
 };
+use health_controller::HealthController;
 use kvproto::{coprocessor::*, kvrpcpb::*, mpp::*, raft_serverpb::*, tikvpb::*};
 use protobuf::RepeatedField;
 use raft::eraftpb::MessageType;
@@ -64,6 +72,7 @@ const GRPC_MSG_NOTIFY_SIZE: usize = 8;
 
 /// Service handles the RPC messages for the `Tikv` service.
 pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
+    cluster_id: u64,
     store_id: u64,
     /// Used to handle requests related to GC.
     // TODO: make it Some after GC is supported for v2.
@@ -89,6 +98,10 @@ pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
     reject_messages_on_memory_ratio: f64,
 
     resource_manager: Option<Arc<ResourceGroupManager>>,
+
+    health_controller: HealthController,
+    health_feedback_interval: Option<Duration>,
+    health_feedback_seq: Arc<AtomicU64>,
 }
 
 impl<E: Engine, L: LockManager, F: KvFormat> Drop for Service<E, L, F> {
@@ -100,6 +113,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Drop for Service<E, L, F> {
 impl<E: Engine + Clone, L: LockManager + Clone, F: KvFormat> Clone for Service<E, L, F> {
     fn clone(&self) -> Self {
         Service {
+            cluster_id: self.cluster_id,
             store_id: self.store_id,
             gc_worker: self.gc_worker.clone(),
             storage: self.storage.clone(),
@@ -112,6 +126,9 @@ impl<E: Engine + Clone, L: LockManager + Clone, F: KvFormat> Clone for Service<E
             proxy: self.proxy.clone(),
             reject_messages_on_memory_ratio: self.reject_messages_on_memory_ratio,
             resource_manager: self.resource_manager.clone(),
+            health_controller: self.health_controller.clone(),
+            health_feedback_seq: self.health_feedback_seq.clone(),
+            health_feedback_interval: self.health_feedback_interval,
         }
     }
 }
@@ -119,6 +136,7 @@ impl<E: Engine + Clone, L: LockManager + Clone, F: KvFormat> Clone for Service<E
 impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
     /// Constructs a new `Service` which provides the `Tikv` service.
     pub fn new(
+        cluster_id: u64,
         store_id: u64,
         storage: Storage<E, L, F>,
         gc_worker: GcWorker<E>,
@@ -131,8 +149,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         proxy: Proxy,
         reject_messages_on_memory_ratio: f64,
         resource_manager: Option<Arc<ResourceGroupManager>>,
+        health_controller: HealthController,
+        health_feedback_interval: Option<Duration>,
     ) -> Self {
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
         Service {
+            cluster_id,
             store_id,
             gc_worker,
             storage,
@@ -145,6 +170,9 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
             proxy,
             reject_messages_on_memory_ratio,
             resource_manager,
+            health_controller,
+            health_feedback_interval,
+            health_feedback_seq: Arc::new(AtomicU64::new(now_unix)),
         }
     }
 
@@ -187,12 +215,27 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
     }
 }
 
+macro_rules! reject_if_cluster_id_mismatch {
+    ($req:expr, $self:ident, $ctx:expr, $sink:expr) => {
+        let req_cluster_id = $req.get_context().get_cluster_id();
+        if req_cluster_id > 0 && req_cluster_id != $self.cluster_id {
+            // Reject the request if the cluster IDs do not match.
+            warn!("unexpected request with different cluster id is received"; "req" => ?&$req);
+            let e = RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT,
+            "the cluster id of the request does not match the TiKV cluster".to_string());
+            $ctx.spawn($sink.fail(e).unwrap_or_else(|_| {}),);
+            return;
+        }
+    };
+}
+
 macro_rules! handle_request {
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident) => {
         handle_request!($fn_name, $future_name, $req_ty, $resp_ty, no_time_detail);
     };
     ($fn_name: ident, $future_name: ident, $req_ty: ident, $resp_ty: ident, $time_detail: tt) => {
         fn $fn_name(&mut self, ctx: RpcContext<'_>, req: $req_ty, sink: UnarySink<$resp_ty>) {
+            reject_if_cluster_id_mismatch!(req, self, ctx, sink);
             forward_unary!(self.proxy, $fn_name, ctx, req, sink);
             let begin_instant = Instant::now();
 
@@ -405,6 +448,15 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         RawChecksumResponse
     );
 
+    handle_request!(kv_flush, future_flush, FlushRequest, FlushResponse);
+
+    handle_request!(
+        kv_buffer_batch_get,
+        future_buffer_batch_get,
+        BufferBatchGetRequest,
+        BufferBatchGetResponse
+    );
+
     fn kv_import(&mut self, _: RpcContext<'_>, _: ImportRequest, _: UnarySink<ImportResponse>) {
         unimplemented!();
     }
@@ -423,6 +475,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         req: PrepareFlashbackToVersionRequest,
         sink: UnarySink<PrepareFlashbackToVersionResponse>,
     ) {
+        reject_if_cluster_id_mismatch!(req, self, ctx, sink);
         let begin_instant = Instant::now();
 
         let source = req.get_context().get_request_source().to_owned();
@@ -455,6 +508,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         req: FlashbackToVersionRequest,
         sink: UnarySink<FlashbackToVersionResponse>,
     ) {
+        reject_if_cluster_id_mismatch!(req, self, ctx, sink);
         let begin_instant = Instant::now();
 
         let source = req.get_context().get_request_source().to_owned();
@@ -482,6 +536,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     }
 
     fn coprocessor(&mut self, ctx: RpcContext<'_>, req: Request, sink: UnarySink<Response>) {
+        reject_if_cluster_id_mismatch!(req, self, ctx, sink);
         forward_unary!(self.proxy, coprocessor, ctx, req, sink);
         let source = req.get_context().get_request_source().to_owned();
         let resource_control_ctx = req.get_context().get_resource_control_context();
@@ -529,6 +584,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         req: RawCoprocessorRequest,
         sink: UnarySink<RawCoprocessorResponse>,
     ) {
+        reject_if_cluster_id_mismatch!(req, self, ctx, sink);
         let source = req.get_context().get_request_source().to_owned();
         let resource_control_ctx = req.get_context().get_resource_control_context();
         let mut resource_group_priority = ResourcePriority::unknown;
@@ -626,6 +682,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         req: Request,
         mut sink: ServerStreamingSink<Response>,
     ) {
+        reject_if_cluster_id_mismatch!(req, self, ctx, sink);
         let begin_instant = Instant::now();
         let resource_control_ctx = req.get_context().get_resource_control_context();
         let mut resource_group_priority = ResourcePriority::unknown;
@@ -926,6 +983,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         let pool_size = storage.get_normal_pool_size();
         let batch_builder = BatcherBuilder::new(self.enable_req_batch, pool_size);
         let resource_manager = self.resource_manager.clone();
+        let cluster_id = self.cluster_id;
+        let mut health_feedback_attacher = HealthFeedbackAttacher::new(
+            self.store_id,
+            self.health_controller.clone(),
+            self.health_feedback_seq.clone(),
+            self.health_feedback_interval,
+        );
         let request_handler = stream.try_for_each(move |mut req| {
             let request_ids = req.take_request_ids();
             let requests: Vec<_> = req.take_requests().into();
@@ -933,17 +997,26 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             let mut batcher = batch_builder.build(queue, request_ids.len());
             GRPC_REQ_BATCH_COMMANDS_SIZE.observe(requests.len() as f64);
             for (id, req) in request_ids.into_iter().zip(requests) {
-                handle_batch_commands_request(
-                    &mut batcher,
-                    &storage,
-                    &copr,
-                    &copr_v2,
-                    &peer,
-                    id,
-                    req,
-                    &tx,
-                    &resource_manager,
-                );
+                if let Err(server_err @ Error::ClusterIDMisMatch { .. }) =
+                    handle_batch_commands_request(
+                        cluster_id,
+                        &mut batcher,
+                        &storage,
+                        &copr,
+                        &copr_v2,
+                        &peer,
+                        id,
+                        req,
+                        &tx,
+                        &resource_manager,
+                    )
+                {
+                    let e = RpcStatus::with_message(
+                        RpcStatusCode::INVALID_ARGUMENT,
+                        server_err.to_string(),
+                    );
+                    return future::err(GrpcError::RpcFailure(e));
+                }
                 if let Some(batch) = batcher.as_mut() {
                     batch.maybe_commit(&storage, &tx);
                 }
@@ -969,15 +1042,25 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             GRPC_RESP_BATCH_COMMANDS_SIZE.observe(r.request_ids.len() as f64);
             // TODO: per thread load is more reasonable for batching.
             r.set_transport_layer_load(grpc_thread_load.total_load() as u64);
-            GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
-                r,
-                WriteFlags::default().buffer_hint(false),
-            ))
+            health_feedback_attacher.attach_if_needed(&mut r);
+            if let Some(err @ Error::ClusterIDMisMatch { .. }) = item.server_err {
+                let e = RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, err.to_string());
+                GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Err(GrpcError::RpcFailure(e))
+            } else {
+                GrpcResult::<(BatchCommandsResponse, WriteFlags)>::Ok((
+                    r,
+                    WriteFlags::default().buffer_hint(false),
+                ))
+            }
         });
 
         let send_task = async move {
-            sink.send_all(&mut response_retriever).await?;
-            sink.close().await?;
+            if let Err(e) = sink.send_all(&mut response_retriever).await {
+                let e = RpcStatus::with_message(RpcStatusCode::INVALID_ARGUMENT, e.to_string());
+                sink.fail(e).await?;
+            } else {
+                sink.close().await?;
+            }
             Ok(())
         }
         .map_err(|e: grpcio::Error| {
@@ -1124,6 +1207,31 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         .map(|_| ());
         ctx.spawn(task);
     }
+
+    fn get_health_feedback(
+        &mut self,
+        ctx: RpcContext<'_>,
+        request: GetHealthFeedbackRequest,
+        sink: UnarySink<GetHealthFeedbackResponse>,
+    ) {
+        reject_if_cluster_id_mismatch!(request, self, ctx, sink);
+        let attacher = HealthFeedbackAttacher::new(
+            self.store_id,
+            self.health_controller.clone(),
+            self.health_feedback_seq.clone(),
+            self.health_feedback_interval,
+        );
+
+        let mut resp = GetHealthFeedbackResponse::default();
+        resp.set_health_feedback(attacher.gen_health_feedback_pb());
+        let task = sink
+            .success(resp)
+            .map_err(|e| {
+                warn!("get_health_feedback failed"; "err" => ?e);
+            })
+            .map(|_| ());
+        ctx.spawn(task);
+    }
 }
 
 fn response_batch_commands_request<F, T>(
@@ -1136,26 +1244,34 @@ fn response_batch_commands_request<F, T>(
     resource_priority: ResourcePriority,
 ) where
     MemoryTraceGuard<batch_commands_response::Response>: From<T>,
-    F: Future<Output = Result<T, ()>> + Send + 'static,
+    F: Future<Output = Result<T, Error>> + Send + 'static,
+    T: Default,
 {
     let task = async move {
-        if let Ok(resp) = resp.await {
-            let measure = GrpcRequestDuration {
-                begin,
-                label,
-                source,
-                resource_priority,
-            };
-            let task = MeasuredSingleResponse::new(id, resp, measure);
-            if let Err(e) = tx.send_with(task, WakePolicy::Immediately) {
-                error!("KvService response batch commands fail"; "err" => ?e);
+        let measure = GrpcRequestDuration::new(begin, label, source, resource_priority);
+        match resp.await {
+            Ok(resp) => {
+                let task = MeasuredSingleResponse::new(id, resp, measure, None);
+                if let Err(e) = tx.send_with(task, WakePolicy::Immediately) {
+                    error!("KvService response batch commands fail"; "err" => ?e);
+                }
             }
-        }
+            Err(server_err @ Error::ClusterIDMisMatch { .. }) => {
+                let task = MeasuredSingleResponse::new(id, T::default(), measure, Some(server_err));
+                if let Err(e) = tx.send_with(task, WakePolicy::Immediately) {
+                    error!("KvService response batch commands fail"; "err" => ?e);
+                }
+            }
+            _ => {}
+        };
     };
     poll_future_notify(task);
 }
 
+// If error is returned, there could be some unexpected errors like cluster id
+// mismatch.
 fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
+    cluster_id: u64,
     batcher: &mut Option<ReqBatcher>,
     storage: &Storage<E, L, F>,
     copr: &Endpoint<E>,
@@ -1165,7 +1281,23 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
     req: batch_commands_request::Request,
     tx: &Sender<MeasuredSingleResponse>,
     resource_manager: &Option<Arc<ResourceGroupManager>>,
-) {
+) -> Result<(), Error> {
+    macro_rules! handle_cluster_id_mismatch {
+        ($cluster_id:expr, $req:expr) => {
+            let req_cluster_id = $req.get_context().get_cluster_id();
+            if req_cluster_id > 0 && req_cluster_id != $cluster_id {
+                // Reject the request if the cluster IDs do not match.
+                warn!("unexpected request with different cluster id is received in batch command request"; "req" => ?&$req);
+                let begin_instant = Instant::now();
+                let fut_resp = future::err::<batch_commands_response::Response, Error>(
+                    Error::ClusterIDMisMatch{request_id: req_cluster_id, cluster_id: $cluster_id});
+                response_batch_commands_request(id, fut_resp, tx.clone(), begin_instant, GrpcTypeKind::invalid,
+                String::default(), ResourcePriority::unknown);
+                return Err(Error::ClusterIDMisMatch{request_id: req_cluster_id, cluster_id: $cluster_id});
+            }
+        };
+    }
+
     // To simplify code and make the logic more clear.
     macro_rules! oneof {
         ($p:path) => {
@@ -1186,6 +1318,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::invalid, String::default(), ResourcePriority::unknown);
                 },
                 Some(batch_commands_request::request::Cmd::Get(req)) => {
+                    handle_cluster_id_mismatch!(cluster_id, req);
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     let mut resource_group_priority = ResourcePriority::unknown;
                     if let Some(resource_manager) = resource_manager {
@@ -1205,11 +1338,12 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                        let source = req.get_context().get_request_source().to_owned();
                        let resp = future_get(storage, req)
                             .map_ok(oneof!(batch_commands_response::response::Cmd::Get))
-                            .map_err(|_| GRPC_MSG_FAIL_COUNTER.kv_get.inc());
-                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get, source,resource_group_priority);
+                            .map_err(|e| {GRPC_MSG_FAIL_COUNTER.kv_get.inc(); e});
+                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::kv_get, source, resource_group_priority);
                     }
                 },
                 Some(batch_commands_request::request::Cmd::RawGet(req)) => {
+                    handle_cluster_id_mismatch!(cluster_id, req);
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     let mut resource_group_priority = ResourcePriority::unknown;
                     if let Some(resource_manager) = resource_manager {
@@ -1228,11 +1362,12 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                        let source = req.get_context().get_request_source().to_owned();
                        let resp = future_raw_get(storage, req)
                             .map_ok(oneof!(batch_commands_response::response::Cmd::RawGet))
-                            .map_err(|_| GRPC_MSG_FAIL_COUNTER.raw_get.inc());
-                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get, source,resource_group_priority);
+                            .map_err(|e| {GRPC_MSG_FAIL_COUNTER.raw_get.inc(); e});
+                        response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::raw_get, source, resource_group_priority);
                     }
                 },
                 Some(batch_commands_request::request::Cmd::Coprocessor(req)) => {
+                    handle_cluster_id_mismatch!(cluster_id, req);
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     let mut resource_group_priority = ResourcePriority::unknown;
                     if let Some(resource_manager) = resource_manager {
@@ -1248,8 +1383,17 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                         .map_ok(|resp| {
                             resp.map(oneof!(batch_commands_response::response::Cmd::Coprocessor))
                         })
-                        .map_err(|_| GRPC_MSG_FAIL_COUNTER.coprocessor.inc());
-                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::coprocessor, source,resource_group_priority);
+                        .map_err(|e| {GRPC_MSG_FAIL_COUNTER.coprocessor.inc(); e});
+                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::coprocessor, source, resource_group_priority);
+                },
+                Some(batch_commands_request::request::Cmd::GetHealthFeedback(req)) => {
+                    handle_cluster_id_mismatch!(cluster_id, req);
+                    let begin_instant = Instant::now();
+                    let source = req.get_context().get_request_source().to_owned();
+                    // The response is empty at this place, and will be filled when collected to
+                    // the batch response. See `HealthFeedbackAttacher::attach_if_needed`.
+                    let resp = std::future::ready(Ok(GetHealthFeedbackResponse::default()).map(oneof!(batch_commands_response::response::Cmd::GetHealthFeedback)));
+                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::get_health_feedback, source, ResourcePriority::unknown);
                 },
                 Some(batch_commands_request::request::Cmd::Empty(req)) => {
                     let begin_instant = Instant::now();
@@ -1258,7 +1402,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                             cmd: Some(batch_commands_response::response::Cmd::Empty(resp)),
                             ..Default::default()
                         })
-                        .map_err(|_| GRPC_MSG_FAIL_COUNTER.invalid.inc());
+                        .map_err(|e| {GRPC_MSG_FAIL_COUNTER.invalid.inc(); e});
                     response_batch_commands_request(
                         id,
                         resp,
@@ -1270,6 +1414,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     );
                 }
                 $(Some(batch_commands_request::request::Cmd::$cmd(req)) => {
+                    handle_cluster_id_mismatch!(cluster_id, req);
                     let resource_control_ctx = req.get_context().get_resource_control_context();
                     let mut resource_group_priority = ResourcePriority::unknown;
                     if let Some(resource_manager) = resource_manager {
@@ -1283,8 +1428,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
                     let source = req.get_context().get_request_source().to_owned();
                     let resp = $future_fn($($arg,)* req)
                         .map_ok(oneof!(batch_commands_response::response::Cmd::$cmd))
-                        .map_err(|_| GRPC_MSG_FAIL_COUNTER.$metric_name.inc());
-                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::$metric_name, source,resource_group_priority);
+                        .map_err(|e| {GRPC_MSG_FAIL_COUNTER.$metric_name.inc(); e});
+                    response_batch_commands_request(id, resp, tx.clone(), begin_instant, GrpcTypeKind::$metric_name, source, resource_group_priority);
                 })*
                 Some(batch_commands_request::request::Cmd::Import(_)) => unimplemented!(),
             }
@@ -1307,6 +1452,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
         DeleteRange, future_delete_range(storage), kv_delete_range;
         PrepareFlashbackToVersion, future_prepare_flashback_to_version(storage.clone()), kv_prepare_flashback_to_version;
         FlashbackToVersion, future_flashback_to_version(storage.clone()), kv_flashback_to_version;
+        BufferBatchGet, future_buffer_batch_get(storage), kv_buffer_batch_get;
+        Flush, future_flush(storage), kv_flush;
         RawBatchGet, future_raw_batch_get(storage), raw_batch_get;
         RawPut, future_raw_put(storage), raw_put;
         RawBatchPut, future_raw_batch_put(storage), raw_batch_put;
@@ -1319,6 +1466,8 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
         PessimisticLock, future_acquire_pessimistic_lock(storage), kv_pessimistic_lock;
         PessimisticRollback, future_pessimistic_rollback(storage), kv_pessimistic_rollback;
     }
+
+    Ok(())
 }
 
 fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
@@ -1335,8 +1484,10 @@ fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
             begin,
             source,
             resource_priority,
+            sent,
         } = measure;
         let elapsed = now.saturating_duration_since(begin);
+        let wait = now.saturating_duration_since(sent);
         GRPC_MSG_HISTOGRAM_STATIC
             .get(label)
             .get(resource_priority)
@@ -1362,6 +1513,9 @@ fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
             exec_details
                 .mut_time_detail_v2()
                 .set_total_rpc_wall_time_ns(elapsed.as_nanos() as u64);
+            exec_details
+                .mut_time_detail_v2()
+                .set_kv_grpc_wait_time_ns(wait.as_nanos() as u64);
         }
     }
 }
@@ -1412,10 +1566,12 @@ fn future_get<E: Engine, L: LockManager, F: KvFormat>(
             match v {
                 Ok((val, stats)) => {
                     let exec_detail_v2 = resp.mut_exec_details_v2();
-                    let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
-                    stats.stats.write_scan_detail(scan_detail_v2);
+                    stats
+                        .stats
+                        .write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                        tracker.write_scan_detail(scan_detail_v2);
+                        tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
+                        tracker.write_time_detail(exec_detail_v2.mut_time_detail_v2());
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
                     match val {
@@ -1527,10 +1683,12 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                 Ok((kv_res, stats)) => {
                     let pairs = map_kv_pairs(kv_res);
                     let exec_detail_v2 = resp.mut_exec_details_v2();
-                    let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
-                    stats.stats.write_scan_detail(scan_detail_v2);
+                    stats
+                        .stats
+                        .write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                        tracker.write_scan_detail(scan_detail_v2);
+                        tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
+                        tracker.write_time_detail(exec_detail_v2.mut_time_detail_v2());
                     });
                     set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
                     resp.set_pairs(pairs.into());
@@ -1542,6 +1700,50 @@ fn future_batch_get<E: Engine, L: LockManager, F: KvFormat>(
                     let mut pair = KvPair::default();
                     pair.set_error(key_error);
                     resp.mut_pairs().push(pair);
+                }
+            }
+        }
+        GLOBAL_TRACKERS.remove(tracker);
+        Ok(resp)
+    }
+}
+
+fn future_buffer_batch_get<E: Engine, L: LockManager, F: KvFormat>(
+    storage: &Storage<E, L, F>,
+    mut req: BufferBatchGetRequest,
+) -> impl Future<Output = ServerResult<BufferBatchGetResponse>> {
+    let tracker = GLOBAL_TRACKERS.insert(Tracker::new(RequestInfo::new(
+        req.get_context(),
+        RequestType::KvBufferBatchGet,
+        req.get_version(),
+    )));
+    set_tls_tracker_token(tracker);
+    let start = Instant::now();
+    let keys = req.get_keys().iter().map(|x| Key::from_raw(x)).collect();
+    let v = storage.buffer_batch_get(req.take_context(), keys, req.get_version().into());
+
+    async move {
+        let v = v.await;
+        let duration = start.saturating_elapsed();
+        let mut resp = BufferBatchGetResponse::default();
+        if let Some(err) = extract_region_error(&v) {
+            resp.set_region_error(err);
+        } else {
+            match v {
+                Ok((kv_res, stats)) => {
+                    let pairs = map_kv_pairs(kv_res);
+                    let exec_detail_v2 = resp.mut_exec_details_v2();
+                    let scan_detail_v2 = exec_detail_v2.mut_scan_detail_v2();
+                    stats.stats.write_scan_detail(scan_detail_v2);
+                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                        tracker.write_scan_detail(scan_detail_v2);
+                    });
+                    set_time_detail(exec_detail_v2, duration, &stats.latency_stats);
+                    resp.set_pairs(pairs.into());
+                }
+                Err(e) => {
+                    let key_error = extract_key_error(&e);
+                    resp.set_error(key_error.clone());
                 }
             }
         }
@@ -2070,6 +2272,7 @@ macro_rules! txn_command_future {
             GLOBAL_TRACKERS.with_tracker($tracker, |tracker| {
                 tracker.write_scan_detail($resp.mut_exec_details_v2().mut_scan_detail_v2());
                 tracker.write_write_detail($resp.mut_exec_details_v2().mut_write_detail());
+                tracker.write_time_detail($resp.mut_exec_details_v2().mut_time_detail_v2());
             });
         });
     };
@@ -2080,6 +2283,7 @@ macro_rules! txn_command_future {
             GLOBAL_TRACKERS.with_tracker($tracker, |tracker| {
                 tracker.write_scan_detail($resp.mut_exec_details_v2().mut_scan_detail_v2());
                 tracker.write_write_detail($resp.mut_exec_details_v2().mut_write_detail());
+                tracker.write_time_detail($resp.mut_exec_details_v2().mut_time_detail_v2());
             });
         });
     };
@@ -2259,6 +2463,9 @@ txn_command_future!(future_mvcc_get_by_start_ts, MvccGetByStartTsRequest, MvccGe
         Err(e) => resp.set_error(format!("{}", e)),
     }
 });
+txn_command_future!(future_flush, FlushRequest, FlushResponse, (v, resp) {
+    resp.set_errors(extract_key_errors(v).into());
+});
 
 pub mod batch_commands_response {
     pub type Response = kvproto::tikvpb::BatchCommandsResponseResponse;
@@ -2283,7 +2490,9 @@ pub struct GrpcRequestDuration {
     pub label: GrpcTypeKind,
     pub source: String,
     pub resource_priority: ResourcePriority,
+    pub sent: Instant,
 }
+
 impl GrpcRequestDuration {
     pub fn new(
         begin: Instant,
@@ -2296,6 +2505,7 @@ impl GrpcRequestDuration {
             label,
             source,
             resource_priority,
+            sent: Instant::now(),
         }
     }
 }
@@ -2306,14 +2516,20 @@ pub struct MeasuredSingleResponse {
     pub id: u64,
     pub resp: MemoryTraceGuard<batch_commands_response::Response>,
     pub measure: GrpcRequestDuration,
+    pub server_err: Option<Error>,
 }
 impl MeasuredSingleResponse {
-    pub fn new<T>(id: u64, resp: T, measure: GrpcRequestDuration) -> Self
+    pub fn new<T>(id: u64, resp: T, measure: GrpcRequestDuration, server_err: Option<Error>) -> Self
     where
         MemoryTraceGuard<batch_commands_response::Response>: From<T>,
     {
         let resp = resp.into();
-        MeasuredSingleResponse { id, resp, measure }
+        MeasuredSingleResponse {
+            id,
+            resp,
+            measure,
+            server_err,
+        }
     }
 }
 
@@ -2321,12 +2537,14 @@ impl MeasuredSingleResponse {
 pub struct MeasuredBatchResponse {
     pub batch_resp: BatchCommandsResponse,
     pub measures: Vec<GrpcRequestDuration>,
+    pub server_err: Option<Error>,
 }
 impl Default for MeasuredBatchResponse {
     fn default() -> Self {
         MeasuredBatchResponse {
             batch_resp: Default::default(),
             measures: Vec::with_capacity(GRPC_MSG_MAX_BATCH_SIZE),
+            server_err: None,
         }
     }
 }
@@ -2335,6 +2553,9 @@ fn collect_batch_resp(v: &mut MeasuredBatchResponse, mut e: MeasuredSingleRespon
     v.batch_resp.mut_request_ids().push(e.id);
     v.batch_resp.mut_responses().push(e.resp.consume());
     v.measures.push(e.measure);
+    if let Some(server_err) = e.server_err.take() {
+        v.server_err = Some(server_err);
+    }
 }
 
 fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
@@ -2362,6 +2583,88 @@ fn needs_reject_raft_append(reject_messages_on_memory_ratio: f64) -> bool {
         }
     }
     false
+}
+
+struct HealthFeedbackAttacher {
+    store_id: u64,
+    health_controller: HealthController,
+    last_feedback_time: Option<Instant>,
+    seq: Arc<AtomicU64>,
+    feedback_interval: Option<Duration>,
+}
+
+impl HealthFeedbackAttacher {
+    fn new(
+        store_id: u64,
+        health_controller: HealthController,
+        seq: Arc<AtomicU64>,
+        feedback_interval: Option<Duration>,
+    ) -> Self {
+        Self {
+            store_id,
+            health_controller,
+            last_feedback_time: None,
+            seq,
+            feedback_interval,
+        }
+    }
+
+    fn attach_if_needed(&mut self, resp: &mut BatchCommandsResponse) {
+        let mut requested_feedback = None;
+
+        for r in resp.responses.iter_mut().flat_map(|r| &mut r.cmd) {
+            if let BatchCommandsResponse_Response_oneof_cmd::GetHealthFeedback(r) = r {
+                if requested_feedback.is_none() {
+                    requested_feedback = Some(self.gen_health_feedback_pb());
+                }
+                r.set_health_feedback(requested_feedback.clone().unwrap());
+            }
+        }
+
+        // If there's any explicit request for health feedback information, attach it
+        // to the BatchCommandsResponse no matter how it's configured.
+        if let Some(feedback) = requested_feedback {
+            self.attach_with(resp, Instant::now_coarse(), feedback);
+            return;
+        }
+
+        let feedback_interval = match self.feedback_interval {
+            Some(i) => i,
+            None => return,
+        };
+
+        let now = Instant::now_coarse();
+
+        if let Some(last_feedback_time) = self.last_feedback_time
+            && now - last_feedback_time < feedback_interval
+        {
+            return;
+        }
+
+        self.attach(resp, now);
+    }
+
+    fn attach(&mut self, resp: &mut BatchCommandsResponse, now: Instant) {
+        self.attach_with(resp, now, self.gen_health_feedback_pb())
+    }
+
+    fn attach_with(
+        &mut self,
+        resp: &mut BatchCommandsResponse,
+        now: Instant,
+        health_feedback_pb: HealthFeedback,
+    ) {
+        self.last_feedback_time = Some(now);
+        resp.set_health_feedback(health_feedback_pb);
+    }
+
+    fn gen_health_feedback_pb(&self) -> HealthFeedback {
+        let mut feedback = HealthFeedback::default();
+        feedback.set_store_id(self.store_id);
+        feedback.set_feedback_seq_no(self.seq.fetch_add(1, Ordering::Relaxed));
+        feedback.set_slow_score(self.health_controller.get_raftstore_slow_score() as i32);
+        feedback
+    }
 }
 
 #[cfg(test)]
@@ -2418,5 +2721,113 @@ mod tests {
         };
         poll_future_notify(task);
         assert_eq!(block_on(rx1).unwrap(), 200);
+    }
+
+    #[test]
+    fn test_health_feedback_attacher() {
+        let health_controller = HealthController::new();
+        let test_reporter = health_controller::reporters::TestReporter::new(&health_controller);
+        let seq = Arc::new(AtomicU64::new(1));
+
+        let mut a = HealthFeedbackAttacher::new(1, health_controller.clone(), seq.clone(), None);
+        let mut resp = BatchCommandsResponse::default();
+        a.attach_if_needed(&mut resp);
+        assert!(!resp.has_health_feedback());
+
+        let mut a =
+            HealthFeedbackAttacher::new(1, health_controller, seq, Some(Duration::from_secs(1)));
+        resp = BatchCommandsResponse::default();
+        a.attach_if_needed(&mut resp);
+        assert!(resp.has_health_feedback());
+        assert_eq!(resp.get_health_feedback().get_store_id(), 1);
+        assert_eq!(resp.get_health_feedback().get_feedback_seq_no(), 1);
+        assert_eq!(resp.get_health_feedback().get_slow_score(), 1);
+
+        // Skips attaching feedback because last attaching was just done.
+        test_reporter.set_raftstore_slow_score(50.);
+        resp = BatchCommandsResponse::default();
+        a.attach_if_needed(&mut resp);
+        assert!(!resp.has_health_feedback());
+
+        // Simulate elapsing enough time by changing the recorded last update time.
+        *a.last_feedback_time.as_mut().unwrap() -= Duration::from_millis(1001);
+        a.attach_if_needed(&mut resp);
+        assert!(resp.has_health_feedback());
+        assert_eq!(resp.get_health_feedback().get_store_id(), 1);
+        // seq_no increased.
+        assert_eq!(resp.get_health_feedback().get_feedback_seq_no(), 2);
+        assert_eq!(resp.get_health_feedback().get_slow_score(), 50);
+
+        // Do not skip if feedback info is explicitly requested, i.e.
+        // `GetHealthFeedback` request is received from the client.
+        let resp_with_get_health_feedback = || {
+            let mut resp = BatchCommandsResponse::default();
+            let mut resp_item = BatchCommandsResponseResponse::default();
+            resp_item.cmd = Some(BatchCommandsResponse_Response_oneof_cmd::GetHealthFeedback(
+                GetHealthFeedbackResponse::default(),
+            ));
+            resp.responses.push(resp_item);
+            resp.request_ids.push(1);
+            resp
+        };
+        resp = resp_with_get_health_feedback();
+        a.attach_if_needed(&mut resp);
+        assert!(resp.has_health_feedback());
+        assert_eq!(resp.get_health_feedback().get_store_id(), 1);
+        assert_eq!(resp.get_health_feedback().get_feedback_seq_no(), 3);
+        assert_eq!(resp.get_health_feedback().get_slow_score(), 50);
+        // And the `GetHealthFeedbackResponse` will also be filled with the feedback
+        // info.
+        fn get_feedback_in_response(resp: &BatchCommandsResponseResponse) -> &HealthFeedback {
+            match resp.cmd {
+                Some(BatchCommandsResponse_Response_oneof_cmd::GetHealthFeedback(ref f)) => {
+                    assert!(!f.has_region_error());
+                    f.get_health_feedback()
+                }
+                _ => panic!("unexpected response body: {:?}", resp),
+            }
+        }
+        assert_eq!(
+            get_feedback_in_response(&resp.get_responses()[0]),
+            resp.get_health_feedback()
+        );
+
+        // If requested, it attaches the feedback info even `feedback_interval` is not
+        // given, which means never attaching.
+        a.feedback_interval = None;
+        a.last_feedback_time = None;
+        resp = BatchCommandsResponse::default();
+        a.attach_if_needed(&mut resp);
+        assert!(!resp.has_health_feedback());
+        resp = resp_with_get_health_feedback();
+        a.attach_if_needed(&mut resp);
+        assert!(resp.has_health_feedback());
+        assert_eq!(resp.get_health_feedback().get_store_id(), 1);
+        assert_eq!(resp.get_health_feedback().get_feedback_seq_no(), 4);
+        assert_eq!(resp.get_health_feedback().get_slow_score(), 50);
+        assert_eq!(
+            get_feedback_in_response(&resp.get_responses()[0]),
+            resp.get_health_feedback()
+        );
+
+        // It also works when there are multiple `GetHealthFeedbackResponse` in the
+        // batch, and each single `GetHealthFeedback` call gets the same result.
+        test_reporter.set_raftstore_slow_score(80.);
+        resp = resp_with_get_health_feedback();
+        resp.responses.push(resp.responses[0].clone());
+        resp.request_ids.push(2);
+        a.attach_if_needed(&mut resp);
+        assert!(resp.has_health_feedback());
+        assert_eq!(resp.get_health_feedback().get_store_id(), 1);
+        assert_eq!(resp.get_health_feedback().get_feedback_seq_no(), 5);
+        assert_eq!(resp.get_health_feedback().get_slow_score(), 80);
+        for i in 0..2 {
+            assert_eq!(
+                get_feedback_in_response(&resp.get_responses()[i]),
+                resp.get_health_feedback(),
+                "{}-th response in BatchCommandsResponse mismatches",
+                i
+            );
+        }
     }
 }

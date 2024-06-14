@@ -11,17 +11,20 @@ use std::{
     },
     iter::Iterator,
     mem,
-    sync::{Arc, Mutex},
+    sync::{atomic::Ordering, Arc, Mutex},
     time::{Duration, Instant},
     u64,
 };
 
 use batch_system::{BasicMailbox, Fsm};
 use collections::{HashMap, HashSet};
-use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT};
+use engine_traits::{
+    Engines, KvEngine, RaftEngine, RaftLogBatch, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT,
+};
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use futures::channel::mpsc::UnboundedSender;
+use itertools::Itertools;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::{
     brpb::CheckAdminResponse,
@@ -49,13 +52,15 @@ use raft::{
     GetEntriesContext, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
 };
 use smallvec::SmallVec;
+use strum::{EnumCount, VariantNames};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err, debug, defer, error, escape, info, info_or_debug, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
+    slow_log,
     store::{find_peer, find_peer_by_id, is_learner, region_on_same_stores},
     sys::disk::DiskUsage,
-    time::{monotonic_raw_now, Instant as TiInstant},
+    time::{monotonic_raw_now, Instant as TiInstant, SlowTimer},
     trace, warn,
     worker::{ScheduleError, Scheduler},
     Either,
@@ -89,22 +94,22 @@ use crate::{
             TRANSFER_LEADER_COMMAND_REPLY_CTX,
         },
         region_meta::RegionMeta,
+        snapshot_backup::{AbortReason, SnapshotBrState, SnapshotBrWaitApplyRequest},
         transport::Transport,
         unsafe_recovery::{
-            exit_joint_request, ForceLeaderState, SnapshotRecoveryState,
-            SnapshotRecoveryWaitApplySyncer, UnsafeRecoveryExecutePlanSyncer,
+            exit_joint_request, ForceLeaderState, UnsafeRecoveryExecutePlanSyncer,
             UnsafeRecoveryFillOutReportSyncer, UnsafeRecoveryForceLeaderSyncer,
             UnsafeRecoveryState, UnsafeRecoveryWaitApplySyncer,
         },
-        util,
-        util::{KeysInfoFormatter, LeaseState},
+        util::{self, compare_region_epoch, KeysInfoFormatter, LeaseState},
         worker::{
             Bucket, BucketRange, CleanupTask, ConsistencyCheckTask, GcSnapshotTask, RaftlogGcTask,
             ReadDelegate, ReadProgress, RegionTask, SplitCheckTask,
         },
         CasualMessage, Config, LocksStatus, MergeResultKind, PdTask, PeerMsg, PeerTick,
-        ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback, ReadTask,
-        SignificantMsg, SnapKey, StoreMsg, WriteCallback,
+        ProposalContext, RaftCmdExtraOpts, RaftCommand, RaftlogFetchResult, ReadCallback,
+        ReadIndexContext, ReadTask, SignificantMsg, SnapKey, StoreMsg, WriteCallback,
+        RAFT_INIT_LOG_INDEX,
     },
     Error, Result,
 };
@@ -618,9 +623,12 @@ where
     }
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
-        let timer = TiInstant::now_coarse();
+        let timer = SlowTimer::from_millis(100);
         let count = msgs.len();
+        #[allow(const_evaluatable_unchecked)]
+        let mut distribution = [0; PeerMsg::<EK>::COUNT];
         for m in msgs.drain(..) {
+            distribution[m.discriminant()] += 1;
             match m {
                 PeerMsg::RaftMessage(msg, sent_time) => {
                     if let Some(sent_time) = sent_time {
@@ -700,31 +708,39 @@ where
                 PeerMsg::UpdateReplicationMode => self.on_update_replication_mode(),
                 PeerMsg::Destroy(peer_id) => {
                     if self.fsm.peer.peer_id() == peer_id {
-                        match self.fsm.peer.maybe_destroy(self.ctx) {
-                            None => self.ctx.raft_metrics.message_dropped.applying_snap.inc(),
-                            Some(job) => {
-                                self.handle_destroy_peer(job);
-                            }
-                        }
+                        self.maybe_destroy();
                     }
                 }
             }
         }
         self.on_loop_finished();
+        slow_log!(
+            T timer,
+            "{} handle {} peer messages {:?}",
+            self.fsm.peer.tag,
+            count,
+            PeerMsg::<EK>::VARIANTS.iter().zip(distribution).filter(|(_, c)| *c > 0).format(", "),
+        );
         self.ctx.raft_metrics.peer_msg_len.observe(count as f64);
         self.ctx
             .raft_metrics
             .event_time
             .peer_msg
-            .observe(timer.saturating_elapsed_secs());
+            .observe(timer.saturating_elapsed().as_secs_f64());
     }
 
     #[inline]
     fn on_loop_finished(&mut self) {
         let ready_concurrency = self.ctx.cfg.cmd_batch_concurrent_ready_max_count;
+        // Allow to propose pending commands iff all ongoing commands are persisted or
+        // committed. this is trying to batch proposes as many as possible to
+        // minimize the cpu overhead.
         let should_propose = self.ctx.sync_write_worker.is_some()
             || ready_concurrency == 0
-            || self.fsm.peer.unpersisted_ready_len() < ready_concurrency;
+            || self.fsm.peer.unpersisted_ready_len() < ready_concurrency
+            // Allow to propose if all ongoing proposals are committed to avoiding io jitter block
+            // new commands.
+            || !self.fsm.peer.has_uncommitted_log();
         let force_delay_fp = || {
             fail_point!(
                 "force_delay_propose_batch_raft_command",
@@ -784,7 +800,9 @@ where
         syncer: UnsafeRecoveryExecutePlanSyncer,
         failed_voters: Vec<metapb::Peer>,
     ) {
-        if let Some(state) = &self.fsm.peer.unsafe_recovery_state && !state.is_abort() {
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state
+            && !state.is_abort()
+        {
             warn!(
                 "Unsafe recovery, demote failed voters has already been initiated";
                 "region_id" => self.region().get_id(),
@@ -890,7 +908,9 @@ where
     }
 
     fn on_unsafe_recovery_destroy(&mut self, syncer: UnsafeRecoveryExecutePlanSyncer) {
-        if let Some(state) = &self.fsm.peer.unsafe_recovery_state && !state.is_abort() {
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state
+            && !state.is_abort()
+        {
             warn!(
                 "Unsafe recovery, can't destroy, another plan is executing in progress";
                 "region_id" => self.region_id(),
@@ -909,7 +929,9 @@ where
     }
 
     fn on_unsafe_recovery_wait_apply(&mut self, syncer: UnsafeRecoveryWaitApplySyncer) {
-        if let Some(state) = &self.fsm.peer.unsafe_recovery_state && !state.is_abort() {
+        if let Some(state) = &self.fsm.peer.unsafe_recovery_state
+            && !state.is_abort()
+        {
             warn!(
                 "Unsafe recovery, can't wait apply, another plan is executing in progress";
                 "region_id" => self.region_id(),
@@ -949,7 +971,7 @@ where
     // func be invoked firstly after assigned leader by BR, wait all leader apply to
     // last log index func be invoked secondly wait follower apply to last
     // index, however the second call is broadcast, it may improve in future
-    fn on_snapshot_recovery_wait_apply(&mut self, syncer: SnapshotRecoveryWaitApplySyncer) {
+    fn on_snapshot_br_wait_apply(&mut self, req: SnapshotBrWaitApplyRequest) {
         if let Some(state) = &self.fsm.peer.snapshot_recovery_state {
             warn!(
                 "can't wait apply, another recovery in progress";
@@ -957,20 +979,47 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "state" => ?state,
             );
-            syncer.abort();
+            req.syncer.abort(AbortReason::Duplicated);
             return;
         }
 
         let target_index = self.fsm.peer.raft_group.raft.raft_log.last_index();
+        let applied_index = self.fsm.peer.raft_group.raft.raft_log.applied;
+        let term = self.fsm.peer.raft_group.raft.term;
+        if let Some(e) = &req.expected_epoch {
+            if let Err(err) = compare_region_epoch(e, self.region(), true, true, true) {
+                warn!("epoch not match for wait apply, aborting."; "err" => %err, 
+                    "peer" => self.fsm.peer.peer_id(), 
+                    "region" => self.fsm.peer.region().get_id());
+                let mut pberr = errorpb::Error::from(err);
+                req.syncer
+                    .abort(AbortReason::EpochNotMatch(pberr.take_epoch_not_match()));
+                return;
+            }
+        }
+
+        // trivial case: no need to wait apply -- already the latest.
+        // Return directly for avoiding to print tons of logs.
+        if target_index == applied_index {
+            debug!(
+                "skip trivial case of waiting apply.";
+                "region_id" => self.region_id(),
+                "peer_id" => self.fsm.peer_id(),
+                "target_index" => target_index,
+                "applied_index" => applied_index,
+            );
+            SNAP_BR_WAIT_APPLY_EVENT.trivial.inc();
+            return;
+        }
 
         // during the snapshot recovery, broadcast waitapply, some peer may stale
         if !self.fsm.peer.is_leader() {
             info!(
-                "snapshot follower recovery started";
+                "snapshot follower wait apply started";
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
                 "target_index" => target_index,
-                "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
+                "applied_index" => applied_index,
                 "pending_remove" => self.fsm.peer.pending_remove,
                 "voter" => self.fsm.peer.raft_group.raft.vote,
             );
@@ -980,7 +1029,8 @@ where
             // case#2 if peer is suppose to remove
             if self.fsm.peer.raft_group.raft.vote == 0 || self.fsm.peer.pending_remove {
                 info!(
-                    "this peer is never vote before or pending remove, it should be skip to wait apply"
+                    "this peer is never vote before or pending remove, it should be skip to wait apply";
+                    "region" => %self.region_id(),
                 );
                 return;
             }
@@ -990,13 +1040,15 @@ where
                 "region_id" => self.region_id(),
                 "peer_id" => self.fsm.peer_id(),
                 "target_index" => target_index,
-                "applied_index" => self.fsm.peer.raft_group.raft.raft_log.applied,
+                "applied_index" => applied_index,
             );
         }
+        SNAP_BR_WAIT_APPLY_EVENT.accepted.inc();
 
-        self.fsm.peer.snapshot_recovery_state = Some(SnapshotRecoveryState::WaitLogApplyToLast {
+        self.fsm.peer.snapshot_recovery_state = Some(SnapshotBrState::WaitLogApplyToLast {
             target_index,
-            syncer,
+            valid_for_term: req.abort_when_term_change.then_some(term),
+            syncer: req.syncer,
         });
         self.fsm
             .peer
@@ -1013,6 +1065,7 @@ where
         region_local_state.set_region(self.region().clone());
         self_report.set_region_state(region_local_state);
         self_report.set_is_force_leader(self.fsm.peer.force_leader.is_some());
+        self_report.set_applied_index(self.fsm.peer.get_store().applied_index());
         match self.fsm.peer.get_store().entries(
             self.fsm.peer.raft_group.store().commit_index() + 1,
             self.fsm.peer.get_store().last_index() + 1,
@@ -1039,10 +1092,10 @@ where
             // in snapshot recovery after we stopped all conf changes from PD.
             // if the follower slow than leader and has the pending conf change.
             // that's means
-            // 1. if the follower didn't finished the conf change
-            //    => it cannot be chosen to be leader during recovery.
-            // 2. if the follower has been chosen to be leader
-            //    => it already apply the pending conf change already.
+            // 1. if the follower didn't finished the conf change => it cannot be chosen to
+            //    be leader during recovery.
+            // 2. if the follower has been chosen to be leader => it already apply the
+            //    pending conf change already.
             return;
         }
         debug!(
@@ -1206,8 +1259,21 @@ where
                 let raft_msg = self.fsm.peer.build_raft_messages(self.ctx, vec![msg]);
                 self.fsm.peer.send_raft_messages(self.ctx, raft_msg);
             }
-            CasualMessage::SnapshotApplied => {
+            CasualMessage::SnapshotApplied { peer_id, tombstone } => {
                 self.fsm.has_ready = true;
+                // If failed on applying snapshot, it should record the peer as an invalid peer.
+                if tombstone && self.fsm.peer.peer_id() == peer_id && !self.fsm.peer.is_leader() {
+                    info!(
+                        "mark the region damaged on applying snapshot";
+                        "region_id" => self.region_id(),
+                        "peer_id" => peer_id,
+                    );
+                    let mut meta = self.ctx.store_meta.lock().unwrap();
+                    meta.damaged_regions.insert(self.region_id());
+                }
+                if self.fsm.peer.should_destroy_after_apply_snapshot() {
+                    self.maybe_destroy();
+                }
             }
             CasualMessage::Campaign => {
                 let _ = self.fsm.peer.raft_group.campaign();
@@ -1503,9 +1569,7 @@ where
                 self.on_unsafe_recovery_fill_out_report(syncer)
             }
             // for snapshot recovery (safe recovery)
-            SignificantMsg::SnapshotRecoveryWaitApply(syncer) => {
-                self.on_snapshot_recovery_wait_apply(syncer)
-            }
+            SignificantMsg::SnapshotBrWaitApply(syncer) => self.on_snapshot_br_wait_apply(syncer),
             SignificantMsg::CheckPendingAdmin(ch) => self.on_check_pending_admin(ch),
         }
     }
@@ -1524,6 +1588,9 @@ where
                 return;
             }
             Some(ForceLeaderState::WaitTicks { .. }) => {
+                self.fsm.peer.force_leader = None;
+            }
+            Some(ForceLeaderState::WaitForceCompact { .. }) => {
                 self.fsm.peer.force_leader = None;
             }
             None => {}
@@ -1597,6 +1664,31 @@ where
                 GroupState::Chaos
             });
             self.fsm.has_ready = true;
+            return;
+        }
+
+        // The applied index is ahead of raft last index, that means some raft logs are
+        // missing. schedule a UnsafeForceCompact task to let ApplyFsm advance
+        // the committed index and compact index to the applied index so raft
+        // and apply state are compatible with each other. This can happen when
+        // feature "apply unpersisted raft log" is enable(by setting config
+        // `raftstore.max-apply-unpersisted-log-limit` > 0).
+        if self.fsm.peer.raft_group.raft.r.raft_log.last_index()
+            < self.fsm.peer.raft_group.raft.r.raft_log.applied
+        {
+            self.ctx.apply_router.schedule_task(
+                self.region_id(),
+                ApplyTask::UnsafeForceCompact {
+                    region_id: self.region_id(),
+                    compact_index: self.fsm.peer.raft_group.raft.r.raft_log.applied,
+                    term: self.fsm.peer.raft_group.raft.r.term,
+                },
+            );
+
+            self.fsm.peer.force_leader = Some(ForceLeaderState::WaitForceCompact {
+                syncer,
+                failed_stores,
+            });
             return;
         }
 
@@ -1726,8 +1818,11 @@ where
         if self.fsm.peer.force_leader.is_none() {
             return;
         }
-        if let Some(UnsafeRecoveryState::Failed) = self.fsm.peer.unsafe_recovery_state && !force {
-            // Skip force leader if the plan failed, so wait for the next retry of plan with force leader state holding
+        if let Some(UnsafeRecoveryState::Failed) = self.fsm.peer.unsafe_recovery_state
+            && !force
+        {
+            // Skip force leader if the plan failed, so wait for the next retry of plan with
+            // force leader state holding
             info!(
                 "skip exiting force leader state";
                 "region_id" => self.fsm.region_id(),
@@ -1814,6 +1909,7 @@ where
                 return;
             }
             Some(ForceLeaderState::PreForceLeader { failed_stores, .. }) => failed_stores,
+            Some(ForceLeaderState::WaitForceCompact { .. }) => return,
             Some(ForceLeaderState::WaitTicks { .. }) => unreachable!(),
         };
 
@@ -2144,11 +2240,27 @@ where
             self.fsm.hibernate_state.group_state() == GroupState::Idle,
             |_| {}
         );
+        fail_point!(
+            "on_raft_base_tick_chaos",
+            self.fsm.hibernate_state.group_state() == GroupState::Chaos,
+            |_| {}
+        );
 
         if self.fsm.peer.pending_remove {
             self.fsm.peer.mut_store().flush_entry_cache_metrics();
             return;
         }
+
+        // Update the state whether the peer is pending on applying raft
+        // logs if necesssary.
+        self.on_check_peer_complete_apply_logs();
+
+        // If the peer is busy on apply and missing the last leader committed index,
+        // it should propose a read index to check whether its lag is behind the leader.
+        // It won't generate flooding fetching messages. This proposal will only be sent
+        // out before it gets response and updates the `last_leader_committed_index`.
+        self.try_to_fetch_committed_index();
+
         // When having pending snapshot, if election timeout is met, it can't pass
         // the pending conf change check because first index has been updated to
         // a value that is larger than last index.
@@ -2347,6 +2459,9 @@ where
                     self.register_pd_heartbeat_tick();
                     self.register_split_region_check_tick();
                     self.retry_pending_prepare_merge(applied_index);
+                    self.fsm
+                        .peer
+                        .maybe_update_apply_unpersisted_log_state(applied_index);
                 }
             }
             ApplyTaskRes::Destroy {
@@ -2565,6 +2680,22 @@ where
             return Ok(());
         }
 
+        // If this peer is restarting, it may lose some logs, so it should update
+        // the `last_leader_committed_idx` with the commited index of the first
+        // `MsgAppend`` message or the committed index in `MsgReadIndexResp` it received
+        // from leader.
+        if self.fsm.peer.needs_update_last_leader_committed_idx()
+            && (MessageType::MsgAppend == msg_type || MessageType::MsgReadIndexResp == msg_type)
+        {
+            let committed_index = cmp::max(
+                msg.get_message().get_commit(), // from MsgAppend
+                msg.get_message().get_index(),  // from MsgReadIndexResp
+            );
+            self.fsm
+                .peer
+                .update_last_leader_committed_idx(committed_index);
+        }
+
         if msg.has_extra_msg() {
             self.on_extra_message(msg);
             return Ok(());
@@ -2606,7 +2737,7 @@ where
         } else {
             // This can be a message that sent when it's still a follower. Nevertheleast,
             // it's meaningless to continue to handle the request as callbacks are cleared.
-            if msg.get_message().get_msg_type() == MessageType::MsgReadIndex
+            if msg_type == MessageType::MsgReadIndex
                 && self.fsm.peer.is_leader()
                 && (msg.get_message().get_from() == raft::INVALID_ID
                     || msg.get_message().get_from() == self.fsm.peer_id())
@@ -2828,18 +2959,19 @@ where
     fn on_extra_message(&mut self, mut msg: RaftMessage) {
         match msg.get_extra_msg().get_type() {
             ExtraMessageType::MsgRegionWakeUp | ExtraMessageType::MsgCheckStalePeer => {
-                if self.fsm.hibernate_state.group_state() == GroupState::Idle {
-                    if msg.get_extra_msg().forcely_awaken {
-                        // Forcely awaken this region by manually setting this GroupState
-                        // into Chaos to trigger a new voting in this RaftGroup.
-                        self.reset_raft_tick(if !self.fsm.peer.is_leader() {
-                            GroupState::Chaos
-                        } else {
-                            GroupState::Ordered
-                        });
+                if msg.get_extra_msg().forcely_awaken {
+                    // Forcely awaken this region by manually setting the GroupState
+                    // into `Chaos` to trigger a new voting in the Raft Group.
+                    // Meanwhile, it avoids the peer entering the `PreChaos` state,
+                    // which would wait for another long tick to enter the `Chaos` state.
+                    self.reset_raft_tick(if !self.fsm.peer.is_leader() {
+                        GroupState::Chaos
                     } else {
-                        self.reset_raft_tick(GroupState::Ordered);
-                    }
+                        GroupState::Ordered
+                    });
+                }
+                if self.fsm.hibernate_state.group_state() == GroupState::Idle {
+                    self.reset_raft_tick(GroupState::Ordered);
                 }
                 if msg.get_extra_msg().get_type() == ExtraMessageType::MsgRegionWakeUp
                     && self.fsm.peer.is_leader()
@@ -2890,6 +3022,38 @@ where
             // It's v2 only message and ignore does no harm.
             ExtraMessageType::MsgGcPeerResponse | ExtraMessageType::MsgFlushMemtable => (),
             ExtraMessageType::MsgRefreshBuckets => self.on_msg_refresh_buckets(msg),
+            ExtraMessageType::MsgSnapGenPrecheckRequest => {
+                let passed = self.ctx.snap_mgr.recv_snap_precheck(msg.region_id);
+                self.fsm.peer.send_snap_gen_precheck_response(
+                    self.ctx,
+                    &msg.from_peer.unwrap(),
+                    passed,
+                )
+            }
+            ExtraMessageType::MsgSnapGenPrecheckResponse => {
+                let passed = msg.get_extra_msg().get_snap_gen_precheck_passed();
+                fail_point!("snap_gen_precheck_failed", !passed, |_| {});
+                info!(
+                    "snap gen precheck response: {}", passed;
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.peer().id,
+                    "store_id" => self.store_id(),
+                    "receiver_peer_id" => msg.get_from_peer().get_id(),
+                    "receiver_store_id" => msg.get_from_peer().get_store_id(),
+                    "ignored" => !self.fsm.peer.get_store().has_gen_snap_task(),
+                );
+                if passed {
+                    if let Some(gen_task) = self.fsm.peer.mut_store().take_gen_snap_task() {
+                        self.fsm
+                            .peer
+                            .pending_request_snapshot_count
+                            .fetch_add(1, Ordering::SeqCst);
+                        self.ctx
+                            .apply_router
+                            .schedule_task(self.region_id(), ApplyTask::Snapshot(gen_task));
+                    }
+                }
+            }
         }
     }
 
@@ -3119,11 +3283,12 @@ where
             return;
         }
 
-        if self.fsm.peer.peer != *msg.get_to_peer() {
+        if self.fsm.peer.peer.get_id() != msg.get_to_peer().get_id() {
             info!(
                 "receive stale gc message, ignore.";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "to_peer_id" => msg.get_to_peer().get_id(),
             );
             self.ctx.raft_metrics.message_dropped.stale_msg.inc();
             return;
@@ -3166,7 +3331,7 @@ where
             // No need to get snapshot for witness, as witness's empty snapshot bypass
             // snapshot manager.
             let key = SnapKey::from_region_snap(region_id, snap);
-            self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
+            self.ctx.snap_mgr.meta_file_exist(&key)?;
             Some(key)
         } else {
             None
@@ -3592,6 +3757,15 @@ where
         }
     }
 
+    fn maybe_destroy(&mut self) {
+        match self.fsm.peer.maybe_destroy(self.ctx) {
+            None => self.ctx.raft_metrics.message_dropped.applying_snap.inc(),
+            Some(job) => {
+                self.handle_destroy_peer(job);
+            }
+        }
+    }
+
     /// Check if destroy can be executed immediately. If it can't, the reason is
     /// returned.
     fn maybe_delay_destroy(&mut self) -> Option<DelayReason> {
@@ -3684,6 +3858,9 @@ where
         // Mark itself as pending_remove
         self.fsm.peer.pending_remove = true;
 
+        // try to decrease the RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE count.
+        self.fsm.peer.disable_apply_unpersisted_log(0);
+
         fail_point!("destroy_peer_after_pending_move", |_| { true });
 
         if let Some(reason) = self.maybe_delay_destroy() {
@@ -3739,6 +3916,8 @@ where
             );
         })();
         let mut meta = self.ctx.store_meta.lock().unwrap();
+        meta.damaged_regions.remove(&self.fsm.region_id());
+        meta.damaged_regions.shrink_to_fit();
         let is_latest_initialized = {
             if let Some(latest_region_info) = meta.regions.get(&region_id) {
                 util::is_region_initialized(latest_region_info)
@@ -3764,6 +3943,12 @@ where
             "is_peer_initialized" => is_peer_initialized,
             "is_latest_initialized" => is_latest_initialized,
         );
+
+        // Ensure this peer is removed in the pending apply list.
+        meta.busy_apply_peers.remove(&self.fsm.peer_id());
+        if let Some(count) = meta.completed_apply_peers_count.as_mut() {
+            *count += 1;
+        }
 
         if meta.atomic_snap_regions.contains_key(&self.region_id()) {
             drop(meta);
@@ -5169,6 +5354,54 @@ where
                         self.register_pull_voter_replicated_index_tick();
                     }
                 }
+                ExecResult::UnsafeForceCompact { apply_state } => {
+                    let last_index = apply_state.get_truncated_state().index;
+                    let first_index = self.fsm.peer.raft_group.raft.r.raft_log.first_index();
+
+                    let raft_engine = self.fsm.peer.get_store().raft_engine();
+                    let mut batch = raft_engine.log_batch(2);
+                    raft_engine
+                        .gc(self.region_id(), first_index, last_index, &mut batch)
+                        .unwrap();
+                    batch
+                        .put_raft_state(self.region_id(), self.fsm.peer.get_store().raft_state())
+                        .unwrap();
+                    // FIXME: generally, we should avoiding do io tasks on the raft thread, but make
+                    // it async make the overall procss more complex.
+                    // Considering unsafe recovery happens very rarely, thus the potential
+                    // performance impact is acceptable in this scenario.
+                    raft_engine.consume(&mut batch, true).unwrap();
+
+                    {
+                        let peer_store = self.fsm.peer.mut_store();
+                        peer_store.set_apply_state(apply_state);
+                        peer_store.clear_entry_cache_warmup_state();
+                        peer_store.compact_entry_cache(last_index + 1);
+                        peer_store.raft_state_mut().mut_hard_state().commit = last_index;
+                        peer_store.raft_state_mut().last_index = last_index;
+                    }
+                    assert!(
+                        self.fsm
+                            .peer
+                            .raft_group
+                            .raft
+                            .raft_log
+                            .unstable
+                            .entries
+                            .is_empty()
+                    );
+                    self.fsm.peer.raft_group.raft.raft_log.unstable.offset = last_index + 1;
+                    self.fsm.peer.raft_group.raft.raft_log.committed = last_index;
+                    self.fsm.peer.raft_group.raft.raft_log.persisted = last_index;
+
+                    if let Some(ForceLeaderState::WaitForceCompact {
+                        syncer,
+                        failed_stores,
+                    }) = &self.fsm.peer.force_leader
+                    {
+                        self.on_enter_pre_force_leader(syncer.clone(), failed_stores.clone());
+                    }
+                }
             }
         }
 
@@ -5707,6 +5940,10 @@ where
         } else {
             replicated_idx
         };
+        // Avoid compacting unpersisted raft logs when persist is far behind apply.
+        if compact_idx > self.fsm.peer.raft_group.raft.raft_log.persisted {
+            compact_idx = self.fsm.peer.raft_group.raft.raft_log.persisted;
+        }
         assert!(compact_idx >= first_idx);
         // Have no idea why subtract 1 here, but original code did this by magic.
         compact_idx -= 1;
@@ -6055,7 +6292,6 @@ where
                         .peer
                         .region_buckets_info()
                         .bucket_stat()
-                        .as_ref()
                         .unwrap()
                         .meta
                         .clone(),
@@ -6084,7 +6320,6 @@ where
             .peer
             .region_buckets_info()
             .bucket_stat()
-            .as_ref()
             .unwrap()
             .clone();
         let buckets_count = region_buckets.meta.keys.len() - 1;
@@ -6299,7 +6534,7 @@ where
                         .send_extra_message(msg, &mut self.ctx.trans, &peer);
                     debug!(
                         "check peer availability";
-                        "target peer id" => *peer_id,
+                        "target_peer_id" => *peer_id,
                     );
                 }
                 None => invalid_peers.push(*peer_id),
@@ -6514,6 +6749,121 @@ where
 
     fn register_report_region_buckets_tick(&mut self) {
         self.schedule_tick(PeerTick::ReportBuckets)
+    }
+
+    /// Check whether the peer should send a request to fetch the committed
+    /// index from the leader.
+    fn try_to_fetch_committed_index(&mut self) {
+        // Already completed, skip.
+        if !self.fsm.peer.needs_update_last_leader_committed_idx() || self.fsm.peer.is_leader() {
+            return;
+        }
+        // Construct a MsgReadIndex message and send it to the leader to
+        // fetch the latest committed index of this raft group.
+        let leader_id = self.fsm.peer.leader_id();
+        if leader_id == raft::INVALID_ID {
+            // The leader is unknown, so we can't fetch the committed index.
+            return;
+        }
+        let rctx = ReadIndexContext {
+            id: uuid::Uuid::new_v4(),
+            request: None,
+            locked: None,
+        };
+        self.fsm.peer.raft_group.read_index(rctx.to_bytes());
+        debug!(
+            "try to fetch committed index from leader";
+            "region_id" => self.region_id(),
+            "peer_id" => self.fsm.peer_id()
+        );
+    }
+
+    /// Check whether the peer is pending on applying raft logs.
+    ///
+    /// If busy, the peer will be recorded, until the pending logs are
+    /// applied. And after it completes applying, it will be removed from
+    /// the recording list.
+    fn on_check_peer_complete_apply_logs(&mut self) {
+        // Already completed, skip.
+        if self.fsm.peer.busy_on_apply.is_none() {
+            return;
+        }
+
+        let peer_id = self.fsm.peer.peer_id();
+        // No need to check the applying state if the peer is leader.
+        if self.fsm.peer.is_leader() {
+            self.fsm.peer.busy_on_apply = None;
+            // Clear it from recoding list and update the counter, to avoid
+            // missing it when the peer is changed to leader.
+            let mut meta = self.ctx.store_meta.lock().unwrap();
+            meta.busy_apply_peers.remove(&peer_id);
+            if let Some(count) = meta.completed_apply_peers_count.as_mut() {
+                *count += 1;
+            }
+            return;
+        }
+
+        let applied_idx = self.fsm.peer.get_store().applied_index();
+        let mut last_idx = self.fsm.peer.get_store().last_index();
+        // If the peer is newly added or created, no need to check the apply status.
+        if last_idx <= RAFT_INIT_LOG_INDEX {
+            self.fsm.peer.busy_on_apply = None;
+            // And it should be recorded in the `completed_apply_peers_count`.
+            let mut meta = self.ctx.store_meta.lock().unwrap();
+            meta.busy_apply_peers.remove(&peer_id);
+            if let Some(count) = meta.completed_apply_peers_count.as_mut() {
+                *count += 1;
+            }
+            debug!(
+                "no need to check initialized peer";
+                "last_commit_idx" => last_idx,
+                "last_applied_idx" => applied_idx,
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => peer_id,
+            );
+            return;
+        }
+        assert!(self.fsm.peer.busy_on_apply.is_some());
+
+        // This peer is restarted and the last leader commit index is not set, so
+        // it use `u64::MAX` as the last commit index to make it wait for the update
+        // of the `last_leader_committed_idx` until the `last_leader_committed_idx` has
+        // been updated.
+        last_idx = self.fsm.peer.last_leader_committed_idx.unwrap_or(u64::MAX);
+
+        // If the peer has large unapplied logs, this peer should be recorded until
+        // the lag is less than the given threshold.
+        if last_idx >= applied_idx + self.ctx.cfg.leader_transfer_max_log_lag {
+            if !self.fsm.peer.busy_on_apply.unwrap() {
+                let mut meta = self.ctx.store_meta.lock().unwrap();
+                meta.busy_apply_peers.insert(peer_id);
+            }
+            self.fsm.peer.busy_on_apply = Some(true);
+            debug!(
+                "peer is busy on applying logs";
+                "last_commit_idx" => last_idx,
+                "last_applied_idx" => applied_idx,
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => peer_id,
+            );
+        } else {
+            // Already finish apply, remove it from recording list.
+            {
+                let mut meta = self.ctx.store_meta.lock().unwrap();
+                meta.busy_apply_peers.remove(&peer_id);
+                if let Some(count) = meta.completed_apply_peers_count.as_mut() {
+                    *count += 1;
+                }
+            }
+            debug!(
+                "peer completes applying logs";
+                "last_commit_idx" => last_idx,
+                "last_applied_idx" => applied_idx,
+                "region_id" => self.fsm.region_id(),
+                "peer_id" => peer_id,
+            );
+            self.fsm.peer.busy_on_apply = None;
+        }
     }
 }
 

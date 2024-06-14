@@ -367,7 +367,7 @@ mod tests {
         for db_creater in db_creaters {
             let (_enc_dir, enc_opts) =
                 gen_db_options_with_encryption("test_cf_build_and_apply_plain_files_enc");
-            for db_opt in vec![None, Some(enc_opts)] {
+            for db_opt in [None, Some(enc_opts)] {
                 let dir = Builder::new().prefix("test-snap-cf-db").tempdir().unwrap();
                 let db: KvTestEngine = db_creater(dir.path(), db_opt.clone(), None).unwrap();
                 // Collect keys via the key_callback into a collection.
@@ -448,7 +448,7 @@ mod tests {
             for db_creater in db_creaters {
                 let (_enc_dir, enc_opts) =
                     gen_db_options_with_encryption("test_cf_build_and_apply_sst_files_enc");
-                for db_opt in vec![None, Some(enc_opts)] {
+                for db_opt in [None, Some(enc_opts)] {
                     let dir = Builder::new().prefix("test-snap-cf-db").tempdir().unwrap();
                     let db = db_creater(dir.path(), db_opt.clone(), None).unwrap();
                     let snap_cf_dir = Builder::new().prefix("test-snap-cf").tempdir().unwrap();

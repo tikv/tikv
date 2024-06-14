@@ -62,6 +62,7 @@ fn test_write_buffer_manager() {
 // Case:
 // Assume FlushMemtable cf1 (schedule flush task) and BackgroundCallFlush cf1
 // (execute flush task) are performed concurrently.
+// ```text
 // t        FlushMemtable cf1                   BackgroundCallFlush cf1
 // 1.       lock
 // 2.       convert memtable t2(seqno. 10-20)
@@ -77,6 +78,7 @@ fn test_write_buffer_manager() {
 //                                            update last_flushed to 20
 // 9.       on_memtable_sealed
 //        10 > 20 *panic*
+// ```
 #[test]
 fn test_rocksdb_listener() {
     use test_raftstore_v2::*;

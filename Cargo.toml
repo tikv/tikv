@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "7.6.0-alpha"
+version = "8.2.0-alpha"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
@@ -12,7 +12,7 @@ edition = "2021"
 publish = false
 
 [features]
-default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine", "cloud-aws", "cloud-gcp", "cloud-azure"]
+default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
 trace-tablet-lifetime = ["engine_rocks/trace-lifetime"]
 tcmalloc = ["tikv_alloc/tcmalloc"]
 jemalloc = ["tikv_alloc/jemalloc", "engine_rocks/jemalloc"]
@@ -21,11 +21,22 @@ snmalloc = ["tikv_alloc/snmalloc"]
 portable = ["engine_rocks/portable"]
 sse = ["engine_rocks/sse"]
 mem-profiling = ["tikv_alloc/mem-profiling"]
-failpoints = ["fail/failpoints", "raftstore/failpoints", "tikv_util/failpoints", "engine_rocks/failpoints", "raft_log_engine/failpoints"]
-cloud-aws = ["encryption_export/cloud-aws"]
-cloud-gcp = ["encryption_export/cloud-gcp"]
-cloud-azure = ["encryption_export/cloud-azure"]
-testexport = ["raftstore/testexport", "api_version/testexport", "causal_ts/testexport", "engine_traits/testexport", "engine_rocks/testexport", "engine_panic/testexport", "hybrid_engine/testexport"]
+failpoints = [
+  "fail/failpoints",
+  "raftstore/failpoints",
+  "tikv_util/failpoints",
+  "engine_rocks/failpoints",
+  "raft_log_engine/failpoints",
+]
+testexport = [
+  "raftstore/testexport",
+  "api_version/testexport",
+  "causal_ts/testexport",
+  "engine_traits/testexport",
+  "engine_rocks/testexport",
+  "engine_panic/testexport",
+  "hybrid_engine/testexport",
+]
 test-engine-kv-rocksdb = ["engine_test/test-engine-kv-rocksdb"]
 test-engine-raft-raft-engine = ["engine_test/test-engine-raft-raft-engine"]
 test-engines-rocksdb = ["engine_test/test-engines-rocksdb"]
@@ -60,7 +71,7 @@ batch-system = { workspace = true }
 byteorder = "1.2"
 case_macros = { workspace = true }
 causal_ts = { workspace = true }
-chrono = "0.4"
+chrono = { workspace = true }
 codec = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
@@ -73,9 +84,7 @@ dashmap = "5"
 encryption_export = { workspace = true }
 engine_panic = { workspace = true }
 engine_rocks = { workspace = true }
-engine_test = { workspace = true }
 engine_traits = { workspace = true }
-engine_traits_tests = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
@@ -83,11 +92,15 @@ flate2 = { version = "1.0", default-features = false, features = ["zlib"] }
 futures = { version = "0.3", features = ["thread-pool", "compat"] }
 futures-executor = "0.3.1"
 futures-timer = "3.0"
-futures-util = { version = "0.3.1", default-features = false, features = ["io", "async-await"] }
+futures-util = { version = "0.3.1", default-features = false, features = [
+  "io",
+  "async-await",
+] }
 fxhash = "0.2.1"
 getset = "0.1"
 grpcio = { workspace = true }
 grpcio-health = { workspace = true }
+health_controller = { workspace = true }
 hex = "0.4"
 http = "0"
 hybrid_engine = { workspace = true }
@@ -101,7 +114,10 @@ kvproto = { workspace = true }
 lazy_static = "1.3"
 libc = "0.2"
 libloading = "0.7"
-log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
+log = { version = "0.4", features = [
+  "max_level_trace",
+  "release_max_level_debug",
+] }
 log_wrappers = { workspace = true }
 match-template = "0.0.1"
 memory_trace_macros = { workspace = true }
@@ -119,7 +135,10 @@ paste = "1.0"
 pd_client = { workspace = true }
 pin-project = "1.0"
 pnet_datalink = "0.23"
-pprof = { version = "0.11", default-features = false, features = ["flamegraph", "protobuf-codec"] }
+pprof = { version = "0.13", default-features = false, features = [
+  "flamegraph",
+  "protobuf-codec",
+] }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
 protobuf = { version = "2.8", features = ["bytes"] }
@@ -158,12 +177,13 @@ tidb_query_expr = { workspace = true }
 tikv_alloc = { workspace = true }
 tikv_kv = { workspace = true }
 tikv_util = { workspace = true }
-time = "0.1"
+time = { workspace = true }
 tipb = { workspace = true }
 tokio = { version = "1.17", features = ["full"] }
 tokio-openssl = "0.6"
 tokio-timer = { workspace = true }
 toml = "0.5"
+tracing-active-tree = { workspace = true }
 tracker = { workspace = true }
 txn_types = { workspace = true }
 url = "2"
@@ -173,7 +193,9 @@ yatp = { workspace = true }
 
 [dev-dependencies]
 api_version = { workspace = true, features = ["testexport"] }
-example_coprocessor_plugin = { workspace = true } # should be a binary dependency
+engine_test = { workspace = true }
+engine_traits_tests = { workspace = true }
+example_coprocessor_plugin = { workspace = true }                              # should be a binary dependency
 hyper-openssl = "0.9"
 panic_hook = { workspace = true }
 raftstore = { workspace = true, features = ["testexport"] }
@@ -201,14 +223,13 @@ rusoto_kms = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-
 rusoto_mock = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 rusoto_s3 = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
 rusoto_sts = { git = "https://github.com/tikv/rusoto", branch = "gh1482-s3-addr-styles" }
-
 # NOTICE: use openssl for signature to support fips 140
-tame-oauth = { git = "https://github.com/tikv/tame-oauth", branch = "fips" }
+tame-oauth = { git = "https://github.com/tikv/tame-oauth", branch = "fips-0.9" }
 
-snappy-sys = { git = "https://github.com/busyjay/rust-snappy.git", branch = "static-link" }
+snappy-sys = { git = "https://github.com/tikv/rust-snappy.git", branch = "static-link" }
 
 # remove this when https://github.com/danburkert/fs2-rs/pull/42 is merged.
-fs2 = { git = "https://github.com/tabokie/fs2-rs", branch = "tikv" }
+fs2 = { git = "https://github.com/tikv/fs2-rs", branch = "tikv" }
 
 # Remove this when a new version is release. We need to solve rust-lang/cmake-rs#143.
 cmake = { git = "https://github.com/rust-lang/cmake-rs" }
@@ -251,12 +272,13 @@ members = [
   "components/encryption",
   "components/encryption/export",
   "components/engine_rocks_helper",
-# Only enable tirocks in local development, otherwise it can slow down compilation.
-# TODO: always enable tirocks and remove engine_rocks.
-#  "components/engine_tirocks",
+  # Only enable tirocks in local development, otherwise it can slow down compilation.
+  # TODO: always enable tirocks and remove engine_rocks.
+  #  "components/engine_tirocks",
   "components/error_code",
   "components/external_storage",
   "components/file_system",
+  "components/health_controller",
   "components/into_other",
   "components/keys",
   "components/log_wrappers",
@@ -325,6 +347,15 @@ batch-system = { path = "components/batch-system" }
 case_macros = { path = "components/case_macros" }
 causal_ts = { path = "components/causal_ts" }
 cdc = { path = "components/cdc", default-features = false }
+# Do not enable default-features because it implicitly enables oldtime which is
+# vulnerable to RUSTSEC-2020-0071, see more in deny.toml.
+chrono = { version = "0.4", default-features = false }
+# Do not enable default-features because it implicitly enables the unsound
+# "atty" crate, see more about RUSTSEC-2021-0145 in deny.toml.
+clap = { version = "2.32", default-features = false, features = [
+  "suggestions",
+  "vec_map",
+] }
 cloud = { path = "components/cloud" }
 codec = { path = "components/codec" }
 collections = { path = "components/collections" }
@@ -345,6 +376,7 @@ external_storage = { path = "components/external_storage" }
 file_system = { path = "components/file_system" }
 crypto = { path = "components/crypto" }
 gcp = { path = "components/cloud/gcp" }
+health_controller = { path = "components/health_controller" }
 into_other = { path = "components/into_other" }
 keys = { path = "components/keys" }
 log_wrappers = { path = "components/log_wrappers" }
@@ -364,7 +396,7 @@ server = { path = "components/server" }
 service = { path = "components/service" }
 snap_recovery = { path = "components/snap_recovery", default-features = false }
 sst_importer = { path = "components/sst_importer", default-features = false }
-test_backup = { path = "components/test_backup" }
+test_backup = { path = "components/test_backup", default-features = false }
 test_coprocessor = { path = "components/test_coprocessor", default-features = false }
 example_coprocessor_plugin = { path = "components/test_coprocessor_plugin/example_plugin" }
 test_pd = { path = "components/test_pd" }
@@ -386,19 +418,43 @@ tikv_alloc = { path = "components/tikv_alloc" }
 tikv_kv = { path = "components/tikv_kv", default-features = false }
 tikv_util = { path = "components/tikv_util" }
 tipb_helper = { path = "components/tipb_helper" }
+time = { version = "0.1" }
 tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs
-raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-grpcio = { version = "0.10.4", default-features = false, features = ["openssl", "protobuf-codec", "nightly"] }
-grpcio-health = { version = "0.10.4", default-features = false, features = ["protobuf-codec"] }
+raft = { version = "0.7.0", default-features = false, features = [
+  "protobuf-codec",
+] }
+raft-engine = { git = "https://github.com/tikv/raft-engine.git", features = [
+  "swap",
+] }
+raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git" }
+grpcio = { version = "0.10.4", default-features = false, features = [
+  "openssl",
+  "protobuf-codec",
+  "nightly",
+] }
+grpcio-health = { version = "0.10.4", default-features = false, features = [
+  "protobuf-codec",
+] }
 tipb = { git = "https://github.com/pingcap/tipb.git" }
 kvproto = { git = "https://github.com/pingcap/kvproto.git" }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
-slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+slog = { version = "2.3", features = [
+  "max_level_trace",
+  "release_max_level_debug",
+] }
+slog-global = { version = "0.1", git = "https://github.com/tikv/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+tracing-active-tree = { git = "https://github.com/tikv/tracing-active-tree.git", features = [
+  "coarsetime",
+], rev = "a71f8f8148f88ab759deb6d3e1d62d07ab218347" }
+# This `tracing` is only used for `tracing-active-tree`, enable its attributes only.
+tracing = { version = "0.1.39", default-features = false, features = [
+  "attributes",
+  "std",
+] }
 openssl = "0.10"
 openssl-sys = "0.9"
 

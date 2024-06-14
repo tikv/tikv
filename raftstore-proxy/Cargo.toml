@@ -15,9 +15,9 @@ sse = ["proxy_server/sse"]
 mem-profiling = ["proxy_server/mem-profiling"]
 failpoints = ["proxy_server/failpoints"]
 
-cloud-aws = ["proxy_server/cloud-aws"]
-cloud-gcp = ["proxy_server/cloud-gcp"]
-cloud-azure = ["proxy_server/cloud-azure"]
+# cloud-aws = ["proxy_server/cloud-aws"]
+# cloud-gcp = ["proxy_server/cloud-gcp"]
+# cloud-azure = ["proxy_server/cloud-azure"]
 test-engine-kv-rocksdb = [
   "proxy_server/test-engine-kv-rocksdb"
 ]

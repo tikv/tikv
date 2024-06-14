@@ -20,7 +20,7 @@ lazy_static! {
 
 fn next_shard_id() -> usize {
     thread_local! {
-        static CURRENT_SHARD_ID: Cell<usize> = Cell::new(0);
+        static CURRENT_SHARD_ID: Cell<usize> = const {Cell::new(0)};
     }
     CURRENT_SHARD_ID.with(|c| {
         let shard_id = c.get();

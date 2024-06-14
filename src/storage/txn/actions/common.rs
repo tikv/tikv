@@ -1,9 +1,9 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use tikv_kv::Snapshot;
-use txn_types::{Key, LastChange, TimeStamp, Write, WriteType};
+use txn_types::{Key, LastChange, OldValue, TimeStamp, Write, WriteType};
 
-use crate::storage::mvcc::{Result, SnapshotReader};
+use crate::storage::mvcc::{MvccTxn, Result, SnapshotReader, TxnCommitRecord};
 
 /// Returns the new `LastChange` according to this write record. If it is
 /// unknown from the given write, try iterate to the last change and find the
@@ -57,5 +57,35 @@ pub fn next_last_change_info<S: Snapshot>(
                 }
             }
         }
+    }
+}
+
+// Further check whether the prewritten transaction has been committed
+// when encountering a WriteConflict or PessimisticLockNotFound error.
+// This extra check manages to make prewrite idempotent after the transaction
+// was committed.
+// Note that this check cannot fully guarantee idempotence because an MVCC
+// GC can remove the old committed records, then we cannot determine
+// whether the transaction has been committed, so the error is still returned.
+pub fn check_committed_record_on_err(
+    prewrite_result: crate::storage::mvcc::Result<(TimeStamp, OldValue)>,
+    txn: &mut MvccTxn,
+    reader: &mut SnapshotReader<impl Snapshot>,
+    key: &Key,
+) -> crate::storage::txn::Result<(
+    Vec<std::result::Result<(), crate::storage::errors::Error>>,
+    TimeStamp,
+)> {
+    match reader.get_txn_commit_record(key)? {
+        TxnCommitRecord::SingleRecord { commit_ts, write }
+            if write.write_type != WriteType::Rollback =>
+        {
+            info!("prewritten transaction has been committed";
+                        "start_ts" => reader.start_ts, "commit_ts" => commit_ts,
+                        "key" => ?key, "write_type" => ?write.write_type);
+            txn.clear();
+            Ok((vec![], commit_ts))
+        }
+        _ => Err(prewrite_result.unwrap_err().into()),
     }
 }

@@ -15,9 +15,9 @@ sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
 
-cloud-aws = ["encryption_export/cloud-aws"]
-cloud-gcp = ["encryption_export/cloud-gcp"]
-cloud-azure = ["encryption_export/cloud-azure"]
+# cloud-aws = ["encryption_export/cloud-aws"]
+# cloud-gcp = ["encryption_export/cloud-gcp"]
+# cloud-azure = ["encryption_export/cloud-azure"]
 test-engine-kv-rocksdb = [
   "tikv/test-engine-kv-rocksdb"
 ]
@@ -38,6 +38,8 @@ openssl-vendored = ["tikv/openssl-vendored", "openssl/vendored"]
 external-jemalloc = ["engine_store_ffi/external-jemalloc"]
 
 [dependencies]
+region_cache_memory_engine = { workspace = true }
+health_controller = { workspace = true }
 api_version = { workspace = true }
 async-stream = "0.2"
 backup = { workspace = true, default-features = false }

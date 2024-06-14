@@ -1,787 +1,565 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use core::slice::SlicePattern;
 use std::{
     collections::BTreeMap,
     fmt::{self, Debug},
-    ops::Deref,
-    sync::{Arc, Mutex},
+    ops::Bound,
+    result,
+    sync::{atomic::AtomicU64, Arc},
 };
 
-use bytes::Bytes;
-use collections::HashMap;
+use crossbeam::epoch::{self, default_collector, Guard};
+use engine_rocks::RocksEngine;
 use engine_traits::{
-    CfNamesExt, DbVector, Error, IterOptions, Iterable, Iterator, Mutable, Peekable, ReadOptions,
-    RegionCacheEngine, Result, Snapshot, SnapshotMiscExt, WriteBatch, WriteBatchExt, WriteOptions,
-    CF_DEFAULT, CF_LOCK, CF_WRITE,
+    CacheRange, FailedReason, IterOptions, Iterable, KvEngine, RangeCacheEngine, Result,
+    CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
-use skiplist_rs::{ByteWiseComparator, IterRef, Skiplist};
-use tikv_util::config::ReadableSize;
+use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
+use skiplist_rs::{
+    base::{Entry, OwnedIter},
+    SkipList,
+};
+use slog_global::error;
+use tikv_util::{config::VersionTrack, info};
 
-fn cf_to_id(cf: &str) -> usize {
+use crate::{
+    background::{BackgroundTask, BgWorkManager, PdRangeHintService},
+    keys::{encode_key_for_eviction, InternalBytes},
+    memory_controller::MemoryController,
+    range_manager::{LoadFailedReason, RangeCacheStatus, RangeManager},
+    read::{RangeCacheIterator, RangeCacheSnapshot},
+    statistics::Statistics,
+    write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
+    RangeCacheEngineConfig, RangeCacheEngineContext,
+};
+
+pub(crate) const CF_DEFAULT_USIZE: usize = 0;
+pub(crate) const CF_LOCK_USIZE: usize = 1;
+pub(crate) const CF_WRITE_USIZE: usize = 2;
+
+pub(crate) fn cf_to_id(cf: &str) -> usize {
     match cf {
-        CF_DEFAULT => 0,
-        CF_LOCK => 1,
-        CF_WRITE => 2,
+        CF_DEFAULT => CF_DEFAULT_USIZE,
+        CF_LOCK => CF_LOCK_USIZE,
+        CF_WRITE => CF_WRITE_USIZE,
         _ => panic!("unrecognized cf {}", cf),
     }
 }
 
-/// RegionMemoryEngine stores data for a specific cached region
-///
-/// todo: The skiplist used here currently is for test purpose. Replace it
-/// with a formal implementation.
-#[derive(Clone)]
-pub struct RegionMemoryEngine {
-    data: [Arc<Skiplist<ByteWiseComparator>>; 3],
+pub(crate) fn id_to_cf(id: usize) -> &'static str {
+    match id {
+        CF_DEFAULT_USIZE => CF_DEFAULT,
+        CF_LOCK_USIZE => CF_LOCK,
+        CF_WRITE_USIZE => CF_WRITE,
+        _ => panic!("unrecognized id {}", id),
+    }
 }
 
-impl RegionMemoryEngine {
-    pub fn with_capacity(arena_size: usize) -> Self {
-        RegionMemoryEngine {
+#[inline]
+pub(crate) fn is_lock_cf(cf: usize) -> bool {
+    cf == CF_LOCK_USIZE
+}
+
+// A wrapper for skiplist to provide some check and clean up worker
+#[derive(Clone)]
+pub struct SkiplistHandle(Arc<SkipList<InternalBytes, InternalBytes>>);
+
+impl SkiplistHandle {
+    pub fn get<'a: 'g, 'g>(
+        &'a self,
+        key: &InternalBytes,
+        guard: &'g Guard,
+    ) -> Option<Entry<'a, 'g, InternalBytes, InternalBytes>> {
+        self.0.get(key, guard)
+    }
+
+    pub fn get_with_user_key<'a: 'g, 'g>(
+        &'a self,
+        key: &InternalBytes,
+        guard: &'g Guard,
+    ) -> Option<Entry<'a, 'g, InternalBytes, InternalBytes>> {
+        let n = self.0.lower_bound(Bound::Included(key), guard)?;
+        if n.key().same_user_key_with(key) {
+            Some(n)
+        } else {
+            None
+        }
+    }
+
+    pub fn insert(&self, key: InternalBytes, value: InternalBytes, guard: &Guard) {
+        assert!(key.memory_controller_set() && value.memory_controller_set());
+        self.0.insert(key, value, guard).release(guard);
+    }
+
+    pub fn remove(&self, key: &InternalBytes, guard: &Guard) {
+        if let Some(entry) = self.0.remove(key, guard) {
+            entry.release(guard);
+        }
+    }
+
+    pub fn iterator(
+        &self,
+    ) -> OwnedIter<Arc<SkipList<InternalBytes, InternalBytes>>, InternalBytes, InternalBytes> {
+        self.0.owned_iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// A single global set of skiplists shared by all cached ranges
+#[derive(Clone)]
+pub struct SkiplistEngine {
+    pub(crate) data: [Arc<SkipList<InternalBytes, InternalBytes>>; 3],
+}
+
+impl Default for SkiplistEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SkiplistEngine {
+    pub fn new() -> Self {
+        let collector = default_collector().clone();
+        SkiplistEngine {
             data: [
-                Arc::new(Skiplist::with_capacity(
-                    ByteWiseComparator::default(),
-                    arena_size,
-                    true,
-                )),
-                Arc::new(Skiplist::with_capacity(
-                    ByteWiseComparator::default(),
-                    arena_size,
-                    true,
-                )),
-                Arc::new(Skiplist::with_capacity(
-                    ByteWiseComparator::default(),
-                    arena_size,
-                    true,
-                )),
+                Arc::new(SkipList::new(collector.clone())),
+                Arc::new(SkipList::new(collector.clone())),
+                Arc::new(SkipList::new(collector)),
             ],
         }
     }
-}
 
-impl Default for RegionMemoryEngine {
-    fn default() -> Self {
-        RegionMemoryEngine::with_capacity(ReadableSize::mb(1).0 as usize)
+    pub fn cf_handle(&self, cf: &str) -> SkiplistHandle {
+        SkiplistHandle(self.data[cf_to_id(cf)].clone())
+    }
+
+    pub fn node_count(&self) -> usize {
+        let mut count = 0;
+        self.data.iter().for_each(|s| count += s.len());
+        count
+    }
+
+    pub(crate) fn delete_range(&self, range: &CacheRange) {
+        DATA_CFS.iter().for_each(|&cf| {
+            let (start, end) = encode_key_for_eviction(range);
+            let handle = self.cf_handle(cf);
+            let mut iter = handle.iterator();
+            let guard = &epoch::pin();
+            iter.seek(&start, guard);
+            while iter.valid() && iter.key() < &end {
+                handle.remove(iter.key(), guard);
+                iter.next(guard);
+            }
+            // guard will buffer 8 drop methods, flush here to clear the buffer.
+            guard.flush();
+        });
     }
 }
 
-impl Debug for RegionMemoryEngine {
+impl Debug for SkiplistEngine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Region Memory Engine")
+        write!(f, "Range Memory Engine")
     }
 }
 
-// read_ts -> ref_count
-#[derive(Default)]
-struct SnapshotList(BTreeMap<u64, u64>);
+pub struct RangeCacheMemoryEngineCore {
+    pub(crate) engine: SkiplistEngine,
+    pub(crate) range_manager: RangeManager,
+    pub(crate) cached_write_batch: BTreeMap<CacheRange, Vec<(u64, RangeCacheWriteBatchEntry)>>,
+}
 
-impl SnapshotList {
-    fn new_snapshot(&mut self, read_ts: u64) {
-        // snapshot with this ts may be granted before
-        let count = self.0.get(&read_ts).unwrap_or(&0) + 1;
-        self.0.insert(read_ts, count);
+impl Default for RangeCacheMemoryEngineCore {
+    fn default() -> Self {
+        Self::new()
     }
+}
 
-    fn remove_snapshot(&mut self, read_ts: u64) {
-        let count = self.0.get_mut(&read_ts).unwrap();
-        assert!(*count >= 1);
-        if *count == 1 {
-            self.0.remove(&read_ts).unwrap();
-        } else {
-            *count -= 1;
+impl RangeCacheMemoryEngineCore {
+    pub fn new() -> RangeCacheMemoryEngineCore {
+        RangeCacheMemoryEngineCore {
+            engine: SkiplistEngine::new(),
+            range_manager: RangeManager::default(),
+            cached_write_batch: BTreeMap::default(),
         }
     }
-}
 
-#[derive(Default)]
-pub struct RegionMemoryMeta {
-    // It records the snapshots that have been granted previsously with specific snapshot_ts. We
-    // should guarantee that the data visible to any one of the snapshot in it will not be removed.
-    snapshot_list: SnapshotList,
-    // It indicates whether the region is readable. False means integrity of the data in this
-    // cached region is not satisfied due to being evicted for instance.
-    can_read: bool,
-    // Request with read_ts below it is not eligible for granting snapshot.
-    // Note: different region can have different safe_ts.
-    safe_ts: u64,
-}
-
-impl RegionMemoryMeta {
-    pub fn set_can_read(&mut self, can_read: bool) {
-        self.can_read = can_read;
+    pub fn engine(&self) -> SkiplistEngine {
+        self.engine.clone()
     }
 
-    pub fn set_safe_ts(&mut self, safe_ts: u64) {
-        self.safe_ts = safe_ts;
+    pub fn range_manager(&self) -> &RangeManager {
+        &self.range_manager
+    }
+
+    pub fn mut_range_manager(&mut self) -> &mut RangeManager {
+        &mut self.range_manager
+    }
+
+    pub(crate) fn has_cached_write_batch(&self, cache_range: &CacheRange) -> bool {
+        self.cached_write_batch.contains_key(cache_range)
+    }
+
+    pub(crate) fn take_cache_write_batch(
+        &mut self,
+        cache_range: &CacheRange,
+    ) -> Option<Vec<(u64, RangeCacheWriteBatchEntry)>> {
+        self.cached_write_batch.remove(cache_range)
+    }
+
+    // ensure that the transfer from `pending_ranges_loading_data` to
+    // `range` is atomic with cached_write_batch empty
+    pub(crate) fn pending_range_completes_loading(
+        core: &mut RwLockWriteGuard<'_, Self>,
+        range: &CacheRange,
+    ) {
+        fail::fail_point!("on_pending_range_completes_loading");
+        assert!(!core.has_cached_write_batch(range));
+        let range_manager = core.mut_range_manager();
+        let (r, _, canceled) = range_manager
+            .pending_ranges_loading_data
+            .pop_front()
+            .unwrap();
+        assert_eq!(&r, range);
+        assert!(!canceled);
+        range_manager.new_range(r);
     }
 }
 
-#[derive(Default)]
-pub struct RegionCacheMemoryEngineCore {
-    engine: HashMap<u64, RegionMemoryEngine>,
-    region_metas: HashMap<u64, RegionMemoryMeta>,
-}
-
-impl RegionCacheMemoryEngineCore {
-    pub fn mut_region_meta(&mut self, region_id: u64) -> Option<&mut RegionMemoryMeta> {
-        self.region_metas.get_mut(&region_id)
-    }
-}
-
-/// The RegionCacheMemoryEngine serves as a region cache, storing hot regions in
+/// The RangeCacheMemoryEngine serves as a range cache, storing hot ranges in
 /// the leaders' store. Incoming writes that are written to disk engine (now,
-/// RocksDB) are also written to the RegionCacheMemoryEngine, leading to a
-/// mirrored data set in the cached regions with the disk engine.
+/// RocksDB) are also written to the RangeCacheMemoryEngine, leading to a
+/// mirrored data set in the cached ranges with the disk engine.
 ///
-/// A load/evict unit manages the memory, deciding which regions should be
-/// evicted when the memory used by the RegionCacheMemoryEngine reaches a
-/// certain limit, and determining which regions should be loaded when there is
+/// A load/evict unit manages the memory, deciding which ranges should be
+/// evicted when the memory used by the RangeCacheMemoryEngine reaches a
+/// certain limit, and determining which ranges should be loaded when there is
 /// spare memory capacity.
 ///
-/// The safe point lifetime differs between RegionCacheMemoryEngine and the disk
-/// engine, often being much shorter in RegionCacheMemoryEngine. This means that
-/// RegionCacheMemoryEngine may filter out some keys that still exist in the
+/// The safe point lifetime differs between RangeCacheMemoryEngine and the disk
+/// engine, often being much shorter in RangeCacheMemoryEngine. This means that
+/// RangeCacheMemoryEngine may filter out some keys that still exist in the
 /// disk engine, thereby improving read performance as fewer duplicated keys
 /// will be read. If there's a need to read keys that may have been filtered by
-/// RegionCacheMemoryEngine (as indicated by read_ts and safe_point of the
+/// RangeCacheMemoryEngine (as indicated by read_ts and safe_point of the
 /// cached region), we resort to using a the disk engine's snapshot instead.
-#[derive(Clone, Default)]
-pub struct RegionCacheMemoryEngine {
-    core: Arc<Mutex<RegionCacheMemoryEngineCore>>,
+#[derive(Clone)]
+pub struct RangeCacheMemoryEngine {
+    pub(crate) core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
+    pub(crate) rocks_engine: Option<RocksEngine>,
+    bg_work_manager: Arc<BgWorkManager>,
+    memory_controller: Arc<MemoryController>,
+    statistics: Arc<Statistics>,
+    config: Arc<VersionTrack<RangeCacheEngineConfig>>,
+
+    // The increment amount of tombstones in the lock cf.
+    // When reaching to the threshold, a CleanLockTombstone task will be scheduled to clean lock cf
+    // tombstones.
+    pub(crate) lock_modification_bytes: Arc<AtomicU64>,
 }
 
-impl RegionCacheMemoryEngine {
-    pub fn core(&self) -> &Arc<Mutex<RegionCacheMemoryEngineCore>> {
+impl RangeCacheMemoryEngine {
+    pub fn new(range_cache_engine_context: RangeCacheEngineContext) -> Self {
+        info!("init range cache memory engine";);
+        let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
+        let skiplist_engine = { core.read().engine().clone() };
+
+        let RangeCacheEngineContext { config, statistics } = range_cache_engine_context;
+        assert!(config.value().enabled);
+        let memory_controller = Arc::new(MemoryController::new(config.clone(), skiplist_engine));
+
+        let bg_work_manager = Arc::new(BgWorkManager::new(
+            core.clone(),
+            config.value().gc_interval.0,
+            memory_controller.clone(),
+        ));
+
+        Self {
+            core,
+            rocks_engine: None,
+            bg_work_manager,
+            memory_controller,
+            statistics,
+            config,
+            lock_modification_bytes: Arc::default(),
+        }
+    }
+
+    pub fn new_range(&self, range: CacheRange) {
+        let mut core = self.core.write();
+        core.range_manager.new_range(range);
+    }
+
+    /// Load the range in the in-memory engine.
+    // This method only push the range in the `pending_range` where sometime
+    // later in `prepare_for_apply`, the range will be scheduled to load snapshot
+    // data into engine.
+    pub fn load_range(&self, range: CacheRange) -> result::Result<(), LoadFailedReason> {
+        let mut core = self.core.write();
+        core.mut_range_manager().load_range(range)
+    }
+
+    /// Evict a range from the in-memory engine. After this call, the range will
+    /// not be readable, but the data of the range may not be deleted
+    /// immediately due to some ongoing snapshots.
+    pub fn evict_range(&self, range: &CacheRange) {
+        let mut core = self.core.write();
+        if core.range_manager.evict_range(range) {
+            drop(core);
+            // The range can be deleted directly.
+            if let Err(e) = self
+                .bg_worker_manager()
+                .schedule_task(BackgroundTask::DeleteRange(vec![range.clone()]))
+            {
+                error!(
+                    "schedule delete range failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+            }
+        }
+    }
+
+    // It handles the pending range and check whether to buffer write for this
+    // range.
+    pub(crate) fn prepare_for_apply(&self, range: &CacheRange) -> RangeCacheStatus {
+        let core = self.core.upgradable_read();
+        let range_manager = core.range_manager();
+        if range_manager.pending_ranges_in_loading_contains(range) {
+            return RangeCacheStatus::Loading;
+        }
+        if range_manager.contains_range(range) {
+            return RangeCacheStatus::Cached;
+        }
+
+        let mut overlapped = false;
+        // check whether the range is in pending_range and we can schedule load task if
+        // it is
+        if let Some((idx, (left_range, right_range))) = range_manager
+            .pending_ranges
+            .iter()
+            .enumerate()
+            .find_map(|(idx, pending_range)| {
+                if pending_range.contains_range(range) {
+                    // The `range` may be a proper subset of `r` and we should split it in this case
+                    // and push the rest back to `pending_range` so that each range only schedules
+                    // load task of its own.
+                    Some((idx, pending_range.split_off(range)))
+                } else if range.overlaps(pending_range) {
+                    // Pending range `range` does not contains the applying range `r` but overlap
+                    // with it, which means the pending range is out dated, we remove it directly.
+                    info!(
+                        "out of date pending ranges";
+                        "applying_range" => ?range,
+                        "pending_range" => ?pending_range,
+                    );
+                    overlapped = true;
+                    Some((idx, (None, None)))
+                } else {
+                    None
+                }
+            })
+        {
+            let mut core = RwLockUpgradableReadGuard::upgrade(core);
+
+            if overlapped {
+                core.mut_range_manager().pending_ranges.swap_remove(idx);
+                return RangeCacheStatus::NotInCache;
+            }
+
+            let range_manager = core.mut_range_manager();
+            if let Some(left_range) = left_range {
+                range_manager.pending_ranges.push(left_range);
+            }
+
+            if let Some(right_range) = right_range {
+                range_manager.pending_ranges.push(right_range);
+            }
+
+            let range_manager = core.mut_range_manager();
+            range_manager.pending_ranges.swap_remove(idx);
+            let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
+            // Here, we use the range in `pending_ranges` rather than the parameter range as
+            // the region may be splitted.
+            range_manager
+                .pending_ranges_loading_data
+                .push_back((range.clone(), rocks_snap, false));
+            info!(
+                "Range to load";
+                "Tag" => &range.tag,
+                "Cached" => range_manager.ranges().len(),
+                "Pending" => range_manager.pending_ranges_loading_data.len(),
+            );
+            if let Err(e) = self
+                .bg_worker_manager()
+                .schedule_task(BackgroundTask::LoadRange)
+            {
+                error!(
+                    "schedule range load failed";
+                    "err" => ?e,
+                    "tag" => &range.tag,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+            }
+            // We have scheduled the range to loading data, so the writes of the range
+            // should be buffered
+            return RangeCacheStatus::Loading;
+        }
+
+        RangeCacheStatus::NotInCache
+    }
+
+    // The writes in `handle_pending_range_in_loading_buffer` indicating the ranges
+    // of the writes are pending_ranges that are still loading data at the time of
+    // `prepare_for_apply`. But some of them may have been finished the load and
+    // become a normal range so that the writes should be written to the engine
+    // directly rather than cached. This method decides which writes should be
+    // cached and which writes should be written directly.
+    pub(crate) fn handle_pending_range_in_loading_buffer(
+        &self,
+        seq: &mut u64,
+        pending_range_in_loading_buffer: Vec<RangeCacheWriteBatchEntry>,
+    ) -> (Vec<RangeCacheWriteBatchEntry>, SkiplistEngine) {
+        if !pending_range_in_loading_buffer.is_empty() {
+            let core = self.core.upgradable_read();
+            let (group_entries_to_cache, entries_to_write) =
+                group_write_batch_entries(pending_range_in_loading_buffer, core.range_manager());
+            let engine = core.engine().clone();
+            if !group_entries_to_cache.is_empty() {
+                let mut core = RwLockUpgradableReadGuard::upgrade(core);
+                for (range, write_batches) in group_entries_to_cache {
+                    core.cached_write_batch.entry(range).or_default().extend(
+                        write_batches.into_iter().map(|e| {
+                            // We should confirm the sequence number for cached entries, and
+                            // also increased for each of them.
+                            *seq += 1;
+                            (*seq - 1, e)
+                        }),
+                    );
+                }
+            }
+            (entries_to_write, engine)
+        } else {
+            let core = self.core.read();
+            (vec![], core.engine().clone())
+        }
+    }
+
+    pub fn bg_worker_manager(&self) -> &BgWorkManager {
+        &self.bg_work_manager
+    }
+
+    pub fn memory_controller(&self) -> Arc<MemoryController> {
+        self.memory_controller.clone()
+    }
+
+    pub fn statistics(&self) -> Arc<Statistics> {
+        self.statistics.clone()
+    }
+}
+
+impl RangeCacheMemoryEngine {
+    pub fn core(&self) -> &Arc<RwLock<RangeCacheMemoryEngineCore>> {
         &self.core
     }
 }
 
-impl Debug for RegionCacheMemoryEngine {
+impl Debug for RangeCacheMemoryEngine {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Region Cache Memory Engine")
+        write!(f, "Range Cache Memory Engine")
     }
 }
 
-impl RegionCacheMemoryEngine {
-    pub fn new_region(&self, region_id: u64) {
-        let mut core = self.core.lock().unwrap();
+impl RangeCacheEngine for RangeCacheMemoryEngine {
+    type Snapshot = RangeCacheSnapshot;
 
-        assert!(core.engine.get(&region_id).is_none());
-        assert!(core.region_metas.get(&region_id).is_none());
-        core.engine.insert(region_id, RegionMemoryEngine::default());
-        core.region_metas
-            .insert(region_id, RegionMemoryMeta::default());
-    }
-}
-
-impl RegionCacheEngine for RegionCacheMemoryEngine {
-    type Snapshot = RegionCacheSnapshot;
-
-    // todo(SpadeA): add sequence number logic
-    fn snapshot(&self, region_id: u64, read_ts: u64, seq_num: u64) -> Option<Self::Snapshot> {
-        RegionCacheSnapshot::new(self.clone(), region_id, read_ts, seq_num)
-    }
-}
-
-// todo: fill fields needed
-pub struct RegionCacheWriteBatch;
-
-impl WriteBatchExt for RegionCacheMemoryEngine {
-    type WriteBatch = RegionCacheWriteBatch;
-    // todo: adjust it
-    const WRITE_BATCH_MAX_KEYS: usize = 256;
-
-    fn write_batch(&self) -> Self::WriteBatch {
-        RegionCacheWriteBatch {}
-    }
-
-    fn write_batch_with_cap(&self, _: usize) -> Self::WriteBatch {
-        RegionCacheWriteBatch {}
-    }
-}
-
-pub struct RegionCacheIterator {
-    cf: String,
-    valid: bool,
-    prefix_same_as_start: bool,
-    prefix: Option<Vec<u8>>,
-    iter: IterRef<Skiplist<ByteWiseComparator>, ByteWiseComparator>,
-    // The lower bound is inclusive while the upper bound is exclusive if set
-    lower_bound: Vec<u8>,
-    upper_bound: Vec<u8>,
-}
-
-impl Iterable for RegionCacheMemoryEngine {
-    type Iterator = RegionCacheIterator;
-
-    fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
-        unimplemented!()
-    }
-}
-
-impl Iterator for RegionCacheIterator {
-    fn key(&self) -> &[u8] {
-        assert!(self.valid);
-        self.iter.key().as_slice()
-    }
-
-    fn value(&self) -> &[u8] {
-        assert!(self.valid);
-        self.iter.value().as_slice()
-    }
-
-    fn next(&mut self) -> Result<bool> {
-        assert!(self.valid);
-        self.iter.next();
-        self.valid = self.iter.valid() && self.iter.key().as_slice() < self.upper_bound.as_slice();
-
-        if self.valid && self.prefix_same_as_start {
-            // todo(SpadeA): support prefix seek
-            unimplemented!()
-        }
-        Ok(self.valid)
-    }
-
-    fn prev(&mut self) -> Result<bool> {
-        assert!(self.valid);
-        self.iter.prev();
-        self.valid = self.iter.valid() && self.iter.key().as_slice() >= self.lower_bound.as_slice();
-        if self.valid && self.prefix_same_as_start {
-            // todo(SpadeA): support prefix seek
-            unimplemented!()
-        }
-        Ok(self.valid)
-    }
-
-    fn seek(&mut self, key: &[u8]) -> Result<bool> {
-        let seek_key = if key < self.lower_bound.as_slice() {
-            self.lower_bound.as_slice()
-        } else {
-            key
-        };
-        self.iter.seek(seek_key);
-        self.valid = self.iter.valid() && self.iter.key().as_slice() < self.upper_bound.as_slice();
-
-        if self.valid && self.prefix_same_as_start {
-            // todo(SpadeA): support prefix seek
-            unimplemented!()
-        }
-
-        Ok(self.valid)
-    }
-
-    fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
-        let end = if key > self.upper_bound.as_slice() {
-            self.upper_bound.as_slice()
-        } else {
-            key
-        };
-        self.iter.seek_for_prev(end);
-        self.valid = self.iter.valid() && self.iter.key().as_slice() >= self.lower_bound.as_slice();
-
-        if self.valid && self.prefix_same_as_start {
-            // todo(SpadeA): support prefix seek
-            unimplemented!()
-        }
-
-        Ok(self.valid)
-    }
-
-    fn seek_to_first(&mut self) -> Result<bool> {
-        let lower_bound = self.lower_bound.clone();
-        self.seek(lower_bound.as_slice())
-    }
-
-    fn seek_to_last(&mut self) -> Result<bool> {
-        let upper_bound = self.upper_bound.clone();
-        self.seek_for_prev(upper_bound.as_slice())
-    }
-
-    fn valid(&self) -> Result<bool> {
-        Ok(self.valid)
-    }
-}
-
-impl WriteBatch for RegionCacheWriteBatch {
-    fn write_opt(&mut self, _: &WriteOptions) -> Result<u64> {
-        unimplemented!()
-    }
-
-    fn data_size(&self) -> usize {
-        unimplemented!()
-    }
-
-    fn count(&self) -> usize {
-        unimplemented!()
-    }
-
-    fn is_empty(&self) -> bool {
-        unimplemented!()
-    }
-
-    fn should_write_to_engine(&self) -> bool {
-        unimplemented!()
-    }
-
-    fn clear(&mut self) {
-        unimplemented!()
-    }
-
-    fn set_save_point(&mut self) {
-        unimplemented!()
-    }
-
-    fn pop_save_point(&mut self) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn rollback_to_save_point(&mut self) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn merge(&mut self, _: Self) -> Result<()> {
-        unimplemented!()
-    }
-}
-
-impl Mutable for RegionCacheWriteBatch {
-    fn put(&mut self, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn put_cf(&mut self, _: &str, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn delete(&mut self, _: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn delete_cf(&mut self, _: &str, _: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn delete_range(&mut self, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-
-    fn delete_range_cf(&mut self, _: &str, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct RegionCacheSnapshot {
-    region_id: u64,
-    snapshot_ts: u64,
-    // Sequence number is shared between RegionCacheEngine and disk KvEnigne to
-    // provide atomic write
-    sequence_number: u64,
-    region_memory_engine: RegionMemoryEngine,
-    engine: RegionCacheMemoryEngine,
-}
-
-impl RegionCacheSnapshot {
-    pub fn new(
-        engine: RegionCacheMemoryEngine,
-        region_id: u64,
+    fn snapshot(
+        &self,
+        range: CacheRange,
         read_ts: u64,
         seq_num: u64,
-    ) -> Option<Self> {
-        let mut core = engine.core.lock().unwrap();
-        let region_meta = core.region_metas.get_mut(&region_id)?;
-        if !region_meta.can_read {
-            return None;
-        }
+    ) -> result::Result<Self::Snapshot, FailedReason> {
+        RangeCacheSnapshot::new(self.clone(), range, read_ts, seq_num)
+    }
 
-        if read_ts <= region_meta.safe_ts {
-            // todo(SpadeA): add metrics for it
-            return None;
-        }
+    type DiskEngine = RocksEngine;
+    fn set_disk_engine(&mut self, disk_engine: Self::DiskEngine) {
+        self.rocks_engine = Some(disk_engine);
+    }
 
-        region_meta.snapshot_list.new_snapshot(read_ts);
+    type RangeHintService = PdRangeHintService;
+    fn start_hint_service(&self, range_hint_service: Self::RangeHintService) {
+        self.bg_worker_manager()
+            .start_bg_hint_service(range_hint_service)
+    }
 
-        Some(RegionCacheSnapshot {
-            region_id,
-            snapshot_ts: read_ts,
-            sequence_number: seq_num,
-            region_memory_engine: core.engine.get(&region_id).unwrap().clone(),
-            engine: engine.clone(),
-        })
+    fn get_range_for_key(&self, key: &[u8]) -> Option<CacheRange> {
+        let core = self.core.read();
+        core.range_manager().get_range_for_key(key)
+    }
+
+    fn enabled(&self) -> bool {
+        self.config.value().enabled
     }
 }
 
-impl Drop for RegionCacheSnapshot {
-    fn drop(&mut self) {
-        let mut core = self.engine.core.lock().unwrap();
-        let meta = core.region_metas.get_mut(&self.region_id).unwrap();
-        meta.snapshot_list.remove_snapshot(self.snapshot_ts);
-    }
-}
+impl Iterable for RangeCacheMemoryEngine {
+    type Iterator = RangeCacheIterator;
 
-impl Snapshot for RegionCacheSnapshot {}
-
-impl Iterable for RegionCacheSnapshot {
-    type Iterator = RegionCacheIterator;
-
-    fn iterator_opt(&self, cf: &str, opts: IterOptions) -> Result<Self::Iterator> {
-        let iter = self.region_memory_engine.data[cf_to_id(cf)].iter();
-        let prefix_same_as_start = opts.prefix_same_as_start();
-        let (lower_bound, upper_bound) = opts.build_bounds();
-        // only support with lower/upper bound set
-        if lower_bound.is_none() || upper_bound.is_none() {
-            return Err(Error::BoundaryNotSet);
-        }
-        Ok(RegionCacheIterator {
-            cf: String::from(cf),
-            valid: false,
-            prefix_same_as_start,
-            prefix: None,
-            lower_bound: lower_bound.unwrap(),
-            upper_bound: upper_bound.unwrap(),
-            iter,
-        })
-    }
-}
-
-impl Peekable for RegionCacheSnapshot {
-    type DbVector = RegionCacheDbVector;
-
-    fn get_value_opt(&self, opts: &ReadOptions, key: &[u8]) -> Result<Option<Self::DbVector>> {
-        self.get_value_cf_opt(opts, CF_DEFAULT, key)
-    }
-
-    fn get_value_cf_opt(
-        &self,
-        _: &ReadOptions,
-        cf: &str,
-        key: &[u8],
-    ) -> Result<Option<Self::DbVector>> {
-        Ok(self.region_memory_engine.data[cf_to_id(cf)]
-            .get(key)
-            .cloned()
-            .map(|v| RegionCacheDbVector(v)))
-    }
-}
-
-impl CfNamesExt for RegionCacheSnapshot {
-    fn cf_names(&self) -> Vec<&str> {
-        unimplemented!()
-    }
-}
-
-impl SnapshotMiscExt for RegionCacheSnapshot {
-    fn sequence_number(&self) -> u64 {
-        self.sequence_number
-    }
-}
-
-#[derive(Debug)]
-pub struct RegionCacheDbVector(Bytes);
-
-impl Deref for RegionCacheDbVector {
-    type Target = [u8];
-
-    fn deref(&self) -> &[u8] {
-        self.0.as_slice()
-    }
-}
-
-impl DbVector for RegionCacheDbVector {}
-
-impl<'a> PartialEq<&'a [u8]> for RegionCacheDbVector {
-    fn eq(&self, rhs: &&[u8]) -> bool {
-        self.0.as_slice() == *rhs
+    fn iterator_opt(&self, _: &str, _: IterOptions) -> Result<Self::Iterator> {
+        // This engine does not support creating iterators directly by the engine.
+        panic!("iterator_opt is not supported on creating by RangeCacheMemoryEngine directly")
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use core::ops::Range;
-    use std::{iter::StepBy, sync::Arc};
+pub mod tests {
+    use std::sync::Arc;
 
-    use bytes::Bytes;
-    use engine_traits::{
-        IterOptions, Iterable, Iterator, Peekable, ReadOptions, RegionCacheEngine,
-    };
-    use skiplist_rs::{ByteWiseComparator, Skiplist};
+    use engine_traits::CacheRange;
+    use tikv_util::config::VersionTrack;
 
-    use super::{cf_to_id, RegionCacheIterator};
-    use crate::RegionCacheMemoryEngine;
+    use crate::{RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine};
 
     #[test]
-    fn test_snapshot() {
-        let engine = RegionCacheMemoryEngine::default();
-        engine.new_region(1);
+    fn test_overlap_with_pending() {
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        )));
+        let range1 = CacheRange::new(b"k1".to_vec(), b"k3".to_vec());
+        engine.load_range(range1).unwrap();
 
-        let verify_snapshot_count = |snapshot_ts, count| {
-            let core = engine.core.lock().unwrap();
-            if count > 0 {
-                assert_eq!(
-                    *core
-                        .region_metas
-                        .get(&1)
-                        .unwrap()
-                        .snapshot_list
-                        .0
-                        .get(&snapshot_ts)
-                        .unwrap(),
-                    count
-                );
-            } else {
-                assert!(
-                    core.region_metas
-                        .get(&1)
-                        .unwrap()
-                        .snapshot_list
-                        .0
-                        .get(&snapshot_ts)
-                        .is_none()
-                )
-            }
-        };
-
-        assert!(engine.snapshot(1, 5, u64::MAX).is_none());
-
-        {
-            let mut core = engine.core.lock().unwrap();
-            core.region_metas.get_mut(&1).unwrap().can_read = true;
-        }
-        let s1 = engine.snapshot(1, 5, u64::MAX).unwrap();
-
-        {
-            let mut core = engine.core.lock().unwrap();
-            core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
-        }
-        assert!(engine.snapshot(1, 5, u64::MAX).is_none());
-        let s2 = engine.snapshot(1, 10, u64::MAX).unwrap();
-
-        verify_snapshot_count(5, 1);
-        verify_snapshot_count(10, 1);
-        let s3 = engine.snapshot(1, 10, u64::MAX).unwrap();
-        verify_snapshot_count(10, 2);
-
-        drop(s1);
-        verify_snapshot_count(5, 0);
-        drop(s2);
-        verify_snapshot_count(10, 1);
-        let s4 = engine.snapshot(1, 10, u64::MAX).unwrap();
-        verify_snapshot_count(10, 2);
-        drop(s4);
-        verify_snapshot_count(10, 1);
-        drop(s3);
-        verify_snapshot_count(10, 0);
-    }
-
-    fn construct_key(i: i32) -> String {
-        format!("key-{:08}", i)
-    }
-
-    fn construct_value(i: i32) -> String {
-        format!("value-{:08}", i)
-    }
-
-    fn fill_data_in_skiplist(sl: Arc<Skiplist<ByteWiseComparator>>, range: StepBy<Range<i32>>) {
-        for i in range {
-            let key = construct_key(i);
-            let val = construct_value(i);
-            sl.put(Bytes::from(key), Bytes::from(val));
-        }
-    }
-
-    fn verify_key_value(k: &[u8], v: &[u8], i: i32) {
-        let key = construct_key(i);
-        let val = construct_value(i);
-        assert_eq!(k, key.as_bytes());
-        assert_eq!(v, val.as_bytes());
-    }
-
-    fn verify_key_values(
-        iter: &mut RegionCacheIterator,
-        step: i32,
-        mut start_idx: i32,
-        end_idx: i32,
-    ) {
-        let forward = step > 0;
-        while iter.valid().unwrap() {
-            let k = iter.key();
-            let val = iter.value();
-            verify_key_value(k, val, start_idx);
-            if forward {
-                iter.next().unwrap();
-            } else {
-                iter.prev().unwrap();
-            }
-            start_idx += step;
-        }
-
-        if forward {
-            assert!(start_idx - step < end_idx);
-        } else {
-            assert!(start_idx - step > end_idx);
-        }
-    }
-
-    #[test]
-    fn test_get_value() {
-        let engine = RegionCacheMemoryEngine::default();
-        engine.new_region(1);
-
-        {
-            let mut core = engine.core.lock().unwrap();
-            core.region_metas.get_mut(&1).unwrap().can_read = true;
-            core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
-            let sl = core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone();
-            fill_data_in_skiplist(sl, (1..100).step_by(1));
-        }
-
-        let snapshot = engine.snapshot(1, 10, u64::MAX).unwrap();
-        let opts = ReadOptions::default();
-        for i in 1..100 {
-            let k = construct_key(i);
-            let v = snapshot
-                .get_value_cf_opt(&opts, "write", k.as_bytes())
-                .unwrap()
-                .unwrap();
-            verify_key_value(k.as_bytes(), &v, i);
-        }
-
-        let k = construct_key(100);
+        let range2 = CacheRange::new(b"k1".to_vec(), b"k5".to_vec());
+        engine.prepare_for_apply(&range2);
         assert!(
-            snapshot
-                .get_value_cf_opt(&opts, "write", k.as_bytes())
-                .unwrap()
-                .is_none()
+            engine.core.read().range_manager().pending_ranges.is_empty()
+                && engine
+                    .core
+                    .read()
+                    .range_manager()
+                    .pending_ranges_loading_data
+                    .is_empty()
         );
-    }
 
-    #[test]
-    fn test_iterator_forawrd() {
-        let engine = RegionCacheMemoryEngine::default();
-        engine.new_region(1);
-        let step: i32 = 2;
+        let range1 = CacheRange::new(b"k1".to_vec(), b"k3".to_vec());
+        engine.load_range(range1).unwrap();
 
-        {
-            let mut core = engine.core.lock().unwrap();
-            core.region_metas.get_mut(&1).unwrap().can_read = true;
-            core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
-            let sl = core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone();
-            fill_data_in_skiplist(sl, (1..100).step_by(step as usize));
-        }
-
-        let mut iter_opt = IterOptions::default();
-        let snapshot = engine.snapshot(1, 10, u64::MAX).unwrap();
-        // boundaries are not set
-        assert!(snapshot.iterator_opt("lock", iter_opt.clone()).is_err());
-
-        let lower_bound = construct_key(1);
-        let upper_bound = construct_key(100);
-        iter_opt.set_upper_bound(upper_bound.as_bytes(), 0);
-        iter_opt.set_lower_bound(lower_bound.as_bytes(), 0);
-
-        let mut iter = snapshot.iterator_opt("lock", iter_opt.clone()).unwrap();
-        assert!(!iter.seek_to_first().unwrap());
-
-        let mut iter = snapshot.iterator_opt("default", iter_opt.clone()).unwrap();
-        assert!(!iter.seek_to_first().unwrap());
-
-        let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
-        iter.seek_to_first().unwrap();
-        verify_key_values(&mut iter, step, 1, i32::MAX);
-
-        // seek key that is in the skiplist
-        let seek_key = construct_key(11);
-        iter.seek(seek_key.as_bytes()).unwrap();
-        verify_key_values(&mut iter, step, 11, i32::MAX);
-
-        // seek key that is not in the skiplist
-        let seek_key = construct_key(12);
-        iter.seek(seek_key.as_bytes()).unwrap();
-        verify_key_values(&mut iter, step, 13, i32::MAX);
-
-        // with bounds
-        let lower_bound = construct_key(20);
-        let upper_bound = construct_key(40);
-        iter_opt.set_upper_bound(upper_bound.as_bytes(), 0);
-        iter_opt.set_lower_bound(lower_bound.as_bytes(), 0);
-        let mut iter = snapshot.iterator_opt("write", iter_opt).unwrap();
-
-        assert!(iter.seek_to_first().unwrap());
-        verify_key_values(&mut iter, step, 21, 40);
-
-        // seek a key that is below the lower bound is the same with seek_to_first
-        let seek_key = construct_key(11);
-        assert!(iter.seek(seek_key.as_bytes()).unwrap());
-        verify_key_values(&mut iter, step, 21, 40);
-
-        // seek a key that is larger or equal to upper bound won't get any key
-        let seek_key = construct_key(40);
-        assert!(!iter.seek(seek_key.as_bytes()).unwrap());
-        assert!(!iter.valid().unwrap());
-
-        let seek_key = construct_key(22);
-        assert!(iter.seek(seek_key.as_bytes()).unwrap());
-        verify_key_values(&mut iter, step, 23, 40);
-    }
-
-    #[test]
-    fn test_iterator_backward() {
-        let engine = RegionCacheMemoryEngine::default();
-        engine.new_region(1);
-        let mut step: i32 = 2;
-
-        {
-            let mut core = engine.core.lock().unwrap();
-            core.region_metas.get_mut(&1).unwrap().can_read = true;
-            core.region_metas.get_mut(&1).unwrap().safe_ts = 5;
-            let sl = core.engine.get_mut(&1).unwrap().data[cf_to_id("write")].clone();
-            fill_data_in_skiplist(sl, (1..100).step_by(step as usize));
-        }
-        step = -step;
-
-        let mut iter_opt = IterOptions::default();
-        let lower_bound = construct_key(1);
-        let upper_bound = construct_key(100);
-        iter_opt.set_upper_bound(upper_bound.as_bytes(), 0);
-        iter_opt.set_lower_bound(lower_bound.as_bytes(), 0);
-
-        let snapshot = engine.snapshot(1, 10, u64::MAX).unwrap();
-        let mut iter = snapshot.iterator_opt("write", iter_opt.clone()).unwrap();
-        assert!(iter.seek_to_last().unwrap());
-        verify_key_values(&mut iter, step, 99, i32::MIN);
-
-        // seek key that is in the skiplist
-        let seek_key = construct_key(81);
-        assert!(iter.seek_for_prev(seek_key.as_bytes()).unwrap());
-        verify_key_values(&mut iter, step, 81, i32::MIN);
-
-        // seek key that is in the skiplist
-        let seek_key = construct_key(80);
-        assert!(iter.seek_for_prev(seek_key.as_bytes()).unwrap());
-        verify_key_values(&mut iter, step, 79, i32::MIN);
-
-        let lower_bound = construct_key(20);
-        let upper_bound = construct_key(40);
-        iter_opt.set_upper_bound(upper_bound.as_bytes(), 0);
-        iter_opt.set_lower_bound(lower_bound.as_bytes(), 0);
-        let mut iter = snapshot.iterator_opt("write", iter_opt).unwrap();
-
-        assert!(iter.seek_to_last().unwrap());
-        verify_key_values(&mut iter, step, 39, 20);
-
-        // seek a key that is above the upper bound is the same with seek_to_last
-        let seek_key = construct_key(45);
-        assert!(iter.seek_for_prev(seek_key.as_bytes()).unwrap());
-        verify_key_values(&mut iter, step, 39, 20);
-
-        // seek a key that is less than the lower bound won't get any key
-        let seek_key = construct_key(19);
-        assert!(!iter.seek_for_prev(seek_key.as_bytes()).unwrap());
-        assert!(!iter.valid().unwrap());
-
-        let seek_key = construct_key(38);
-        assert!(iter.seek_for_prev(seek_key.as_bytes()).unwrap());
-        verify_key_values(&mut iter, step, 37, 20);
+        let range2 = CacheRange::new(b"k2".to_vec(), b"k5".to_vec());
+        engine.prepare_for_apply(&range2);
+        assert!(
+            engine.core.read().range_manager().pending_ranges.is_empty()
+                && engine
+                    .core
+                    .read()
+                    .range_manager()
+                    .pending_ranges_loading_data
+                    .is_empty()
+        );
     }
 }

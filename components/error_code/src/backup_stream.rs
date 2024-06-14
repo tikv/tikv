@@ -11,6 +11,10 @@ define_error_codes! {
         "A task not found.",
         "Please check the spell of your task name."
     ),
+    OUT_OF_QUOTA => ("OutOfQuota",
+        "Some of quota has been exceed, hence the task cannot continue.",
+        "For memory quotas, please check whether there are huge transactions. You may also increase the quota by modifying config."
+    ),
     OBSERVE_CANCELED => (
         "ObserveCancel",
         "When doing initial scanning, the observe of that region has been canceled",
@@ -47,6 +51,10 @@ define_error_codes! {
     GRPC => ("gRPC",
         "Error happened during executing gRPC",
         "This error is often relative to the network, please check the network connection and network config, say, TLS config."
+    ),
+    ENCRYPTION => ("Encryption",
+        "Error happened during interacting with the encryption library.",
+        "This is an internal error, please ask the community for help."
     ),
 
     OTHER => ("Unknown",

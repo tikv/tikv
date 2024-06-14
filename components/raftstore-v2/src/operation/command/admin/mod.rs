@@ -108,8 +108,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         // Check whether the admin request can be proposed when disk full.
         let can_skip_check = is_transfer_leader || pre_transfer_leader || is_conf_change;
-        if !can_skip_check && let Err(e) =
-            self.check_proposal_with_disk_full_opt(ctx, DiskFullOpt::AllowedOnAlmostFull)
+        if !can_skip_check
+            && let Err(e) =
+                self.check_proposal_with_disk_full_opt(ctx, DiskFullOpt::AllowedOnAlmostFull)
         {
             let resp = cmd_resp::new_error(e);
             ch.report_error(resp);
@@ -135,7 +136,9 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         }
         // Do not check conflict for transfer leader, otherwise we may not
         // transfer leadership out of busy nodes in time.
-        if !is_transfer_leader && let Some(conflict) = self.proposal_control_mut().check_conflict(Some(cmd_type)) {
+        if !is_transfer_leader
+            && let Some(conflict) = self.proposal_control_mut().check_conflict(Some(cmd_type))
+        {
             conflict.delay_channel(ch);
             return;
         }

@@ -4,14 +4,15 @@ version = "0.0.1"
 description = "An example TiKV storage engine that does nothing but panic"
 edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [features]
 testexport = []
 
 [dependencies]
-encryption = { workspace = true }
 engine_traits = { workspace = true }
 kvproto = { workspace = true }
+encryption = { workspace = true }
 raft = { workspace = true }
 tikv_alloc = { workspace = true }
 # FIXME: Remove this dep from the engine_traits interface

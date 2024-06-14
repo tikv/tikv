@@ -1,7 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, sync::Arc, time::Duration,
+    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, mem, sync::Arc,
+    time::Duration,
 };
 
 use ::tracker::{
@@ -11,23 +12,35 @@ use api_version::{dispatch_api_version, KvFormat};
 use async_stream::try_stream;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::PerfLevel;
-use futures::{channel::mpsc, future::Either, prelude::*};
-use kvproto::{coprocessor as coppb, errorpb, kvrpcpb};
+use futures::{
+    channel::{mpsc, oneshot},
+    future::Either,
+    prelude::*,
+};
+use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri};
+use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
-use resource_control::{ResourceGroupManager, TaskMetadata};
+use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::SnapshotExt;
 use tikv_util::{
-    deadline::set_deadline_exceeded_busy_error, quota_limiter::QuotaLimiter, time::Instant,
+    deadline::set_deadline_exceeded_busy_error,
+    memory::{MemoryQuota, OwnedAllocated},
+    quota_limiter::QuotaLimiter,
+    time::Instant,
 };
 use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
 use tokio::sync::Semaphore;
 use txn_types::Lock;
 
+use super::config_manager::CopConfigManager;
 use crate::{
-    coprocessor::{cache::CachedRequestHandler, interceptors::*, metrics::*, tracker::Tracker, *},
+    coprocessor::{
+        cache::CachedRequestHandler, interceptors::*, metrics::*,
+        statistics::analyze_context::AnalyzeContext, tracker::Tracker, *,
+    },
     read_pool::ReadPoolHandle,
     server::Config,
     storage::{
@@ -51,6 +64,8 @@ pub struct Endpoint<E: Engine> {
 
     /// The concurrency limiter of the coprocessor.
     semaphore: Option<Arc<Semaphore>>,
+    /// The memory quota for coprocessor requests.
+    memory_quota: Arc<MemoryQuota>,
 
     concurrency_manager: ConcurrencyManager,
 
@@ -88,18 +103,18 @@ impl<E: Engine> Endpoint<E> {
         quota_limiter: Arc<QuotaLimiter>,
         resource_ctl: Option<Arc<ResourceGroupManager>>,
     ) -> Self {
-        // FIXME: When yatp is used, we need to limit coprocessor requests in progress
-        // to avoid using too much memory. However, if there are a number of large
-        // requests, small requests will still be blocked. This needs to be improved.
         let semaphore = match &read_pool {
             ReadPoolHandle::Yatp { .. } => {
                 Some(Arc::new(Semaphore::new(cfg.end_point_max_concurrency)))
             }
             _ => None,
         };
+        let memory_quota = Arc::new(MemoryQuota::new(cfg.end_point_memory_quota.0 as _));
+        register_coprocessor_memory_quota_metrics(memory_quota.clone());
         Self {
             read_pool,
             semaphore,
+            memory_quota,
             concurrency_manager,
             perf_level: cfg.end_point_perf_level,
             resource_tag_factory,
@@ -113,6 +128,10 @@ impl<E: Engine> Endpoint<E> {
             resource_ctl,
             _phantom: Default::default(),
         }
+    }
+
+    pub fn config_manager(&self) -> Box<dyn ConfigManager> {
+        Box::new(CopConfigManager::new(self.memory_quota.clone()))
     }
 
     fn check_memory_locks(&self, req_ctx: &ReqContext) -> Result<()> {
@@ -302,7 +321,7 @@ impl<E: Engine> Endpoint<E> {
                 let quota_limiter = self.quota_limiter.clone();
 
                 builder = Box::new(move |snap, req_ctx| {
-                    statistics::analyze::AnalyzeContext::<_, F>::new(
+                    AnalyzeContext::<_, F>::new(
                         analyze,
                         req_ctx.ranges.clone(),
                         start_ts,
@@ -424,15 +443,16 @@ impl<E: Engine> Endpoint<E> {
 
         // Check if the buckets version is latest.
         // skip if request don't carry this bucket version.
-        if let Some(ref buckets) = latest_buckets&&
-            buckets.version > tracker.req_ctx.context.buckets_version &&
-            tracker.req_ctx.context.buckets_version!=0 {
-                let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
-                bucket_not_match.set_version(buckets.version);
-                bucket_not_match.set_keys(buckets.keys.clone().into());
-                let mut err = errorpb::Error::default();
-                err.set_bucket_version_not_match(bucket_not_match);
-                return Err(Error::Region(err));
+        if let Some(ref buckets) = latest_buckets
+            && buckets.version > tracker.req_ctx.context.buckets_version
+            && tracker.req_ctx.context.buckets_version != 0
+        {
+            let mut bucket_not_match = errorpb::BucketVersionNotMatch::default();
+            bucket_not_match.set_version(buckets.version);
+            bucket_not_match.set_keys(buckets.keys.clone().into());
+            let mut err = errorpb::Error::default();
+            err.set_bucket_version_not_match(bucket_not_match);
+            return Err(Error::Region(err));
         }
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
@@ -497,7 +517,7 @@ impl<E: Engine> Endpoint<E> {
     ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
-        let key_ranges = req_ctx
+        let key_ranges: Vec<_> = req_ctx
             .ranges
             .iter()
             .map(|key_range| (key_range.get_start().to_vec(), key_range.get_end().to_vec()))
@@ -505,6 +525,8 @@ impl<E: Engine> Endpoint<E> {
         let resource_tag = self
             .resource_tag_factory
             .new_tag_with_key_ranges(&req_ctx.context, key_ranges);
+        let mut allocated_bytes = resource_tag.approximate_heap_size();
+
         let metadata = TaskMetadata::from_ctx(req_ctx.context.get_resource_control_context());
         let resource_limiter = self.resource_ctl.as_ref().and_then(|r| {
             r.get_resource_limiter(
@@ -521,19 +543,27 @@ impl<E: Engine> Endpoint<E> {
         });
         // box the tracker so that moving it is cheap.
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
+        allocated_bytes += tracker.approximate_mem_size();
 
-        let res = self
-            .read_pool
-            .spawn_handle(
-                Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
-                    .in_resource_metering_tag(resource_tag),
-                priority,
-                task_id,
-                metadata,
-                resource_limiter,
-            )
-            .map_err(|_| Error::MaxPendingTasksExceeded);
-        async move { res.await? }
+        let (tx, rx) = oneshot::channel();
+        let future =
+            Self::handle_unary_request_impl(self.semaphore.clone(), tracker, handler_builder)
+                .in_resource_metering_tag(resource_tag)
+                .map(|res| {
+                    let _ = tx.send(res);
+                });
+        let res = self.read_pool_spawn_with_memory_quota_check(
+            allocated_bytes,
+            future,
+            priority,
+            task_id,
+            metadata,
+            resource_limiter,
+        );
+        async move {
+            res?;
+            rx.map_err(|_| Error::MaxPendingTasksExceeded).await?
+        }
     }
 
     /// Parses and handles a unary request. Returns a future that will never
@@ -545,6 +575,7 @@ impl<E: Engine> Endpoint<E> {
         mut req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
+        let now = Instant::now();
         // Check the load of the read pool. If it's too busy, generate and return
         // error in the gRPC thread to avoid waiting in the queue of the read pool.
         if let Err(busy_err) = self.read_pool.check_busy_threshold(Duration::from_millis(
@@ -566,6 +597,9 @@ impl<E: Engine> Endpoint<E> {
         let result_of_future = self
             .parse_request_and_check_memory_locks(req, peer, false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
+        with_tls_tracker(|tracker| {
+            tracker.metrics.grpc_process_nanos = now.saturating_elapsed().as_nanos() as u64;
+        });
         let fut = async move {
             let res = match result_of_future {
                 Err(e) => {
@@ -579,7 +613,9 @@ impl<E: Engine> Endpoint<E> {
                     let mut res = handle_res.unwrap_or_else(|e| make_error_response(e).into());
                     res.set_batch_responses(batch_res.into());
                     GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                        tracker.write_scan_detail(res.mut_exec_details_v2().mut_scan_detail_v2());
+                        let exec_detail_v2 = res.mut_exec_details_v2();
+                        tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
+                        tracker.write_time_detail(exec_detail_v2.mut_time_detail_v2());
                     });
                     res
                 }
@@ -777,24 +813,29 @@ impl<E: Engine> Endpoint<E> {
         let resource_tag = self
             .resource_tag_factory
             .new_tag_with_key_ranges(&req_ctx.context, key_ranges);
+        let mut allocated_bytes = resource_tag.approximate_heap_size();
+
         let task_id = req_ctx.build_task_id();
         let tracker = Box::new(Tracker::new(req_ctx, self.slow_log_threshold));
+        allocated_bytes += tracker.approximate_mem_size();
 
-        self.read_pool
-            .spawn(
-                Self::handle_stream_request_impl(self.semaphore.clone(), tracker, handler_builder)
-                    .in_resource_metering_tag(resource_tag)
-                    .then(futures::future::ok::<_, mpsc::SendError>)
-                    .forward(tx)
-                    .unwrap_or_else(|e| {
-                        warn!("coprocessor stream send error"; "error" => %e);
-                    }),
-                priority,
-                task_id,
-                metadata,
-                resource_limiter,
-            )
-            .map_err(|_| Error::MaxPendingTasksExceeded)?;
+        let future =
+            Self::handle_stream_request_impl(self.semaphore.clone(), tracker, handler_builder)
+                .in_resource_metering_tag(resource_tag)
+                .then(futures::future::ok::<_, mpsc::SendError>)
+                .forward(tx)
+                .unwrap_or_else(|e| {
+                    warn!("coprocessor stream send error"; "error" => %e);
+                });
+
+        self.read_pool_spawn_with_memory_quota_check(
+            allocated_bytes,
+            future,
+            priority,
+            task_id,
+            metadata,
+            resource_limiter,
+        )?;
         Ok(rx)
     }
 
@@ -819,6 +860,30 @@ impl<E: Engine> Endpoint<E> {
             .or_else(|e| futures::future::ok(make_error_response(e))) // Stream<Resp, ()>
             .map(|item: std::result::Result<_, ()>| item.unwrap())
     }
+
+    fn read_pool_spawn_with_memory_quota_check<F>(
+        &self,
+        mut allocated_bytes: usize,
+        future: F,
+        priority: CommandPri,
+        task_id: u64,
+        metadata: TaskMetadata<'_>,
+        resource_limiter: Option<Arc<ResourceLimiter>>,
+    ) -> Result<()>
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        allocated_bytes += mem::size_of_val(&future);
+        let mut owned_quota = OwnedAllocated::new(self.memory_quota.clone());
+        owned_quota.alloc(allocated_bytes)?;
+        let fut = future.map(move |_| {
+            // Release quota after handle completed.
+            drop(owned_quota);
+        });
+        self.read_pool
+            .spawn(fut, priority, task_id, metadata, resource_limiter)
+            .map_err(|_| Error::MaxPendingTasksExceeded)
+    }
 }
 
 macro_rules! make_error_response_common {
@@ -841,6 +906,15 @@ macro_rules! make_error_response_common {
             }
             Error::MaxPendingTasksExceeded => {
                 $tag = "max_pending_tasks_exceeded";
+                let mut server_is_busy_err = errorpb::ServerIsBusy::default();
+                server_is_busy_err.set_reason($e.to_string());
+                let mut errorpb = errorpb::Error::default();
+                errorpb.set_message($e.to_string());
+                errorpb.set_server_is_busy(server_is_busy_err);
+                $resp.set_region_error(errorpb);
+            }
+            Error::MemoryQuotaExceeded => {
+                $tag = "memory_quota_exceeded";
                 let mut server_is_busy_err = errorpb::ServerIsBusy::default();
                 server_is_busy_err.set_reason($e.to_string());
                 let mut errorpb = errorpb::Error::default();
@@ -2031,5 +2105,61 @@ mod tests {
             region_err.get_message(),
             "Coprocessor task terminated due to exceeding the deadline"
         );
+    }
+
+    #[test]
+    fn test_memory_quota() {
+        let engine = TestEngineBuilder::new().build().unwrap();
+        let read_pool = ReadPool::from(build_read_pool_for_test(
+            &CoprReadPoolConfig::default_for_test(),
+            engine,
+        ));
+        let cm = ConcurrencyManager::new(1.into());
+        let copr = Endpoint::<RocksEngine>::new(
+            &Config::default(),
+            read_pool.handle(),
+            cm,
+            ResourceTagFactory::new_for_test(),
+            Arc::new(QuotaLimiter::default()),
+            None,
+        );
+
+        // By default, coprocessor does not return memory quota exceeded error.
+        {
+            let handler_builder = Box::new(|_, _: &_| {
+                Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed())
+            });
+
+            let mut config = ReqContext::default_for_test();
+            config.deadline = Deadline::from_now(Duration::from_millis(500));
+
+            let resp = block_on(copr.handle_unary_request(config, handler_builder)).unwrap();
+            assert!(!resp.has_region_error(), "{:?}", resp);
+        }
+
+        // Trigger memory quota exceeded error.
+        copr.memory_quota.set_capacity(1);
+        {
+            let handler_builder = Box::new(|_, _: &_| {
+                Ok(UnaryFixture::new(Ok(coppb::Response::default())).into_boxed())
+            });
+
+            let mut config = ReqContext::default_for_test();
+            config.deadline = Deadline::from_now(Duration::from_millis(500));
+
+            let res = block_on(copr.handle_unary_request(config, handler_builder));
+            assert!(res.is_err(), "{:?}", res);
+            let resp = make_error_response(res.unwrap_err());
+            assert_eq!(resp.get_data().len(), 0);
+            let region_err = resp.get_region_error();
+            assert!(
+                region_err
+                    .get_server_is_busy()
+                    .reason
+                    .contains("exceeding memory quota"),
+                "{:?}",
+                region_err.get_server_is_busy().reason
+            );
+        }
     }
 }

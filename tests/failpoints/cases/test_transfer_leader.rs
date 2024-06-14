@@ -361,8 +361,8 @@ fn test_read_lock_after_become_follower() {
 /// 1. Inserted 5 entries and make all stores commit and apply them.
 /// 2. Prevent the store 3 from append following logs.
 /// 3. Insert another 20 entries.
-/// 4. Wait for some time so that part of the entry cache are compacted
-///    on the leader(store 1).
+/// 4. Wait for some time so that part of the entry cache are compacted on the
+///    leader(store 1).
 macro_rules! run_cluster_for_test_warmup_entry_cache {
     ($cluster:expr) => {
         // Let the leader compact the entry cache.

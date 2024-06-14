@@ -139,7 +139,7 @@ impl ImportModeSwitcherV2 {
 
     pub fn ranges_in_import(&self) -> HashSet<HashRange> {
         let inner = self.inner.lock().unwrap();
-        HashSet::from_iter(inner.import_mode_ranges.keys().into_iter().cloned())
+        HashSet::from_iter(inner.import_mode_ranges.keys().cloned())
     }
 }
 

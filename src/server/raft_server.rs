@@ -10,7 +10,7 @@ use api_version::api_v2::TIDB_RANGES_COMPLEMENT;
 use causal_ts::CausalTsProviderImpl;
 use concurrency_manager::ConcurrencyManager;
 use engine_traits::{Engines, Iterable, KvEngine, RaftEngine, DATA_CFS, DATA_KEY_PREFIX_LEN};
-use grpcio_health::HealthService;
+use health_controller::HealthController;
 use kvproto::{
     kvrpcpb::ApiVersion, metapb, raft_serverpb::StoreIdent, replication_modepb::ReplicationStatus,
 };
@@ -91,8 +91,7 @@ pub(crate) fn init_store(store: Option<metapb::Store>, cfg: &ServerConfig) -> me
 }
 
 /// A wrapper for the raftstore which runs Multi-Raft.
-// TODO: we will rename another better name like RaftStore later.
-pub struct Node<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
+pub struct MultiRaftServer<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
     cluster_id: u64,
     store: metapb::Store,
     store_cfg: Arc<VersionTrack<StoreConfig>>,
@@ -103,16 +102,16 @@ pub struct Node<C: PdClient + 'static, EK: KvEngine, ER: RaftEngine> {
     pd_client: Arc<C>,
     state: Arc<Mutex<GlobalReplicationState>>,
     bg_worker: Worker,
-    health_service: Option<HealthService>,
+    health_controller: HealthController,
 }
 
-impl<C, EK, ER> Node<C, EK, ER>
+impl<C, EK, ER> MultiRaftServer<C, EK, ER>
 where
     C: PdClient,
     EK: KvEngine,
     ER: RaftEngine,
 {
-    /// Creates a new Node.
+    /// Creates a new MultiRaftServer.
     pub fn new(
         system: RaftBatchSystem<EK, ER>,
         cfg: &ServerConfig,
@@ -121,12 +120,12 @@ where
         pd_client: Arc<C>,
         state: Arc<Mutex<GlobalReplicationState>>,
         bg_worker: Worker,
-        health_service: Option<HealthService>,
+        health_controller: HealthController,
         default_store: Option<metapb::Store>,
-    ) -> Node<C, EK, ER> {
+    ) -> MultiRaftServer<C, EK, ER> {
         let store = init_store(default_store, cfg);
 
-        Node {
+        MultiRaftServer {
             cluster_id: cfg.cluster_id,
             store,
             store_cfg,
@@ -136,7 +135,7 @@ where
             has_started: false,
             state,
             bg_worker,
-            health_service,
+            health_controller,
         }
     }
 
@@ -155,9 +154,9 @@ where
         Ok(())
     }
 
-    /// Starts the Node. It tries to bootstrap cluster if the cluster is not
-    /// bootstrapped yet. Then it spawns a thread to run the raftstore in
-    /// background.
+    /// Starts the MultiRaftServer. It tries to bootstrap cluster if the cluster
+    /// is not bootstrapped yet. Then it spawns a thread to run the
+    /// raftstore in background.
     #[allow(clippy::too_many_arguments)]
     pub fn start<T>(
         &mut self,
@@ -494,7 +493,7 @@ where
             self.state.clone(),
             concurrency_manager,
             collector_reg_handle,
-            self.health_service.clone(),
+            self.health_controller.clone(),
             causal_ts_provider,
             grpc_service_mgr,
             safe_point,
@@ -507,7 +506,7 @@ where
         self.system.shutdown();
     }
 
-    /// Stops the Node.
+    /// Stops the MultiRaftServer.
     pub fn stop(&mut self) {
         let store_id = self.store.get_id();
         self.stop_store(store_id);

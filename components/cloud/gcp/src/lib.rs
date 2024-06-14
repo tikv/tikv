@@ -7,6 +7,12 @@ extern crate slog_global;
 mod gcs;
 pub use gcs::{Config, GcsStorage};
 
+mod client;
+mod kms;
+pub use kms::GcpKms;
+
+pub const STORAGE_VENDOR_NAME_GCP: &str = "gcp";
+
 pub mod utils {
     use std::future::Future;
 

@@ -19,12 +19,16 @@ use std::{cmp::Ordering, ops::Deref, sync::Arc, time::Duration};
 
 use futures::future::BoxFuture;
 use kvproto::{
-    metapb, pdpb,
+    metapb,
+    pdpb::{self, UpdateServiceGcSafePointRequest, UpdateServiceGcSafePointResponse},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
     resource_manager::TokenBucketsRequest,
 };
 use pdpb::QueryStats;
-use tikv_util::time::{Instant, UnixSecs};
+use tikv_util::{
+    memory::HeapSize,
+    time::{Instant, UnixSecs},
+};
 use txn_types::TimeStamp;
 
 pub use self::{
@@ -39,7 +43,7 @@ pub use self::{
 pub type Key = Vec<u8>;
 pub type PdFuture<T> = BoxFuture<'static, Result<T>>;
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct RegionStat {
     pub down_peers: Vec<pdpb::PeerStats>,
     pub pending_peers: Vec<metapb::Peer>,
@@ -130,6 +134,12 @@ impl BucketMeta {
     // total size of the whole buckets
     pub fn total_size(&self) -> u64 {
         self.sizes.iter().sum()
+    }
+}
+
+impl HeapSize for BucketMeta {
+    fn approximate_heap_size(&self) -> usize {
+        self.keys.approximate_heap_size() + self.sizes.approximate_heap_size()
     }
 }
 
@@ -259,38 +269,14 @@ pub const INVALID_ID: u64 = 0;
 pub const RESOURCE_CONTROL_CONFIG_PATH: &str = "resource_group/settings";
 pub const RESOURCE_CONTROL_CONTROLLER_CONFIG_PATH: &str = "resource_group/controller";
 
+pub const REGION_LABEL_PATH_PREFIX: &str = "region_label";
+
 /// PdClient communicates with Placement Driver (PD).
 /// Because now one PD only supports one cluster, so it is no need to pass
 /// cluster id in trait interface every time, so passing the cluster id when
 /// creating the PdClient is enough and the PdClient will use this cluster id
 /// all the time.
 pub trait PdClient: Send + Sync {
-    /// Load a list of GlobalConfig
-    fn load_global_config(
-        &self,
-        _config_path: String,
-    ) -> PdFuture<(Vec<pdpb::GlobalConfigItem>, i64)> {
-        unimplemented!();
-    }
-
-    /// Store a list of GlobalConfig
-    fn store_global_config(
-        &self,
-        _config_path: String,
-        _items: Vec<pdpb::GlobalConfigItem>,
-    ) -> PdFuture<()> {
-        unimplemented!();
-    }
-
-    /// Watching change of GlobalConfig
-    fn watch_global_config(
-        &self,
-        _config_path: String,
-        _revision: i64,
-    ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
-        unimplemented!();
-    }
-
     /// Returns the cluster ID.
     fn get_cluster_id(&self) -> Result<u64> {
         unimplemented!();
@@ -564,4 +550,17 @@ pub fn take_peer_address(store: &mut metapb::Store) -> String {
     } else {
         store.take_address()
     }
+}
+
+fn check_update_service_safe_point_resp(
+    resp: &UpdateServiceGcSafePointResponse,
+    req: &UpdateServiceGcSafePointRequest,
+) -> Result<()> {
+    if req.get_ttl() > 0 && resp.min_safe_point > req.get_safe_point() {
+        return Err(Error::UnsafeServiceGcSafePoint {
+            requested: req.get_safe_point().into(),
+            current_minimal: resp.min_safe_point.into(),
+        });
+    }
+    Ok(())
 }

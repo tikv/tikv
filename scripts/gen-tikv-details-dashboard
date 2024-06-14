@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
+root_dir=$(realpath "$(dirname "$(realpath "$0")")/..")
 
 docker build -t tikv-dashboard-gen -f - . <<EOF
 FROM pyfound/black:23.11.0
 
-RUN pip install isort grafanalib==v0.7.0
+RUN pip install isort==5.13.2 grafanalib==v0.7.0
 
 CMD ["bash"]
 EOF
 
 docker run \
     --rm \
-    -v ./metrics:/metrics \
+    -v "$root_dir/metrics:/metrics" \
     -e PYTHONDONTWRITEBYTECODE=1 \
     tikv-dashboard-gen \
     bash -c "

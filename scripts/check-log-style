@@ -7,7 +7,7 @@ function error_msg() {
 }
 
 if grep -r -n --color=always \
-        -E '"[a-zA-Z0-9_ -]*( |-)[a-zA-Z0-9_ -]*" ?=>[\?% ]*[a-zA-Z0-9:\._\(\["]+[,|\)|\n]?' \
+        -E '"[a-zA-Z0-9_ -]*( |-)[a-zA-Z0-9_ -]*" ?=>[\?% ]*[\*&a-zA-Z0-9:\._\(\["]+[,|\)|\n]?' \
         --include \*.rs \
         --exclude-dir target . \
     | grep -v -E "config\.rs|tikv_util/src/logger|file_system/src/rate_limiter.rs" ; # ignore files contain kebab-case names.

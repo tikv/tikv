@@ -3,6 +3,7 @@ name = "external_storage"
 version = "0.0.1"
 edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [dependencies]
 async-compression = { version = "0.3.14", features = ["futures-io", "zstd"] }

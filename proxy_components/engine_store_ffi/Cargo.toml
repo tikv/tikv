@@ -23,9 +23,9 @@ test-engines-panic = [
   "engine_test/test-engines-panic",
 ]
 
-cloud-aws = ["encryption_export/cloud-aws"]
-cloud-gcp = ["encryption_export/cloud-gcp"]
-cloud-azure = ["encryption_export/cloud-azure"]
+# cloud-aws = ["encryption_export/cloud-aws"]
+# cloud-gcp = ["encryption_export/cloud-gcp"]
+# cloud-azure = ["encryption_export/cloud-azure"]
 
 # TODO use encryption/openssl-vendored if later supports
 openssl-vendored = [
