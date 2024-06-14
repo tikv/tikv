@@ -41,7 +41,7 @@ use tikv_util::{
     debug, info, slow_log,
     sys::thread::StdThreadBuildWrapper,
     thd_name,
-    time::{duration_to_sec, Instant},
+    time::{duration_to_sec, yield_at_least, Duration, Instant},
     warn,
 };
 
@@ -643,11 +643,11 @@ impl WriteBatchRecorder {
         batch_size < self.batch_size_hint && self.spin_count < self.spin_max_count
     }
 
-    fn spin_for_a_while(&mut self) {
+    fn yield_for_a_while(&mut self) {
         self.spin_count += 1;
 
         let trend: f64 = self.trend.into();
-        std::thread::sleep(std::time::Duration::from_micros(
+        yield_at_least(Duration::from_micros(
             self.spin_interval * (1.0 / trend) as u64,
         ));
     }
@@ -746,7 +746,7 @@ where
                             .pending_batch_recorder
                             .should_spin(self.batch.get_raft_size())
                         {
-                            self.pending_batch_recorder.spin_for_a_while();
+                            self.pending_batch_recorder.yield_for_a_while();
                             continue;
                         } else {
                             break;

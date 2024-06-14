@@ -532,6 +532,13 @@ impl Default for ThreadReadId {
     }
 }
 
+pub fn yield_at_least(elaspsed: Duration) {
+    let now = Instant::now_coarse();
+    while now.saturating_elapsed() < elaspsed {
+        thread::yield_now();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -685,6 +692,13 @@ mod tests {
             assert!(now.saturating_elapsed() >= zero);
             assert!(now_coarse.saturating_elapsed() >= zero);
         }
+    }
+
+    #[test]
+    fn test_yield_at_least() {
+        let start = Instant::now_coarse();
+        yield_at_least(Duration::from_micros(100));
+        assert!(start.saturating_elapsed() >= Duration::from_micros(100));
     }
 
     #[bench]
