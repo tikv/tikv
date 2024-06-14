@@ -715,16 +715,27 @@ where
         let wopts = WriteOptions::default();
         for cf in self.engine.cf_names() {
             // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
-            let strategy = if cf == CF_LOCK {
-                DeleteStrategy::DeleteByKey
+            let (strategy, observer) = if cf == CF_LOCK {
+                (
+                    DeleteStrategy::DeleteByKey,
+                    &CLEAR_OVERLAP_REGION_DURATION.by_key,
+                )
             } else if self.use_delete_range {
-                DeleteStrategy::DeleteByRange
+                (
+                    DeleteStrategy::DeleteByRange,
+                    &CLEAR_OVERLAP_REGION_DURATION.by_range,
+                )
             } else {
-                DeleteStrategy::DeleteByWriter {
-                    sst_path: self.mgr.get_temp_path_for_ingest(),
-                }
+                (
+                    DeleteStrategy::DeleteByWriter {
+                        sst_path: self.mgr.get_temp_path_for_ingest(),
+                    },
+                    &CLEAR_OVERLAP_REGION_DURATION.by_ingest_files,
+                )
             };
+            let start = Instant::now();
             box_try!(self.engine.delete_ranges_cf(&wopts, cf, strategy, ranges));
+            observer.observe(start.saturating_elapsed_secs());
         }
 
         Ok(())
@@ -800,6 +811,7 @@ where
                 {
                     new_batch = false;
                     self.handle_apply(region_id, peer_id, status);
+                    self.mgr.set_pending_apply_count(self.pending_applies.len());
                 }
             }
         }
@@ -884,6 +896,7 @@ where
                 SNAP_COUNTER.apply.all.inc();
                 // to makes sure applying snapshots in order.
                 self.pending_applies.push_back(task);
+                self.mgr.set_pending_apply_count(self.pending_applies.len());
                 self.handle_pending_applies(false);
                 if !self.pending_applies.is_empty() {
                     // delay the apply and retry later
