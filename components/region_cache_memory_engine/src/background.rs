@@ -931,6 +931,7 @@ impl Runnable for DeleteRangeRunner {
                 };
                 self.delay_ranges.append(&mut ranges_to_delay);
                 self.delete_ranges(&ranges_to_delete);
+                fail::fail_point!("in_memory_engine_delete_range_done");
             }
             _ => unreachable!(),
         }

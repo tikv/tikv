@@ -235,6 +235,19 @@ pub fn encode_key_for_eviction(range: &CacheRange) -> (InternalBytes, InternalBy
     (encoded_start, encoded_end)
 }
 
+#[inline]
+pub fn encode_key_for_boundary_without_mvcc(range: &CacheRange) -> (InternalBytes, InternalBytes) {
+    // Both encoded_start and encoded_end should be the smallest key in the
+    // respective of user key (without mvcc version), so that the iterations cover
+    // all versions of the range start and covers nothing of range end.
+
+    // TODO: can we avoid one clone
+    let encoded_start = encode_key(&range.start, u64::MAX, VALUE_TYPE_FOR_SEEK);
+    let encoded_end = encode_key(&range.end, u64::MAX, VALUE_TYPE_FOR_SEEK);
+
+    (encoded_start, encoded_end)
+}
+
 // mvcc_prefix is already mem-comparison encoded.
 #[inline]
 pub fn encoding_for_filter(mvcc_prefix: &[u8], start_ts: TimeStamp) -> InternalBytes {

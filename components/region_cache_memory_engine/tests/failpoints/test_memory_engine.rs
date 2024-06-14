@@ -6,12 +6,17 @@ use std::{
 };
 
 use crossbeam::epoch;
-use engine_traits::{CacheRange, Mutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_WRITE};
-use region_cache_memory_engine::{
-    decode_key, encoding_for_filter, test_util::put_data, BackgroundTask, InternalBytes,
-    InternalKey, RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
-    SkiplistHandle, ValueType,
+use engine_rocks::util::new_engine;
+use engine_traits::{
+    CacheRange, Mutable, RangeCacheEngine, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_WRITE,
+    DATA_CFS,
 };
+use region_cache_memory_engine::{
+    decode_key, encode_key_for_boundary_without_mvcc, encoding_for_filter, test_util::put_data,
+    BackgroundTask, InternalBytes, InternalKey, RangeCacheEngineConfig, RangeCacheEngineContext,
+    RangeCacheMemoryEngine, SkiplistHandle, ValueType,
+};
+use tempfile::Builder;
 use tikv_util::config::{ReadableDuration, VersionTrack};
 use txn_types::{Key, TimeStamp};
 
@@ -203,4 +208,132 @@ fn test_clean_up_tombstone() {
         assert_eq!(user_key, &k);
         assert_eq!(v_type, ty);
     }
+}
+
+#[test]
+fn test_concurrency_between_delete_range_and_write_to_memory() {
+    let path = Builder::new().prefix("test").tempdir().unwrap();
+    let path_str = path.path().to_str().unwrap();
+    let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+
+    let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test()));
+    let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(config.clone()));
+    engine.set_disk_engine(rocks_engine);
+
+    let range1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+    let range2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
+    let range3 = CacheRange::new(b"k40".to_vec(), b"k50".to_vec());
+
+    let (snapshot_load_tx, snapshot_load_rx) = sync_channel(0);
+    fail::cfg_callback("on_snapshot_load_finished", move || {
+        let _ = snapshot_load_tx.send(true);
+    })
+    .unwrap();
+    fail::cfg("before_clear_ranges_in_being_written", "pause").unwrap();
+
+    let (write_batch_consume_tx, write_batch_consume_rx) = sync_channel(0);
+    fail::cfg_callback("in_memory_engine_write_batch_consumed", move || {
+        let _ = write_batch_consume_tx.send(true);
+    })
+    .unwrap();
+
+    let (delete_range_tx, delete_range_rx) = sync_channel(0);
+    fail::cfg_callback("in_memory_engine_delete_range_done", move || {
+        let _ = delete_range_tx.send(true);
+    })
+    .unwrap();
+
+    engine.new_range(range1.clone());
+    engine.new_range(range2.clone());
+    engine.load_range(range3.clone());
+
+    let engine_clone = engine.clone();
+    let (range_prepared_tx, range_prepared_rx) = sync_channel(0);
+    let range1_clone = range1.clone();
+    let range2_clone = range2.clone();
+    let range3_clone = range3.clone();
+    let handle = std::thread::spawn(move || {
+        let mut wb = engine_clone.write_batch();
+        wb.prepare_for_range(range1_clone);
+        wb.put(b"k02", b"val").unwrap();
+        wb.put(b"k03", b"val").unwrap();
+        wb.put(b"k04", b"val").unwrap();
+        wb.set_sequence_number(100).unwrap();
+
+        let mut wb2 = engine_clone.write_batch();
+        wb2.prepare_for_range(range2_clone);
+        wb2.put(b"k22", b"val").unwrap();
+        wb2.put(b"k23", b"val").unwrap();
+        wb2.set_sequence_number(200).unwrap();
+
+        let mut wb3 = engine_clone.write_batch();
+        wb3.prepare_for_range(range3_clone);
+        wb3.put(b"k32", b"val").unwrap();
+        wb3.put(b"k33", b"val").unwrap();
+        wb3.put(b"k34", b"val").unwrap();
+        wb3.set_sequence_number(300).unwrap();
+
+        range_prepared_tx.send(true).unwrap();
+
+        wb.write().unwrap();
+        wb2.write().unwrap();
+        wb3.write();
+    });
+
+    range_prepared_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    // Now, three ranges are in write status, delete range will not be performed
+    // until they leave the write status
+
+    engine.evict_range(&range1);
+    engine.evict_range(&range2);
+    engine.evict_range(&range3);
+
+    let verify_data = |range, expected_num: u64| {
+        let handle = engine.core().write().engine().cf_handle(CF_DEFAULT);
+        let (start, end) = encode_key_for_boundary_without_mvcc(range);
+        let mut iter = handle.iterator();
+        let guard = &epoch::pin();
+        let mut count = 0;
+        iter.seek(&start, guard);
+        while iter.valid() && iter.key() < &end {
+            count += 1;
+            iter.next(guard);
+        }
+        assert_eq!(count, expected_num);
+    };
+
+    write_batch_consume_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    delete_range_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    delete_range_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    // Now, a DeleteRange task has been done: actually, the task will be delayed, so
+    // the data has not be deleted
+    verify_data(&range1, 3);
+    // remove failpoint so that the range can leave write status
+    fail::remove("before_clear_ranges_in_being_written");
+    delete_range_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    // Now, data should be deleted
+    verify_data(&range1, 0);
+
+    // Next to test range2
+    fail::cfg("before_clear_ranges_in_being_written", "pause").unwrap();
+    write_batch_consume_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    verify_data(&range2, 2);
+    // remove failpoint so that the range can leave write status
+    fail::remove("before_clear_ranges_in_being_written");
+    delete_range_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    verify_data(&range2, 0);
 }

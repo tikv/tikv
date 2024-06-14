@@ -376,9 +376,11 @@ impl RangeManager {
     }
 
     pub(crate) fn range_overlapped_with_ranges_being_written(&self, range: &CacheRange) -> bool {
-        self.ranges_being_written
-            .iter()
-            .any(|(_, range)| range.iter().any(|range| range.overlaps(&r)))
+        self.ranges_being_written.iter().any(|(_, ranges)| {
+            ranges
+                .iter()
+                .any(|range_being_written| range_being_written.overlaps(range))
+        })
     }
 
     pub(crate) fn set_range_in_being_written(&mut self, write_batch_id: u64, range: &CacheRange) {

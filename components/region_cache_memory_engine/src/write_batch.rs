@@ -187,6 +187,9 @@ impl RangeCacheWriteBatch {
         let duration = start.saturating_elapsed_secs();
         WRITE_DURATION_HISTOGRAM.observe(duration);
 
+        fail::fail_point!("in_memory_engine_write_batch_consumed");
+        fail::fail_point!("before_clear_ranges_in_being_written");
+
         self.engine
             .core
             .write()
