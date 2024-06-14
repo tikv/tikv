@@ -7,7 +7,9 @@
 
 use std::{sync::Arc, time::Duration};
 
+use futures::future::ready;
 use online_config::OnlineConfig;
+use pd_client::PdClient;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
@@ -32,6 +34,7 @@ pub use keys::{decode_key, encoding_for_filter, InternalBytes, InternalKey, Valu
 pub use metrics::flush_range_cache_engine_statistics;
 pub use range_manager::RangeCacheStatus;
 pub use statistics::Statistics as RangeCacheMemoryEngineStatistics;
+use txn_types::TimeStamp;
 pub use write_batch::RangeCacheWriteBatch;
 
 #[derive(Debug, Error)]
@@ -110,13 +113,34 @@ impl RangeCacheEngineConfig {
 pub struct RangeCacheEngineContext {
     config: Arc<VersionTrack<RangeCacheEngineConfig>>,
     statistics: Arc<RangeCacheMemoryEngineStatistics>,
+    pd_client: Arc<dyn PdClient>,
 }
 
 impl RangeCacheEngineContext {
-    pub fn new(config: Arc<VersionTrack<RangeCacheEngineConfig>>) -> RangeCacheEngineContext {
+    pub fn new(
+        config: Arc<VersionTrack<RangeCacheEngineConfig>>,
+        pd_client: Arc<dyn PdClient>,
+    ) -> RangeCacheEngineContext {
         RangeCacheEngineContext {
             config,
             statistics: Arc::default(),
+            pd_client,
+        }
+    }
+
+    pub fn new_for_tests(
+        config: Arc<VersionTrack<RangeCacheEngineConfig>>,
+    ) -> RangeCacheEngineContext {
+        struct MockPdClient;
+        impl PdClient for MockPdClient {
+            fn get_tso(&self) -> pd_client::PdFuture<txn_types::TimeStamp> {
+                Box::pin(ready(Ok(TimeStamp::compose(TimeStamp::physical_now(), 0))))
+            }
+        }
+        RangeCacheEngineContext {
+            config,
+            statistics: Arc::default(),
+            pd_client: Arc::new(MockPdClient),
         }
     }
 

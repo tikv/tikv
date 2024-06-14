@@ -277,12 +277,17 @@ impl RangeCacheMemoryEngine {
         let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
         let skiplist_engine = { core.read().engine().clone() };
 
-        let RangeCacheEngineContext { config, statistics } = range_cache_engine_context;
+        let RangeCacheEngineContext {
+            config,
+            statistics,
+            pd_client,
+        } = range_cache_engine_context;
         assert!(config.value().enabled);
         let memory_controller = Arc::new(MemoryController::new(config.clone(), skiplist_engine));
 
         let bg_work_manager = Arc::new(BgWorkManager::new(
             core.clone(),
+            pd_client,
             config.value().gc_interval.0,
             memory_controller.clone(),
         ));
@@ -543,7 +548,7 @@ pub mod tests {
 
     #[test]
     fn test_overlap_with_pending() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range1 = CacheRange::new(b"k1".to_vec(), b"k3".to_vec());
