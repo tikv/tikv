@@ -1535,7 +1535,7 @@ pub mod tests {
     #[test]
     fn test_gc_one_range() {
         let config = RangeCacheEngineConfig::config_for_test();
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(config),
         )));
         let memory_controller = engine.memory_controller();
