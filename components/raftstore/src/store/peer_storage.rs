@@ -905,7 +905,7 @@ where
             region_id: self.get_region_id(),
             status,
             peer_id: self.peer_id,
-            create_time: Instant::now(),
+            create_time: Instant::now_coarse(),
         };
 
         // Don't schedule the snapshot to region worker.
