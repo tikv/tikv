@@ -432,9 +432,15 @@ impl BackgroundRunnerCore {
                     .remove(&range)
                     .expect(format!("cannot remove range {:?}", range).as_str());
 
-                delete_range_scheduler
-                    .schedule_force(BackgroundTask::DeleteRange(vec![r]))
-                    .unwrap();
+                if let Err(e) =
+                    delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(vec![r]))
+                {
+                    error!(
+                        "schedule delete range failed";
+                        "err" => ?e,
+                    );
+                    assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+                }
 
                 return false;
             }
@@ -483,9 +489,14 @@ impl BackgroundRunnerCore {
 
         core.remove_cache_write_batch(&range);
 
-        delete_range_scheduler
-            .schedule_force(BackgroundTask::DeleteRange(vec![r]))
-            .unwrap();
+        if let Err(e) = delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(vec![r]))
+        {
+            error!(
+                "schedule delete range failed";
+                "err" => ?e,
+            );
+            assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+        }
     }
 }
 

@@ -157,8 +157,9 @@ pub struct RangeManager {
     // writting data for this range. Therefore, we have to delay the DeleteRange task until the
     // range leaves the `ranges_being_written`.
     //
-    // `u64` means write batch id, so when the write batch is consumed by the in-memory engine, all
-    // ranges in it are cleared from `ranges_being_written`.
+    // `u64` means write batch id, we record the ranges of a specific write batch together so when
+    // the write batch is consumed by the in-memory engine, all ranges of it are cleared from
+    // `ranges_being_written`.
     ranges_being_written: HashMap<u64, Vec<CacheRange>>,
     range_evictions: AtomicU64,
 }
