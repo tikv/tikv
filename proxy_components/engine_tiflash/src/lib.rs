@@ -26,11 +26,9 @@ extern crate tikv_alloc;
 extern crate test;
 
 mod cf_names;
-pub use crate::cf_names::*;
 mod cf_options;
 pub use crate::cf_options::*;
 mod compact;
-pub use crate::compact::*;
 mod db_options;
 pub use crate::db_options::*;
 mod engine;
@@ -43,7 +41,7 @@ mod misc;
 pub use crate::misc::*;
 pub mod range_properties;
 mod snapshot;
-pub use crate::{range_properties::*, snapshot::*};
+pub use crate::snapshot::*;
 mod sst;
 pub use crate::sst::*;
 mod sst_partitioner;
@@ -115,7 +113,6 @@ pub use rocksdb::{
 };
 
 pub mod flow_control_factors;
-pub use flow_control_factors::*;
 
 pub mod raw;
 

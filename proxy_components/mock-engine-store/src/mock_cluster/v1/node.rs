@@ -5,13 +5,13 @@ use std::{
     sync::{atomic::AtomicU64, Arc, Mutex},
 };
 
-use health_controller::HealthController;
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
 use encryption_export::DataKeyManager;
 use engine_rocks::RocksSnapshot;
 use engine_store_ffi::core::DebugStruct;
 use engine_traits::{Engines, MiscExt, Peekable, SnapshotContext};
+use health_controller::HealthController;
 use kvproto::{
     metapb,
     raft_cmdpb::*,
@@ -321,7 +321,7 @@ impl Simulator<TiFlashEngine> for NodeCluster {
             (snap_mgr, Some(tmp))
         } else {
             let trans = self.trans.core.lock().unwrap();
-            let &(ref snap_mgr, _) = &trans.snap_paths[&node_id];
+            let (snap_mgr, _) = &trans.snap_paths[&node_id];
             (snap_mgr.clone(), None)
         };
 

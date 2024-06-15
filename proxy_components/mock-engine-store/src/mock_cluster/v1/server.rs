@@ -1,4 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+#![allow(clippy::arc_with_non_send_sync)]
 
 use std::{
     path::Path,
@@ -307,7 +308,8 @@ impl ServerCluster {
             } else {
                 Arc::new(|| false)
             };
-        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host, enable_region_stats_mgr_cb);
+        let region_info_accessor =
+            RegionInfoAccessor::new(&mut coprocessor_host, enable_region_stats_mgr_cb);
 
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());

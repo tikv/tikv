@@ -62,10 +62,7 @@ use raftstore::{
         SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
 };
-use region_cache_memory_engine::{
-    config::RangeCacheConfigManager, RangeCacheEngineContext, RangeCacheMemoryEngine,
-    RangeCacheMemoryEngineStatistics,
-};
+use region_cache_memory_engine::{RangeCacheEngineContext, RangeCacheMemoryEngineStatistics};
 use resource_control::{
     ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
 };
@@ -278,6 +275,7 @@ pub fn run_impl<CER: ConfiguredRaftEngine, F: KvFormat>(
 }
 
 #[inline]
+#[allow(clippy::extra_unused_type_parameters)]
 fn run_impl_only_for_decryption<CER: ConfiguredRaftEngine, F: KvFormat>(
     config: TikvConfig,
     proxy_config: ProxyConfig,
@@ -1561,6 +1559,7 @@ impl<ER: RaftEngine, F: KvFormat> TiKvServer<ER, F> {
                     .unwrap()
                     .join(Path::new(file_system::SPACE_PLACEHOLDER_FILE));
 
+                #[allow(clippy::needless_borrows_for_generic_args)]
                 let placeholder_size: u64 =
                     file_system::get_file_size(&placeholer_file_path).unwrap_or(0);
 

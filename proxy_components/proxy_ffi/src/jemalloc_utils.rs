@@ -33,7 +33,7 @@ fn issue_mallctl(command: &str) -> u64 {
         // See unprefixed_malloc_on_supported_platforms in tikv-jemalloc-sys.
         #[cfg(any(test, feature = "testexport"))]
         {
-            #[cfg(any(feature = "jemalloc"))]
+            #[cfg(feature = "jemalloc")]
             {
                 // See NO_UNPREFIXED_MALLOC
                 #[cfg(any(target_os = "android", target_os = "dragonfly", target_os = "macos"))]

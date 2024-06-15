@@ -1,9 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-use engine_rocks::{get_range_stats, STORE_ENGINE_EVENT_COUNTER_VEC};
+use engine_rocks::STORE_ENGINE_EVENT_COUNTER_VEC;
 use engine_traits::{
     CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
     Range, RangeStats, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt,
-    WriteOptions, ALL_CFS,
+    WriteOptions,
 };
 use rocksdb::{FlushOptions, Range as RocksRange};
 use tikv_util::{box_try, keybuilder::KeyBuilder};

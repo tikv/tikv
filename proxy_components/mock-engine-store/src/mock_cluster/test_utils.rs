@@ -501,7 +501,7 @@ pub fn get_valid_compact_index_by(
     states: &HashMap<u64, States>,
     use_nodes: Option<Vec<u64>>,
 ) -> (u64, u64) {
-    let set = use_nodes.map(|nodes| HashSet::from_iter(nodes.clone().into_iter()));
+    let set = use_nodes.map(|nodes| HashSet::from_iter(nodes.clone()));
     states
         .iter()
         .filter(|(k, _)| {
