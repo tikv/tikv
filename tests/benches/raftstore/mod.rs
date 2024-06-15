@@ -12,7 +12,7 @@ const DEFAULT_DATA_SIZE: usize = 100_000;
 
 fn enc_write_kvs(db: &RocksEngine, kvs: &[(Vec<u8>, Vec<u8>)]) {
     let mut wb = db.write_batch();
-    for &(ref k, ref v) in kvs {
+    for (k, v) in kvs {
         wb.put(&keys::data_key(k), v).unwrap();
     }
     wb.write().unwrap();

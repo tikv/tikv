@@ -3,6 +3,7 @@ name = "engine_rocks"
 version = "0.0.1"
 edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [features]
 trace-lifetime = []
@@ -52,7 +53,7 @@ slog_derive = "0.2"
 tempfile = "3.0"
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
-time = "0.1"
+time = { workspace = true }
 tracker = { workspace = true }
 txn_types = { workspace = true }
 
@@ -62,5 +63,6 @@ package = "rocksdb"
 features = ["encryption"]
 
 [dev-dependencies]
+proptest = "1.0.0"
 rand = "0.8"
 toml = "0.5"

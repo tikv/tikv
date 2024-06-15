@@ -3,17 +3,32 @@ name = "hybrid_engine"
 version = "0.0.1"
 edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [features]
 testexport = []
+failpoints = ["fail/failpoints"]
+
+[[test]]
+name = "failpoints"
+path = "tests/failpoints/mod.rs"
+required-features = ["failpoints"]
 
 [dependencies]
+crossbeam = "0.8"
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
+fail = "0.5"
+lazy_static = "1.4.0"
+online_config = { workspace = true }
+prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
+prometheus-static-metric = "0.5"
+region_cache_memory_engine = { workspace = true }
+slog = { workspace = true }
+slog-global = { workspace = true }
+tempfile = "3.0"
 tikv_util = { workspace = true }
 txn_types = { workspace = true }
 
 [dev-dependencies]
-engine_rocks = { workspace = true }
-region_cache_memory_engine = { workspace = true }
 tempfile = "3.0"

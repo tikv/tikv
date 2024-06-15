@@ -49,13 +49,11 @@ elif [[ $M == "testnew" ]]; then
     LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::jemalloc --features="jemalloc"
     cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::write
     cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::snapshot
-    cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::store
     cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::config
     cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::normal::restart
     cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::normal::persist
     cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::ingest
     cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::engine
-    cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::config
     cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::store
     cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::region
     cargo test --package proxy_tests --features="$ENABLE_FEATURES" --test proxy shared::flashback

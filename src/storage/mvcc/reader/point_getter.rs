@@ -1287,7 +1287,7 @@ mod tests {
         let k = b"k";
 
         // Write enough LOCK recrods
-        for start_ts in (1..30).into_iter().step_by(2) {
+        for start_ts in (1..30).step_by(2) {
             must_prewrite_lock(&mut engine, k, k, start_ts);
             must_commit(&mut engine, k, start_ts, start_ts + 1);
         }

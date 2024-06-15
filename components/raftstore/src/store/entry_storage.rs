@@ -81,6 +81,11 @@ impl CachedEntries {
     pub fn take_entries(&self) -> (Vec<Entry>, usize) {
         mem::take(&mut *self.entries.lock().unwrap())
     }
+
+    #[cfg(test)]
+    pub fn has_entries(&self) -> bool {
+        !self.entries.lock().unwrap().0.is_empty()
+    }
 }
 
 struct EntryCache {
@@ -236,10 +241,16 @@ impl EntryCache {
 
         // Clean cached entries which have been already sent to apply threads. For
         // example, if entries [1, 10), [10, 20), [20, 30) are sent to apply threads and
-        // `compact_to(15)` is called, only [20, 30) will still be kept in cache.
+        // `compact_to(15)` is called:
+        // - if persisted >= 19, then only [20, 30) will still be kept in cache.
+        // - if persisted < 19, then [10, 20), [20, 30) will still be kept in cache.
         let old_trace_cap = self.trace.capacity();
         while let Some(cached_entries) = self.trace.pop_front() {
-            if cached_entries.range.start >= idx {
+            // Do not evict cached entries if not all of them are persisted.
+            // After PR #16626, it is possible that applying entries are not
+            // yet fully persisted. Therefore, it should not free these
+            // entries until they are completely persisted.
+            if cached_entries.range.start >= idx || cached_entries.range.end > self.persisted + 1 {
                 self.trace.push_front(cached_entries);
                 let trace_len = self.trace.len();
                 let trace_cap = self.trace.capacity();
@@ -479,12 +490,8 @@ fn validate_states<ER: RaftEngine>(
         info!("updating commit index"; "region_id" => region_id, "old" => commit_index, "new" => recorded_commit_index);
         commit_index = recorded_commit_index;
     }
-    // Invariant: applied index <= max(commit index, recorded commit index)
     if apply_state.get_applied_index() > commit_index {
-        return Err(box_err!(
-            "applied index > max(commit index, recorded commit index), {}",
-            state_str()
-        ));
+        info!("applied index is larger than recorded commit index"; "apply" => apply_state.get_applied_index(), "commit" => commit_index);
     }
     // Invariant: max(commit index, recorded commit index) <= last index
     if commit_index > last_index {
@@ -538,6 +545,7 @@ pub fn init_last_term<ER: RaftEngine>(
 pub fn init_applied_term<ER: RaftEngine>(
     raft_engine: &ER,
     region: &metapb::Region,
+    raft_state: &RaftLocalState,
     apply_state: &RaftApplyState,
 ) -> Result<u64> {
     if apply_state.applied_index == RAFT_INIT_LOG_INDEX {
@@ -546,6 +554,13 @@ pub fn init_applied_term<ER: RaftEngine>(
     let truncated_state = apply_state.get_truncated_state();
     if apply_state.applied_index == truncated_state.get_index() {
         return Ok(truncated_state.get_term());
+    }
+
+    // Applied index > last index means that some committed entries have applied but
+    // not persisted, in this case, the raft term must not be changed, so we use the
+    // term persisted in apply_state.
+    if apply_state.applied_index > raft_state.get_last_index() {
+        return Ok(apply_state.commit_term);
     }
 
     match raft_engine.get_entry(region.get_id(), apply_state.applied_index)? {
@@ -662,7 +677,7 @@ impl<EK: KvEngine, ER: RaftEngine> EntryStorage<EK, ER> {
             ));
         }
         let last_term = init_last_term(&raft_engine, region, &raft_state, &apply_state)?;
-        let applied_term = init_applied_term(&raft_engine, region, &apply_state)?;
+        let applied_term = init_applied_term(&raft_engine, region, &raft_state, &apply_state)?;
         Ok(Self {
             region_id: region.id,
             peer_id,
@@ -1336,26 +1351,30 @@ pub mod tests {
         };
 
         // Test the initial data structure size.
-        let (tx, rx) = mpsc::sync_channel(8);
+        let (tx, rx) = mpsc::sync_channel(1);
+        let check_mem_size_change = |expect: i64| {
+            assert_eq!(rx.try_recv().unwrap(), expect);
+            rx.try_recv().unwrap_err();
+        };
         let mut cache = EntryCache::new_with_cb(move |c: i64| tx.send(c).unwrap());
-        assert_eq!(rx.try_recv().unwrap(), 896);
+        check_mem_size_change(0);
 
         cache.append(
             0,
             0,
             &[new_padded_entry(101, 1, 1), new_padded_entry(102, 1, 2)],
         );
-        assert_eq!(rx.try_recv().unwrap(), 3);
+        check_mem_size_change(419);
 
         cache.prepend(vec![new_padded_entry(100, 1, 1)]);
-        assert_eq!(rx.try_recv().unwrap(), 1);
+        check_mem_size_change(1);
         cache.persisted = 100;
         cache.compact_to(101);
-        assert_eq!(rx.try_recv().unwrap(), -1);
+        check_mem_size_change(-1);
 
         // Test size change for one overlapped entry.
         cache.append(0, 0, &[new_padded_entry(102, 2, 3)]);
-        assert_eq!(rx.try_recv().unwrap(), 1);
+        check_mem_size_change(1);
 
         // Test size change for all overlapped entries.
         cache.append(
@@ -1363,42 +1382,42 @@ pub mod tests {
             0,
             &[new_padded_entry(101, 3, 4), new_padded_entry(102, 3, 5)],
         );
-        assert_eq!(rx.try_recv().unwrap(), 5);
+        check_mem_size_change(5);
 
         cache.append(0, 0, &[new_padded_entry(103, 3, 6)]);
-        assert_eq!(rx.try_recv().unwrap(), 6);
+        check_mem_size_change(6);
 
         // Test trace a dangle entry.
         let cached_entries = CachedEntries::new(vec![new_padded_entry(100, 1, 1)]);
         cache.trace_cached_entries(cached_entries);
-        assert_eq!(rx.try_recv().unwrap(), 1);
+        check_mem_size_change(97);
 
         // Test trace an entry which is still in cache.
         let cached_entries = CachedEntries::new(vec![new_padded_entry(102, 3, 5)]);
         cache.trace_cached_entries(cached_entries);
-        assert_eq!(rx.try_recv().unwrap(), 0);
+        check_mem_size_change(0);
 
         // Test compare `cached_last` with `trunc_to_idx` in `EntryCache::append_impl`.
         cache.append(0, 0, &[new_padded_entry(103, 4, 7)]);
-        assert_eq!(rx.try_recv().unwrap(), 1);
+        check_mem_size_change(1);
 
         // Test compact one traced dangle entry and one entry in cache.
         cache.persisted = 101;
         cache.compact_to(102);
-        assert_eq!(rx.try_recv().unwrap(), -5);
+        check_mem_size_change(-5);
 
         // Test compact the last traced dangle entry.
         cache.persisted = 102;
         cache.compact_to(103);
-        assert_eq!(rx.try_recv().unwrap(), -5);
+        check_mem_size_change(-5);
 
         // Test compact all entries.
         cache.persisted = 103;
         cache.compact_to(104);
-        assert_eq!(rx.try_recv().unwrap(), -7);
+        check_mem_size_change(-7);
 
         drop(cache);
-        assert_eq!(rx.try_recv().unwrap(), -896);
+        check_mem_size_change(-512);
     }
 
     #[test]
@@ -1875,5 +1894,64 @@ pub mod tests {
         store.maybe_warm_up_entry_cache(res);
         // Cache should be warmed up.
         assert_eq!(store.entry_cache_first_index().unwrap(), 5);
+    }
+
+    #[test]
+    fn test_evict_cached_entries() {
+        let ents = vec![new_entry(3, 3)];
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
+        let worker = LazyWorker::new("snap-manager");
+        let sched = worker.scheduler();
+        let (dummy_scheduler, _) = dummy_scheduler();
+        let mut store = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
+
+        // initial cache
+        for i in 4..10 {
+            append_ents(&mut store, &[new_entry(i, 4)]);
+        }
+
+        let cached_entries = vec![
+            CachedEntries::new(vec![new_entry(4, 4)]),
+            CachedEntries::new(vec![new_entry(5, 4)]),
+            CachedEntries::new(vec![new_entry(6, 4), new_entry(7, 4), new_entry(8, 4)]),
+            CachedEntries::new(vec![new_entry(9, 4)]),
+        ];
+        for ents in &cached_entries {
+            store.trace_cached_entries(ents.clone());
+        }
+        assert_eq!(store.cache.first_index().unwrap(), 4);
+
+        store.evict_entry_cache(false);
+        assert_eq!(store.cache.first_index().unwrap(), 4);
+        assert!(cached_entries[0].has_entries());
+
+        store.cache.persisted = 4;
+        store.evict_entry_cache(false);
+        assert_eq!(store.cache.first_index().unwrap(), 5);
+        assert!(!cached_entries[0].has_entries());
+        assert!(cached_entries[1].has_entries());
+
+        store.cache.persisted = 5;
+        store.evict_entry_cache(false);
+        assert_eq!(store.cache.first_index().unwrap(), 6);
+        assert!(!cached_entries[1].has_entries());
+        assert!(cached_entries[2].has_entries());
+
+        for idx in [6, 7] {
+            store.cache.persisted = idx;
+            store.evict_entry_cache(false);
+            assert_eq!(store.cache.first_index().unwrap(), idx + 1);
+            assert!(cached_entries[2].has_entries());
+        }
+
+        store.cache.persisted = 8;
+        store.evict_entry_cache(false);
+        assert_eq!(store.cache.first_index().unwrap(), 9);
+        assert!(!cached_entries[2].has_entries());
+
+        store.cache.persisted = 9;
+        store.evict_entry_cache(false);
+        assert!(store.cache.first_index().is_none());
+        assert!(!cached_entries[3].has_entries());
     }
 }

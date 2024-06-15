@@ -8,7 +8,8 @@ use std::{
     u64,
 };
 
-use engine_traits::{MvccProperties, Range};
+use api_version::{ApiV2, KeyMode, KvFormat};
+use engine_traits::{raw_ttl::ttl_current_ts, MvccProperties, Range, RangeStats};
 use rocksdb::{
     DBEntryType, TablePropertiesCollector, TablePropertiesCollectorFactory, TitanBlobIndex,
     UserCollectedProperties,
@@ -130,12 +131,6 @@ impl<'a> DecodeProperties for UserCollectedPropertiesDecoder<'a> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Copy)]
-pub enum RangeOffsetKind {
-    Size,
-    Keys,
-}
-
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RangeOffsets {
     pub size: u64,
@@ -149,10 +144,7 @@ pub struct RangeProperties {
 
 impl RangeProperties {
     pub fn get(&self, key: &[u8]) -> &RangeOffsets {
-        let idx = self
-            .offsets
-            .binary_search_by_key(&key, |&(ref k, _)| k)
-            .unwrap();
+        let idx = self.offsets.binary_search_by_key(&key, |(k, _)| k).unwrap();
         &self.offsets[idx].1
     }
 
@@ -205,17 +197,16 @@ impl RangeProperties {
     }
 
     /// Returns `size` and `keys`.
-    #[allow(clippy::redundant_closure)]
     pub fn get_approximate_distance_in_range(&self, start: &[u8], end: &[u8]) -> (u64, u64) {
         assert!(start <= end);
         if start == end {
             return (0, 0);
         }
-        let start_offset = match self.offsets.binary_search_by_key(&start, |&(ref k, _)| k) {
+        let start_offset = match self.offsets.binary_search_by_key(&start, |(k, _)| k) {
             Ok(idx) => Some(idx),
             Err(next_idx) => next_idx.checked_sub(1),
         };
-        let end_offset = match self.offsets.binary_search_by_key(&end, |&(ref k, _)| k) {
+        let end_offset = match self.offsets.binary_search_by_key(&end, |(k, _)| k) {
             Ok(idx) => Some(idx),
             Err(next_idx) => next_idx.checked_sub(1),
         };
@@ -231,10 +222,7 @@ impl RangeProperties {
         start_key: &[u8],
         end_key: &[u8],
     ) -> Vec<(Vec<u8>, RangeOffsets)> {
-        let start_offset = match self
-            .offsets
-            .binary_search_by_key(&start_key, |&(ref k, _)| k)
-        {
+        let start_offset = match self.offsets.binary_search_by_key(&start_key, |(k, _)| k) {
             Ok(idx) => {
                 if idx == self.offsets.len() - 1 {
                     return vec![];
@@ -245,7 +233,7 @@ impl RangeProperties {
             Err(next_idx) => next_idx,
         };
 
-        let end_offset = match self.offsets.binary_search_by_key(&end_key, |&(ref k, _)| k) {
+        let end_offset = match self.offsets.binary_search_by_key(&end_key, |(k, _)| k) {
             Ok(idx) => {
                 if idx == 0 {
                     return vec![];
@@ -387,7 +375,8 @@ impl TablePropertiesCollectorFactory<RangePropertiesCollector> for RangeProperti
     }
 }
 
-/// Can only be used for write CF.
+/// Can be used for write CF in TiDB & TxnKV scenario, or be used for default CF
+/// in RawKV scenario.
 pub struct MvccPropertiesCollector {
     props: MvccProperties,
     last_row: Vec<u8>,
@@ -395,10 +384,12 @@ pub struct MvccPropertiesCollector {
     row_versions: u64,
     cur_index_handle: IndexHandle,
     row_index_handles: IndexHandles,
+    key_mode: KeyMode, // Use KeyMode::Txn for both TiDB & TxnKV, KeyMode::Raw for RawKV.
+    current_ts: u64,
 }
 
 impl MvccPropertiesCollector {
-    fn new() -> MvccPropertiesCollector {
+    fn new(key_mode: KeyMode) -> MvccPropertiesCollector {
         MvccPropertiesCollector {
             props: MvccProperties::new(),
             last_row: Vec::new(),
@@ -406,6 +397,8 @@ impl MvccPropertiesCollector {
             row_versions: 0,
             cur_index_handle: IndexHandle::default(),
             row_index_handles: IndexHandles::new(),
+            key_mode,
+            current_ts: ttl_current_ts(),
         }
     }
 }
@@ -415,7 +408,10 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
         // TsFilter filters sst based on max_ts and min_ts during iterating.
         // To prevent seeing outdated (GC) records, we should consider
         // RocksDB delete entry type.
-        if entry_type != DBEntryType::Put && entry_type != DBEntryType::Delete {
+        if entry_type != DBEntryType::Put
+            && entry_type != DBEntryType::Delete
+            && entry_type != DBEntryType::BlobIndex
+        {
             return;
         }
 
@@ -453,18 +449,43 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
             self.props.max_row_versions = self.row_versions;
         }
 
-        let write_type = match Write::parse_type(value) {
-            Ok(v) => v,
-            Err(_) => {
-                self.num_errors += 1;
-                return;
-            }
-        };
+        if entry_type != DBEntryType::BlobIndex {
+            if self.key_mode == KeyMode::Raw {
+                let decode_raw_value = ApiV2::decode_raw_value(value);
+                match decode_raw_value {
+                    Ok(raw_value) => {
+                        if raw_value.is_valid(self.current_ts) {
+                            self.props.num_puts += 1;
+                        } else {
+                            self.props.num_deletes += 1;
+                        }
+                        if let Some(expire_ts) = raw_value.expire_ts {
+                            self.props.ttl.add(expire_ts);
+                        }
+                    }
+                    Err(_) => {
+                        self.num_errors += 1;
+                    }
+                }
+            } else {
+                let write_type = match Write::parse_type(value) {
+                    Ok(v) => v,
+                    Err(_) => {
+                        self.num_errors += 1;
+                        return;
+                    }
+                };
 
-        match write_type {
-            WriteType::Put => self.props.num_puts += 1,
-            WriteType::Delete => self.props.num_deletes += 1,
-            _ => {}
+                match write_type {
+                    WriteType::Put => self.props.num_puts += 1,
+                    WriteType::Delete => self.props.num_deletes += 1,
+                    _ => {}
+                }
+            }
+        } else {
+            // NOTE: if titan is enabled, the entry will always be treated as PUT.
+            // Be careful if you try to enable Titan on CF_WRITE.
+            self.props.num_puts += 1;
         }
 
         // Add new row.
@@ -494,22 +515,33 @@ impl TablePropertiesCollector for MvccPropertiesCollector {
     }
 }
 
-/// Can only be used for write CF.
+/// Can be used for write CF of TiDB/TxnKV, default CF of RawKV.
 #[derive(Default)]
 pub struct MvccPropertiesCollectorFactory {}
 
 impl TablePropertiesCollectorFactory<MvccPropertiesCollector> for MvccPropertiesCollectorFactory {
     fn create_table_properties_collector(&mut self, _: u32) -> MvccPropertiesCollector {
-        MvccPropertiesCollector::new()
+        MvccPropertiesCollector::new(KeyMode::Txn)
     }
 }
 
-pub fn get_range_entries_and_versions(
+#[derive(Default)]
+pub struct RawMvccPropertiesCollectorFactory {}
+
+impl TablePropertiesCollectorFactory<MvccPropertiesCollector>
+    for RawMvccPropertiesCollectorFactory
+{
+    fn create_table_properties_collector(&mut self, _: u32) -> MvccPropertiesCollector {
+        MvccPropertiesCollector::new(KeyMode::Raw)
+    }
+}
+
+pub fn get_range_stats(
     engine: &crate::RocksEngine,
     cf: &str,
     start: &[u8],
     end: &[u8],
-) -> Option<(u64, u64)> {
+) -> Option<RangeStats> {
     let range = Range::new(start, end);
     let collection = match engine.get_properties_of_tables_in_range(cf, &[range]) {
         Ok(v) => v,
@@ -531,12 +563,16 @@ pub fn get_range_entries_and_versions(
         num_entries += v.num_entries();
         props.add(&mvcc);
     }
-
-    Some((num_entries, props.num_versions))
+    Some(RangeStats {
+        num_entries,
+        num_versions: props.num_versions,
+        num_rows: props.num_rows,
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    use api_version::RawValue;
     use engine_traits::{MiscExt, SyncMutable, CF_WRITE, LARGE_CFS};
     use rand::Rng;
     use tempfile::Builder;
@@ -746,10 +782,9 @@ mod tests {
 
         let start_keys = keys::data_key(&[]);
         let end_keys = keys::data_end_key(&[]);
-        let (entries, versions) =
-            get_range_entries_and_versions(&db, CF_WRITE, &start_keys, &end_keys).unwrap();
-        assert_eq!(entries, (cases.len() * 2) as u64);
-        assert_eq!(versions, cases.len() as u64);
+        let range_stats = get_range_stats(&db, CF_WRITE, &start_keys, &end_keys).unwrap();
+        assert_eq!(range_stats.num_entries, (cases.len() * 2) as u64);
+        assert_eq!(range_stats.num_versions, cases.len() as u64);
     }
 
     #[test]
@@ -765,7 +800,7 @@ mod tests {
             ("ef", 6, WriteType::Put, DBEntryType::Delete),
             ("gh", 7, WriteType::Delete, DBEntryType::Put),
         ];
-        let mut collector = MvccPropertiesCollector::new();
+        let mut collector = MvccPropertiesCollector::new(KeyMode::Txn);
         for &(key, ts, write_type, entry_type) in &cases {
             let ts = ts.into();
             let k = Key::from_raw(key.as_bytes()).append_ts(ts);
@@ -784,6 +819,44 @@ mod tests {
         assert_eq!(props.max_row_versions, 3);
     }
 
+    #[test]
+    fn test_mvcc_properties_rawkv_mode() {
+        let test_raws = vec![
+            (b"r\0a", 1, false, u64::MAX),
+            (b"r\0a", 5, false, u64::MAX),
+            (b"r\0a", 7, false, u64::MAX),
+            (b"r\0b", 1, false, u64::MAX),
+            (b"r\0b", 1, true, u64::MAX),
+            (b"r\0c", 1, true, 10),
+            (b"r\0d", 1, true, 10),
+        ];
+
+        let mut collector = MvccPropertiesCollector::new(KeyMode::Raw);
+        for &(key, ts, is_delete, expire_ts) in &test_raws {
+            let encode_key = ApiV2::encode_raw_key(key, Some(ts.into()));
+            let k = keys::data_key(encode_key.as_encoded());
+            let v = ApiV2::encode_raw_value(RawValue {
+                user_value: &[0; 10][..],
+                expire_ts: Some(expire_ts),
+                is_delete,
+            });
+            collector.add(&k, &v, DBEntryType::Put, 0, 0);
+        }
+
+        let result = UserProperties(collector.finish());
+
+        let props = RocksMvccProperties::decode(&result).unwrap();
+        assert_eq!(props.min_ts, 1.into());
+        assert_eq!(props.max_ts, 7.into());
+        assert_eq!(props.num_rows, 4);
+        assert_eq!(props.num_deletes, 3);
+        assert_eq!(props.num_puts, 4);
+        assert_eq!(props.num_versions, 7);
+        assert_eq!(props.max_row_versions, 3);
+        assert_eq!(props.ttl.max_expire_ts, Some(u64::MAX));
+        assert_eq!(props.ttl.min_expire_ts, Some(10));
+    }
+
     #[bench]
     fn bench_mvcc_properties(b: &mut Bencher) {
         let ts = 1.into();
@@ -797,9 +870,9 @@ mod tests {
             entries.push((k, w.as_ref().to_bytes()));
         }
 
-        let mut collector = MvccPropertiesCollector::new();
+        let mut collector = MvccPropertiesCollector::new(KeyMode::Txn);
         b.iter(|| {
-            for &(ref k, ref v) in &entries {
+            for (k, v) in &entries {
                 collector.add(k, v, DBEntryType::Put, 0, 0);
             }
         });

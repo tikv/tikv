@@ -84,7 +84,7 @@
 # max-backups = 0
 
 [memory]
-## Whether enable the heap profiling which may have a bit performance overhead about 2% for the
+## Whether enables the heap profiling which may have a bit performance overhead about 2% for the
 ## default sample rate.
 # enable-heap-profiling = true
 
@@ -94,6 +94,10 @@
 ## The default sample interval is 512 KB. It only accepts power of two, otherwise it will be
 ## rounded up to the next power of two.
 # profiling-sample-per-bytes = "512KB"
+
+## Whether allocates the exclusive arena for threads.
+## When disabled, the metric of memory usage for each thread would be unavailable.
+# enable-thread-exclusive-arena = true
 
 ## Configurations for the single thread pool serving read requests.
 [readpool.unified]
@@ -481,7 +485,7 @@
 
 ## Use how many threads to handle raft io tasks
 ## If it is 0, it means io tasks are handled in store threads.
-# store-io-pool-size = 0
+# store-io-pool-size = 1
 
 ## When the size of raft db writebatch exceeds this value, write will be triggered.
 # raft-write-size-limit = "1MB"
@@ -672,8 +676,8 @@
 [rocksdb.titan]
 ## Enables or disables `Titan`. Note that Titan is still an experimental feature. Once
 ## enabled, it can't fall back. Forced fallback may result in data loss.
-## default: false
-# enabled = false
+## Titan is default on since v7.6.0. This won't affect deployments existed before v7.6.0.
+# enabled = true
 
 ## Maximum number of threads of `Titan` background gc jobs.
 ## default: 1
@@ -927,8 +931,9 @@
 [rocksdb.defaultcf.titan]
 ## The smallest value to store in blob files. Value smaller than
 ## this threshold will be inlined in base DB.
-## default: 1KB
-# min-blob-size = "1KB"
+## The default value is 32KB since v7.6.0. But it won't affect deployments existed
+## before v7.6.0 of which the default value is 1KB.
+# min-blob-size = "32KB"
 
 ## The compression algorithm used to compress data in blob files.
 ## Compression method.
@@ -948,6 +953,11 @@
 ## It has no effect when `blob-file-compression` is not `zstd`.
 ## default: 0
 # zstd-dict-size = 0
+
+## Whether to share blob cache with block cache. If set to true, Titan would use the shared block 
+## cache configured in `storage.block_cache` and ignore the setting of `blob-cache-size`.
+## default: true
+# shared-blob-cache = true
 
 ## Specifics cache size for blob records
 ## default: 0

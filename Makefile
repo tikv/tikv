@@ -116,12 +116,6 @@ else
 # Caller is responsible for setting up test engine features
 endif
 
-ifneq ($(NO_CLOUD),1)
-ENABLE_FEATURES += cloud-aws
-ENABLE_FEATURES += cloud-gcp
-ENABLE_FEATURES += cloud-azure
-endif
-
 export DOCKER_FILE ?= Dockerfile
 export DOCKER_IMAGE_NAME ?= pingcap/tikv
 export DOCKER_IMAGE_TAG ?= latest

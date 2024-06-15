@@ -215,6 +215,43 @@ pub mod compression_type_serde {
     }
 }
 
+impl From<CompressionType> for ConfigValue {
+    fn from(comp: CompressionType) -> ConfigValue {
+        let str_value = match comp {
+            CompressionType::No => "no",
+            CompressionType::Snappy => "snappy",
+            CompressionType::Zlib => "zlib",
+            CompressionType::Bz2 => "bzip2",
+            CompressionType::Lz4 => "lz4",
+            CompressionType::Lz4hc => "lz4hc",
+            CompressionType::Zstd => "zstd",
+            CompressionType::ZstdNotFinal => "zstd-not-final",
+        };
+        ConfigValue::String(str_value.into())
+    }
+}
+
+impl TryFrom<ConfigValue> for CompressionType {
+    type Error = String;
+    fn try_from(c: ConfigValue) -> Result<CompressionType, Self::Error> {
+        if let ConfigValue::String(s) = c {
+            match s {
+                s if s.eq_ignore_ascii_case("no") => Ok(CompressionType::No),
+                s if s.eq_ignore_ascii_case("snappy") => Ok(CompressionType::Snappy),
+                s if s.eq_ignore_ascii_case("zlib") => Ok(CompressionType::Zlib),
+                s if s.eq_ignore_ascii_case("bzip2") => Ok(CompressionType::Bz2),
+                s if s.eq_ignore_ascii_case("lz4") => Ok(CompressionType::Lz4),
+                s if s.eq_ignore_ascii_case("lz4hc") => Ok(CompressionType::Lz4hc),
+                s if s.eq_ignore_ascii_case("zstd") => Ok(CompressionType::Zstd),
+                s if s.eq_ignore_ascii_case("zstd-not-final") => Ok(CompressionType::ZstdNotFinal),
+                _ => Err(format!("invalid compression type: {:?}", s)),
+            }
+        } else {
+            panic!("expect: ConfigValue::String, got: {:?}", c);
+        }
+    }
+}
+
 pub mod checksum_serde {
     use std::fmt;
 

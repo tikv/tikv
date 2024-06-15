@@ -56,7 +56,7 @@ use test_raftstore::{
     new_tikv_config_with_api_ver, new_transfer_leader_cmd, sleep_ms, Config, Filter, FilterFactory,
     PartitionFilterFactory, RawEngine,
 };
-use tikv::{server::Result as ServerResult, storage::config::EngineType};
+use tikv::{config::TikvConfig, server::Result as ServerResult, storage::config::EngineType};
 use tikv_util::{
     box_err, box_try, debug, error,
     future::block_on_timeout,
@@ -223,7 +223,7 @@ pub trait Simulator<EK: KvEngine> {
             None => {
                 error!("call_query_on_node receives none response"; "request" => ?request);
                 // Do not unwrap here, sometimes raftstore v2 may return none.
-                return Err(box_err!("receives none response {:?}", request));
+                Err(box_err!("receives none response {:?}", request))
             }
         }
     }
@@ -405,10 +405,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
         let mut tikv_cfg = new_tikv_config_with_api_ver(id, api_version);
         tikv_cfg.storage.engine = EngineType::RaftKv2;
         Cluster {
-            cfg: Config {
-                tikv: tikv_cfg,
-                prefer_mem: true,
-            },
+            cfg: Config::new(tikv_cfg, true),
             count,
             tablet_registries: HashMap::default(),
             key_managers_map: HashMap::default(),
@@ -429,6 +426,11 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
             pd_client,
             engine_creator,
         }
+    }
+
+    pub fn set_cfg(&mut self, mut cfg: TikvConfig) {
+        cfg.cfg_path = self.cfg.tikv.cfg_path.clone();
+        self.cfg.tikv = cfg;
     }
 
     pub fn id(&self) -> u64 {

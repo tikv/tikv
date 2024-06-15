@@ -1072,7 +1072,16 @@ def heatmap_panel_graph_panel_histogram_quantile_pairs(
     metric: str,
     label_selectors=[],
     graph_by_labels=[],
+    graph_hides: list[str] = ["count"],
 ) -> list[Panel]:
+    hide_count = False
+    hide_avg = False
+    for hide in graph_hides:
+        if hide == "count":
+            hide_count = True
+        elif hide == "avg":
+            hide_avg = True
+
     return [
         heatmap_panel(
             title=heatmap_title,
@@ -1088,6 +1097,7 @@ def heatmap_panel_graph_panel_histogram_quantile_pairs(
             yaxes=yaxes(left_format=yaxis_format),
             label_selectors=label_selectors,
             by_labels=graph_by_labels,
-            hide_count=True,
+            hide_count=hide_count,
+            hide_avg=hide_avg,
         ),
     ]

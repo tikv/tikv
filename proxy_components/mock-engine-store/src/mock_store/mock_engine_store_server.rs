@@ -567,7 +567,7 @@ unsafe extern "C" fn ffi_atomic_update_proxy(
     arg2: *mut interfaces_ffi::RaftStoreProxyFFIHelper,
 ) {
     let store = into_engine_store_server_wrap(arg1);
-    store.maybe_proxy_helper = Some(&mut *(arg2 as *mut RaftStoreProxyFFIHelper));
+    store.maybe_proxy_helper = Some(arg2);
 }
 
 unsafe extern "C" fn ffi_handle_destroy(

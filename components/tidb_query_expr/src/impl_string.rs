@@ -63,13 +63,13 @@ pub fn oct_string(s: BytesRef, writer: BytesWriter) -> Result<BytesGuard> {
     if let Some(&c) = trimmed.next() {
         if c == b'-' {
             negative = true;
-        } else if (b'0'..=b'9').contains(&c) {
+        } else if c.is_ascii_digit() {
             r = Some(u64::from(c) - u64::from(b'0'));
         } else if c != b'+' {
             return Ok(writer.write(Some(b"0".to_vec())));
         }
 
-        for c in trimmed.take_while(|&c| (b'0'..=b'9').contains(c)) {
+        for c in trimmed.take_while(|&c| c.is_ascii_digit()) {
             r = r
                 .and_then(|r| r.checked_mul(10))
                 .and_then(|r| r.checked_add(u64::from(*c - b'0')));
@@ -698,7 +698,7 @@ pub fn elt(raw_args: &[ScalarValueRef]) -> Result<Option<Bytes>> {
         None => None,
         Some(i) => {
             let i = *i;
-            if i <= 0 || i + 1 > raw_args.len() as i64 {
+            if i <= 0 || i >= raw_args.len() as i64 {
                 return Ok(None);
             }
             raw_args[i as usize].as_bytes().map(|x| x.to_vec())
@@ -886,7 +886,7 @@ impl TrimDirection {
 }
 
 #[inline]
-fn trim<'a, 'b>(string: &'a [u8], pattern: &'b [u8], direction: TrimDirection) -> &'a [u8] {
+fn trim<'a>(string: &'a [u8], pattern: &[u8], direction: TrimDirection) -> &'a [u8] {
     if pattern.is_empty() {
         return string;
     }
@@ -3661,6 +3661,14 @@ mod tests {
             (
                 vec![
                     Some(-1).into(),
+                    None::<Bytes>.into(),
+                    Some(b"Hello World!".to_vec()).into(),
+                ],
+                None,
+            ),
+            (
+                vec![
+                    Some(9223372036854775807).into(),
                     None::<Bytes>.into(),
                     Some(b"Hello World!".to_vec()).into(),
                 ],

@@ -38,7 +38,7 @@ impl<T: Simulator<TiFlashEngine>> Cluster<T> {
         let mut node_ids: Vec<u64> = self.engines.iter().map(|(&id, _)| id).collect();
         // We force iterate engines in sorted order.
         node_ids.sort();
-        for (_, node_id) in node_ids.iter().enumerate() {
+        for node_id in node_ids.iter() {
             // Always at the front of the vector since iterate from 0.
             self.register_ffi_helper_set(Some(0), *node_id);
         }

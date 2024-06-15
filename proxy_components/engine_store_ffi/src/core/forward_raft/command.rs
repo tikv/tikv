@@ -458,7 +458,7 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
                                 .pending_delete_ssts
                                 .write()
                                 .expect("lock error")
-                                .drain_filter(|e| e.meta.get_region_id() == region_id)
+                                .extract_if(|e| e.meta.get_region_id() == region_id)
                                 .collect();
                             apply_ctx_info.delete_ssts.append(&mut sst_in_region);
                             apply_ctx_info.delete_ssts.append(v);

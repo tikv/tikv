@@ -13,7 +13,7 @@ test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
 test-engines-panic = ["tikv/test-engines-panic"]
 
 [dependencies]
-chrono = "0.4"
+chrono = { workspace = true }
 encryption = { workspace = true }
 encryption_export = { workspace = true }
 engine_rocks = { workspace = true }

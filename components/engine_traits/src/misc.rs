@@ -7,7 +7,7 @@
 
 use crate::{
     cf_names::CfNamesExt, errors::Result, flow_control_factors::FlowControlFactorsExt,
-    range::Range, WriteBatchExt, WriteOptions,
+    range::Range, KvEngine, WriteBatchExt, WriteOptions,
 };
 
 #[derive(Clone, Debug)]
@@ -121,6 +121,12 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt + WriteBatchExt {
 
     fn sync_wal(&self) -> Result<()>;
 
+    /// Disable manual compactions, some on-going manual compactions may be
+    /// aborted.
+    fn disable_manual_compaction(&self) -> Result<()>;
+
+    fn enable_manual_compaction(&self) -> Result<()>;
+
     /// Depending on the implementation, some on-going manual compactions may be
     /// aborted.
     fn pause_background_work(&self) -> Result<()>;
@@ -179,6 +185,6 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt + WriteBatchExt {
         Ok(n)
     }
 
-    type DiskEngine;
+    type DiskEngine: KvEngine;
     fn get_disk_engine(&self) -> &Self::DiskEngine;
 }

@@ -128,6 +128,12 @@ impl Watch {
         self.inner.set_start_revision(rev);
         self
     }
+
+    /// Enhance the request to get the previous KV before the event happens.
+    pub fn with_prev_kv(mut self) -> Self {
+        self.inner.set_prev_kv(true);
+        self
+    }
 }
 
 impl From<Watch> for pb::WatchRequest {
@@ -136,16 +142,59 @@ impl From<Watch> for pb::WatchRequest {
     }
 }
 
+/// A Delete request to the meta storage.
+#[derive(Clone, Debug)]
+pub struct Delete {
+    pub(crate) inner: pb::DeleteRequest,
+}
+
+impl From<Delete> for pb::DeleteRequest {
+    fn from(value: Delete) -> Self {
+        value.inner
+    }
+}
+
+impl Delete {
+    /// Create a new delete request, deleting for exactly one key.
+    pub fn of(key: impl Into<Vec<u8>>) -> Self {
+        let mut inner = pb::DeleteRequest::default();
+        inner.set_key(key.into());
+        Self { inner }
+    }
+
+    /// Enhance the delete, make it be able to delete the prefix of keys.
+    /// The prefix is the key passed to the method [`of`](Delete::of).
+    pub fn prefixed(mut self) -> Self {
+        let mut next = codec::next_prefix_of(self.inner.key.clone());
+        if next.is_empty() {
+            next = INF.to_vec();
+        }
+        self.inner.set_range_end(next);
+        self
+    }
+
+    /// Enhance the query, make it be able to query a range of keys.
+    /// The prefix is the key passed to the method [`of`](Get::of).
+    pub fn range_to(mut self, to: impl Into<Vec<u8>>) -> Self {
+        self.inner.set_range_end(to.into());
+        self
+    }
+}
+
 /// The descriptor of source (caller) of the requests.
 #[derive(Clone, Copy)]
 pub enum Source {
     LogBackup = 0,
+    ResourceControl = 1,
+    RegionLabel = 2,
 }
 
 impl std::fmt::Display for Source {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Source::LogBackup => f.write_str("log_backup"),
+            Source::ResourceControl => f.write_str("resource_control"),
+            Source::RegionLabel => f.write_str("region_label"),
         }
     }
 }
@@ -184,6 +233,11 @@ impl<S: MetaStorageClient> MetaStorageClient for Sourced<S> {
     fn watch(&self, mut req: Watch) -> Self::WatchStream {
         self.prepare_header(req.inner.mut_header());
         self.inner.watch(req)
+    }
+
+    fn delete(&self, mut req: Delete) -> PdFuture<pb::DeleteResponse> {
+        self.prepare_header(req.inner.mut_header());
+        self.inner.delete(req)
     }
 }
 
@@ -269,6 +323,18 @@ impl<S: MetaStorageClient> MetaStorageClient for Checked<S> {
     fn watch(&self, req: Watch) -> Self::WatchStream {
         CheckedStream(self.0.watch(req))
     }
+
+    fn delete(&self, req: Delete) -> PdFuture<pb::DeleteResponse> {
+        self.0
+            .delete(req)
+            .map(|resp| {
+                resp.and_then(|r| {
+                    check_resp_header(r.get_header())?;
+                    Ok(r)
+                })
+            })
+            .boxed()
+    }
 }
 
 impl<S: MetaStorageClient> MetaStorageClient for Arc<S> {
@@ -285,6 +351,10 @@ impl<S: MetaStorageClient> MetaStorageClient for Arc<S> {
     fn watch(&self, req: Watch) -> Self::WatchStream {
         Arc::as_ref(self).watch(req)
     }
+
+    fn delete(&self, req: Delete) -> PdFuture<pb::DeleteResponse> {
+        Arc::as_ref(self).delete(req)
+    }
 }
 
 /// A client which is able to play with the `meta_storage` service.
@@ -298,5 +368,6 @@ pub trait MetaStorageClient: Send + Sync + 'static {
 
     fn get(&self, req: Get) -> PdFuture<pb::GetResponse>;
     fn put(&self, req: Put) -> PdFuture<pb::PutResponse>;
+    fn delete(&self, req: Delete) -> PdFuture<pb::DeleteResponse>;
     fn watch(&self, req: Watch) -> Self::WatchStream;
 }

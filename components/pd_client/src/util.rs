@@ -1,5 +1,6 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
+use core::panic;
 use std::{
     pin::Pin,
     sync::{atomic::AtomicU64, Arc, RwLock},
@@ -945,14 +946,12 @@ pub fn check_resp_header(header: &ResponseHeader) -> Result<()> {
         ErrorType::IncompatibleVersion => Err(Error::Incompatible),
         ErrorType::StoreTombstone => Err(Error::StoreTombstone(err.get_message().to_owned())),
         ErrorType::RegionNotFound => Err(Error::RegionNotFound(vec![])),
-        ErrorType::GlobalConfigNotFound => {
-            Err(Error::GlobalConfigNotFound(err.get_message().to_owned()))
-        }
         ErrorType::DataCompacted => Err(Error::DataCompacted(err.get_message().to_owned())),
         ErrorType::Ok => Ok(()),
         ErrorType::DuplicatedEntry | ErrorType::EntryNotFound => Err(box_err!(err.get_message())),
         ErrorType::Unknown => Err(box_err!(err.get_message())),
         ErrorType::InvalidValue => Err(box_err!(err.get_message())),
+        ErrorType::GlobalConfigNotFound => panic!("unexpected error {:?}", err),
     }
 }
 

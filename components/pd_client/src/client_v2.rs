@@ -12,7 +12,6 @@
 //! connection subscribe changes instead of altering it themselves.
 
 use std::{
-    collections::HashMap,
     fmt::Debug,
     pin::Pin,
     sync::{
@@ -556,12 +555,6 @@ pub trait PdClient {
 
     fn fetch_cluster_id(&mut self) -> Result<u64>;
 
-    fn load_global_config(&mut self, config_path: String) -> PdFuture<HashMap<String, String>>;
-
-    fn watch_global_config(
-        &mut self,
-    ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>>;
-
     fn bootstrap_cluster(
         &mut self,
         stores: metapb::Store,
@@ -805,35 +798,6 @@ impl PdClient for RpcClient {
             }
         });
         Ok((tx, resp_rx))
-    }
-
-    fn load_global_config(&mut self, config_path: String) -> PdFuture<HashMap<String, String>> {
-        use kvproto::pdpb::LoadGlobalConfigRequest;
-        let mut req = LoadGlobalConfigRequest::new();
-        req.set_config_path(config_path);
-        let mut raw_client = self.raw_client.clone();
-        Box::pin(async move {
-            raw_client.wait_for_ready().await?;
-            let fut = raw_client.stub().load_global_config_async(&req)?;
-            match fut.await {
-                Ok(grpc_response) => {
-                    let mut res = HashMap::with_capacity(grpc_response.get_items().len());
-                    for c in grpc_response.get_items() {
-                        res.insert(c.get_name().to_owned(), c.get_value().to_owned());
-                    }
-                    Ok(res)
-                }
-                Err(err) => Err(box_err!("{:?}", err)),
-            }
-        })
-    }
-
-    fn watch_global_config(
-        &mut self,
-    ) -> Result<grpcio::ClientSStreamReceiver<pdpb::WatchGlobalConfigResponse>> {
-        let req = pdpb::WatchGlobalConfigRequest::default();
-        block_on(self.raw_client.wait_for_ready())?;
-        Ok(self.raw_client.stub().watch_global_config(&req)?)
     }
 
     fn fetch_cluster_id(&mut self) -> Result<u64> {
@@ -1343,6 +1307,7 @@ impl PdClient for RpcClient {
                 .observe(timer.saturating_elapsed_secs());
             let resp = raw_client.check_resp(resp)?;
             check_resp_header(resp.get_header())?;
+            crate::check_update_service_safe_point_resp(&resp, &req)?;
             Ok(())
         })
     }

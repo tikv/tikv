@@ -1,6 +1,10 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{CfName, IterOptions, ReadOptions, CF_DEFAULT, DATA_KEY_PREFIX_LEN};
+use engine_rocks::PerfContext;
+use engine_traits::{
+    CfName, IterMetricsCollector, IterOptions, MetricsExt, ReadOptions, CF_DEFAULT,
+    DATA_KEY_PREFIX_LEN,
+};
 use txn_types::{Key, TimeStamp, Value};
 
 use crate::storage::kv::{Error, ErrorInner, Iterator, Result, Snapshot};
@@ -230,6 +234,26 @@ impl<I: Iterator> Iterator for RawMvccIterator<I> {
     }
 }
 
+pub struct RawMvccIterMetricsCollector;
+
+impl IterMetricsCollector for RawMvccIterMetricsCollector {
+    fn internal_delete_skipped_count(&self) -> u64 {
+        PerfContext::get().internal_delete_skipped_count()
+    }
+
+    fn internal_key_skipped_count(&self) -> u64 {
+        PerfContext::get().internal_key_skipped_count()
+    }
+}
+
+impl<I: Iterator> MetricsExt for RawMvccIterator<I> {
+    type Collector = RawMvccIterMetricsCollector;
+
+    fn metrics_collector(&self) -> Self::Collector {
+        RawMvccIterMetricsCollector {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::iter::Iterator as StdIterator;
@@ -290,7 +314,7 @@ mod tests {
             RawEncodeSnapshot::from_snapshot(raw_mvcc_snapshot);
 
         // get_cf
-        for &(ref key, ref value, _) in &test_data[6..12] {
+        for (key, value, _) in &test_data[6..12] {
             let res = encode_snapshot.get_cf(CF_DEFAULT, &ApiV2::encode_raw_key(key, None));
             assert_eq!(res.unwrap(), Some(value.to_owned()));
         }

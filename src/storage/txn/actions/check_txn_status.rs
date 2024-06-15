@@ -176,6 +176,13 @@ pub fn check_txn_status_lock_exists(
         }
         assert!(check_result.0.is_none() && check_result.1.is_none());
     } else if lock.ts.physical() + lock.ttl < current_ts.physical() {
+        if lock.generation > 0 {
+            warn!("flushed lock has been rolled back";
+                "lock" => ?&lock,
+                "current_ts" => current_ts,
+                "caller_start_ts" => caller_start_ts,
+            );
+        }
         let released = rollback_lock(txn, reader, primary_key, &lock, is_pessimistic_txn, true)?;
         MVCC_CHECK_TXN_STATUS_COUNTER_VEC.rollback.inc();
         return Ok((TxnStatus::TtlExpire, released));
@@ -322,8 +329,22 @@ pub fn rollback_lock(
         txn.delete_value(key.clone(), lock.ts);
     }
 
-    // Only the primary key of a pessimistic transaction needs to be protected.
-    let protected: bool = is_pessimistic_txn && key.is_encoded_from(&lock.primary);
+    // (1) The primary key of any transaction needs to be protected.
+    //
+    // (2) If the lock belongs to a pipelined-DML transaction, it must be protected.
+    //
+    // This is for avoiding false positive of assertion failures.
+    // Consider the sequence of events happening on a same key:
+    // 1. T0 commits at commit_ts=10
+    // 2. T1(pipelined-DML) with start_ts=10 flushes, and assert exist. The
+    //    assertion passes.
+    // 3. T2 rolls back T1. The lock is removed, if this is not protected, there's
+    //    no clue left that indicates T1 is rolled back.
+    // 4. T1 flushes again, and assert not exist. It observes T0's commit and
+    //    assertion failed.
+    // If the lock is protected, the second flush will detect the conflict and
+    // return a write conflict error.
+    let protected: bool = key.is_encoded_from(&lock.primary) || (lock.generation > 0);
     if let Some(write) = make_rollback(reader.start_ts, protected, overlapped_write) {
         txn.put_write(key.clone(), reader.start_ts, write.as_ref().to_bytes());
     }

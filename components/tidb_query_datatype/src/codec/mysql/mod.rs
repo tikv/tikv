@@ -11,6 +11,9 @@ pub const MIN_FSP: i8 = 0;
 /// `DEFAULT_FSP` is the default digit of fractional seconds part.
 /// `MySQL` use 0 as the default Fsp.
 pub const DEFAULT_FSP: i8 = 0;
+/// `DEFAULT_DIV_FRAC_INCR` is the default value of decimal divide precision
+/// inrements.
+pub const DEFAULT_DIV_FRAC_INCR: u8 = 4;
 
 fn check_fsp(fsp: i8) -> Result<u8> {
     if fsp == UNSPECIFIED_FSP {

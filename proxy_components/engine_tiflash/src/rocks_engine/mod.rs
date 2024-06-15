@@ -7,4 +7,3 @@ pub mod write_batch;
 pub use write_batch::*;
 
 pub mod db_vector;
-pub use db_vector::*;

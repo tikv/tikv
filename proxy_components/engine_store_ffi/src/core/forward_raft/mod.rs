@@ -7,5 +7,4 @@ mod snapshot;
 
 pub use command::*;
 pub use fap_snapshot::*;
-pub use region::*;
 pub use snapshot::*;

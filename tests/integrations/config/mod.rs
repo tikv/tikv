@@ -17,7 +17,9 @@ use engine_traits::PerfLevel;
 use file_system::{IoPriority, IoRateLimitMode};
 use kvproto::encryptionpb::EncryptionMethod;
 use pd_client::Config as PdConfig;
-use raft_log_engine::{ReadableSize as RaftEngineReadableSize, RecoveryMode};
+use raft_log_engine::{
+    RaftEngineConfig as RawRaftEngineConfig, ReadableSize as RaftEngineReadableSize, RecoveryMode,
+};
 use raftstore::{
     coprocessor::{Config as CopConfig, ConsistencyCheckMethod},
     store::Config as RaftstoreConfig,
@@ -78,6 +80,7 @@ fn test_serde_custom_tikv_config() {
     value.memory_usage_high_water = 0.65;
     value.memory.enable_heap_profiling = false;
     value.memory.profiling_sample_per_bytes = ReadableSize::mb(1);
+    value.memory.enable_thread_exclusive_arena = false;
     value.server = ServerConfig {
         cluster_id: 0, // KEEP IT ZERO, it is skipped by serde.
         addr: "example.com:443".to_owned(),
@@ -123,6 +126,7 @@ fn test_serde_custom_tikv_config() {
         forward_max_connections_per_address: 5,
         reject_messages_on_memory_ratio: 0.8,
         simplify_metrics: false,
+        health_feedback_interval: ReadableDuration::secs(2),
         ..Default::default()
     };
     value.readpool = ReadPoolConfig {
@@ -272,9 +276,10 @@ fn test_serde_custom_tikv_config() {
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
-        min_blob_size: ReadableSize(2018),
+        min_blob_size: Some(ReadableSize(2018)),
         blob_file_compression: CompressionType::Lz4,
         zstd_dict_size: ReadableSize::kb(16),
+        shared_blob_cache: false,
         blob_cache_size: ReadableSize::gb(12),
         min_gc_batch_size: ReadableSize::kb(12),
         max_gc_batch_size: ReadableSize::mb(12),
@@ -287,7 +292,7 @@ fn test_serde_custom_tikv_config() {
         ..Default::default()
     };
     let titan_db_config = TitanDbConfig {
-        enabled: true,
+        enabled: Some(true),
         dirname: "bar".to_owned(),
         disable_gc: false,
         max_background_gc: 9,
@@ -432,9 +437,10 @@ fn test_serde_custom_tikv_config() {
             hard_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
             force_consistency_checks: true,
             titan: TitanCfConfig {
-                min_blob_size: ReadableSize(1024), // default value
+                min_blob_size: None, // default value
                 blob_file_compression: CompressionType::Zstd,
                 zstd_dict_size: ReadableSize::kb(0),
+                shared_blob_cache: true,
                 blob_cache_size: ReadableSize::mb(0),
                 min_gc_batch_size: ReadableSize::mb(16),
                 max_gc_batch_size: ReadableSize::mb(64),
@@ -506,9 +512,10 @@ fn test_serde_custom_tikv_config() {
             hard_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
             force_consistency_checks: true,
             titan: TitanCfConfig {
-                min_blob_size: ReadableSize(1024), // default value
+                min_blob_size: None, // default value
                 blob_file_compression: CompressionType::Zstd,
                 zstd_dict_size: ReadableSize::kb(0),
+                shared_blob_cache: true,
                 blob_cache_size: ReadableSize::mb(0),
                 min_gc_batch_size: ReadableSize::mb(16),
                 max_gc_batch_size: ReadableSize::mb(64),
@@ -580,9 +587,10 @@ fn test_serde_custom_tikv_config() {
             hard_pending_compaction_bytes_limit: Some(ReadableSize::gb(12)),
             force_consistency_checks: true,
             titan: TitanCfConfig {
-                min_blob_size: ReadableSize(1024), // default value
+                min_blob_size: None, // default value
                 blob_file_compression: CompressionType::Zstd,
                 zstd_dict_size: ReadableSize::kb(0),
+                shared_blob_cache: true,
                 blob_cache_size: ReadableSize::mb(0),
                 min_gc_batch_size: ReadableSize::mb(16),
                 max_gc_batch_size: ReadableSize::mb(64),
@@ -741,6 +749,7 @@ fn test_serde_custom_tikv_config() {
             num_shard_bits: 10,
             strict_capacity_limit: true,
             high_pri_pool_ratio: 0.8,
+            low_pri_pool_ratio: 0.2,
             memory_allocator: Some(String::from("nodump")),
         },
         io_rate_limit: IoRateLimitConfig {
@@ -761,6 +770,7 @@ fn test_serde_custom_tikv_config() {
         },
         background_error_recovery_window: ReadableDuration::hours(1),
         txn_status_cache_capacity: 1000,
+        memory_quota: ReadableSize::kb(123),
     };
     value.coprocessor = CopConfig {
         split_region_on_table: false,
@@ -969,4 +979,74 @@ engine = "partitioned-raft-kv"
     let old_cfg: TikvConfig = toml::from_str(old_content).unwrap();
     let new_cfg: TikvConfig = toml::from_str(new_content).unwrap();
     assert_eq_debug(&old_cfg, &new_cfg);
+}
+
+#[test]
+fn test_raft_engine_compression_thd() {
+    let default_batch_compression_threshold =
+        RawRaftEngineConfig::default().batch_compression_threshold;
+    let disable_async_io_content = r#"
+        [raftstore]
+        store-io-pool-size = 0
+
+        [raft-engine]
+        batch-compression-threshold = "64KB"
+    "#;
+    let mut cfg: TikvConfig = toml::from_str(disable_async_io_content).unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        RaftEngineReadableSize::kb(64)
+    );
+    cfg.validate().unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        RaftEngineReadableSize::kb(64)
+    );
+
+    let async_io_content = r#"
+        [raftstore]
+        store-io-pool-size = 3
+
+        [raft-engine]
+        batch-compression-threshold = "64KB"
+    "#;
+    cfg = toml::from_str(async_io_content).unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        RaftEngineReadableSize::kb(64)
+    );
+    cfg.validate().unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        RaftEngineReadableSize::kb(64)
+    );
+
+    let async_io_content = r#"
+        [raftstore]
+        store-io-pool-size = 5
+    "#;
+    cfg = toml::from_str(async_io_content).unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        default_batch_compression_threshold
+    );
+    cfg.validate().unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        RaftEngineReadableSize::kb(4)
+    );
+    let disable_async_io_content = r#"
+        [raftstore]
+        store-io-pool-size = 0
+    "#;
+    let mut cfg: TikvConfig = toml::from_str(disable_async_io_content).unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        default_batch_compression_threshold
+    );
+    cfg.validate().unwrap();
+    assert_eq!(
+        cfg.raft_engine.config().batch_compression_threshold,
+        default_batch_compression_threshold
+    );
 }

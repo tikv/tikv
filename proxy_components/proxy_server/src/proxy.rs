@@ -96,8 +96,8 @@ pub unsafe fn run_proxy(
     let matches = App::new("RaftStore Proxy")
         .about("RaftStore proxy to connect TiKV cluster")
         .author("tongzhigao@pingcap.com;luorongzhen@pingcap.com")
-        .version(crate::proxy_version_info().as_ref())
-        .long_version(crate::proxy_version_info().as_ref())
+        .version::<&str>(crate::proxy_version_info().as_ref())
+        .long_version::<&str>(crate::proxy_version_info().as_ref())
         .arg(
             Arg::with_name("unips-enabled")
                 .long("unips-enabled")

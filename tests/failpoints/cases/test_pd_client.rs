@@ -1,6 +1,7 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cell::RefCell,
     sync::{mpsc, Arc},
     thread,
     time::Duration,
@@ -13,6 +14,7 @@ use pd_client::{PdClientV2, RegionInfo, RpcClientV2};
 use security::{SecurityConfig, SecurityManager};
 use test_pd::{mocker::*, util::*, Server as MockServer};
 use tikv_util::config::ReadableDuration;
+use txn_types::TimeStamp;
 
 fn new_test_server_and_client(
     update_interval: ReadableDuration,
@@ -69,7 +71,6 @@ fn test_pd_client_deadlock() {
         request!(client => block_on(get_gc_safe_point())),
         request!(client => block_on(get_store_and_stats(0))),
         request!(client => get_operator(0)),
-        request!(client => load_global_config(String::default())),
     ];
 
     for (name, func) in test_funcs {
@@ -232,10 +233,47 @@ fn test_retry() {
     });
     test_retry_success(&mut client, |c| block_on(c.get_gc_safe_point()));
     test_retry_success(&mut client, |c| c.get_operator(0));
-    test_retry_success(&mut client, |c| {
-        block_on(c.load_global_config(String::default()))
-    });
 
     fail::remove(pd_client_v2_timeout_fp);
     fail::remove(pd_client_v2_backoff_fp);
+}
+
+#[test]
+fn test_update_service_gc_safe_point() {
+    let (_server, client) = new_test_server_and_client(ReadableDuration::secs(100));
+    let cli = RefCell::new(client);
+    let update_gc_safepoint = |x| {
+        block_on(cli.borrow_mut().update_service_safe_point(
+            "test".to_owned(),
+            x,
+            Duration::from_secs(1),
+        ))
+    };
+    let clear_gc_safepoint = || {
+        block_on(cli.borrow_mut().update_service_safe_point(
+            "test".to_owned(),
+            TimeStamp::max(),
+            Duration::from_secs(0),
+        ))
+    };
+
+    #[track_caller]
+    fn assert_is_unsafe_safepoint(res: pd_client::Result<()>, current_min: u64, safe_point: u64) {
+        match res {
+            Err(pd_client::Error::UnsafeServiceGcSafePoint {
+                requested,
+                current_minimal,
+            }) => {
+                assert_eq!(requested.into_inner(), safe_point);
+                assert_eq!(current_minimal.into_inner(), current_min);
+            }
+            _ => panic!("the error is {:?}", res),
+        }
+    }
+    update_gc_safepoint(42.into()).unwrap();
+    assert_is_unsafe_safepoint(update_gc_safepoint(41.into()), 42, 41);
+    update_gc_safepoint(43.into()).unwrap();
+    assert_is_unsafe_safepoint(update_gc_safepoint(42.into()), 43, 42);
+    clear_gc_safepoint().unwrap();
+    update_gc_safepoint(41.into()).unwrap();
 }

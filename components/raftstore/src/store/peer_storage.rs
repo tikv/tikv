@@ -96,7 +96,7 @@ impl PartialEq for SnapState {
             (&SnapState::Relax, &SnapState::Relax)
             | (&SnapState::ApplyAborted, &SnapState::ApplyAborted)
             | (&SnapState::Generating { .. }, &SnapState::Generating { .. }) => true,
-            (&SnapState::Applying(ref b1), &SnapState::Applying(ref b2)) => {
+            (SnapState::Applying(b1), SnapState::Applying(b2)) => {
                 b1.load(Ordering::Relaxed) == b2.load(Ordering::Relaxed)
             }
             _ => false,
@@ -507,6 +507,8 @@ where
                     *snap_state = SnapState::Relax;
                     *tried_cnt = 0;
                     if self.validate_snap(&s, request_index) {
+                        info!("start sending snapshot"; "region_id" => self.region.get_id(),
+                            "peer_id" => self.peer_id, "request_peer" => to,);
                         return Ok(s);
                     }
                 }
@@ -544,35 +546,44 @@ where
             *tried_cnt += 1;
         }
 
-        info!(
-            "requesting snapshot";
-            "region_id" => self.region.get_id(),
-            "peer_id" => self.peer_id,
-            "request_index" => request_index,
-            "request_peer" => to,
-        );
+        match find_peer_by_id(&self.region, to) {
+            Some(to_peer) => {
+                info!(
+                    "requesting snapshot";
+                    "region_id" => self.region.get_id(),
+                    "peer_id" => self.peer_id,
+                    "request_index" => request_index,
+                    "request_peer" => to,
+                );
 
-        let (sender, receiver) = mpsc::sync_channel(1);
-        let canceled = Arc::new(AtomicBool::new(false));
-        let index = Arc::new(AtomicU64::new(0));
-        *snap_state = SnapState::Generating {
-            canceled: canceled.clone(),
-            index: index.clone(),
-            receiver,
-        };
+                let (sender, receiver) = mpsc::sync_channel(1);
+                let canceled = Arc::new(AtomicBool::new(false));
+                let index = Arc::new(AtomicU64::new(0));
+                *snap_state = SnapState::Generating {
+                    canceled: canceled.clone(),
+                    index: index.clone(),
+                    receiver,
+                };
 
-        let store_id = self
-            .region()
-            .get_peers()
-            .iter()
-            .find(|p| p.id == to)
-            .map(|p| p.store_id)
-            .unwrap_or(0);
-        let task = GenSnapTask::new(self.region.get_id(), index, canceled, sender, store_id);
-
-        let mut gen_snap_task = self.gen_snap_task.borrow_mut();
-        assert!(gen_snap_task.is_none());
-        *gen_snap_task = Some(task);
+                let task = GenSnapTask::new(
+                    self.region.get_id(),
+                    index,
+                    canceled,
+                    sender,
+                    to_peer.clone(),
+                );
+                self.set_gen_snap_task(task);
+            }
+            None => {
+                warn!(
+                    "failed to find peer";
+                    "region_id" => self.region.get_id(),
+                    "peer_id" => self.peer_id,
+                    "times" => *tried_cnt,
+                    "request_peer" => to,
+                );
+            }
+        }
         Err(raft::Error::Store(
             raft::StorageError::SnapshotTemporarilyUnavailable,
         ))
@@ -588,6 +599,12 @@ where
 
     pub fn take_gen_snap_task(&mut self) -> Option<GenSnapTask> {
         self.gen_snap_task.get_mut().take()
+    }
+
+    pub fn set_gen_snap_task(&self, task: GenSnapTask) {
+        let mut gen_snap_task = self.gen_snap_task.borrow_mut();
+        assert!(gen_snap_task.is_none(), "{:?}", gen_snap_task);
+        *gen_snap_task = Some(task);
     }
 
     pub fn on_compact_raftlog(&mut self, idx: u64) {
@@ -793,8 +810,9 @@ where
                 } else if s == JOB_STATUS_CANCELLED {
                     SnapState::ApplyAborted
                 } else if s == JOB_STATUS_FAILED {
-                    // TODO: cleanup region and treat it as tombstone.
-                    panic!("{} applying snapshot failed", self.tag,);
+                    // Cleanup region and treat it as tombstone.
+                    warn!("{} applying snapshot failed", self.tag);
+                    SnapState::ApplyAborted
                 } else {
                     return CheckApplyingSnapStatus::Applying;
                 }
@@ -1648,7 +1666,8 @@ pub mod tests {
             Option::<Arc<TestPdClient>>::None,
         );
         worker.start_with_timer(runner);
-        let snap = s.snapshot(0, 1);
+        let to_peer_id = s.peer_id;
+        let snap = s.snapshot(0, to_peer_id);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
@@ -1672,11 +1691,11 @@ pub mod tests {
         let (tx, rx) = channel();
         s.set_snap_state(gen_snap_for_test(rx));
         // Empty channel should cause snapshot call to wait.
-        assert_eq!(s.snapshot(0, 1).unwrap_err(), unavailable);
+        assert_eq!(s.snapshot(0, to_peer_id).unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
 
         tx.send(snap.clone()).unwrap();
-        assert_eq!(s.snapshot(0, 1), Ok(snap.clone()));
+        assert_eq!(s.snapshot(0, to_peer_id), Ok(snap.clone()));
         assert_eq!(*s.snap_tried_cnt.borrow(), 0);
 
         let (tx, rx) = channel();
@@ -1684,7 +1703,7 @@ pub mod tests {
         s.set_snap_state(gen_snap_for_test(rx));
         // stale snapshot should be abandoned, snapshot index < request index.
         assert_eq!(
-            s.snapshot(snap.get_metadata().get_index() + 1, 0)
+            s.snapshot(snap.get_metadata().get_index() + 1, to_peer_id)
                 .unwrap_err(),
             unavailable
         );
@@ -1717,7 +1736,7 @@ pub mod tests {
         s.set_snap_state(gen_snap_for_test(rx));
         *s.snap_tried_cnt.borrow_mut() = 1;
         // stale snapshot should be abandoned, snapshot index < truncated index.
-        assert_eq!(s.snapshot(0, 1).unwrap_err(), unavailable);
+        assert_eq!(s.snapshot(0, to_peer_id).unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
 
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
@@ -1734,7 +1753,7 @@ pub mod tests {
             ref s => panic!("unexpected state {:?}", s),
         }
         // Disconnected channel should trigger another try.
-        assert_eq!(s.snapshot(0, 1).unwrap_err(), unavailable);
+        assert_eq!(s.snapshot(0, to_peer_id).unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap_err();
         assert_eq!(*s.snap_tried_cnt.borrow(), 2);
@@ -1749,13 +1768,13 @@ pub mod tests {
             }
 
             // Scheduled job failed should trigger .
-            assert_eq!(s.snapshot(0, 1).unwrap_err(), unavailable);
+            assert_eq!(s.snapshot(0, to_peer_id).unwrap_err(), unavailable);
             let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
             generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap_err();
         }
 
         // When retry too many times, it should report a different error.
-        match s.snapshot(0, 1) {
+        match s.snapshot(0, to_peer_id) {
             Err(RaftError::Store(StorageError::Other(_))) => {}
             res => panic!("unexpected res: {:?}", res),
         }
@@ -2027,8 +2046,8 @@ pub mod tests {
         s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
             JOB_STATUS_FAILED,
         ))));
-        let res = panic_hook::recover_safe(|| s.cancel_applying_snap());
-        res.unwrap_err();
+        assert!(s.cancel_applying_snap());
+        assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
     }
 
     #[test]
@@ -2077,8 +2096,8 @@ pub mod tests {
         s.snap_state = RefCell::new(SnapState::Applying(Arc::new(AtomicUsize::new(
             JOB_STATUS_FAILED,
         ))));
-        let res = panic_hook::recover_safe(|| s.check_applying_snap());
-        res.unwrap_err();
+        assert!(s.cancel_applying_snap());
+        assert_eq!(*s.snap_state.borrow(), SnapState::ApplyAborted);
     }
 
     #[test]
@@ -2144,25 +2163,15 @@ pub mod tests {
         lb.put_raft_state(1, &raft_state).unwrap();
         engines.raft.consume(&mut lb, false).unwrap();
 
-        // applied_index > commit_index is invalid.
-        let mut apply_state = RaftApplyState::default();
-        apply_state.set_applied_index(13);
-        apply_state.mut_truncated_state().set_index(13);
-        apply_state
-            .mut_truncated_state()
-            .set_term(RAFT_INIT_LOG_TERM);
-        let apply_state_key = keys::apply_state_key(1);
-        engines
-            .kv
-            .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)
-            .unwrap();
-        assert!(build_storage().is_err());
-
         // It should not recover if corresponding log doesn't exist.
         engines.raft.gc(1, 14, 15, &mut lb).unwrap();
         engines.raft.consume(&mut lb, false).unwrap();
+        let mut apply_state = RaftApplyState::default();
+        apply_state.set_applied_index(13);
+        apply_state.mut_truncated_state().set_index(13);
         apply_state.set_commit_index(14);
         apply_state.set_commit_term(RAFT_INIT_LOG_TERM);
+        let apply_state_key = keys::apply_state_key(1);
         engines
             .kv
             .put_msg_cf(CF_RAFT, &apply_state_key, &apply_state)

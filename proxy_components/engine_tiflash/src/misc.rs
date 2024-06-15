@@ -1,9 +1,9 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
-use engine_rocks::{get_range_stats, STORE_ENGINE_EVENT_COUNTER_VEC};
+use engine_rocks::STORE_ENGINE_EVENT_COUNTER_VEC;
 use engine_traits::{
     CfNamesExt, DeleteStrategy, ImportExt, IterOptions, Iterable, Iterator, MiscExt, Mutable,
     Range, RangeStats, Result, SstWriter, SstWriterBuilder, WriteBatch, WriteBatchExt,
-    WriteOptions, ALL_CFS,
+    WriteOptions,
 };
 use rocksdb::{FlushOptions, Range as RocksRange};
 use tikv_util::{box_try, keybuilder::KeyBuilder};
@@ -191,10 +191,7 @@ impl MiscExt for RocksEngine {
             fopts.set_allow_write_stall(true);
             fopts.set_check_if_compaction_disabled(true);
             fopts.set_expected_oldest_key_time(time);
-            self
-                .as_inner()
-                .flush_cf(handle, &fopts)
-                .map_err(r2e)?;
+            self.as_inner().flush_cf(handle, &fopts).map_err(r2e)?;
             return Ok(true);
         }
         Ok(false)
@@ -315,7 +312,7 @@ impl MiscExt for RocksEngine {
 
     fn get_engine_used_size(&self) -> Result<u64> {
         let mut used_size: u64 = 0;
-        for cf in ALL_CFS {
+        for cf in self.cf_names() {
             let handle = util::get_cf_handle(self.as_inner(), cf)?;
             used_size += util::get_engine_cf_used_size(self.as_inner(), handle);
         }
@@ -330,16 +327,26 @@ impl MiscExt for RocksEngine {
         self.as_inner().sync_wal().map_err(r2e)
     }
 
+    fn disable_manual_compaction(&self) -> Result<()> {
+        self.as_inner().disable_manual_compaction();
+        Ok(())
+    }
+
+    fn enable_manual_compaction(&self) -> Result<()> {
+        self.as_inner().enable_manual_compaction();
+        Ok(())
+    }
+
     fn pause_background_work(&self) -> Result<()> {
         // This will make manual compaction return error instead of waiting. In practice
         // we might want to identify this case by parsing error message.
-        self.as_inner().disable_manual_compaction();
+        self.disable_manual_compaction()?;
         self.as_inner().pause_bg_work();
         Ok(())
     }
 
     fn continue_background_work(&self) -> Result<()> {
-        self.as_inner().enable_manual_compaction();
+        self.enable_manual_compaction()?;
         self.as_inner().continue_bg_work();
         Ok(())
     }
@@ -411,7 +418,7 @@ impl MiscExt for RocksEngine {
     }
 
     fn get_range_stats(&self, cf: &str, start: &[u8], end: &[u8]) -> Result<Option<RangeStats>> {
-        Ok(get_range_stats(&self.rocks, cf, start, end))
+        Ok(crate::properties::get_range_stats(self, cf, start, end))
     }
 
     fn is_stalled_or_stopped(&self) -> bool {
@@ -454,7 +461,8 @@ impl MiscExt for RocksEngine {
 #[cfg(test)]
 mod tests {
     use engine_traits::{
-        DeleteStrategy, Iterable, Iterator, Mutable, SyncMutable, WriteBatchExt, ALL_CFS,
+        CompactExt, DeleteStrategy, Iterable, Iterator, ManualCompactionOptions, Mutable,
+        SyncMutable, WriteBatchExt, ALL_CFS,
     };
     use tempfile::Builder;
 
@@ -499,7 +507,7 @@ mod tests {
             .collect();
 
         let mut kvs: Vec<(&[u8], &[u8])> = vec![];
-        for (_, key) in keys.iter().enumerate() {
+        for key in keys.iter() {
             kvs.push((key.as_slice(), b"value"));
         }
         for &(k, v) in kvs.as_slice() {
@@ -510,7 +518,8 @@ mod tests {
         wb.write().unwrap();
         check_data(&db, ALL_CFS, kvs.as_slice());
 
-        db.delete_ranges_cfs(strategy, ranges).unwrap();
+        db.delete_ranges_cfs(&WriteOptions::default(), strategy, ranges)
+            .unwrap();
 
         let mut kvs_left: Vec<_> = kvs;
         for r in ranges {
@@ -648,10 +657,18 @@ mod tests {
         }
         check_data(&db, ALL_CFS, kvs.as_slice());
 
-        db.delete_ranges_cfs(DeleteStrategy::DeleteFiles, &[Range::new(b"k2", b"k4")])
-            .unwrap();
-        db.delete_ranges_cfs(DeleteStrategy::DeleteBlobs, &[Range::new(b"k2", b"k4")])
-            .unwrap();
+        db.delete_ranges_cfs(
+            &WriteOptions::default(),
+            DeleteStrategy::DeleteFiles,
+            &[Range::new(b"k2", b"k4")],
+        )
+        .unwrap();
+        db.delete_ranges_cfs(
+            &WriteOptions::default(),
+            DeleteStrategy::DeleteBlobs,
+            &[Range::new(b"k2", b"k4")],
+        )
+        .unwrap();
         check_data(&db, ALL_CFS, kvs_left.as_slice());
     }
 
@@ -696,10 +713,125 @@ mod tests {
 
         // Delete all in ["k2", "k4").
         db.delete_ranges_cfs(
+            &WriteOptions::default(),
             DeleteStrategy::DeleteByRange,
             &[Range::new(b"kabcdefg2", b"kabcdefg4")],
         )
         .unwrap();
         check_data(&db, &[cf], kvs_left.as_slice());
+    }
+
+    #[test]
+    fn test_get_sst_key_ranges() {
+        let path = Builder::new()
+            .prefix("test_get_sst_key_ranges")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+
+        let mut opts = RocksDbOptions::default();
+        opts.create_if_missing(true);
+        opts.enable_multi_batch_write(true);
+
+        let mut cf_opts = RocksCfOptions::default();
+        // Prefix extractor(trim the timestamp at tail) for write cf.
+        cf_opts
+            .set_prefix_extractor(
+                "FixedSuffixSliceTransform",
+                crate::util::FixedSuffixSliceTransform::new(8),
+            )
+            .unwrap_or_else(|err| panic!("{:?}", err));
+        // Create prefix bloom filter for memtable.
+        cf_opts.set_memtable_prefix_bloom_size_ratio(0.1_f64);
+        let cf = "default";
+        let db = new_engine_opt(path_str, opts, vec![(cf, cf_opts)]).unwrap();
+        let mut wb = db.write_batch();
+        let kvs: Vec<(&[u8], &[u8])> = vec![
+            (b"k1", b"v1"),
+            (b"k2", b"v2"),
+            (b"k6", b"v3"),
+            (b"k7", b"v4"),
+        ];
+
+        for &(k, v) in kvs.as_slice() {
+            wb.put_cf(cf, k, v).unwrap();
+        }
+        wb.write().unwrap();
+
+        db.flush_cf(cf, true).unwrap();
+        let sst_range = db.get_sst_key_ranges(cf, 0).unwrap();
+        let expected = vec![(b"k1".to_vec(), b"k7".to_vec())];
+        assert_eq!(sst_range, expected);
+
+        let mut wb = db.write_batch();
+        let kvs: Vec<(&[u8], &[u8])> = vec![(b"k3", b"v1"), (b"k4", b"v2"), (b"k8", b"v3")];
+
+        for &(k, v) in kvs.as_slice() {
+            wb.put_cf(cf, k, v).unwrap();
+        }
+        wb.write().unwrap();
+
+        db.flush_cf(cf, true).unwrap();
+        let sst_range = db.get_sst_key_ranges(cf, 0).unwrap();
+        let expected = vec![
+            (b"k3".to_vec(), b"k8".to_vec()),
+            (b"k1".to_vec(), b"k7".to_vec()),
+        ];
+        assert_eq!(sst_range, expected);
+
+        db.compact_range_cf(
+            cf,
+            None,
+            None,
+            ManualCompactionOptions::new(false, 1, false),
+        )
+        .unwrap();
+        let sst_range = db.get_sst_key_ranges(cf, 0).unwrap();
+        assert_eq!(sst_range.len(), 0);
+        let sst_range = db.get_sst_key_ranges(cf, 1).unwrap();
+        let expected = vec![(b"k1".to_vec(), b"k8".to_vec())];
+        assert_eq!(sst_range, expected);
+    }
+
+    #[test]
+    fn test_flush_oldest() {
+        let path = Builder::new()
+            .prefix("test_flush_oldest")
+            .tempdir()
+            .unwrap();
+        let path_str = path.path().to_str().unwrap();
+
+        let mut opts = RocksDbOptions::default();
+        opts.create_if_missing(true);
+
+        let db = new_engine(path_str, ALL_CFS).unwrap();
+        db.put_cf("default", b"k", b"v").unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        db.put_cf("write", b"k", b"v").unwrap();
+        db.put_cf("lock", b"k", b"v").unwrap();
+        assert_eq!(
+            db.get_total_sst_files_size_cf("default").unwrap().unwrap(),
+            0
+        );
+        assert_eq!(db.get_total_sst_files_size_cf("write").unwrap().unwrap(), 0);
+        assert_eq!(db.get_total_sst_files_size_cf("lock").unwrap().unwrap(), 0);
+        let now = std::time::SystemTime::now();
+        assert!(
+            !db.flush_oldest_cf(true, Some(now - std::time::Duration::from_secs(5)))
+                .unwrap()
+        );
+        assert_eq!(
+            db.get_total_sst_files_size_cf("default").unwrap().unwrap(),
+            0
+        );
+        assert_eq!(db.get_total_sst_files_size_cf("write").unwrap().unwrap(), 0);
+        assert_eq!(db.get_total_sst_files_size_cf("lock").unwrap().unwrap(), 0);
+        assert!(
+            db.flush_oldest_cf(true, Some(now - std::time::Duration::from_secs(1)))
+                .unwrap()
+        );
+        assert_eq!(db.get_total_sst_files_size_cf("write").unwrap().unwrap(), 0);
+        assert_eq!(db.get_total_sst_files_size_cf("lock").unwrap().unwrap(), 0);
+        assert!(db.get_total_sst_files_size_cf("default").unwrap().unwrap() > 0);
     }
 }

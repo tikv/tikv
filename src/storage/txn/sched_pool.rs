@@ -130,13 +130,7 @@ impl PriorityQueue {
         extras.set_metadata(metadata.to_vec());
         self.worker_pool.spawn_with_extras(
             with_resource_limiter(
-                ControlledFuture::new(
-                    async move {
-                        f.await;
-                    },
-                    self.resource_ctl.clone(),
-                    group_name,
-                ),
+                ControlledFuture::new(f, self.resource_ctl.clone(), group_name),
                 resource_limiter,
             ),
             extras,
@@ -281,7 +275,7 @@ pub fn tls_collect_scan_details(cmd: &'static str, stats: &Statistics) {
         m.borrow_mut()
             .local_scan_details
             .entry(cmd)
-            .or_insert_with(Default::default)
+            .or_default()
             .add(stats);
     });
 }

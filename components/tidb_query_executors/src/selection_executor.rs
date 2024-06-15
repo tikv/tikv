@@ -537,8 +537,7 @@ mod tests {
             })
             .collect();
 
-        for predicates in vec![
-            // Swap predicates should produce same results.
+        for predicates in [
             vec![predicate[0](), predicate[1]()],
             vec![predicate[1](), predicate[0]()],
         ] {
@@ -572,8 +571,7 @@ mod tests {
             })
             .collect();
 
-        for predicates in vec![
-            // Swap predicates should produce same results.
+        for predicates in [
             vec![predicate[0](), predicate[1](), predicate[2]()],
             vec![predicate[1](), predicate[2](), predicate[0]()],
         ] {

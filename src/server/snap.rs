@@ -8,12 +8,14 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, Instant as StdInstant},
 };
 
 use file_system::{IoType, WithIoType};
 use futures::{
-    future::{Future, TryFutureExt},
+    compat::Future01CompatExt,
+    future::{select, Either, Future, TryFutureExt},
+    pin_mut,
     sink::SinkExt,
     stream::{Stream, StreamExt, TryStreamExt},
     task::{Context, Poll},
@@ -36,8 +38,10 @@ use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};
 use security::SecurityManager;
 use tikv_kv::RaftExtension;
 use tikv_util::{
-    config::{Tracker, VersionTrack},
+    box_err,
+    config::{Tracker, VersionTrack, MIB},
     time::{Instant, UnixSecs},
+    timer::GLOBAL_TIMER_HANDLE,
     worker::Runnable,
     DeferContext,
 };
@@ -49,6 +53,25 @@ use crate::{server::tablet_snap::NoSnapshotCache, tikv_util::sys::thread::Thread
 pub type Callback = Box<dyn FnOnce(Result<()>) + Send>;
 
 pub const DEFAULT_POOL_SIZE: usize = 4;
+
+// the default duration before a snapshot sending task is canceled.
+const SNAP_SEND_TIMEOUT_DURATION: Duration = Duration::from_secs(600);
+// the minimum expected send speed for sending snapshot, this is used to avoid
+// timeout too early when the snapshot size is too big.
+const MIN_SNAP_SEND_SPEED: u64 = MIB;
+
+#[inline]
+fn get_snap_timeout(size: u64) -> Duration {
+    let timeout = (|| {
+        fail_point!("snap_send_duration_timeout", |t| -> Duration {
+            let t = t.unwrap().parse::<u64>();
+            Duration::from_millis(t.unwrap())
+        });
+        SNAP_SEND_TIMEOUT_DURATION
+    })();
+    let max_expected_dur = Duration::from_secs(size / MIN_SNAP_SEND_SPEED);
+    std::cmp::max(timeout, max_expected_dur)
+}
 
 /// A task for either receiving Snapshot or sending Snapshot
 pub enum Task {
@@ -191,17 +214,47 @@ pub fn send_snap(
     let (sink, receiver) = client.snapshot()?;
 
     let send_task = async move {
-        let mut sink = sink.sink_map_err(Error::from);
-        sink.send_all(&mut chunks).await?;
-        sink.close().await?;
-        let recv_result = receiver.map_err(Error::from).await;
+        let send_and_recv = async {
+            let mut sink = sink.sink_map_err(Error::from);
+
+            #[cfg(feature = "failpoints")]
+            {
+                fail::fail_point!("snap_send_error", |_| {
+                    Err(Error::Other(box_err!("snap_send_error")))
+                });
+                let should_delay = (|| {
+                    fail::fail_point!("snap_send_timer_delay", |_| { true });
+                    false
+                })();
+                if should_delay {
+                    _ = GLOBAL_TIMER_HANDLE
+                        .delay(StdInstant::now() + Duration::from_secs(1))
+                        .compat()
+                        .await;
+                }
+            }
+            sink.send_all(&mut chunks).await?;
+            sink.close().await?;
+            Ok(receiver.map_err(Error::from).await)
+        };
+        let wait_timeout = GLOBAL_TIMER_HANDLE
+            .delay(StdInstant::now() + get_snap_timeout(total_size))
+            .compat();
+        let recv_result = {
+            pin_mut!(send_and_recv, wait_timeout);
+            match select(send_and_recv, wait_timeout).await {
+                Either::Left((r, _)) => r,
+                Either::Right((..)) => Err(Error::Other(box_err!("send snapshot timeout"))),
+            }
+        };
         send_timer.observe_duration();
         drop(deregister);
         drop(client);
+
+        fail_point!("snapshot_delete_after_send");
+        mgr.delete_snapshot(&key, &chunks.snap, true);
         match recv_result {
             Ok(_) => {
-                fail_point!("snapshot_delete_after_send");
-                mgr.delete_snapshot(&key, &chunks.snap, true);
                 let cost = UnixSecs::now().into_inner().saturating_sub(snap_start);
                 let send_duration_sec = timer.saturating_elapsed().as_secs();
                 // it should ignore if the duration of snapshot is less than 1s to decrease the
@@ -324,6 +377,7 @@ fn recv_snap<R: RaftExtension + 'static>(
         snap_mgr.register(context.key.clone(), SnapEntry::Receiving);
         defer!(snap_mgr.deregister(&context_key, &SnapEntry::Receiving));
         while let Some(item) = stream.next().await {
+            fail_point!("receiving_snapshot_callback");
             fail_point!("receiving_snapshot_net_error", |_| {
                 Err(box_err!("{} failed to receive snapshot", context_key))
             });
@@ -341,6 +395,9 @@ fn recv_snap<R: RaftExtension + 'static>(
                 return Err(e);
             }
         }
+        // Notify the snapshot manager that a snapshot has been received,
+        // freeing up the associated resource in the concurrency limiter.
+        snap_mgr.recv_snap_complete(context.raft_msg.region_id);
         context.finish(raft_router)
     };
     async move {
@@ -415,6 +472,10 @@ impl<R: RaftExtension + 'static> Runner<R> {
             info!("refresh snapshot manager config";
             "speed_limit"=> limit,
             "max_total_snap_size"=> max_total_size);
+            if incoming.concurrent_recv_snap_limit > 0 {
+                self.snap_mgr
+                    .set_concurrent_recv_snap_limit(incoming.concurrent_recv_snap_limit);
+            }
             self.cfg = incoming.clone();
         }
     }

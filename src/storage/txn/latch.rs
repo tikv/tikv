@@ -222,7 +222,7 @@ impl Latches {
         keep_latches_for_next_cmd: Option<(u64, &Lock)>,
     ) -> Vec<u64> {
         // Used to
-        let dummy_vec = vec![];
+        let dummy_vec = [];
         let (keep_latches_for_cid, mut keep_latches_it) = match keep_latches_for_next_cmd {
             Some((cid, lock)) => (Some(cid), lock.required_hashes.iter().peekable()),
             None => (None, dummy_vec.iter().peekable()),
@@ -280,9 +280,9 @@ mod tests {
     fn test_wakeup() {
         let latches = Latches::new(256);
 
-        let keys_a = vec!["k1", "k3", "k5"];
+        let keys_a = ["k1", "k3", "k5"];
         let mut lock_a = Lock::new(keys_a.iter());
-        let keys_b = vec!["k4", "k5", "k6"];
+        let keys_b = ["k4", "k5", "k6"];
         let mut lock_b = Lock::new(keys_b.iter());
         let cid_a: u64 = 1;
         let cid_b: u64 = 2;
@@ -308,9 +308,9 @@ mod tests {
     fn test_wakeup_by_multi_cmds() {
         let latches = Latches::new(256);
 
-        let keys_a = vec!["k1", "k2", "k3"];
-        let keys_b = vec!["k4", "k5", "k6"];
-        let keys_c = vec!["k3", "k4"];
+        let keys_a = ["k1", "k2", "k3"];
+        let keys_b = ["k4", "k5", "k6"];
+        let keys_c = ["k3", "k4"];
         let mut lock_a = Lock::new(keys_a.iter());
         let mut lock_b = Lock::new(keys_b.iter());
         let mut lock_c = Lock::new(keys_c.iter());
@@ -351,10 +351,10 @@ mod tests {
     fn test_wakeup_by_small_latch_slot() {
         let latches = Latches::new(5);
 
-        let keys_a = vec!["k1", "k2", "k3"];
-        let keys_b = vec!["k6", "k7", "k8"];
-        let keys_c = vec!["k3", "k4"];
-        let keys_d = vec!["k7", "k10"];
+        let keys_a = ["k1", "k2", "k3"];
+        let keys_b = ["k6", "k7", "k8"];
+        let keys_c = ["k3", "k4"];
+        let keys_d = ["k7", "k10"];
         let mut lock_a = Lock::new(keys_a.iter());
         let mut lock_b = Lock::new(keys_b.iter());
         let mut lock_c = Lock::new(keys_c.iter());

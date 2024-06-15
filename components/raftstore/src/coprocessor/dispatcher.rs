@@ -290,7 +290,11 @@ impl_box_observer_g!(
     WrappedConsistencyCheckObserver
 );
 impl_box_observer!(BoxMessageObserver, MessageObserver, WrappedMessageObserver);
-
+impl_box_observer!(
+    BoxRegionHeartbeatObserver,
+    RegionHeartbeatObserver,
+    WrappedRegionHeartbeatObserver
+);
 /// Registry contains all registered coprocessors.
 #[derive(Clone)]
 pub struct Registry<E>
@@ -309,6 +313,7 @@ where
     pd_task_observers: Vec<Entry<BoxPdTaskObserver>>,
     update_safe_ts_observers: Vec<Entry<BoxUpdateSafeTsObserver>>,
     message_observers: Vec<Entry<BoxMessageObserver>>,
+    region_heartbeat_observers: Vec<Entry<BoxRegionHeartbeatObserver>>,
     // TODO: add endpoint
 }
 
@@ -327,6 +332,7 @@ impl<E: KvEngine> Default for Registry<E> {
             pd_task_observers: Default::default(),
             update_safe_ts_observers: Default::default(),
             message_observers: Default::default(),
+            region_heartbeat_observers: Default::default(),
         }
     }
 }
@@ -398,6 +404,14 @@ impl<E: KvEngine> Registry<E> {
 
     pub fn register_message_observer(&mut self, priority: u32, qo: BoxMessageObserver) {
         push!(priority, qo, self.message_observers);
+    }
+
+    pub fn register_region_heartbeat_observer(
+        &mut self,
+        priority: u32,
+        qo: BoxRegionHeartbeatObserver,
+    ) {
+        push!(priority, qo, self.region_heartbeat_observers);
     }
 }
 
@@ -481,10 +495,7 @@ impl<E: KvEngine> CoprocessorHost<E> {
             BoxSplitCheckObserver::new(KeysCheckObserver::new(ch)),
         );
         registry.register_split_check_observer(100, BoxSplitCheckObserver::new(HalfCheckObserver));
-        registry.register_split_check_observer(
-            400,
-            BoxSplitCheckObserver::new(TableCheckObserver::default()),
-        );
+        registry.register_split_check_observer(400, BoxSplitCheckObserver::new(TableCheckObserver));
         registry.register_admin_observer(100, BoxAdminObserver::new(SplitObserver));
         CoprocessorHost { registry, cfg }
     }
@@ -672,6 +683,10 @@ impl<E: KvEngine> CoprocessorHost<E> {
         );
     }
 
+    pub fn pre_transfer_leader(&self, r: &Region, tr: &TransferLeaderRequest) -> Result<()> {
+        try_loop_ob!(r, &self.registry.admin_observers, pre_transfer_leader, tr)
+    }
+
     pub fn post_apply_snapshot(
         &self,
         region: &Region,
@@ -768,6 +783,14 @@ impl<E: KvEngine> CoprocessorHost<E> {
             on_region_changed,
             event,
             role
+        );
+    }
+    pub fn on_region_heartbeat(&self, region: &Region, region_stat: &RegionStat) {
+        loop_ob!(
+            region,
+            &self.registry.region_heartbeat_observers,
+            on_region_heartbeat,
+            region_stat
         );
     }
 

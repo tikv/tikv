@@ -3,6 +3,7 @@ name = "test_storage"
 version = "0.0.1"
 edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [features]
 default = ["test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
@@ -24,6 +25,7 @@ test-engines-panic = [
 api_version = { workspace = true }
 collections = { workspace = true }
 engine_rocks = { workspace = true }
+engine_traits = { workspace = true }
 futures = "0.3"
 kvproto = { workspace = true }
 pd_client = { workspace = true }

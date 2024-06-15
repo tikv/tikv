@@ -31,9 +31,7 @@ use super::{
 
 impl Clone for RaftStoreProxyPtr {
     fn clone(&self) -> RaftStoreProxyPtr {
-        RaftStoreProxyPtr {
-            inner: self.inner.clone(),
-        }
+        *self
     }
 }
 

@@ -111,23 +111,23 @@ pub unsafe extern "C" fn ffi_mockps_wb_del_page(wb: RawVoidPtr, page_id: BaseBuf
 }
 
 pub unsafe extern "C" fn ffi_mockps_get_wb_size(wb: RawVoidPtr) -> u64 {
-    let wb: _ = <&mut MockPSWriteBatch as From<RawVoidPtr>>::from(wb);
+    let wb = <&mut MockPSWriteBatch as From<RawVoidPtr>>::from(wb);
     wb.data.len() as u64
 }
 
 pub unsafe extern "C" fn ffi_mockps_is_wb_empty(wb: RawVoidPtr) -> u8 {
-    let wb: _ = <&mut MockPSWriteBatch as From<RawVoidPtr>>::from(wb);
+    let wb = <&mut MockPSWriteBatch as From<RawVoidPtr>>::from(wb);
     u8::from(wb.data.is_empty())
 }
 
 pub unsafe extern "C" fn ffi_mockps_handle_merge_wb(lwb: RawVoidPtr, rwb: RawVoidPtr) {
-    let lwb: _ = <&mut MockPSWriteBatch as From<RawVoidPtr>>::from(lwb);
-    let rwb: _ = <&mut MockPSWriteBatch as From<RawVoidPtr>>::from(rwb);
+    let lwb = <&mut MockPSWriteBatch as From<RawVoidPtr>>::from(lwb);
+    let rwb = <&mut MockPSWriteBatch as From<RawVoidPtr>>::from(rwb);
     lwb.data.append(&mut rwb.data);
 }
 
 pub unsafe extern "C" fn ffi_mockps_handle_clear_wb(wb: RawVoidPtr) {
-    let wb: _ = <&mut MockPSWriteBatch as From<RawVoidPtr>>::from(wb);
+    let wb = <&mut MockPSWriteBatch as From<RawVoidPtr>>::from(wb);
     wb.data.clear();
 }
 
@@ -136,7 +136,7 @@ pub unsafe extern "C" fn ffi_mockps_handle_consume_wb(
     wb: RawVoidPtr,
 ) {
     let store = into_engine_store_server_wrap(wrap);
-    let wb: _ = <&mut MockPSWriteBatch as From<RawVoidPtr>>::from(wb);
+    let wb = <&mut MockPSWriteBatch as From<RawVoidPtr>>::from(wb);
     let mut guard = (*store.engine_store_server)
         .page_storage
         .data

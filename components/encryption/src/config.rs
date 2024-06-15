@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use cloud::kms::SubConfigAzure;
+use cloud::kms::{SubConfigAzure, SubConfigGcp};
 use kvproto::encryptionpb::{EncryptionMethod, MasterKeyKms};
 use online_config::OnlineConfig;
 use serde_derive::{Deserialize, Serialize};
@@ -84,6 +84,17 @@ impl std::fmt::Debug for AzureConfig {
     }
 }
 
+// TODO: the representation of GCP KMS to users needs to be discussed.
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct GcpConfig {
+    /// User credential file path. Currently, only service account and
+    /// authorized user are supported. If set to None, will try to build the
+    /// `TokenProvider` following the "Google Default Credentials" flow.
+    pub credential_file_path: Option<String>,
+}
+
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, OnlineConfig)]
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
@@ -95,6 +106,9 @@ pub struct KmsConfig {
     // followings are used for Azure Kms
     #[online_config(skip)]
     pub azure: Option<AzureConfig>,
+    // Gcp Kms configuration.
+    #[online_config(skip)]
+    pub gcp: Option<GcpConfig>,
 }
 
 impl KmsConfig {
@@ -132,13 +146,29 @@ impl KmsConfig {
         };
         (mk, azure_kms_cfg)
     }
+
+    pub fn convert_to_gcp_config(self) -> (MasterKeyKms, SubConfigGcp) {
+        let gcp_cfg = SubConfigGcp {
+            credential_file_path: self.gcp.unwrap().credential_file_path,
+        };
+        let mk = MasterKeyKms {
+            key_id: self.key_id,
+            region: self.region,
+            endpoint: self.endpoint,
+            vendor: self.vendor,
+            ..MasterKeyKms::default()
+        };
+        (mk, gcp_cfg)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "kebab-case", tag = "type")]
+#[derive(Default)]
 pub enum MasterKeyConfig {
     // Store encryption metadata as plaintext. Data still get encrypted. Not allowed to use if
     // encryption is enabled. (i.e. when encryption_config.method != Plaintext).
+    #[default]
     Plaintext,
 
     // Pass master key from a file, with key encoded as a readable hex string. The file should end
@@ -154,12 +184,6 @@ pub enum MasterKeyConfig {
         #[serde(flatten)]
         config: KmsConfig,
     },
-}
-
-impl Default for MasterKeyConfig {
-    fn default() -> Self {
-        MasterKeyConfig::Plaintext
-    }
 }
 
 mod encryption_method_serde {
@@ -243,6 +267,7 @@ mod tests {
                     endpoint: "endpoint".to_owned(),
                     vendor: "".to_owned(),
                     azure: None,
+                    gcp: None,
                 },
             },
             previous_master_key: MasterKeyConfig::Plaintext,
@@ -264,10 +289,28 @@ mod tests {
                         hsm_url: "hsm_url".to_owned(),
                         ..AzureConfig::default()
                     }),
+                    gcp: None,
                 },
             },
             ..kms_config.clone()
         };
+
+        let kms_config_gcp = EncryptionConfig {
+            master_key: MasterKeyConfig::Kms {
+                config: KmsConfig {
+                    key_id: "key_id".to_owned(),
+                    region: "region".to_owned(),
+                    endpoint: "endpoint".to_owned(),
+                    vendor: "gcp".to_owned(),
+                    azure: None,
+                    gcp: Some(GcpConfig {
+                        credential_file_path: Some("/tmp/credential.json".into()),
+                    }),
+                },
+            },
+            ..kms_config.clone()
+        };
+
         // KMS with default(aws).
         let kms_str = r#"
             data-encryption-method = "aes128-ctr"
@@ -306,7 +349,28 @@ mod tests {
             [previous-master-key]
             type = 'plaintext'
         "#;
-        for (kms_cfg, kms_str) in [(kms_config, kms_str), (kms_config_azure, kms_str_azure)] {
+        // KMS with gcp
+        let kms_str_gcp = r#"
+            data-encryption-method = 'aes128-ctr'
+            data-key-rotation-period = '14d'
+            enable-file-dictionary-log = true
+            file-dictionary-rewrite-threshold = 1000000
+
+            [master-key]
+            type = 'kms'
+            key-id = 'key_id'
+            region = 'region'
+            endpoint = 'endpoint'
+            vendor = 'gcp'
+
+            [master-key.gcp]
+            credential-file-path = '/tmp/credential.json'
+        "#;
+        for (kms_cfg, kms_str) in [
+            (kms_config, kms_str),
+            (kms_config_azure, kms_str_azure),
+            (kms_config_gcp, kms_str_gcp),
+        ] {
             let cfg: EncryptionConfig = toml::from_str(kms_str).unwrap();
             assert_eq!(
                 cfg,

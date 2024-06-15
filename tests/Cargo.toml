@@ -3,6 +3,7 @@ name = "tests"
 version = "0.0.1"
 edition = "2021"
 publish = false
+license = "Apache-2.0"
 
 [[test]]
 name = "failpoints"
@@ -39,6 +40,11 @@ name = "deadlock_detector"
 harness = false
 path = "benches/deadlock_detector/mod.rs"
 
+[[bench]]
+name = "memory"
+harness = false
+path = "benches/memory/mod.rs"
+
 [features]
 default = ["failpoints", "testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
 failpoints = ["fail/failpoints", "tikv/failpoints", "pd_client/failpoints"]
@@ -52,10 +58,10 @@ test-engine-raft-raft-engine = [
   "raftstore/test-engine-raft-raft-engine"
 ]
 test-engines-rocksdb = [
-  "raftstore/test-engines-rocksdb",
+  "raftstore/test-engines-rocksdb"
 ]
 test-engines-panic = [
-  "raftstore/test-engines-panic",
+  "raftstore/test-engines-panic"
 ]
 jemalloc = ["tikv/jemalloc"]
 mimalloc = ["tikv/mimalloc"]
@@ -80,6 +86,7 @@ file_system = { workspace = true }
 futures = "0.3"
 grpcio = { workspace = true }
 grpcio-health = { workspace = true }
+health_controller = { workspace = true }
 kvproto = { workspace = true }
 libc = "0.2"
 log_wrappers = { workspace = true }
@@ -106,7 +113,7 @@ tidb_query_executors = { workspace = true }
 tidb_query_expr = { workspace = true }
 tikv = { workspace = true }
 tikv_util = { workspace = true }
-time = "0.1"
+time = { workspace = true }
 tipb = { workspace = true }
 toml = "0.5"
 tracker = { workspace = true }
@@ -138,7 +145,7 @@ resource_metering = { workspace = true }
 security = { workspace = true }
 serde_json = "1.0"
 sst_importer = { workspace = true }
-test_backup = { workspace = true }
+test_backup = { workspace = true, default-features = false }
 test_coprocessor = { workspace = true }
 test_pd = { workspace = true }
 test_pd_client = { workspace = true }

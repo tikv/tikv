@@ -8,18 +8,20 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{KvEngine, RangeStats, CF_WRITE};
+use engine_traits::{KvEngine, ManualCompactionOptions, RangeStats, CF_LOCK, CF_WRITE};
 use fail::fail_point;
 use futures_util::compat::Future01CompatExt;
 use thiserror::Error;
 use tikv_util::{
-    box_try, debug, error, info, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn, worker::Runnable,
+    box_try, config::Tracker, debug, error, info, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn,
+    worker::Runnable,
 };
 use yatp::Remote;
 
 use super::metrics::{
     COMPACT_RANGE_CF, FULL_COMPACT, FULL_COMPACT_INCREMENTAL, FULL_COMPACT_PAUSE,
 };
+use crate::store::Config;
 
 type Key = Vec<u8>;
 
@@ -34,8 +36,9 @@ pub enum Task {
 
     Compact {
         cf_name: String,
-        start_key: Option<Key>, // None means smallest key
-        end_key: Option<Key>,   // None means largest key
+        start_key: Option<Key>,       // None means smallest key
+        end_key: Option<Key>,         // None means largest key
+        bottommost_level_force: bool, // Whether force the bottommost level to compact
     },
 
     CheckAndCompact {
@@ -155,6 +158,7 @@ impl Display for Task {
                 ref cf_name,
                 ref start_key,
                 ref end_key,
+                ref bottommost_level_force,
             } => f
                 .debug_struct("Compact")
                 .field("cf_name", cf_name)
@@ -166,6 +170,7 @@ impl Display for Task {
                     "end_key",
                     &end_key.as_ref().map(|k| log_wrappers::Value::key(k)),
                 )
+                .field("bottommost_level_force", bottommost_level_force)
                 .finish(),
             Task::CheckAndCompact {
                 ref cf_names,
@@ -211,14 +216,27 @@ pub enum Error {
 pub struct Runner<E> {
     engine: E,
     remote: Remote<yatp::task::future::TaskCell>,
+    cfg_tracker: Tracker<Config>,
+    // Whether to skip the manual compaction of write and default comlumn family.
+    skip_compact: bool,
 }
 
 impl<E> Runner<E>
 where
     E: KvEngine,
 {
-    pub fn new(engine: E, remote: Remote<yatp::task::future::TaskCell>) -> Runner<E> {
-        Runner { engine, remote }
+    pub fn new(
+        engine: E,
+        remote: Remote<yatp::task::future::TaskCell>,
+        cfg_tracker: Tracker<Config>,
+        skip_compact: bool,
+    ) -> Runner<E> {
+        Runner {
+            engine,
+            remote,
+            cfg_tracker,
+            skip_compact,
+        }
     }
 
     /// Periodic full compaction.
@@ -253,9 +271,9 @@ where
              );
             let incremental_timer = FULL_COMPACT_INCREMENTAL.start_coarse_timer();
             box_try!(engine.compact_range(
-                range.0, range.1, // Compact the entire key range.
-                false,   // non-exclusive
-                1,       // number of threads threads
+                range.0,
+                range.1, // Compact the entire key range.
+                ManualCompactionOptions::new(false, 1, false),
             ));
             incremental_timer.observe_duration();
             debug!(
@@ -301,16 +319,20 @@ where
         cf_name: &str,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
+        bottommost_level_force: bool,
     ) -> Result<(), Error> {
         fail_point!("on_compact_range_cf");
         let timer = Instant::now();
         let compact_range_timer = COMPACT_RANGE_CF
             .with_label_values(&[cf_name])
             .start_coarse_timer();
-        box_try!(
-            self.engine
-                .compact_range_cf(cf_name, start_key, end_key, false, 1 /* threads */,)
-        );
+        let compact_options = ManualCompactionOptions::new(false, 1, bottommost_level_force);
+        box_try!(self.engine.compact_range_cf(
+            cf_name,
+            start_key,
+            end_key,
+            compact_options.clone()
+        ));
         compact_range_timer.observe_duration();
         info!(
             "compact range finished";
@@ -318,6 +340,7 @@ where
             "range_end" => end_key.map(::log_wrappers::Value::key),
             "cf" => cf_name,
             "time_takes" => ?timer.saturating_elapsed(),
+            "compact_options" => ?compact_options,
         );
         Ok(())
     }
@@ -358,10 +381,30 @@ where
                 cf_name,
                 start_key,
                 end_key,
+                bottommost_level_force,
             } => {
                 let cf = &cf_name;
-                if let Err(e) = self.compact_range_cf(cf, start_key.as_deref(), end_key.as_deref())
-                {
+                if cf != CF_LOCK {
+                    // check whether the config changed for ignoring manual compaction
+                    if let Some(incoming) = self.cfg_tracker.any_new() {
+                        self.skip_compact = incoming.skip_manual_compaction_in_clean_up_worker;
+                    }
+                    if self.skip_compact {
+                        info!(
+                            "skip compact range";
+                            "range_start" => start_key.as_ref().map(|k| log_wrappers::Value::key(k)),
+                            "range_end" => end_key.as_ref().map(|k|log_wrappers::Value::key(k)),
+                            "cf" => cf_name,
+                        );
+                        return;
+                    }
+                }
+                if let Err(e) = self.compact_range_cf(
+                    cf,
+                    start_key.as_deref(),
+                    end_key.as_deref(),
+                    bottommost_level_force,
+                ) {
                     error!("execute compact range failed"; "cf" => cf, "err" => %e);
                 }
             }
@@ -373,7 +416,9 @@ where
                 Ok(mut ranges) => {
                     for (start, end) in ranges.drain(..) {
                         for cf in &cf_names {
-                            if let Err(e) = self.compact_range_cf(cf, Some(&start), Some(&end)) {
+                            if let Err(e) =
+                                self.compact_range_cf(cf, Some(&start), Some(&end), false)
+                            {
                                 error!(
                                     "compact range failed";
                                     "range_start" => log_wrappers::Value::key(&start),
@@ -468,8 +513,8 @@ mod tests {
         kv::{new_engine, new_engine_opt, KvTestEngine},
     };
     use engine_traits::{
-        MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_RAFT,
-        CF_WRITE,
+        CompactExt, MiscExt, Mutable, SyncMutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK,
+        CF_RAFT, CF_WRITE,
     };
     use keys::data_key;
     use tempfile::Builder;
@@ -483,7 +528,75 @@ mod tests {
         E: KvEngine,
     {
         let pool = YatpPoolBuilder::new(DefaultTicker::default()).build_future_pool();
-        (pool.clone(), Runner::new(engine, pool.remote().clone()))
+        (
+            pool.clone(),
+            Runner::new(engine, pool.remote().clone(), Tracker::default(), false),
+        )
+    }
+
+    #[test]
+    fn test_disable_manual_compaction() {
+        let path = Builder::new()
+            .prefix("test_disable_manual_compaction")
+            .tempdir()
+            .unwrap();
+        let db = new_engine(path.path().to_str().unwrap(), &[CF_DEFAULT]).unwrap();
+
+        // Generate the first SST file.
+        let mut wb = db.write_batch();
+        for i in 0..1000 {
+            let k = format!("key_{}", i);
+            wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")
+                .unwrap();
+        }
+        wb.write().unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
+
+        // Generate another SST file has the same content with first SST file.
+        let mut wb = db.write_batch();
+        for i in 0..1000 {
+            let k = format!("key_{}", i);
+            wb.put_cf(CF_DEFAULT, k.as_bytes(), b"whatever content")
+                .unwrap();
+        }
+        wb.write().unwrap();
+        db.flush_cf(CF_DEFAULT, true).unwrap();
+
+        // Get the total SST files size.
+        let old_sst_files_size = db.get_total_sst_files_size_cf(CF_DEFAULT).unwrap().unwrap();
+
+        // Stop the assistant.
+        {
+            let _ = db.disable_manual_compaction();
+
+            // Manually compact range.
+            let _ = db.compact_range_cf(
+                CF_DEFAULT,
+                None,
+                None,
+                ManualCompactionOptions::new(false, 1, true),
+            );
+
+            // Get the total SST files size after compact range.
+            let new_sst_files_size = db.get_total_sst_files_size_cf(CF_DEFAULT).unwrap().unwrap();
+            assert_eq!(old_sst_files_size, new_sst_files_size);
+        }
+        // Restart the assistant.
+        {
+            let _ = db.enable_manual_compaction();
+
+            // Manually compact range.
+            let _ = db.compact_range_cf(
+                CF_DEFAULT,
+                None,
+                None,
+                ManualCompactionOptions::new(false, 1, true),
+            );
+
+            // Get the total SST files size after compact range.
+            let new_sst_files_size = db.get_total_sst_files_size_cf(CF_DEFAULT).unwrap().unwrap();
+            assert!(old_sst_files_size > new_sst_files_size);
+        }
     }
 
     #[test]
@@ -523,6 +636,7 @@ mod tests {
             cf_name: String::from(CF_DEFAULT),
             start_key: None,
             end_key: None,
+            bottommost_level_force: false,
         });
         sleep(Duration::from_secs(5));
 

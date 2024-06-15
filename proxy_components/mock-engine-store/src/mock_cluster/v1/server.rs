@@ -1,4 +1,5 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
+#![allow(clippy::arc_with_non_send_sync)]
 
 use std::{
     path::Path,
@@ -18,7 +19,7 @@ use engine_store_ffi::core::DebugStruct;
 use engine_traits::{Engines, MiscExt, SnapshotContext};
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
-use grpcio_health::HealthService;
+use health_controller::HealthController;
 use kvproto::{
     deadlock::create_deadlock,
     debugpb::DebugClient,
@@ -58,7 +59,7 @@ use tikv::{
         raftkv::ReplicaReadLockChecker,
         resolve::{self, StoreAddrResolver},
         tablet_snap::NoSnapshotCache,
-        ConnectionBuilder, Error, Node, PdStoreAddrResolver, RaftClient, RaftKv,
+        ConnectionBuilder, Error, MultiRaftServer, PdStoreAddrResolver, RaftClient, RaftKv,
         Result as ServerResult, Server, ServerTransport,
     },
     storage::{
@@ -128,7 +129,7 @@ impl StoreAddrResolver for AddressMap {
 }
 
 struct ServerMeta {
-    node: Node<TestPdClient, TiFlashEngine, ProxyRaftEngine>,
+    node: MultiRaftServer<TestPdClient, TiFlashEngine, ProxyRaftEngine>,
     server: Server<PdStoreAddrResolver, SimulateEngine>,
     sim_router: SimulateStoreTransport,
     sim_trans: SimulateServerTransport,
@@ -150,7 +151,7 @@ pub struct ServerCluster {
     pub importers: HashMap<u64, Arc<SstImporter<TiFlashEngine>>>,
     pub pending_services: HashMap<u64, PendingServices>,
     pub coprocessor_hooks: HashMap<u64, CopHooks>,
-    pub health_services: HashMap<u64, HealthService>,
+    pub health_controllers: HashMap<u64, HealthController>,
     pub security_mgr: Arc<SecurityManager>,
     pub txn_extra_schedulers: HashMap<u64, Arc<dyn TxnExtraScheduler>>,
     snap_paths: HashMap<u64, TempDir>,
@@ -198,7 +199,7 @@ impl ServerCluster {
             snap_mgrs: HashMap::default(),
             pending_services: HashMap::default(),
             coprocessor_hooks: HashMap::default(),
-            health_services: HashMap::default(),
+            health_controllers: HashMap::default(),
             raft_client,
             concurrency_managers: HashMap::default(),
             env,
@@ -299,7 +300,16 @@ impl ServerCluster {
 
         // Create coprocessor.
         let mut coprocessor_host = CoprocessorHost::new(router.clone(), cfg.coprocessor.clone());
-        let region_info_accessor = RegionInfoAccessor::new(&mut coprocessor_host);
+
+        // Region stats manager collects region heartbeat for use by in-memory engine.
+        let enable_region_stats_mgr_cb: Arc<dyn Fn() -> bool + Send + Sync> =
+            if cfg.range_cache_engine.enabled {
+                Arc::new(|| true)
+            } else {
+                Arc::new(|| false)
+            };
+        let region_info_accessor =
+            RegionInfoAccessor::new(&mut coprocessor_host, enable_region_stats_mgr_cb);
 
         let raft_router = ServerRaftStoreRouter::new(router.clone(), local_reader);
         let sim_router = SimulateTransport::new(raft_router.clone());
@@ -488,8 +498,8 @@ impl ServerCluster {
                 false,
             )
             .unwrap();
-        let health_service = HealthService::default();
-        let mut node = Node::new(
+        let health_controller = HealthController::new();
+        let mut node = MultiRaftServer::new(
             system,
             &server_cfg.value().clone(),
             Arc::new(VersionTrack::new(raft_store)),
@@ -497,7 +507,7 @@ impl ServerCluster {
             Arc::clone(&self.pd_client),
             state,
             bg_worker.clone(),
-            Some(health_service.clone()),
+            health_controller.clone(),
             None,
         );
         node.try_bootstrap_store(engines.clone())?;
@@ -518,7 +528,7 @@ impl ServerCluster {
                 self.env.clone(),
                 None,
                 debug_thread_pool.clone(),
-                health_service.clone(),
+                health_controller.clone(),
                 None,
             )
             .unwrap();
@@ -619,7 +629,7 @@ impl ServerCluster {
         self.region_info_accessors
             .insert(node_id, region_info_accessor);
         self.importers.insert(node_id, importer);
-        self.health_services.insert(node_id, health_service);
+        self.health_controllers.insert(node_id, health_controller);
 
         lock_mgr
             .start(

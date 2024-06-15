@@ -176,7 +176,7 @@ impl RaftStoreProxy {
                 break;
             }
             let sel = futures::future::select_all(pending);
-            let (resp, _completed_idx, remaining) = rt.block_on(async { sel.await });
+            let (resp, _completed_idx, remaining) = rt.block_on(sel);
 
             let (res, need_retry) = parse_response(&rt, resp.unwrap());
             has_need_retry |= need_retry;

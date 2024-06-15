@@ -436,15 +436,13 @@ impl<T: Transport + 'static, ER: RaftEngine> ProxyForwarder<T, ER> {
     ) -> RaftStoreResult<u64> {
         match self.raft_engine.get_entry(region_id, index)? {
             Some(entry) => Ok(entry.get_term()),
-            None => {
-                return Err(box_err!(
-                    "can't find entry for index {} of region {}, peer_id: {}, tag {}",
-                    index,
-                    region_id,
-                    peer_id,
-                    tag
-                ));
-            }
+            None => Err(box_err!(
+                "can't find entry for index {} of region {}, peer_id: {}, tag {}",
+                index,
+                region_id,
+                peer_id,
+                tag
+            )),
         }
     }
 

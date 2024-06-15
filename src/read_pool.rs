@@ -12,12 +12,15 @@ use std::{
 };
 
 use file_system::{set_io_type, IoType};
-use futures::{channel::oneshot, future::TryFutureExt};
+use futures::{
+    channel::oneshot,
+    future::{FutureExt, TryFutureExt},
+};
 use kvproto::{errorpb, kvrpcpb::CommandPri};
 use online_config::{ConfigChange, ConfigManager, ConfigValue, Result as CfgResult};
 use prometheus::{core::Metric, Histogram, IntCounter, IntGauge};
 use resource_control::{
-    with_resource_limiter, ControlledFuture, ResourceController, ResourceLimiter,
+    with_resource_limiter, ControlledFuture, ResourceController, ResourceLimiter, TaskPriority,
 };
 use thiserror::Error;
 use tikv_util::{
@@ -57,7 +60,7 @@ pub enum ReadPool {
     },
     Yatp {
         pool: yatp::ThreadPool<TaskCell>,
-        running_tasks: IntGauge,
+        running_tasks: [IntGauge; TaskPriority::PRIORITY_COUNT],
         running_threads: IntGauge,
         max_tasks: usize,
         pool_size: usize,
@@ -108,7 +111,7 @@ pub enum ReadPoolHandle {
     },
     Yatp {
         remote: Remote<TaskCell>,
-        running_tasks: IntGauge,
+        running_tasks: [IntGauge; TaskPriority::PRIORITY_COUNT],
         running_threads: IntGauge,
         max_tasks: usize,
         pool_size: usize,
@@ -150,7 +153,8 @@ impl ReadPoolHandle {
                 resource_ctl,
                 ..
             } => {
-                let running_tasks = running_tasks.clone();
+                let task_priority = TaskPriority::from(metadata.override_priority());
+                let running_tasks = running_tasks[task_priority as usize].clone();
                 // Note that the running task number limit is not strict.
                 // If several tasks are spawned at the same time while the running task number
                 // is close to the limit, they may all pass this check and the number of running
@@ -158,7 +162,6 @@ impl ReadPoolHandle {
                 if running_tasks.get() as usize >= *max_tasks {
                     return Err(ReadPoolError::UnifiedReadPoolFull);
                 }
-
                 running_tasks.inc();
                 let fixed_level = match priority {
                     CommandPri::High => Some(0),
@@ -172,10 +175,9 @@ impl ReadPoolHandle {
                     TaskCell::new(
                         TrackedFuture::new(with_resource_limiter(
                             ControlledFuture::new(
-                                async move {
-                                    f.await;
+                                f.map(move |_| {
                                     running_tasks.dec();
-                                },
+                                }),
                                 resource_ctl.clone(),
                                 group_name,
                             ),
@@ -185,10 +187,9 @@ impl ReadPoolHandle {
                     )
                 } else {
                     TaskCell::new(
-                        TrackedFuture::new(async move {
-                            f.await;
+                        TrackedFuture::new(f.map(move |_| {
                             running_tasks.dec();
-                        }),
+                        })),
                         extras,
                     )
                 };
@@ -212,10 +213,9 @@ impl ReadPoolHandle {
     {
         let (tx, rx) = oneshot::channel::<T>();
         let res = self.spawn(
-            async move {
-                let res = f.await;
+            f.map(move |res| {
                 let _ = tx.send(res);
-            },
+            }),
             priority,
             task_id,
             metadata,
@@ -245,7 +245,7 @@ impl ReadPoolHandle {
                 running_tasks,
                 pool_size,
                 ..
-            } => running_tasks.get() as usize / *pool_size,
+            } => running_tasks.iter().map(|r| r.get()).sum::<i64>() as usize / *pool_size,
         }
     }
 
@@ -506,10 +506,16 @@ pub fn build_yatp_read_pool_with_name<E: Engine, R: FlowStatsReporter>(
     let time_slice_inspector = Arc::new(TimeSliceInspector::new(&unified_read_pool_name));
     ReadPool::Yatp {
         pool,
-        running_tasks: UNIFIED_READ_POOL_RUNNING_TASKS
-            .with_label_values(&[&unified_read_pool_name]),
-        running_threads: UNIFIED_READ_POOL_RUNNING_THREADS
-            .with_label_values(&[&unified_read_pool_name]),
+        running_tasks: TaskPriority::priorities().map(|p| {
+            UNIFIED_READ_POOL_RUNNING_TASKS
+                .with_label_values(&[&unified_read_pool_name, p.as_str()])
+        }),
+        running_threads: {
+            let running_threads =
+                UNIFIED_READ_POOL_RUNNING_THREADS.with_label_values(&[&unified_read_pool_name]);
+            running_threads.set(config.max_thread_count as _);
+            running_threads
+        },
         max_tasks: config
             .max_tasks_per_worker
             .saturating_mul(config.max_thread_count),
@@ -628,7 +634,9 @@ impl RunnableWithTimer for ReadPoolConfigRunner {
 impl ReadPoolConfigRunner {
     fn running_tasks(&self) -> i64 {
         match &self.handle {
-            ReadPoolHandle::Yatp { running_tasks, .. } => running_tasks.get(),
+            ReadPoolHandle::Yatp { running_tasks, .. } => {
+                running_tasks.iter().map(|r| r.get()).sum()
+            }
             _ => unreachable!(),
         }
     }
@@ -788,7 +796,7 @@ mod metrics {
         pub static ref UNIFIED_READ_POOL_RUNNING_TASKS: IntGaugeVec = register_int_gauge_vec!(
             "tikv_unified_read_pool_running_tasks",
             "The number of running tasks in the unified read pool",
-            &["name"]
+            &["name", "priority"]
         )
         .unwrap();
         pub static ref UNIFIED_READ_POOL_RUNNING_THREADS: IntGaugeVec = register_int_gauge_vec!(
@@ -805,6 +813,8 @@ mod tests {
     use std::{thread, time::Duration};
 
     use futures::channel::oneshot;
+    use futures_executor::block_on;
+    use kvproto::kvrpcpb::ResourceControlContext;
     use raftstore::store::{ReadStats, WriteStats};
     use resource_control::ResourceGroupManager;
 
@@ -875,7 +885,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             UNIFIED_READ_POOL_RUNNING_TASKS
-                .with_label_values(&[name])
+                .with_label_values(&[name, "medium"])
                 .get(),
             2
         );
@@ -991,8 +1001,14 @@ mod tests {
             _ => panic!("should return full error"),
         }
 
-        // TODO: move running task by priority to read_pool.
         // spawn a high-priority task, should not return Full error.
+        let (task_high, tx_h) = gen_task();
+        let mut ctx = ResourceControlContext::default();
+        ctx.override_priority = 16; // high priority
+        let metadata = TaskMetadata::from_ctx(&ctx);
+        let f = handle.spawn_handle(task_high, CommandPri::Normal, 6, metadata, None);
+        tx_h.send(()).unwrap();
+        block_on(f).unwrap();
 
         tx1.send(()).unwrap();
         tx2.send(()).unwrap();
