@@ -2540,8 +2540,10 @@ checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 name = "hybrid_engine"
 version = "0.0.1"
 dependencies = [
+ "crossbeam",
  "engine_rocks",
  "engine_traits",
+ "fail",
  "lazy_static",
  "online_config",
  "prometheus",
@@ -2842,7 +2844,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#d9297553c9009f569eaf4350f68a908f7811ee55"
+source = "git+https://github.com/pingcap/kvproto.git#0ad602a429126e39bd4a87c687be64f9ae173c02"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -4608,6 +4610,7 @@ dependencies = [
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
+ "raftstore",
  "rand 0.8.5",
  "security",
  "serde",
@@ -4619,6 +4622,7 @@ dependencies = [
  "tempfile",
  "test_pd",
  "test_pd_client",
+ "test_util",
  "thiserror",
  "tikv_util",
  "txn_types",
@@ -6119,6 +6123,7 @@ dependencies = [
  "api_version",
  "collections",
  "engine_rocks",
+ "engine_traits",
  "futures 0.3.15",
  "kvproto",
  "pd_client",

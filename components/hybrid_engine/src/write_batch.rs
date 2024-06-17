@@ -43,7 +43,8 @@ impl<EK: KvEngine> WriteBatch for HybridEngineWriteBatch<EK> {
 
     fn write_callback_opt(&mut self, opts: &WriteOptions, mut cb: impl FnMut(u64)) -> Result<u64> {
         let called = AtomicBool::new(false);
-        self.disk_write_batch
+        let res = self
+            .disk_write_batch
             .write_callback_opt(opts, |s| {
                 if !called.fetch_or(true, Ordering::SeqCst) {
                     self.cache_write_batch.set_sequence_number(s).unwrap();
@@ -53,7 +54,9 @@ impl<EK: KvEngine> WriteBatch for HybridEngineWriteBatch<EK> {
             .map(|s| {
                 cb(s);
                 s
-            })
+            });
+        self.cache_write_batch.maybe_compact_lock_cf();
+        res
     }
 
     fn data_size(&self) -> usize {
