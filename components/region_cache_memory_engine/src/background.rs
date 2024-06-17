@@ -462,8 +462,12 @@ impl BackgroundRunnerCore {
             }
 
             if core.has_cached_write_batch(&range) {
-                let (cache_batch, skiplist_engine) =
-                    { (core.take_cache_write_batch(&range), core.engine().clone()) };
+                let (cache_batch, skiplist_engine) = {
+                    (
+                        core.take_cached_write_batch_entries(&range),
+                        core.engine().clone(),
+                    )
+                };
                 drop(core);
                 let guard = &epoch::pin();
                 for (seq, entry) in cache_batch {
@@ -478,7 +482,7 @@ impl BackgroundRunnerCore {
                 }
                 fail::fail_point!("on_cached_write_batch_consumed");
             } else {
-                core.remove_cache_write_batch(&range);
+                core.remove_cached_write_batch(&range);
                 RangeCacheMemoryEngineCore::pending_range_completes_loading(&mut core, &range);
                 break;
             }
@@ -503,7 +507,7 @@ impl BackgroundRunnerCore {
             .ranges_being_deleted
             .insert(r.clone());
 
-        core.remove_cache_write_batch(&range);
+        core.remove_cached_write_batch(&range);
 
         if let Err(e) = delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(vec![r]))
         {
@@ -894,9 +898,9 @@ impl RunnableWithTimer for BackgroundRunner {
 pub struct DeleteRangeRunner {
     engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
     // It is possible that when `DeleteRangeRunner` begins to delete a range, the range is being
-    // written by apply thread. In this case, we have to delay the delete range task to avoid race
-    // condition between them. Periodically, these ranges will be checked to see if it is ready to
-    // be deleted.
+    // written by apply threads. In that case, we have to delay the delete range task to avoid race
+    // condition between them. Periodically, these delayed ranges will be checked to see if it is
+    // ready to be deleted.
     delay_ranges: Vec<CacheRange>,
 }
 

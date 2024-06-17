@@ -222,17 +222,19 @@ impl RangeCacheMemoryEngineCore {
     }
 
     pub(crate) fn has_cached_write_batch(&self, cache_range: &CacheRange) -> bool {
-        self.cached_write_batch.contains_key(cache_range)
+        self.cached_write_batch
+            .get(cache_range)
+            .map_or(false, |entries| !entries.is_empty())
     }
 
-    pub(crate) fn take_cache_write_batch(
+    pub(crate) fn take_cached_write_batch_entries(
         &mut self,
         cache_range: &CacheRange,
     ) -> Vec<(u64, RangeCacheWriteBatchEntry)> {
         std::mem::take(self.cached_write_batch.get_mut(cache_range).unwrap())
     }
 
-    pub(crate) fn remove_cache_write_batch(&mut self, cache_range: &CacheRange) {
+    pub(crate) fn remove_cached_write_batch(&mut self, cache_range: &CacheRange) {
         self.cached_write_batch.remove(cache_range).expect(
             format!(
                 "range cannot be found in cached_write_batch: {:?}",
