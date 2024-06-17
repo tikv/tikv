@@ -274,6 +274,7 @@ pub struct RangeCacheMemoryEngine {
     // tombstones.
     pub(crate) lock_modification_bytes: Arc<AtomicU64>,
 
+    // `write_batch_id_allocator` is used to allocate id for each write batch
     write_batch_id_allocator: Arc<AtomicU64>,
 }
 

@@ -242,7 +242,7 @@ impl BgWorkManager {
             task @ BackgroundTask::DeleteRange(_) => {
                 self.delete_range_scheduler.schedule_force(task)
             }
-            task @ _ => self.scheduler.schedule_force(task),
+            task => self.scheduler.schedule_force(task),
         }
     }
 
@@ -952,6 +952,8 @@ impl Runnable for BackgroundRunner {
                     self.core.memory_controller.set_memory_checking(false);
                 }
             }
+            // DeleteRange task is executed by `DeleteRangeRunner` with a different scheduler so
+            // that the task will not be scheduled to here.
             BackgroundTask::DeleteRange(_) => unreachable!(),
             BackgroundTask::TopRegionsLoadEvict => {
                 let delete_range_scheduler = self.delete_range_scheduler.clone();

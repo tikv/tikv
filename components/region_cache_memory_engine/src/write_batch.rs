@@ -40,6 +40,9 @@ const AMOUNT_TO_CLEAN_TOMBSTONE: u64 = ReadableSize::mb(16).0;
 // delegate. It sets `range_cache_status` which is used to determine whether the
 // writes of this peer should be buffered.
 pub struct RangeCacheWriteBatch {
+    // `id` strictly incrementing and is used as the key in `ranges_being_written`, which records
+    // the ranges that are being written, so that when the write batch is consumed, we can
+    // quickly remove the ranges involved.
     id: u64,
     // `range_cache_status` indicates whether the range is cached, loading data, or not cached. If
     // it is cached, we should buffer the write in `buffer` which is consumed during the write
