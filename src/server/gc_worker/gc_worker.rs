@@ -15,7 +15,7 @@ use std::{
 use api_version::{ApiV2, KvFormat};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
-use engine_rocks::FlowInfo;
+use engine_rocks::{FlowInfo, RocksEngine};
 use engine_traits::{
     raw_ttl::ttl_current_ts, DeleteStrategy, Error as EngineError, KvEngine, MiscExt, Range,
     WriteBatch, WriteOptions, CF_DEFAULT, CF_LOCK, CF_WRITE,
@@ -938,7 +938,7 @@ impl<E: Engine> GcRunnerCore<E> {
     }
 
     #[inline]
-    fn run(&mut self, task: GcTask<E::Local>) {
+    fn run(&mut self, task: GcTask<<E::Local as MiscExt>::DiskEngine>) {
         let _io_type_guard = WithIoType::new(IoType::Gc);
         let enum_label = task.get_enum_label();
         GC_GCTASK_COUNTER_STATIC.get(enum_label).inc();
@@ -1088,10 +1088,10 @@ impl<E: Engine> GcRunner<E> {
 }
 
 impl<E: Engine> Runnable for GcRunner<E> {
-    type Task = GcTask<E::Local>;
+    type Task = GcTask<<E::Local as MiscExt>::DiskEngine>;
 
     #[inline]
-    fn run(&mut self, task: GcTask<E::Local>) {
+    fn run(&mut self, task: GcTask<<E::Local as MiscExt>::DiskEngine>) {
         // Refresh config before handle task
         self.inner.refresh_cfg();
 
@@ -1164,8 +1164,8 @@ where
     /// How many strong references. The worker will be stopped
     /// once there are no more references.
     refs: Arc<AtomicUsize>,
-    worker: Arc<Mutex<LazyWorker<GcTask<E::Local>>>>,
-    worker_scheduler: Scheduler<GcTask<E::Local>>,
+    worker: Arc<Mutex<LazyWorker<GcTask<<E::Local as MiscExt>::DiskEngine>>>>,
+    worker_scheduler: Scheduler<GcTask<<E::Local as MiscExt>::DiskEngine>>,
 
     gc_manager_handle: Arc<Mutex<Option<GcManagerHandle>>>,
     feature_gate: FeatureGate,
@@ -1206,6 +1206,52 @@ impl<E: Engine> Drop for GcWorker<E> {
     }
 }
 
+impl<E> GcWorker<E>
+where
+    E: Engine<Local: KvEngine<DiskEngine = RocksEngine>>,
+{
+    pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
+        &self,
+        cfg: AutoGcConfig<S, R>,
+        safe_point: Arc<AtomicU64>, // Store safe point here.
+    ) -> Result<()> {
+        assert!(
+            cfg.self_store_id > 0,
+            "AutoGcConfig::self_store_id shouldn't be 0"
+        );
+
+        info!("initialize compaction filter to perform GC when necessary");
+        let disk_engine = self.engine.kv_engine().map(|e| e.get_disk_engine().clone());
+        disk_engine.init_compaction_filter(
+            cfg.self_store_id,
+            safe_point.clone(),
+            self.config_manager.clone(),
+            self.feature_gate.clone(),
+            self.scheduler(),
+            Arc::new(cfg.region_info_provider.clone()),
+        );
+
+        let mut handle = self.gc_manager_handle.lock().unwrap();
+        assert!(handle.is_none());
+
+        let new_handle = GcManager::new(
+            cfg,
+            safe_point,
+            self.scheduler(),
+            self.config_manager.clone(),
+            self.feature_gate.clone(),
+            self.config_manager.value().num_threads,
+        )
+        .start()?;
+        *handle = Some(new_handle);
+        Ok(())
+    }
+
+    pub fn scheduler(&self) -> Scheduler<GcTask<<E::Local as MiscExt>::DiskEngine>> {
+        self.worker_scheduler.clone()
+    }
+}
+
 impl<E: Engine> GcWorker<E> {
     pub fn new(
         engine: E,
@@ -1235,42 +1281,6 @@ impl<E: Engine> GcWorker<E> {
         }
     }
 
-    pub fn start_auto_gc<S: GcSafePointProvider, R: RegionInfoProvider + Clone + 'static>(
-        &self,
-        cfg: AutoGcConfig<S, R>,
-        safe_point: Arc<AtomicU64>, // Store safe point here.
-    ) -> Result<()> {
-        assert!(
-            cfg.self_store_id > 0,
-            "AutoGcConfig::self_store_id shouldn't be 0"
-        );
-
-        info!("initialize compaction filter to perform GC when necessary");
-        self.engine.kv_engine().init_compaction_filter(
-            cfg.self_store_id,
-            safe_point.clone(),
-            self.config_manager.clone(),
-            self.feature_gate.clone(),
-            self.scheduler(),
-            Arc::new(cfg.region_info_provider.clone()),
-        );
-
-        let mut handle = self.gc_manager_handle.lock().unwrap();
-        assert!(handle.is_none());
-
-        let new_handle = GcManager::new(
-            cfg,
-            safe_point,
-            self.scheduler(),
-            self.config_manager.clone(),
-            self.feature_gate.clone(),
-            self.config_manager.value().num_threads,
-        )
-        .start()?;
-        *handle = Some(new_handle);
-        Ok(())
-    }
-
     pub fn start(&mut self, store_id: u64) -> Result<()> {
         let mut worker = self.worker.lock().unwrap();
         let runner = GcRunner::new(
@@ -1297,10 +1307,6 @@ impl<E: Engine> GcWorker<E> {
         // Stop self.
         self.worker.lock().unwrap().stop();
         Ok(())
-    }
-
-    pub fn scheduler(&self) -> Scheduler<GcTask<E::Local>> {
-        self.worker_scheduler.clone()
     }
 
     /// Only for tests.

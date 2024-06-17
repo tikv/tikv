@@ -748,6 +748,7 @@ where
         let snap_mgr = SnapManagerBuilder::default()
             .max_write_bytes_per_sec(bps)
             .max_total_size(self.core.config.server.snap_max_total_size.0)
+            .concurrent_recv_snap_limit(self.core.config.server.concurrent_recv_snap_limit)
             .encryption_key_manager(self.core.encryption_key_manager.clone())
             .max_per_file_size(self.core.config.raft_store.max_snapshot_file_raw_size.0)
             .enable_multi_snapshot_files(
@@ -939,6 +940,7 @@ where
                     pd_client::meta_storage::Source::LogBackup,
                 ))),
                 self.core.config.log_backup.clone(),
+                self.core.config.resolved_ts.clone(),
                 backup_stream_scheduler.clone(),
                 backup_stream_ob,
                 self.region_info_accessor.clone(),
@@ -1081,6 +1083,7 @@ where
         let cdc_endpoint = cdc::Endpoint::new(
             self.core.config.server.cluster_id,
             &self.core.config.cdc,
+            &self.core.config.resolved_ts,
             self.core.config.storage.engine == EngineType::RaftKv2,
             self.core.config.storage.api_version(),
             self.pd_client.clone(),
@@ -1679,16 +1682,19 @@ where
         let disk_engine = factory
             .create_shared_db(&self.core.store_path)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
-        let range_cache_engine_config = Arc::new(VersionTrack::new(
-            self.core.config.range_cache_engine.clone(),
-        ));
+        let mut range_cache_engine_config = self.core.config.range_cache_engine.clone();
+        let _ = range_cache_engine_config
+            .expected_region_size
+            .get_or_insert(self.core.config.coprocessor.region_split_size());
+        let range_cache_engine_config = Arc::new(VersionTrack::new(range_cache_engine_config));
         let range_cache_engine_context =
-            RangeCacheEngineContext::new(range_cache_engine_config.clone());
+            RangeCacheEngineContext::new(range_cache_engine_config.clone(), self.pd_client.clone());
         let range_cache_engine_statistics = range_cache_engine_context.statistics();
         let kv_engine: EK = KvEngineBuilder::build(
             range_cache_engine_context,
             disk_engine.clone(),
             Some(self.pd_client.clone()),
+            Some(Arc::new(self.region_info_accessor.clone())),
         );
         let range_cache_config_manager = RangeCacheConfigManager(range_cache_engine_config);
         self.kv_statistics = Some(factory.rocks_statistics());

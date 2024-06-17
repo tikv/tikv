@@ -344,19 +344,17 @@ impl Drop for Delegate {
             LockTracker::Preparing(locks) => {
                 let mut free_bytes = 0;
                 for lock in locks {
-                    let bytes = lock.approximate_heap_size();
-                    self.memory_quota.free(bytes);
-                    free_bytes += bytes;
+                    free_bytes += lock.approximate_heap_size();
                 }
+                self.memory_quota.free(free_bytes);
                 CDC_PENDING_BYTES_GAUGE.sub(free_bytes as _);
             }
             LockTracker::Prepared { locks, .. } => {
                 let mut free_bytes = 0;
                 for lock in locks.keys() {
-                    let bytes = lock.approximate_heap_size();
-                    self.memory_quota.free(bytes);
-                    free_bytes += bytes;
+                    free_bytes += lock.approximate_heap_size();
                 }
+                self.memory_quota.free(free_bytes);
                 CDC_PENDING_BYTES_GAUGE.sub(free_bytes as _);
             }
         }

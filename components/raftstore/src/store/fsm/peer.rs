@@ -11,7 +11,7 @@ use std::{
     },
     iter::Iterator,
     mem,
-    sync::{Arc, Mutex},
+    sync::{atomic::Ordering, Arc, Mutex},
     time::{Duration, Instant},
     u64,
 };
@@ -1259,8 +1259,18 @@ where
                 let raft_msg = self.fsm.peer.build_raft_messages(self.ctx, vec![msg]);
                 self.fsm.peer.send_raft_messages(self.ctx, raft_msg);
             }
-            CasualMessage::SnapshotApplied => {
+            CasualMessage::SnapshotApplied { peer_id, tombstone } => {
                 self.fsm.has_ready = true;
+                // If failed on applying snapshot, it should record the peer as an invalid peer.
+                if tombstone && self.fsm.peer.peer_id() == peer_id && !self.fsm.peer.is_leader() {
+                    info!(
+                        "mark the region damaged on applying snapshot";
+                        "region_id" => self.region_id(),
+                        "peer_id" => peer_id,
+                    );
+                    let mut meta = self.ctx.store_meta.lock().unwrap();
+                    meta.damaged_regions.insert(self.region_id());
+                }
                 if self.fsm.peer.should_destroy_after_apply_snapshot() {
                     self.maybe_destroy();
                 }
@@ -3012,6 +3022,38 @@ where
             // It's v2 only message and ignore does no harm.
             ExtraMessageType::MsgGcPeerResponse | ExtraMessageType::MsgFlushMemtable => (),
             ExtraMessageType::MsgRefreshBuckets => self.on_msg_refresh_buckets(msg),
+            ExtraMessageType::MsgSnapGenPrecheckRequest => {
+                let passed = self.ctx.snap_mgr.recv_snap_precheck(msg.region_id);
+                self.fsm.peer.send_snap_gen_precheck_response(
+                    self.ctx,
+                    &msg.from_peer.unwrap(),
+                    passed,
+                )
+            }
+            ExtraMessageType::MsgSnapGenPrecheckResponse => {
+                let passed = msg.get_extra_msg().get_snap_gen_precheck_passed();
+                fail_point!("snap_gen_precheck_failed", !passed, |_| {});
+                info!(
+                    "snap gen precheck response: {}", passed;
+                    "region_id" => self.region_id(),
+                    "peer_id" => self.peer().id,
+                    "store_id" => self.store_id(),
+                    "receiver_peer_id" => msg.get_from_peer().get_id(),
+                    "receiver_store_id" => msg.get_from_peer().get_store_id(),
+                    "ignored" => !self.fsm.peer.get_store().has_gen_snap_task(),
+                );
+                if passed {
+                    if let Some(gen_task) = self.fsm.peer.mut_store().take_gen_snap_task() {
+                        self.fsm
+                            .peer
+                            .pending_request_snapshot_count
+                            .fetch_add(1, Ordering::SeqCst);
+                        self.ctx
+                            .apply_router
+                            .schedule_task(self.region_id(), ApplyTask::Snapshot(gen_task));
+                    }
+                }
+            }
         }
     }
 
@@ -3874,6 +3916,8 @@ where
             );
         })();
         let mut meta = self.ctx.store_meta.lock().unwrap();
+        meta.damaged_regions.remove(&self.fsm.region_id());
+        meta.damaged_regions.shrink_to_fit();
         let is_latest_initialized = {
             if let Some(latest_region_info) = meta.regions.get(&region_id) {
                 util::is_region_initialized(latest_region_info)
