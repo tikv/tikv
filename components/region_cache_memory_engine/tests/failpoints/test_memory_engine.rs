@@ -6,12 +6,17 @@ use std::{
 };
 
 use crossbeam::epoch;
-use engine_traits::{CacheRange, Mutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_WRITE};
+use engine_rocks::util::new_engine;
+use engine_traits::{
+    CacheRange, Mutable, RangeCacheEngine, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_WRITE,
+    DATA_CFS,
+};
 use region_cache_memory_engine::{
     decode_key, encoding_for_filter, test_util::put_data, BackgroundTask, InternalBytes,
     InternalKey, RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
     SkiplistHandle, ValueType,
 };
+use tempfile::Builder;
 use tikv_util::config::{ReadableDuration, VersionTrack};
 use txn_types::{Key, TimeStamp};
 
@@ -204,4 +209,63 @@ fn test_clean_up_tombstone() {
         assert_eq!(user_key, &k);
         assert_eq!(v_type, ty);
     }
+}
+
+#[test]
+fn test_evict_with_loading_range() {
+    let path = Builder::new().prefix("test").tempdir().unwrap();
+    let path_str = path.path().to_str().unwrap();
+    let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+
+    let config = RangeCacheEngineConfig::config_for_test();
+    let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
+        VersionTrack::new(config),
+    )));
+    engine.set_disk_engine(rocks_engine);
+
+    let range1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+    let range2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
+    let range3 = CacheRange::new(b"k40".to_vec(), b"k50".to_vec());
+    let (snapshot_load_tx, snapshot_load_rx) = sync_channel(0);
+    fail::cfg_callback("on_snapshot_load_finished", move || {
+        let _ = snapshot_load_tx.send(true);
+    })
+    .unwrap();
+
+    let (loading_complete_tx, loading_complete_rx) = sync_channel(0);
+    fail::cfg_callback("on_pending_range_completes_loading", move || {
+        let _ = loading_complete_tx.send(true);
+    })
+    .unwrap();
+
+    engine.load_range(range1.clone()).unwrap();
+    engine.load_range(range2.clone()).unwrap();
+    engine.load_range(range3.clone()).unwrap();
+
+    let mut wb = engine.write_batch();
+    // prepare range to trigger loading
+    wb.prepare_for_range(range1.clone());
+    wb.prepare_for_range(range2.clone());
+    wb.prepare_for_range(range3.clone());
+    wb.set_sequence_number(10).unwrap();
+    wb.write().unwrap();
+
+    // range1 and range2 will be evicted
+    let r = CacheRange::new(b"k05".to_vec(), b"k25".to_vec());
+    engine.evict_range(&r);
+
+    snapshot_load_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    snapshot_load_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+
+    loading_complete_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+
+    engine.snapshot(range1, 100, 100).unwrap_err();
+    engine.snapshot(range2, 100, 100).unwrap_err();
+    engine.snapshot(range3, 100, 100).unwrap();
 }
