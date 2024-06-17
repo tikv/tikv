@@ -1,5 +1,6 @@
 use std::{collections::HashMap, marker::PhantomData, sync::Arc, task::ready};
 
+use derive_more::Display;
 use engine_traits::{
     CfName, ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,
 };
@@ -18,7 +19,8 @@ use super::{
     util::{Cooperate, ExecuteAllExt},
 };
 
-#[derive(Debug)]
+#[derive(Debug, Display)]
+#[display(fmt = "compaction(region={},size={},cf={})", region_id, size, cf)]
 pub struct Compaction {
     pub source: Vec<LogFileId>,
     pub size: u64,
@@ -239,6 +241,7 @@ where
 {
     const COMPRESSION: Option<SstCompressionType> = Some(SstCompressionType::Lz4);
 
+    #[tracing::instrument(skip_all)]
     async fn pick_and_sort(
         &mut self,
         c: &Compaction,
@@ -259,6 +262,7 @@ where
         flatten_items
     }
 
+    #[tracing::instrument(skip_all)]
     async fn load(
         &mut self,
         c: &Compaction,
@@ -301,6 +305,7 @@ where
         Ok(result.into_iter())
     }
 
+    #[tracing::instrument(skip_all)]
     async fn write_sst(
         &mut self,
         cf: CfName,
@@ -330,6 +335,7 @@ where
         Ok((info.file_size(), out))
     }
 
+    #[tracing::instrument(skip_all, fields(c=%c))]
     pub async fn compact_ext(&mut self, c: Compaction, mut ext: CompactLogExt<'_>) -> Result<()> {
         let mut eext = ExecuteAllExt::default();
         eext.max_concurrency = ext.max_load_concurrency;

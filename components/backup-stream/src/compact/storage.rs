@@ -12,9 +12,13 @@ use futures::{
     io::AsyncReadExt,
     stream::{Fuse, FusedStream, StreamExt},
 };
+use tikv_util::time::Instant;
 use tokio_stream::Stream;
 
-use super::errors::{Error, Result};
+use super::{
+    errors::{Error, Result},
+    statistic::LoadMetaStatistic,
+};
 use crate::utils;
 
 const METADATA_PREFIX: &'static str = "v1/backupmeta";
@@ -58,22 +62,27 @@ impl std::fmt::Debug for LogFileId {
     }
 }
 
-pub struct LoadFromExt {
+pub struct LoadFromExt<'a> {
     pub max_concurrent_fetch: usize,
+    pub on_update_stat: Option<Box<dyn FnMut(LoadMetaStatistic) + 'a>>,
 }
 
-impl Default for LoadFromExt {
+impl<'a> Default for LoadFromExt<'a> {
     fn default() -> Self {
         Self {
             max_concurrent_fetch: 16,
+            on_update_stat: None,
         }
     }
 }
 
 pub struct StreamyMetaStorage<'a> {
-    prefetch: VecDeque<Prefetch<Pin<Box<dyn Future<Output = Result<MetaFile>> + 'a>>>>,
+    prefetch: VecDeque<
+        Prefetch<Pin<Box<dyn Future<Output = Result<(MetaFile, LoadMetaStatistic)>> + 'a>>>,
+    >,
     ext_storage: &'a dyn ExternalStorage,
-    ext: LoadFromExt,
+    ext: LoadFromExt<'a>,
+    stat: LoadMetaStatistic,
 
     files: Fuse<Pin<Box<dyn Stream<Item = std::io::Result<BlobObject>> + 'a>>>,
 }
@@ -155,6 +164,7 @@ impl<'a> StreamyMetaStorage<'a> {
             // We need to check this in next run.
             cx.waker().wake_by_ref();
         }
+        self.stat.prefetch_task_emitted += 1;
         self.prefetch.push_back(fut);
     }
 
@@ -188,32 +198,58 @@ impl<'a> StreamyMetaStorage<'a> {
         }
         if self.prefetch[0].is_terminated() {
             let file = self.prefetch.pop_front().unwrap().must_fetch();
-            file.into()
+            match file {
+                Ok((file, stat)) => {
+                    self.stat += stat;
+                    self.stat.prefetch_task_finished += 1;
+                    self.flush_stat();
+                    Ok(file).into()
+                }
+                Err(err) => Err(err.attach_current_frame()).into(),
+            }
         } else {
             Poll::Pending
         }
     }
 
-    pub fn load_from_ext(s: &'a dyn WalkExternalStorage, ext: LoadFromExt) -> Self {
+    fn flush_stat(&mut self) {
+        let stat = std::mem::take(&mut self.stat);
+        if let Some(u) = &mut self.ext.on_update_stat {
+            u(stat)
+        }
+    }
+
+    pub fn load_from_ext(s: &'a dyn WalkExternalStorage, ext: LoadFromExt<'a>) -> Self {
         let files = s.walk(&METADATA_PREFIX).fuse();
         Self {
             prefetch: VecDeque::new(),
             files,
             ext_storage: s,
             ext,
+            stat: LoadMetaStatistic::default(),
         }
     }
 }
 
 impl MetaFile {
-    async fn load_from(s: &dyn ExternalStorage, blob: BlobObject) -> Result<Self> {
+    #[tracing::instrument(skip(s))]
+    async fn load_from(
+        s: &dyn ExternalStorage,
+        blob: BlobObject,
+    ) -> Result<(Self, LoadMetaStatistic)> {
         use protobuf::Message;
 
+        let mut stat = LoadMetaStatistic::default();
+        let begin = Instant::now();
+
         let mut content = vec![];
-        s.read(&blob.key)
+        let n = s
+            .read(&blob.key)
             .read_to_end(&mut content)
             .await
-            .map_err(|err| Error::from(err).message(format!("reading {}", blob.key)))?;
+            .map_err(|err| Error::from(err).message(format_args!("reading {}", blob.key)))?;
+        stat.physical_bytes_loaded += n as u64;
+
         let mut meta_file = kvproto::brpb::Metadata::new();
         meta_file.merge_from_bytes(&content)?;
         let mut log_files = vec![];
@@ -221,8 +257,10 @@ impl MetaFile {
         let max_ts = meta_file.max_ts;
 
         for mut group in meta_file.take_file_groups().into_iter() {
+            stat.physical_data_files_in += 1;
             let name = Arc::from(group.path.clone().into_boxed_str());
             for mut log_file in group.take_data_files_info().into_iter() {
+                stat.logical_data_files_in += 1;
                 log_files.push(LogFile {
                     id: LogFileId {
                         name: Arc::clone(&name),
@@ -249,6 +287,7 @@ impl MetaFile {
             min_ts,
             max_ts,
         };
-        Ok(result)
+        stat.load_file_duration += begin.saturating_elapsed();
+        Ok((result, stat))
     }
 }

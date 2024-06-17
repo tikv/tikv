@@ -1,16 +1,27 @@
-use std::{collections::VecDeque, sync::Arc};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
 
 use engine_rocks::RocksEngine;
 use external_storage::{BackendConfig, WalkExternalStorage};
 use futures::stream::{self, StreamExt};
 use kvproto::brpb::StorageBackend;
 use tikv_util::info;
+use tokio::{
+    io::AsyncWriteExt,
+    runtime::Handle,
+    signal::{self, unix::SignalKind},
+};
+use tracing::{instrument::Instrumented, span, trace_span, Instrument, Span};
+use tracing_active_tree::{frame, root};
 use txn_types::TimeStamp;
 
 use super::{
     compaction::{
         CollectCompaction, CollectCompactionConfig, CompactLogExt, CompactWorker, Compaction,
     },
+    statistic::LoadMetaStatistic,
     storage::{LoadFromExt, StreamyMetaStorage},
 };
 use crate::compact::{
@@ -38,6 +49,10 @@ pub trait ExecHooks: 'static {
     fn before_compaction_start(&mut self, _c: &Compaction, _cid: CId) {}
     fn after_compaction_end(&mut self, _cid: CId, _lst: LoadStatistic, _cst: CompactStatistic) {}
     fn after_finish(&mut self) {}
+
+    fn after_runtime_start(&mut self, _h: &Handle) {}
+
+    fn update_load_meta_stat(&mut self, _stat: LoadMetaStatistic) {}
 }
 
 pub struct NoHooks;
@@ -48,6 +63,7 @@ impl ExecHooks for NoHooks {}
 pub struct LogToTerm {
     load_stat: LoadStatistic,
     compact_stat: CompactStatistic,
+    load_meta_stat: LoadMetaStatistic,
 }
 
 impl ExecHooks for LogToTerm {
@@ -74,13 +90,14 @@ impl ExecHooks for LogToTerm {
         self.compact_stat += cst.clone();
 
         println!(
-            "[{}] finishing compaction. cid: {}, load_stat: {:?}, compact_stat: {:?}, speed: {:.2} KB./s, total_take: {:?}",
+            "[{}] finishing compaction. cid: {}, load_stat: {:?}, compact_stat: {:?}, speed: {:.2} KB./s, total_take: {:?}, global_load_meta_stat: {:?}",
             TimeStamp::physical_now(),
             cid.0,
             lst,
             cst,
             speed,
-            total_take
+            total_take,
+            self.load_meta_stat,
         );
     }
 
@@ -92,10 +109,37 @@ impl ExecHooks for LogToTerm {
             self.compact_stat
         );
     }
+
+    fn after_runtime_start(&mut self, h: &Handle) {
+        tracing_active_tree::init();
+
+        let sigusr1_handler = async {
+            let mut signal = tokio::signal::unix::signal(SignalKind::user_defined1()).unwrap();
+            while let Some(_) = signal.recv().await {
+                let file_name = "/tmp/compact-sst.dump".to_owned();
+                let res = async {
+                    let mut file = tokio::fs::File::create(&file_name).await?;
+                    file.write_all(&tracing_active_tree::layer::global().fmt_bytes())
+                        .await
+                }
+                .await;
+                match res {
+                    Ok(_) => eprintln!("dumped to {}", file_name),
+                    Err(err) => eprintln!("failed to dump because {}", err),
+                }
+            }
+        };
+
+        h.spawn(sigusr1_handler);
+    }
+
+    fn update_load_meta_stat(&mut self, stat: LoadMetaStatistic) {
+        self.load_meta_stat += stat;
+    }
 }
 
 impl Execution {
-    pub fn run(self, mut hooks: impl ExecHooks) -> Result<()> {
+    pub fn run(self, hooks: impl ExecHooks) -> Result<()> {
         let storage = external_storage::create_walkable_storage(
             &self.external_storage,
             BackendConfig::default(),
@@ -105,9 +149,19 @@ impl Execution {
             .enable_all()
             .build()
             .unwrap();
+        let locked_hooks = Mutex::new(hooks);
+        locked_hooks
+            .lock()
+            .unwrap()
+            .after_runtime_start(runtime.handle());
+
         let all_works = async move {
             let mut ext = LoadFromExt::default();
             ext.max_concurrent_fetch = 128;
+            ext.on_update_stat = Some(Box::new(|stat| {
+                locked_hooks.lock().unwrap().update_load_meta_stat(stat)
+            }));
+
             let meta = StreamyMetaStorage::load_from_ext(storage.as_ref(), ext);
             let stream = meta.flat_map(|file| match file {
                 Ok(file) => stream::iter(file.logs).map(Ok).left_stream(),
@@ -122,10 +176,15 @@ impl Execution {
             );
             let mut pending = VecDeque::new();
             let mut id = 0;
-            while let Some(c) = compact_stream.next().await {
+
+            let span = trace_span!("poll_meta_stream");
+            while let Some(c) = compact_stream.next().instrument(span.clone()).await {
                 let c = c?;
                 let cid = CId(id);
-                hooks.before_compaction_start(&c, cid);
+                locked_hooks
+                    .lock()
+                    .unwrap()
+                    .before_compaction_start(&c, cid);
                 id += 1;
 
                 let mut compact_worker =
@@ -136,28 +195,35 @@ impl Execution {
                     let mut ext = CompactLogExt::default();
                     ext.compact_statistic = Some(&mut compact_statistic);
                     ext.load_statistic = Some(&mut load_statistic);
-                    ext.max_load_concurrency = 128;
+                    ext.max_load_concurrency = 32;
                     compact_worker.compact_ext(c, ext).await?;
                     Result::Ok((load_statistic, compact_statistic))
                 };
-                let join_handle = tokio::spawn(compact_work);
+                let join_handle = tokio::spawn(root!(compact_work));
                 pending.push_back((join_handle, cid));
 
                 if pending.len() >= self.max_concurrent_compaction as _ {
                     let (join, cid) = pending.pop_front().unwrap();
-                    let (lst, cst) = join.await.unwrap()?;
-                    hooks.after_compaction_end(cid, lst, cst);
+                    let (lst, cst) = frame!("wait"; join).await.unwrap()?;
+                    locked_hooks
+                        .lock()
+                        .unwrap()
+                        .after_compaction_end(cid, lst, cst);
                 }
             }
+            drop(span);
 
             for (join, cid) in pending {
-                let (lst, cst) = join.await.unwrap()?;
-                hooks.after_compaction_end(cid, lst, cst);
+                let (lst, cst) = frame!("final_wait"; join).await.unwrap()?;
+                locked_hooks
+                    .lock()
+                    .unwrap()
+                    .after_compaction_end(cid, lst, cst);
             }
 
-            hooks.after_finish();
+            locked_hooks.lock().unwrap().after_finish();
             Result::Ok(())
         };
-        runtime.block_on(all_works)
+        runtime.block_on(frame!(all_works))
     }
 }

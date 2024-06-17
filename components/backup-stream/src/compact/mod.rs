@@ -11,6 +11,8 @@ mod test;
 mod util {
     use std::{future::Future, task::Poll};
 
+    use tracing::Span;
+
     pub struct Cooperate {
         work_count: usize,
         yield_every: usize,
@@ -86,6 +88,7 @@ mod util {
         }
     }
 
+    #[tracing::instrument(skip_all, fields(size = futs.len()))]
     pub async fn execute_all_ext<T, F, E>(futs: Vec<F>, ext: ExecuteAllExt) -> Result<Vec<T>, E>
     where
         F: Future<Output = Result<T, E>> + Unpin,

@@ -9,6 +9,9 @@ pub struct LoadMetaStatistic {
     pub physical_data_files_in: u64,
     pub logical_data_files_in: u64,
     pub load_file_duration: Duration,
+
+    pub prefetch_task_emitted: u64,
+    pub prefetch_task_finished: u64,
 }
 
 #[derive(Default, Debug, Add, AddAssign, Clone)]
