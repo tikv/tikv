@@ -471,10 +471,6 @@ impl BackgroundRunnerCore {
                     .ranges_being_deleted
                     .insert(r.clone());
 
-                core.cached_write_batch
-                    .remove(&range)
-                    .expect(format!("cannot remove range {:?}", range).as_str());
-
                 if let Err(e) =
                     delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(vec![r]))
                 {
@@ -491,7 +487,7 @@ impl BackgroundRunnerCore {
             if core.has_cached_write_batch(&range) {
                 let (cache_batch, skiplist_engine) = {
                     (
-                        core.take_cached_write_batch_entries(&range),
+                        core.take_cache_write_batch(&range).unwrap(),
                         core.engine().clone(),
                     )
                 };
@@ -509,7 +505,6 @@ impl BackgroundRunnerCore {
                 }
                 fail::fail_point!("on_cached_write_batch_consumed");
             } else {
-                core.remove_cached_write_batch(&range);
                 RangeCacheMemoryEngineCore::pending_range_completes_loading(&mut core, &range);
                 break;
             }
@@ -533,8 +528,6 @@ impl BackgroundRunnerCore {
         core.mut_range_manager()
             .ranges_being_deleted
             .insert(r.clone());
-
-        core.remove_cached_write_batch(&range);
 
         if let Err(e) = delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(vec![r]))
         {
@@ -581,7 +574,7 @@ impl BackgroundRunnerCore {
             if remaining == 0 {
                 break;
             }
-            let mut evicted_range = false;
+            let evicted_range;
             {
                 let mut engine_wr = self.engine.write();
                 let mut ranges = engine_wr.mut_range_manager().evict_range(range);
@@ -1098,6 +1091,7 @@ impl DeleteRangeRunner {
     fn delete_ranges(&mut self, ranges: &[CacheRange]) {
         let skiplist_engine = self.engine.read().engine();
         for r in ranges {
+            println!("delete range {:?}", r);
             skiplist_engine.delete_range(r);
         }
         self.engine
@@ -2395,16 +2389,12 @@ pub mod tests {
         rocks_engine.put_cf(CF_DEFAULT, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
-        // Memory usage reaches 1260
-
-        let range4 = CacheRange::new(construct_user_key(6), construct_user_key(7));
         let key = construct_key(6, 10);
         rocks_engine.put_cf(CF_DEFAULT, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
-        // Although the memory is enough for loading range4, it is alreay reaching soft
-        // limit at begin.
+        rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
 
-        for r in [&range1, &range2, &range3, &range4] {
+        for r in [&range1, &range2, &range3] {
             engine.load_range(r.clone()).unwrap();
             engine.prepare_for_apply(1, r);
         }
@@ -2449,9 +2439,8 @@ pub mod tests {
         };
         verify(range1, true, 6);
         verify(range2, false, 0);
-        verify(range3, true, 3);
-        verify(range4, false, 0);
-        assert_eq!(mem_controller.mem_usage(), 1260);
+        verify(range3, false, 3);
+        assert_eq!(mem_controller.mem_usage(), 1540);
     }
 
     #[test]
