@@ -61,6 +61,8 @@ pub trait RangeHintService: Send + Sync {}
 pub struct CacheRange {
     pub start: Vec<u8>,
     pub end: Vec<u8>,
+    // Note: tag may not be accurate due decouple of region split and range split. It's only for
+    // debug purpose.
     pub tag: String,
 }
 
@@ -136,7 +138,7 @@ impl CacheRange {
         self.start.as_slice() <= key && key < self.end.as_slice()
     }
 
-    // note: overlaps also includes contain
+    // Note: overlaps also includes "contains"
     pub fn overlaps(&self, other: &CacheRange) -> bool {
         self.start < other.end && other.start < self.end
     }

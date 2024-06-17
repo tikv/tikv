@@ -548,8 +548,8 @@ impl Mutable for RangeCacheWriteBatch {
         Ok(())
     }
 
-    // rather than delete the keys in the range, we evict ranges overlap with them
-    // directly
+    // rather than delete the keys in the range, we evict ranges that overlap with
+    // them directly
     fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let range = CacheRange::new(begin_key.to_vec(), end_key.to_vec());
         self.engine.evict_range(&range);

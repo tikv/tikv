@@ -311,7 +311,7 @@ impl RangeManager {
     // and deleted.
     //
     // For 2, this is caused by some special operations such as merge and delete
-    // range. So, conservertively, we evict all ranges overlap with it.
+    // range. So, conservatively, we evict all ranges overlap with it.
     pub(crate) fn evict_range(&mut self, evict_range: &CacheRange) -> Vec<CacheRange> {
         info!(
             "try to evict range";
