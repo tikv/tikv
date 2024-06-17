@@ -166,6 +166,10 @@ impl<'a> Stream for StreamyMetaStorage<'a> {
                     if let Poll::Ready(input) = self.files.poll_next_unpin(cx) {
                         self.cached_stream_input = Some(input);
                     }
+                    if let Err(e) = file { // skip the error from fetching metafile
+                        eprintln!("skip the error5: {:?}", e);
+                        return Poll::Pending;
+                    }
                     return Some(file).into();
                 } else {
                     return Poll::Pending;

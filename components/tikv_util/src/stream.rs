@@ -152,6 +152,43 @@ impl<E> Default for RetryExt<E> {
 
 /// Retires a future execution. Comparing to `retry`, this version allows more
 /// configurations.
+pub async fn retry_all_ext<G, T, F, E>(mut action: G, mut ext: RetryExt<E>) -> Result<T, E>
+where
+    G: FnMut() -> F,
+    F: Future<Output = Result<T, E>>,
+    E: RetryError,
+{
+    let max_retry_times = (|| {
+        fail::fail_point!("retry_count", |t| t
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(MAX_RETRY_TIMES));
+        MAX_RETRY_TIMES
+    })();
+
+    let mut retry_wait_dur = Duration::from_secs(1);
+    let mut retry_time = 0;
+    loop {
+        match action().await {
+            Ok(r) => return Ok(r),
+            Err(e) => {
+                if let Some(ref mut f) = ext.on_failure {
+                    f(&e);
+                }
+                retry_time += 1;
+                if retry_time > max_retry_times {
+                    return Err(e);
+                }
+            }
+        }
+
+        let backoff = thread_rng().gen_range(0..1000);
+        sleep(retry_wait_dur + Duration::from_millis(backoff)).await;
+        retry_wait_dur = MAX_RETRY_DELAY.min(retry_wait_dur * 2);
+    }
+}
+
+/// Retires a future execution. Comparing to `retry`, this version allows more
+/// configurations.
 pub async fn retry_ext<G, T, F, E>(mut action: G, mut ext: RetryExt<E>) -> Result<T, E>
 where
     G: FnMut() -> F,

@@ -304,7 +304,7 @@ where
     async fn write_sst(
         &mut self,
         cf: CfName,
-        sorted_items: impl Iterator<Item = Record>,
+        sorted_items: impl Iterator<Item = &Record>,
         ext: &mut CompactLogExt<'_>,
     ) -> Result<(u64, impl std::io::Read + 'static)> {
         let mut w = <DB as SstExt>::SstWriterBuilder::new()
@@ -347,25 +347,49 @@ where
             return Ok(());
         }
 
-        let begin = Instant::now();
-        let (size, out) = self
-            .write_sst(c.cf, sorted_items.into_iter(), &mut ext)
-            .await?;
-        ext.with_compact_stat(|stat| stat.write_sst_duration += begin.saturating_elapsed());
+        let mut retry_time = 0;
+        let max_retry_times = 32;
+        loop {
+            let begin = Instant::now();
+            let (size, out) = match self.write_sst(c.cf, sorted_items.iter(), &mut ext).await {
+                Ok((size, out)) => (size, out),
+                Err(e) => {
+                    eprintln!("retry the error3: {:?}", e);
+                    retry_time += 1;
+                    if retry_time > max_retry_times {
+                        return Err(e);
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    continue;
+                },
+            };
+            ext.with_compact_stat(|stat| stat.write_sst_duration += begin.saturating_elapsed());
 
-        let begin = Instant::now();
-        let out_name = format!(
-            "compact-out/{}-{}-{}-{}.sst",
-            c.input_min_ts, c.input_max_ts, c.cf, c.region_id
-        );
-        self.output
-            .write(
-                &out_name,
-                external_storage::UnpinReader(Box::new(AllowStdIo::new(out))),
-                size,
-            )
-            .await?;
-        ext.with_compact_stat(|stat| stat.save_duration += begin.saturating_elapsed());
-        Ok(())
+            let begin = Instant::now();
+            let out_name = format!(
+                "compact-out/{}-{}-{}-{}.sst",
+                c.input_min_ts, c.input_max_ts, c.cf, c.region_id
+            );
+            match self.output
+                .write(
+                    &out_name,
+                    external_storage::UnpinReader(Box::new(AllowStdIo::new(out))),
+                    size,
+                )
+                .await {
+                Ok(_) => (),
+                Err(e) => {
+                    eprintln!("retry the error4: {:?}", e);
+                    retry_time += 1;
+                    if retry_time > max_retry_times {
+                        return Err(e.into());
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    continue;
+                },
+            }
+            ext.with_compact_stat(|stat| stat.save_duration += begin.saturating_elapsed());
+            return Ok(())
+        }
     }
 }

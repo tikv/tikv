@@ -18,7 +18,7 @@ use futures::{
 use prometheus::core::{Atomic, AtomicU64};
 use tikv_util::{
     codec::stream_event::{self, Iterator},
-    stream::{retry, retry_ext, RetryError, RetryExt},
+    stream::{retry_all_ext, RetryError, RetryExt},
 };
 use tokio::sync::OnceCell;
 use txn_types::Key;
@@ -77,7 +77,10 @@ impl CacheManager {
         // (error_during_downloading, physical_bytes_in)
         let stat = Arc::new((AtomicU64::new(0), AtomicU64::new(0)));
         let stat_ref = Arc::clone(&stat);
-        let ext = RetryExt::default().with_fail_hook(move |_err| stat_ref.0.inc_by(1));
+        let ext = RetryExt::default().with_fail_hook(move |err: &RetryIo| {
+            eprintln!("retry the error: {:?}", err.0);
+            stat_ref.0.inc_by(1)
+        });
         let fetch = || {
             let storage = storage.clone();
             let id = id.clone();
@@ -103,7 +106,7 @@ impl CacheManager {
         };
 
         let path = path_cell
-            .get_or_try_init(|| retry_ext(fetch, ext).map_err(|err| err.0))
+            .get_or_try_init(|| retry_all_ext(fetch, ext).map_err(|err| err.0))
             .await?;
         let mut f = std::fs::File::options()
             .read(true)
@@ -157,7 +160,10 @@ impl Source {
     ) -> Result<Vec<u8>> {
         let error_during_downloading = Arc::new(AtomicU64::new(0));
         let counter = error_during_downloading.clone();
-        let ext = RetryExt::default().with_fail_hook(move |_err| counter.inc_by(1));
+        let ext = RetryExt::default().with_fail_hook(move |err: &RetryIo| {
+            eprintln!("retry the error2: {:?}", err.0);
+            counter.inc_by(1)
+        });
         let fetch = || {
             let storage = self.inner.clone();
             let id = id.clone();
@@ -170,7 +176,7 @@ impl Source {
                 std::result::Result::<_, RetryIo>::Ok((content, n))
             }
         };
-        let (content, size) = retry_ext(fetch, ext).await.map_err(|err| err.0)?;
+        let (content, size) = retry_all_ext(fetch, ext).await.map_err(|err| err.0)?;
         stat.as_mut().map(|stat| {
             stat.physical_bytes_in += size;
             stat.error_during_downloading += error_during_downloading.get();
