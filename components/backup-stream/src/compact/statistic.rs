@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use derive_more::{Add, AddAssign};
 
-#[derive(Default, Debug, Add, AddAssign)]
+#[derive(Default, Debug, Add, AddAssign, Clone)]
 pub struct LoadMetaStatistic {
     pub meta_files_in: u64,
     pub physical_bytes_loaded: u64,
@@ -11,7 +11,7 @@ pub struct LoadMetaStatistic {
     pub load_file_duration: Duration,
 }
 
-#[derive(Default, Debug, Add, AddAssign)]
+#[derive(Default, Debug, Add, AddAssign, Clone)]
 pub struct LoadStatistic {
     pub files_in: u64,
     pub keys_in: u64,
@@ -21,13 +21,7 @@ pub struct LoadStatistic {
     pub error_during_downloading: u64,
 }
 
-impl LoadStatistic {
-    pub fn merge_with(&mut self, other: &Self) {
-        *self += other;
-    }
-}
-
-#[derive(Default, Debug, Add, AddAssign)]
+#[derive(Default, Debug, Add, AddAssign, Clone)]
 pub struct CompactStatistic {
     pub keys_out: u64,
     pub physical_bytes_out: u64,
@@ -40,10 +34,4 @@ pub struct CompactStatistic {
     pub save_duration: Duration,
 
     pub empty_generation: u64,
-}
-
-impl CompactStatistic {
-    pub fn merge_with(&mut self, other: &Self) {
-        *self += other;
-    }
 }

@@ -295,7 +295,7 @@ where
 
         let mut result = Vec::with_capacity(items.len());
         for (item, stat) in items {
-            ext.with_load_stat(|s| s.merge_with(&stat));
+            ext.with_load_stat(|s| *s += stat);
             result.push(item);
         }
         Ok(result.into_iter())
@@ -361,7 +361,7 @@ where
                     }
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     continue;
-                },
+                }
             };
             ext.with_compact_stat(|stat| stat.write_sst_duration += begin.saturating_elapsed());
 
@@ -370,13 +370,15 @@ where
                 "compact-out/{}-{}-{}-{}.sst",
                 c.input_min_ts, c.input_max_ts, c.cf, c.region_id
             );
-            match self.output
+            match self
+                .output
                 .write(
                     &out_name,
                     external_storage::UnpinReader(Box::new(AllowStdIo::new(out))),
                     size,
                 )
-                .await {
+                .await
+            {
                 Ok(_) => (),
                 Err(e) => {
                     eprintln!("retry the error4: {:?}", e);
@@ -386,10 +388,10 @@ where
                     }
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     continue;
-                },
+                }
             }
             ext.with_compact_stat(|stat| stat.save_duration += begin.saturating_elapsed());
-            return Ok(())
+            return Ok(());
         }
     }
 }

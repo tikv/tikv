@@ -135,13 +135,13 @@ impl<'a> Stream for StreamyMetaStorage<'a> {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
         if self.prefetch.is_empty() {
-            return self.poll_register_prefetch(cx);
+            return self.poll_fetch_or_finish(cx);
         }
 
-        let first_result = self.poll_first(cx);
+        let first_result = self.poll_first_prefetch(cx);
         match first_result {
             Poll::Ready(item) => Some(item).into(),
-            Poll::Pending => self.poll_register_prefetch(cx),
+            Poll::Pending => self.poll_fetch_or_finish(cx),
         }
     }
 }
@@ -158,7 +158,7 @@ impl<'a> StreamyMetaStorage<'a> {
         self.prefetch.push_back(fut);
     }
 
-    fn poll_register_prefetch(&mut self, cx: &mut Context<'_>) -> Poll<Option<()>> {
+    fn poll_fetch_or_finish(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<MetaFile>>> {
         loop {
             // No more space for prefetching.
             if self.prefetch.len() >= self.ext.max_concurrent_fetch {
@@ -171,16 +171,16 @@ impl<'a> StreamyMetaStorage<'a> {
                     return Poll::Pending;
                 }
             }
-            match ready!(self.files.next().poll_unpin(cx)) {
-                Some(load) => {
+            match self.files.next().poll_unpin(cx) {
+                Poll::Ready(Some(load)) => {
                     self.register_prefetch(cx, load?);
                 }
-                None => return Poll::Pending,
+                Poll::Ready(None) | Poll::Pending => return Poll::Pending,
             }
         }
     }
 
-    fn poll_first(&mut self, cx: &mut Context<'_>) -> Poll<Result<MetaFile>> {
+    fn poll_first_prefetch(&mut self, cx: &mut Context<'_>) -> Poll<Result<MetaFile>> {
         for fut in &mut self.prefetch {
             if !fut.is_terminated() {
                 let _ = fut.poll_unpin(cx);

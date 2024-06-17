@@ -70,8 +70,8 @@ impl ExecHooks for LogToTerm {
         let total_take =
             cst.load_duration + cst.sort_duration + cst.save_duration + cst.write_sst_duration;
         let speed = logical_input_size as f64 / total_take.as_millis() as f64;
-        self.load_stat.merge_with(&lst);
-        self.compact_stat.merge_with(&cst);
+        self.load_stat += lst.clone();
+        self.compact_stat += cst.clone();
 
         println!(
             "[{}] finishing compaction. cid: {}, load_stat: {:?}, compact_stat: {:?}, speed: {:.2} KB./s, total_take: {:?}",

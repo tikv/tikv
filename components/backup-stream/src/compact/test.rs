@@ -48,18 +48,16 @@ async fn playground() {
         },
     );
     println!("{:?}", now.elapsed());
-    let compaction = collect
-        .try_filter(|_f| futures::future::ready(true))
-        .next()
-        .await
-        .unwrap();
+    let mut compactions = collect.try_collect::<Vec<_>>().await.unwrap();
     println!("{:?}", now.elapsed());
-    println!("{:?}", compaction);
     let guard = pprof::ProfilerGuardBuilder::default()
         .frequency(99)
         .blocklist(&["libc", "libgcc", "pthread", "vdso"])
         .build()
         .unwrap();
+    println!("{}", compactions.len());
+    let compaction = compactions.swap_remove(0);
+    println!("{:?}", compaction);
     let arc_store = Arc::from(*storage);
     let mut compact_worker = CompactWorker::<RocksEngine>::inplace(Arc::clone(&arc_store) as _);
     let mut load_stat = LoadStatistic::default();
@@ -69,10 +67,7 @@ async fn playground() {
         compact_statistic: Some(&mut compact_stat),
         max_load_concurrency: 32,
     };
-    compact_worker
-        .compact_ext(compaction.unwrap(), c_ext)
-        .await
-        .unwrap();
+    compact_worker.compact_ext(compaction, c_ext).await.unwrap();
 
     println!("{:?}\n{:?}", load_stat, compact_stat);
     let mut file = std::fs::File::create("/tmp/pprof.svg").unwrap();
@@ -114,8 +109,8 @@ fn cli_playground() {
             lst: LoadStatistic,
             cst: CompactStatistic,
         ) {
-            self.load_stat.merge_with(&lst);
-            self.compact_stat.merge_with(&cst);
+            self.load_stat += lst;
+            self.compact_stat += cst;
         }
 
         fn after_finish(&mut self) {
