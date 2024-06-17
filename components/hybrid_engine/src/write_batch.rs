@@ -130,11 +130,18 @@ impl<EK: KvEngine> Mutable for HybridEngineWriteBatch<EK> {
     }
 
     fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        self.disk_write_batch.delete_range(begin_key, end_key)
+        self.disk_write_batch.delete_range(begin_key, end_key)?;
+        // delete_range in range cache engine means eviction -- all ranges overlapped
+        // with [begin_key, end_key] will be evicted.
+        self.cache_write_batch.delete_range(begin_key, end_key)
     }
 
     fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         self.disk_write_batch
+            .delete_range_cf(cf, begin_key, end_key)?;
+        // delete_range in range cache engine means eviction -- all ranges overlapped
+        // with [begin_key, end_key] will be evicted.
+        self.cache_write_batch
             .delete_range_cf(cf, begin_key, end_key)
     }
 }
@@ -142,8 +149,11 @@ impl<EK: KvEngine> Mutable for HybridEngineWriteBatch<EK> {
 #[cfg(test)]
 mod tests {
 
+    use std::time::Duration;
+
     use engine_traits::{
-        CacheRange, KvEngine, Mutable, Peekable, SnapshotContext, WriteBatch, WriteBatchExt,
+        CacheRange, KvEngine, Mutable, Peekable, RangeCacheEngine, SnapshotContext, WriteBatch,
+        WriteBatchExt,
     };
     use region_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheStatus};
 
@@ -219,5 +229,82 @@ mod tests {
                 .set_sequence_number(0)
                 .is_err()
         ); // Second call err.
+    }
+
+    #[test]
+    fn test_delete_range() {
+        let range1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+        let range2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
+
+        let range1_clone = range1.clone();
+        let range2_clone = range2.clone();
+        let (_path, hybrid_engine) = hybrid_engine_for_tests(
+            "temp",
+            RangeCacheEngineConfig::config_for_test(),
+            move |memory_engine| {
+                memory_engine.new_range(range1_clone);
+                memory_engine.new_range(range2_clone);
+            },
+        )
+        .unwrap();
+
+        let mut wb = hybrid_engine.write_batch();
+        wb.prepare_for_range(range1.clone());
+        wb.put(b"k05", b"val").unwrap();
+        wb.put(b"k08", b"val2").unwrap();
+        wb.prepare_for_range(range2.clone());
+        wb.put(b"k25", b"val3").unwrap();
+        wb.put(b"k27", b"val4").unwrap();
+        wb.write().unwrap();
+
+        hybrid_engine
+            .region_cache_engine()
+            .snapshot(range1.clone(), 1000, 1000)
+            .unwrap();
+        hybrid_engine
+            .region_cache_engine()
+            .snapshot(range2.clone(), 1000, 1000)
+            .unwrap();
+        assert_eq!(
+            4,
+            hybrid_engine
+                .region_cache_engine()
+                .core()
+                .read()
+                .engine()
+                .cf_handle("default")
+                .len()
+        );
+
+        let mut wb = hybrid_engine.write_batch();
+        // all ranges overlapped with it will be evicted
+        wb.delete_range(b"k05", b"k21").unwrap();
+        wb.write().unwrap();
+
+        hybrid_engine
+            .region_cache_engine()
+            .snapshot(range1, 1000, 1000)
+            .unwrap_err();
+        hybrid_engine
+            .region_cache_engine()
+            .snapshot(range2, 1000, 1000)
+            .unwrap_err();
+        let m_engine = hybrid_engine.region_cache_engine();
+
+        let mut times = 0;
+        while times < 10 {
+            if m_engine
+                .core()
+                .read()
+                .engine()
+                .cf_handle("default")
+                .is_empty()
+            {
+                return;
+            }
+            times += 1;
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        panic!("data is not empty");
     }
 }
