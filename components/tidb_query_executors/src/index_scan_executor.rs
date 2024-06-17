@@ -622,7 +622,8 @@ impl IndexScanExecutorImpl {
         self.decode_handle_columns(decode_handle, columns, restore_data)?;
 
         // Deprecated: Keep this for old tidb version during upgrade.
-        // If need partition id, append partition id to the last column before physical table id column if exists.
+        // If need partition id, append partition id to the last column before physical
+        // table id column if exists.
         if self.pid_column_cnt > 0 {
             self.decode_pid_columns(
                 columns,
@@ -3428,9 +3429,9 @@ mod tests {
                     0x0, 0x0, 0x0, 0x0, 0x1, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
                 ],
                 &[
-                    0x8, 0x7e /* INDEX_VALUE_PARTITION_ID_FLAG */,
-                    0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x5c, /* partition id */
-                    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, /* _tidb_rowid */
+                    0x8, 0x7e, // INDEX_VALUE_PARTITION_ID_FLAG
+                    0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x5c, // partition id
+                    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, // _tidb_rowid
                 ],
                 &mut columns,
             )
