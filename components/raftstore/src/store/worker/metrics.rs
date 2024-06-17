@@ -20,7 +20,7 @@ make_auto_flush_static_metric! {
     //               V
     // |success|abort|fail|delay|ignore|
     //
-    // ingest_delay is used to records occurrences of delayed ingestions
+    // ingest_delay is used to record occurrences of delayed ingestions
     // during snapshot apply (e.g. due to high L0 file count).
     pub label_enum SnapStatus {
         all,
