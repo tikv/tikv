@@ -233,13 +233,14 @@ impl RangeCacheMemoryEngineCore {
     }
 
     pub fn remove_cached_write_batch(&mut self, cache_range: &CacheRange) {
-        self.cached_write_batch.remove(cache_range).expect(
-            format!(
-                "range cannot be found in cached_write_batch: {:?}",
-                cache_range
-            )
-            .as_str(),
-        );
+        self.cached_write_batch
+            .remove(cache_range)
+            .unwrap_or_else(|| {
+                panic!(
+                    "range cannot be found in cached_write_batch: {:?}",
+                    cache_range
+                );
+            });
     }
 
     // ensure that the transfer from `pending_ranges_loading_data` to
