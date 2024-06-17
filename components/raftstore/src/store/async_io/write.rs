@@ -601,7 +601,7 @@ impl WriteBatchRecorder {
             trend: OrderedFloat(1.0),
             spin_interval,
             spin_count: 0,
-            spin_max_count: 3,
+            spin_max_count: 1,
         }
     }
 
