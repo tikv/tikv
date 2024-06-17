@@ -131,12 +131,16 @@ impl<EK: KvEngine> Mutable for HybridEngineWriteBatch<EK> {
 
     fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         self.disk_write_batch.delete_range(begin_key, end_key)?;
+        // delete_range in range cache engine means eviction -- all ranges overlapped
+        // with [begin_key, end_key] will be evicted.
         self.cache_write_batch.delete_range(begin_key, end_key)
     }
 
     fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         self.disk_write_batch
             .delete_range_cf(cf, begin_key, end_key)?;
+        // delete_range in range cache engine means eviction -- all ranges overlapped
+        // with [begin_key, end_key] will be evicted.
         self.cache_write_batch
             .delete_range_cf(cf, begin_key, end_key)
     }
@@ -253,18 +257,14 @@ mod tests {
         wb.put(b"k27", b"val4").unwrap();
         wb.write().unwrap();
 
-        assert!(
-            hybrid_engine
-                .region_cache_engine()
-                .snapshot(range1.clone(), 1000, 1000)
-                .is_ok()
-        );
-        assert!(
-            hybrid_engine
-                .region_cache_engine()
-                .snapshot(range2.clone(), 1000, 1000)
-                .is_ok()
-        );
+        hybrid_engine
+            .region_cache_engine()
+            .snapshot(range1.clone(), 1000, 1000)
+            .unwrap();
+        hybrid_engine
+            .region_cache_engine()
+            .snapshot(range2.clone(), 1000, 1000)
+            .unwrap();
         assert_eq!(
             4,
             hybrid_engine
@@ -281,18 +281,14 @@ mod tests {
         wb.delete_range(b"k05", b"k21").unwrap();
         wb.write().unwrap();
 
-        assert!(
-            hybrid_engine
-                .region_cache_engine()
-                .snapshot(range1, 1000, 1000)
-                .is_err()
-        );
-        assert!(
-            hybrid_engine
-                .region_cache_engine()
-                .snapshot(range2, 1000, 1000)
-                .is_err()
-        );
+        hybrid_engine
+            .region_cache_engine()
+            .snapshot(range1, 1000, 1000)
+            .unwrap();
+        hybrid_engine
+            .region_cache_engine()
+            .snapshot(range2, 1000, 1000)
+            .unwrap();
         let m_engine = hybrid_engine.region_cache_engine();
 
         let mut times = 0;
