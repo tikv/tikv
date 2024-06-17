@@ -2703,7 +2703,6 @@ where
 
         let is_snapshot = msg.get_message().has_snapshot();
 
-        // TODO: spin off the I/O code (delete_snapshot)
         let regions_to_destroy = match self.check_snapshot(&msg)? {
             Either::Left(key) => {
                 if let Some(key) = key {
@@ -2711,8 +2710,20 @@ where
                     // delete them here. If the snapshot file will be reused when
                     // receiving, then it will fail to pass the check again, so
                     // missing snapshot files should not be noticed.
-                    let s = self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
-                    self.ctx.snap_mgr.delete_snapshot(&key, s.as_ref(), false);
+                    let snap = self.ctx.snap_mgr.get_snapshot_for_gc(&key, false)?;
+                    if let Err(e) = self.ctx.cleanup_scheduler.schedule(CleanupTask::GcSnapshot(
+                        GcSnapshotTask::DeleteSnapshotFiles {
+                            key: key.clone(),
+                            snapshot: snap,
+                            check_entry: false,
+                        },
+                    )) {
+                        error!(
+                            "failed to schedule task to delete snap file";
+                            "key" => %key,
+                            "err" => %e,
+                        )
+                    }
                 }
                 return Ok(());
             }
