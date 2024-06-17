@@ -254,7 +254,7 @@ mod tests {
         .unwrap();
         let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test()));
         let memory_engine =
-            RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(config.clone()));
+            RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(config.clone()));
 
         let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
         memory_engine.new_range(range.clone());

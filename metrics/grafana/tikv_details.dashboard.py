@@ -413,7 +413,7 @@ def Cluster() -> RowPanel:
             graph_panel(
                 title="Uptime",
                 description="TiKV uptime since the last restart",
-                yaxes=yaxes(left_format=UNITS.SECONDS),
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
                 targets=[
                     target(
                         expr=expr_operator(
@@ -732,6 +732,18 @@ def Server() -> RowPanel:
                         legend_format="{{instance}}",
                     ),
                 ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel_histogram_quantiles(
+                title="Clear overlap region duration",
+                description="Bucketed histogram of clear overlap region duration.",
+                yaxes=yaxes(left_format=UNITS.SECONDS),
+                metric="tikv_raftstore_clear_overlap_region_duration_seconds",
+                by_labels=["type"],
+                hide_count=True,
             ),
         ]
     )
@@ -2276,6 +2288,7 @@ def RaftMessage() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_raftstore_raft_sent_message_total",
+                            label_selectors=['status="accept"'],
                             by_labels=["type"],
                         ),
                     ),
@@ -2306,6 +2319,13 @@ def RaftMessage() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_raftstore_raft_dropped_message_total",
+                            by_labels=["type"],
+                        ),
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_raftstore_raft_sent_message_total",
+                            label_selectors=['status="drop"'],
                             by_labels=["type"],
                         ),
                     ),
@@ -5853,10 +5873,11 @@ def RocksDB() -> RowPanel:
             ),
             graph_panel_histogram_quantiles(
                 title="Ingest SST duration seconds",
-                description="The time consumed when ingesting SST files",
+                description="Bucketed histogram of ingest external SST files duration.",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
-                metric="tikv_snapshot_ingest_sst_duration_seconds",
+                metric="tikv_storage_ingest_external_file_duration_secs",
                 label_selectors=['db="$db"'],
+                by_labels=["cf", "type"],
                 hide_count=True,
             ),
         ]

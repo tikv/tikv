@@ -105,11 +105,11 @@ impl IdAllocator {
 // eviction range is k3-k5. k1-k10 will be splitted to three ranges: k1-k3,
 // k3-k5, and k5-k10.
 // k1-k3 and k5-k10 will be new ranges inserted in self.ranges with meta dervied
-// from meta of k1-k10 (only safe_ts and can_read will be derived). k1-k10 will
-// be removed from self.ranges and inserted to self.historical_ranges. Then,
-// k3-k5 will be in the self.evicted_ranges. Now, we cannot remove the data of
-// k3-k5 as there may be some snapshot of k1-k10. After these snapshot are
-// dropped, k3-k5 can be acutally removed.
+// from meta of k1-k10 (only safe_ts will be derived). k1-k10 will be removed
+// from self.ranges and inserted to self.historical_ranges. Then, k3-k5 will be
+// in the self.evicted_ranges. Now, we cannot remove the data of k3-k5 as there
+// may be some snapshot of k1-k10. After these snapshot are dropped, k3-k5 can
+// be acutally removed.
 #[derive(Default)]
 pub struct RangeManager {
     // Each new range will increment it by one.
@@ -308,7 +308,20 @@ impl RangeManager {
         vec![]
     }
 
-    // return whether the range can be already removed
+    /// Return ranges that can be deleted now (no ongoing snapshot).
+    // There are two cases based on the relationship between `evict_range` and
+    // cached ranges:
+    // 1. `evict_range` is contained(including equals) by a cached range (at most
+    //    one due to non-overlapping in cached ranges)
+    // 2. `evict_range` is overlapped with (including contains but not be contained)
+    //    one or more cached ranges
+    //
+    // For 1, if the `evict_range` is a proper subset of the cached_range, we will
+    // split the cached_range so that only the `evict_range` part will be evicted
+    // and deleted.
+    //
+    // For 2, this is caused by some special operations such as merge and delete
+    // range. So, conservatively, we evict all ranges overlap with it.
     pub(crate) fn evict_range(&mut self, evict_range: &CacheRange) -> Vec<CacheRange> {
         info!(
             "try to evict range";
@@ -565,6 +578,7 @@ mod tests {
         assert!(range_mgr.ranges_being_deleted.contains(&r_left));
         assert!(range_mgr.ranges.get(&r_left).is_none());
 
+        assert!(range_mgr.evict_range(&r_right).is_empty());
         assert!(range_mgr.historical_ranges.get(&r_right).is_none());
     }
 
@@ -640,5 +654,83 @@ mod tests {
             range_mgr.load_range(r).unwrap_err(),
             LoadFailedReason::PendingRange
         );
+    }
+
+    #[test]
+    fn test_evict_ranges() {
+        {
+            let mut range_mgr = RangeManager::default();
+            let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+            let r2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
+            let r3 = CacheRange::new(b"k40".to_vec(), b"k50".to_vec());
+            range_mgr.new_range(r1.clone());
+            range_mgr.new_range(r2.clone());
+            range_mgr.new_range(r3.clone());
+            range_mgr.contains_range(&r1);
+            range_mgr.contains_range(&r2);
+            range_mgr.contains_range(&r3);
+
+            let r4 = CacheRange::new(b"k00".to_vec(), b"k05".to_vec());
+            let r5 = CacheRange::new(b"k05".to_vec(), b"k10".to_vec());
+            assert_eq!(range_mgr.evict_range(&r4), vec![r4]);
+            assert_eq!(
+                range_mgr.ranges().keys().collect::<Vec<_>>(),
+                vec![&r5, &r2, &r3]
+            );
+
+            let r6 = CacheRange::new(b"k24".to_vec(), b"k27".to_vec());
+            let r7 = CacheRange::new(b"k20".to_vec(), b"k24".to_vec());
+            let r8 = CacheRange::new(b"k27".to_vec(), b"k30".to_vec());
+            assert_eq!(range_mgr.evict_range(&r6), vec![r6]);
+            assert_eq!(
+                range_mgr.ranges().keys().collect::<Vec<_>>(),
+                vec![&r5, &r7, &r8, &r3]
+            );
+        }
+
+        {
+            let mut range_mgr = RangeManager::default();
+            let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+            let r2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
+            let r3 = CacheRange::new(b"k40".to_vec(), b"k50".to_vec());
+            range_mgr.new_range(r1.clone());
+            range_mgr.new_range(r2.clone());
+            range_mgr.new_range(r3.clone());
+            range_mgr.contains_range(&r1);
+            range_mgr.contains_range(&r2);
+            range_mgr.contains_range(&r3);
+
+            let r4 = CacheRange::new(b"k".to_vec(), b"k51".to_vec());
+            assert_eq!(range_mgr.evict_range(&r4), vec![r1, r2, r3]);
+            assert!(range_mgr.ranges().is_empty());
+        }
+
+        {
+            let mut range_mgr = RangeManager::default();
+            let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+            let r2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
+            let r3 = CacheRange::new(b"k40".to_vec(), b"k50".to_vec());
+            range_mgr.new_range(r1.clone());
+            range_mgr.new_range(r2.clone());
+            range_mgr.new_range(r3.clone());
+
+            let r4 = CacheRange::new(b"k25".to_vec(), b"k55".to_vec());
+            assert_eq!(range_mgr.evict_range(&r4), vec![r2, r3]);
+            assert_eq!(range_mgr.ranges().len(), 1);
+        }
+
+        {
+            let mut range_mgr = RangeManager::default();
+            let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+            let r2 = CacheRange::new(b"k30".to_vec(), b"k40".to_vec());
+            let r3 = CacheRange::new(b"k50".to_vec(), b"k60".to_vec());
+            range_mgr.new_range(r1.clone());
+            range_mgr.new_range(r2.clone());
+            range_mgr.new_range(r3.clone());
+
+            let r4 = CacheRange::new(b"k25".to_vec(), b"k75".to_vec());
+            assert_eq!(range_mgr.evict_range(&r4), vec![r2, r3]);
+            assert_eq!(range_mgr.ranges().len(), 1);
+        }
     }
 }

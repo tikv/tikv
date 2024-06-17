@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    collections::BTreeSet,
     num::NonZeroUsize,
     sync::{mpsc::channel, Arc},
     thread,
@@ -204,7 +205,7 @@ fn test_region_collection_get_top_regions() {
     let regions = prepare_cluster(&mut cluster);
     let mut regions = regions.into_iter().map(|r| r.get_id()).collect::<Vec<_>>();
     regions.sort();
-    let mut all_results = Vec::<u64>::new();
+    let mut all_results = BTreeSet::<u64>::new();
     for node_id in cluster.get_node_ids() {
         let engine = &region_info_providers[&node_id];
 
@@ -233,8 +234,7 @@ fn test_region_collection_get_top_regions() {
             .collect::<Vec<_>>();
         all_results.extend(result.iter());
     }
-    all_results.sort();
-    assert_eq!(all_results, regions);
+    assert_eq!(all_results.into_iter().collect::<Vec<_>>(), regions);
 
     for (_, p) in region_info_providers {
         p.stop();

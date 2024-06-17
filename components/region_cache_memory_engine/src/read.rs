@@ -464,7 +464,7 @@ impl RangeCacheIterator {
     }
 
     fn reverse_to_forward(&mut self, guard: &epoch::Guard) {
-        if !self.prefix_extractor.is_none() || !self.iter.valid() {
+        if self.prefix_extractor.is_some() || !self.iter.valid() {
             let seek_key = encode_seek_key(&self.saved_user_key, MAX_SEQUENCE_NUMBER);
             self.iter.seek(&seek_key, guard);
         }
@@ -702,7 +702,7 @@ mod tests {
     use tempfile::Builder;
     use tikv_util::config::VersionTrack;
 
-    use super::{RangeCacheIterator, MAX_SEQUENCE_NUMBER};
+    use super::{RangeCacheIterator, RangeCacheSnapshot, MAX_SEQUENCE_NUMBER};
     use crate::{
         engine::{cf_to_id, SkiplistEngine},
         keys::{
@@ -712,11 +712,12 @@ mod tests {
         perf_context::PERF_CONTEXT,
         statistics::Tickers,
         RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
+        RangeCacheWriteBatch,
     };
 
     #[test]
     fn test_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
@@ -906,7 +907,7 @@ mod tests {
 
     #[test]
     fn test_seek() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -944,7 +945,7 @@ mod tests {
 
     #[test]
     fn test_get_value() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -1024,7 +1025,7 @@ mod tests {
 
     #[test]
     fn test_iterator_forawrd() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -1211,7 +1212,7 @@ mod tests {
 
     #[test]
     fn test_iterator_backward() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -1315,7 +1316,7 @@ mod tests {
 
     #[test]
     fn test_seq_visibility() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -1438,7 +1439,7 @@ mod tests {
 
     #[test]
     fn test_seq_visibility_backward() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -1555,9 +1556,9 @@ mod tests {
 
         // backward, all put
         {
-            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
-                VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
-            )));
+            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
+                Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test())),
+            ));
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
@@ -1593,9 +1594,9 @@ mod tests {
 
         // backward, all deletes
         {
-            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
-                VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
-            )));
+            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
+                Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test())),
+            ));
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
@@ -1624,9 +1625,9 @@ mod tests {
 
         // backward, all deletes except for last put, last put's seq
         {
-            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
-                VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
-            )));
+            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
+                Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test())),
+            ));
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
@@ -1657,9 +1658,9 @@ mod tests {
 
         // all deletes except for last put, deletions' seq
         {
-            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
-                VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
-            )));
+            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
+                Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test())),
+            ));
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
@@ -1689,7 +1690,7 @@ mod tests {
 
     #[test]
     fn test_prefix_seek() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"k000".to_vec(), b"k100".to_vec());
@@ -1814,7 +1815,7 @@ mod tests {
 
     #[test]
     fn test_evict_range_without_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
@@ -1873,7 +1874,7 @@ mod tests {
 
     #[test]
     fn test_evict_range_with_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
@@ -1945,7 +1946,7 @@ mod tests {
 
     #[test]
     fn test_tombstone_count_when_iterating() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -1989,7 +1990,7 @@ mod tests {
 
     #[test]
     fn test_read_flow_metrics() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -2101,9 +2102,19 @@ mod tests {
         assert_eq!(3, statistics.get_ticker_count(Tickers::NumberDbPrevFound));
     }
 
-    #[test]
-    fn test_reverse_direction() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+    fn set_up_for_iteator<F>(
+        wb_sequence: u64,
+        snap_sequence: u64,
+        put_entries: F,
+    ) -> (
+        RangeCacheMemoryEngine,
+        RangeCacheSnapshot,
+        RangeCacheIterator,
+    )
+    where
+        F: FnOnce(&mut RangeCacheWriteBatch),
+    {
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -2111,39 +2122,245 @@ mod tests {
 
         let mut wb = engine.write_batch();
         wb.prepare_for_range(range.clone());
-        wb.delete(b"a").unwrap();
-        wb.delete(b"a").unwrap();
-        wb.delete(b"a").unwrap();
-        wb.delete(b"a").unwrap();
-        wb.put(b"a", b"val_a").unwrap();
-        wb.put(b"b", b"val_b").unwrap();
-        wb.set_sequence_number(100).unwrap();
+        put_entries(&mut wb);
+        wb.set_sequence_number(wb_sequence).unwrap();
         wb.write().unwrap();
 
-        let snap = engine
-            .snapshot(range.clone(), 100, MAX_SEQUENCE_NUMBER)
-            .unwrap();
+        let snap = engine.snapshot(range.clone(), 100, snap_sequence).unwrap();
         let mut iter_opt = IterOptions::default();
         iter_opt.set_upper_bound(&range.end, 0);
         iter_opt.set_lower_bound(&range.start, 0);
 
-        let mut iter = snap.iterator_opt("default", iter_opt).unwrap();
-        iter.seek_to_last();
+        let iter = snap.iterator_opt("default", iter_opt).unwrap();
+        (engine, snap, iter)
+    }
+
+    // copied from RocksDB TEST_F(DBIteratorTest, DBIterator10)
+    #[test]
+    fn test_iterator() {
+        let (.., mut iter) = set_up_for_iteator(100, 200, |wb| {
+            wb.put(b"a", b"1").unwrap();
+            wb.put(b"b", b"2").unwrap();
+            wb.put(b"c", b"3").unwrap();
+            wb.put(b"d", b"4").unwrap();
+        });
+
+        iter.seek(b"c").unwrap();
+        assert!(iter.valid().unwrap());
+        iter.prev().unwrap();
         assert!(iter.valid().unwrap());
         assert_eq!(iter.key(), b"b");
-        assert_eq!(iter.value(), b"val_b");
+        assert_eq!(iter.value(), b"2");
 
-        iter.prev();
+        iter.next().unwrap();
         assert!(iter.valid().unwrap());
+        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.value(), b"3");
+
+        iter.seek_for_prev(b"c").unwrap();
+        assert!(iter.valid().unwrap());
+        iter.next().unwrap();
+        assert!(iter.valid().unwrap());
+        assert_eq!(iter.key(), b"d");
+        assert_eq!(iter.value(), b"4");
+
+        iter.prev().unwrap();
+        assert!(iter.valid().unwrap());
+        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.value(), b"3");
+    }
+
+    // copied from RocksDB TEST_P(DBIteratorTest, IterNextWithNewerSeq) and
+    // TEST_P(DBIteratorTest, IterPrevWithNewerSeq)
+    #[test]
+    fn test_next_with_newer_seq() {
+        let (engine, _, mut iter) = set_up_for_iteator(100, 110, |wb| {
+            wb.put(b"0", b"0").unwrap();
+            wb.put(b"a", b"b").unwrap();
+            wb.put(b"c", b"d").unwrap();
+            wb.put(b"d", b"e").unwrap();
+        });
+
+        let mut wb = engine.write_batch();
+        wb.prepare_for_range(CacheRange::new(b"".to_vec(), b"z".to_vec()));
+        wb.put(b"b", b"f").unwrap();
+        wb.set_sequence_number(200).unwrap();
+
+        iter.seek(b"a").unwrap();
         assert_eq!(iter.key(), b"a");
-        assert_eq!(iter.value(), b"val_a");
+        assert_eq!(iter.value(), b"b");
 
-        iter.next();
-        assert!(iter.valid().unwrap());
+        iter.next().unwrap();
+        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.value(), b"d");
+
+        iter.seek_for_prev(b"b").unwrap();
+        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.value(), b"b");
+
+        iter.next().unwrap();
+        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.value(), b"d");
+
+        iter.seek(b"d").unwrap();
+        assert_eq!(iter.key(), b"d");
+        assert_eq!(iter.value(), b"e");
+
+        iter.prev().unwrap();
+        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.value(), b"d");
+
+        iter.prev().unwrap();
+        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.value(), b"b");
+
+        iter.prev().unwrap();
+        iter.seek_for_prev(b"d").unwrap();
+        assert_eq!(iter.key(), b"d");
+        assert_eq!(iter.value(), b"e");
+
+        iter.prev().unwrap();
+        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.value(), b"d");
+
+        iter.prev().unwrap();
+        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.value(), b"b");
+    }
+
+    #[test]
+    fn test_reverse_direction() {
+        let (engine, ..) = set_up_for_iteator(100, 100, |wb| {
+            wb.put(b"a", b"val_a1").unwrap(); // seq 100
+            wb.put(b"b", b"val_b1").unwrap(); // seq 101
+            wb.put(b"c", b"val_c1").unwrap(); // seq 102
+
+            wb.put(b"a", b"val_a2").unwrap(); // seq 103
+            wb.put(b"b", b"val_b2").unwrap(); // seq 104
+
+            wb.put(b"c", b"val_c2").unwrap(); // seq 105
+            wb.put(b"a", b"val_a3").unwrap(); // seq 106
+            wb.put(b"b", b"val_b3").unwrap(); // seq 107
+            wb.put(b"c", b"val_c3").unwrap(); // seq 108
+        });
+
+        // For sequence number 102
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        let snap = engine.snapshot(range.clone(), 100, 102).unwrap();
+        let mut iter_opt = IterOptions::default();
+        iter_opt.set_upper_bound(&range.end, 0);
+        iter_opt.set_lower_bound(&range.start, 0);
+
+        let mut iter = snap.iterator_opt("default", iter_opt.clone()).unwrap();
+        iter.seek(b"c").unwrap();
+        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.value(), b"val_c1");
+
+        iter.prev().unwrap();
         assert_eq!(iter.key(), b"b");
-        assert_eq!(iter.value(), b"val_b");
+        assert_eq!(iter.value(), b"val_b1");
 
-        iter.next();
+        iter.seek(b"b").unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b1");
+
+        iter.prev().unwrap();
+        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.value(), b"val_a1");
+
+        iter.next().unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b1");
+
+        iter.seek_for_prev(b"a").unwrap();
+        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.value(), b"val_a1");
+
+        iter.next().unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b1");
+
+        iter.next().unwrap();
+        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.value(), b"val_c1");
+
+        iter.next().unwrap();
+        assert!(!iter.valid().unwrap());
+
+        // For sequence number 104
+        let snap = engine.snapshot(range.clone(), 100, 104).unwrap();
+        let mut iter = snap.iterator_opt("default", iter_opt.clone()).unwrap();
+        iter.seek(b"c").unwrap();
+        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.value(), b"val_c1");
+
+        iter.prev().unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b2");
+
+        iter.seek(b"b").unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b2");
+
+        iter.prev().unwrap();
+        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.value(), b"val_a2");
+
+        iter.next().unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b2");
+
+        iter.seek_for_prev(b"a").unwrap();
+        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.value(), b"val_a2");
+
+        iter.next().unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b2");
+
+        iter.next().unwrap();
+        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.value(), b"val_c1");
+
+        iter.next().unwrap();
+        assert!(!iter.valid().unwrap());
+
+        // For sequence number 108
+        let snap = engine.snapshot(range.clone(), 100, 108).unwrap();
+        let mut iter = snap.iterator_opt("default", iter_opt.clone()).unwrap();
+        iter.seek(b"c").unwrap();
+        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.value(), b"val_c3");
+
+        iter.prev().unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b3");
+
+        iter.seek(b"b").unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b3");
+
+        iter.prev().unwrap();
+        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.value(), b"val_a3");
+
+        iter.next().unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b3");
+
+        iter.seek_for_prev(b"a").unwrap();
+        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.value(), b"val_a3");
+
+        iter.next().unwrap();
+        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.value(), b"val_b3");
+
+        iter.next().unwrap();
+        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.value(), b"val_c3");
+
+        iter.next().unwrap();
         assert!(!iter.valid().unwrap());
     }
 }

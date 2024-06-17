@@ -58,13 +58,10 @@ ENV PATH /usr/local/bin/:$PATH
 # Install Rustup
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --no-modify-path --default-toolchain none -y
 ENV PATH /root/.cargo/bin/:$PATH
+RUN rustup self update
 
-# Install the Rust toolchain
 WORKDIR /tikv
-COPY rust-toolchain ./
-RUN rustup self update \
-  && rustup set profile minimal \
-  && rustup default $(cat "rust-toolchain")
+COPY rust-toolchain.toml ./
 
 # For cargo
 COPY scripts ./scripts

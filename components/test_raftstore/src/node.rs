@@ -273,6 +273,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             let snap_mgr = SnapManagerBuilder::default()
                 .max_write_bytes_per_sec(cfg.server.snap_io_max_bytes_per_sec.0 as i64)
                 .max_total_size(cfg.server.snap_max_total_size.0)
+                .concurrent_recv_snap_limit(cfg.server.concurrent_recv_snap_limit)
                 .encryption_key_manager(key_manager)
                 .max_per_file_size(cfg.raft_store.max_snapshot_file_raw_size.0)
                 .enable_multi_snapshot_files(true)

@@ -3,23 +3,40 @@
 use collections::HashSet;
 use mur3::murmurhash3_x64_128;
 
-/// FMSketch (Flajolet–Martin Sketch) is a probabilistic data structure used for
-/// estimating the number of distinct elements in a stream. It uses a hash
-/// function to map each element to a binary number and counts the number of
-/// trailing zeroes in each hashed value. The maximum number of trailing zeroes
-/// observed gives an estimate of the logarithm of the number of distinct
-/// elements. This approach allows the FM sketch to handle large streams of data
-/// in a memory-efficient way.
-///
-/// See https://en.wikipedia.org/wiki/Flajolet%E2%80%93Martin_algorithm
+/// FMSketch (Flajolet-Martin Sketch) is a probabilistic data structure that
+/// estimates the count of unique elements in a stream. It employs a hash
+/// function to convert each element into a binary number and then counts the
+/// trailing zeroes in each hashed value. **This variant of the FM sketch uses a
+/// set to store unique hashed values and a binary mask to track the maximum
+/// number of trailing zeroes.** The estimated count of distinct values is
+/// calculated as 2^r * count, where 'r' is the maximum number of trailing
+/// zeroes observed and 'count' is the number of unique hashed values. The
+/// fundamental idea is that our hash function maps the input domain onto a
+/// logarithmic scale. This is achieved by hashing the input value and counting
+/// the number of trailing zeroes in the binary representation of the hash
+/// value. Each distinct value is mapped to 'i' with a probability of 2^-(i+1).
+/// For example, a value is mapped to 0 with a probability of 1/2, to 1 with a
+/// probability of 1/4, to 2 with a probability of 1/8, and so on. This is
+/// achieved by hashing the input value and counting the trailing zeroes in the
+/// hash value. If we have a set of 'n' distinct values, the count of distinct
+/// values with 'r' trailing zeroes is n / 2^r. Therefore, the estimated count
+/// of distinct values is 2^r * count = n. The level-by-level approach increases
+/// the accuracy of the estimation by ensuring a minimum count of distinct
+/// values at each level. This way, the final estimation is less likely to be
+/// skewed by outliers. For more details, refer to the following papers:
+///  1. https://www.vldb.org/conf/2001/P541.pdf
+///  2. https://algo.inria.fr/flajolet/Publications/FlMa85.pdf
 #[derive(Clone)]
 pub struct FmSketch {
     /// A binary mask used to track the maximum number of trailing zeroes in the
-    /// hashed values.
+    /// hashed values. Also used to track the level of the sketch.
+    /// Every time the size of the hashset exceeds the maximum size, the mask
+    /// will be moved to the next level.
     mask: u64,
     /// The maximum size of the hashset. If the size exceeds this value, the
-    /// mask size will be doubled and some hashed values will be removed
-    /// from the hashset.
+    /// mask will be moved to the next level. And the hashset will only keep
+    /// the hashed values with trailing zeroes greater than or equal to the
+    /// new mask.
     max_size: usize,
     /// A set to store unique hashed values.
     hash_set: HashSet<u64>,
@@ -41,22 +58,23 @@ impl FmSketch {
     }
 
     pub fn insert_hash_value(&mut self, hash_val: u64) {
-        // If the hashed value is already in the sketch (determined by bitwise AND with
-        // the mask), return without inserting. This is because the number of
-        // trailing zeroes in the hashed value is less than or equal to the mask value.
+        // If the hashed value is already covered by the mask, we can skip it.
+        // This is because the number of trailing zeroes in the hashed value is less
+        // than the mask.
         if (hash_val & self.mask) != 0 {
             return;
         }
         // Put the hashed value into the hashset.
         self.hash_set.insert(hash_val);
-        // If the count of unique hashed values exceeds the maximum size,
-        // double the mask size and remove any hashed values from the hashset that are
-        // now within the mask. This is to ensure that the mask value is always
-        // a power of two minus one (i.e., a binary number of the form 111...),
-        // which allows us to quickly check the number of trailing zeroes in a hashed
-        // value by performing a bitwise AND operation with the mask.
+        // We track the unique hashed values level by level to ensure a minimum count of
+        // distinct values at each level. This way, the final estimation is less
+        // likely to be skewed by outliers.
         if self.hash_set.len() > self.max_size {
+            // If the size of the hashset exceeds the maximum size, move the mask to the
+            // next level.
             let mask = (self.mask << 1) | 1;
+            // Clean up the hashset by removing the hashed values with trailing zeroes less
+            // than the new mask.
             self.hash_set.retain(|&x| x & mask == 0);
             self.mask = mask;
         }
@@ -135,11 +153,15 @@ mod tests {
     impl FmSketch {
         // ndv returns the approximate number of distinct elements
         pub fn ndv(&self) -> u64 {
-            // The size of the mask (incremented by one) is 2^r, where r is the maximum
-            // number of trailing zeroes observed in the hashed values.
-            // The count of unique hashed values is the number of unique elements in the
-            // hashset. This estimation method is based on the Flajolet-Martin
-            // algorithm for estimating the number of distinct elements in a stream.
+            // The estimated count of distinct values is 2^r * count, where 'r' is the
+            // maximum number of trailing zeroes observed and 'count' is the number of
+            // unique hashed values. The fundamental idea is that the hash
+            // function maps the input domain onto a logarithmic scale.
+            // This is achieved by hashing the input value and counting the number of
+            // trailing zeroes in the binary representation of the hash value.
+            // So the count of distinct values with 'r' trailing zeroes is n / 2^r, where
+            // 'n' is the number of distinct values. Therefore, the estimated
+            // count of distinct values is 2^r * count = n.
             (self.mask + 1) * (self.hash_set.len() as u64)
         }
     }

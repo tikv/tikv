@@ -2520,7 +2520,8 @@ mod tests {
             engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
         let (ch, rx, _) = HybridEngineMockRouter::new();
         let config = Arc::new(VersionTrack::new(engine_config));
-        let memory_engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(config));
+        let memory_engine =
+            RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(config));
         let engine = HybridEngine::new(disk_engine, memory_engine.clone());
         let mut reader = LocalReader::new(
             engine.clone(),

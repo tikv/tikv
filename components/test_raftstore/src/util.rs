@@ -677,6 +677,7 @@ pub fn create_test_engine<EK>(
     // TODO: pass it in for all cases.
     router: Option<RaftRouter<EK, RaftTestEngine>>,
     limiter: Option<Arc<IoRateLimiter>>,
+    pd_client: Arc<dyn PdClient>,
     cfg: &Config,
 ) -> (
     Engines<EK, RaftTestEngine>,
@@ -719,7 +720,7 @@ where
     let disk_engine = factory.create_shared_db(dir.path()).unwrap();
     let config = Arc::new(VersionTrack::new(cfg.tikv.range_cache_engine.clone()));
     let kv_engine: EK = KvEngineBuilder::build(
-        RangeCacheEngineContext::new(config),
+        RangeCacheEngineContext::new(config, pd_client),
         disk_engine,
         None,
         None,
