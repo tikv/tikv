@@ -485,6 +485,7 @@ dependencies = [
  "crossbeam",
  "crossbeam-channel",
  "dashmap",
+ "derive_more",
  "encryption",
  "engine_panic",
  "engine_rocks",
