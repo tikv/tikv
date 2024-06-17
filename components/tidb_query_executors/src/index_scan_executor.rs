@@ -338,22 +338,19 @@ impl ScanExecutorImpl for IndexScanExecutorImpl {
     #[inline]
     fn process_kv_pair(
         &mut self,
-        mut key: &[u8],
+        key: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
         check_index_key(key)?;
-        if self.physical_table_id_column_cnt > 0 {
-            self.process_physical_table_id_column(key, columns)?;
-        }
-        key = &key[table::PREFIX_LEN + table::ID_LEN..];
+        let key_payload = &key[table::PREFIX_LEN + table::ID_LEN..];
         if self.index_version == -1 {
             self.index_version = Self::get_index_version(value)?
         }
         if value.len() > MAX_OLD_ENCODED_VALUE_LEN {
-            self.process_kv_general(key, value, columns)
+            self.process_kv_general(key, key_payload, value, columns)
         } else {
-            self.process_old_collation_kv(key, value, columns)
+            self.process_old_collation_kv(key, key_payload, value, columns)
         }
     }
 }
@@ -452,10 +449,15 @@ impl IndexScanExecutorImpl {
     // Otherwise, extract the handles from the key.
     fn process_old_collation_kv(
         &mut self,
+        key: &[u8],
         mut key_payload: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
     ) -> Result<()> {
+        if self.physical_table_id_column_cnt > 0 {
+            self.process_physical_table_id_column(key, columns)?;
+        }
+
         Self::extract_columns_from_datum_format(
             &mut key_payload,
             &mut columns[..self.columns_id_without_handle.len()],
@@ -596,6 +598,7 @@ impl IndexScanExecutorImpl {
     // see https://docs.google.com/document/d/1Co5iMiaxitv3okJmLYLJxZYCNChcjzswJMRr-_45Eqg/edit?usp=sharing
     fn process_kv_general(
         &mut self,
+        key: &[u8],
         key_payload: &[u8],
         value: &[u8],
         columns: &mut LazyBatchColumnVec,
@@ -603,9 +606,31 @@ impl IndexScanExecutorImpl {
         let (decode_handle, decode_pid, restore_data) =
             self.build_operations(key_payload, value)?;
 
+        if self.physical_table_id_column_cnt > 0 {
+            match decode_pid {
+                DecodePartitionIdOp::Nop => {
+                    self.process_physical_table_id_column(key, columns)?;
+                }
+                // When it's a global index, will return partition id instead of table id.
+                DecodePartitionIdOp::Pid(_) => {
+                    self.decode_pid_columns(columns, columns.columns_len() - 1, decode_pid)?;
+                }
+            }
+        }
+
         self.decode_index_columns(key_payload, columns, restore_data)?;
         self.decode_handle_columns(decode_handle, columns, restore_data)?;
-        self.decode_pid_columns(columns, decode_pid)?;
+
+        // Deprecated: Keep this for old tidb version during upgrade.
+        // If need partition id, append partition id to the last column before physical
+        // table id column if exists.
+        if self.pid_column_cnt > 0 {
+            self.decode_pid_columns(
+                columns,
+                columns.columns_len() - self.physical_table_id_column_cnt - 1,
+                decode_pid,
+            )?;
+        }
 
         Ok(())
     }
@@ -808,15 +833,13 @@ impl IndexScanExecutorImpl {
     fn decode_pid_columns(
         &mut self,
         columns: &mut LazyBatchColumnVec,
+        idx: usize,
         decode_pid: DecodePartitionIdOp<'_>,
     ) -> Result<()> {
         match decode_pid {
             DecodePartitionIdOp::Nop => {}
             DecodePartitionIdOp::Pid(pid) => {
-                // If need partition id, append partition id to the last column
-                // before physical table id column if exists.
                 let pid = NumberCodec::decode_i64(pid);
-                let idx = columns.columns_len() - self.physical_table_id_column_cnt - 1;
                 columns[idx].mut_decoded().push_int(Some(pid))
             }
         }
@@ -3367,6 +3390,65 @@ mod tests {
         assert_eq!(
             // physical table id
             columns[5].mut_decoded().to_int_vec()[0].unwrap(),
+            92
+        );
+    }
+
+    #[test]
+    fn test_global_index_with_physical_table_id() {
+        // CREATE TABLE `t` (
+        //     `a` int(11) NOT NULL,
+        //     `b` int(11) NOT NUL,
+        //     UNIQUE KEY uidx_a(`a`),
+        //  ) partition by hash(b) partitions 5;
+        // insert into t values (1, 2);
+
+        // uidx_a
+        let mut idx_exe = IndexScanExecutorImpl {
+            context: Default::default(),
+            schema: vec![
+                // column `a`
+                FieldTypeTp::Long.into(),
+                // _tidb_rowid
+                FieldTypeTp::Long.into(),
+                // EXTRA_PHYSICAL_TABLE_ID_COL
+                FieldTypeTp::Long.into(),
+            ],
+            columns_id_without_handle: vec![1],
+            columns_id_for_common_handle: vec![],
+            decode_handle_strategy: DecodeHandleStrategy::DecodeIntHandle,
+            pid_column_cnt: 0,
+            physical_table_id_column_cnt: 1,
+            index_version: -1,
+        };
+        let mut columns = idx_exe.build_column_vec(10);
+        idx_exe
+            .process_kv_pair(
+                &[
+                    0x74, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x7b, 0x5f, 0x69, 0x80, 0x0, 0x0,
+                    0x0, 0x0, 0x0, 0x0, 0x1, 0x3, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1,
+                ],
+                &[
+                    0x8, 0x7e, // INDEX_VALUE_PARTITION_ID_FLAG
+                    0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x5c, // partition id
+                    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1, // _tidb_rowid
+                ],
+                &mut columns,
+            )
+            .unwrap();
+        assert_eq!(
+            // column a
+            columns[0].raw().last().unwrap().read_datum().unwrap(),
+            Datum::I64(1)
+        );
+        assert_eq!(
+            // _tidb_rowid
+            columns[1].mut_decoded().to_int_vec()[0].unwrap(),
+            1
+        );
+        assert_eq!(
+            // partition id
+            columns[2].mut_decoded().to_int_vec()[0].unwrap(),
             92
         );
     }
