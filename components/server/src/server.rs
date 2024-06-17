@@ -1682,16 +1682,19 @@ where
         let disk_engine = factory
             .create_shared_db(&self.core.store_path)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
-        let range_cache_engine_config = Arc::new(VersionTrack::new(
-            self.core.config.range_cache_engine.clone(),
-        ));
+        let mut range_cache_engine_config = self.core.config.range_cache_engine.clone();
+        let _ = range_cache_engine_config
+            .expected_region_size
+            .get_or_insert(self.core.config.coprocessor.region_split_size());
+        let range_cache_engine_config = Arc::new(VersionTrack::new(range_cache_engine_config));
         let range_cache_engine_context =
-            RangeCacheEngineContext::new(range_cache_engine_config.clone());
+            RangeCacheEngineContext::new(range_cache_engine_config.clone(), self.pd_client.clone());
         let range_cache_engine_statistics = range_cache_engine_context.statistics();
         let kv_engine: EK = KvEngineBuilder::build(
             range_cache_engine_context,
             disk_engine.clone(),
             Some(self.pd_client.clone()),
+            Some(Arc::new(self.region_info_accessor.clone())),
         );
         let range_cache_config_manager = RangeCacheConfigManager(range_cache_engine_config);
         self.kv_statistics = Some(factory.rocks_statistics());

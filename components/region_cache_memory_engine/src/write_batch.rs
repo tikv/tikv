@@ -212,15 +212,16 @@ impl RangeCacheWriteBatch {
         let mut ranges = vec![];
         let range_manager = core.mut_range_manager();
         for r in std::mem::take(&mut self.ranges_to_evict) {
-            if range_manager.contains_range(&r) && range_manager.evict_range(&r) {
-                ranges.push(r);
+            let mut ranges_to_delete = range_manager.evict_range(&r);
+            if !ranges_to_delete.is_empty() {
+                ranges.append(&mut ranges_to_delete);
                 continue;
             }
 
             if let Some((.., canceled)) = range_manager
                 .pending_ranges_loading_data
                 .iter_mut()
-                .find(|(range, ..)| range.contains_range(&r))
+                .find(|(range, ..)| range.overlaps(&r))
             {
                 *canceled = true;
             }
@@ -575,12 +576,18 @@ impl Mutable for RangeCacheWriteBatch {
         Ok(())
     }
 
-    fn delete_range(&mut self, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
+    // rather than delete the keys in the range, we evict ranges that overlap with
+    // them directly
+    fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        let range = CacheRange::new(begin_key.to_vec(), end_key.to_vec());
+        self.engine.evict_range(&range);
+        Ok(())
     }
 
-    fn delete_range_cf(&mut self, _: &str, _: &[u8], _: &[u8]) -> Result<()> {
-        unimplemented!()
+    fn delete_range_cf(&mut self, _: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+        let range = CacheRange::new(begin_key.to_vec(), end_key.to_vec());
+        self.engine.evict_range(&range);
+        Ok(())
     }
 }
 
@@ -621,7 +628,7 @@ mod tests {
 
     #[test]
     fn test_write_to_skiplist() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -643,7 +650,7 @@ mod tests {
 
     #[test]
     fn test_savepoints() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -670,7 +677,7 @@ mod tests {
 
     #[test]
     fn test_put_write_clear_delete_put_write() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -706,7 +713,7 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
         let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let r1 = CacheRange::new(b"k01".to_vec(), b"k05".to_vec());
@@ -830,7 +837,7 @@ mod tests {
         config.soft_limit_threshold = Some(ReadableSize(500));
         config.hard_limit_threshold = Some(ReadableSize(1000));
         config.enabled = true;
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(config),
         )));
         let r1 = CacheRange::new(b"kk00".to_vec(), b"kk10".to_vec());
@@ -921,7 +928,8 @@ mod tests {
         config.hard_limit_threshold = Some(ReadableSize(u64::MAX));
         config.enabled = true;
         let config = Arc::new(VersionTrack::new(config));
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(config.clone()));
+        let engine =
+            RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(config.clone()));
         let r1 = CacheRange::new(b"kk00".to_vec(), b"kk10".to_vec());
         let r2 = CacheRange::new(b"kk10".to_vec(), b"kk20".to_vec());
         for r in [&r1, &r2] {
