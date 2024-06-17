@@ -318,6 +318,7 @@ impl RangeManager {
             "evict_range" => ?evict_range,
         );
 
+        // cancel loading ranges overlapped with `evict_range`
         self.pending_ranges_loading_data
             .iter_mut()
             .for_each(|(r, _, canceled)| {
