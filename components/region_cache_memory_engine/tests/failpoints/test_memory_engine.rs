@@ -268,8 +268,4 @@ fn test_evict_with_loading_range() {
     engine.snapshot(range1, 100, 100).unwrap_err();
     engine.snapshot(range2, 100, 100).unwrap_err();
     engine.snapshot(range3, 100, 100).unwrap();
-
-    drop(engine);
-
-    std::thread::sleep(Duration::from_secs(1));
 }
