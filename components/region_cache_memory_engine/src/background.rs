@@ -552,7 +552,7 @@ impl BackgroundRunnerCore {
     /// keep evicting until either all candidates are evicted, or the total
     /// approximated size of evicted regions is equal to or greater than the
     /// excess memory usage.
-    fn evict_on_soft_limit_reached(&self) {
+    fn evict_on_soft_limit_reached(&self, delete_range_scheduler: &Scheduler<BackgroundTask>) {
         if self.range_stats_manager.is_none() {
             warn!("range stats manager is not initialized, cannot evict on soft limit reached");
             return;
@@ -573,6 +573,8 @@ impl BackgroundRunnerCore {
         range_stats_manager.collect_candidates_for_eviction(&mut ranges_to_evict, |range| {
             self.engine.read().range_manager().contains_range(range)
         });
+
+        let mut ranges_to_delete = vec![];
         // TODO (afeinberg): approximate size may differ from size in in-memory cache,
         // consider taking the actual size into account.
         for (range, approx_size) in &ranges_to_evict {
@@ -582,26 +584,31 @@ impl BackgroundRunnerCore {
             let mut evicted_range = false;
             {
                 let mut engine_wr = self.engine.write();
-                let ranges_to_delete = engine_wr.mut_range_manager().evict_range(range);
-                if !ranges_to_delete.is_empty() {
-                    info!("evict on soft limit reached"; "range" => ?&range, "approx_size" => approx_size, "remaining" => remaining);
+                let mut ranges = engine_wr.mut_range_manager().evict_range(range);
+                evicted_range = !ranges.is_empty();
+                if !ranges.is_empty() {
+                    info!(
+                        "evict on soft limit reached";
+                        "range_to_evict" => ?&range,
+                        "ranges_evicted" => ?ranges,
+                        "approx_size" => approx_size,
+                        "remaining" => remaining
+                    );
                     remaining = remaining
                         .checked_sub(*approx_size as usize)
                         .unwrap_or_default();
-                    // We need to delete the range manually here.
-                    // TODO (afeinberg): consider making delete_range return number of bytes
-                    // deleted.
-                    for r in ranges_to_delete {
-                        engine_wr.engine().delete_range(&r);
-                        if r.overlaps(range) {
-                            evicted_range = true;
-                        }
-                    }
+                    ranges_to_delete.append(&mut ranges);
                 }
             }
             if evicted_range {
                 range_stats_manager.handle_range_evicted(range);
             }
+        }
+
+        if !ranges_to_delete.is_empty() {
+            delete_range_scheduler
+                .schedule_force(BackgroundTask::DeleteRange(ranges_to_delete))
+                .unwrap();
         }
     }
 
@@ -612,7 +619,7 @@ impl BackgroundRunnerCore {
     ///
     /// See: [`RangeStatsManager::collect_changes_ranges`] for
     /// algorithm details.
-    fn top_regions_load_evict(&self) {
+    fn top_regions_load_evict(&self, delete_range_scheduler: &Scheduler<BackgroundTask>) {
         if self.range_stats_manager.is_none() {
             return;
         }
@@ -629,19 +636,24 @@ impl BackgroundRunnerCore {
         let mut ranges_to_add = Vec::<CacheRange>::with_capacity(256);
         let mut ranges_to_remove = Vec::<CacheRange>::with_capacity(256);
         range_stats_manager.collect_changed_ranges(&mut ranges_to_add, &mut ranges_to_remove);
+        let mut ranges_to_delete = vec![];
         info!("load_evict"; "ranges_to_add" => ?&ranges_to_add, "may_evict" => ?&ranges_to_remove);
         for evict_range in ranges_to_remove {
             if self.memory_controller.reached_soft_limit() {
-                info!("load_evict: soft limit reached"; "evict_range" => ?&evict_range);
                 let mut core = self.engine.write();
-                if core
-                    .mut_range_manager()
-                    .evict_range(&evict_range)
-                    .is_empty()
-                {
-                    error!("fail to evict range"; "evict_range" => ?&evict_range);
-                }
+                let mut ranges = core.mut_range_manager().evict_range(&evict_range);
+                info!(
+                    "load_evict: soft limit reached";
+                    "range_to_evict" => ?&evict_range,
+                    "ranges_evicted" => ?ranges
+                );
+                ranges_to_delete.append(&mut ranges);
             }
+        }
+        if !ranges_to_delete.is_empty() {
+            delete_range_scheduler
+                .schedule_force(BackgroundTask::DeleteRange(ranges_to_delete))
+                .unwrap();
         }
         for cache_range in ranges_to_add {
             let mut core = self.engine.write();
@@ -936,9 +948,10 @@ impl Runnable for BackgroundRunner {
                     "mem_usage(MB)" => ReadableSize(mem_usage as u64).as_mb()
                 );
                 if mem_usage > self.core.memory_controller.soft_limit_threshold() {
+                    let delete_range_scheduler = self.delete_range_scheduler.clone();
                     let core = self.core.clone();
                     let task = async move {
-                        core.evict_on_soft_limit_reached();
+                        core.evict_on_soft_limit_reached(&delete_range_scheduler);
                         core.memory_controller.set_memory_checking(false);
                     };
                     self.load_evict_remote.spawn(task);
@@ -948,8 +961,9 @@ impl Runnable for BackgroundRunner {
             }
             BackgroundTask::DeleteRange(_) => unreachable!(),
             BackgroundTask::TopRegionsLoadEvict => {
+                let delete_range_scheduler = self.delete_range_scheduler.clone();
                 let core = self.core.clone();
-                let task = async move { core.top_regions_load_evict() };
+                let task = async move { core.top_regions_load_evict(&delete_range_scheduler) };
                 self.load_evict_remote.spawn(task);
             }
             BackgroundTask::CleanLockTombstone(snapshot_seqno) => {
