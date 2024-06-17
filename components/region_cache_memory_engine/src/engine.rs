@@ -259,9 +259,9 @@ impl RangeCacheMemoryEngineCore {
 /// cached region), we resort to using a the disk engine's snapshot instead.
 #[derive(Clone)]
 pub struct RangeCacheMemoryEngine {
+    bg_work_manager: Arc<BgWorkManager>,
     pub(crate) core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
     pub(crate) rocks_engine: Option<RocksEngine>,
-    bg_work_manager: Arc<BgWorkManager>,
     memory_controller: Arc<MemoryController>,
     statistics: Arc<Statistics>,
     config: Arc<VersionTrack<RangeCacheEngineConfig>>,
