@@ -1891,6 +1891,15 @@ impl SnapManager {
     pub fn recv_snap_complete(&self, region_id: u64) {
         self.core.recv_concurrency_limiter.finish_recv(region_id)
     }
+
+    /// Adjusts the capacity of the snapshot receive concurrency limiter to
+    /// account for the number of pending applies. This prevents more snapshots
+    /// to be generated if there are too many snapshots waiting to be applied.
+    pub fn set_pending_apply_count(&self, num_pending_applies: usize) {
+        self.core
+            .recv_concurrency_limiter
+            .set_reserved_capacity(num_pending_applies)
+    }
 }
 
 impl SnapManagerCore {
@@ -1997,6 +2006,7 @@ impl SnapManagerCore {
 #[derive(Clone)]
 pub struct SnapRecvConcurrencyLimiter {
     limit: Arc<AtomicUsize>,
+    reserved_capacity: Arc<AtomicUsize>,
     ttl_secs: u64,
     timestamps: Arc<Mutex<HashMap<u64, Instant>>>,
 }
@@ -2006,6 +2016,7 @@ impl SnapRecvConcurrencyLimiter {
     pub fn new(limit: usize, ttl_secs: u64) -> Self {
         SnapRecvConcurrencyLimiter {
             limit: Arc::new(AtomicUsize::new(limit)),
+            reserved_capacity: Arc::new(AtomicUsize::new(0)),
             ttl_secs,
             timestamps: Arc::new(Mutex::new(HashMap::with_capacity_and_hasher(
                 limit,
@@ -2028,9 +2039,10 @@ impl SnapRecvConcurrencyLimiter {
             return true;
         }
 
+        let reserved_capacity = self.reserved_capacity.load(Ordering::Relaxed);
         // Insert into the map if its size is within limit. If the region id is
         // already present in the map, update its timestamp.
-        if timestamps.len() < limit || timestamps.contains_key(&region_id) {
+        if timestamps.len() + reserved_capacity < limit || timestamps.contains_key(&region_id) {
             timestamps.insert(region_id, current_time);
             return true;
         }
@@ -2061,15 +2073,21 @@ impl SnapRecvConcurrencyLimiter {
     }
 
     // Completes a snapshot receive operation by removing a timestamp from the
-    // queue. It is sufficient to remove the head of the queue instead of
-    // finding the matching timestamp, as we are only concerned with maintaining
-    // a total count of active operations.
+    // queue.
     pub fn finish_recv(&self, region_id: u64) {
         self.timestamps.lock().unwrap().remove(&region_id);
     }
 
     pub fn set_limit(&self, limit: usize) {
         self.limit.store(limit, Ordering::Relaxed);
+    }
+
+    // Set the reserved capacity of the limiter. The reserved capacity is
+    // unavailable for use. The actual available capacity is calculated as
+    // the total limit minus the reserved capacity.
+    pub fn set_reserved_capacity(&self, reserved_cap: usize) {
+        self.reserved_capacity
+            .store(reserved_cap, Ordering::Relaxed);
     }
 }
 
@@ -3528,7 +3546,7 @@ pub mod tests {
         assert!(!limiter.try_recv(2));
         assert!(limiter.try_recv(1));
 
-        // After try_recv(1) is called, try_recv(2) should succeed.
+        // After finish_recv(1) is called, try_recv(2) should succeed.
         limiter.finish_recv(1);
         assert!(limiter.try_recv(2));
 
@@ -3536,6 +3554,13 @@ pub mod tests {
         limiter.set_limit(2);
         assert!(limiter.try_recv(1));
         assert!(!limiter.try_recv(3));
+
+        limiter.finish_recv(1);
+        limiter.finish_recv(2);
+        // If we reserve a capacity of 1, the limiter will only allow one receive.
+        limiter.set_reserved_capacity(1);
+        assert!(limiter.try_recv(1));
+        assert!(!limiter.try_recv(2));
 
         // Test the evict_expired_timestamps function.
         let t_now = Instant::now();
