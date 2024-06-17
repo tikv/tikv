@@ -471,6 +471,9 @@ impl BackgroundRunnerCore {
                     .ranges_being_deleted
                     .insert(r.clone());
 
+                drop(core);
+                fail::fail_point!("in_memory_engine_snapshot_load_canceled");
+
                 if let Err(e) =
                     delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(vec![r]))
                 {
@@ -1093,13 +1096,15 @@ impl DeleteRangeRunner {
     fn delete_ranges(&mut self, ranges: &[CacheRange]) {
         let skiplist_engine = self.engine.read().engine();
         for r in ranges {
-            println!("delete range {:?}", r);
             skiplist_engine.delete_range(r);
         }
         self.engine
             .write()
             .mut_range_manager()
             .on_delete_ranges(ranges);
+
+        fail::fail_point!("in_memory_engine_delete_range_done");
+
         #[cfg(test)]
         flush_epoch();
     }
@@ -1129,8 +1134,9 @@ impl Runnable for DeleteRangeRunner {
                     (ranges_to_delay, ranges_to_delete)
                 };
                 self.delay_ranges.append(&mut ranges_to_delay);
-                self.delete_ranges(&ranges_to_delete);
-                fail::fail_point!("in_memory_engine_delete_range_done");
+                if !ranges_to_delete.is_empty() {
+                    self.delete_ranges(&ranges_to_delete);
+                }
             }
             _ => unreachable!(),
         }

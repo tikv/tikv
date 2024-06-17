@@ -332,6 +332,20 @@ impl RangeManager {
             "evict_range" => ?evict_range,
         );
 
+        // cancel loading ranges overlapped with `evict_range`
+        self.pending_ranges_loading_data
+            .iter_mut()
+            .for_each(|(r, _, canceled)| {
+                if evict_range.overlaps(r) {
+                    info!(
+                        "evict range that overlaps with loading range";
+                        "evicted_range" => ?evict_range,
+                        "overlapped_range" => ?r,
+                    );
+                    *canceled = true;
+                }
+            });
+
         let mut overlapped_ranges = vec![];
         for r in self.ranges.keys() {
             if r.contains_range(evict_range) {
