@@ -265,9 +265,9 @@ fn test_evict_with_loading_range() {
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
 
-    assert!(engine.snapshot(range1, 100, 100).is_err());
-    assert!(engine.snapshot(range2, 100, 100).is_err());
-    assert!(engine.snapshot(range3, 100, 100).is_ok());
+    engine.snapshot(range1, 100, 100).unwrap_err();
+    engine.snapshot(range2, 100, 100).unwrap_err();
+    engine.snapshot(range3, 100, 100).unwrap();
 
     drop(engine);
 
