@@ -284,11 +284,11 @@ mod tests {
         hybrid_engine
             .region_cache_engine()
             .snapshot(range1, 1000, 1000)
-            .unwrap();
+            .unwrap_err();
         hybrid_engine
             .region_cache_engine()
             .snapshot(range2, 1000, 1000)
-            .unwrap();
+            .unwrap_err();
         let m_engine = hybrid_engine.region_cache_engine();
 
         let mut times = 0;
