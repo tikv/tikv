@@ -546,9 +546,11 @@ impl BackgroundRunnerCore {
             if remaining == 0 {
                 break;
             }
-            let evicted_range = {
+            let mut evicted_range = false;
+            {
                 let mut engine_wr = self.engine.write();
-                if engine_wr.mut_range_manager().evict_range(range) {
+                let ranges_to_delete = engine_wr.mut_range_manager().evict_range(range);
+                if !ranges_to_delete.is_empty() {
                     info!("evict on soft limit reached"; "range" => ?&range, "approx_size" => approx_size, "remaining" => remaining);
                     remaining = remaining
                         .checked_sub(*approx_size as usize)
@@ -556,12 +558,14 @@ impl BackgroundRunnerCore {
                     // We need to delete the range manually here.
                     // TODO (afeinberg): consider making delete_range return number of bytes
                     // deleted.
-                    engine_wr.engine().delete_range(range);
-                    true
-                } else {
-                    false
+                    for r in ranges_to_delete {
+                        engine_wr.engine().delete_range(&r);
+                        if r.overlaps(range) {
+                            evicted_range = true;
+                        }
+                    }
                 }
-            };
+            }
             if evicted_range {
                 range_stats_manager.handle_range_evicted(range);
             }
@@ -597,7 +601,11 @@ impl BackgroundRunnerCore {
             if self.memory_controller.reached_soft_limit() {
                 info!("load_evict: soft limit reached"; "evict_range" => ?&evict_range);
                 let mut core = self.engine.write();
-                if !core.mut_range_manager().evict_range(&evict_range) {
+                if core
+                    .mut_range_manager()
+                    .evict_range(&evict_range)
+                    .is_empty()
+                {
                     error!("fail to evict range"; "evict_range" => ?&evict_range);
                 }
             }
