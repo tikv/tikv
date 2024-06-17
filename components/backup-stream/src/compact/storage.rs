@@ -10,18 +10,12 @@ use external_storage::{BlobObject, ExternalStorage, WalkBlobStorage, WalkExterna
 use futures::{
     future::{FusedFuture, FutureExt, TryFutureExt},
     io::AsyncReadExt,
-    stream::StreamExt,
+    stream::{Fuse, FusedStream, StreamExt},
 };
 use tokio_stream::Stream;
 
-use super::{
-    errors::{Error, Result},
-};
+use super::errors::{Error, Result};
 use crate::utils;
-
-pub trait CompactStorage: WalkBlobStorage + ExternalStorage {}
-
-impl<T: WalkBlobStorage + ExternalStorage> CompactStorage for T {}
 
 const METADATA_PREFIX: &'static str = "v1/backupmeta";
 
@@ -78,13 +72,13 @@ impl Default for LoadFromExt {
 
 pub struct StreamyMetaStorage<'a> {
     prefetch: VecDeque<Prefetch<Pin<Box<dyn Future<Output = Result<MetaFile>> + 'a>>>>,
-    cached_stream_input: Option<Option<std::io::Result<BlobObject>>>,
-    files: Pin<Box<dyn Stream<Item = std::io::Result<BlobObject>> + 'a>>,
     ext_storage: &'a dyn ExternalStorage,
     ext: LoadFromExt,
+
+    files: Fuse<Pin<Box<dyn Stream<Item = std::io::Result<BlobObject>> + 'a>>>,
 }
 
-#[pin_project::pin_project(project = ProjCachedFuse)]
+#[pin_project::pin_project(project = ProjPrefetch)]
 enum Prefetch<F: Future> {
     Polling(#[pin] F),
     Ready(<F as Future>::Output),
@@ -111,7 +105,7 @@ impl<F: Future> Future for Prefetch<F> {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
         match self.as_mut().project() {
-            ProjCachedFuse::Polling(fut) => {
+            ProjPrefetch::Polling(fut) => {
                 let resolved = ready!(fut.poll(cx));
                 unsafe {
                     // SAFETY: we won't poll it anymore.
@@ -119,7 +113,7 @@ impl<F: Future> Future for Prefetch<F> {
                 }
                 ().into()
             }
-            ProjCachedFuse::Ready(_) => std::task::Poll::Pending,
+            ProjPrefetch::Ready(_) => std::task::Poll::Pending,
         }
     }
 }
@@ -140,56 +134,70 @@ impl<'a> Stream for StreamyMetaStorage<'a> {
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        loop {
-            if let Some(input) = self.cached_stream_input.take() {
-                match input {
-                    Some(Ok(load)) => self.prefetch_file(cx, load),
-                    Some(Err(err)) => return Some(Err(err.into())).into(),
-                    None => return None.into(),
-                }
-            }
+        if self.prefetch.is_empty() {
+            return self.poll_register_prefetch(cx);
+        }
 
-            if self.prefetch.len() >= self.ext.max_concurrent_fetch {
-                assert!(
-                    self.cached_stream_input.is_none(),
-                    "{:?}",
-                    self.cached_stream_input
-                );
-
-                for fut in &mut self.prefetch {
-                    if !fut.is_terminated() {
-                        let _ = fut.poll_unpin(cx);
-                    }
-                }
-                if self.prefetch[0].is_terminated() {
-                    let file = self.prefetch.pop_front().unwrap().must_fetch();
-                    if let Poll::Ready(input) = self.files.poll_next_unpin(cx) {
-                        self.cached_stream_input = Some(input);
-                    }
-                    return Some(file).into();
-                } else {
-                    return Poll::Pending;
-                }
-            }
-
-            self.cached_stream_input = Some(ready!(self.files.poll_next_unpin(cx)));
+        let first_result = self.poll_first(cx);
+        match first_result {
+            Poll::Ready(item) => Some(item).into(),
+            Poll::Pending => self.poll_register_prefetch(cx),
         }
     }
 }
 
 impl<'a> StreamyMetaStorage<'a> {
-    fn prefetch_file(&mut self, cx: &mut Context<'_>, load: BlobObject) {
+    fn register_prefetch(&mut self, cx: &mut Context<'_>, load: BlobObject) {
         let mut fut = Prefetch::new(MetaFile::load_from(self.ext_storage, load).boxed_local());
         // start the execution of this future.
-        let _ = fut.poll_unpin(cx);
+        let poll = fut.poll_unpin(cx);
+        if poll.is_ready() {
+            // We need to check this in next run.
+            cx.waker().wake_by_ref();
+        }
         self.prefetch.push_back(fut);
     }
 
+    fn poll_register_prefetch(&mut self, cx: &mut Context<'_>) -> Poll<Option<()>> {
+        loop {
+            // No more space for prefetching.
+            if self.prefetch.len() >= self.ext.max_concurrent_fetch {
+                return Poll::Pending;
+            }
+            if self.files.is_terminated() {
+                if self.prefetch.is_empty() {
+                    return None.into();
+                } else {
+                    return Poll::Pending;
+                }
+            }
+            match ready!(self.files.next().poll_unpin(cx)) {
+                Some(load) => {
+                    self.register_prefetch(cx, load?);
+                }
+                None => return Poll::Pending,
+            }
+        }
+    }
+
+    fn poll_first(&mut self, cx: &mut Context<'_>) -> Poll<Result<MetaFile>> {
+        for fut in &mut self.prefetch {
+            if !fut.is_terminated() {
+                let _ = fut.poll_unpin(cx);
+            }
+        }
+        if self.prefetch[0].is_terminated() {
+            let file = self.prefetch.pop_front().unwrap().must_fetch();
+            file.into()
+        } else {
+            Poll::Pending
+        }
+    }
+
     pub fn load_from_ext(s: &'a dyn WalkExternalStorage, ext: LoadFromExt) -> Self {
-        let files = s.walk(&METADATA_PREFIX);
+        let files = s.walk(&METADATA_PREFIX).fuse();
         Self {
             prefetch: VecDeque::new(),
-            cached_stream_input: None,
             files,
             ext_storage: s,
             ext,
