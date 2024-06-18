@@ -439,6 +439,7 @@ impl BackgroundRunnerCore {
     // if `false` is returned, the load is canceled
     fn on_snapshot_load_finished(&mut self, range: CacheRange) -> bool {
         fail::fail_point!("on_snapshot_load_finished");
+        fail::fail_point!("on_snapshot_load_finished2");
         loop {
             // Consume the cached write batch after the snapshot is acquired.
             let mut core = self.engine.write();
@@ -456,6 +457,8 @@ impl BackgroundRunnerCore {
                     .pop_front()
                     .unwrap();
                 assert_eq!(r, range);
+                core.remove_cached_write_batch(&range);
+
                 drop(core);
                 // Clear the range directly here to quickly free the memory.
                 self.delete_ranges(&[r]);
@@ -465,7 +468,7 @@ impl BackgroundRunnerCore {
             if core.has_cached_write_batch(&range) {
                 let (cache_batch, skiplist_engine) = {
                     (
-                        core.take_cache_write_batch(&range).unwrap(),
+                        core.take_cached_write_batch_entries(&range),
                         core.engine().clone(),
                     )
                 };
@@ -483,6 +486,7 @@ impl BackgroundRunnerCore {
                 }
                 fail::fail_point!("on_cached_write_batch_consumed");
             } else {
+                core.remove_cached_write_batch(&range);
                 RangeCacheMemoryEngineCore::pending_range_completes_loading(&mut core, &range);
                 break;
             }
@@ -498,6 +502,7 @@ impl BackgroundRunnerCore {
             .pop_front()
             .unwrap();
         assert_eq!(r, range);
+        core.remove_cached_write_batch(&range);
     }
 
     fn delete_ranges(&mut self, ranges: &[CacheRange]) {

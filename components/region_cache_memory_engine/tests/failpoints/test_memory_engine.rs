@@ -17,7 +17,7 @@ use region_cache_memory_engine::{
     SkiplistHandle, ValueType,
 };
 use tempfile::Builder;
-use tikv_util::config::{ReadableDuration, VersionTrack};
+use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 use txn_types::{Key, TimeStamp};
 
 // We should not use skiplist.get directly as we only cares keys without
@@ -268,4 +268,60 @@ fn test_evict_with_loading_range() {
     engine.snapshot(range1, 100, 100).unwrap_err();
     engine.snapshot(range2, 100, 100).unwrap_err();
     engine.snapshot(range3, 100, 100).unwrap();
+}
+
+#[test]
+fn test_cached_write_batch_cleared_when_load_failed() {
+    let path = Builder::new().prefix("test").tempdir().unwrap();
+    let path_str = path.path().to_str().unwrap();
+    let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+
+    let mut config = RangeCacheEngineConfig::config_for_test();
+    config.soft_limit_threshold = Some(ReadableSize(20));
+    config.hard_limit_threshold = Some(ReadableSize(40));
+    let config = Arc::new(VersionTrack::new(config));
+    let mut engine =
+        RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(config.clone()));
+    engine.set_disk_engine(rocks_engine);
+
+    let (tx, rx) = sync_channel(0);
+    fail::cfg_callback("on_snapshot_load_finished", move || {
+        let _ = tx.send(true);
+    })
+    .unwrap();
+
+    fail::cfg("on_snapshot_load_finished2", "pause").unwrap();
+
+    // range1 will be canceled in on_snapshot_load_finished whereas range2 will be
+    // canceled at begin
+    let range1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+    let range2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
+    engine.load_range(range1.clone()).unwrap();
+    engine.load_range(range2.clone()).unwrap();
+
+    let mut wb = engine.write_batch();
+    // range1 starts to load
+    wb.prepare_for_range(range1.clone());
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    wb.put(b"k05", b"val").unwrap();
+    wb.put(b"k06", b"val").unwrap();
+    wb.prepare_for_range(range2.clone());
+    wb.put(b"k25", b"val").unwrap();
+    wb.set_sequence_number(100).unwrap();
+    wb.write().unwrap();
+
+    fail::remove("on_snapshot_load_finished2");
+
+    let mut tried = 0;
+    while tried < 20 {
+        if !engine.core().read().has_cached_write_batch(&range1)
+            && !engine.core().read().has_cached_write_batch(&range2)
+        {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        tried += 1;
+    }
+    panic!("write batches are not cleared");
 }
