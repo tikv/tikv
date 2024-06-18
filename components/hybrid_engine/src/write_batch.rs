@@ -176,6 +176,7 @@ mod tests {
         )
         .unwrap();
         let mut write_batch = hybrid_engine.write_batch();
+        write_batch.prepare_for_range(range.clone());
         write_batch
             .cache_write_batch
             .set_range_cache_status(RangeCacheStatus::Cached);
