@@ -656,6 +656,7 @@ mod tests {
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.range_cache_status = RangeCacheStatus::Cached;
+        wb.prepare_for_range(r.clone());
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
         assert_eq!(wb.write().unwrap(), 1);
