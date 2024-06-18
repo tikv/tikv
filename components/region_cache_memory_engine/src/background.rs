@@ -450,6 +450,7 @@ impl BackgroundRunnerCore {
         delete_range_scheduler: &Scheduler<BackgroundTask>,
     ) -> bool {
         fail::fail_point!("on_snapshot_load_finished");
+        fail::fail_point!("on_snapshot_load_finished2");
         loop {
             // Consume the cached write batch after the snapshot is acquired.
             let mut core = self.engine.write();
@@ -470,7 +471,7 @@ impl BackgroundRunnerCore {
                 core.mut_range_manager()
                     .ranges_being_deleted
                     .insert(r.clone());
-
+                core.remove_cached_write_batch(&range);
                 drop(core);
                 fail::fail_point!("in_memory_engine_snapshot_load_canceled");
 
@@ -490,7 +491,7 @@ impl BackgroundRunnerCore {
             if core.has_cached_write_batch(&range) {
                 let (cache_batch, skiplist_engine) = {
                     (
-                        core.take_cache_write_batch(&range).unwrap(),
+                        core.take_cached_write_batch_entries(&range),
                         core.engine().clone(),
                     )
                 };
@@ -508,7 +509,11 @@ impl BackgroundRunnerCore {
                 }
                 fail::fail_point!("on_cached_write_batch_consumed");
             } else {
+                core.remove_cached_write_batch(&range);
                 RangeCacheMemoryEngineCore::pending_range_completes_loading(&mut core, &range);
+                drop(core);
+
+                fail::fail_point!("pending_range_completes_loading");
                 break;
             }
         }
@@ -527,7 +532,7 @@ impl BackgroundRunnerCore {
             .pop_front()
             .unwrap();
         assert_eq!(r, range);
-
+        core.remove_cached_write_batch(&range);
         core.mut_range_manager()
             .ranges_being_deleted
             .insert(r.clone());

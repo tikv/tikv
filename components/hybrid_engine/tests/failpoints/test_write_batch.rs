@@ -13,7 +13,7 @@ fn test_sequence_number_unique() {
         hybrid_engine_for_tests("temp", RangeCacheEngineConfig::config_for_test(), |_| {}).unwrap();
 
     let (tx, rx) = sync_channel(0);
-    fail::cfg_callback("on_pending_range_completes_loading", move || {
+    fail::cfg_callback("pending_range_completes_loading", move || {
         fail::cfg("on_snapshot_load_finished", "pause").unwrap();
         tx.send(true).unwrap();
     })
