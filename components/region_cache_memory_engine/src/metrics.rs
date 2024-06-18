@@ -93,6 +93,12 @@ lazy_static! {
         &["type"]
     )
     .unwrap();
+    pub static ref IN_MEMORY_ENGINE_SEEK_DURATION: Histogram = register_histogram!(
+        "tikv_range_cache_memory_engine_seek_duration",
+        "Histogram of seek duration",
+        exponential_buckets(0.00001, 2.0, 26).unwrap()
+    )
+    .unwrap();
 }
 
 lazy_static! {

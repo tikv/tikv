@@ -73,6 +73,7 @@ pub enum Task<S> {
         region_id: u64,
         status: Arc<AtomicUsize>,
         peer_id: u64,
+        create_time: Instant,
     },
     /// Destroy data between [start_key, end_key).
     ///
@@ -793,6 +794,7 @@ where
                 region_id,
                 status,
                 peer_id,
+                ..
             } => (region_id, status.clone(), peer_id),
             _ => panic!("invalid apply snapshot task"),
         };
@@ -834,6 +836,7 @@ where
             // ingested. check level 0 every time because we can not make sure
             // how does the number of level 0 files change.
             if self.ingest_maybe_stall() {
+                SNAP_COUNTER.apply.ingest_delay.inc();
                 break;
             }
             if let Some(Task::Apply { region_id, .. }) = self.pending_applies.front() {
@@ -845,20 +848,25 @@ where
                     self.pending_applies.len(),
                 ) {
                     // KvEngine can't apply snapshot for other reasons.
+                    SNAP_COUNTER.apply.ingest_delay.inc();
                     break;
                 }
                 if let Some(Task::Apply {
                     region_id,
                     status,
                     peer_id,
+                    create_time,
                 }) = self.pending_applies.pop_front()
                 {
+                    SNAP_APPLY_WAIT_DURATION_HISTOGRAM
+                        .observe(create_time.saturating_elapsed_secs());
                     new_batch = false;
                     self.handle_apply(region_id, peer_id, status);
                     self.mgr.set_pending_apply_count(self.pending_applies.len());
                 }
             }
         }
+        SNAP_PENDING_APPLIES_GAUGE.set(self.pending_applies.len() as i64);
     }
 }
 
@@ -1315,6 +1323,7 @@ pub(crate) mod tests {
                     region_id: id,
                     status,
                     peer_id: 1,
+                    create_time: Instant::now(),
                 })
                 .unwrap();
         };
