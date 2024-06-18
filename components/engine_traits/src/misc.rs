@@ -7,7 +7,7 @@
 
 use crate::{
     cf_names::CfNamesExt, errors::Result, flow_control_factors::FlowControlFactorsExt,
-    range::Range, KvEngine, WriteBatchExt, WriteOptions,
+    range::Range, CacheRange, KvEngine, WriteBatchExt, WriteOptions,
 };
 
 #[derive(Clone, Debug)]
@@ -187,4 +187,8 @@ pub trait MiscExt: CfNamesExt + FlowControlFactorsExt + WriteBatchExt {
 
     type DiskEngine: KvEngine;
     fn get_disk_engine(&self) -> &Self::DiskEngine;
+
+    // TODO(SpadeA): try to find a better way to reduce couple of range cache engine
+    // and kv engine
+    fn evict_range(&self, range: &CacheRange);
 }

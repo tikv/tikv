@@ -535,6 +535,10 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
     fn enabled(&self) -> bool {
         self.config.value().enabled
     }
+
+    fn evict_range(&self, range: &CacheRange) {
+        self.evict_range(range)
+    }
 }
 
 impl Iterable for RangeCacheMemoryEngine {

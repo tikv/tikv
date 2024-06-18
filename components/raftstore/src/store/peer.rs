@@ -2316,6 +2316,8 @@ where
                         let _ = self.get_store().clear_data();
                         self.delay_clean_data = false;
                     }
+                    let range = CacheRange::from_region(self.region());
+                    ctx.engines.kv.evict_range(&range);
                 }
                 _ => {}
             }
