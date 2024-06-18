@@ -784,10 +784,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "case_macros"
-version = "0.1.0"
-
-[[package]]
 name = "cast"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1546,7 +1542,6 @@ name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
  "api_version",
- "case_macros",
  "collections",
  "derive_more",
  "encryption",
@@ -1623,7 +1618,6 @@ dependencies = [
 name = "engine_traits"
 version = "0.0.1"
 dependencies = [
- "case_macros",
  "collections",
  "encryption",
  "error_code",
@@ -4610,6 +4604,7 @@ dependencies = [
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
+ "raftstore",
  "rand 0.8.5",
  "security",
  "serde",
@@ -6455,7 +6450,6 @@ dependencies = [
  "backtrace",
  "batch-system",
  "byteorder",
- "case_macros",
  "causal_ts",
  "chrono",
  "codec",
@@ -6760,6 +6754,7 @@ dependencies = [
  "futures-util",
  "gag",
  "grpcio",
+ "heck 0.3.1",
  "http",
  "kvproto",
  "lazy_static",

@@ -4916,7 +4916,6 @@ mod tests {
     };
 
     use api_version::{ApiV1, KvFormat};
-    use case_macros::*;
     use engine_rocks::raw::LRUCacheOptions;
     use engine_traits::{CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt};
     use futures::executor::block_on;
@@ -4971,21 +4970,6 @@ mod tests {
     fn create_mock_kv_data(path: &Path) {
         fs::create_dir_all(path.join("db")).unwrap();
         fs::File::create(path.join("db").join("CURRENT")).unwrap();
-    }
-
-    #[test]
-    fn test_case_macro() {
-        let h = kebab_case!(HelloWorld);
-        assert_eq!(h, "hello-world");
-
-        let h = kebab_case!(WelcomeToMyHouse);
-        assert_eq!(h, "welcome-to-my-house");
-
-        let h = snake_case!(HelloWorld);
-        assert_eq!(h, "hello_world");
-
-        let h = snake_case!(WelcomeToMyHouse);
-        assert_eq!(h, "welcome_to_my_house");
     }
 
     #[test]

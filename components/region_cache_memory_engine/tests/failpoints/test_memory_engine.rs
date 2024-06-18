@@ -6,13 +6,18 @@ use std::{
 };
 
 use crossbeam::epoch;
-use engine_traits::{CacheRange, Mutable, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_WRITE};
+use engine_rocks::util::new_engine;
+use engine_traits::{
+    CacheRange, Mutable, RangeCacheEngine, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_WRITE,
+    DATA_CFS,
+};
 use region_cache_memory_engine::{
     decode_key, encoding_for_filter, test_util::put_data, BackgroundTask, InternalBytes,
     InternalKey, RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
     SkiplistHandle, ValueType,
 };
-use tikv_util::config::{ReadableDuration, VersionTrack};
+use tempfile::Builder;
+use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 use txn_types::{Key, TimeStamp};
 
 // We should not use skiplist.get directly as we only cares keys without
@@ -30,7 +35,7 @@ fn key_exist(sl: &SkiplistHandle, key: &InternalBytes, guard: &epoch::Guard) -> 
 fn test_gc_worker() {
     let mut config = RangeCacheEngineConfig::config_for_test();
     config.gc_interval = ReadableDuration(Duration::from_secs(1));
-    let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+    let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
         VersionTrack::new(config),
     )));
     let memory_controller = engine.memory_controller();
@@ -42,7 +47,7 @@ fn test_gc_worker() {
         (engine.cf_handle(CF_WRITE), engine.cf_handle(CF_DEFAULT))
     };
 
-    fail::cfg("in_memry_engine_gc_oldest_seqno", "return(1000)").unwrap();
+    fail::cfg("in_memory_engine_gc_oldest_seqno", "return(1000)").unwrap();
 
     let (tx, rx) = sync_channel(0);
     fail::cfg_callback("in_memory_engine_gc_finish", move || {
@@ -130,7 +135,8 @@ fn test_gc_worker() {
 #[test]
 fn test_clean_up_tombstone() {
     let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test()));
-    let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(config.clone()));
+    let engine =
+        RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(config.clone()));
     let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
 
     let (tx, rx) = sync_channel(0);
@@ -203,4 +209,119 @@ fn test_clean_up_tombstone() {
         assert_eq!(user_key, &k);
         assert_eq!(v_type, ty);
     }
+}
+
+#[test]
+fn test_evict_with_loading_range() {
+    let path = Builder::new().prefix("test").tempdir().unwrap();
+    let path_str = path.path().to_str().unwrap();
+    let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+
+    let config = RangeCacheEngineConfig::config_for_test();
+    let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
+        VersionTrack::new(config),
+    )));
+    engine.set_disk_engine(rocks_engine);
+
+    let range1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+    let range2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
+    let range3 = CacheRange::new(b"k40".to_vec(), b"k50".to_vec());
+    let (snapshot_load_tx, snapshot_load_rx) = sync_channel(0);
+    fail::cfg_callback("on_snapshot_load_finished", move || {
+        let _ = snapshot_load_tx.send(true);
+    })
+    .unwrap();
+
+    let (loading_complete_tx, loading_complete_rx) = sync_channel(0);
+    fail::cfg_callback("on_pending_range_completes_loading", move || {
+        let _ = loading_complete_tx.send(true);
+    })
+    .unwrap();
+
+    engine.load_range(range1.clone()).unwrap();
+    engine.load_range(range2.clone()).unwrap();
+    engine.load_range(range3.clone()).unwrap();
+
+    let mut wb = engine.write_batch();
+    // prepare range to trigger loading
+    wb.prepare_for_range(range1.clone());
+    wb.prepare_for_range(range2.clone());
+    wb.prepare_for_range(range3.clone());
+    wb.set_sequence_number(10).unwrap();
+    wb.write().unwrap();
+
+    // range1 and range2 will be evicted
+    let r = CacheRange::new(b"k05".to_vec(), b"k25".to_vec());
+    engine.evict_range(&r);
+
+    snapshot_load_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    snapshot_load_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+
+    loading_complete_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+
+    engine.snapshot(range1, 100, 100).unwrap_err();
+    engine.snapshot(range2, 100, 100).unwrap_err();
+    engine.snapshot(range3, 100, 100).unwrap();
+}
+
+#[test]
+fn test_cached_write_batch_cleared_when_load_failed() {
+    let path = Builder::new().prefix("test").tempdir().unwrap();
+    let path_str = path.path().to_str().unwrap();
+    let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+
+    let mut config = RangeCacheEngineConfig::config_for_test();
+    config.soft_limit_threshold = Some(ReadableSize(20));
+    config.hard_limit_threshold = Some(ReadableSize(40));
+    let config = Arc::new(VersionTrack::new(config));
+    let mut engine =
+        RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(config.clone()));
+    engine.set_disk_engine(rocks_engine);
+
+    let (tx, rx) = sync_channel(0);
+    fail::cfg_callback("on_snapshot_load_finished", move || {
+        let _ = tx.send(true);
+    })
+    .unwrap();
+
+    fail::cfg("on_snapshot_load_finished2", "pause").unwrap();
+
+    // range1 will be canceled in on_snapshot_load_finished whereas range2 will be
+    // canceled at begin
+    let range1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+    let range2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
+    engine.load_range(range1.clone()).unwrap();
+    engine.load_range(range2.clone()).unwrap();
+
+    let mut wb = engine.write_batch();
+    // range1 starts to load
+    wb.prepare_for_range(range1.clone());
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    wb.put(b"k05", b"val").unwrap();
+    wb.put(b"k06", b"val").unwrap();
+    wb.prepare_for_range(range2.clone());
+    wb.put(b"k25", b"val").unwrap();
+    wb.set_sequence_number(100).unwrap();
+    wb.write().unwrap();
+
+    fail::remove("on_snapshot_load_finished2");
+
+    let mut tried = 0;
+    while tried < 20 {
+        if !engine.core().read().has_cached_write_batch(&range1)
+            && !engine.core().read().has_cached_write_batch(&range2)
+        {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        tried += 1;
+    }
+    panic!("write batches are not cleared");
 }
