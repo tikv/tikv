@@ -20,6 +20,26 @@ use tempfile::Builder;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 use txn_types::{Key, TimeStamp};
 
+#[test]
+fn test_set_disk_engine() {
+    let (tx, rx) = sync_channel(0);
+    fail::cfg_callback("in_memory_engine_set_rocks_engine", move || {
+        let _ = tx.send(true);
+    })
+    .unwrap();
+    let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
+        VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+    )));
+    let path = Builder::new()
+        .prefix("test_set_disk_engine")
+        .tempdir()
+        .unwrap();
+    let path_str = path.path().to_str().unwrap();
+    let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+    engine.set_disk_engine(rocks_engine.clone());
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+}
+
 // We should not use skiplist.get directly as we only cares keys without
 // sequence number suffix
 fn key_exist(sl: &SkiplistHandle, key: &InternalBytes, guard: &epoch::Guard) -> bool {
