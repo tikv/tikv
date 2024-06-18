@@ -805,6 +805,7 @@ impl Runnable for BackgroundRunner {
         match task {
             BackgroundTask::SetRocksEngine(rocks_engine) => {
                 self.rocks_engine = Some(rocks_engine);
+                fail::fail_point!("in_memory_engine_set_rocks_engine");
             }
             BackgroundTask::Gc(t) => {
                 let seqno = (|| {

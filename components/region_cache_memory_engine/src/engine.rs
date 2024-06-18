@@ -562,7 +562,7 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
 
     type DiskEngine = RocksEngine;
     fn set_disk_engine(&mut self, disk_engine: Self::DiskEngine) {
-        self.rocks_engine = Some(disk_engine);
+        self.rocks_engine = Some(disk_engine.clone());
         if let Err(e) = self
             .bg_worker_manager()
             .schedule_task(BackgroundTask::SetRocksEngine(disk_engine))
