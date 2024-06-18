@@ -39,10 +39,12 @@ pub const INDEX_VALUE_VERSION_FLAG: u8 = 125;
 /// Flag that indicate if the index value has restored data.
 pub const INDEX_VALUE_RESTORED_DATA_FLAG: u8 = crate::codec::row::v2::CODEC_VERSION;
 
+/// Deprecated. see <https://github.com/tikv/tikv/issues/17138>
 /// ID for partition column, see <https://github.com/pingcap/parser/pull/1010>
 pub const EXTRA_PARTITION_ID_COL_ID: i64 = -2;
 
 /// ID for physical table id column, see <https://github.com/tikv/tikv/issues/11888>
+/// If it's a global index, it will return partition id, see <https://github.com/tikv/tikv/issues/17138>
 pub const EXTRA_PHYSICAL_TABLE_ID_COL_ID: i64 = -3;
 
 /// `TableEncoder` encodes the table record/index prefix.

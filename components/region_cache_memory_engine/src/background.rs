@@ -265,7 +265,7 @@ impl BgWorkManager {
             task @ BackgroundTask::DeleteRange(_) => {
                 self.delete_range_scheduler.schedule_force(task)
             }
-            task @ _ => self.scheduler.schedule_force(task),
+            task => self.scheduler.schedule_force(task),
         }
     }
 
@@ -477,6 +477,7 @@ impl BackgroundRunnerCore {
         delete_range_scheduler: &Scheduler<BackgroundTask>,
     ) -> bool {
         fail::fail_point!("on_snapshot_load_finished");
+        fail::fail_point!("on_snapshot_load_finished2");
         loop {
             // Consume the cached write batch after the snapshot is acquired.
             let mut core = self.engine.write();
@@ -501,21 +502,30 @@ impl BackgroundRunnerCore {
                 core.mut_range_manager()
                     .ranges_being_deleted
                     .insert(r.clone());
+                core.remove_cached_write_batch(&range);
+                drop(core);
+                fail::fail_point!("in_memory_engine_snapshot_load_canceled");
 
-                core.cached_write_batch
-                    .remove(&range)
-                    .expect(format!("cannot remove range {:?}", range).as_str());
-
-                delete_range_scheduler
-                    .schedule_force(BackgroundTask::DeleteRange(vec![r]))
-                    .unwrap();
+                if let Err(e) =
+                    delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(vec![r]))
+                {
+                    error!(
+                        "schedule delete range failed";
+                        "err" => ?e,
+                    );
+                    assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+                }
 
                 return false;
             }
 
             if core.has_cached_write_batch(&range) {
-                let (cache_batch, skiplist_engine) =
-                    { (core.take_cache_write_batch(&range), core.engine().clone()) };
+                let (cache_batch, skiplist_engine) = {
+                    (
+                        core.take_cached_write_batch_entries(&range),
+                        core.engine().clone(),
+                    )
+                };
                 drop(core);
                 let guard = &epoch::pin();
                 for (seq, entry) in cache_batch {
@@ -530,11 +540,11 @@ impl BackgroundRunnerCore {
                 }
                 fail::fail_point!("on_cached_write_batch_consumed");
             } else {
-                core.cached_write_batch
-                    .remove(&range)
-                    .expect(format!("cannot remove range {:?}", range).as_str());
-
+                core.remove_cached_write_batch(&range);
                 RangeCacheMemoryEngineCore::pending_range_completes_loading(&mut core, &range);
+                drop(core);
+
+                fail::fail_point!("pending_range_completes_loading");
                 break;
             }
         }
@@ -552,18 +562,20 @@ impl BackgroundRunnerCore {
             .pending_ranges_loading_data
             .pop_front()
             .unwrap();
+        assert_eq!(r, range);
+        core.remove_cached_write_batch(&range);
         core.mut_range_manager()
             .ranges_being_deleted
             .insert(r.clone());
 
-        core.cached_write_batch
-            .remove(&range)
-            .expect(format!("cannot get range {:?}", range).as_str());
-
-        assert_eq!(r, range);
-        delete_range_scheduler
-            .schedule_force(BackgroundTask::DeleteRange(vec![r]))
-            .unwrap();
+        if let Err(e) = delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(vec![r]))
+        {
+            error!(
+                "schedule delete range failed";
+                "err" => ?e,
+            );
+            assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+        }
     }
 
     /// Eviction on soft limit reached:
@@ -593,34 +605,48 @@ impl BackgroundRunnerCore {
         range_stats_manager.collect_candidates_for_eviction(&mut ranges_to_evict, |range| {
             self.engine.read().range_manager().contains_range(range)
         });
+
+        let mut ranges_to_delete = vec![];
         // TODO (afeinberg): approximate size may differ from size in in-memory cache,
         // consider taking the actual size into account.
         for (range, approx_size) in &ranges_to_evict {
             if remaining == 0 {
                 break;
             }
-            let mut evicted_range = false;
-            {
+            let evicted_range = {
                 let mut engine_wr = self.engine.write();
-                let ranges_to_delete = engine_wr.mut_range_manager().evict_range(range);
-                if !ranges_to_delete.is_empty() {
-                    info!("evict on soft limit reached"; "range" => ?&range, "approx_size" => approx_size, "remaining" => remaining);
+                let mut ranges = engine_wr.mut_range_manager().evict_range(range);
+                if !ranges.is_empty() {
+                    info!(
+                        "evict on soft limit reached";
+                        "range_to_evict" => ?&range,
+                        "ranges_evicted" => ?ranges,
+                        "approx_size" => approx_size,
+                        "remaining" => remaining
+                    );
                     remaining = remaining
                         .checked_sub(*approx_size as usize)
                         .unwrap_or_default();
-                    // We need to delete the range manually here.
-                    // TODO (afeinberg): consider making delete_range return number of bytes
-                    // deleted.
-                    for r in ranges_to_delete {
-                        engine_wr.engine().delete_range(&r);
-                        if r.overlaps(range) {
-                            evicted_range = true;
-                        }
-                    }
+                    ranges_to_delete.append(&mut ranges);
+                    true
+                } else {
+                    false
                 }
-            }
+            };
             if evicted_range {
                 range_stats_manager.handle_range_evicted(range);
+            }
+        }
+
+        if !ranges_to_delete.is_empty() {
+            if let Err(e) =
+                delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(ranges_to_delete))
+            {
+                error!(
+                    "schedule deletet range failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
         }
     }
@@ -649,18 +675,29 @@ impl BackgroundRunnerCore {
         let mut ranges_to_add = Vec::<CacheRange>::with_capacity(256);
         let mut ranges_to_remove = Vec::<CacheRange>::with_capacity(256);
         range_stats_manager.collect_changed_ranges(&mut ranges_to_add, &mut ranges_to_remove);
+        let mut ranges_to_delete = vec![];
         info!("load_evict"; "ranges_to_add" => ?&ranges_to_add, "may_evict" => ?&ranges_to_remove);
         for evict_range in ranges_to_remove {
             if self.memory_controller.reached_soft_limit() {
-                info!("load_evict: soft limit reached"; "evict_range" => ?&evict_range);
                 let mut core = self.engine.write();
-                if core
-                    .mut_range_manager()
-                    .evict_range(&evict_range)
-                    .is_empty()
-                {
-                    error!("fail to evict range"; "evict_range" => ?&evict_range);
-                }
+                let mut ranges = core.mut_range_manager().evict_range(&evict_range);
+                info!(
+                    "load_evict: soft limit reached";
+                    "range_to_evict" => ?&evict_range,
+                    "ranges_evicted" => ?ranges
+                );
+                ranges_to_delete.append(&mut ranges);
+            }
+        }
+        if !ranges_to_delete.is_empty() {
+            if let Err(e) =
+                delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(ranges_to_delete))
+            {
+                error!(
+                    "schedule deletet range failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
         }
         for cache_range in ranges_to_add {
@@ -777,7 +814,6 @@ impl BackgroundRunner {
                 region_info_provider,
             )
         });
-
         (
             Self {
                 core: BackgroundRunnerCore {
@@ -1041,7 +1077,7 @@ impl Runnable for BackgroundRunner {
             }
             BackgroundTask::LoadRange => {
                 let mut core = self.core.clone();
-                let scheduler = self.delete_range_scheduler.clone();
+                let delete_range_scheduler = self.delete_range_scheduler.clone();
                 let f = async move {
                     let skiplist_engine = {
                         let core = core.engine.read();
@@ -1064,7 +1100,7 @@ impl Runnable for BackgroundRunner {
                                 "snapshot load canceled due to memory reaching soft limit";
                                 "range" => ?range,
                             );
-                            core.on_snapshot_load_canceled(range, &scheduler);
+                            core.on_snapshot_load_canceled(range, &delete_range_scheduler);
                             continue;
                         }
 
@@ -1160,12 +1196,11 @@ impl Runnable for BackgroundRunner {
                                 "snapshot load failed";
                                 "range" => ?range,
                             );
-                            // snapshot load failed, we should clear the dirty data
-                            core.on_snapshot_load_canceled(range, &scheduler);
+                            core.on_snapshot_load_canceled(range, &delete_range_scheduler);
                             continue;
                         }
 
-                        if core.on_snapshot_load_finished(range.clone(), &scheduler) {
+                        if core.on_snapshot_load_finished(range.clone(), &delete_range_scheduler) {
                             let duration = start.saturating_elapsed();
                             RANGE_LOAD_TIME_HISTOGRAM.observe(duration.as_secs_f64());
                             info!(
@@ -1199,6 +1234,8 @@ impl Runnable for BackgroundRunner {
                     self.core.memory_controller.set_memory_checking(false);
                 }
             }
+            // DeleteRange task is executed by `DeleteRangeRunner` with a different scheduler so
+            // that the task will not be scheduled to here.
             BackgroundTask::DeleteRange(_) => unreachable!(),
             BackgroundTask::TopRegionsLoadEvict => {
                 let delete_range_scheduler = self.delete_range_scheduler.clone();
@@ -1362,6 +1399,10 @@ impl RunnableWithTimer for BackgroundRunner {
 
 pub struct DeleteRangeRunner {
     engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
+    // It is possible that when `DeleteRangeRunner` begins to delete a range, the range is being
+    // written by apply threads. In that case, we have to delay the delete range task to avoid race
+    // condition between them. Periodically, these delayed ranges will be checked to see if it is
+    // ready to be deleted.
     delay_ranges: Vec<CacheRange>,
 }
 
@@ -1382,6 +1423,9 @@ impl DeleteRangeRunner {
             .write()
             .mut_range_manager()
             .on_delete_ranges(ranges);
+
+        fail::fail_point!("in_memory_engine_delete_range_done");
+
         #[cfg(test)]
         flush_epoch();
     }
@@ -1397,11 +1441,11 @@ impl Runnable for DeleteRangeRunner {
                     let mut ranges_to_delay = vec![];
                     let mut ranges_to_delete = vec![];
                     for r in ranges {
+                        // If the range is overlapped with ranges in `ranges_being_written`, the
+                        // range has to be delayed to delete. See comment on `delay_ranges`.
                         if core
                             .range_manager
-                            .ranges_being_written
-                            .iter()
-                            .any(|(_, range)| range.iter().any(|range| range.contains_range(&r)))
+                            .is_overlapped_with_ranges_being_written(&r)
                         {
                             ranges_to_delay.push(r);
                         } else {
@@ -1411,7 +1455,9 @@ impl Runnable for DeleteRangeRunner {
                     (ranges_to_delay, ranges_to_delete)
                 };
                 self.delay_ranges.append(&mut ranges_to_delay);
-                self.delete_ranges(&ranges_to_delete);
+                if !ranges_to_delete.is_empty() {
+                    self.delete_ranges(&ranges_to_delete);
+                }
             }
             _ => unreachable!(),
         }
@@ -2142,7 +2188,7 @@ pub mod tests {
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
 
-        let worker = BackgroundRunner::new(
+        let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
@@ -2304,7 +2350,7 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let worker = BackgroundRunner::new(
+        let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
@@ -2318,7 +2364,7 @@ pub mod tests {
         assert_eq!(4, element_count(&default));
         assert_eq!(4, element_count(&write));
 
-        let worker = BackgroundRunner::new(
+        let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
@@ -2365,7 +2411,7 @@ pub mod tests {
         assert_eq!(1, element_count(&default));
         assert_eq!(2, element_count(&write));
 
-        let worker = BackgroundRunner::new(
+        let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
@@ -2462,7 +2508,7 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let worker = BackgroundRunner::new(
+        let (worker, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller,
             None,
@@ -2523,8 +2569,8 @@ pub mod tests {
             core.mut_range_manager().pending_ranges.push(r1.clone());
             core.mut_range_manager().pending_ranges.push(r2.clone());
         }
-        engine.prepare_for_apply(&r1);
-        engine.prepare_for_apply(&r2);
+        engine.prepare_for_apply(1, &r1);
+        engine.prepare_for_apply(1, &r2);
 
         // concurrent write to rocksdb, but the key will not be loaded in the memory
         // engine
@@ -2585,7 +2631,7 @@ pub mod tests {
         engine.new_range(r1);
         engine.new_range(r2);
 
-        let mut runner = BackgroundRunner::new(
+        let (mut runner, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller,
             None,
@@ -2648,7 +2694,7 @@ pub mod tests {
         // Wait for the watch to fire.
         std::thread::sleep(Duration::from_millis(200));
         let r1 = CacheRange::try_from(&label_rule.data[0]).unwrap();
-        engine.prepare_for_apply(&r1);
+        engine.prepare_for_apply(1, &r1);
 
         // Wait for the range to be loaded.
         std::thread::sleep(Duration::from_secs(1));
@@ -2738,18 +2784,14 @@ pub mod tests {
         rocks_engine.put_cf(CF_DEFAULT, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
-        // Memory usage reaches 1260
-
-        let range4 = CacheRange::new(construct_user_key(6), construct_user_key(7));
         let key = construct_key(6, 10);
         rocks_engine.put_cf(CF_DEFAULT, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
-        // Although the memory is enough for loading range4, it is alreay reaching soft
-        // limit at begin.
+        rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
 
-        for r in [&range1, &range2, &range3, &range4] {
+        for r in [&range1, &range2, &range3] {
             engine.load_range(r.clone()).unwrap();
-            engine.prepare_for_apply(r);
+            engine.prepare_for_apply(1, r);
         }
 
         // ensure all ranges are finshed
@@ -2792,9 +2834,8 @@ pub mod tests {
         };
         verify(range1, true, 6);
         verify(range2, false, 0);
-        verify(range3, true, 3);
-        verify(range4, false, 0);
-        assert_eq!(mem_controller.mem_usage(), 1260);
+        verify(range3, false, 3);
+        assert_eq!(mem_controller.mem_usage(), 1540);
     }
 
     #[test]
@@ -2828,7 +2869,7 @@ pub mod tests {
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
         // After loading range1, the memory usage should be 140*6=840
         engine.load_range(range1.clone()).unwrap();
-        engine.prepare_for_apply(&range1);
+        engine.prepare_for_apply(1, &range1);
 
         let range2 = CacheRange::new(construct_user_key(3), construct_user_key(5));
         let key = construct_key(3, 10);
@@ -2853,7 +2894,7 @@ pub mod tests {
         assert_eq!(config.value().hard_limit_threshold(), 2000);
 
         engine.load_range(range2.clone()).unwrap();
-        engine.prepare_for_apply(&range2);
+        engine.prepare_for_apply(1, &range2);
 
         // ensure all ranges are finshed
         {

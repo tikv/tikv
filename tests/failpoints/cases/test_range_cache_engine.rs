@@ -191,7 +191,7 @@ fn test_write_batch_cache_during_load() {
     }
 
     let (tx1, rx1) = sync_channel(1);
-    fail::cfg_callback("on_pending_range_completes_loading", move || {
+    fail::cfg_callback("pending_range_completes_loading", move || {
         tx1.send(true).unwrap();
     })
     .unwrap();

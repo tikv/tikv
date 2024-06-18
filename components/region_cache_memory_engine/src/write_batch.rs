@@ -50,6 +50,9 @@ const AMOUNT_TO_CLEAN_TOMBSTONE: u64 = ReadableSize::mb(16).0;
 // delegate. It sets `range_cache_status` which is used to determine whether the
 // writes of this peer should be buffered.
 pub struct RangeCacheWriteBatch {
+    // `id` strictly incrementing and is used as the key in `ranges_being_written`, which records
+    // the ranges that are being written, so that when the write batch is consumed, we can
+    // quickly remove the ranges involved.
     id: u64,
     // `range_cache_status` indicates whether the range is cached, loading data, or not cached. If
     // it is cached, we should buffer the write in `buffer` which is consumed during the write
@@ -86,7 +89,7 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
     fn from(engine: &RangeCacheMemoryEngine) -> Self {
         let id = rand::random::<u64>();
         Self {
-            id,
+            id: engine.alloc_write_batch_id(),
             range_cache_status: RangeCacheStatus::NotInCache,
             buffer: Vec::new(),
             pending_range_in_loading_buffer: Vec::new(),
@@ -106,7 +109,7 @@ impl RangeCacheWriteBatch {
     pub fn with_capacity(engine: &RangeCacheMemoryEngine, cap: usize) -> Self {
         let id = rand::random::<u64>();
         Self {
-            id,
+            id: engine.alloc_write_batch_id(),
             range_cache_status: RangeCacheStatus::NotInCache,
             buffer: Vec::with_capacity(cap),
             // cache_buffer should need small capacity
@@ -186,6 +189,7 @@ impl RangeCacheWriteBatch {
         let guard = &epoch::pin();
         let start = Instant::now();
         let mut lock_modification: u64 = 0;
+        let mut have_entry_applied = false;
         // Some entries whose ranges may be marked as evicted above, but it does not
         // matter, they will be deleted later.
         let mut have_entry = false;
@@ -193,27 +197,24 @@ impl RangeCacheWriteBatch {
             .into_iter()
             .chain(std::mem::take(&mut self.buffer))
             .try_for_each(|e| {
-                have_entry = true;
-                let cur = seq;
-                seq += 1;
+                have_entry_applied = true;
                 if is_lock_cf(e.cf) {
                     lock_modification += e.data_size() as u64;
                 }
-                e.write_to_memory(cur, &engine, self.memory_controller.clone(), guard)
+                seq += 1;
+                e.write_to_memory(seq - 1, &engine, self.memory_controller.clone(), guard)
             });
         let duration = start.saturating_elapsed_secs();
         WRITE_DURATION_HISTOGRAM.observe(duration);
 
-        {
-            let mut core = self.engine.core.write();
-            let res = core
-                .mut_range_manager()
-                .ranges_being_written
-                .remove(&self.id);
-            if have_entry {
-                assert!(!res.unwrap().is_empty());
-            }
-        }
+        fail::fail_point!("in_memory_engine_write_batch_consumed");
+        fail::fail_point!("before_clear_ranges_in_being_written");
+
+        self.engine
+            .core
+            .write()
+            .mut_range_manager()
+            .clear_ranges_in_being_written(self.id, have_entry_applied);
 
         self.engine
             .lock_modification_bytes
@@ -702,6 +703,7 @@ mod tests {
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.range_cache_status = RangeCacheStatus::Cached;
+        wb.prepare_for_range(r.clone());
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
         assert_eq!(wb.write().unwrap(), 1);
@@ -724,6 +726,7 @@ mod tests {
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.range_cache_status = RangeCacheStatus::Cached;
+        wb.prepare_for_range(r.clone());
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_save_point();
         wb.put(b"aaa", b"ccc").unwrap();
@@ -751,10 +754,12 @@ mod tests {
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.range_cache_status = RangeCacheStatus::Cached;
+        wb.prepare_for_range(r.clone());
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
         _ = wb.write();
         wb.clear();
+        wb.prepare_for_range(r.clone());
         wb.put(b"bbb", b"ccc").unwrap();
         wb.delete(b"aaa").unwrap();
         wb.set_sequence_number(2).unwrap();
