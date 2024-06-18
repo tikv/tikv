@@ -142,4 +142,8 @@ impl MiscExt for PanicEngine {
     fn get_disk_engine(&self) -> &Self::DiskEngine {
         panic!()
     }
+
+    fn evict_range(&self, range: &engine_traits::CacheRange) {
+        panic!()
+    }
 }

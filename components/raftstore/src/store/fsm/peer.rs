@@ -4838,6 +4838,7 @@ where
             "evict range due to prepare merge";
             "source_range" => ?source_range,
         );
+        self.ctx.engines.kv.evict_range(&source_range);
 
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
