@@ -103,7 +103,7 @@ fn cli_playground() {
         compact_stat: CompactStatistic,
     }
     impl ExecHooks for EventuallyStatistic {
-        fn after_compaction_end(
+        fn after_a_compaction_end(
             &mut self,
             _cid: crate::compact_logs::CId,
             lst: LoadStatistic,
@@ -113,7 +113,7 @@ fn cli_playground() {
             self.compact_stat += cst;
         }
 
-        fn after_finish(&mut self) {
+        fn after_execution_finished(&mut self) {
             println!("All compcations done.");
             println!("{:?}\n{:?}", self.load_stat, self.compact_stat);
         }
@@ -169,4 +169,25 @@ async fn gcloud() {
         .await
         .unwrap();
     println!("{:?}\n{:?}", load_stat, compact_stat);
+}
+
+#[tokio::test]
+async fn gcloud_count() {
+    test_util::init_log_for_test();
+    let mut backend = StorageBackend::new();
+    let mut gcs = Gcs::new();
+    gcs.bucket = "br-datasets".to_owned();
+    gcs.prefix = "pitr-compaction-test/log".to_owned();
+    gcs.credentials_blob = String::from_utf8(
+        std::fs::read("/root/.config/gcloud/application_default_credentials.json").unwrap(),
+    )
+    .unwrap();
+    backend.set_gcs(gcs);
+    let storage =
+        external_storage::create_walkable_storage(&backend, BackendConfig::default()).unwrap();
+
+    let n = StreamyMetaStorage::count_objects(storage.as_ref())
+        .await
+        .unwrap();
+    println!("{n}");
 }

@@ -364,10 +364,15 @@ struct GcsWalker<'cli, 'arg> {
     cli: &'cli GcsStorage,
     page_token: Option<String>,
     prefix: &'arg str,
+    finished: bool,
 }
 
 impl<'cli, 'arg> GcsWalker<'cli, 'arg> {
     async fn one_page(&mut self) -> io::Result<Option<Vec<BlobObject>>> {
+        if self.finished {
+            return Ok(None);
+        }
+
         let mut opt = ListOptional::default();
         let bucket =
             BucketName::try_from(self.cli.config.bucket.bucket.to_string()).or_invalid_input(
@@ -375,7 +380,7 @@ impl<'cli, 'arg> GcsWalker<'cli, 'arg> {
             )?;
         let prefix = self.cli.maybe_prefix_key(&self.prefix);
         opt.prefix = Some(&prefix);
-        opt.max_results = Some(128);
+        opt.max_results = Some(2048);
         opt.page_token = self.page_token.as_deref();
         let req = Object::list(&bucket, Some(opt)).or_io_error(format_args!(
             "failed to list with prefix {} page_token {:?}",
@@ -387,10 +392,12 @@ impl<'cli, 'arg> GcsWalker<'cli, 'arg> {
             .await
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
         let resp = utils::read_from_http_body::<ListResponse>(res).await?;
-        self.page_token = resp.page_token;
-        if resp.objects.is_empty() {
-            return Ok(None);
+        debug!("requesting paging GCP"; "prefix" => self.prefix, "page_token" => self.page_token.as_deref(), 
+            "response_size" => resp.objects.len(), "new_page_token" => resp.page_token.as_deref());
+        if resp.page_token.is_none() || resp.objects.is_empty() {
+            self.finished = true;
         }
+        self.page_token = resp.page_token;
         let items = resp
             .objects
             .into_iter()
@@ -419,6 +426,7 @@ impl WalkBlobStorage for GcsStorage {
             cli: self,
             page_token: None,
             prefix,
+            finished: false,
         };
         let s = stream::try_unfold(walker, |mut w| async move {
             let res = w.one_page().await?;

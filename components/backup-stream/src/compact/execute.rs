@@ -21,7 +21,7 @@ use super::{
     compaction::{
         CollectCompaction, CollectCompactionConfig, CompactLogExt, CompactWorker, Compaction,
     },
-    statistic::LoadMetaStatistic,
+    statistic::{CollectCompactionStatistic, LoadMetaStatistic},
     storage::{LoadFromExt, StreamyMetaStorage},
 };
 use crate::compact::{
@@ -45,14 +45,20 @@ impl std::fmt::Display for CId {
     }
 }
 
-pub trait ExecHooks: 'static {
-    fn before_compaction_start(&mut self, _c: &Compaction, _cid: CId) {}
-    fn after_compaction_end(&mut self, _cid: CId, _lst: LoadStatistic, _cst: CompactStatistic) {}
-    fn after_finish(&mut self) {}
+pub struct BeforeStartCtx<'a> {
+    async_rt: &'a Handle,
+    est_meta_size: u64,
+}
 
-    fn after_runtime_start(&mut self, _h: &Handle) {}
+pub trait ExecHooks: 'static {
+    fn before_a_compaction_start(&mut self, _c: &Compaction, _cid: CId) {}
+    fn after_a_compaction_end(&mut self, _cid: CId, _lst: LoadStatistic, _cst: CompactStatistic) {}
+
+    fn before_execution_started(&mut self, _cx: &BeforeStartCtx<'_>) {}
+    fn after_execution_finished(&mut self) {}
 
     fn update_load_meta_stat(&mut self, _stat: LoadMetaStatistic) {}
+    fn update_collect_compaction_stat(&mut self, _stat: CollectCompactionStatistic) {}
 }
 
 pub struct NoHooks;
@@ -64,10 +70,12 @@ pub struct LogToTerm {
     load_stat: LoadStatistic,
     compact_stat: CompactStatistic,
     load_meta_stat: LoadMetaStatistic,
+    collect_stat: CollectCompactionStatistic,
+    meta_len: u64,
 }
 
 impl ExecHooks for LogToTerm {
-    fn before_compaction_start(&mut self, c: &Compaction, cid: CId) {
+    fn before_a_compaction_start(&mut self, c: &Compaction, cid: CId) {
         println!(
             "[{}] spawning compaction. cid: {}, cf: {}, input_min_ts: {}, input_max_ts: {}, source: {}, size: {}, region_id: {}",
             TimeStamp::physical_now(),
@@ -81,7 +89,7 @@ impl ExecHooks for LogToTerm {
         );
     }
 
-    fn after_compaction_end(&mut self, cid: CId, lst: LoadStatistic, cst: CompactStatistic) {
+    fn after_a_compaction_end(&mut self, cid: CId, lst: LoadStatistic, cst: CompactStatistic) {
         let logical_input_size = lst.logical_key_bytes_in + lst.logical_value_bytes_in;
         let total_take =
             cst.load_duration + cst.sort_duration + cst.save_duration + cst.write_sst_duration;
@@ -90,8 +98,11 @@ impl ExecHooks for LogToTerm {
         self.compact_stat += cst.clone();
 
         println!(
-            "[{}] finishing compaction. cid: {}, load_stat: {:?}, compact_stat: {:?}, speed: {:.2} KB./s, total_take: {:?}, global_load_meta_stat: {:?}",
+            "[{}] finishing compaction. meta: {}/{}, p_bytes: {}, cid: {}, load_stat: {:?}, compact_stat: {:?}, speed: {:.2} KB./s, total_take: {:?}, global_load_meta_stat: {:?}",
             TimeStamp::physical_now(),
+            self.load_meta_stat.meta_files_in,
+            self.meta_len,
+            self.collect_stat.bytes_in - self.collect_stat.bytes_out,
             cid.0,
             lst,
             cst,
@@ -101,7 +112,7 @@ impl ExecHooks for LogToTerm {
         );
     }
 
-    fn after_finish(&mut self) {
+    fn after_execution_finished(&mut self) {
         println!(
             "[{}] All compcations done. load_stat: {:?}, compact_stat: {:?}",
             TimeStamp::physical_now(),
@@ -110,7 +121,11 @@ impl ExecHooks for LogToTerm {
         );
     }
 
-    fn after_runtime_start(&mut self, h: &Handle) {
+    fn update_load_meta_stat(&mut self, stat: LoadMetaStatistic) {
+        self.load_meta_stat += stat;
+    }
+
+    fn before_execution_started(&mut self, cx: &BeforeStartCtx<'_>) {
         tracing_active_tree::init();
 
         let sigusr1_handler = async {
@@ -130,11 +145,12 @@ impl ExecHooks for LogToTerm {
             }
         };
 
-        h.spawn(sigusr1_handler);
+        cx.async_rt.spawn(sigusr1_handler);
+        self.meta_len = cx.est_meta_size;
     }
 
-    fn update_load_meta_stat(&mut self, stat: LoadMetaStatistic) {
-        self.load_meta_stat += stat;
+    fn update_collect_compaction_stat(&mut self, stat: CollectCompactionStatistic) {
+        self.collect_stat += stat
     }
 }
 
@@ -150,10 +166,6 @@ impl Execution {
             .build()
             .unwrap();
         let locked_hooks = Mutex::new(hooks);
-        locked_hooks
-            .lock()
-            .unwrap()
-            .after_runtime_start(runtime.handle());
 
         let all_works = async move {
             let mut ext = LoadFromExt::default();
@@ -167,6 +179,12 @@ impl Execution {
                 "load_meta_file_names"
             ));
 
+            let total = StreamyMetaStorage::count_objects(storage.as_ref()).await?;
+            let cx = BeforeStartCtx {
+                est_meta_size: total,
+                async_rt: &tokio::runtime::Handle::current(),
+            };
+            locked_hooks.lock().unwrap().before_execution_started(&cx);
             let meta = StreamyMetaStorage::load_from_ext(storage.as_ref(), ext);
             let stream = meta.flat_map(|file| match file {
                 Ok(file) => stream::iter(file.logs).map(Ok).left_stream(),
@@ -187,12 +205,18 @@ impl Execution {
                 .instrument(next_compaction.clone())
                 .await
             {
+                locked_hooks
+                    .lock()
+                    .unwrap()
+                    .update_collect_compaction_stat(compact_stream.take_statistic());
+
                 let c = c?;
                 let cid = CId(id);
                 locked_hooks
                     .lock()
                     .unwrap()
-                    .before_compaction_start(&c, cid);
+                    .before_a_compaction_start(&c, cid);
+
                 id += 1;
 
                 let mut compact_worker =
@@ -216,7 +240,7 @@ impl Execution {
                     locked_hooks
                         .lock()
                         .unwrap()
-                        .after_compaction_end(cid, lst, cst);
+                        .after_a_compaction_end(cid, lst, cst);
                 }
             }
             drop(next_compaction);
@@ -226,10 +250,14 @@ impl Execution {
                 locked_hooks
                     .lock()
                     .unwrap()
-                    .after_compaction_end(cid, lst, cst);
+                    .after_a_compaction_end(cid, lst, cst);
             }
 
-            locked_hooks.lock().unwrap().after_finish();
+            locked_hooks
+                .lock()
+                .unwrap()
+                .update_collect_compaction_stat(compact_stream.take_statistic());
+            locked_hooks.lock().unwrap().after_execution_finished();
             Result::Ok(())
         };
         runtime.block_on(frame!(all_works))

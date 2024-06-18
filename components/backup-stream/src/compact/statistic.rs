@@ -39,3 +39,13 @@ pub struct CompactStatistic {
 
     pub empty_generation: u64,
 }
+
+#[derive(Default, Debug, Add, AddAssign, Clone)]
+pub struct CollectCompactionStatistic {
+    pub files_in: u64,
+    pub bytes_in: u64,
+    pub bytes_out: u64,
+    pub compactions_out: u64,
+
+    pub files_filtered_out: u64,
+}

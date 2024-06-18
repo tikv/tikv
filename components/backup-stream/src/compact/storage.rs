@@ -10,7 +10,7 @@ use external_storage::{BlobObject, ExternalStorage, WalkBlobStorage, WalkExterna
 use futures::{
     future::{FusedFuture, FutureExt, TryFutureExt},
     io::AsyncReadExt,
-    stream::{Fuse, FusedStream, StreamExt},
+    stream::{Fuse, FusedStream, StreamExt, TryStreamExt},
 };
 use prometheus::core::{Atomic, AtomicU64};
 use tikv_util::{stream::RetryExt, time::Instant};
@@ -218,6 +218,7 @@ impl<'a> StreamyMetaStorage<'a> {
             match file {
                 Ok((file, stat)) => {
                     self.stat += stat;
+                    self.stat.meta_files_in += 1;
                     self.stat.prefetch_task_finished += 1;
                     self.flush_stat();
                     Ok(file).into()
@@ -245,6 +246,15 @@ impl<'a> StreamyMetaStorage<'a> {
             ext,
             stat: LoadMetaStatistic::default(),
         }
+    }
+
+    pub async fn count_objects(s: &'a dyn WalkExternalStorage) -> std::io::Result<u64> {
+        let mut n = 0;
+        let mut items = s.walk(&METADATA_PREFIX);
+        while let Some(_) = items.try_next().await? {
+            n += 1
+        }
+        Ok(n)
     }
 }
 

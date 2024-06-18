@@ -14,7 +14,7 @@ use tokio_stream::Stream;
 use super::{
     errors::Result,
     source::{Record, Source},
-    statistic::{CompactStatistic, LoadStatistic},
+    statistic::{CollectCompactionStatistic, CompactStatistic, LoadStatistic},
     storage::{LogFile, LogFileId},
     util::{Cooperate, ExecuteAllExt},
 };
@@ -52,6 +52,12 @@ pub struct CollectCompaction<S: Stream<Item = Result<LogFile>>> {
     collector: CompactionCollector,
 }
 
+impl<S: Stream<Item = Result<LogFile>>> CollectCompaction<S> {
+    pub fn take_statistic(&mut self) -> CollectCompactionStatistic {
+        std::mem::take(&mut self.collector.stat)
+    }
+}
+
 pub struct CollectCompactionConfig {
     pub compact_from_ts: u64,
     pub compact_to_ts: u64,
@@ -66,6 +72,7 @@ impl<S: Stream<Item = Result<LogFile>>> CollectCompaction<S> {
                 cfg,
                 items: HashMap::new(),
                 compaction_size_threshold: ReadableSize::mb(128).0,
+                stat: CollectCompactionStatistic::default(),
             },
         }
     }
@@ -80,6 +87,7 @@ struct CompactionCollectKey {
 struct CompactionCollector {
     items: HashMap<CompactionCollectKey, UnformedCompaction>,
     compaction_size_threshold: u64,
+    stat: CollectCompactionStatistic,
     cfg: CollectCompactionConfig,
 }
 
@@ -92,14 +100,18 @@ impl CompactionCollector {
         };
 
         // Skip out-of-range files and schema meta files.
-        // Meta files need to have a simpler format so other languages can easily open
+        // Meta files need to have a simpler format so other BR client can easily open
         // and rewrite it.
         if file.is_meta
             || file.max_ts < self.cfg.compact_from_ts
             || file.min_ts > self.cfg.compact_to_ts
         {
+            self.stat.files_filtered_out += 1;
             return None;
         }
+
+        self.stat.bytes_in += file.real_size;
+        self.stat.files_in += 1;
 
         match self.items.entry(key) {
             Entry::Occupied(mut o) => {
@@ -130,6 +142,8 @@ impl CompactionCollector {
                         compact_to_ts: self.cfg.compact_to_ts,
                     };
                     o.remove();
+                    self.stat.compactions_out += 1;
+                    self.stat.bytes_out += c.size;
                     return Some(c);
                 }
             }
@@ -149,17 +163,22 @@ impl CompactionCollector {
     }
 
     fn take_pending_compactions(&mut self) -> impl Iterator<Item = Compaction> + '_ {
-        self.items.drain().map(|(key, c)| Compaction {
-            source: c.files,
-            region_id: key.region_id,
-            size: c.size,
-            cf: key.cf,
-            input_max_ts: c.max_ts,
-            input_min_ts: c.min_ts,
-            min_key: c.min_key,
-            max_key: c.max_key,
-            compact_from_ts: self.cfg.compact_from_ts,
-            compact_to_ts: self.cfg.compact_to_ts,
+        self.items.drain().map(|(key, c)| {
+            let c = Compaction {
+                source: c.files,
+                region_id: key.region_id,
+                size: c.size,
+                cf: key.cf,
+                input_max_ts: c.max_ts,
+                input_min_ts: c.min_ts,
+                min_key: c.min_key,
+                max_key: c.max_key,
+                compact_from_ts: self.cfg.compact_from_ts,
+                compact_to_ts: self.cfg.compact_to_ts,
+            };
+            self.stat.bytes_out += c.size;
+            self.stat.compactions_out += 1;
+            c
         })
     }
 }
