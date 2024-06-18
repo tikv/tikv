@@ -705,10 +705,12 @@ mod tests {
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.range_cache_status = RangeCacheStatus::Cached;
+        wb.prepare_for_range(r.clone());
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
         _ = wb.write();
         wb.clear();
+        wb.prepare_for_range(r.clone());
         wb.put(b"bbb", b"ccc").unwrap();
         wb.delete(b"aaa").unwrap();
         wb.set_sequence_number(2).unwrap();
