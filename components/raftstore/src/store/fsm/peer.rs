@@ -4833,13 +4833,6 @@ where
 
     fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState) {
         fail_point!("on_apply_res_prepare_merge");
-        let source_range = CacheRange::from_region(&region);
-        info!(
-            "evict range due to prepare merge";
-            "source_range" => ?source_range,
-        );
-        self.ctx.engines.kv.evict_range(&source_range);
-
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(
@@ -4938,13 +4931,6 @@ where
         region: metapb::Region,
         source: metapb::Region,
     ) {
-        let range = CacheRange::from_region(&region);
-        info!(
-            "evict range due to commit merge";
-            "range" => ?range,
-        );
-        self.ctx.engines.kv.evict_range(&range);
-
         self.register_split_region_check_tick();
         let mut meta = self.ctx.store_meta.lock().unwrap();
 
