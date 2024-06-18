@@ -424,7 +424,7 @@ impl RangeCacheMemoryEngine {
             return RangeCacheStatus::Cached;
         }
 
-        if let Some(overlapped_range) = range_manager.overlap_or_contained_by_range(range) {
+        if let Some(overlapped_range) = range_manager.get_overlapped_range(range) {
             error!(
                 "overlap or contained by range";
                 "range_in_cache" => ?overlapped_range,

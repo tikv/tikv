@@ -208,11 +208,8 @@ impl RangeManager {
         self.ranges.keys().any(|r| r.overlaps(range))
     }
 
-    pub fn overlap_or_contained_by_range(&self, range: &CacheRange) -> Option<CacheRange> {
-        self.ranges
-            .keys()
-            .find(|r| r.overlaps(range) || range.contains_range(r))
-            .cloned()
+    pub fn get_overlapped_range(&self, range: &CacheRange) -> Option<CacheRange> {
+        self.ranges.keys().find(|r| r.overlaps(range)).cloned()
     }
 
     fn overlap_with_evicting_range(&self, range: &CacheRange) -> bool {

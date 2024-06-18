@@ -93,8 +93,8 @@ pub enum BackgroundTask {
     LoadRange,
     MemoryCheckAndEvict,
     DeleteRange(Vec<CacheRange>),
-    CleanLockTombstone(u64),
     TopRegionsLoadEvict,
+    CleanLockTombstone(u64),
     SetRocksEngine(RocksEngine),
     Audit((Vec<(RangeCacheSnapshot, u64)>, RocksSnapshot)),
 }
@@ -113,7 +113,6 @@ impl Display for BackgroundTask {
                 .debug_struct("CleanLockTombstone")
                 .field("seqno", r)
                 .finish(),
-            BackgroundTask::TopRegionsLoadEvict => f.debug_struct("CheckTopRegions").finish(),
             BackgroundTask::Audit(_) => f.debug_struct("audit").finish(),
             BackgroundTask::SetRocksEngine(_) => f.debug_struct("SetDiskEngine").finish(),
         }
@@ -754,9 +753,6 @@ impl BackgroundRunner {
         let delete_range_scheduler =
             delete_range_worker.start_with_timer("delete-range-runner", delete_range_runner);
 
-        let lock_cleanup_worker = Worker::new("lock-cleanup-worker");
-        let lock_cleanup_remote = lock_cleanup_worker.remote();
-
         let audit_worker = Worker::new("audit-worker");
         let audit_remote = audit_worker.remote();
 
@@ -768,8 +764,10 @@ impl BackgroundRunner {
             .thread_count(1)
             .create();
         let gc_range_remote = gc_range_worker.remote();
+
         let load_evict_worker = Worker::new("background-region-load-evict-worker");
         let load_evict_remote = load_evict_worker.remote();
+
         let num_regions_to_cache = memory_controller.soft_limit_threshold() / expected_region_size;
         let range_stats_manager = region_info_provider.map(|region_info_provider| {
             RangeStatsManager::new(
@@ -1144,7 +1142,6 @@ impl Runnable for BackgroundRunner {
                                             }
 
                                             handle.insert(encoded_key, val, guard);
-
                                             iter.next().unwrap();
                                         }
                                     }
@@ -1203,19 +1200,22 @@ impl Runnable for BackgroundRunner {
                 }
             }
             BackgroundTask::DeleteRange(_) => unreachable!(),
-            // TODO: Consider making this async.
-            BackgroundTask::TopRegionsLoadEvict => self
-                .core
-                .top_regions_load_evict(&self.delete_range_scheduler),
+            BackgroundTask::TopRegionsLoadEvict => {
+                let delete_range_scheduler = self.delete_range_scheduler.clone();
+                let core = self.core.clone();
+                let task = async move { core.top_regions_load_evict(&delete_range_scheduler) };
+                self.load_evict_remote.spawn(task);
+            }
             BackgroundTask::CleanLockTombstone(snapshot_seqno) => {
                 if snapshot_seqno < self.last_seqno {
                     return;
                 }
+                self.last_seqno = snapshot_seqno;
                 let core = self.core.clone();
 
                 let f = async move {
                     info!(
-                        "begin lock tombstone";
+                        "begin to cleanup tombstones in lock cf";
                         "seqno" => snapshot_seqno,
                     );
 
@@ -1298,88 +1298,6 @@ impl Runnable for BackgroundRunner {
                                 "key" => log_wrappers::Value(&remove),
                             );
                         }
-                        lock_handle.remove(&InternalBytes::from_vec(remove), guard);
-                    }
-
-                    info!(
-                        "cleanup lock tombstone";
-                        "seqno" => snapshot_seqno,
-                        "total" => total,
-                        "removed" => removed,
-                        "duration" => ?now.saturating_elapsed(),
-                        "current_count" => lock_handle.len(),
-                    );
-                };
-
-                self.lock_cleanup_remote.spawn(f);
-            }
-            BackgroundTask::TopRegionsLoadEvict => {
-                let delete_range_scheduler = self.delete_range_scheduler.clone();
-                let core = self.core.clone();
-                let task = async move { core.top_regions_load_evict(&delete_range_scheduler) };
-                self.load_evict_remote.spawn(task);
-            }
-            BackgroundTask::CleanLockTombstone(snapshot_seqno) => {
-                if snapshot_seqno < self.last_seqno {
-                    return;
-                }
-                self.last_seqno = snapshot_seqno;
-                let core = self.core.clone();
-
-                let f = async move {
-                    info!(
-                        "begin to cleanup tombstones in lock cf";
-                        "seqno" => snapshot_seqno,
-                    );
-
-                    let mut last_user_key = vec![];
-                    let mut remove_rest = false;
-                    let mut cached_to_remove: Option<Vec<u8>> = None;
-
-                    let mut removed = 0;
-                    let mut total = 0;
-                    let now = Instant::now();
-                    let lock_handle = core.engine.read().engine().cf_handle("lock");
-                    let guard = &epoch::pin();
-                    let mut iter = lock_handle.iterator();
-                    iter.seek_to_first(guard);
-                    while iter.valid() {
-                        total += 1;
-                        let InternalKey {
-                            user_key,
-                            v_type,
-                            sequence,
-                        } = decode_key(iter.key().as_bytes());
-                        if user_key != last_user_key {
-                            if let Some(remove) = cached_to_remove.take() {
-                                removed += 1;
-                                lock_handle.remove(&InternalBytes::from_vec(remove), guard);
-                            }
-                            last_user_key = user_key.to_vec();
-                            if sequence >= snapshot_seqno {
-                                remove_rest = false;
-                            } else {
-                                remove_rest = true;
-                                if v_type == ValueType::Deletion {
-                                    cached_to_remove = Some(iter.key().as_bytes().to_vec());
-                                }
-                            }
-                        } else if remove_rest {
-                            assert!(sequence < snapshot_seqno);
-                            removed += 1;
-                            lock_handle.remove(iter.key(), guard);
-                        } else if sequence < snapshot_seqno {
-                            remove_rest = true;
-                            if v_type == ValueType::Deletion {
-                                assert!(cached_to_remove.is_none());
-                                cached_to_remove = Some(iter.key().as_bytes().to_vec());
-                            }
-                        }
-
-                        iter.next(guard);
-                    }
-                    if let Some(remove) = cached_to_remove.take() {
-                        removed += 1;
                         lock_handle.remove(&InternalBytes::from_vec(remove), guard);
                     }
 

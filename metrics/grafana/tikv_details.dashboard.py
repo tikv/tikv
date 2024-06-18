@@ -4228,14 +4228,14 @@ def RangeCacheMemoryEngine() -> RowPanel:
     )
     layout.row(
         heatmap_panel_graph_panel_histogram_quantile_pairs(
-            heatmap_title="Prepare for apply duration",
-            heatmap_description="The time consumed of prepare for apply in range cache engine",
-            graph_title="99% Range cache engine prepare for apply duration per server",
-            graph_description="The time consumed of prepare for apply in range cache engine per TiKV instance",
+            heatmap_title="Prepare for write duration",
+            heatmap_description="The time consumed of prepare for write in range cache engine",
+            graph_title="99% Range cache engine prepare for write duration per server",
+            graph_description="The time consumed of prepare for write in range cache engine per TiKV instance",
             graph_by_labels=["instance"],
             graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
-            metric="tikv_range_cache_engine_prepare_for_apply_duration_seconds",
+            metric="tikv_range_cache_engine_prepare_for_write_duration_seconds",
         )
     )
     layout.row(
@@ -4322,17 +4322,35 @@ def RangeCacheMemoryEngine() -> RowPanel:
             graph_panel(
                 title="Seek duration",
                 description="The time consumed when executing seek operation",
-                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS, log_base=2),
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
                 targets=[
                     target(
-                        expr=expr_max(
-                            "tikv_engine_seek_micro_seconds",
-                            label_selectors=[
-                                'type="seek_max"',
-                            ],
-                            by_labels=[],  # override default by instance.
+                        expr=expr_histogram_quantile(
+                            1,
+                            "tikv_range_cache_memory_engine_seek_duration",
                         ),
                         legend_format="max",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_range_cache_memory_engine_seek_duration",
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.95,
+                            "tikv_range_cache_memory_engine_seek_duration",
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_histogram_avg(
+                            "tikv_range_cache_memory_engine_seek_duration",
+                            by_labels=["type"],
+                        ),
+                        legend_format="avg",
                     ),
                 ],
             ),

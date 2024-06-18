@@ -26,7 +26,7 @@ use crate::{
     engine::{cf_to_id, id_to_cf, is_lock_cf, SkiplistEngine},
     keys::{encode_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
     memory_controller::{MemoryController, MemoryUsage},
-    metrics::{PREPARE_FOR_APPLY_DURATION_HISTOGRAM, WRITE_DURATION_HISTOGRAM},
+    metrics::{PREPARE_FOR_WRITE_DURATION_HISTOGRAM, WRITE_DURATION_HISTOGRAM},
     range_manager::{RangeCacheStatus, RangeManager},
     RangeCacheMemoryEngine,
 };
@@ -234,7 +234,7 @@ impl RangeCacheWriteBatch {
         }
 
         let dur = std::mem::take(&mut self.prepare_apply);
-        PREPARE_FOR_APPLY_DURATION_HISTOGRAM
+        PREPARE_FOR_WRITE_DURATION_HISTOGRAM
             .with_label_values(&["prepare_apply"])
             .observe(dur.as_secs_f64());
 

@@ -1,6 +1,6 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{KvEngine, MiscExt, RangeCacheEngine, Result, WriteBatchExt};
+use engine_traits::{CacheRange, KvEngine, MiscExt, RangeCacheEngine, Result, WriteBatchExt};
 
 use crate::{engine::HybridEngine, hybrid_metrics::HybridEngineStatisticsReporter};
 
@@ -35,6 +35,10 @@ where
         strategy: engine_traits::DeleteStrategy,
         ranges: &[engine_traits::Range<'_>],
     ) -> Result<bool> {
+        for r in ranges {
+            self.region_cache_engine()
+                .evict_range(CacheRange::new(r.start_key.to_vec(), r.end_key.to_vec()));
+        }
         self.disk_engine()
             .delete_ranges_cf(wopts, cf, strategy, ranges)
     }

@@ -284,9 +284,8 @@ impl Drop for RangeCacheIterator {
             Tickers::NumberDbPrevFound,
             self.local_stats.number_db_prev_found,
         );
-
-        self.seek_duration.flush();
         perf_counter_add!(iter_read_bytes, self.local_stats.bytes_read);
+        self.seek_duration.flush();
     }
 }
 
@@ -375,15 +374,13 @@ impl RangeCacheIterator {
             self.saved_user_key.extend_from_slice(user_key);
 
             if user_key < self.lower_bound.as_slice() {
-                self.valid = false;
-                return;
+                break;
             }
 
             if let Some(ref prefix) = self.prefix {
                 if prefix != self.prefix_extractor.as_mut().unwrap().transform(user_key) {
                     // stop iterating due to unmatched prefix
-                    self.valid = false;
-                    return;
+                    break;
                 }
             }
 
