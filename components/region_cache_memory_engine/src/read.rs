@@ -11,9 +11,10 @@ use engine_traits::{
     Iterable, Iterator, MetricsExt, Peekable, ReadOptions, Result, Snapshot, SnapshotMiscExt,
     CF_DEFAULT,
 };
+use prometheus::local::LocalHistogram;
 use skiplist_rs::{base::OwnedIter, SkipList};
 use slog_global::error;
-use tikv_util::box_err;
+use tikv_util::{box_err, time::Instant};
 
 use crate::{
     background::BackgroundTask,
