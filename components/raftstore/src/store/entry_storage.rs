@@ -81,6 +81,11 @@ impl CachedEntries {
     pub fn take_entries(&self) -> (Vec<Entry>, usize) {
         mem::take(&mut *self.entries.lock().unwrap())
     }
+
+    #[cfg(test)]
+    pub fn has_entries(&self) -> bool {
+        !self.entries.lock().unwrap().0.is_empty()
+    }
 }
 
 struct EntryCache {
@@ -236,10 +241,16 @@ impl EntryCache {
 
         // Clean cached entries which have been already sent to apply threads. For
         // example, if entries [1, 10), [10, 20), [20, 30) are sent to apply threads and
-        // `compact_to(15)` is called, only [20, 30) will still be kept in cache.
+        // `compact_to(15)` is called:
+        // - if persisted >= 19, then only [20, 30) will still be kept in cache.
+        // - if persisted < 19, then [10, 20), [20, 30) will still be kept in cache.
         let old_trace_cap = self.trace.capacity();
         while let Some(cached_entries) = self.trace.pop_front() {
-            if cached_entries.range.start >= idx {
+            // Do not evict cached entries if not all of them are persisted.
+            // After PR #16626, it is possible that applying entries are not
+            // yet fully persisted. Therefore, it should not free these
+            // entries until they are completely persisted.
+            if cached_entries.range.start >= idx || cached_entries.range.end > self.persisted + 1 {
                 self.trace.push_front(cached_entries);
                 let trace_len = self.trace.len();
                 let trace_cap = self.trace.capacity();
@@ -1883,5 +1894,64 @@ pub mod tests {
         store.maybe_warm_up_entry_cache(res);
         // Cache should be warmed up.
         assert_eq!(store.entry_cache_first_index().unwrap(), 5);
+    }
+
+    #[test]
+    fn test_evict_cached_entries() {
+        let ents = vec![new_entry(3, 3)];
+        let td = Builder::new().prefix("tikv-store-test").tempdir().unwrap();
+        let worker = LazyWorker::new("snap-manager");
+        let sched = worker.scheduler();
+        let (dummy_scheduler, _) = dummy_scheduler();
+        let mut store = new_storage_from_ents(sched, dummy_scheduler, &td, &ents);
+
+        // initial cache
+        for i in 4..10 {
+            append_ents(&mut store, &[new_entry(i, 4)]);
+        }
+
+        let cached_entries = vec![
+            CachedEntries::new(vec![new_entry(4, 4)]),
+            CachedEntries::new(vec![new_entry(5, 4)]),
+            CachedEntries::new(vec![new_entry(6, 4), new_entry(7, 4), new_entry(8, 4)]),
+            CachedEntries::new(vec![new_entry(9, 4)]),
+        ];
+        for ents in &cached_entries {
+            store.trace_cached_entries(ents.clone());
+        }
+        assert_eq!(store.cache.first_index().unwrap(), 4);
+
+        store.evict_entry_cache(false);
+        assert_eq!(store.cache.first_index().unwrap(), 4);
+        assert!(cached_entries[0].has_entries());
+
+        store.cache.persisted = 4;
+        store.evict_entry_cache(false);
+        assert_eq!(store.cache.first_index().unwrap(), 5);
+        assert!(!cached_entries[0].has_entries());
+        assert!(cached_entries[1].has_entries());
+
+        store.cache.persisted = 5;
+        store.evict_entry_cache(false);
+        assert_eq!(store.cache.first_index().unwrap(), 6);
+        assert!(!cached_entries[1].has_entries());
+        assert!(cached_entries[2].has_entries());
+
+        for idx in [6, 7] {
+            store.cache.persisted = idx;
+            store.evict_entry_cache(false);
+            assert_eq!(store.cache.first_index().unwrap(), idx + 1);
+            assert!(cached_entries[2].has_entries());
+        }
+
+        store.cache.persisted = 8;
+        store.evict_entry_cache(false);
+        assert_eq!(store.cache.first_index().unwrap(), 9);
+        assert!(!cached_entries[2].has_entries());
+
+        store.cache.persisted = 9;
+        store.evict_entry_cache(false);
+        assert!(store.cache.first_index().is_none());
+        assert!(!cached_entries[3].has_entries());
     }
 }

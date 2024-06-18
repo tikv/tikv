@@ -69,7 +69,8 @@ use serde::{
 use serde_json::{to_value, Map, Value};
 use tikv_util::{
     config::{
-        self, LogFormat, RaftDataStateMachine, ReadableDuration, ReadableSize, TomlWriter, MIB,
+        self, LogFormat, RaftDataStateMachine, ReadableDuration, ReadableSchedule, ReadableSize,
+        TomlWriter, MIB,
     },
     logger::{get_level_by_string, get_string_by_level, set_log_level},
     sys::SysQuota,
@@ -4668,7 +4669,11 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
         ConfigValue::Usize(_) => ConfigValue::from(v.parse::<usize>()?),
         ConfigValue::Bool(_) => ConfigValue::from(v.parse::<bool>()?),
         ConfigValue::String(_) => ConfigValue::String(v.to_owned()),
-        _ => unreachable!(),
+        ConfigValue::Schedule(_) => {
+            let schedule = v.parse::<ReadableSchedule>()?;
+            ConfigValue::from(schedule)
+        }
+        ConfigValue::Skip | ConfigValue::None | ConfigValue::Module(_) => unreachable!(),
     };
     Ok(res)
 }
@@ -4922,10 +4927,12 @@ impl ConfigController {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::{
+        sync::{mpsc::channel, Arc},
+        time::Duration,
+    };
 
     use api_version::{ApiV1, KvFormat};
-    use case_macros::*;
     use engine_rocks::raw::LRUCacheOptions;
     use engine_traits::{CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt};
     use futures::executor::block_on;
@@ -4980,21 +4987,6 @@ mod tests {
     fn create_mock_kv_data(path: &Path) {
         fs::create_dir_all(path.join("db")).unwrap();
         fs::File::create(path.join("db").join("CURRENT")).unwrap();
-    }
-
-    #[test]
-    fn test_case_macro() {
-        let h = kebab_case!(HelloWorld);
-        assert_eq!(h, "hello-world");
-
-        let h = kebab_case!(WelcomeToMyHouse);
-        assert_eq!(h, "welcome-to-my-house");
-
-        let h = snake_case!(HelloWorld);
-        assert_eq!(h, "hello_world");
-
-        let h = snake_case!(WelcomeToMyHouse);
-        assert_eq!(h, "welcome_to_my_house");
     }
 
     #[test]
@@ -5713,22 +5705,26 @@ mod tests {
         assert_eq!(flow_controller.enabled(), true);
     }
 
+    struct MockCfgManager(Box<dyn Fn(ConfigChange) + Send + Sync>);
+
+    impl ConfigManager for MockCfgManager {
+        fn dispatch(&mut self, change: ConfigChange) -> online_config::Result<()> {
+            (self.0)(change);
+            Ok(())
+        }
+    }
+
     #[test]
     fn test_change_resolved_ts_config() {
-        use crossbeam::channel;
-
-        pub struct TestConfigManager(channel::Sender<ConfigChange>);
-        impl ConfigManager for TestConfigManager {
-            fn dispatch(&mut self, change: ConfigChange) -> online_config::Result<()> {
-                self.0.send(change).unwrap();
-                Ok(())
-            }
-        }
-
         let (cfg, _dir) = TikvConfig::with_tmp().unwrap();
         let cfg_controller = ConfigController::new(cfg);
-        let (tx, rx) = channel::unbounded();
-        cfg_controller.register(Module::ResolvedTs, Box::new(TestConfigManager(tx)));
+        let (tx, rx) = channel();
+        cfg_controller.register(
+            Module::ResolvedTs,
+            Box::new(MockCfgManager(Box::new(move |c| {
+                tx.send(c).unwrap();
+            }))),
+        );
 
         // Return error if try to update not support config or unknow config
         cfg_controller
@@ -6359,12 +6355,14 @@ mod tests {
         let cfg_controller = ConfigController::new(cfg.clone());
         let (scheduler, _receiver) = dummy_scheduler();
         let version_tracker = Arc::new(VersionTrack::new(cfg.server.clone()));
+        let cop_manager = MockCfgManager(Box::new(|_| {}));
         cfg_controller.register(
             Module::Server,
             Box::new(ServerConfigManager::new(
                 scheduler,
                 version_tracker.clone(),
                 ResourceQuota::new(None),
+                Box::new(cop_manager),
             )),
         );
 
@@ -6414,6 +6412,39 @@ mod tests {
             default_cfg.server.end_point_request_max_handle_duration(),
             ReadableDuration::secs(900)
         );
+    }
+
+    #[test]
+    fn test_change_coprocessor_endpoint_config() {
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+        cfg.validate().unwrap();
+        let cfg_controller = ConfigController::new(cfg.clone());
+        let (scheduler, _receiver) = dummy_scheduler();
+        let version_tracker = Arc::new(VersionTrack::new(cfg.server.clone()));
+
+        let (cop_tx, cop_rx) = channel();
+        let cop_manager = MockCfgManager(Box::new(move |c| {
+            cop_tx.send(c).unwrap();
+        }));
+        cfg_controller.register(
+            Module::Server,
+            Box::new(ServerConfigManager::new(
+                scheduler,
+                version_tracker.clone(),
+                ResourceQuota::new(None),
+                Box::new(cop_manager),
+            )),
+        );
+
+        cfg_controller
+            .update_config("server.end-point-memory-quota", "32MB")
+            .unwrap();
+        let mut change = cop_rx.try_recv().unwrap();
+        let quota = change.remove("end_point_memory_quota").unwrap();
+        let cap: ReadableSize = quota.into();
+        assert_eq!(cap, ReadableSize::mb(32));
+        cfg.server.end_point_memory_quota = ReadableSize::mb(32);
+        assert_eq_debug(&cfg_controller.get_current(), &cfg);
     }
 
     #[test]
