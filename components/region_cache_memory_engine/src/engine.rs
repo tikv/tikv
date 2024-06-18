@@ -210,15 +210,37 @@ impl RangeCacheMemoryEngineCore {
         &mut self.range_manager
     }
 
-    pub(crate) fn has_cached_write_batch(&self, cache_range: &CacheRange) -> bool {
-        self.cached_write_batch.contains_key(cache_range)
+    // `cached_range` must not exist in the `cached_write_batch`
+    pub fn init_cached_write_batch(&mut self, cache_range: &CacheRange) {
+        assert!(
+            self.cached_write_batch
+                .insert(cache_range.clone(), vec![])
+                .is_none()
+        );
     }
 
-    pub(crate) fn take_cache_write_batch(
+    pub fn has_cached_write_batch(&self, cache_range: &CacheRange) -> bool {
+        self.cached_write_batch
+            .get(cache_range)
+            .map_or(false, |entries| !entries.is_empty())
+    }
+
+    pub(crate) fn take_cached_write_batch_entries(
         &mut self,
         cache_range: &CacheRange,
-    ) -> Option<Vec<(u64, RangeCacheWriteBatchEntry)>> {
-        self.cached_write_batch.remove(cache_range)
+    ) -> Vec<(u64, RangeCacheWriteBatchEntry)> {
+        std::mem::take(self.cached_write_batch.get_mut(cache_range).unwrap())
+    }
+
+    pub fn remove_cached_write_batch(&mut self, cache_range: &CacheRange) {
+        self.cached_write_batch
+            .remove(cache_range)
+            .unwrap_or_else(|| {
+                panic!(
+                    "range cannot be found in cached_write_batch: {:?}",
+                    cache_range
+                );
+            });
     }
 
     // ensure that the transfer from `pending_ranges_loading_data` to
@@ -424,6 +446,10 @@ impl RangeCacheMemoryEngine {
                 "Cached" => range_manager.ranges().len(),
                 "Pending" => range_manager.pending_ranges_loading_data.len(),
             );
+
+            // init cached write batch to cache the writes before loading complete
+            core.init_cached_write_batch(range);
+
             if let Err(e) = self
                 .bg_worker_manager()
                 .schedule_task(BackgroundTask::LoadRange)
