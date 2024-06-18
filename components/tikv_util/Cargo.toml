@@ -10,7 +10,6 @@ failpoints = ["fail/failpoints"]
 test-cgroup = []
 
 [dependencies]
-heck = { workspace = true }
 async-speed-limit = "0.4.0"
 backtrace = "0.3.9"
 byteorder = "1.2"
@@ -28,6 +27,7 @@ fail = "0.5"
 futures = { version = "0.3", features = ["compat", "thread-pool"] }
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
 grpcio = { workspace = true }
+heck = { workspace = true }
 http = "0.2.0"
 kvproto = { workspace = true }
 lazy_static = "1.3"
