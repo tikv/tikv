@@ -11,9 +11,10 @@ use engine_traits::{
     Iterable, Iterator, MetricsExt, Peekable, ReadOptions, Result, Snapshot, SnapshotMiscExt,
     CF_DEFAULT,
 };
+use prometheus::local::LocalHistogram;
 use skiplist_rs::{base::OwnedIter, SkipList};
 use slog_global::error;
-use tikv_util::box_err;
+use tikv_util::{box_err, time::Instant};
 
 use crate::{
     background::BackgroundTask,
@@ -22,6 +23,7 @@ use crate::{
         decode_key, encode_seek_for_prev_key, encode_seek_key, InternalBytes, InternalKey,
         ValueType,
     },
+    metrics::IN_MEMORY_ENGINE_SEEK_DURATION,
     perf_context::PERF_CONTEXT,
     perf_counter_add,
     statistics::{LocalStatistics, Statistics, Tickers},
@@ -150,6 +152,7 @@ impl Iterable for RangeCacheSnapshot {
             statistics: self.engine.statistics(),
             prefix_extractor,
             local_stats: LocalStatistics::default(),
+            seek_duration: IN_MEMORY_ENGINE_SEEK_DURATION.local(),
         })
     }
 }
@@ -240,6 +243,7 @@ pub struct RangeCacheIterator {
 
     statistics: Arc<Statistics>,
     local_stats: LocalStatistics,
+    seek_duration: LocalHistogram,
 }
 
 impl Drop for RangeCacheIterator {
@@ -265,6 +269,7 @@ impl Drop for RangeCacheIterator {
             self.local_stats.number_db_prev_found,
         );
         perf_counter_add!(iter_read_bytes, self.local_stats.bytes_read);
+        self.seek_duration.flush();
     }
 }
 
@@ -518,6 +523,7 @@ impl Iterator for RangeCacheIterator {
     }
 
     fn seek(&mut self, key: &[u8]) -> Result<bool> {
+        let begin = Instant::now();
         self.direction = Direction::Forward;
         if let Some(ref mut extractor) = self.prefix_extractor {
             assert!(key.len() >= 8);
@@ -536,11 +542,13 @@ impl Iterator for RangeCacheIterator {
             self.local_stats.bytes_read += (self.key().len() + self.value().len()) as u64;
             self.local_stats.number_db_seek_found += 1;
         }
+        self.seek_duration.observe(begin.saturating_elapsed_secs());
 
         Ok(self.valid)
     }
 
     fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
+        let begin = Instant::now();
         self.direction = Direction::Backward;
         if let Some(ref mut extractor) = self.prefix_extractor {
             assert!(key.len() >= 8);
@@ -558,11 +566,13 @@ impl Iterator for RangeCacheIterator {
             self.local_stats.bytes_read += (self.key().len() + self.value().len()) as u64;
             self.local_stats.number_db_seek_found += 1;
         }
+        self.seek_duration.observe(begin.saturating_elapsed_secs());
 
         Ok(self.valid)
     }
 
     fn seek_to_first(&mut self) -> Result<bool> {
+        let begin = Instant::now();
         assert!(self.prefix_extractor.is_none());
         self.direction = Direction::Forward;
         let seek_key = encode_seek_key(&self.lower_bound, self.sequence_number);
@@ -572,11 +582,13 @@ impl Iterator for RangeCacheIterator {
             self.local_stats.bytes_read += (self.key().len() + self.value().len()) as u64;
             self.local_stats.number_db_seek_found += 1;
         }
+        self.seek_duration.observe(begin.saturating_elapsed_secs());
 
         Ok(self.valid)
     }
 
     fn seek_to_last(&mut self) -> Result<bool> {
+        let begin = Instant::now();
         assert!(self.prefix_extractor.is_none());
         self.direction = Direction::Backward;
         let seek_key = encode_seek_for_prev_key(&self.upper_bound, u64::MAX);
@@ -590,6 +602,7 @@ impl Iterator for RangeCacheIterator {
             self.local_stats.bytes_read += (self.key().len() + self.value().len()) as u64;
             self.local_stats.number_db_seek_found += 1;
         }
+        self.seek_duration.observe(begin.saturating_elapsed_secs());
 
         Ok(self.valid)
     }
@@ -676,7 +689,7 @@ mod tests {
 
     #[test]
     fn test_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
@@ -866,7 +879,7 @@ mod tests {
 
     #[test]
     fn test_seek() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -904,7 +917,7 @@ mod tests {
 
     #[test]
     fn test_get_value() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -984,7 +997,7 @@ mod tests {
 
     #[test]
     fn test_iterator_forawrd() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -1171,7 +1184,7 @@ mod tests {
 
     #[test]
     fn test_iterator_backward() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -1275,7 +1288,7 @@ mod tests {
 
     #[test]
     fn test_seq_visibility() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -1398,7 +1411,7 @@ mod tests {
 
     #[test]
     fn test_seq_visibility_backward() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -1501,9 +1514,9 @@ mod tests {
 
         // backward, all put
         {
-            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
-                VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
-            )));
+            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
+                Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test())),
+            ));
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
@@ -1539,9 +1552,9 @@ mod tests {
 
         // backward, all deletes
         {
-            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
-                VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
-            )));
+            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
+                Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test())),
+            ));
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
@@ -1570,9 +1583,9 @@ mod tests {
 
         // backward, all deletes except for last put, last put's seq
         {
-            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
-                VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
-            )));
+            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
+                Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test())),
+            ));
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
@@ -1603,9 +1616,9 @@ mod tests {
 
         // all deletes except for last put, deletions' seq
         {
-            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
-                VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
-            )));
+            let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
+                Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test())),
+            ));
             engine.new_range(range.clone());
             let sl = {
                 let mut core = engine.core.write();
@@ -1635,7 +1648,7 @@ mod tests {
 
     #[test]
     fn test_prefix_seek() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"k000".to_vec(), b"k100".to_vec());
@@ -1760,7 +1773,7 @@ mod tests {
 
     #[test]
     fn test_evict_range_without_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
@@ -1819,7 +1832,7 @@ mod tests {
 
     #[test]
     fn test_evict_range_with_snapshot() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(construct_user_key(0), construct_user_key(30));
@@ -1891,7 +1904,7 @@ mod tests {
 
     #[test]
     fn test_tombstone_count_when_iterating() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -1935,7 +1948,7 @@ mod tests {
 
     #[test]
     fn test_read_flow_metrics() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
@@ -2059,7 +2072,7 @@ mod tests {
     where
         F: FnOnce(&mut RangeCacheWriteBatch),
     {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
