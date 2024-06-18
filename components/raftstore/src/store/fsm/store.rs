@@ -834,6 +834,7 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         let count = msgs.len();
         #[allow(const_evaluatable_unchecked)]
         let mut distribution = [0; StoreMsg::<EK>::COUNT];
+        let detail = msgs.get(0).map_or("".to_string(), |m| format!("{:?}", m));
         for m in msgs.drain(..) {
             distribution[m.discriminant()] += 1;
             match m {
@@ -898,10 +899,11 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         }
         slow_log!(
             T timer,
-            "[store {}] handle {} store messages {:?}",
+            "[store {}] handle {} store messages {:?}, detail: {:?}",
             self.fsm.store.id,
             count,
             StoreMsg::<EK>::VARIANTS.iter().zip(distribution).filter(|(_, c)| *c > 0).format(", "),
+            detail,
         );
         self.ctx
             .raft_metrics

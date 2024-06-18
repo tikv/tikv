@@ -627,6 +627,7 @@ where
         let count = msgs.len();
         #[allow(const_evaluatable_unchecked)]
         let mut distribution = [0; PeerMsg::<EK>::COUNT];
+        let detail = msgs.get(0).map_or("".to_string(), |m| format!("{:?}", m));
         for m in msgs.drain(..) {
             distribution[m.discriminant()] += 1;
             match m {
@@ -716,10 +717,11 @@ where
         self.on_loop_finished();
         slow_log!(
             T timer,
-            "{} handle {} peer messages {:?}",
+            "{} handle {} peer messages {:?}, detail: {:?}",
             self.fsm.peer.tag,
             count,
             PeerMsg::<EK>::VARIANTS.iter().zip(distribution).filter(|(_, c)| *c > 0).format(", "),
+            detail,
         );
         self.ctx.raft_metrics.peer_msg_len.observe(count as f64);
         self.ctx

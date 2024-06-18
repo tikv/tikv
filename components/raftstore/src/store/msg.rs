@@ -811,7 +811,23 @@ impl<EK: KvEngine> ResourceMetered for PeerMsg<EK> {}
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PeerMsg::RaftMessage(..) => write!(fmt, "Raft Message"),
+            PeerMsg::RaftMessage(m, _) => {
+                if m.msg.has_extra_msg() {
+                    write!(
+                        fmt,
+                        "[{}] Raft Message with extra message {:?}",
+                        m.msg.get_region_id(),
+                        m.msg.get_message().get_msg_type()
+                    )
+                } else {
+                    write!(
+                        fmt,
+                        "[{}] Raft Message {:?}",
+                        m.msg.get_region_id(),
+                        m.msg.get_message().get_msg_type()
+                    )
+                }
+            }
             PeerMsg::RaftCommand(_) => write!(fmt, "Raft Command"),
             PeerMsg::Tick(tick) => write! {
                 fmt,
@@ -924,22 +940,35 @@ where
     EK: KvEngine,
 {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
+        match self {
+            StoreMsg::RaftMessage(m) => {
+                if m.msg.has_extra_msg() {
+                    write!(
+                        fmt,
+                        "[{}] Raft Message with extra message {:?}",
+                        m.msg.get_region_id(),
+                        m.msg.get_message().get_msg_type()
+                    )
+                } else {
+                    write!(
+                        fmt,
+                        "[{}] Raft Message {:?}",
+                        m.msg.get_region_id(),
+                        m.msg.get_message().get_msg_type()
+                    )
+                }
+            }
             StoreMsg::StoreUnreachable { store_id } => {
                 write!(fmt, "Store {}  is unreachable", store_id)
             }
-            StoreMsg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf()),
-            StoreMsg::ClearRegionSizeInRange {
-                ref start_key,
-                ref end_key,
-            } => write!(
+            StoreMsg::CompactedEvent(event) => write!(fmt, "CompactedEvent cf {}", event.cf()),
+            StoreMsg::ClearRegionSizeInRange { start_key, end_key } => write!(
                 fmt,
                 "Clear Region size in range {:?} to {:?}",
                 start_key, end_key
             ),
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
-            StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
+            StoreMsg::Start { store } => write!(fmt, "Start store {:?}", store),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
             StoreMsg::LatencyInspect { .. } => write!(fmt, "LatencyInspect"),
             StoreMsg::UnsafeRecoveryReport(..) => write!(fmt, "UnsafeRecoveryReport"),
