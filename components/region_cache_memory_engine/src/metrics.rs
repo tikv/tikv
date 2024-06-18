@@ -69,7 +69,7 @@ lazy_static! {
         exponential_buckets(0.00001, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref PREPARE_FOR_APPLY_DURATION_HISTOGRAM: Histogram = register_histogram!(
+    pub static ref PREPARE_FOR_WRITE_DURATION_HISTOGRAM: Histogram = register_histogram!(
         "tikv_range_cache_engine_prepare_for_write_duration_seconds",
         "Bucketed histogram of prepare for write duration in range cache engine.",
         exponential_buckets(0.00001, 2.0, 20).unwrap()
