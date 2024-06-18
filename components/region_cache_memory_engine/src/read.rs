@@ -22,6 +22,7 @@ use crate::{
         decode_key, encode_seek_for_prev_key, encode_seek_key, InternalBytes, InternalKey,
         ValueType,
     },
+    metrics::IN_MEMORY_ENGINE_SEEK_DURATION,
     perf_context::PERF_CONTEXT,
     perf_counter_add,
     statistics::{LocalStatistics, Statistics, Tickers},
@@ -150,6 +151,7 @@ impl Iterable for RangeCacheSnapshot {
             statistics: self.engine.statistics(),
             prefix_extractor,
             local_stats: LocalStatistics::default(),
+            seek_duration: IN_MEMORY_ENGINE_SEEK_DURATION.local(),
         })
     }
 }
@@ -240,6 +242,7 @@ pub struct RangeCacheIterator {
 
     statistics: Arc<Statistics>,
     local_stats: LocalStatistics,
+    seek_duration: LocalHistogram,
 }
 
 impl Drop for RangeCacheIterator {
@@ -265,6 +268,7 @@ impl Drop for RangeCacheIterator {
             self.local_stats.number_db_prev_found,
         );
         perf_counter_add!(iter_read_bytes, self.local_stats.bytes_read);
+        self.seek_duration.flush();
     }
 }
 
@@ -518,6 +522,7 @@ impl Iterator for RangeCacheIterator {
     }
 
     fn seek(&mut self, key: &[u8]) -> Result<bool> {
+        let begin = Instant::now();
         self.direction = Direction::Forward;
         if let Some(ref mut extractor) = self.prefix_extractor {
             assert!(key.len() >= 8);
@@ -536,11 +541,13 @@ impl Iterator for RangeCacheIterator {
             self.local_stats.bytes_read += (self.key().len() + self.value().len()) as u64;
             self.local_stats.number_db_seek_found += 1;
         }
+        self.seek_duration.observe(begin.saturating_elapsed_secs());
 
         Ok(self.valid)
     }
 
     fn seek_for_prev(&mut self, key: &[u8]) -> Result<bool> {
+        let begin = Instant::now();
         self.direction = Direction::Backward;
         if let Some(ref mut extractor) = self.prefix_extractor {
             assert!(key.len() >= 8);
@@ -558,11 +565,13 @@ impl Iterator for RangeCacheIterator {
             self.local_stats.bytes_read += (self.key().len() + self.value().len()) as u64;
             self.local_stats.number_db_seek_found += 1;
         }
+        self.seek_duration.observe(begin.saturating_elapsed_secs());
 
         Ok(self.valid)
     }
 
     fn seek_to_first(&mut self) -> Result<bool> {
+        let begin = Instant::now();
         assert!(self.prefix_extractor.is_none());
         self.direction = Direction::Forward;
         let seek_key = encode_seek_key(&self.lower_bound, self.sequence_number);
@@ -572,11 +581,13 @@ impl Iterator for RangeCacheIterator {
             self.local_stats.bytes_read += (self.key().len() + self.value().len()) as u64;
             self.local_stats.number_db_seek_found += 1;
         }
+        self.seek_duration.observe(begin.saturating_elapsed_secs());
 
         Ok(self.valid)
     }
 
     fn seek_to_last(&mut self) -> Result<bool> {
+        let begin = Instant::now();
         assert!(self.prefix_extractor.is_none());
         self.direction = Direction::Backward;
         let seek_key = encode_seek_for_prev_key(&self.upper_bound, u64::MAX);
@@ -590,6 +601,7 @@ impl Iterator for RangeCacheIterator {
             self.local_stats.bytes_read += (self.key().len() + self.value().len()) as u64;
             self.local_stats.number_db_seek_found += 1;
         }
+        self.seek_duration.observe(begin.saturating_elapsed_secs());
 
         Ok(self.valid)
     }
