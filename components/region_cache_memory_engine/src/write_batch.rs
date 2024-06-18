@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeSet,
     sync::{atomic::Ordering, Arc},
+    time::Duration,
 };
 
 use bytes::Bytes;
@@ -16,7 +17,7 @@ use crate::{
     engine::{cf_to_id, id_to_cf, is_lock_cf, SkiplistEngine},
     keys::{encode_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
     memory_controller::{MemoryController, MemoryUsage},
-    metrics::WRITE_DURATION_HISTOGRAM,
+    metrics::{RANGE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM, WRITE_DURATION_HISTOGRAM},
     range_manager::{RangeCacheStatus, RangeManager},
     RangeCacheMemoryEngine,
 };
@@ -40,6 +41,10 @@ const AMOUNT_TO_CLEAN_TOMBSTONE: u64 = ReadableSize::mb(16).0;
 // delegate. It sets `range_cache_status` which is used to determine whether the
 // writes of this peer should be buffered.
 pub struct RangeCacheWriteBatch {
+    // `id` strictly incrementing and is used as the key in `ranges_being_written`, which records
+    // the ranges that are being written, so that when the write batch is consumed, we can
+    // quickly remove the ranges involved.
+    id: u64,
     // `range_cache_status` indicates whether the range is cached, loading data, or not cached. If
     // it is cached, we should buffer the write in `buffer` which is consumed during the write
     // is written in the kv engine. If it is loading data, we should buffer the write in
@@ -57,6 +62,9 @@ pub struct RangeCacheWriteBatch {
     current_range: Option<CacheRange>,
     // the ranges that reaches the hard limit and need to be evicted
     ranges_to_evict: BTreeSet<CacheRange>,
+
+    // record the total durations of the prepare work for write in the write batch
+    prepare_for_write_duration: Duration,
 }
 
 impl std::fmt::Debug for RangeCacheWriteBatch {
@@ -72,6 +80,7 @@ impl std::fmt::Debug for RangeCacheWriteBatch {
 impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
     fn from(engine: &RangeCacheMemoryEngine) -> Self {
         Self {
+            id: engine.alloc_write_batch_id(),
             range_cache_status: RangeCacheStatus::NotInCache,
             buffer: Vec::new(),
             pending_range_in_loading_buffer: Vec::new(),
@@ -82,6 +91,7 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
             memory_usage_reach_hard_limit: false,
             current_range: None,
             ranges_to_evict: BTreeSet::default(),
+            prepare_for_write_duration: Duration::default(),
         }
     }
 }
@@ -89,6 +99,7 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
 impl RangeCacheWriteBatch {
     pub fn with_capacity(engine: &RangeCacheMemoryEngine, cap: usize) -> Self {
         Self {
+            id: engine.alloc_write_batch_id(),
             range_cache_status: RangeCacheStatus::NotInCache,
             buffer: Vec::with_capacity(cap),
             // cache_buffer should need small capacity
@@ -100,6 +111,7 @@ impl RangeCacheWriteBatch {
             memory_usage_reach_hard_limit: false,
             current_range: None,
             ranges_to_evict: BTreeSet::default(),
+            prepare_for_write_duration: Duration::default(),
         }
     }
 
@@ -167,12 +179,14 @@ impl RangeCacheWriteBatch {
         let guard = &epoch::pin();
         let start = Instant::now();
         let mut lock_modification: u64 = 0;
+        let mut have_entry_applied = false;
         // Some entries whose ranges may be marked as evicted above, but it does not
         // matter, they will be deleted later.
         let res = entries_to_write
             .into_iter()
             .chain(std::mem::take(&mut self.buffer))
             .try_for_each(|e| {
+                have_entry_applied = true;
                 if is_lock_cf(e.cf) {
                     lock_modification += e.data_size() as u64;
                 }
@@ -181,6 +195,15 @@ impl RangeCacheWriteBatch {
             });
         let duration = start.saturating_elapsed_secs();
         WRITE_DURATION_HISTOGRAM.observe(duration);
+
+        fail::fail_point!("in_memory_engine_write_batch_consumed");
+        fail::fail_point!("before_clear_ranges_in_being_written");
+
+        self.engine
+            .core
+            .write()
+            .mut_range_manager()
+            .clear_ranges_in_being_written(self.id, have_entry_applied);
 
         self.engine
             .lock_modification_bytes
@@ -199,6 +222,9 @@ impl RangeCacheWriteBatch {
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
         }
+
+        let dur = std::mem::take(&mut self.prepare_for_write_duration);
+        RANGE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM.observe(dur.as_secs_f64());
 
         res
     }
@@ -545,9 +571,11 @@ impl WriteBatch for RangeCacheWriteBatch {
     }
 
     fn prepare_for_range(&mut self, range: CacheRange) {
-        self.set_range_cache_status(self.engine.prepare_for_apply(&range));
+        let time = Instant::now();
+        self.set_range_cache_status(self.engine.prepare_for_apply(self.id, &range));
         self.memory_usage_reach_hard_limit = false;
         self.current_range = Some(range);
+        self.prepare_for_write_duration += time.saturating_elapsed();
     }
 }
 
@@ -639,6 +667,7 @@ mod tests {
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.range_cache_status = RangeCacheStatus::Cached;
+        wb.prepare_for_range(r.clone());
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
         assert_eq!(wb.write().unwrap(), 1);
@@ -661,6 +690,7 @@ mod tests {
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.range_cache_status = RangeCacheStatus::Cached;
+        wb.prepare_for_range(r.clone());
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_save_point();
         wb.put(b"aaa", b"ccc").unwrap();
@@ -688,10 +718,12 @@ mod tests {
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.range_cache_status = RangeCacheStatus::Cached;
+        wb.prepare_for_range(r.clone());
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
         _ = wb.write();
         wb.clear();
+        wb.prepare_for_range(r.clone());
         wb.put(b"bbb", b"ccc").unwrap();
         wb.delete(b"aaa").unwrap();
         wb.set_sequence_number(2).unwrap();
