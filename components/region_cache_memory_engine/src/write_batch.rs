@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeSet,
-    sync::{atomic::Ordering, Arc},
+    sync::{atomic::Ordering, Arc}, time::Duration,
 };
 
 use bytes::Bytes;
@@ -16,7 +16,7 @@ use crate::{
     engine::{cf_to_id, id_to_cf, is_lock_cf, SkiplistEngine},
     keys::{encode_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
     memory_controller::{MemoryController, MemoryUsage},
-    metrics::WRITE_DURATION_HISTOGRAM,
+    metrics::{PREPARE_FOR_APPLY_DURATION_HISTOGRAM, WRITE_DURATION_HISTOGRAM},
     range_manager::{RangeCacheStatus, RangeManager},
     RangeCacheMemoryEngine,
 };
@@ -57,6 +57,9 @@ pub struct RangeCacheWriteBatch {
     current_range: Option<CacheRange>,
     // the ranges that reaches the hard limit and need to be evicted
     ranges_to_evict: BTreeSet<CacheRange>,
+
+    // record the total durations of the prepare work for write in the write batch
+    prepare_for_write_duration: Duration,
 }
 
 impl std::fmt::Debug for RangeCacheWriteBatch {
@@ -82,6 +85,7 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
             memory_usage_reach_hard_limit: false,
             current_range: None,
             ranges_to_evict: BTreeSet::default(),
+            prepare_for_write_duration: Duration::default(),
         }
     }
 }
@@ -100,6 +104,7 @@ impl RangeCacheWriteBatch {
             memory_usage_reach_hard_limit: false,
             current_range: None,
             ranges_to_evict: BTreeSet::default(),
+            prepare_for_write_duration: Duration::default(),
         }
     }
 
@@ -199,6 +204,9 @@ impl RangeCacheWriteBatch {
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
         }
+
+        let dur = std::mem::take(&mut self.prepare_for_write_duration);
+        PREPARE_FOR_APPLY_DURATION_HISTOGRAM.observe(dur.as_secs_f64());
 
         res
     }
@@ -545,9 +553,11 @@ impl WriteBatch for RangeCacheWriteBatch {
     }
 
     fn prepare_for_range(&mut self, range: CacheRange) {
+        let time = Instant::now();
         self.set_range_cache_status(self.engine.prepare_for_apply(&range));
         self.memory_usage_reach_hard_limit = false;
         self.current_range = Some(range);
+        self.prepare_for_write_duration += time.saturating_elapsed();
     }
 }
 
