@@ -157,9 +157,9 @@ pub struct RangeManager {
     // writting data for this range. Therefore, we have to delay the DeleteRange task until the
     // range leaves the `ranges_being_written`.
     //
-    // `u64` means write batch id, we record the ranges of a specific write batch together so when
-    // the write batch is consumed by the in-memory engine, all ranges of it are cleared from
-    // `ranges_being_written`.
+    // The key in this map is the id of the write batch, and the value is a collection
+    // the ranges of this batch. So, when the write batch is consumed by the in-memory engine,
+    // all ranges of it are cleared from `ranges_being_written`.
     ranges_being_written: HashMap<u64, Vec<CacheRange>>,
     range_evictions: AtomicU64,
 }
@@ -425,7 +425,7 @@ impl RangeManager {
         self.ranges_in_gc = ranges_in_gc;
     }
 
-    pub(crate) fn range_overlapped_with_ranges_being_written(&self, range: &CacheRange) -> bool {
+    pub(crate) fn is_overlapped_with_ranges_being_written(&self, range: &CacheRange) -> bool {
         self.ranges_being_written.iter().any(|(_, ranges)| {
             ranges
                 .iter()
@@ -433,7 +433,11 @@ impl RangeManager {
         })
     }
 
-    pub(crate) fn set_range_in_being_written(&mut self, write_batch_id: u64, range: &CacheRange) {
+    pub(crate) fn record_in_ranges_being_written(
+        &mut self,
+        write_batch_id: u64,
+        range: &CacheRange,
+    ) {
         self.ranges_being_written
             .entry(write_batch_id)
             .or_default()

@@ -371,11 +371,11 @@ impl RangeCacheMemoryEngine {
         let mut core = self.core.write();
         let range_manager = core.mut_range_manager();
         if range_manager.pending_ranges_in_loading_contains(range) {
-            range_manager.set_range_in_being_written(write_batch_id, range);
+            range_manager.record_in_ranges_being_written(write_batch_id, range);
             return RangeCacheStatus::Loading;
         }
         if range_manager.contains_range(range) {
-            range_manager.set_range_in_being_written(write_batch_id, range);
+            range_manager.record_in_ranges_being_written(write_batch_id, range);
             return RangeCacheStatus::Cached;
         }
 
@@ -430,7 +430,7 @@ impl RangeCacheMemoryEngine {
                 .pending_ranges_loading_data
                 .push_back((range.clone(), rocks_snap, false));
 
-            range_manager.set_range_in_being_written(write_batch_id, range);
+            range_manager.record_in_ranges_being_written(write_batch_id, range);
 
             info!(
                 "Range to load";

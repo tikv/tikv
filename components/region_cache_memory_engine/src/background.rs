@@ -577,11 +577,9 @@ impl BackgroundRunnerCore {
             if remaining == 0 {
                 break;
             }
-            let evicted_range;
-            {
+            let evicted_range = {
                 let mut engine_wr = self.engine.write();
                 let mut ranges = engine_wr.mut_range_manager().evict_range(range);
-                evicted_range = !ranges.is_empty();
                 if !ranges.is_empty() {
                     info!(
                         "evict on soft limit reached";
@@ -594,17 +592,26 @@ impl BackgroundRunnerCore {
                         .checked_sub(*approx_size as usize)
                         .unwrap_or_default();
                     ranges_to_delete.append(&mut ranges);
+                    true
+                } else {
+                    false
                 }
-            }
+            };
             if evicted_range {
                 range_stats_manager.handle_range_evicted(range);
             }
         }
 
         if !ranges_to_delete.is_empty() {
-            delete_range_scheduler
-                .schedule_force(BackgroundTask::DeleteRange(ranges_to_delete))
-                .unwrap();
+            if let Err(e) =
+                delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(ranges_to_delete))
+            {
+                error!(
+                    "schedule deletet range failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+            }
         }
     }
 
@@ -647,9 +654,15 @@ impl BackgroundRunnerCore {
             }
         }
         if !ranges_to_delete.is_empty() {
-            delete_range_scheduler
-                .schedule_force(BackgroundTask::DeleteRange(ranges_to_delete))
-                .unwrap();
+            if let Err(e) =
+                delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(ranges_to_delete))
+            {
+                error!(
+                    "schedule deletet range failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+            }
         }
         for cache_range in ranges_to_add {
             let mut core = self.engine.write();
@@ -1124,7 +1137,7 @@ impl Runnable for DeleteRangeRunner {
                         // range has to be delayed to delete. See comment on `delay_ranges`.
                         if core
                             .range_manager
-                            .range_overlapped_with_ranges_being_written(&r)
+                            .is_overlapped_with_ranges_being_written(&r)
                         {
                             ranges_to_delay.push(r);
                         } else {
