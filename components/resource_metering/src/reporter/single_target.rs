@@ -10,8 +10,9 @@ use std::{
 };
 
 use futures::stream;
-use kvproto::resource_usage_agent::{
-    resource_usage_agent_client::ResourceUsageAgentClient, ResourceUsageRecord,
+use kvproto::{
+    resource_usage_agent::ResourceUsageRecord,
+    resource_usage_agent_grpc::resource_usage_agent_client::ResourceUsageAgentClient,
 };
 use tikv_util::{
     warn,

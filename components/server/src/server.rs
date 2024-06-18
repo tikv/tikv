@@ -44,11 +44,11 @@ use grpcio::{EnvBuilder, Environment};
 use health_controller::HealthController;
 use hybrid_engine::HybridEngine;
 use kvproto::{
-    backup::backup_server::BackupServer, cdcpb::change_data_server::ChangeDataServer,
-    deadlock::deadlock_server::DeadlockServer, debugpb::debug_server::DebugServer,
-    diagnosticspb::diagnostics_server::DiagnosticsServer,
-    import_sstpb::import_sst_server::ImportSstServer, kvrpcpb::ApiVersion,
-    resource_usage_agent::resource_metering_pub_sub_server::ResourceMeteringPubSubServer,
+    backup_grpc::backup_server::BackupServer, cdcpb_grpc::change_data_server::ChangeDataServer,
+    deadlock_grpc::deadlock_server::DeadlockServer, debugpb_grpc::debug_server::DebugServer,
+    diagnosticspb_grpc::diagnostics_server::DiagnosticsServer,
+    import_sstpb_grpc::import_s_s_t_server::ImportSSTServer, kvrpcpb::ApiVersion,
+    resource_usage_agent_grpc::resource_metering_pub_sub_server::ResourceMeteringPubSubServer,
 };
 use pd_client::{
     meta_storage::{Checked, Sourced},
@@ -1155,7 +1155,7 @@ where
 
         if servers
             .server
-            .register_service(ImportSstServer::new(import_service))
+            .register_service(ImportSSTServer::new(import_service))
             .is_some()
         {
             fatal!("failed to register import service");

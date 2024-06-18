@@ -18,7 +18,7 @@ use futures::{compat::Future01CompatExt, future::select_all, FutureExt, TryFutur
 use kvproto::{
     kvrpcpb::{CheckLeaderRequest, CheckLeaderResponse},
     metapb::{Peer, PeerRole},
-    tikvpb::tikv_client::TikvClient,
+    tikvpb_grpc::tikv_client::TikvClient,
 };
 use pd_client::PdClient;
 use protobuf::Message;

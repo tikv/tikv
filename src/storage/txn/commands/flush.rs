@@ -2,7 +2,7 @@
 
 use std::mem;
 
-use kvproto::kvrpcpb::{prewrite_request, AssertionLevel, ExtraOp};
+use kvproto::kvrpcpb::{AssertionLevel, ExtraOp, PrewriteRequestPessimisticAction};
 // #[PerformanceCriticalPath]
 use txn_types::{insert_old_value_if_resolved, Mutation, OldValues, TimeStamp, TxnExtra};
 
@@ -143,7 +143,7 @@ impl Flush {
                 &props,
                 m,
                 &None,
-                prewrite_request::PessimisticAction::SkipPessimisticCheck,
+                PrewriteRequestPessimisticAction::SkipPessimisticCheck,
                 None,
                 self.generation,
             );

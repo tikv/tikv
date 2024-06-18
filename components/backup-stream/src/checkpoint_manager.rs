@@ -10,7 +10,7 @@ use futures::{
 use grpcio::{RpcStatus, RpcStatusCode, WriteFlags};
 use kvproto::{
     errorpb::{Error as PbError, *},
-    logbackup::{FlushEvent, SubscribeFlushEventResponse},
+    logbackuppb::{FlushEvent, SubscribeFlushEventResponse},
     metapb::Region,
 };
 use pd_client::PdClient;
@@ -128,7 +128,7 @@ impl SubscriptionManager {
 // Note: can we make it more generic...?
 #[cfg(not(test))]
 pub type Subscription =
-    grpcio::ServerStreamingSink<kvproto::logbackup::SubscribeFlushEventResponse>;
+    grpcio::ServerStreamingSink<kvproto::logbackuppb::SubscribeFlushEventResponse>;
 
 #[cfg(test)]
 pub type Subscription = tests::MockSink;
@@ -614,7 +614,7 @@ pub mod tests {
 
     use futures::{future::ok, Sink};
     use grpcio::{RpcStatus, RpcStatusCode};
-    use kvproto::{logbackup::SubscribeFlushEventResponse, metapb::*};
+    use kvproto::{logbackuppb::SubscribeFlushEventResponse, metapb::*};
     use pd_client::{PdClient, PdFuture};
     use txn_types::TimeStamp;
 

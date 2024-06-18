@@ -93,7 +93,7 @@ impl Default for ResourceGroupManager {
         let mut default_group = PbResourceGroup::default();
         default_group.name = DEFAULT_RESOURCE_GROUP_NAME.into();
         default_group.priority = MEDIUM_PRIORITY;
-        default_group.mode = GroupMode::RuMode.into();
+        default_group.mode = GroupMode::RuMode;
         default_group
             .mut_r_u_settings()
             .mut_r_u()

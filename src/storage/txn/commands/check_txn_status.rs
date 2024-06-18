@@ -165,8 +165,7 @@ impl<S: Snapshot, L: LockManager> WriteCommand<S, L> for CheckTxnStatus {
 pub mod tests {
     use concurrency_manager::ConcurrencyManager;
     use kvproto::kvrpcpb::{
-        self, prewrite_request::PessimisticAction::*,
-        write_conflict::Reason as WriteConflictReason, Context, LockInfo,
+        self, Context, LockInfo, PrewriteRequestPessimisticAction::*, WriteConflictReason,
     };
     use tikv_util::deadline::Deadline;
     use txn_types::{Key, LastChange, WriteType};

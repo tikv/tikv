@@ -1635,7 +1635,7 @@ fn cast_string_as_json(
                 let mut buf = val;
 
                 let mut vec;
-                if typ.tp() == FieldTypeTp::String as i32 {
+                if typ.tp() == FieldTypeTp::String {
                     vec = (*val).to_owned();
                     if typ.flen() > 0 {
                         vec.resize(typ.flen().try_into().unwrap(), 0);
@@ -1643,10 +1643,7 @@ fn cast_string_as_json(
                     buf = &vec;
                 }
 
-                Ok(Some(Json::from_opaque(
-                    FieldTypeTp::from_i32(typ.tp()).unwrap(),
-                    buf,
-                )?))
+                Ok(Some(Json::from_opaque(typ.tp(), buf)?))
             } else if extra
                 .ret_field_type
                 .as_accessor()

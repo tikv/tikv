@@ -17,7 +17,7 @@ use grpcio::{
 };
 use kvproto::{
     cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest},
-    kvrpcpb::{prewrite_request::PessimisticAction::*, *},
+    kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
     tikvpb::TikvClient,
 };
 use online_config::OnlineConfig;

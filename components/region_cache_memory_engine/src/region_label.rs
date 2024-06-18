@@ -9,7 +9,7 @@ use futures::{
     stream::{self, StreamExt},
 };
 use keys::{data_end_key, data_key};
-use kvproto::meta_storagepb::event::EventType;
+use kvproto::meta_storagepb::EventEventType;
 use pd_client::{
     meta_storage::{Checked, Get, MetaStorageClient, Sourced, Watch},
     Error as PdError, PdClient, RpcClient, REGION_LABEL_PATH_PREFIX,
@@ -212,7 +212,7 @@ impl RegionLabelService {
                         self.revision = resp.get_header().get_revision();
                         let events = resp.get_events();
                         events.iter().for_each(|event| match event.get_type() {
-                            EventType::Put => {
+                            EventEventType::Put => {
                                 match serde_json::from_slice::<LabelRule>(
                                     event.get_kv().get_value(),
                                 ) {
@@ -220,7 +220,7 @@ impl RegionLabelService {
                                     Err(e) => error!("parse put region label event failed"; "name" => ?event.get_kv().get_key(), "err" => ?e),
                                 }
                             }
-                            EventType::Delete => {
+                            EventEventType::Delete => {
                                 match serde_json::from_slice::<LabelRule>(
                                     event.get_prev_kv().get_value()
                                 ) {

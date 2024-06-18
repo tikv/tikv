@@ -237,7 +237,7 @@ where
     meta.set_start_ts(start_ts.unwrap_or_default());
     meta.set_length(len);
     meta.set_restore_ts(u64::MAX);
-    meta.set_compression_type(kvproto::backup::CompressionType::Unknown);
+    meta.set_compression_type(kvproto::brpb::CompressionType::Unknown);
     meta.set_name(name.to_owned());
     meta.set_cf(CF_DEFAULT.to_owned());
     meta
@@ -269,6 +269,6 @@ pub fn local_storage(tmp: &TempDir) -> StorageBackend {
     let mut local = Local::default();
     local.set_path(tmp.path().to_str().unwrap().to_owned());
     StorageBackend {
-        backend: Some(kvproto::backup::storage_backend::Backend::Local(local)),
+        backend: Some(kvproto::brpb::storage_backend::Backend::Local(local)),
     }
 }

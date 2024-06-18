@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use external_storage::ExternalStorage;
-use kvproto::backup::StorageBackend;
+use kvproto::brpb::StorageBackend;
 
 use super::cache_map::{MakeCache, ShareOwned};
 use crate::{Error, Result};

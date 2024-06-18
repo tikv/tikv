@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use kvproto::kvrpcpb::write_conflict::Reason as WriteConflictReason;
+use kvproto::kvrpcpb::WriteConflictReason;
 // #[PerformanceCriticalPath]
 use txn_types::{Key, LastChange, OldValue, PessimisticLock, TimeStamp, Value, Write, WriteType};
 

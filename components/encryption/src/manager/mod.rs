@@ -208,7 +208,7 @@ impl Dicts {
         let file = FileInfo {
             iv: iv.as_slice().to_vec(),
             key_id: self.current_key_id.load(Ordering::SeqCst),
-            method: method.into(),
+            method,
             ..Default::default()
         };
         let file_num = {
@@ -253,7 +253,7 @@ impl Dicts {
 
         file_dict_file.remove(fname, sync)?;
         ENCRYPTION_FILE_NUM_GAUGE.set(file_num);
-        if file.get_method() != EncryptionMethod::Plaintext {
+        if file.method != EncryptionMethod::Plaintext {
             debug!("delete encrypted file"; "fname" => fname);
         } else {
             debug!("delete plaintext file"; "fname" => fname);
@@ -277,7 +277,7 @@ impl Dicts {
             // info about this file. But the opposite is not true, this is because the
             // actual file operation and file_dict operation are not atomic.
             check_stale_file_exist(dst_fname, &mut file_dict, &mut file_dict_file)?;
-            let method = file.get_method();
+            let method = file.method;
             file_dict.files.insert(dst_fname.to_owned(), file.clone());
             let file_num = file_dict.files.len() as _;
             (method, file, file_num)
@@ -326,7 +326,7 @@ impl Dicts {
             // Generate a new data key if
             //   1. encryption method is not the same, or
             //   2. the current data key was exposed and the new master key is secure.
-            if method == key.get_method() && !(key.was_exposed && master_key.is_secure()) {
+            if method == key.method && !(key.was_exposed && master_key.is_secure()) {
                 let creation_time = UNIX_EPOCH + Duration::from_secs(key.creation_time);
                 match now.duration_since(creation_time) {
                     Ok(duration) => {
@@ -358,7 +358,7 @@ impl Dicts {
             }
             let data_key = DataKey {
                 key,
-                method: method.into(),
+                method,
                 creation_time,
                 was_exposed: false,
                 ..Default::default()
@@ -516,7 +516,7 @@ impl DataKeyManager {
         let mut dict = self.dicts.file_dict.lock().unwrap();
         let mut file_dict_file = self.dicts.file_dict_file.lock().unwrap();
         dict.files.retain(|fname, info| {
-            if info.get_method() != EncryptionMethod::Plaintext {
+            if info.method != EncryptionMethod::Plaintext {
                 let retain = f(fname);
                 if !retain {
                     file_dict_file.remove(fname, true).unwrap();
@@ -747,7 +747,7 @@ impl DataKeyManager {
     fn get_file_exists(&self, fname: &str) -> IoResult<Option<FileEncryptionInfo>> {
         let (method, key_id, iv) = {
             match self.dicts.get_file(fname) {
-                Some(file) => (file.get_method(), file.key_id, file.iv),
+                Some(file) => (file.method, file.key_id, file.iv),
                 None => return Ok(None),
             }
         };
@@ -773,9 +773,7 @@ impl DataKeyManager {
     pub fn get_file_internal(&self, fname: &str) -> IoResult<Option<(Vec<u8>, DataKey)>> {
         let (key_id, iv) = {
             match self.dicts.get_file(fname) {
-                Some(file) if file.get_method() != EncryptionMethod::Plaintext => {
-                    (file.key_id, file.iv)
-                }
+                Some(file) if file.method != EncryptionMethod::Plaintext => (file.key_id, file.iv),
                 _ => return Ok(None),
             }
         };
@@ -891,7 +889,7 @@ impl DataKeyManager {
         let file = self.dicts.new_file(fname, self.method, true)?;
         let encrypted_file = FileEncryptionInfo {
             key,
-            method: file.get_method(),
+            method: file.method,
             iv: file.get_iv().to_owned(),
         };
         Ok(encrypted_file)

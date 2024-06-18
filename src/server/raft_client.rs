@@ -30,7 +30,8 @@ use futures_timer::Delay;
 use grpcio::{CallOption, Environment, MetadataBuilder};
 use kvproto::{
     raft_serverpb::{Done, RaftMessage, RaftSnapshotData},
-    tikvpb::{tikv_client::TikvClient, BatchRaftMessage},
+    tikvpb::BatchRaftMessage,
+    tikvpb_grpc::tikv_client::TikvClient,
 };
 use protobuf::Message;
 use raft::SnapshotStatus;

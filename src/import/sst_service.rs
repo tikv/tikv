@@ -14,10 +14,11 @@ use futures::{stream::TryStreamExt, FutureExt, TryFutureExt};
 use kvproto::{
     encryptionpb::EncryptionMethod,
     import_sstpb::{
-        import_sst_server::ImportSst, raw_write_request::Chunk as RawChunk, write_request::Chunk,
-        Error as ImportPbError, Range, SuspendImportRpcRequest, SuspendImportRpcResponse,
-        SwitchMode, *,
+        Error as ImportPbError, Range, RawWriteRequest_oneof_chunk as RawChunk,
+        SuspendImportRpcRequest, SuspendImportRpcResponse, SwitchMode,
+        WriteRequest_oneof_chunk as Chunk, *,
     },
+    import_sstpb_grpc::import_s_s_t_server::ImportSST,
     metapb::RegionEpoch,
 };
 use raftstore::{
@@ -508,7 +509,7 @@ fn check_local_region_stale(
 }
 
 #[tonic::async_trait]
-impl<E: Engine> ImportSst for ImportSstService<E> {
+impl<E: Engine> ImportSST for ImportSstService<E> {
     async fn switch_mode(
         &self,
         request: tonic::Request<SwitchModeRequest>,
@@ -682,7 +683,8 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             let cipher = req
                 .cipher_info
                 .to_owned()
-                .filter(|c| c.cipher_type != EncryptionMethod::Plaintext as i32);
+                .into_option()
+                .filter(|c| c.cipher_type != EncryptionMethod::Plaintext);
 
             let tablet = match tablets.get(region_id) {
                 Some(tablet) => tablet,
@@ -787,6 +789,7 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             ))),
         }
     }
+    type DuplicateDetectStream = tonic::codegen::BoxStream<DuplicateDetectResponse>;
     /// Collect duplicate data from TiKV.
     async fn duplicate_detect(
         &self,

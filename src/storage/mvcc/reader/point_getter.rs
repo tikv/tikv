@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
-use kvproto::kvrpcpb::{write_conflict::Reason as WriteConflictReason, IsolationLevel};
+use kvproto::kvrpcpb::{IsolationLevel, WriteConflictReason};
 use tikv_kv::SEEK_BOUND;
 use txn_types::{Key, LastChange, Lock, LockType, TimeStamp, TsSet, Value, WriteRef, WriteType};
 

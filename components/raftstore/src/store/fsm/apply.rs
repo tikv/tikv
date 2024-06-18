@@ -76,6 +76,7 @@ use uuid::Builder as UuidBuilder;
 use self::memtrace::*;
 use super::metrics::*;
 use crate::{
+    bytes_capacity,
     coprocessor::{
         ApplyCtxInfo, Cmd, CmdBatch, CmdObserveInfo, CoprocessorHost, ObserveHandle, ObserveLevel,
         RegionState,
@@ -3505,7 +3506,7 @@ impl<C: WriteCallback> Apply<C> {
     ) -> Apply<C> {
         let mut entries_size = 0;
         for e in &entries {
-            entries_size += e.data.capacity() + e.context.capacity();
+            entries_size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
         }
         let cached_entries = CachedEntries::new(entries);
         Apply {
@@ -5038,7 +5039,7 @@ mod memtrace {
         fn approximate_heap_size(&self) -> usize {
             let mut size = self.pending_entries.capacity() * mem::size_of::<Entry>();
             for e in &self.pending_entries {
-                size += e.data.capacity() + e.context.capacity();
+                size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
             }
 
             size += self.pending_msgs.capacity() * mem::size_of::<Msg<EK>>();
@@ -5079,7 +5080,7 @@ mod memtrace {
         fn approximate_heap_size(&self) -> usize {
             let mut size: usize = 0;
             for e in &self.merge.entries {
-                size += e.data.capacity() + e.context.capacity();
+                size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
             }
             size
         }
@@ -5231,13 +5232,13 @@ mod tests {
         let mut req = RaftCmdRequest::default();
         entry.set_entry_type(EntryType::EntryNormal);
         let data = req.write_to_bytes().unwrap();
-        entry.set_data(data);
+        entry.set_data(Bytes::copy_from_slice(&data));
         assert!(can_witness_skip(&entry));
 
         req.mut_admin_request()
             .set_cmd_type(AdminCmdType::CompactLog);
         let data = req.write_to_bytes().unwrap();
-        entry.set_data(data);
+        entry.set_data(Bytes::copy_from_slice(&data));
         assert!(!can_witness_skip(&entry));
 
         let mut req = RaftCmdRequest::default();
@@ -5245,19 +5246,19 @@ mod tests {
         request.set_cmd_type(CmdType::Put);
         req.set_requests(vec![request].into());
         let data = req.write_to_bytes().unwrap();
-        entry.set_data(data);
+        entry.set_data(Bytes::copy_from_slice(&data));
         assert!(can_witness_skip(&entry));
 
         entry.set_entry_type(EntryType::EntryConfChange);
         let conf_change = ConfChange::new();
         let data = conf_change.write_to_bytes().unwrap();
-        entry.set_data(data);
+        entry.set_data(Bytes::copy_from_slice(&data));
         assert!(!can_witness_skip(&entry));
 
         entry.set_entry_type(EntryType::EntryConfChangeV2);
         let conf_change_v2 = ConfChangeV2::new();
         let data = conf_change_v2.write_to_bytes().unwrap();
-        entry.set_data(data);
+        entry.set_data(Bytes::copy_from_slice(&data));
         assert!(!can_witness_skip(&entry));
     }
 

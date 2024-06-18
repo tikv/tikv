@@ -15,7 +15,7 @@ use engine_traits::{name_to_cf, raw_ttl::ttl_current_ts, CfName, KvEngine, SstCo
 use external_storage::{create_storage, BackendConfig, ExternalStorage, HdfsConfig};
 use futures::{channel::mpsc::*, executor::block_on};
 use kvproto::{
-    backup::*,
+    brpb::*,
     encryptionpb::EncryptionMethod,
     kvrpcpb::{ApiVersion, Context, IsolationLevel, KeyRange},
     metapb::*,

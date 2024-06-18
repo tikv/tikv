@@ -583,7 +583,6 @@ dependencies = [
  "pin-project",
  "prometheus",
  "prometheus-static-metric",
- "prost 0.12.6",
  "protobuf",
  "raft",
  "raftstore",
@@ -608,6 +607,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
+ "tonic",
  "tracing",
  "tracing-active-tree",
  "txn_types",
@@ -708,7 +708,7 @@ dependencies = [
  "lazy_static",
  "lazycell",
  "peeking_take_while",
- "prettyplease 0.2.6",
+ "prettyplease",
  "proc-macro2",
  "quote",
  "regex",
@@ -761,15 +761,6 @@ name = "block-buffer"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4152116fd6e9dadb291ae18fc1ec3575ed6d84c29642d97890f4b4a3417297e4"
-dependencies = [
- "generic-array",
-]
-
-[[package]]
-name = "block-buffer"
-version = "0.10.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
 dependencies = [
  "generic-array",
 ]
@@ -964,6 +955,7 @@ dependencies = [
  "tikv_kv",
  "tikv_util",
  "tokio",
+ "tonic",
  "txn_types",
 ]
 
@@ -1215,15 +1207,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cpufeatures"
-version = "0.2.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53fe5e26ff1b7aef8bca9c6080520cfb8d9333c7568e1829cef191a9723e5504"
-dependencies = [
- "libc 0.2.151",
-]
-
-[[package]]
 name = "cpuid-bool"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1396,16 +1379,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crypto-common"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1bfb12502f3fc46cca1bb51ac28df9d618d813cdc3d2f25b9fe775a34af26bb3"
-dependencies = [
- "generic-array",
- "typenum",
-]
-
-[[package]]
 name = "csv"
 version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1500,17 +1473,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "derive-new"
-version = "0.5.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3418329ca0ad70234b9735dc4ceed10af4df60eff9c8e7b06cb5e520d92c3535"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 1.0.103",
-]
-
-[[package]]
 name = "derive_more"
 version = "0.99.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1528,16 +1490,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3dd60d1080a57a05ab032377049e0591415d2b31afd7028356dbf3cc6dcb066"
 dependencies = [
  "generic-array",
-]
-
-[[package]]
-name = "digest"
-version = "0.10.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
-dependencies = [
- "block-buffer 0.10.4",
- "crypto-common",
 ]
 
 [[package]]
@@ -2441,27 +2393,13 @@ name = "grpcio"
 version = "0.10.4"
 source = "git+https://github.com/glorv/grpc-rs?branch=prost#eb81585582f44d12611e329e21ac6402c64eea99"
 dependencies = [
- "bytes",
  "futures-executor",
  "futures-util",
  "grpcio-sys",
  "libc 0.2.151",
  "log",
  "parking_lot 0.11.1",
- "prost 0.12.6",
-]
-
-[[package]]
-name = "grpcio-compiler"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "375292b9a9e3f5f9c6ef978d1f28070a6b56ab78f8be0cfbee16c62d5b0fa361"
-dependencies = [
- "derive-new",
- "prost 0.11.9",
- "prost-build 0.11.9",
- "prost-types 0.11.9",
- "tempfile",
+ "protobuf",
 ]
 
 [[package]]
@@ -2473,7 +2411,7 @@ dependencies = [
  "futures-util",
  "grpcio",
  "log",
- "prost 0.12.6",
+ "protobuf",
 ]
 
 [[package]]
@@ -2563,6 +2501,12 @@ name = "heck"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "95505c38b4572b2d910cecb0281560f54b440a19336cbbcb27bf6ce6adc6f5a8"
+
+[[package]]
+name = "heck"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "hermit-abi"
@@ -2989,17 +2933,15 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/glorv/kvproto?branch=tonic-prost#534b685689be5e810628818437177ac44aee7637"
+source = "git+https://github.com/glorv/kvproto?branch=tonic-protobuf#63b9184cdaadbbf3c9022cd514554df02dc2044c"
 dependencies = [
  "futures 0.3.15",
- "grpcio",
- "lazy_static",
- "prost 0.12.6",
- "prost-derive 0.12.6",
  "protobuf",
  "protobuf-build",
  "raft-proto",
  "tonic",
+ "tonic-build-protobuf",
+ "tonic-codec-protobuf",
 ]
 
 [[package]]
@@ -3629,7 +3571,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_path_to_error",
- "sha2 0.9.1",
+ "sha2",
  "thiserror",
  "url",
 ]
@@ -4068,10 +4010,8 @@ dependencies = [
  "nix 0.26.2",
  "once_cell",
  "parking_lot 0.12.1",
- "prost 0.12.6",
- "prost-build 0.12.6",
- "prost-derive 0.12.6",
- "sha2 0.10.8",
+ "protobuf",
+ "protobuf-codegen-pure",
  "smallvec",
  "symbolic-demangle",
  "tempfile",
@@ -4083,16 +4023,6 @@ name = "ppv-lite86"
 version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac74c624d6b2d21f425f752262f42188365d7b8ff1aff74c82e45136510a4857"
-
-[[package]]
-name = "prettyplease"
-version = "0.1.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c8646e95016a7a6c4adea95bafa8a16baab64b583356217f2c85db4a39d9a86"
-dependencies = [
- "proc-macro2",
- "syn 1.0.103",
-]
 
 [[package]]
 name = "prettyplease"
@@ -4235,44 +4165,12 @@ dependencies = [
 
 [[package]]
 name = "prost"
-version = "0.11.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b82eaa1d779e9a4bc1c3217db8ffbeabaae1dca241bf70183242128d48681cd"
-dependencies = [
- "bytes",
- "prost-derive 0.11.9",
-]
-
-[[package]]
-name = "prost"
 version = "0.12.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "deb1435c188b76130da55f17a466d252ff7b1418b2ad3e037d127b94e3411f29"
 dependencies = [
  "bytes",
- "prost-derive 0.12.6",
-]
-
-[[package]]
-name = "prost-build"
-version = "0.11.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "119533552c9a7ffacc21e099c24a0ac8bb19c2a2a3f363de84cd9b844feab270"
-dependencies = [
- "bytes",
- "heck 0.4.1",
- "itertools",
- "lazy_static",
- "log",
- "multimap",
- "petgraph",
- "prettyplease 0.1.25",
- "prost 0.11.9",
- "prost-types 0.11.9",
- "regex",
- "syn 1.0.103",
- "tempfile",
- "which",
+ "prost-derive",
 ]
 
 [[package]]
@@ -4288,25 +4186,12 @@ dependencies = [
  "multimap",
  "once_cell",
  "petgraph",
- "prettyplease 0.2.6",
- "prost 0.12.6",
- "prost-types 0.12.6",
+ "prettyplease",
+ "prost",
+ "prost-types",
  "regex",
  "syn 2.0.58",
  "tempfile",
-]
-
-[[package]]
-name = "prost-derive"
-version = "0.11.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5d2d8d10f3c6ded6da8b05b5fb3b8a5082514344d56c9f871412d29b4e075b4"
-dependencies = [
- "anyhow",
- "itertools",
- "proc-macro2",
- "quote",
- "syn 1.0.103",
 ]
 
 [[package]]
@@ -4324,20 +4209,11 @@ dependencies = [
 
 [[package]]
 name = "prost-types"
-version = "0.11.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "213622a1460818959ac1181aaeb2dc9c7f63df720db7d788b3e24eacd1983e13"
-dependencies = [
- "prost 0.11.9",
-]
-
-[[package]]
-name = "prost-types"
 version = "0.12.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9091c90b0a32608e984ff2fa4091273cbdd755d54935c51d520887f4a1dbd5b0"
 dependencies = [
- "prost 0.12.6",
+ "prost",
 ]
 
 [[package]]
@@ -4356,14 +4232,29 @@ version = "0.15.1"
 source = "git+https://github.com/glorv/protobuf-build?branch=tonic#1be670af876a536d0a7f95b05fe5af21ff9d5c42"
 dependencies = [
  "bitflags 1.3.2",
- "grpcio-compiler",
- "proc-macro2",
- "prost-build 0.12.6",
+ "protobuf",
+ "protobuf-codegen",
  "protobuf-src",
- "quote",
  "regex",
- "syn 1.0.103",
- "tonic-build",
+]
+
+[[package]]
+name = "protobuf-codegen"
+version = "2.8.0"
+source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaae4352ea01bf00e160480d8da966d3109"
+dependencies = [
+ "heck 0.3.1",
+ "protobuf",
+]
+
+[[package]]
+name = "protobuf-codegen-pure"
+version = "2.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00993dc5fbbfcf9d8a005f6b6c29fd29fd6d86deba3ae3f41fd20c624c414616"
+dependencies = [
+ "protobuf",
+ "protobuf-codegen",
 ]
 
 [[package]]
@@ -4414,6 +4305,7 @@ name = "raft"
 version = "0.7.0"
 source = "git+https://github.com/glorv/raft-rs?branch=prost#569f7107c0e9802dcd5e97969551fedd840c66c0"
 dependencies = [
+ "bytes",
  "fxhash",
  "getset",
  "protobuf",
@@ -4429,7 +4321,7 @@ dependencies = [
 [[package]]
 name = "raft-engine"
 version = "0.4.2"
-source = "git+https://github.com/glorv/raft-engine.git?branch=prost#20a335d6b1362a44a779f8c875f6f20b64ba7a8e"
+source = "git+https://github.com/tikv/raft-engine.git#cf5d1b91441a30db34dd01aad7d73ed6e2f3e129"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4456,14 +4348,14 @@ dependencies = [
  "scopeguard",
  "serde",
  "serde_repr",
- "strum 0.25.0",
+ "strum 0.26.2",
  "thiserror",
 ]
 
 [[package]]
 name = "raft-engine-ctl"
 version = "0.4.2"
-source = "git+https://github.com/glorv/raft-engine.git?branch=prost#31371061201c8998740770b9bfc5c33ee35c88af"
+source = "git+https://github.com/tikv/raft-engine.git#cf5d1b91441a30db34dd01aad7d73ed6e2f3e129"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
@@ -4475,8 +4367,7 @@ name = "raft-proto"
 version = "0.7.0"
 source = "git+https://github.com/glorv/raft-rs?branch=prost#569f7107c0e9802dcd5e97969551fedd840c66c0"
 dependencies = [
- "lazy_static",
- "prost 0.12.6",
+ "bytes",
  "protobuf",
  "protobuf-build",
 ]
@@ -4552,7 +4443,6 @@ dependencies = [
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
- "prost 0.12.6",
  "protobuf",
  "raft",
  "raft-proto",
@@ -4999,7 +4889,6 @@ dependencies = [
  "pd_client",
  "pin-project",
  "prometheus",
- "prost 0.12.6",
  "protobuf",
  "rand 0.8.5",
  "serde",
@@ -5625,22 +5514,11 @@ version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2933378ddfeda7ea26f48c555bdad8bb446bf8a3d17832dc83e380d444cfb8c1"
 dependencies = [
- "block-buffer 0.9.0",
+ "block-buffer",
  "cfg-if 0.1.10",
  "cpuid-bool",
- "digest 0.9.0",
+ "digest",
  "opaque-debug",
-]
-
-[[package]]
-name = "sha2"
-version = "0.10.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "793db75ad2bcafc3ffa7c68b215fee268f537982cd901d132f89c6343f3a3dc8"
-dependencies = [
- "cfg-if 1.0.0",
- "cpufeatures",
- "digest 0.10.7",
 ]
 
 [[package]]
@@ -6010,11 +5888,11 @@ dependencies = [
 
 [[package]]
 name = "strum"
-version = "0.25.0"
+version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "290d54ea6f91c969195bdbcd7442c8c2a2ba87da8bf60a7ee86a235d4bc1e125"
+checksum = "5d8cec3501a5194c432b2b7976db6b7d10ec95c253208b45f83f7136aa985e29"
 dependencies = [
- "strum_macros 0.25.0",
+ "strum_macros 0.26.4",
 ]
 
 [[package]]
@@ -6044,11 +5922,11 @@ dependencies = [
 
 [[package]]
 name = "strum_macros"
-version = "0.25.0"
+version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe9f3bd7d2e45dcc5e265fbb88d6513e4747d8ef9444cf01a533119bce28a157"
+checksum = "4c6bee85a5a24955dc440386795aa378cd9cf82acd5f764469152d2270e581be"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "proc-macro2",
  "quote",
  "rustversion",
@@ -6747,7 +6625,6 @@ dependencies = [
  "openssl",
  "panic_hook",
  "profiler",
- "prost 0.12.6",
  "protobuf",
  "regex",
  "ryu",
@@ -7185,15 +7062,11 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/glorv/tipb?branch=prost#80fe149495e2edcbe484cd54cdfd50ae07cf4aa1"
+source = "git+https://github.com/glorv/tipb?branch=tonic-protobuf#ef916898caa6b394bc27c3680f9ecea68b938e23"
 dependencies = [
  "futures 0.3.15",
- "lazy_static",
- "prost 0.12.6",
- "prost-derive 0.12.6",
  "protobuf",
  "protobuf-build",
- "tonic",
 ]
 
 [[package]]
@@ -7325,8 +7198,7 @@ dependencies = [
 [[package]]
 name = "tonic"
 version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76c4eb7a4e9ef9d4763600161f12f5070b92a578e1b634db88a6887844c91a13"
+source = "git+https://github.com/glorv/tonic?branch=patch-health#914f934323860c4638e13e12eaedaa7c7031d5ce"
 dependencies = [
  "async-stream 0.3.5",
  "async-trait",
@@ -7340,7 +7212,7 @@ dependencies = [
  "hyper-timeout",
  "percent-encoding",
  "pin-project",
- "prost 0.12.6",
+ "prost",
  "tokio",
  "tokio-stream",
  "tower",
@@ -7355,20 +7227,45 @@ version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be4ef6dd70a610078cb4e338a0f79d06bc759ff1b22d2120c2ff02ae264ba9c2"
 dependencies = [
- "prettyplease 0.2.6",
+ "prettyplease",
  "proc-macro2",
- "prost-build 0.12.6",
+ "prost-build",
  "quote",
  "syn 2.0.58",
 ]
 
 [[package]]
+name = "tonic-build-protobuf"
+version = "0.1.0"
+source = "git+https://github.com/glorv/tonic-protobuf?branch=build-v2#66e0716a752dd316d27b049cf40ddedb6bbb7e91"
+dependencies = [
+ "heck 0.5.0",
+ "prettyplease",
+ "proc-macro2",
+ "protobuf",
+ "protobuf-src",
+ "quote",
+ "syn 2.0.58",
+ "tonic-build",
+]
+
+[[package]]
+name = "tonic-codec-protobuf"
+version = "0.1.0"
+source = "git+https://github.com/glorv/tonic-protobuf?branch=build-v2#66e0716a752dd316d27b049cf40ddedb6bbb7e91"
+dependencies = [
+ "bytes",
+ "protobuf",
+ "tonic",
+]
+
+[[package]]
 name = "tonic-health"
 version = "0.11.0"
-source = "git+https://github.com/glorv/tonic?branch=patch-health#ab0af7c68b28ba3cdba2e1ab0ae17850246c7d36"
+source = "git+https://github.com/glorv/tonic?branch=patch-health#914f934323860c4638e13e12eaedaa7c7031d5ce"
 dependencies = [
  "async-stream 0.3.5",
- "prost 0.12.6",
+ "prost",
  "tokio",
  "tokio-stream",
  "tonic",
@@ -7499,7 +7396,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if 0.1.10",
  "static_assertions",
 ]
 
@@ -8200,8 +8097,3 @@ dependencies = [
  "cc",
  "libc 0.2.151",
 ]
-
-[[patch.unused]]
-name = "protobuf-codegen"
-version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaae4352ea01bf00e160480d8da966d3109"

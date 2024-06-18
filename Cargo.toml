@@ -137,7 +137,7 @@ pin-project = "1.0"
 pnet_datalink = "0.23"
 pprof = { version = "0.13", default-features = false, features = [
   "flamegraph",
-  "prost-codec",
+  "protobuf-codec",
 ] }
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
@@ -240,7 +240,7 @@ procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "7693954bd1dd86e
 # kvproto at the same time.
 # After the PR to kvproto is merged, remember to comment this out and run `cargo update -p kvproto`.
 # [patch.'https://github.com/pingcap/kvproto']
-# kvproto = { path = "../kvproto", features = ["grpcio-prost"] }
+# kvproto = { git = "https://github.com/yourname/kvproto", features = ["grpcio-prost"] }
 #
 # After the PR to rust-rocksdb is merged, remember to comment this out and run `cargo update -p rocksdb`.
 # [patch.'https://github.com/tikv/rust-rocksdb']
@@ -413,22 +413,22 @@ time = { version = "0.1" }
 tracker = { path = "components/tracker" }
 txn_types = { path = "components/txn_types" }
 # External libs
-raft = { git = "https://github.com/glorv/raft-rs", branch = "prost", default-features = false, features = ["prost-codec", "default-logger"] }
-raft-proto = { git = "https://github.com/glorv/raft-rs", branch = "prost", default-features = false, features = ["prost-codec"] }
-raft-engine = { git = "https://github.com/glorv/raft-engine.git", branch = "prost", features = [
+raft = { git = "https://github.com/glorv/raft-rs", branch = "prost", default-features = false, features = ["protobuf-codec", "default-logger"] }
+raft-proto = { git = "https://github.com/glorv/raft-rs", branch = "prost", default-features = false, features = ["protobuf-codec"] }
+raft-engine = { git = "https://github.com/tikv/raft-engine.git", features = [
   "swap",
 ] }
-raft-engine-ctl = { git = "https://github.com/glorv/raft-engine.git", branch = "prost" }
+raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git" }
 grpcio = { git = "https://github.com/glorv/grpc-rs", branch = "prost", default-features = false, features = [
   "openssl",
-  "prost-codec",
+  "protobuf-codec",
   "nightly",
 ] }
 grpcio-health = { git = "https://github.com/glorv/grpc-rs", branch = "prost", default-features = false, features = [
-  "prost-codec",
+  "protobuf-codec",
 ] }
-tipb = { git = "https://github.com/glorv/tipb", branch = "prost", default-features = false, features = ["tonic-prost-codec"] }
-kvproto = { git = "https://github.com/glorv/kvproto", branch = "tonic-prost", features = ["tonic-prost"] }
+tipb = { git = "https://github.com/glorv/tipb", branch = "tonic-protobuf", default-features = false, features = ["protobuf-codec"] }
+kvproto = { git = "https://github.com/glorv/kvproto", branch = "tonic-protobuf", default-features = false, features = ["tonic-protobuf"] }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
@@ -447,8 +447,7 @@ tracing = { version = "0.1.39", default-features = false, features = [
 ] }
 openssl = "0.10"
 openssl-sys = "0.9"
-prost = "0.12"
-tonic = "0.11"
+tonic = { git = "https://github.com/glorv/tonic", branch = "patch-health" }
 tonic-health = { git = "https://github.com/glorv/tonic", branch = "patch-health" }
 
 tokio = { version = "1.5", features = ["rt-multi-thread"] }

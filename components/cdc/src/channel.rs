@@ -11,7 +11,7 @@ use futures::{
     stream, SinkExt, Stream, StreamExt,
 };
 use grpcio::WriteFlags;
-use kvproto::cdcpb::{event::Event as EventEvent, ChangeDataEvent, Event, ResolvedTs};
+use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
 use protobuf::Message;
 use tikv_util::{
     future::block_on_timeout,
@@ -115,8 +115,8 @@ impl fmt::Debug for CdcEvent {
                 let mut d = f.debug_struct("Event");
                 d.field("region_id", &e.region_id);
                 d.field("request_id", &e.request_id);
-                if let Some(EventEvent::Entries(e)) = &e.event {
-                    d.field("entries count", &e.get_entries().len());
+                if e.has_entries() {
+                    d.field("entries count", &e.get_entries().get_entries().len());
                 }
                 d.finish()
             }

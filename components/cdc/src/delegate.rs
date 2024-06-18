@@ -14,12 +14,8 @@ use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
 use kvproto::{
     cdcpb::{
-        change_data_request::KvApi as ChangeDataRequestKvApi,
-        event::{
-            row::OpType as EventRowOpType, Entries as EventEntries, Event as Event_oneof_event,
-            LogType as EventLogType, Row as EventRow,
-        },
-        Error as EventError, Event,
+        ChangeDataRequestKvApi, Error as EventError, Event, EventEntries, EventLogType, EventRow,
+        EventRowOpType, Event_oneof_event,
     },
     kvrpcpb::ExtraOp as TxnExtraOp,
     metapb::{Region, RegionEpoch},
@@ -722,9 +718,7 @@ impl Delegate {
 
         let mut rows = Vec::with_capacity(txn_rows.len());
         for (_, (v, has_value)) in txn_rows {
-            if v.r#type == EventLogType::Prewrite as i32
-                && v.op_type == EventRowOpType::Put as i32
-                && !has_value
+            if v.r_type == EventLogType::Prewrite && v.op_type == EventRowOpType::Put && !has_value
             {
                 // It's possible that a prewrite command only contains lock but without
                 // default. It's not documented by classic Percolator but introduced with
@@ -1043,7 +1037,7 @@ impl Delegate {
 }
 
 fn set_event_row_type(row: &mut EventRow, ty: EventLogType) {
-    row.r#type = ty as i32;
+    row.r_type = ty;
 }
 
 fn make_overlapped_rollback(key: Key, row: &mut EventRow) {
@@ -1153,9 +1147,9 @@ fn decode_rawkv(key: Vec<u8>, value: Vec<u8>, row: &mut EventRow) -> Result<()> 
     }
 
     if decoded_value.is_delete {
-        row.op_type = EventRowOpType::Delete as i32;
+        row.op_type = EventRowOpType::Delete;
     } else {
-        row.op_type = EventRowOpType::Put as i32;
+        row.op_type = EventRowOpType::Put;
     }
     set_event_row_type(row, EventLogType::Committed);
     Ok(())

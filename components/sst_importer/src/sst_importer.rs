@@ -24,7 +24,7 @@ use external_storage::{
 };
 use file_system::{IoType, OpenOptions};
 use kvproto::{
-    backup::{CipherInfo, StorageBackend},
+    brpb::{CipherInfo, StorageBackend},
     import_sstpb::{Range, *},
     kvrpcpb::ApiVersion,
     metapb::Region,
@@ -870,7 +870,7 @@ impl<E: KvEngine> SstImporter<E> {
         };
         let restore_config = external_storage::RestoreConfig {
             range,
-            compression_type: Some(meta.get_compression_type()),
+            compression_type: Some(meta.compression_type),
             expected_sha256,
             file_crypter: None,
         };
@@ -1094,7 +1094,7 @@ impl<E: KvEngine> SstImporter<E> {
         let path = self.dir.join_for_write(meta)?;
 
         let file_crypter = crypter.map(|c| FileEncryptionInfo {
-            method: c.get_cipher_type(),
+            method: c.cipher_type,
             key: c.cipher_key,
             iv: meta.cipher_iv.to_owned(),
         });

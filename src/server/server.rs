@@ -15,9 +15,9 @@ use grpcio::{
     ChannelBuilder, Environment, ResourceQuota, Server as GrpcioGrpcServer, ServerBuilder,
 };
 use health_controller::HealthController;
-use kvproto::tikvpb::{
-    tikv_server::{Tikv, TikvServer as GrpcTikvServer},
-    *,
+use kvproto::{
+    tikvpb::*,
+    tikvpb_grpc::tikv_server::{Tikv, TikvServer as GrpcTikvServer},
 };
 use raftstore::store::{CheckLeaderTask, SnapManager, TabletSnapManager};
 use resource_control::ResourceGroupManager;

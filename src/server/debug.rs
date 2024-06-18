@@ -655,7 +655,7 @@ where
             // It's safe to unwrap region_local_state here, because
             // get_all_regions_in_store() guarantees that the region state
             // exists in kvdb.
-            if region_state.region_local_state.unwrap().get_state() == PeerState::Tombstone {
+            if region_state.region_local_state.unwrap().state == PeerState::Tombstone {
                 continue;
             }
 

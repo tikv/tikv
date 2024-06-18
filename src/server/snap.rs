@@ -28,7 +28,7 @@ use kvproto::{
     raft_serverpb::{
         RaftMessage, RaftSnapshotData, SnapshotChunk, TabletSnapshotRequest, TabletSnapshotResponse,
     },
-    tikvpb::tikv_client::TikvClient,
+    tikvpb_grpc::tikv_client::TikvClient,
 };
 use protobuf::Message;
 use raftstore::store::{SnapEntry, SnapKey, SnapManager, Snapshot};

@@ -181,13 +181,8 @@ impl From<Records> for Vec<ResourceUsageRecord> {
             let mut tag_record = GroupTagRecord::default();
             tag_record.set_resource_group_tag(tag);
             tag_record.set_items(items.into());
-            let r: ResourceUsageRecord = ResourceUsageRecord {
-                record_oneof: Some(
-                    kvproto::resource_usage_agent::resource_usage_record::RecordOneof::Record(
-                        tag_record,
-                    ),
-                ),
-            };
+            let mut r = ResourceUsageRecord::new();
+            r.set_record(tag_record);
             res.push(r);
         }
 
@@ -211,13 +206,8 @@ impl From<Records> for Vec<ResourceUsageRecord> {
             }
             let mut tag_record = GroupTagRecord::default();
             tag_record.set_items(items.into());
-            let r: ResourceUsageRecord = ResourceUsageRecord {
-                record_oneof: Some(
-                    kvproto::resource_usage_agent::resource_usage_record::RecordOneof::Record(
-                        tag_record,
-                    ),
-                ),
-            };
+            let mut r = ResourceUsageRecord::new();
+            r.set_record(tag_record);
             res.push(r);
         }
 

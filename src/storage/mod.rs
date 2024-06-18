@@ -648,12 +648,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 deadline.check()?;
 
-                Self::check_api_version(
-                    api_version,
-                    ctx.get_api_version(),
-                    CMD,
-                    [key.as_encoded()],
-                )?;
+                Self::check_api_version(api_version, ctx.api_version, CMD, [key.as_encoded()])?;
 
                 let command_duration = Instant::now();
 
@@ -848,12 +843,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                         QueryKind::Get,
                     );
 
-                    Self::check_api_version(
-                        api_version,
-                        ctx.get_api_version(),
-                        CMD,
-                        [key.as_encoded()],
-                    )?;
+                    Self::check_api_version(api_version, ctx.api_version, CMD, [key.as_encoded()])?;
 
                     let start_ts = req.get_version().into();
                     let isolation_level = ctx.get_isolation_level();
@@ -1051,7 +1041,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 Self::check_api_version(
                     api_version,
-                    ctx.get_api_version(),
+                    ctx.api_version,
                     CMD,
                     keys.iter().map(Key::as_encoded),
                 )?;
@@ -1245,7 +1235,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 Self::check_api_version(
                     api_version,
-                    ctx.get_api_version(),
+                    ctx.api_version,
                     CMD,
                     keys.iter().map(Key::as_encoded),
                 )?;
@@ -1440,7 +1430,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 Self::check_api_version_ranges(
                     api_version,
-                    ctx.get_api_version(),
+                    ctx.api_version,
                     CMD,
                     [(
                         Some(start_key.as_encoded()),
@@ -1739,7 +1729,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let keys = mutations.iter().map(|m| m.key().as_encoded());
                 Self::check_api_version(
                     self.api_version,
-                    cmd.ctx().get_api_version(),
+                    cmd.ctx().api_version,
                     CommandKind::prewrite,
                     keys.clone(),
                 )?;
@@ -1749,7 +1739,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let keys = mutations.iter().map(|(m, _)| m.key().as_encoded());
                 Self::check_api_version(
                     self.api_version,
-                    cmd.ctx().get_api_version(),
+                    cmd.ctx().api_version,
                     CommandKind::prewrite,
                     keys.clone(),
                 )?;
@@ -1759,7 +1749,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let keys = mutations.iter().map(|m| m.key().as_encoded());
                 Self::check_api_version(
                     self.api_version,
-                    cmd.ctx().get_api_version(),
+                    cmd.ctx().api_version,
                     CommandKind::flush,
                     keys.clone(),
                 )?;
@@ -1769,7 +1759,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let keys = keys.iter().map(|k| k.0.as_encoded());
                 Self::check_api_version(
                     self.api_version,
-                    cmd.ctx().get_api_version(),
+                    cmd.ctx().api_version,
                     CommandKind::acquire_pessimistic_lock,
                     keys.clone(),
                 )?;
@@ -1781,7 +1771,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 let keys = items.iter().map(|item| item.key.as_encoded());
                 Self::check_api_version(
                     self.api_version,
-                    cmd.ctx().get_api_version(),
+                    cmd.ctx().api_version,
                     CommandKind::acquire_pessimistic_lock_resumed,
                     keys.clone(),
                 )?;
@@ -1857,7 +1847,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> Result<()> {
         Self::check_api_version_ranges(
             self.api_version,
-            ctx.get_api_version(),
+            ctx.api_version,
             CommandKind::delete_range,
             [(Some(start_key.as_encoded()), Some(end_key.as_encoded()))],
         )?;
@@ -1922,7 +1912,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     .get(priority_tag)
                     .inc();
 
-                Self::check_api_version(api_version, ctx.get_api_version(), CMD, [&key])?;
+                Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
 
                 let command_duration = Instant::now();
                 let snap_ctx = SnapContext {
@@ -2034,7 +2024,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                 for get in &gets {
                     Self::check_api_version(
                         api_version,
-                        get.get_context().get_api_version(),
+                        get.get_context().api_version,
                         CMD,
                         [get.get_key()],
                     )
@@ -2171,7 +2161,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     .get(priority_tag)
                     .inc();
 
-                Self::check_api_version(api_version, ctx.get_api_version(), CMD, &keys)?;
+                Self::check_api_version(api_version, ctx.api_version, CMD, &keys)?;
 
                 let command_duration = Instant::now();
                 let snap_ctx = SnapContext {
@@ -2288,7 +2278,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         const CMD: CommandKind = CommandKind::raw_put;
         let api_version = self.api_version;
 
-        Self::check_api_version(api_version, ctx.get_api_version(), CMD, [&key])?;
+        Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
 
@@ -2395,7 +2385,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         const CMD: CommandKind = CommandKind::raw_batch_put;
         Self::check_api_version(
             self.api_version,
-            ctx.get_api_version(),
+            ctx.api_version,
             CMD,
             pairs.iter().map(|(ref k, _)| k),
         )?;
@@ -2470,7 +2460,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<()>,
     ) -> Result<()> {
         const CMD: CommandKind = CommandKind::raw_delete;
-        Self::check_api_version(self.api_version, ctx.get_api_version(), CMD, [&key])?;
+        Self::check_api_version(self.api_version, ctx.api_version, CMD, [&key])?;
 
         check_key_size!(Some(&key).into_iter(), self.max_key_size, callback);
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
@@ -2531,7 +2521,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         check_key_size!([&start_key, &end_key], self.max_key_size, callback);
         Self::check_api_version_ranges(
             self.api_version,
-            ctx.get_api_version(),
+            ctx.api_version,
             CMD,
             [(Some(&start_key), Some(&end_key))],
         )?;
@@ -2579,7 +2569,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         callback: Callback<()>,
     ) -> Result<()> {
         const CMD: CommandKind = CommandKind::raw_batch_delete;
-        Self::check_api_version(self.api_version, ctx.get_api_version(), CMD, &keys)?;
+        Self::check_api_version(self.api_version, ctx.api_version, CMD, &keys)?;
 
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         check_key_size!(keys.iter(), self.max_key_size, callback);
@@ -2675,7 +2665,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 Self::check_api_version_ranges(
                     api_version,
-                    ctx.get_api_version(),
+                    ctx.api_version,
                     CMD,
                     [(Some(&start_key), end_key.as_ref())],
                 )?;
@@ -2819,7 +2809,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 Self::check_api_version_ranges(
                     api_version,
-                    ctx.get_api_version(),
+                    ctx.api_version,
                     CMD,
                     ranges
                         .iter()
@@ -2976,7 +2966,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
                     .get(priority_tag)
                     .inc();
 
-                Self::check_api_version(api_version, ctx.get_api_version(), CMD, [&key])?;
+                Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
 
                 let command_duration = Instant::now();
                 let snap_ctx = SnapContext {
@@ -3045,7 +3035,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> Result<()> {
         const CMD: CommandKind = CommandKind::raw_compare_and_swap;
         let api_version = self.api_version;
-        Self::check_api_version(api_version, ctx.get_api_version(), CMD, [&key])?;
+        Self::check_api_version(api_version, ctx.api_version, CMD, [&key])?;
         let cf = Self::rawkv_cf(&cf, api_version)?;
 
         if !F::IS_TTL_ENABLED && ttl != 0 {
@@ -3076,7 +3066,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
         const CMD: CommandKind = CommandKind::raw_atomic_store;
         Self::check_api_version(
             self.api_version,
-            ctx.get_api_version(),
+            ctx.api_version,
             CMD,
             pairs.iter().map(|(ref k, _)| k),
         )?;
@@ -3107,7 +3097,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
     ) -> Result<()> {
         const CMD: CommandKind = CommandKind::raw_atomic_store;
 
-        Self::check_api_version(self.api_version, ctx.get_api_version(), CMD, &keys)?;
+        Self::check_api_version(self.api_version, ctx.api_version, CMD, &keys)?;
         let cf = Self::rawkv_cf(&cf, self.api_version)?;
         let sched = self.get_scheduler();
         let priority = ctx.get_priority();
@@ -3166,7 +3156,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Storage<E, L, F> {
 
                 Self::check_api_version_ranges(
                     api_version,
-                    ctx.get_api_version(),
+                    ctx.api_version,
                     CMD,
                     ranges
                         .iter()
@@ -4180,9 +4170,7 @@ mod tests {
     use errors::extract_key_error;
     use futures::executor::block_on;
     use kvproto::{
-        kvrpcpb::{
-            prewrite_request::PessimisticAction::*, Assertion, AssertionLevel, CommandPri, Op,
-        },
+        kvrpcpb::{Assertion, AssertionLevel, CommandPri, Op, PrewriteRequestPessimisticAction::*},
         metapb::RegionEpoch,
     };
     use parking_lot::Mutex;

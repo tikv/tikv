@@ -2,10 +2,7 @@
 
 use std::collections::HashSet;
 
-use kvproto::{
-    logbackup::{log_backup_server::LogBackup, *},
-    metapb::Region,
-};
+use kvproto::{logbackup_grpc::log_backup_server::LogBackup, logbackuppb::*, metapb::Region};
 use tikv_util::{warn, worker::Scheduler};
 
 use crate::{
@@ -41,7 +38,23 @@ impl From<RegionIdWithVersion> for RegionIdentity {
     }
 }
 
-impl LogBackup for Service {}
+#[tonic::async_trait]
+impl LogBackup for Service {
+    async fn get_last_flush_ts_of_region(
+        &self,
+        request: tonic::Request<GetLastFlushTsOfRegionRequest>,
+    ) -> std::result::Result<tonic::Response<GetLastFlushTsOfRegionResponse>, tonic::Status> {
+        unimplemented!()
+    }
+    /// Server streaming response type for the SubscribeFlushEvent method.
+    type SubscribeFlushEventStream = tonic::codegen::BoxStream<SubscribeFlushEventResponse>;
+    async fn subscribe_flush_event(
+        &self,
+        request: tonic::Request<SubscribeFlushEventRequest>,
+    ) -> std::result::Result<tonic::Response<Self::SubscribeFlushEventStream>, tonic::Status> {
+        unimplemented!()
+    }
+}
 
 // impl LogBackup for Service {
 // fn get_last_flush_ts_of_region(

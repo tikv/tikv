@@ -15,10 +15,7 @@ use futures::{
     stream::{StreamExt, TryStreamExt},
 };
 use grpcio::Environment;
-use kvproto::{
-    deadlock::{deadlock_server::Deadlock, *},
-    metapb::Region,
-};
+use kvproto::{deadlock::*, deadlock_grpc::deadlock_server::Deadlock, metapb::Region};
 use pd_client::{PdClient, INVALID_ID};
 use raft::StateRole;
 use raftstore::{
@@ -1115,6 +1112,7 @@ impl Deadlock for Service {
         }
     }
 
+    type DetectStream = tonic::codegen::BoxStream<DeadlockResponse>;
     async fn detect(
         &self,
         request: tonic::Request<tonic::Streaming<DeadlockRequest>>,

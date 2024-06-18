@@ -11,12 +11,9 @@ use futures::stream::TryStreamExt;
 use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
 use kvproto::{
     cdcpb::{
-        change_data_request::{
-            KvApi as ChangeDataRequestKvApi, Request as ChangeDataRequest_oneof_request,
-        },
-        change_data_server::ChangeData,
-        ChangeDataEvent, ChangeDataRequest,
+        ChangeDataEvent, ChangeDataRequest, ChangeDataRequestKvApi, ChangeDataRequest_oneof_request,
     },
+    cdcpb_grpc::change_data_server::ChangeData,
     kvrpcpb::ApiVersion,
 };
 use tikv_util::{error, info, memory::MemoryQuota, warn, worker::*};
@@ -354,7 +351,7 @@ impl Service {
             request.get_region_epoch().clone(),
             request.request_id,
             conn_id,
-            request.get_kv_api(),
+            request.kv_api,
             request.filter_loop,
             observed_range,
         );
@@ -487,7 +484,24 @@ impl Service {
     }
 }
 
-impl ChangeData for Service {}
+#[tonic::async_trait]
+impl ChangeData for Service {
+    type EventFeedStream = tonic::codegen::BoxStream<ChangeDataEvent>;
+    async fn event_feed(
+        &self,
+        request: tonic::Request<tonic::Streaming<ChangeDataRequest>>,
+    ) -> std::result::Result<tonic::Response<Self::EventFeedStream>, tonic::Status> {
+        unimplemented!()
+    }
+    /// Server streaming response type for the EventFeedV2 method.
+    type EventFeedV2Stream = tonic::codegen::BoxStream<ChangeDataEvent>;
+    async fn event_feed_v2(
+        &self,
+        request: tonic::Request<tonic::Streaming<ChangeDataRequest>>,
+    ) -> std::result::Result<tonic::Response<Self::EventFeedV2Stream>, tonic::Status> {
+        unimplemented!()
+    }
+}
 // impl ChangeData for Service {
 // fn event_feed(
 // &mut self,

@@ -2,6 +2,7 @@
 
 use std::cmp::Ordering;
 
+use bytes::Bytes;
 use engine_traits::{KvEngine, RaftEngine};
 use kvproto::{
     disk_usage::DiskUsage,
@@ -321,7 +322,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         msg.set_index(self.storage().apply_state().applied_index);
         msg.set_log_term(self.term());
         if reply_cmd {
-            msg.set_context(TRANSFER_LEADER_COMMAND_REPLY_CTX.to_vec());
+            msg.set_context(Bytes::from_static(TRANSFER_LEADER_COMMAND_REPLY_CTX));
         }
         self.raft_group_mut().raft.msgs.push(msg);
     }

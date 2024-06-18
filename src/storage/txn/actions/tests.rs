@@ -4,8 +4,8 @@
 
 use concurrency_manager::ConcurrencyManager;
 use kvproto::kvrpcpb::{
-    prewrite_request::{self, PessimisticAction::*},
     Assertion, AssertionLevel, Context,
+    PrewriteRequestPessimisticAction::{self, *},
 };
 use prewrite::{prewrite, CommitKind, TransactionKind, TransactionProperties};
 use tikv_kv::SnapContext;
@@ -24,7 +24,7 @@ pub fn must_prewrite_put_impl<E: Engine>(
     pk: &[u8],
     secondary_keys: &Option<Vec<Vec<u8>>>,
     ts: TimeStamp,
-    pessimistic_action: prewrite_request::PessimisticAction,
+    pessimistic_action: PrewriteRequestPessimisticAction,
     lock_ttl: u64,
     for_update_ts: TimeStamp,
     txn_size: u64,
@@ -64,7 +64,7 @@ pub fn must_prewrite_insert_impl<E: Engine>(
     pk: &[u8],
     secondary_keys: &Option<Vec<Vec<u8>>>,
     ts: TimeStamp,
-    pessimistic_action: prewrite_request::PessimisticAction,
+    pessimistic_action: PrewriteRequestPessimisticAction,
     lock_ttl: u64,
     for_update_ts: TimeStamp,
     txn_size: u64,
@@ -104,7 +104,7 @@ pub fn must_prewrite_put_impl_with_should_not_exist<E: Engine>(
     pk: &[u8],
     secondary_keys: &Option<Vec<Vec<u8>>>,
     ts: TimeStamp,
-    pessimistic_action: prewrite_request::PessimisticAction,
+    pessimistic_action: PrewriteRequestPessimisticAction,
     expected_for_update_ts: Option<TimeStamp>,
     lock_ttl: u64,
     for_update_ts: TimeStamp,
@@ -268,7 +268,7 @@ pub fn must_pessimistic_prewrite_put<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_action: prewrite_request::PessimisticAction,
+    pessimistic_action: PrewriteRequestPessimisticAction,
 ) {
     must_prewrite_put_impl(
         engine,
@@ -296,7 +296,7 @@ pub fn must_pessimistic_prewrite_insert<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_action: prewrite_request::PessimisticAction,
+    pessimistic_action: PrewriteRequestPessimisticAction,
 ) {
     must_prewrite_insert_impl(
         engine,
@@ -324,7 +324,7 @@ pub fn must_pessimistic_prewrite_put_with_ttl<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_action: prewrite_request::PessimisticAction,
+    pessimistic_action: PrewriteRequestPessimisticAction,
     lock_ttl: u64,
 ) {
     must_prewrite_put_impl(
@@ -420,7 +420,7 @@ pub fn must_pessimistic_prewrite_put_async_commit<E: Engine>(
     secondary_keys: &Option<Vec<Vec<u8>>>,
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_action: prewrite_request::PessimisticAction,
+    pessimistic_action: PrewriteRequestPessimisticAction,
     min_commit_ts: impl Into<TimeStamp>,
 ) -> TimeStamp {
     assert!(secondary_keys.is_some());
@@ -509,7 +509,7 @@ pub fn must_prewrite_put_err_impl<E: Engine>(
     secondary_keys: &Option<Vec<Vec<u8>>>,
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_action: prewrite_request::PessimisticAction,
+    pessimistic_action: PrewriteRequestPessimisticAction,
     max_commit_ts: impl Into<TimeStamp>,
     is_retry_request: bool,
     assertion: Assertion,
@@ -542,7 +542,7 @@ pub fn must_prewrite_insert_err_impl<E: Engine>(
     secondary_keys: &Option<Vec<Vec<u8>>>,
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_action: prewrite_request::PessimisticAction,
+    pessimistic_action: PrewriteRequestPessimisticAction,
     max_commit_ts: impl Into<TimeStamp>,
     is_retry_request: bool,
     assertion: Assertion,
@@ -575,7 +575,7 @@ pub fn must_prewrite_put_err_impl_with_should_not_exist<E: Engine>(
     secondary_keys: &Option<Vec<Vec<u8>>>,
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_action: prewrite_request::PessimisticAction,
+    pessimistic_action: PrewriteRequestPessimisticAction,
     expected_for_update_ts: Option<TimeStamp>,
     min_commit_ts: impl Into<TimeStamp>,
     max_commit_ts: impl Into<TimeStamp>,
@@ -648,7 +648,7 @@ pub fn must_pessimistic_prewrite_put_err<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_action: prewrite_request::PessimisticAction,
+    pessimistic_action: PrewriteRequestPessimisticAction,
 ) -> Error {
     must_prewrite_put_err_impl(
         engine,
@@ -673,7 +673,7 @@ pub fn must_pessimistic_prewrite_insert_err<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_action: prewrite_request::PessimisticAction,
+    pessimistic_action: PrewriteRequestPessimisticAction,
 ) -> Error {
     must_prewrite_insert_err_impl(
         engine,
@@ -727,7 +727,7 @@ pub fn must_retry_pessimistic_prewrite_put_err<E: Engine>(
     secondary_keys: &Option<Vec<Vec<u8>>>,
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_action: prewrite_request::PessimisticAction,
+    pessimistic_action: PrewriteRequestPessimisticAction,
     max_commit_ts: impl Into<TimeStamp>,
 ) -> Error {
     must_prewrite_put_err_impl(
@@ -752,7 +752,7 @@ fn must_prewrite_delete_impl<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_action: prewrite_request::PessimisticAction,
+    pessimistic_action: PrewriteRequestPessimisticAction,
     region_id: Option<u64>,
 ) {
     let mut ctx = Context::default();
@@ -828,7 +828,7 @@ pub fn must_pessimistic_prewrite_delete<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_action: prewrite_request::PessimisticAction,
+    pessimistic_action: PrewriteRequestPessimisticAction,
 ) {
     must_prewrite_delete_impl(engine, key, pk, ts, for_update_ts, pessimistic_action, None);
 }
@@ -839,7 +839,7 @@ fn must_prewrite_lock_impl<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_action: prewrite_request::PessimisticAction,
+    pessimistic_action: PrewriteRequestPessimisticAction,
 ) {
     let ctx = Context::default();
     let snapshot = engine.snapshot(Default::default()).unwrap();
@@ -905,7 +905,7 @@ pub fn must_pessimistic_prewrite_lock<E: Engine>(
     pk: &[u8],
     ts: impl Into<TimeStamp>,
     for_update_ts: impl Into<TimeStamp>,
-    pessimistic_action: prewrite_request::PessimisticAction,
+    pessimistic_action: PrewriteRequestPessimisticAction,
 ) {
     must_prewrite_lock_impl(engine, key, pk, ts, for_update_ts, pessimistic_action);
 }

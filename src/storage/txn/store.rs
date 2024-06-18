@@ -656,7 +656,7 @@ mod tests {
 
     use concurrency_manager::ConcurrencyManager;
     use engine_traits::{CfName, IterMetricsCollector, IterOptions, MetricsExt, ReadOptions};
-    use kvproto::kvrpcpb::{prewrite_request::PessimisticAction::*, AssertionLevel, Context};
+    use kvproto::kvrpcpb::{AssertionLevel, Context, PrewriteRequestPessimisticAction::*};
     use tikv_kv::DummySnapshotExt;
 
     use super::*;

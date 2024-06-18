@@ -26,16 +26,15 @@ use futures::{
 };
 use grpcio::{CallOption, MetadataBuilder};
 use kvproto::{
-    meta_storagepb::meta_storage_client::MetaStorageClient as MetaStorageStub,
+    meta_storagepb_grpc::meta_storage_client::MetaStorageClient as MetaStorageStub,
     metapb::BucketStats,
     pdpb::{
-        pd_client::PdClient as PdClientStub, ErrorType, GetMembersRequest, GetMembersResponse,
-        Member, RegionHeartbeatRequest, RegionHeartbeatResponse, ReportBucketsRequest,
-        ResponseHeader,
+        ErrorType, GetMembersRequest, GetMembersResponse, Member, RegionHeartbeatRequest,
+        RegionHeartbeatResponse, ReportBucketsRequest, ResponseHeader,
     },
-    resource_manager::{
-        resource_manager_client::ResourceManagerClient as ResourceManagerStub, TokenBucketsRequest,
-    },
+    pdpb_grpc::p_d_client::PDClient as PdClientStub,
+    resource_manager::TokenBucketsRequest,
+    resource_manager_grpc::resource_manager_client::ResourceManagerClient as ResourceManagerStub,
 };
 use security::SecurityManager;
 use tikv_util::{
@@ -273,13 +272,13 @@ impl Client {
         // );
 
         let meta_storage = unsafe {
-            let c: &kvproto::meta_storagepb::meta_storage_client::MetaStorageClient<Channel> =
+            let c: &kvproto::meta_storagepb_grpc::meta_storage_client::MetaStorageClient<Channel> =
                 std::mem::transmute(&client_stub);
             c.clone()
         };
 
         let mut resource_manager = unsafe {
-            let c: &kvproto::resource_manager::resource_manager_client::ResourceManagerClient<
+            let c: &kvproto::resource_manager_grpc::resource_manager_client::ResourceManagerClient<
                 Channel,
             > = std::mem::transmute(&client_stub);
             c.clone()

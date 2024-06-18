@@ -268,7 +268,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             "message_type" => %util::MsgType(&msg),
             "from_peer_id" => msg.get_from_peer().get_id(),
             "to_peer_id" => msg.get_to_peer().get_id(),
-            "disk_usage" => ?msg.get_disk_usage(),
+            "disk_usage" => ?msg.disk_usage,
         );
         if let Some(send_time) = send_time {
             let process_wait_time = send_time.saturating_elapsed();
@@ -431,7 +431,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
         let pre_committed_index = self.raft_group().raft.raft_log.committed;
         if msg.get_message().get_msg_type() == MessageType::MsgTransferLeader {
-            self.on_transfer_leader_msg(ctx, msg.get_message(), msg.get_disk_usage())
+            self.on_transfer_leader_msg(ctx, msg.get_message(), msg.disk_usage)
         } else {
             // As this peer is already created, the empty split message is meaningless.
             if is_empty_split_message(&msg) {
@@ -1247,14 +1247,14 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         let store_id = msg.get_from_peer().get_store_id();
         let peer_id = msg.get_from_peer().get_id();
         let disk_full_peers = self.abnormal_peer_context().disk_full_peers();
-        let refill_disk_usages = if matches!(msg.get_disk_usage(), DiskUsage::Normal) {
+        let refill_disk_usages = if matches!(msg.disk_usage, DiskUsage::Normal) {
             ctx.store_disk_usages.remove(&store_id);
             if !self.is_leader() {
                 return;
             }
             disk_full_peers.has(peer_id)
         } else {
-            ctx.store_disk_usages.insert(store_id, msg.get_disk_usage());
+            ctx.store_disk_usages.insert(store_id, msg.disk_usage);
             if !self.is_leader() {
                 return;
             }
@@ -1262,15 +1262,15 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
             disk_full_peers.is_empty()
                 || disk_full_peers
                     .get(peer_id)
-                    .map_or(true, |x| x != msg.get_disk_usage())
+                    .map_or(true, |x| x != msg.disk_usage)
         };
 
         if refill_disk_usages || self.has_region_merge_proposal {
             let prev = disk_full_peers.get(peer_id);
-            if Some(msg.get_disk_usage()) != prev {
+            if Some(msg.disk_usage) != prev {
                 info!(
                     self.logger,
-                    "reported disk usage changes {:?} -> {:?}", prev, msg.get_disk_usage();
+                    "reported disk usage changes {:?} -> {:?}", prev, msg.disk_usage;
                     "region_id" => self.region_id(),
                     "peer_id" => peer_id,
                 );

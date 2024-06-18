@@ -128,7 +128,9 @@ where
             let profile = report
                 .pprof()
                 .map_err(|e| format!("generate pprof from report fail: {}", e))?;
-            profile.encode_raw(&mut body);
+            profile
+                .write_to_vec(&mut body)
+                .map_err(|e| format!("encode pprof into bytes fail: {}", e))?;
         } else {
             report
                 .flamegraph(&mut body)

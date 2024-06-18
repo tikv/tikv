@@ -22,9 +22,9 @@ use futures::compat::Future01CompatExt;
 use grpcio::Environment;
 use kvproto::{
     cdcpb::{
-        event::Event as Event_oneof_event, ChangeDataRequest,
-        ClusterIdMismatch as ErrorClusterIdMismatch, Compatibility as ErrorCompatibility,
-        DuplicateRequest as ErrorDuplicateRequest, Error as EventError, Event, ResolvedTs,
+        ChangeDataRequest, ClusterIdMismatch as ErrorClusterIdMismatch,
+        Compatibility as ErrorCompatibility, DuplicateRequest as ErrorDuplicateRequest,
+        Error as EventError, Event, Event_oneof_event, ResolvedTs,
     },
     kvrpcpb::ApiVersion,
     metapb::Region,
@@ -1401,7 +1401,7 @@ mod tests {
     use engine_rocks::RocksEngine;
     use futures::executor::block_on;
     use kvproto::{
-        cdcpb::{change_data_request::KvApi as ChangeDataRequestKvApi, Header},
+        cdcpb::{ChangeDataRequestKvApi, Header},
         errorpb::Error as ErrorHeader,
     };
     use raftstore::{

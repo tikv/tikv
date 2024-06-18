@@ -30,7 +30,7 @@ use super::{
     metrics::*, peer_storage::storage_error, WriteTask, MEMTRACE_ENTRY_CACHE, RAFT_INIT_LOG_INDEX,
     RAFT_INIT_LOG_TERM,
 };
-use crate::{store::ReadTask, Result};
+use crate::{bytes_capacity, store::ReadTask, Result};
 
 const MAX_ASYNC_FETCH_TRY_CNT: usize = 3;
 const SHRINK_CACHE_CAPACITY: usize = 64;
@@ -166,7 +166,7 @@ impl EntryCache {
         let mut mem_size_change = 0;
         let old_capacity = self.cache.capacity();
         for e in entries.into_iter().rev() {
-            mem_size_change += (e.data.capacity() + e.context.capacity()) as u64 as i64;
+            mem_size_change += (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
             self.cache.push_front(e);
         }
         let new_capacity = self.cache.capacity();
@@ -187,7 +187,8 @@ impl EntryCache {
                     .unwrap_or_default();
                 let trunc_to_idx = self.cache[truncate_to].index;
                 for e in self.cache.drain(truncate_to..) {
-                    mem_size_change -= (e.data.capacity() + e.context.capacity()) as u64 as i64;
+                    mem_size_change -=
+                        (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
                 }
                 if let Some(cached) = self.trace.back() {
                     // Only committed entries can be traced, and only uncommitted entries
@@ -205,7 +206,7 @@ impl EntryCache {
 
         for e in entries {
             self.cache.push_back(e.to_owned());
-            mem_size_change += (e.data.capacity() + e.context.capacity()) as u64 as i64;
+            mem_size_change += (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64;
         }
         // In the past, the entry cache will be truncated if its size exceeds a certain
         // number. However, after introducing async write io, the entry must stay in
@@ -266,7 +267,7 @@ impl EntryCache {
         // necessary.
         let compact_to = (cmp::min(cache_last_idx + 1, idx) - cache_first_idx) as usize;
         for e in self.cache.drain(..compact_to) {
-            mem_size_change -= (e.data.capacity() + e.context.capacity()) as u64 as i64;
+            mem_size_change -= (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64
         }
 
         mem_size_change += self.shrink_if_necessary();
@@ -279,7 +280,7 @@ impl EntryCache {
         let data_size: i64 = self
             .cache
             .iter()
-            .map(|e| (e.data.capacity() + e.context.capacity()) as u64 as i64)
+            .map(|e| (bytes_capacity(&e.data) + bytes_capacity(&e.context)) as i64)
             .sum();
         let cache_vec_size = Self::cache_vec_mem_size_change(self.cache.capacity(), 0);
         let trace_vec_size = Self::trace_vec_mem_size_change(self.trace.capacity(), 0);
@@ -343,7 +344,7 @@ impl EntryCache {
 
             let mut size = 0;
             for e in &guard.0[dangle_range] {
-                size += e.data.capacity() + e.context.capacity();
+                size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
             }
             guard.1 = size;
             size
@@ -354,7 +355,7 @@ impl EntryCache {
         let new_capacity = self.trace.capacity();
         let diff = Self::trace_vec_mem_size_change(new_capacity, old_capacity);
 
-        self.flush_mem_size_change(diff + dangle_size as u64 as i64);
+        self.flush_mem_size_change(diff + dangle_size as i64);
     }
 
     fn shrink_if_necessary(&mut self) -> i64 {

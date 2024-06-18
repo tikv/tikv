@@ -11,9 +11,12 @@ use futures::{
     sink::SinkExt,
     stream::StreamExt,
 };
-use kvproto::diagnosticspb::{
-    diagnostics_server::Diagnostics, search_log_request::Target as SearchLogRequestTarget,
-    SearchLogRequest, SearchLogResponse, ServerInfoRequest, ServerInfoResponse, ServerInfoType,
+use kvproto::{
+    diagnosticspb::{
+        SearchLogRequest, SearchLogRequestTarget, SearchLogResponse, ServerInfoRequest,
+        ServerInfoResponse, ServerInfoType,
+    },
+    diagnosticspb_grpc::diagnostics_server::Diagnostics,
 };
 use tikv_util::{
     sys::{ioload, SystemExt},
@@ -51,6 +54,7 @@ impl Service {
 
 #[tonic::async_trait]
 impl Diagnostics for Service {
+    type search_logStream = tonic::codegen::BoxStream<SearchLogResponse>;
     async fn search_log(
         &self,
         request: tonic::Request<SearchLogRequest>,

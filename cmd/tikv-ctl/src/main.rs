@@ -35,7 +35,7 @@ use kvproto::{
     encryptionpb::EncryptionMethod,
     kvrpcpb::SplitRegionRequest,
     raft_serverpb::{SnapshotMeta, StoreIdent},
-    tikvpb::tikv_client::TikvClient,
+    tikvpb_grpc::tikv_client::TikvClient,
 };
 use pd_client::{Config as PdConfig, PdClient, RpcClient};
 use protobuf::Message;
@@ -665,7 +665,7 @@ fn main() {
                             let list_req = ListFailPointsRequest::default();
                             let option = CallOption::default().timeout(Duration::from_secs(10));
                             let resp = client.list_fail_points(list_req);
-                            //println!("{:?}", resp.get_entries());
+                            // println!("{:?}", resp.get_entries());
                         }
                     }
                 }

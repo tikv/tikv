@@ -17,7 +17,7 @@ use engine_traits::{
 use fail::fail_point;
 use keys::{data_end_key, data_key};
 use kvproto::{
-    cdcpb::change_data_request::KvApi as ChangeDataRequestKvApi,
+    cdcpb::ChangeDataRequestKvApi,
     kvrpcpb::ExtraOp as TxnExtraOp,
     metapb::{Region, RegionEpoch},
 };
@@ -598,7 +598,7 @@ mod tests {
     use engine_traits::{MiscExt, CF_WRITE};
     use futures::{executor::block_on, StreamExt};
     use kvproto::{
-        cdcpb::{event::Event as Event_oneof_event, EventLogType},
+        cdcpb::{EventLogType, Event_oneof_event},
         errorpb::Error as ErrorHeader,
     };
     use raftstore::{coprocessor::ObserveHandle, router::CdcRaftRouter, store::RegionSnapshot};

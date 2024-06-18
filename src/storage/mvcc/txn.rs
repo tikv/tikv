@@ -244,7 +244,7 @@ pub(crate) fn make_txn_error(
     key: &Key,
     start_ts: TimeStamp,
 ) -> crate::storage::mvcc::ErrorInner {
-    use kvproto::kvrpcpb::write_conflict::Reason as WriteConflictReason;
+    use kvproto::kvrpcpb::WriteConflictReason;
 
     use crate::storage::mvcc::{ErrorInner, PessimisticLockNotFoundReason};
     if let Some(s) = s {

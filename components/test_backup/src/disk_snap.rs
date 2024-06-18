@@ -18,7 +18,7 @@ use grpcio::{
     WriteFlags,
 };
 use kvproto::{
-    backup::{
+    brpb::{
         self, PrepareSnapshotBackupEventType, PrepareSnapshotBackupRequest,
         PrepareSnapshotBackupRequestType, PrepareSnapshotBackupResponse,
     },
@@ -36,7 +36,7 @@ use tikv_util::{
 pub struct Node {
     service: Option<Server>,
     pub rejector: Arc<PrepareDiskSnapObserver>,
-    pub backup_client: Option<backup::BackupClient>,
+    pub backup_client: Option<brpb::BackupClient>,
 }
 
 pub struct Suite {

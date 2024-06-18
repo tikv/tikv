@@ -30,7 +30,7 @@ use std::{
 
 use encryption::{DataKeyManager, DecrypterReader, EncrypterWriter, Iv};
 use futures::{AsyncWriteExt, TryFutureExt};
-use kvproto::{backup::CompressionType, encryptionpb::EncryptionMethod};
+use kvproto::{brpb::CompressionType, encryptionpb::EncryptionMethod};
 use tikv_util::warn;
 use tokio::{
     fs::File as OsFile,
@@ -791,7 +791,7 @@ mod test {
 
     use async_compression::tokio::bufread::ZstdDecoder;
     use encryption::DataKeyManager;
-    use kvproto::{backup::CompressionType, encryptionpb::EncryptionMethod};
+    use kvproto::{brpb::CompressionType, encryptionpb::EncryptionMethod};
     use tempfile::{tempdir, TempDir};
     use test_util::new_test_key_manager;
     use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};

@@ -22,7 +22,7 @@ use file_system::File;
 use futures::io::BufReader;
 use futures_io::AsyncRead;
 use futures_util::AsyncReadExt;
-use kvproto::backup::CompressionType;
+use kvproto::brpb::CompressionType;
 use openssl::hash::{Hasher, MessageDigest};
 use tikv_util::{
     future::RescheduleChecker,

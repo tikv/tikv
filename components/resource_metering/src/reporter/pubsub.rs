@@ -6,9 +6,9 @@ use futures::{
     channel::mpsc::{channel, Sender},
     stream, StreamExt,
 };
-use kvproto::resource_usage_agent::{
-    resource_metering_pub_sub_server::ResourceMeteringPubSub, ResourceMeteringRequest,
-    ResourceUsageRecord,
+use kvproto::{
+    resource_usage_agent::{ResourceMeteringRequest, ResourceUsageRecord},
+    resource_usage_agent_grpc::resource_metering_pub_sub_server::ResourceMeteringPubSub,
 };
 use tikv_util::{info, stream::GuardedStream};
 use tonic::{self, codegen::BoxStream};
@@ -42,6 +42,7 @@ impl PubSubService {
 
 #[tonic::async_trait]
 impl ResourceMeteringPubSub for PubSubService {
+    type SubscribeStream = tonic::codegen::BoxStream<ResourceUsageRecord>;
     async fn subscribe(
         &self,
         _request: tonic::Request<ResourceMeteringRequest>,

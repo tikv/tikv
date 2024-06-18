@@ -18,7 +18,7 @@ use std::{
 
 use collections::HashMap;
 use grpcio::{CallOption, ChannelBuilder, Environment, MetadataBuilder, RpcContext};
-use kvproto::tikvpb::tikv_client::TikvClient;
+use kvproto::tikvpb_grpc::tikv_client::TikvClient;
 use security::SecurityManager;
 use tonic::transport::Channel;
 

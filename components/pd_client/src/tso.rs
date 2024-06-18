@@ -24,7 +24,10 @@ use futures::{
     prelude::*,
     task::{AtomicWaker, Context, Poll},
 };
-use kvproto::pdpb::{pd_client::PdClient, TsoRequest, TsoResponse};
+use kvproto::{
+    pdpb::{TsoRequest, TsoResponse},
+    pdpb_grpc::p_d_client::PDClient,
+};
 use tikv_util::{box_err, info, sys::thread::StdThreadBuildWrapper, warn};
 use tokio::sync::{mpsc, oneshot, watch};
 use tonic::transport::Channel;
@@ -57,7 +60,7 @@ pub struct TimestampOracle {
 impl TimestampOracle {
     pub(crate) fn new(
         cluster_id: u64,
-        pd_client: &PdClient<Channel>,
+        pd_client: &PDClient<Channel>,
         spawn_handle: tokio::runtime::Handle,
     ) -> Result<TimestampOracle> {
         let (request_tx, request_rx) = mpsc::channel(MAX_BATCH_SIZE);
@@ -112,7 +115,7 @@ impl TimestampOracle {
 
 async fn run_tso(
     cluster_id: u64,
-    mut pd_client: PdClient<Channel>,
+    mut pd_client: PDClient<Channel>,
     request_rx: mpsc::Receiver<TimestampRequest>,
     close_tx: watch::Sender<()>,
 ) {

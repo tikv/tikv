@@ -9,7 +9,7 @@ use futures::{
     stream::{StreamExt, TryStreamExt},
 };
 use grpcio::{EnvBuilder, Environment};
-use kvproto::deadlock::{deadlock_client::DeadlockClient, *};
+use kvproto::{deadlock::*, deadlock_grpc::deadlock_client::DeadlockClient};
 use security::SecurityManager;
 use tonic::transport::Channel;
 

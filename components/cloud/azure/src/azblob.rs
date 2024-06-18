@@ -24,7 +24,7 @@ use futures_util::{
     stream::StreamExt,
     TryStreamExt,
 };
-pub use kvproto::backup::{AzureBlobStorage as InputConfig, AzureCustomerKey};
+pub use kvproto::brpb::{AzureBlobStorage as InputConfig, AzureCustomerKey};
 use oauth2::{ClientId, ClientSecret};
 use tikv_util::{
     debug,
@@ -158,7 +158,10 @@ impl Config {
             region: None,
         };
 
-        let encryption_customer = input.encryption_key.clone().map(EncryptionCustomer::from);
+        let encryption_customer = input
+            .encryption_key
+            .into_option()
+            .map(EncryptionCustomer::from);
 
         Ok(Config {
             bucket,

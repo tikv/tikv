@@ -166,7 +166,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
 
             // make fake vote responses from peers on failed store.
             let mut msg = raft::eraftpb::Message::default();
-            msg.msg_type = MessageType::MsgRequestVoteResponse as i32;
+            msg.msg_type = MessageType::MsgRequestVoteResponse;
             msg.reject = false;
             msg.term = self.term();
             msg.from = peer_id;

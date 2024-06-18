@@ -20,12 +20,10 @@ use futures::{
 };
 use health_controller::HealthController;
 use kvproto::{
-    coprocessor::*,
-    kvrpcpb::*,
-    mpp::*,
-    raft_serverpb::*,
-    tikvpb::{tikv_server::Tikv, *},
+    coprocessor::*, disaggregated::*, kvrpcpb::*, mpp::*, raft_serverpb::*, tikvpb::*,
+    tikvpb_grpc::tikv_server::Tikv,
 };
+use protobuf::RepeatedField;
 use raft::eraftpb::MessageType;
 use raftstore::{
     store::{
@@ -418,6 +416,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     ) -> std::result::Result<tonic::Response<CommitResponse>, tonic::Status> {
         handle_request!(kv_commit, future_commit, self, request, has_time_detail)
     }
+    async fn kv_import(
+        &self,
+        request: tonic::Request<ImportRequest>,
+    ) -> std::result::Result<tonic::Response<ImportResponse>, tonic::Status> {
+        unimplemented!()
+    }
     async fn kv_cleanup(
         &self,
         request: tonic::Request<CleanupRequest>,
@@ -465,6 +469,12 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             request,
             has_time_detail
         )
+    }
+    async fn kv_gc(
+        &self,
+        request: tonic::Request<GcRequest>,
+    ) -> std::result::Result<tonic::Response<GcResponse>, tonic::Status> {
+        unimplemented!()
     }
 
     async fn kv_delete_range(
@@ -740,6 +750,33 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         Ok(tonic::Response::new(resp))
     }
 
+    async fn register_lock_observer(
+        &self,
+        request: tonic::Request<RegisterLockObserverRequest>,
+    ) -> std::result::Result<tonic::Response<RegisterLockObserverResponse>, tonic::Status> {
+        unimplemented!()
+    }
+
+    async fn check_lock_observer(
+        &self,
+        request: tonic::Request<CheckLockObserverRequest>,
+    ) -> std::result::Result<tonic::Response<CheckLockObserverResponse>, tonic::Status> {
+        unimplemented!()
+    }
+    async fn remove_lock_observer(
+        &self,
+        request: tonic::Request<RemoveLockObserverRequest>,
+    ) -> std::result::Result<tonic::Response<RemoveLockObserverResponse>, tonic::Status> {
+        unimplemented!()
+    }
+    async fn physical_scan_lock(
+        &self,
+        request: tonic::Request<PhysicalScanLockRequest>,
+    ) -> std::result::Result<tonic::Response<PhysicalScanLockResponse>, tonic::Status> {
+        unimplemented!()
+    }
+
+    type CoprocessorStreamStream = tonic::codegen::BoxStream<Response>;
     async fn coprocessor_stream(
         &self,
         request: tonic::Request<Request>,
@@ -775,6 +812,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             .observe(begin_instant.saturating_elapsed().as_secs_f64());
 
         Ok(tonic::Response::new(Box::pin(stream) as _))
+    }
+
+    type BatchCoprocessorStream = tonic::codegen::BoxStream<BatchResponse>;
+    async fn batch_coprocessor(
+        &self,
+        request: tonic::Request<BatchRequest>,
+    ) -> std::result::Result<tonic::Response<Self::BatchCoprocessorStream>, tonic::Status> {
+        unimplemented!()
     }
 
     async fn raft(
@@ -867,6 +912,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             .map_err(|e| tonic::Status::cancelled(format!("{:?}", e)))
     }
 
+    type TabletSnapshotStream = tonic::codegen::BoxStream<TabletSnapshotResponse>;
     async fn tablet_snapshot(
         &self,
         request: tonic::Request<tonic::Streaming<TabletSnapshotRequest>>,
@@ -960,6 +1006,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         Ok(tonic::Response::new(resp))
     }
 
+    async fn read_index(
+        &self,
+        request: tonic::Request<ReadIndexRequest>,
+    ) -> std::result::Result<tonic::Response<ReadIndexResponse>, tonic::Status> {
+        unimplemented!()
+    }
+
+    type BatchCommandsStream = tonic::codegen::BoxStream<BatchCommandsResponse>;
     async fn batch_commands(
         &self,
         request: tonic::Request<tonic::Streaming<BatchCommandsRequest>>,
@@ -1049,6 +1103,40 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
         Ok(tonic::Response::new(Box::pin(response_retriever) as _))
     }
 
+    async fn dispatch_mpp_task(
+        &self,
+        request: tonic::Request<DispatchTaskRequest>,
+    ) -> std::result::Result<tonic::Response<DispatchTaskResponse>, tonic::Status> {
+        unimplemented!()
+    }
+    async fn cancel_mpp_task(
+        &self,
+        request: tonic::Request<CancelTaskRequest>,
+    ) -> std::result::Result<tonic::Response<CancelTaskResponse>, tonic::Status> {
+        unimplemented!()
+    }
+    /// Server streaming response type for the EstablishMPPConnection method.
+    type EstablishMPPConnectionStream = tonic::codegen::BoxStream<MppDataPacket>;
+    async fn establish_mpp_connection(
+        &self,
+        request: tonic::Request<EstablishMppConnectionRequest>,
+    ) -> std::result::Result<tonic::Response<Self::EstablishMPPConnectionStream>, tonic::Status>
+    {
+        unimplemented!()
+    }
+    async fn is_alive(
+        &self,
+        request: tonic::Request<IsAliveRequest>,
+    ) -> std::result::Result<tonic::Response<IsAliveResponse>, tonic::Status> {
+        unimplemented!()
+    }
+    async fn report_mpp_task_status(
+        &self,
+        request: tonic::Request<ReportTaskStatusRequest>,
+    ) -> std::result::Result<tonic::Response<ReportTaskStatusResponse>, tonic::Status> {
+        unimplemented!()
+    }
+
     async fn check_leader(
         &self,
         request: tonic::Request<CheckLeaderRequest>,
@@ -1119,8 +1207,65 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
             }
         };
         let mut response = GetLockWaitInfoResponse::default();
-        response.set_entries(res);
+        response.set_entries(RepeatedField::from_vec(res));
         Ok(tonic::Response::new(response))
+    }
+
+    async fn compact(
+        &self,
+        request: tonic::Request<CompactRequest>,
+    ) -> std::result::Result<tonic::Response<CompactResponse>, tonic::Status> {
+        unimplemented!()
+    }
+    async fn get_lock_wait_history(
+        &self,
+        request: tonic::Request<GetLockWaitHistoryRequest>,
+    ) -> std::result::Result<tonic::Response<GetLockWaitHistoryResponse>, tonic::Status> {
+        unimplemented!()
+    }
+    async fn get_ti_flash_system_table(
+        &self,
+        request: tonic::Request<TiFlashSystemTableRequest>,
+    ) -> std::result::Result<tonic::Response<TiFlashSystemTableResponse>, tonic::Status> {
+        unimplemented!()
+    }
+    async fn try_add_lock(
+        &self,
+        request: tonic::Request<TryAddLockRequest>,
+    ) -> std::result::Result<tonic::Response<TryAddLockResponse>, tonic::Status> {
+        unimplemented!()
+    }
+    async fn try_mark_delete(
+        &self,
+        request: tonic::Request<TryMarkDeleteRequest>,
+    ) -> std::result::Result<tonic::Response<TryMarkDeleteResponse>, tonic::Status> {
+        unimplemented!()
+    }
+    async fn establish_disagg_task(
+        &self,
+        request: tonic::Request<EstablishDisaggTaskRequest>,
+    ) -> std::result::Result<tonic::Response<EstablishDisaggTaskResponse>, tonic::Status> {
+        unimplemented!()
+    }
+    async fn cancel_disagg_task(
+        &self,
+        request: tonic::Request<CancelDisaggTaskRequest>,
+    ) -> std::result::Result<tonic::Response<CancelDisaggTaskResponse>, tonic::Status> {
+        unimplemented!()
+    }
+    /// Server streaming response type for the FetchDisaggPages method.
+    type FetchDisaggPagesStream = tonic::codegen::BoxStream<PagesPacket>;
+    async fn fetch_disagg_pages(
+        &self,
+        request: tonic::Request<FetchDisaggPagesRequest>,
+    ) -> std::result::Result<tonic::Response<Self::FetchDisaggPagesStream>, tonic::Status> {
+        unimplemented!()
+    }
+    async fn get_disagg_config(
+        &self,
+        request: tonic::Request<GetDisaggConfigRequest>,
+    ) -> std::result::Result<tonic::Response<GetDisaggConfigResponse>, tonic::Status> {
+        unimplemented!()
     }
 
     async fn get_health_feedback(
@@ -1378,7 +1523,7 @@ fn handle_batch_commands_request<E: Engine, L: LockManager, F: KvFormat>(
 }
 
 fn handle_measures_for_batch_commands(measures: &mut MeasuredBatchResponse) {
-    use kvproto::tikvpb::batch_commands_response::response::Cmd::*;
+    use BatchCommandsResponse_Response_oneof_cmd::*;
     let now = Instant::now();
     for (resp, measure) in measures
         .batch_resp
@@ -2373,18 +2518,18 @@ txn_command_future!(future_flush, FlushRequest, FlushResponse, (v, resp) {
 });
 
 pub mod batch_commands_response {
-    pub type Response = kvproto::tikvpb::batch_commands_response::Response;
+    pub type Response = kvproto::tikvpb::BatchCommandsResponseResponse;
 
     pub mod response {
-        pub type Cmd = kvproto::tikvpb::batch_commands_response::response::Cmd;
+        pub type Cmd = kvproto::tikvpb::BatchCommandsResponse_Response_oneof_cmd;
     }
 }
 
 pub mod batch_commands_request {
-    pub type Request = kvproto::tikvpb::batch_commands_request::Request;
+    pub type Request = kvproto::tikvpb::BatchCommandsRequestRequest;
 
     pub mod request {
-        pub type Cmd = kvproto::tikvpb::batch_commands_request::request::Cmd;
+        pub type Cmd = kvproto::tikvpb::BatchCommandsRequest_Request_oneof_cmd;
     }
 }
 
@@ -2668,7 +2813,7 @@ mod tests {
         let resp_with_get_health_feedback = || {
             let mut resp = BatchCommandsResponse::default();
             let mut resp_item = BatchCommandsResponseResponse::default();
-            resp_item.cmd = Some(batch_commands_response::response::Cmd::GetHealthFeedback(
+            resp_item.cmd = Some(BatchCommandsResponse_Response_oneof_cmd::GetHealthFeedback(
                 GetHealthFeedbackResponse::default(),
             ));
             resp.responses.push(resp_item);
@@ -2685,7 +2830,7 @@ mod tests {
         // info.
         fn get_feedback_in_response(resp: &BatchCommandsResponseResponse) -> &HealthFeedback {
             match resp.cmd {
-                Some(batch_commands_response::response::Cmd::GetHealthFeedback(ref f)) => {
+                Some(BatchCommandsResponse_Response_oneof_cmd::GetHealthFeedback(ref f)) => {
                     assert!(!f.has_region_error());
                     f.get_health_feedback()
                 }

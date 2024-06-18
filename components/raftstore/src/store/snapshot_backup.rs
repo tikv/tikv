@@ -10,7 +10,7 @@ use std::{
 
 use engine_traits::{KvEngine, RaftEngine};
 use futures::channel::mpsc::UnboundedSender;
-use kvproto::{backup::CheckAdminResponse, metapb::RegionEpoch, raft_cmdpb::AdminCmdType};
+use kvproto::{brpb::CheckAdminResponse, metapb::RegionEpoch, raft_cmdpb::AdminCmdType};
 use tikv_util::{info, warn};
 use tokio::sync::oneshot;
 

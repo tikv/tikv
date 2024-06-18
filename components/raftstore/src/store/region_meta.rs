@@ -199,7 +199,7 @@ impl From<RegionPeer> for metapb::Peer {
         metapb::Peer {
             id: p.id,
             store_id: p.store_id,
-            role: Into::<PeerRole>::into(p.role) as i32,
+            role: p.role.into(),
             is_witness: p.is_witness,
             ..Default::default()
         }

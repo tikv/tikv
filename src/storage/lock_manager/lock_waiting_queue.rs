@@ -558,7 +558,7 @@ impl<L: LockManager> LockWaitQueues<L> {
                     conflict_commit_ts: conflicting_commit_ts,
                     key: lock_wait_entry.key.into_raw().unwrap(),
                     primary: lock_wait_entry.parameters.primary,
-                    reason: kvrpcpb::write_conflict::Reason::PessimisticRetry,
+                    reason: kvrpcpb::WriteConflictReason::PessimisticRetry,
                 },
             )));
             cb(Err(e.into()), false);

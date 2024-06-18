@@ -7,7 +7,7 @@ use futures::{
     sink::SinkExt,
     stream::{self, TryStreamExt},
 };
-use kvproto::debugpb::{self, get_range_properties_response::RangeProperty, *};
+use kvproto::debugpb::{self, *};
 use raftstore::store::fsm::store::StoreRegionMeta;
 use tikv_kv::RaftExtension;
 use tikv_util::{future::paired_future_callback, metrics};
@@ -103,7 +103,7 @@ where
 }
 
 #[tonic::async_trait]
-impl<T, D, S> debugpb::debug_server::Debug for Service<T, D, S>
+impl<T, D, S> kvproto::debugpb_grpc::debug_server::Debug for Service<T, D, S>
 where
     T: RaftExtension + Sync + 'static,
     D: Debugger + Clone + Send + Sync + 'static,
@@ -219,6 +219,7 @@ where
         }
     }
 
+    type ScanMvccStream = tonic::codegen::BoxStream<ScanMvccResponse>;
     async fn scan_mvcc(
         &self,
         request: tonic::Request<ScanMvccRequest>,
@@ -447,7 +448,7 @@ where
             .map(|props| {
                 let mut resp = GetRangePropertiesResponse::default();
                 for (key, value) in props {
-                    let mut prop = RangeProperty::default();
+                    let mut prop: GetRangePropertiesResponseRangeProperty = GetRangePropertiesResponseRangeProperty::default();
                     prop.set_key(key);
                     prop.set_value(value);
                     resp.mut_properties().push(prop)
@@ -649,9 +650,9 @@ where
 }
 
 mod region_size_response {
-    pub type Entry = kvproto::debugpb::region_size_response::Entry;
+    pub type Entry = kvproto::debugpb::RegionSizeResponseEntry;
 }
 
 mod list_fail_points_response {
-    pub type Entry = kvproto::debugpb::list_fail_points_response::Entry;
+    pub type Entry = kvproto::debugpb::ListFailPointsResponseEntry;
 }

@@ -14,7 +14,7 @@ use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
 use futures::{stream::AbortHandle, FutureExt, TryFutureExt};
 use kvproto::{
-    backup::{StreamBackupError, StreamBackupTaskInfo},
+    brpb::{StreamBackupError, StreamBackupTaskInfo},
     metapb::{Region, RegionEpoch},
 };
 use pd_client::PdClient;

@@ -8,7 +8,7 @@ use futures::{
     FutureExt, SinkExt, Stream, StreamExt, TryFutureExt,
 };
 use futures_util::stream::AbortHandle;
-use kvproto::backup::{backup_server::Backup, *};
+use kvproto::{backup_grpc::backup_server::Backup, brpb::*};
 use raftstore::store::snapshot_backup::SnapshotBrHandle;
 use tikv_util::{error, info, warn, worker::*};
 use tonic::codegen::BoxStream;
@@ -73,6 +73,7 @@ impl<T> Drop for CancelableReceiver<T> {
 
 #[tonic::async_trait]
 impl Backup for Service {
+    type backupStream = tonic::codegen::BoxStream<BackupResponse>;
     async fn backup(
         &self,
         request: tonic::Request<BackupRequest>,
@@ -101,6 +102,15 @@ impl Backup for Service {
         ))
     }
 
+    type CheckPendingAdminOpStream = tonic::codegen::BoxStream<CheckAdminResponse>;
+    async fn check_pending_admin_op(
+        &self,
+        request: tonic::Request<CheckAdminRequest>,
+    ) -> std::result::Result<tonic::Response<Self::CheckPendingAdminOpStream>, tonic::Status> {
+        unimplemented!()
+    }
+    /// Server streaming response type for the PrepareSnapshotBackup method.
+    type PrepareSnapshotBackupStream = tonic::codegen::BoxStream<PrepareSnapshotBackupResponse>;
     /// CheckPendingAdminOp used for snapshot backup. before we start snapshot
     /// for a TiKV. we need stop all schedule first and make sure all
     /// in-flight schedule has finished. this rpc check all pending conf

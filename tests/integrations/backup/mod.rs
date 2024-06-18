@@ -33,10 +33,7 @@ fn assert_same_file_name(s1: String, s2: String) {
     }
 }
 
-fn assert_same_files(
-    mut files1: Vec<kvproto::backup::File>,
-    mut files2: Vec<kvproto::backup::File>,
-) {
+fn assert_same_files(mut files1: Vec<kvproto::brpb::File>, mut files2: Vec<kvproto::brpb::File>) {
     assert_eq!(files1.len(), files2.len());
     // Sort here by start key in case of unordered response (by pipelined write +
     // scan).

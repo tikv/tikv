@@ -509,7 +509,7 @@ impl<ER: RaftEngine> DebuggerImplV2<ER> {
             // It's safe to unwrap region_local_state here, because
             // get_all_regions_in_store() guarantees that the region state
             // exists in kvdb.
-            if region_state.region_local_state.unwrap().get_state() == PeerState::Tombstone {
+            if region_state.region_local_state.unwrap().state == PeerState::Tombstone {
                 continue;
             }
 
@@ -792,7 +792,7 @@ impl<ER: RaftEngine> Debugger for DebuggerImplV2<ER> {
                     .get_region_state(region_id, u64::MAX)
                     .unwrap()
                     .unwrap();
-                if region_state.get_state() == PeerState::Tombstone {
+                if region_state.state == PeerState::Tombstone {
                     return Ok(());
                 }
                 region_ids.push(region_id);
@@ -1043,7 +1043,7 @@ fn find_region_states_by_key_range<ER: RaftEngine>(
                 .get_region_state(region_id, u64::MAX)
                 .unwrap()
                 .unwrap();
-            if region_state.get_state() != PeerState::Normal {
+            if region_state.state != PeerState::Normal {
                 return Ok(());
             }
 
@@ -1130,7 +1130,7 @@ fn get_all_active_region_states<ER: RaftEngine>(raft_engine: &ER) -> Vec<RegionL
                 .get_region_state(region_id, u64::MAX)
                 .unwrap()
                 .unwrap();
-            if region_state.get_state() != PeerState::Tombstone {
+            if region_state.state != PeerState::Tombstone {
                 region_states.push(region_state);
             }
             Ok(())

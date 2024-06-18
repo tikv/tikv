@@ -347,7 +347,7 @@ impl<E: KvEngine> ImportDir<E> {
         api_version: ApiVersion,
     ) -> Result<bool> {
         for meta in metas {
-            match (api_version, meta.get_api_version()) {
+            match (api_version, meta.api_version) {
                 (cur_version, meta_version) if cur_version == meta_version => continue,
                 // sometimes client do not know whether ttl is enabled, so a general V1 is accepted
                 // as V1ttl

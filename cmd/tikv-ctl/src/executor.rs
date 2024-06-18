@@ -21,7 +21,8 @@ use futures::{
 };
 use grpcio::{ChannelBuilder, Environment};
 use kvproto::{
-    debugpb::{debug_client::DebugClient, Db as DbType, *},
+    debugpb::{Db as DbType, *},
+    debugpb_grpc::debug_client::DebugClient,
     kvrpcpb::{KeyRange, MvccInfo},
     metapb::{Peer, Region},
     raft_cmdpb::RaftCmdRequest,
@@ -176,7 +177,7 @@ pub fn new_debug_client(host: &str, mgr: Arc<SecurityManager>) -> DebugClient<Ch
     //     .keepalive_timeout(Duration::from_secs(3));
 
     // let channel = mgr.connect(cb, host);
-    //DebugClient::new(channel)
+    // DebugClient::new(channel)
     unimplemented!()
 }
 
@@ -600,8 +601,8 @@ pub trait DebugExecutor {
         region_ids: Vec<u64>,
     ) {
         self.check_local_mode();
-        let rpc_client =
-            RpcClient::new(cfg, mgr, tokio::runtime::Handle::current()).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+        let rpc_client = RpcClient::new(cfg, mgr, tokio::runtime::Handle::current())
+            .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
         let regions = region_ids
             .into_iter()
@@ -648,8 +649,8 @@ pub trait DebugExecutor {
         read_only: bool,
     ) {
         self.check_local_mode();
-        let rpc_client =
-            RpcClient::new(cfg, mgr, tokio::runtime::Handle::current()).unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
+        let rpc_client = RpcClient::new(cfg, mgr, tokio::runtime::Handle::current())
+            .unwrap_or_else(|e| perror_and_exit("RpcClient::new", e));
 
         let regions = region_ids
             .into_iter()

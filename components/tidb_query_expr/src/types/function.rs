@@ -349,10 +349,11 @@ thread_local! {
         std::cell::RefCell::new(Vec::with_capacity(20));
 }
 
-pub fn extract_metadata_from_val<T: prost::Message + Default>(val: &[u8]) -> Result<T> {
+pub fn extract_metadata_from_val<T: protobuf::Message + Default>(val: &[u8]) -> Result<T> {
     if val.is_empty() {
         Ok(T::default())
     } else {
-        <T as prost::Message>::decode(val).map_err(|e| other_err!("Decode metadata failed: {}", e))
+        protobuf::parse_from_bytes::<T>(val)
+            .map_err(|e| other_err!("Decode metadata failed: {}", e))
     }
 }

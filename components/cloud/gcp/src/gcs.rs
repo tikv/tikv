@@ -13,7 +13,7 @@ use futures_util::{
 };
 use http::HeaderValue;
 use hyper::{Body, Request, Response};
-pub use kvproto::backup::Gcs as InputConfig;
+pub use kvproto::brpb::Gcs as InputConfig;
 use tame_gcs::{
     common::{PredefinedAcl, StorageClass},
     objects::{InsertObjectOptional, Metadata, Object},

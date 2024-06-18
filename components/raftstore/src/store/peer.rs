@@ -15,6 +15,7 @@ use std::{
 };
 
 use bitflags::bitflags;
+use bytes::Bytes;
 use collections::{HashMap, HashSet};
 use crossbeam::{atomic::AtomicCell, channel::TrySendError};
 use engine_traits::{
@@ -4686,7 +4687,7 @@ where
         msg.set_index(self.get_store().applied_index());
         msg.set_log_term(self.term());
         if reply_cmd {
-            msg.set_context(TRANSFER_LEADER_COMMAND_REPLY_CTX.to_vec());
+            msg.set_context(Bytes::from_static(TRANSFER_LEADER_COMMAND_REPLY_CTX));
         }
         self.raft_group.raft.msgs.push(msg);
     }

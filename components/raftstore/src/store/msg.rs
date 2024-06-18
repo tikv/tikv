@@ -10,7 +10,7 @@ use engine_traits::{CompactedEvent, KvEngine, Snapshot};
 use futures::channel::mpsc::UnboundedSender;
 use health_controller::types::LatencyInspector;
 use kvproto::{
-    backup::CheckAdminResponse,
+    brpb::CheckAdminResponse,
     kvrpcpb::{DiskFullOpt, ExtraOp as TxnExtraOp},
     metapb,
     metapb::RegionEpoch,

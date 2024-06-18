@@ -27,7 +27,7 @@ use futures::channel::mpsc::UnboundedSender;
 use itertools::Itertools;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::{
-    backup::CheckAdminResponse,
+    brpb::CheckAdminResponse,
     errorpb,
     import_sstpb::SwitchMode,
     kvrpcpb::DiskFullOpt,
@@ -1252,7 +1252,7 @@ where
             }
             CasualMessage::RejectRaftAppend { peer_id } => {
                 let mut msg = raft::eraftpb::Message::default();
-                msg.msg_type = MessageType::MsgUnreachable as i32;
+                msg.msg_type = MessageType::MsgUnreachable;
                 msg.to = peer_id;
                 msg.from = self.fsm.peer.peer_id();
 
@@ -1782,7 +1782,7 @@ where
 
             // make fake vote response
             let mut msg = raft::eraftpb::Message::default();
-            msg.msg_type = MessageType::MsgRequestVoteResponse as i32;
+            msg.msg_type = MessageType::MsgRequestVoteResponse;
             msg.reject = false;
             msg.term = self.fsm.peer.term();
             msg.from = peer_id;
@@ -2551,16 +2551,14 @@ where
     fn handle_reported_disk_usage(&mut self, msg: &RaftMessage) {
         let store_id = msg.get_from_peer().get_store_id();
         let peer_id = msg.get_from_peer().get_id();
-        let refill_disk_usages = if matches!(msg.get_disk_usage(), DiskUsage::Normal) {
+        let refill_disk_usages = if matches!(msg.disk_usage, DiskUsage::Normal) {
             self.ctx.store_disk_usages.remove(&store_id);
             if !self.fsm.peer.is_leader() {
                 return;
             }
             self.fsm.peer.disk_full_peers.has(peer_id)
         } else {
-            self.ctx
-                .store_disk_usages
-                .insert(store_id, msg.get_disk_usage());
+            self.ctx.store_disk_usages.insert(store_id, msg.disk_usage);
             if !self.fsm.peer.is_leader() {
                 return;
             }
@@ -2569,13 +2567,13 @@ where
             disk_full_peers.is_empty()
                 || disk_full_peers
                     .get(peer_id)
-                    .map_or(true, |x| x != msg.get_disk_usage())
+                    .map_or(true, |x| x != msg.disk_usage)
         };
         if refill_disk_usages || self.fsm.peer.has_region_merge_proposal {
             let prev = self.fsm.peer.disk_full_peers.get(peer_id);
-            if Some(msg.get_disk_usage()) != prev {
+            if Some(msg.disk_usage) != prev {
                 info!(
-                    "reported disk usage changes {:?} -> {:?}", prev, msg.get_disk_usage();
+                    "reported disk usage changes {:?} -> {:?}", prev, msg.disk_usage;
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => peer_id,
                 );
@@ -2591,7 +2589,7 @@ where
 
     fn on_raft_message(&mut self, msg: InspectedRaftMessage) -> Result<()> {
         let InspectedRaftMessage { heap_size, mut msg } = msg;
-        let peer_disk_usage = msg.get_disk_usage();
+        let peer_disk_usage = msg.disk_usage;
         let stepped = Cell::new(false);
         let memtrace_raft_entries = &mut self.fsm.peer.memtrace_raft_entries as *mut usize;
         defer!({
