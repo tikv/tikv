@@ -266,6 +266,7 @@ members = [
   "components/collections",
   "components/concurrency_manager",
   "components/coprocessor_plugin_api",
+  "components/crossbeam-skiplist",
   "components/crypto",
   "components/encryption",
   "components/encryption/export",
@@ -348,6 +349,7 @@ codec = { path = "components/codec" }
 collections = { path = "components/collections" }
 concurrency_manager = { path = "components/concurrency_manager" }
 coprocessor_plugin_api = { path = "components/coprocessor_plugin_api" }
+crossbeam-skiplist = { path = "components/crossbeam-skiplist" }
 encryption = { path = "components/encryption" }
 encryption_export = { path = "components/encryption/export" }
 engine_panic = { path = "components/engine_panic" }
@@ -448,7 +450,7 @@ heck = "0.3"
 crossbeam = "0.8"
 crossbeam-channel = "0.5"
 crossbeam-utils = "0.8"
-crossbeam-skiplist = "0.1"
+crossbeam-epoch = "0.9"
 
 [profile.dev.package.grpcio-sys]
 debug = false
