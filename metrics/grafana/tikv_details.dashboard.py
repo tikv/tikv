@@ -4258,6 +4258,41 @@ def RangeCacheMemoryEngine() -> RowPanel:
                     ),
                 ],
             ),
+            graph_panel(
+                title="Seek duration",
+                description="The time consumed when executing seek operation",
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            1,
+                            "tikv_range_cache_memory_engine_seek_duration",
+                        ),
+                        legend_format="max",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_range_cache_memory_engine_seek_duration",
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.95,
+                            "tikv_range_cache_memory_engine_seek_duration",
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_histogram_avg(
+                            "tikv_range_cache_memory_engine_seek_duration",
+                            by_labels=["type"],
+                        ),
+                        legend_format="avg",
+                    ),
+                ],
+            ),
         ]
     )
     return layout.row_panel
