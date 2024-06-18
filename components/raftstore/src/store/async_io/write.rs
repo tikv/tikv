@@ -647,7 +647,7 @@ impl WriteBatchRecorder {
         self.spin_count += 1;
 
         let trend: f64 = self.trend.into();
-        yield_at_least(Duration::from_micros(
+        yield_at_least(Duration::from_nanos(
             self.spin_interval * (1.0 / trend) as u64,
         ));
     }

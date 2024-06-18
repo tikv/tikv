@@ -333,7 +333,7 @@ pub struct Config {
 
     /// When the size of raft db writebatch is smaller than this value, write
     /// will spin for a while, waiting until the size reaches this value.
-    /// Unit: micros.
+    /// Unit: nanoseconds.
     pub raft_write_batch_size_spin: u64,
 
     pub waterfall_metrics: bool,
@@ -526,7 +526,7 @@ impl Default for Config {
             cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
             raft_write_batch_size_thd: ReadableSize::kb(16),
-            raft_write_batch_size_spin: 5,
+            raft_write_batch_size_spin: 50,
             waterfall_metrics: true,
             io_reschedule_concurrent_max_count: 4,
             io_reschedule_hotpot_duration: ReadableDuration::secs(5),
