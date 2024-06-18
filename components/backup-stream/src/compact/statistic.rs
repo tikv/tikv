@@ -12,6 +12,7 @@ pub struct LoadMetaStatistic {
 
     pub prefetch_task_emitted: u64,
     pub prefetch_task_finished: u64,
+    pub error_during_downloading: u64,
 }
 
 #[derive(Default, Debug, Add, AddAssign, Clone)]

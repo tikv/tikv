@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{io, marker::Unpin, pin::Pin, task::Poll};
+use std::{fmt::Display, io, marker::Unpin, pin::Pin, task::Poll};
 
 use async_trait::async_trait;
 use futures::stream::Stream;
@@ -56,6 +56,12 @@ pub trait BlobStorage: 'static + Send + Sync {
 #[derive(Debug)]
 pub struct BlobObject {
     pub key: String,
+}
+
+impl Display for BlobObject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.key)
+    }
 }
 
 pub trait WalkBlobStorage: 'static + Send + Sync {

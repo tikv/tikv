@@ -12,8 +12,12 @@ use futures::{
     io::AsyncReadExt,
     stream::{Fuse, FusedStream, StreamExt},
 };
-use tikv_util::time::Instant;
+use prometheus::core::{Atomic, AtomicU64};
+use tikv_util::{stream::RetryExt, time::Instant};
 use tokio_stream::Stream;
+use tracing::{instrument::Instrumented, span::Entered, Span};
+use tracing_active_tree::frame;
+use txn_types::TimeStamp;
 
 use super::{
     errors::{Error, Result},
@@ -65,6 +69,17 @@ impl std::fmt::Debug for LogFileId {
 pub struct LoadFromExt<'a> {
     pub max_concurrent_fetch: usize,
     pub on_update_stat: Option<Box<dyn FnMut(LoadMetaStatistic) + 'a>>,
+    pub loading_content_span: Option<Span>,
+}
+
+impl<'a> LoadFromExt<'a> {
+    fn enter_load_span(&self) -> Option<Entered> {
+        if let Some(span) = &self.loading_content_span {
+            Some(span.enter())
+        } else {
+            None
+        }
+    }
 }
 
 impl<'a> Default for LoadFromExt<'a> {
@@ -72,6 +87,7 @@ impl<'a> Default for LoadFromExt<'a> {
         Self {
             max_concurrent_fetch: 16,
             on_update_stat: None,
+            loading_content_span: None,
         }
     }
 }
@@ -156,18 +172,6 @@ impl<'a> Stream for StreamyMetaStorage<'a> {
 }
 
 impl<'a> StreamyMetaStorage<'a> {
-    fn register_prefetch(&mut self, cx: &mut Context<'_>, load: BlobObject) {
-        let mut fut = Prefetch::new(MetaFile::load_from(self.ext_storage, load).boxed_local());
-        // start the execution of this future.
-        let poll = fut.poll_unpin(cx);
-        if poll.is_ready() {
-            // We need to check this in next run.
-            cx.waker().wake_by_ref();
-        }
-        self.stat.prefetch_task_emitted += 1;
-        self.prefetch.push_back(fut);
-    }
-
     fn poll_fetch_or_finish(&mut self, cx: &mut Context<'_>) -> Poll<Option<Result<MetaFile>>> {
         loop {
             // No more space for prefetching.
@@ -175,15 +179,28 @@ impl<'a> StreamyMetaStorage<'a> {
                 return Poll::Pending;
             }
             if self.files.is_terminated() {
+                self.ext.loading_content_span.take();
                 if self.prefetch.is_empty() {
                     return None.into();
                 } else {
                     return Poll::Pending;
                 }
             }
-            match self.files.next().poll_unpin(cx) {
+            match {
+                let _enter = self.ext.enter_load_span();
+                self.files.next().poll_unpin(cx)
+            } {
                 Poll::Ready(Some(load)) => {
-                    self.register_prefetch(cx, load?);
+                    let mut fut =
+                        Prefetch::new(MetaFile::load_from(self.ext_storage, load?).boxed_local());
+                    // start the execution of this future.
+                    let poll = fut.poll_unpin(cx);
+                    if poll.is_ready() {
+                        // We need to check this in next run.
+                        cx.waker().wake_by_ref();
+                    }
+                    self.stat.prefetch_task_emitted += 1;
+                    self.prefetch.push_back(fut);
                 }
                 Poll::Ready(None) | Poll::Pending => return Poll::Pending,
             }
@@ -232,7 +249,7 @@ impl<'a> StreamyMetaStorage<'a> {
 }
 
 impl MetaFile {
-    #[tracing::instrument(skip(s))]
+    #[tracing::instrument(skip_all, fields(blob=%blob))]
     async fn load_from(
         s: &dyn ExternalStorage,
         blob: BlobObject,
@@ -242,13 +259,32 @@ impl MetaFile {
         let mut stat = LoadMetaStatistic::default();
         let begin = Instant::now();
 
-        let mut content = vec![];
-        let n = s
-            .read(&blob.key)
-            .read_to_end(&mut content)
+        let error_cnt = Arc::new(AtomicU64::new(0));
+        let error_cnt2 = Arc::clone(&error_cnt);
+        let blob_name = blob.key.clone();
+        let ext = RetryExt::default().with_fail_hook(move |err| {
+            eprintln!(
+                "[{}] warn: encountered error err={} downloading={}",
+                TimeStamp::physical_now(),
+                err,
+                blob_name
+            );
+            error_cnt.inc_by(1);
+        });
+
+        let loading_file = tikv_util::stream::retry_all_ext(
+            || async {
+                let mut content = vec![];
+                let n = s.read(&blob.key).read_to_end(&mut content).await?;
+                std::io::Result::Ok((n, content))
+            },
+            ext,
+        );
+        let (n, content) = frame!(loading_file)
             .await
             .map_err(|err| Error::from(err).message(format_args!("reading {}", blob.key)))?;
         stat.physical_bytes_loaded += n as u64;
+        stat.error_during_downloading += error_cnt2.get();
 
         let mut meta_file = kvproto::brpb::Metadata::new();
         meta_file.merge_from_bytes(&content)?;

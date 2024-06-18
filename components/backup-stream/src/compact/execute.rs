@@ -157,10 +157,15 @@ impl Execution {
 
         let all_works = async move {
             let mut ext = LoadFromExt::default();
+            let next_compaction = trace_span!("next_compaction");
             ext.max_concurrent_fetch = 128;
             ext.on_update_stat = Some(Box::new(|stat| {
                 locked_hooks.lock().unwrap().update_load_meta_stat(stat)
             }));
+            ext.loading_content_span = Some(trace_span!(
+                parent: next_compaction.clone(),
+                "load_meta_file_names"
+            ));
 
             let meta = StreamyMetaStorage::load_from_ext(storage.as_ref(), ext);
             let stream = meta.flat_map(|file| match file {
@@ -177,8 +182,11 @@ impl Execution {
             let mut pending = VecDeque::new();
             let mut id = 0;
 
-            let span = trace_span!("poll_meta_stream");
-            while let Some(c) = compact_stream.next().instrument(span.clone()).await {
+            while let Some(c) = compact_stream
+                .next()
+                .instrument(next_compaction.clone())
+                .await
+            {
                 let c = c?;
                 let cid = CId(id);
                 locked_hooks
@@ -211,7 +219,7 @@ impl Execution {
                         .after_compaction_end(cid, lst, cst);
                 }
             }
-            drop(span);
+            drop(next_compaction);
 
             for (join, cid) in pending {
                 let (lst, cst) = frame!("final_wait"; join).await.unwrap()?;

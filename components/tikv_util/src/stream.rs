@@ -156,7 +156,6 @@ pub async fn retry_all_ext<G, T, F, E>(mut action: G, mut ext: RetryExt<E>) -> R
 where
     G: FnMut() -> F,
     F: Future<Output = Result<T, E>>,
-    E: RetryError,
 {
     let max_retry_times = (|| {
         fail::fail_point!("retry_count", |t| t

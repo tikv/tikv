@@ -11,8 +11,6 @@ mod test;
 mod util {
     use std::{future::Future, task::Poll};
 
-    use tracing::Span;
-
     pub struct Cooperate {
         work_count: usize,
         yield_every: usize,
