@@ -4252,6 +4252,18 @@ def RangeCacheMemoryEngine() -> RowPanel:
         )
     )
     layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Prepare for write duration",
+            heatmap_description="The time consumed of prepare for write in range cache engine",
+            graph_title="99% Range cache engine prepare for write duration per server",
+            graph_description="The time consumed of prepare for write in range cache engine per TiKV instance",
+            graph_by_labels=["instance"],
+            graph_hides=["count", "avg"],
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_range_cache_engine_prepare_for_write_duration_seconds",
+        )
+    )
+    layout.row(
         [
             graph_panel(
                 title="Iterator operations",
