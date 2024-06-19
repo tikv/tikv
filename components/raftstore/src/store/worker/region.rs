@@ -18,7 +18,8 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{
-    DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, WriteOptions, CF_LOCK, CF_RAFT,
+    CacheRange, DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, WriteOptions, CF_LOCK,
+    CF_RAFT,
 };
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
@@ -665,6 +666,14 @@ where
 
         let mut region_state = self.region_state(region_id)?;
         let region = region_state.get_region().clone();
+
+        let range = CacheRange::from_region(&region);
+        info!(
+            "evict range due to apply snap";
+            "range" => ?range,
+        );
+        self.engine.evict_range(&range);
+
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;

@@ -8,4 +8,8 @@ impl RangeCacheEngineExt for PanicEngine {
     fn range_cache_engine_enabled(&self) -> bool {
         panic!()
     }
+
+    fn evict_range(&self, range: &engine_traits::CacheRange) {
+        panic!()
+    }
 }
