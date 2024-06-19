@@ -153,6 +153,7 @@ impl From<std::io::Error> for RetryIo {
 }
 
 impl Source {
+    #[tracing::instrument(skip_all)]
     pub async fn load_remote(
         &self,
         id: LogFileId,
@@ -184,6 +185,7 @@ impl Source {
         Ok(content)
     }
 
+    #[tracing::instrument(skip_all, fields(id=?id))]
     pub async fn load(
         &self,
         id: LogFileId,

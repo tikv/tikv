@@ -176,8 +176,8 @@ impl CompactionCollector {
                 compact_from_ts: self.cfg.compact_from_ts,
                 compact_to_ts: self.cfg.compact_to_ts,
             };
-            self.stat.bytes_out += c.size;
-            self.stat.compactions_out += 1;
+            // Hacking: update the statistic when we really yield the compaction.
+            // (At `poll_next`.)
             c
         })
     }
@@ -193,7 +193,15 @@ impl<S: Stream<Item = Result<LogFile>>> Stream for CollectCompaction<S> {
         let mut this = self.project();
         loop {
             if let Some(finalize) = this.last_compactions {
-                return finalize.pop().map(Ok).into();
+                return finalize
+                    .pop()
+                    .map(|c| {
+                        // Now user can see the compaction, we can update the statistic here.
+                        this.collector.stat.bytes_out += c.size;
+                        this.collector.stat.compactions_out += 1;
+                        Ok(c)
+                    })
+                    .into();
             }
 
             let item = ready!(this.inner.as_mut().poll_next(cx));
@@ -275,6 +283,7 @@ where
                     .unwrap_or(false)
             })
             .collect::<Vec<_>>();
+        tokio::task::yield_now().await;
         flatten_items.sort_unstable_by(|k1, k2| k1.cmp_key(&k2));
         tokio::task::yield_now().await;
         flatten_items.dedup_by(|k1, k2| k1.cmp_key(&k2) == std::cmp::Ordering::Equal);

@@ -6,6 +6,7 @@ use std::{
     task::{ready, Context, Poll},
 };
 
+use derive_more::Display;
 use external_storage::{BlobObject, ExternalStorage, WalkBlobStorage, WalkExternalStorage};
 use futures::{
     future::{FusedFuture, FutureExt, TryFutureExt},
@@ -50,7 +51,8 @@ pub struct LogFile {
     pub is_meta: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Display)]
+#[display(fmt = "{}@{}+{}", name, offset, length)]
 pub struct LogFileId {
     pub name: Arc<str>,
     pub offset: u64,
