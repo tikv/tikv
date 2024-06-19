@@ -242,8 +242,6 @@ impl BgWorkManager {
         );
         let scheduler = worker.start_with_timer("range-cache-engine-background", runner);
 
-        let scheduler_clone = scheduler.clone();
-
         let (h, tx) = BgWorkManager::start_tick(
             scheduler.clone(),
             pd_client,
@@ -734,8 +732,8 @@ pub struct BackgroundRunner {
     range_load_remote: Remote<yatp::task::future::TaskCell>,
     range_load_worker: Worker,
 
-    delete_range_worker: Worker,
     delete_range_scheduler: Scheduler<BackgroundTask>,
+    delete_range_worker: Worker,
 
     gc_range_remote: Remote<yatp::task::future::TaskCell>,
     gc_range_worker: Worker,
@@ -827,10 +825,10 @@ impl BackgroundRunner {
                 delete_range_scheduler: delete_range_scheduler.clone(),
                 gc_range_worker,
                 gc_range_remote,
-                lock_cleanup_remote,
-                lock_cleanup_worker,
                 load_evict_worker,
                 load_evict_remote,
+                lock_cleanup_remote,
+                lock_cleanup_worker,
                 audit_remote,
                 audit_worker,
                 last_seqno: 0,
@@ -1360,6 +1358,7 @@ impl RunnableWithTimer for BackgroundRunner {
     fn on_timeout(&mut self) {
         let mem_usage = self.core.memory_controller.mem_usage();
         RANGE_CACHE_MEMORY_USAGE.set(mem_usage as i64);
+        
         let core = self.core.engine.read();
         let pending = core.range_manager.pending_ranges.len();
         let cached = core.range_manager.ranges().len();
