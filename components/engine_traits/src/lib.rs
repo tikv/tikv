@@ -312,7 +312,7 @@ pub use crate::table_properties::*;
 mod checkpoint;
 pub use crate::checkpoint::*;
 mod range_cache_engine;
-pub use range_cache_engine::{CacheRange, FailedReason, RangeCacheEngine, RangeHintService};
+pub use crate::range_cache_engine::*;
 
 // These modules contain more general traits, some of which may be implemented
 // by multiple types.
