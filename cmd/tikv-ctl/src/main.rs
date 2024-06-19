@@ -31,6 +31,7 @@ use futures::{executor::block_on, future::try_join_all};
 use gag::BufferRedirect;
 use grpcio::{CallOption, ChannelBuilder, Environment};
 use kvproto::{
+    brpb,
     debugpb::{Db as DbType, *},
     encryptionpb::EncryptionMethod,
     kvrpcpb::SplitRegionRequest,
@@ -384,6 +385,41 @@ fn main() {
                 start_key,
                 end_key,
             );
+        }
+        Cmd::CompactLogBackup {
+            from_ts,
+            until_ts,
+            max_compaction_num,
+            storage_base64,
+        } => {
+            let maybe_external_storage = base64::decode(storage_base64)
+                .map_err(|err| format!("cannot parse base64: {}", err))
+                .and_then(|storage_bytes| {
+                    let mut ext_storage = brpb::StorageBackend::new();
+                    ext_storage
+                        .merge_from_bytes(&storage_bytes)
+                        .map_err(|err| format!("cannot parse bytes as StorageBackend: {}", err))?;
+                    Result::Ok(ext_storage)
+                });
+            let external_storage = match maybe_external_storage {
+                Ok(s) => s,
+                Err(err) => {
+                    clap::Error {
+                        message: format!("(-s, --storage-base64) is invalid: {:?}", err),
+                        kind: ErrorKind::InvalidValue,
+                        info: None,
+                    }
+                    .exit();
+                }
+            };
+            let exec = backup_stream::compact_logs::Execution {
+                from_ts,
+                until_ts,
+                max_concurrent_compaction: max_compaction_num,
+                external_storage,
+            };
+            exec.run(backup_stream::compact_logs::LogToTerm::default())
+                .expect("failed to execute compact-log-backup")
         }
         // Commands below requires either the data dir or the host.
         cmd => {

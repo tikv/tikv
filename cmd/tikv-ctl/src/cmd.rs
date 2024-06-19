@@ -627,6 +627,16 @@ pub enum Cmd {
         /// hex end key
         end: String,
     },
+    CompactLogBackup {
+        #[structopt(long = "from")]
+        from_ts: u64,
+        #[structopt(long = "until")]
+        until_ts: u64,
+        #[structopt(short = "N", long = "concurrency", default_value = "32")]
+        max_compaction_num: u64,
+        #[structopt(short = "s", long = "storage-base64")]
+        storage_base64: String,
+    },
     /// Get the state of a region's RegionReadProgress.
     GetRegionReadProgress {
         #[structopt(short = "r", long)]

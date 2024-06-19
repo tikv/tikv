@@ -1,12 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{io, path::Path, sync::Arc};
+use std::{io, path::Path, pin::Pin, result::Result, sync::Arc};
 
 use async_trait::async_trait;
 pub use aws::{Config as S3Config, S3Storage};
 pub use azure::{AzureStorage, Config as AzureConfig};
-use cloud::blob::{BlobStorage, PutResource};
+use cloud::blob::{BlobObject, BlobStorage, PutResource, WalkBlobStorage};
 use encryption::DataKeyManager;
+use futures::prelude::Stream;
 use gcp::GcsStorage;
 use kvproto::brpb::{
     AzureBlobStorage, Gcs, Noop, StorageBackend, StorageBackend_oneof_backend as Backend, S3,
@@ -19,6 +20,10 @@ use crate::{
     NoopStorage, RestoreConfig, UnpinReader,
 };
 
+pub trait WalkExternalStorage: ExternalStorage + WalkBlobStorage {}
+
+impl<T: ExternalStorage + WalkBlobStorage> WalkExternalStorage for T {}
+
 pub fn create_storage(
     storage_backend: &StorageBackend,
     config: BackendConfig,
@@ -28,6 +33,31 @@ pub fn create_storage(
     } else {
         Err(bad_storage_backend(storage_backend))
     }
+}
+
+pub fn create_walkable_storage(
+    storage_backend: &StorageBackend,
+    config: BackendConfig,
+) -> io::Result<Box<dyn WalkExternalStorage>> {
+    if let Some(backend) = &storage_backend.backend {
+        create_walkable_backend(backend, config)
+    } else {
+        Err(bad_storage_backend(storage_backend))
+    }
+}
+
+fn walk_not_supported(backend: Backend) -> io::Error {
+    let storage_backend = StorageBackend {
+        backend: Some(backend),
+        ..Default::default()
+    };
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        format!(
+            "storage backend doesn't support walking {:?}",
+            storage_backend
+        ),
+    )
 }
 
 fn bad_storage_backend(storage_backend: &StorageBackend) -> io::Error {
@@ -47,6 +77,27 @@ fn bad_backend(backend: Backend) -> io::Error {
 
 fn blob_store<Blob: BlobStorage>(store: Blob) -> Box<dyn ExternalStorage> {
     Box::new(BlobStore::new(store)) as Box<dyn ExternalStorage>
+}
+
+fn create_walkable_backend(
+    backend: &Backend,
+    backend_config: BackendConfig,
+) -> io::Result<Box<dyn WalkExternalStorage>> {
+    let start = Instant::now();
+    let storage: Box<dyn WalkExternalStorage> = match backend {
+        Backend::S3(config) => {
+            let mut s = S3Storage::from_input(config.clone())?;
+            s.set_multi_part_size(backend_config.s3_multi_part_size);
+            Box::new(BlobStore::new(s)) as _
+        }
+        Backend::Gcs(config) => {
+            Box::new(BlobStore::new(GcsStorage::from_input(config.clone())?)) as _
+        }
+        #[allow(unreachable_patterns)]
+        _ => return Err(walk_not_supported(backend.clone())),
+    };
+    record_storage_create(start, &*storage);
+    Ok(storage)
 }
 
 fn create_backend(
@@ -133,6 +184,15 @@ impl<Blob: BlobStorage> std::ops::Deref for BlobStore<Blob> {
     type Target = Blob;
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl<Blob: BlobStorage + WalkBlobStorage> WalkBlobStorage for BlobStore<Blob> {
+    fn walk<'c, 'a: 'c, 'b: 'c>(
+        &'a self,
+        prefix: &'b str,
+    ) -> Pin<Box<dyn Stream<Item = Result<BlobObject, io::Error>> + 'c>> {
+        self.0.walk(prefix)
     }
 }
 

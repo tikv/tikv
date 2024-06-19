@@ -18,6 +18,9 @@ use rand::{thread_rng, Rng};
 use rusoto_core::{request::HttpDispatchError, RusotoError};
 use tokio::{runtime::Builder, time::sleep};
 
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(32);
+const MAX_RETRY_TIMES: usize = 14;
+
 /// Wrapper of an `AsyncRead` instance, exposed as a `Sync` `Stream` of `Bytes`.
 pub struct AsyncReadAsSyncStreamOfBytes<R> {
     // we need this Mutex to ensure the type is Sync (provided R is Send).
@@ -107,10 +110,9 @@ where
 
 /// The extra configuration for retry.
 pub struct RetryExt<E> {
-    // NOTE: we can move `MAX_RETRY_DELAY` and `MAX_RETRY_TIMES`
-    // to here, for making the retry more configurable.
-    // However those are constant for now and no place for configure them.
     on_failure: Option<Box<dyn FnMut(&E) + Send + Sync + 'static>>,
+    max_retry_times: usize,
+    max_retry_delay: Duration,
 }
 
 impl<E> RetryExt<E> {
@@ -122,6 +124,18 @@ impl<E> RetryExt<E> {
         self.on_failure = Some(Box::new(f));
         self
     }
+
+    /// Attaches the maximum retry times to the ext.
+    pub fn with_max_retry_times(mut self, max_retry_times: usize) -> Self {
+        self.max_retry_times = max_retry_times;
+        self
+    }
+
+    /// Attaches the maximum retry delay to the ext.
+    pub fn with_max_retry_delay(mut self, max_retry_delay: Duration) -> Self {
+        self.max_retry_delay = max_retry_delay;
+        self
+    }
 }
 
 // If we use the default derive macro, it would complain that `E` isn't
@@ -130,7 +144,45 @@ impl<E> Default for RetryExt<E> {
     fn default() -> Self {
         Self {
             on_failure: Default::default(),
+            max_retry_times: MAX_RETRY_TIMES,
+            max_retry_delay: MAX_RETRY_DELAY,
         }
+    }
+}
+
+/// Retires a future execution. Comparing to `retry`, this version allows more
+/// configurations.
+pub async fn retry_all_ext<G, T, F, E>(mut action: G, mut ext: RetryExt<E>) -> Result<T, E>
+where
+    G: FnMut() -> F,
+    F: Future<Output = Result<T, E>>,
+{
+    let max_retry_times = (|| {
+        fail::fail_point!("retry_count", |t| t
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(MAX_RETRY_TIMES));
+        MAX_RETRY_TIMES
+    })();
+
+    let mut retry_wait_dur = Duration::from_secs(1);
+    let mut retry_time = 0;
+    loop {
+        match action().await {
+            Ok(r) => return Ok(r),
+            Err(e) => {
+                if let Some(ref mut f) = ext.on_failure {
+                    f(&e);
+                }
+                retry_time += 1;
+                if retry_time > max_retry_times {
+                    return Err(e);
+                }
+            }
+        }
+
+        let backoff = thread_rng().gen_range(0..1000);
+        sleep(retry_wait_dur + Duration::from_millis(backoff)).await;
+        retry_wait_dur = MAX_RETRY_DELAY.min(retry_wait_dur * 2);
     }
 }
 
@@ -142,8 +194,6 @@ where
     F: Future<Output = Result<T, E>>,
     E: RetryError,
 {
-    const MAX_RETRY_DELAY: Duration = Duration::from_secs(32);
-    const MAX_RETRY_TIMES: usize = 14;
     let max_retry_times = (|| {
         fail::fail_point!("retry_count", |t| t
             .and_then(|v| v.parse::<usize>().ok())

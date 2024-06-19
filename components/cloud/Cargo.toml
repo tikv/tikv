@@ -9,6 +9,7 @@ license = "Apache-2.0"
 async-trait = "0.1"
 derive_more = "0.99.3"
 error_code = { workspace = true }
+futures = "0.3"
 futures-io = "0.3"
 kvproto = { workspace = true }
 lazy_static = "1.3"

@@ -2,15 +2,20 @@
 use std::{
     error::Error as StdError,
     io,
+    pin::Pin,
     time::{Duration, SystemTime},
 };
 
 use async_trait::async_trait;
 use cloud::{
-    blob::{none_to_empty, BlobConfig, BlobStorage, BucketConf, PutResource, StringNonEmpty},
+    blob::{
+        none_to_empty, BlobConfig, BlobObject, BlobStorage, BucketConf, PutResource,
+        StringNonEmpty, WalkBlobStorage,
+    },
     metrics::CLOUD_REQUEST_HISTOGRAM_VEC,
 };
 use fail::fail_point;
+use futures::stream::{self, Stream};
 use futures_util::{
     future::FutureExt,
     io::{AsyncRead, AsyncReadExt},
@@ -239,6 +244,15 @@ impl S3Storage {
             return format!("{}/{}", *prefix, key);
         }
         key.to_owned()
+    }
+
+    fn maybe_strip_prefix_for_string(&self, key: String) -> String {
+        if let Some(prefix) = &self.config.bucket.prefix {
+            if key.starts_with(prefix.as_str()) {
+                return key[prefix.len()..].trim_start_matches('/').to_owned();
+            }
+        }
+        key
     }
 
     fn get_range(&self, name: &str, range: Option<String>) -> cloud::blob::BlobStream<'_> {
@@ -626,6 +640,68 @@ impl BlobStorage for S3Storage {
     }
 }
 
+struct S3Walker<'cli, 'arg> {
+    cli: &'cli S3Storage,
+    finished: bool,
+    cont_token: Option<String>,
+    prefix: &'arg str,
+}
+
+impl<'cli, 'arg> S3Walker<'cli, 'arg> {
+    async fn one_page(&mut self) -> io::Result<Option<Vec<BlobObject>>> {
+        if self.finished {
+            return io::Result::Ok(None);
+        }
+        let mut input = ListObjectsV2Request::default();
+        input.bucket = String::clone(&self.cli.config.bucket.bucket);
+        input.prefix = Some(self.cli.maybe_prefix_key(self.prefix));
+        input.max_keys = Some(128);
+        input.continuation_token = self.cont_token.clone();
+        let res = self
+            .cli
+            .client
+            .list_objects_v2(input)
+            .await
+            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+        self.finished = !res.is_truncated.ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "no IsTruncated in response")
+        })?;
+        self.cont_token = res.next_continuation_token;
+        let data = res
+            .contents
+            .unwrap_or_default()
+            .into_iter()
+            .map(|data| BlobObject {
+                key: self
+                    .cli
+                    .maybe_strip_prefix_for_string(data.key.unwrap_or_default()),
+            })
+            .collect::<Vec<_>>();
+        io::Result::Ok(Some(data))
+    }
+}
+
+impl WalkBlobStorage for S3Storage {
+    fn walk<'c, 'a: 'c, 'b: 'c>(
+        &'a self,
+        prefix: &'b str,
+    ) -> Pin<Box<dyn Stream<Item = std::result::Result<BlobObject, io::Error>> + 'c>> {
+        let walker = S3Walker {
+            cli: self,
+            finished: false,
+            cont_token: None,
+            prefix,
+        };
+        let s = stream::try_unfold(walker, |mut w| async move {
+            let res = w.one_page().await?;
+            io::Result::Ok(res.map(|v| (v, w)))
+        })
+        .map_ok(|data| stream::iter(data.into_iter().map(Ok)))
+        .try_flatten();
+        Box::pin(s)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::assert_matches::assert_matches;
@@ -635,6 +711,29 @@ mod tests {
     use tikv_util::stream::block_on_external_io;
 
     use super::*;
+
+    #[test]
+    #[ignore]
+    fn test_somewhat() {
+        let mut bucket = BucketConf::default(StringNonEmpty::opt("astro".to_owned()).unwrap());
+        bucket.endpoint = StringNonEmpty::opt("http://10.2.7.193:9000".to_owned());
+        let s3 = Config::default(bucket);
+        let s3 = Config {
+            access_key_pair: Some(AccessKeyPair {
+                access_key: StringNonEmpty::opt("minioadmin".to_owned()).unwrap(),
+                secret_access_key: StringNonEmpty::opt("minioadmin".to_owned()).unwrap(),
+                session_token: None,
+            }),
+            force_path_style: true,
+            ..s3
+        };
+
+        let storage = S3Storage::new(s3).unwrap();
+        let s = storage.walk("tpcc-1000-incr/v1/backupmeta");
+        let items = block_on_external_io(TryStreamExt::try_collect::<Vec<_>>(s));
+        println!("{:?}", items);
+        println!("{}", items.unwrap().len());
+    }
 
     #[test]
     fn test_s3_get_content_md5() {
