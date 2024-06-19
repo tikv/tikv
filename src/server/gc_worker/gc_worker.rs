@@ -275,9 +275,7 @@ fn get_keys_in_region(keys: &mut Peekable<IntoIter<Key>>, region: &Region) -> Ve
     let mut keys_in_region = Vec::new();
 
     loop {
-        let Some(key) = keys.peek() else {
-            break;
-        };
+        let Some(key) = keys.peek() else { break };
         let key = key.as_encoded().as_slice();
 
         if key < region.get_start_key() {
@@ -1536,6 +1534,7 @@ pub mod test_gc_worker {
 
 #[cfg(test)]
 mod tests {
+    
     use std::{
         collections::{BTreeMap, BTreeSet},
         path::Path,
