@@ -646,10 +646,14 @@ where
         }));
         let tracker = store_cb.read_tracker().unwrap();
 
-        let snap_ctx = ctx.start_ts.map(|ts| SnapshotContext {
-            read_ts: ts.into_inner(),
-            range: None,
-        });
+        let snap_ctx = if self.engine.range_cache_engine_enabled() {
+            ctx.start_ts.map(|ts| SnapshotContext {
+                read_ts: ts.into_inner(),
+                range: None,
+            })
+        } else {
+            None
+        };
 
         if res.is_ok() {
             res = self
