@@ -2432,8 +2432,7 @@ dependencies = [
 [[package]]
 name = "h2"
 version = "0.3.26"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81fe527a889e1532da5c525686d96d4c2e74cdd345badf8dfef9f6b39dd5f5e8"
+source = "git+https://github.com/glorv/h2?branch=no-tracing-0.3.26#4a5ed15b83bae3c85feebeccd7e3b53ceada758e"
 dependencies = [
  "bytes",
  "fnv",
@@ -2445,7 +2444,6 @@ dependencies = [
  "slab",
  "tokio",
  "tokio-util",
- "tracing",
 ]
 
 [[package]]
@@ -2636,8 +2634,7 @@ dependencies = [
 [[package]]
 name = "hyper"
 version = "0.14.26"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab302d72a6f11a3b910431ff93aae7e773078c769f0a3ef15fb9ec692ed147d4"
+source = "git+https://github.com/glorv/hyper?branch=path-0.14.26#2a8a03e9ee7e588c95fa98086d81649208640c42"
 dependencies = [
  "bytes",
  "futures-channel",
@@ -7198,7 +7195,7 @@ dependencies = [
 [[package]]
 name = "tonic"
 version = "0.11.0"
-source = "git+https://github.com/glorv/tonic?branch=patch-health#914f934323860c4638e13e12eaedaa7c7031d5ce"
+source = "git+https://github.com/glorv/tonic?branch=patch-health#4a348c0b25f54a365a6151226e16959fb65a5840"
 dependencies = [
  "async-stream 0.3.5",
  "async-trait",
@@ -7262,7 +7259,7 @@ dependencies = [
 [[package]]
 name = "tonic-health"
 version = "0.11.0"
-source = "git+https://github.com/glorv/tonic?branch=patch-health#914f934323860c4638e13e12eaedaa7c7031d5ce"
+source = "git+https://github.com/glorv/tonic?branch=patch-health#4a348c0b25f54a365a6151226e16959fb65a5840"
 dependencies = [
  "async-stream 0.3.5",
  "prost",

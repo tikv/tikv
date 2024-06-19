@@ -234,6 +234,8 @@ cmake = { git = "https://github.com/rust-lang/cmake-rs" }
 
 sysinfo = { git = "https://github.com/tikv/sysinfo", branch = "0.26-fix-cpu" }
 
+hyper = { git = "https://github.com/glorv/hyper", branch = "path-0.14.26", features = ["full"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 procinfo = { git = "https://github.com/tikv/procinfo-rs", rev = "7693954bd1dd86eb1709572fd7b62fd5f7ff2ea1" }
 # When you modify TiKV cooperatively with kvproto, this will be useful to submit the PR to TiKV and the PR to

@@ -123,7 +123,7 @@ use tikv_util::{
     memory::MemoryQuota,
     mpsc as TikvMpsc,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
-    sys::{disk, path_in_diff_mount_point, register_memory_usage_high_water, SysQuota},
+    sys::{disk, path_in_diff_mount_point, register_memory_usage_high_water, SysQuota, thread::ThreadBuildWrapper},
     thread_group::GroupProperties,
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
@@ -140,7 +140,6 @@ use crate::{
     memory::*,
     setup::*,
     signal_handler,
-    tikv_util::sys::thread::ThreadBuildWrapper,
 };
 
 #[inline]
@@ -353,7 +352,9 @@ where
         );
         let grpc_tonic_runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(config.server.grpc_concurrency)
+            .thread_name(thd_name!(GRPC_THREAD_PREFIX))
             .enable_all()
+            .with_sys_hooks()
             .build()
             .unwrap();
         let pd_client = TikvServerCore::connect_to_pd_cluster(
