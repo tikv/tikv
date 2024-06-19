@@ -47,10 +47,16 @@ pub trait RangeCacheEngine:
     fn enabled(&self) -> bool {
         false
     }
+
+    fn evict_range(&self, range: &CacheRange);
 }
 
 pub trait RangeCacheEngineExt {
     fn range_cache_engine_enabled(&self) -> bool;
+
+    // TODO(SpadeA): try to find a better way to reduce coupling degree of range
+    // cache engine and kv engine
+    fn evict_range(&self, range: &CacheRange);
 }
 
 /// A service that should run in the background to retrieve and apply cache

@@ -495,5 +495,5 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
         .unwrap();
     verify_data(&range3, 0);
 
-    let _ = handle.join().unwrap();
+    let _ = handle.join();
 }
