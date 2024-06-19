@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use engine_traits::{self, Mutable, Result, WriteBatchExt, WriteOptions};
 use rocksdb::{Writable, WriteBatch as RawWriteBatch, DB};
+use tikv_util::info;
 
 use crate::{engine::RocksEngine, options::RocksWriteOptions, r2e, util::get_cf_handle};
 
@@ -217,6 +218,13 @@ impl Mutable for RocksWriteBatchVec {
     }
 
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
+        if cf != "lock" {
+            info!(
+                "delete_cf";
+                "cf" => ?cf,
+                "key" => log_wrappers::Value(key),
+            );
+        }
         self.check_switch_batch();
         let handle = get_cf_handle(self.db.as_ref(), cf)?;
         self.wbs[self.index].delete_cf(handle, key).map_err(r2e)

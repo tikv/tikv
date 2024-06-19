@@ -47,6 +47,10 @@ pub trait RangeCacheEngine:
     fn enabled(&self) -> bool {
         false
     }
+
+    fn evict_range(&self, range: CacheRange);
+
+    fn dump_cache(&self, _: u64) -> String;
 }
 
 pub trait RangeCacheEngineExt {
@@ -99,8 +103,12 @@ impl CacheRange {
         Self {
             start: enc_start_key(region),
             end: enc_end_key(region),
-            tag: format!("[region_id={}]", region.get_id()),
+            tag: Self::new_tag(region.get_id()),
         }
+    }
+
+    pub fn new_tag(region_id: u64) -> String {
+        format!("[region_id={}]", region_id)
     }
 }
 

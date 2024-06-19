@@ -1,20 +1,37 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::BTreeSet, fmt::Display, sync::Arc, thread::JoinHandle, time::Duration};
+use core::slice::SlicePattern;
+use std::{
+    cmp,
+    collections::{BTreeMap, BTreeSet},
+    fmt::Display,
+    num::NonZeroUsize,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
+    thread::JoinHandle,
+    time::Duration,
+};
 
 use bytes::Bytes;
 use crossbeam::{
     channel::{bounded, tick, Sender},
     epoch, select,
+    sync::ShardedLock,
 };
-use engine_rocks::{RocksEngine, RocksSnapshot};
+use engine_rocks::{RocksEngine, RocksEngineIterator, RocksSnapshot};
 use engine_traits::{
-    CacheRange, IterOptions, Iterable, Iterator, MiscExt, RangeHintService, SnapshotMiscExt,
-    CF_DEFAULT, CF_WRITE, DATA_CFS,
+    iter_option, CacheRange, IterOptions, Iterable, Iterator, MiscExt, RangeHintService,
+    SnapshotMiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
-use parking_lot::RwLock;
+use kvproto::metapb::Region;
+use parking_lot::{Mutex, RwLock};
 use pd_client::{PdClient, RpcClient};
-use raftstore::coprocessor::RegionInfoProvider;
+use raftstore::{
+    coprocessor::RegionInfoProvider,
+    store::fsm::apply::{PRINTF_LOCK, PRINTF_LOG},
+};
 use slog_global::{error, info, warn};
 use tikv_util::{
     config::ReadableSize,
@@ -23,14 +40,15 @@ use tikv_util::{
     time::Instant,
     worker::{Builder, Runnable, RunnableWithTimer, ScheduleError, Scheduler, Worker},
 };
-use txn_types::{Key, TimeStamp, WriteRef, WriteType};
+use txn_types::{Key, Lock, TimeStamp, WriteRef, WriteType};
 use yatp::Remote;
 
 use crate::{
     engine::{RangeCacheMemoryEngineCore, SkiplistHandle},
     keys::{
-        decode_key, encode_key, encode_key_for_boundary_with_mvcc, encoding_for_filter,
-        InternalBytes, InternalKey, ValueType,
+        decode_key, encode_key, encode_key_for_boundary_with_mvcc,
+        encode_key_for_boundary_without_mvcc, encoding_for_filter, InternalBytes, InternalKey,
+        ValueType,
     },
     memory_controller::{MemoryController, MemoryUsage},
     metrics::{
@@ -39,6 +57,7 @@ use crate::{
     },
     range_manager::LoadFailedReason,
     range_stats::{RangeStatsManager, DEFAULT_EVICT_MIN_DURATION},
+    read::{RangeCacheIterator, RangeCacheSnapshot},
     region_label::{
         LabelRule, RegionLabelAddedCb, RegionLabelRulesManager, RegionLabelServiceBuilder,
     },
@@ -77,6 +96,7 @@ pub enum BackgroundTask {
     TopRegionsLoadEvict,
     CleanLockTombstone(u64),
     SetRocksEngine(RocksEngine),
+    Audit((Vec<(RangeCacheSnapshot, u64)>, RocksSnapshot)),
 }
 
 impl Display for BackgroundTask {
@@ -93,6 +113,7 @@ impl Display for BackgroundTask {
                 .debug_struct("CleanLockTombstone")
                 .field("seqno", r)
                 .finish(),
+            BackgroundTask::Audit(_) => f.debug_struct("audit").finish(),
             BackgroundTask::SetRocksEngine(_) => f.debug_struct("SetDiskEngine").finish(),
         }
     }
@@ -250,6 +271,10 @@ impl BgWorkManager {
         let core = self.core.clone();
         range_hint_service.start(self.worker.remote(), move |cache_range: &CacheRange| {
             let mut engine = core.write();
+            info!(
+                "load range due to hint service";
+                "range" => ?cache_range,
+            );
             engine.mut_range_manager().load_range(cache_range.clone())?;
             // TODO (afeinberg): This does not actually load the range. The load happens
             // the apply thread begins to apply raft entries. To force this (for read-only
@@ -462,6 +487,10 @@ impl BackgroundRunnerCore {
                 .unwrap()
                 .2;
             if canceled {
+                info!(
+                    "snapshot load canceled";
+                    "range" => ?range,
+                );
                 let (r, ..) = core
                     .mut_range_manager()
                     .pending_ranges_loading_data
@@ -717,7 +746,9 @@ pub struct BackgroundRunner {
     lock_cleanup_remote: Remote<yatp::task::future::TaskCell>,
     lock_cleanup_worker: Worker,
 
-    // The last sequence number for the lock cf tombstone cleanup
+    audit_remote: Remote<yatp::task::future::TaskCell>,
+    audit_worker: Worker,
+
     last_seqno: u64,
     // RocksEngine is used to get the oldest snapshot sequence number.
     rocks_engine: Option<RocksEngine>,
@@ -732,6 +763,11 @@ impl Drop for BackgroundRunner {
         self.lock_cleanup_worker.stop();
     }
 }
+
+// The expected average region size in bytes: used to estimate the number of top
+// regions to cache (using `soft limit threshold /
+// `EXPECTED_AVERAGE_REGION_SIZE`)`.
+pub const EXPECTED_AVERAGE_REGION_SIZE: usize = 96_000_000;
 
 impl BackgroundRunner {
     pub fn new(
@@ -751,6 +787,9 @@ impl BackgroundRunner {
         let delete_range_runner = DeleteRangeRunner::new(engine.clone());
         let delete_range_scheduler =
             delete_range_worker.start_with_timer("delete-range-runner", delete_range_runner);
+
+        let audit_worker = Worker::new("audit-worker");
+        let audit_remote = audit_worker.remote();
 
         let lock_cleanup_worker = Worker::new("lock-cleanup-worker");
         let lock_cleanup_remote = lock_cleanup_worker.remote();
@@ -790,11 +829,125 @@ impl BackgroundRunner {
                 load_evict_remote,
                 lock_cleanup_remote,
                 lock_cleanup_worker,
+                audit_remote,
+                audit_worker,
                 last_seqno: 0,
                 rocks_engine: None,
             },
             delete_range_scheduler,
         )
+    }
+}
+
+fn next_to_match(
+    cf: &str,
+    iter: &mut RangeCacheIterator,
+    disk_iter: &mut RocksEngineIterator,
+    next_fisrt: bool,
+    last_user_key: &Vec<u8>,
+    last_ts: u64,
+) {
+    let read_ts = iter.read_ts;
+    let key = iter.key();
+    let val = iter.value();
+    if next_fisrt {
+        if !disk_iter.next().unwrap() {
+            error!(
+                "next inconsistent, disk iterator next failed";
+                "cache_key" => log_wrappers::Value(key),
+                "cache_val" => log_wrappers::Value(val),
+                "lower" => log_wrappers::Value(&iter.lower_bound),
+                "upper" => log_wrappers::Value(&iter.upper_bound),
+                "seqno" => iter.sequence_number,
+                "cf" => ?cf,
+            );
+            unreachable!()
+        }
+    }
+    let (user_key, ts) = if cf != "lock" {
+        split_ts(key).unwrap()
+    } else {
+        (b"".as_slice(), 0)
+    };
+    loop {
+        let disk_key = disk_iter.key();
+        let disk_val = disk_iter.value();
+
+        if cf == "lock" {
+            if disk_key != key {
+                error!(
+                    "next inconsistent, lock not match";
+                    "cache_key" => log_wrappers::Value(key),
+                    "cache_val" => log_wrappers::Value(val),
+                    "disk_key" => log_wrappers::Value(disk_key),
+                    "disk_val" => log_wrappers::Value(disk_val),
+                    "lower" => log_wrappers::Value(&iter.lower_bound),
+                    "upper" => log_wrappers::Value(&iter.upper_bound),
+                    "seqno" => iter.sequence_number,
+                    "cf" => ?cf,
+                );
+                unreachable!()
+            }
+            break;
+        }
+
+        if disk_key == key {
+            break;
+        }
+
+        let (disk_user_key, disk_ts) = split_ts(disk_key).unwrap();
+        if disk_user_key == user_key && disk_ts > ts {
+            if let Ok(write) = parse_write(disk_iter.value())
+                && cf == "write"
+                && (write.write_type == WriteType::Rollback || write.write_type == WriteType::Lock)
+            {
+                info!(
+                    "meet gced rollback or lock";
+                    "cache_key" => log_wrappers::Value(key),
+                    "cache_val" => log_wrappers::Value(val),
+                    "disk_key" => log_wrappers::Value(disk_key),
+                    "disk_val" => log_wrappers::Value(disk_val),
+                    "lower" => log_wrappers::Value(&iter.lower_bound),
+                    "upper" => log_wrappers::Value(&iter.upper_bound),
+                    "seqno" => iter.sequence_number,
+                    "cf" => ?cf,
+                );
+            } else {
+                if disk_user_key == last_user_key && (disk_ts >= read_ts || disk_ts > last_ts) {
+                    error!(
+                        "next inconsistent, missing higher ts";
+                        "cache_key" => log_wrappers::Value(key),
+                        "cache_val" => log_wrappers::Value(val),
+                        "disk_key" => log_wrappers::Value(disk_key),
+                        "disk_val" => log_wrappers::Value(disk_val),
+                        "lower" => log_wrappers::Value(&iter.lower_bound),
+                        "upper" => log_wrappers::Value(&iter.upper_bound),
+                        "seqno" => iter.sequence_number,
+                        "read_ts" => read_ts,
+                        "last_ts" => last_ts,
+                        "cf" => ?cf,
+                    );
+                    unreachable!()
+                }
+            }
+        }
+
+        if disk_key > key {
+            error!(
+                "next inconsistent";
+                "cache_key" => log_wrappers::Value(key),
+                "cache_val" => log_wrappers::Value(val),
+                "disk_key" => log_wrappers::Value(disk_key),
+                "disk_val" => log_wrappers::Value(disk_val),
+                "lower" => log_wrappers::Value(&iter.lower_bound),
+                "upper" => log_wrappers::Value(&iter.upper_bound),
+                "seqno" => iter.sequence_number,
+                "cf" => ?cf,
+            );
+            unreachable!()
+        }
+
+        assert!(disk_iter.next().unwrap());
     }
 }
 
@@ -806,6 +959,79 @@ impl Runnable for BackgroundRunner {
             BackgroundTask::SetRocksEngine(rocks_engine) => {
                 self.rocks_engine = Some(rocks_engine);
                 fail::fail_point!("in_memory_engine_set_rocks_engine");
+            }
+            BackgroundTask::Audit((ranges_snap, rocksdb_snap)) => {
+                let core = self.core.engine.clone();
+                let f = async move {
+                    for (range_snap, safe_ts) in ranges_snap {
+                        info!(
+                            "audit range";
+                            "range" => ?range_snap.snapshot_meta.range,
+                        );
+                        let opts = iter_option(
+                            &range_snap.snapshot_meta.range.start,
+                            &range_snap.snapshot_meta.range.end,
+                            false,
+                        );
+                        for cf in &[CF_LOCK, CF_WRITE] {
+                            let mut iter = range_snap.iterator_opt(cf, opts.clone()).unwrap();
+                            let read_ts = iter.read_ts;
+                            let mut disk_iter =
+                                rocksdb_snap.iterator_opt(cf, opts.clone()).unwrap();
+                            let valid = iter.seek_to_first().unwrap();
+                            if !valid {
+                                continue;
+                            }
+                            let valid = disk_iter.seek_to_first().unwrap();
+                            if !valid {
+                                error!(
+                                    "seek_to_first result not equal";
+                                    "lower" => log_wrappers::Value(&iter.lower_bound),
+                                    "upper" => log_wrappers::Value(&iter.upper_bound),
+                                    "cache_key" => log_wrappers::Value(&iter.key()),
+                                    "seqno" => iter.sequence_number,
+                                    "cf" => ?cf,
+                                );
+                                unreachable!();
+                            }
+
+                            next_to_match(cf, &mut iter, &mut disk_iter, false, &vec![], 0);
+                            let (mut last_user_key, mut last_ts) = if *cf == CF_WRITE {
+                                let r = split_ts(iter.key()).unwrap();
+                                (r.0.to_vec(), r.1)
+                            } else {
+                                (vec![], 0)
+                            };
+
+                            while iter.next().unwrap() {
+                                next_to_match(
+                                    cf,
+                                    &mut iter,
+                                    &mut disk_iter,
+                                    true,
+                                    &last_user_key,
+                                    last_ts,
+                                );
+                                if *cf == CF_WRITE {
+                                    let (cur_user_key, ts) = split_ts(iter.key()).unwrap();
+                                    if last_user_key != cur_user_key {
+                                        last_user_key = cur_user_key.to_vec();
+                                        last_ts = 0;
+                                    }
+                                    if last_ts == 0 && last_ts < read_ts {
+                                        last_ts = read_ts;
+                                    }
+                                }
+                            }
+                        }
+                        info!(
+                            "audit range done";
+                            "range" => ?range_snap.snapshot_meta.range,
+                        );
+                    }
+                };
+
+                self.audit_remote.spawn(f);
             }
             BackgroundTask::Gc(t) => {
                 let seqno = (|| {
@@ -877,10 +1103,30 @@ impl Runnable for BackgroundRunner {
                             continue;
                         }
 
+                        let seq = snap.sequence_number();
                         let snapshot_load = || -> bool {
                             for &cf in DATA_CFS {
                                 let handle = skiplist_engine.cf_handle(cf);
-                                let seq = snap.sequence_number();
+                                let mut iter = handle.iterator();
+
+                                let (start, end) = if cf == CF_LOCK {
+                                    encode_key_for_boundary_without_mvcc(&range)
+                                } else {
+                                    encode_key_for_boundary_with_mvcc(&range)
+                                };
+                                let guard = &epoch::pin();
+                                iter.seek(&start, guard);
+                                if iter.valid() && iter.key() < &end {
+                                    error!(
+                                        "not clean when load";
+                                        "range" => ?range,
+                                        "key" => log_wrappers::Value(iter.key().as_slice()),
+                                    );
+                                    unreachable!()
+                                }
+                            }
+                            for &cf in DATA_CFS {
+                                let handle = skiplist_engine.cf_handle(cf);
                                 let guard = &epoch::pin();
                                 match snap.iterator_opt(cf, iter_opt.clone()) {
                                     Ok(mut iter) => {
@@ -918,6 +1164,18 @@ impl Runnable for BackgroundRunner {
                                             val.set_memory_controller(
                                                 core.memory_controller.clone(),
                                             );
+
+                                            if PRINTF_LOG.load(Ordering::Relaxed)
+                                                || (cf == CF_LOCK
+                                                    && PRINTF_LOCK.load(Ordering::Relaxed))
+                                            {
+                                                info!(
+                                                    "write to memory in load";
+                                                    "key" => log_wrappers::Value(encoded_key.as_slice()),
+                                                    "cf" => ?cf,
+                                                );
+                                            }
+
                                             handle.insert(encoded_key, val, guard);
                                             iter.next().unwrap();
                                         }
@@ -948,6 +1206,7 @@ impl Runnable for BackgroundRunner {
                                 "Loading range finished";
                                 "range" => ?range,
                                 "duration(sec)" => ?duration,
+                                "seqno" => seq,
                             );
                         } else {
                             info!("Loading range canceled";"range" => ?range);
@@ -958,10 +1217,10 @@ impl Runnable for BackgroundRunner {
             }
             BackgroundTask::MemoryCheckAndEvict => {
                 let mem_usage = self.core.memory_controller.mem_usage();
-                info!(
-                    "start memory usage check and evict";
-                    "mem_usage(MB)" => ReadableSize(mem_usage as u64).as_mb()
-                );
+                // info!(
+                //     "start memory usage check and evict";
+                //     "mem_usage(MB)" => ReadableSize(mem_usage as u64).as_mb()
+                // );
                 if mem_usage > self.core.memory_controller.soft_limit_threshold() {
                     let delete_range_scheduler = self.delete_range_scheduler.clone();
                     let core = self.core.clone();
@@ -1017,6 +1276,12 @@ impl Runnable for BackgroundRunner {
                         if user_key != last_user_key {
                             if let Some(remove) = cached_to_remove.take() {
                                 removed += 1;
+                                if PRINTF_LOCK.load(Ordering::Relaxed) {
+                                    info!(
+                                        "clean lock";
+                                        "key" => log_wrappers::Value(&remove),
+                                    );
+                                }
                                 lock_handle.remove(&InternalBytes::from_vec(remove), guard);
                             }
                             last_user_key = user_key.to_vec();
@@ -1031,6 +1296,25 @@ impl Runnable for BackgroundRunner {
                         } else if remove_rest {
                             assert!(sequence < snapshot_seqno);
                             removed += 1;
+                            if v_type != ValueType::Deletion {
+                                let cached_to_remove_value =
+                                    Lock::parse(iter.value().as_bytes().as_slice()).unwrap();
+                                if PRINTF_LOCK.load(Ordering::Relaxed) {
+                                    info!(
+                                        "clean lock2";
+                                        "key" => log_wrappers::Value(iter.key().as_bytes()),
+                                        "lock_type" => ?cached_to_remove_value.lock_type,
+                                        "ts" => cached_to_remove_value.ts,
+                                    );
+                                }
+                            } else {
+                                if PRINTF_LOCK.load(Ordering::Relaxed) {
+                                    info!(
+                                        "clean lock2";
+                                        "key" => log_wrappers::Value(iter.key().as_bytes()),
+                                    );
+                                }
+                            }
                             lock_handle.remove(iter.key(), guard);
                         } else if sequence < snapshot_seqno {
                             remove_rest = true;
@@ -1044,6 +1328,12 @@ impl Runnable for BackgroundRunner {
                     }
                     if let Some(remove) = cached_to_remove.take() {
                         removed += 1;
+                        if PRINTF_LOCK.load(Ordering::Relaxed) {
+                            info!(
+                                "clean lock";
+                                "key" => log_wrappers::Value(&remove),
+                            );
+                        }
                         lock_handle.remove(&InternalBytes::from_vec(remove), guard);
                     }
 
@@ -1075,7 +1365,16 @@ impl RunnableWithTimer for BackgroundRunner {
         let cached = core.range_manager.ranges().len();
         let loading = core.range_manager.pending_ranges_loading_data.len();
         let evictions = core.range_manager.get_and_reset_range_evictions();
+        let deleting = core.range_manager.ranges_being_deleted.len();
         drop(core);
+        info!(
+            "range types";
+            "pending_range" => pending,
+            "cached_range" => cached,
+            "loading_range" => loading,
+            "range_evictions" => evictions,
+            "range_deleting" => deleting,
+        );
         RANGE_CACHE_COUNT
             .with_label_values(&["pending_range"])
             .set(pending as i64);
@@ -1088,10 +1387,13 @@ impl RunnableWithTimer for BackgroundRunner {
         RANGE_CACHE_COUNT
             .with_label_values(&["range_evictions"])
             .set(evictions as i64);
+        RANGE_CACHE_COUNT
+            .with_label_values(&["range_deleting"])
+            .set(deleting as i64);
     }
 
     fn get_interval(&self) -> Duration {
-        Duration::from_secs(1)
+        Duration::from_millis(500)
     }
 }
 
@@ -1231,11 +1533,25 @@ impl Drop for Filter {
     fn drop(&mut self) {
         if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
             let guard = &epoch::pin();
+            self.metrics.filtered += 1;
+            if PRINTF_LOG.load(Ordering::Relaxed) {
+                info!(
+                    "gc filter write n";
+                    "key" => log_wrappers::Value(&cached_delete_key),
+                );
+            }
             self.write_cf_handle
                 .remove(&InternalBytes::from_vec(cached_delete_key), guard);
         }
         if let Some(cached_delete_key) = self.cached_skiplist_delete_key.take() {
             let guard = &epoch::pin();
+            self.metrics.filtered += 1;
+            if PRINTF_LOG.load(Ordering::Relaxed) {
+                info!(
+                    "gc filter tombstone";
+                    "key" => log_wrappers::Value(&cached_delete_key),
+                );
+            }
             self.write_cf_handle
                 .remove(&InternalBytes::from_vec(cached_delete_key), guard);
         }
@@ -1295,8 +1611,15 @@ impl Filter {
                 // 2. Two consecutive ValueType::Deletion of different user keys.
                 // In either cases, we can delete the previous one directly.
                 let guard = &epoch::pin();
-                self.write_cf_handle
-                    .remove(&InternalBytes::from_vec(cache_skiplist_delete_key), guard)
+                let key = InternalBytes::from_vec(cache_skiplist_delete_key);
+                self.write_cf_handle.remove(&key, guard);
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    info!(
+                        "delete in memory due to gc";
+                        "key" => log_wrappers::Value(key.as_bytes()),
+                        "cf" => "write",
+                    );
+                }
             }
             self.cached_skiplist_delete_key = Some(key.to_vec());
             return Ok(());
@@ -1307,10 +1630,24 @@ impl Filter {
             } = decode_key(cache_skiplist_delete_key);
             let guard = &epoch::pin();
             if cache_skiplist_delete_user_key == user_key {
+                self.metrics.filtered += 1;
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    info!(
+                        "gc filter write hidden by tombstone";
+                        "key" => log_wrappers::Value(key),
+                    );
+                }
                 self.write_cf_handle
                     .remove(&InternalBytes::from_bytes(key.clone()), guard);
                 return Ok(());
             } else {
+                self.metrics.filtered += 1;
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    info!(
+                        "gc filter write tombstone";
+                        "key" => log_wrappers::Value(&self.cached_skiplist_delete_key.as_ref().unwrap()),
+                    );
+                }
                 self.write_cf_handle.remove(
                     &InternalBytes::from_vec(self.cached_skiplist_delete_key.take().unwrap()),
                     guard,
@@ -1336,6 +1673,13 @@ impl Filter {
             self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
             self.remove_older = false;
             if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
+                self.metrics.filtered += 1;
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    info!(
+                        "gc filter write n";
+                        "key" => log_wrappers::Value(key),
+                    );
+                }
                 self.write_cf_handle
                     .remove(&InternalBytes::from_vec(cached_delete_key), guard);
             }
@@ -1363,11 +1707,29 @@ impl Filter {
         }
 
         if !filtered {
+            if PRINTF_LOG.load(Ordering::Relaxed) {
+                info!(
+                    "gc filter not filter";
+                    "key" => log_wrappers::Value(key),
+                    "seqno" => sequence,
+                    "write type" => ?write.write_type,
+                    "start_ts" => write.start_ts,
+                );
+            }
             return Ok(());
         }
         self.metrics.filtered += 1;
         self.write_cf_handle
             .remove(&InternalBytes::from_bytes(key.clone()), guard);
+        if PRINTF_LOG.load(Ordering::Relaxed) {
+            info!(
+                "gc filter write";
+                "key" => log_wrappers::Value(key),
+                "seqno" => sequence,
+                "write type" => ?write.write_type,
+                "start_ts" => write.start_ts,
+            );
+        }
         self.handle_filtered_write(write, guard)?;
 
         Ok(())
@@ -1390,6 +1752,12 @@ impl Filter {
             iter.seek(&default_key, guard);
             while iter.valid() && iter.key().same_user_key_with(&default_key) {
                 self.default_cf_handle.remove(iter.key(), guard);
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    info!(
+                        "gc filter default";
+                        "key" => log_wrappers::Value(iter.key().as_bytes()),
+                    );
+                }
                 iter.next(guard);
             }
         }
@@ -1410,8 +1778,8 @@ pub mod tests {
     use crossbeam::epoch;
     use engine_rocks::util::new_engine;
     use engine_traits::{
-        CacheRange, IterOptions, Iterable, Iterator, RangeCacheEngine, SyncMutable, CF_DEFAULT,
-        CF_LOCK, CF_WRITE, DATA_CFS,
+        CacheRange, IterOptions, Iterable, Iterator, Mutable, RangeCacheEngine, SyncMutable,
+        WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
     };
     use futures::future::ready;
     use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
@@ -1424,7 +1792,7 @@ pub mod tests {
     };
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
-    use super::*;
+    use super::{BackgroundTask, Filter, PdRangeHintService, *};
     use crate::{
         background::BackgroundRunner,
         config::RangeCacheConfigManager,
@@ -2569,6 +2937,45 @@ pub mod tests {
         verify(range1, true, 6);
         verify(range2, true, 6);
         assert_eq!(mem_controller.mem_usage(), 1680);
+    }
+
+    #[test]
+    fn test_clean_up_tombstone() {
+        let mut config = RangeCacheEngineConfig::config_for_test();
+        config.soft_limit_threshold = Some(ReadableSize(1000));
+        config.hard_limit_threshold = Some(ReadableSize(1500));
+        let config = Arc::new(VersionTrack::new(config));
+        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(config.clone()));
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(range.clone());
+        let mut wb = engine.write_batch();
+        wb.prepare_for_range(range.clone());
+        wb.put_cf("lock", b"k", b"val");
+        wb.put_cf("lock", b"k1", b"val");
+        wb.put_cf("lock", b"k2", b"val");
+        wb.delete_cf("lock", b"k");
+        wb.delete_cf("lock", b"k1");
+        wb.delete_cf("lock", b"k2");
+        wb.put_cf("lock", b"k", b"val2");
+        wb.set_sequence_number(100);
+        wb.write();
+
+        let mut wb = engine.write_batch();
+        wb.prepare_for_range(range.clone());
+        wb.put_cf("lock", b"k", b"val");
+        wb.put_cf("lock", b"k1", b"val");
+        wb.put_cf("lock", b"k2", b"val");
+        wb.delete_cf("lock", b"k");
+        wb.delete_cf("lock", b"k1");
+        wb.delete_cf("lock", b"k2");
+        wb.set_sequence_number(110);
+        wb.write();
+
+        engine
+            .bg_worker_manager()
+            .schedule_task(BackgroundTask::CleanLockTombstone(110));
+
+        std::thread::sleep(Duration::from_secs(1000));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fmt::{self, Debug},
     ops::Bound,
     result,
@@ -9,31 +9,37 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
+    time::Duration,
 };
 
 use crossbeam::epoch::{self, default_collector, Guard};
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    CacheRange, FailedReason, IterOptions, Iterable, KvEngine, RangeCacheEngine, Result,
-    CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    CacheRange, FailedReason, IterOptions, Iterable, Iterator, KvEngine, RangeCacheEngine, Result,
+    SnapshotMiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
-use raftstore::coprocessor::RegionInfoProvider;
+use raftstore::{
+    coprocessor::RegionInfoProvider,
+    store::fsm::apply::{PRINTF_LOCK, PRINTF_LOG},
+};
 use skiplist_rs::{
     base::{Entry, OwnedIter},
     SkipList,
 };
 use slog_global::error;
-use tikv_util::{config::VersionTrack, info};
+use tikv_util::{config::VersionTrack, info, warn};
+use txn_types::TimeStamp;
 
 use crate::{
     background::{BackgroundTask, BgWorkManager, PdRangeHintService},
     keys::{
-        encode_key_for_boundary_with_mvcc, encode_key_for_boundary_without_mvcc, InternalBytes,
+        encode_key_for_boundary_with_mvcc, encode_key_for_boundary_without_mvcc, encode_seek_key,
+        InternalBytes,
     },
     memory_controller::MemoryController,
     range_manager::{LoadFailedReason, RangeCacheStatus, RangeManager},
-    read::{RangeCacheIterator, RangeCacheSnapshot},
+    read::{RangeCacheIterator, RangeCacheSnapshot, RangeCacheSnapshotMeta},
     statistics::Statistics,
     write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
     RangeCacheEngineConfig, RangeCacheEngineContext,
@@ -153,6 +159,10 @@ impl SkiplistEngine {
     }
 
     pub(crate) fn delete_range(&self, range: &CacheRange) {
+        info!(
+            "delete range in range cache engine";
+            "range" => ?range,
+        );
         DATA_CFS.iter().for_each(|&cf| {
             let (start, end) = if cf == CF_LOCK {
                 encode_key_for_boundary_without_mvcc(range)
@@ -166,6 +176,15 @@ impl SkiplistEngine {
             iter.seek(&start, guard);
             while iter.valid() && iter.key() < &end {
                 handle.remove(iter.key(), guard);
+                if PRINTF_LOG.load(Ordering::Relaxed)
+                    || (cf == CF_LOCK && PRINTF_LOCK.load(Ordering::Relaxed))
+                {
+                    info!(
+                        "delete range";
+                        "key" => log_wrappers::Value(iter.key().as_slice()),
+                        "cf" => ?cf,
+                    );
+                }
                 iter.next(guard);
             }
             // guard will buffer 8 drop methods, flush here to clear the buffer.
@@ -261,6 +280,26 @@ impl RangeCacheMemoryEngineCore {
         assert_eq!(&r, range);
         assert!(!canceled);
         range_manager.new_range(r);
+    }
+
+    pub fn dump_cached_write_batch(&self, region_id: u64) -> String {
+        let tag = CacheRange::new_tag(region_id);
+        let mut buffer = String::default();
+        for (range, wb) in self
+            .cached_write_batch
+            .iter()
+            .filter(|(range, _)| tag == range.tag)
+        {
+            buffer.push_str(&format!("range: {:?}\n", range));
+            for wb in wb {
+                buffer.push_str(&format!(
+                    "  seq: {}, key: {}",
+                    wb.0,
+                    hex::encode_upper(&wb.1.key)
+                ));
+            }
+        }
+        buffer
     }
 }
 
@@ -400,6 +439,15 @@ impl RangeCacheMemoryEngine {
             return RangeCacheStatus::Cached;
         }
 
+        if let Some(overlapped_range) = range_manager.get_overlapped_range(range) {
+            error!(
+                "overlap or contained by range";
+                "range_in_cache" => ?overlapped_range,
+                "range_for_prepare" => ?range,
+            );
+            unreachable!()
+        }
+
         let mut overlapped = false;
         // check whether the range is in pending_range and we can schedule load task if
         // it is
@@ -456,6 +504,7 @@ impl RangeCacheMemoryEngine {
             info!(
                 "Range to load";
                 "Tag" => &range.tag,
+                "range" => ?range,
                 "Cached" => range_manager.ranges().len(),
                 "Pending" => range_manager.pending_ranges_loading_data.len(),
             );
@@ -501,14 +550,14 @@ impl RangeCacheMemoryEngine {
             if !group_entries_to_cache.is_empty() {
                 let mut core = RwLockUpgradableReadGuard::upgrade(core);
                 for (range, write_batches) in group_entries_to_cache {
-                    core.cached_write_batch.entry(range).or_default().extend(
-                        write_batches.into_iter().map(|e| {
-                            // We should confirm the sequence number for cached entries, and
-                            // also increased for each of them.
+                    core.cached_write_batch
+                        .get_mut(&range)
+                        .expect(format!("cannot get range {:?}", range).as_str())
+                        .extend(write_batches.into_iter().map(|e| {
+                            let cur = *seq;
                             *seq += 1;
-                            (*seq - 1, e)
-                        }),
-                    );
+                            (cur, e)
+                        }));
                 }
             }
             (entries_to_write, engine)
@@ -528,6 +577,93 @@ impl RangeCacheMemoryEngine {
 
     pub fn statistics(&self) -> Arc<Statistics> {
         self.statistics.clone()
+    }
+
+    pub fn dump_cache(&self, range: CacheRange) -> String {
+        let Ok(snap) = RangeCacheSnapshot::new(self.clone(), range.clone(), u64::MAX, u64::MAX)
+        else {
+            return String::default();
+        };
+        let mut buffer = String::default();
+        let mut scan = |cf| {
+            let mut iter_opts = IterOptions::default();
+            iter_opts.set_lower_bound(&range.start, 0);
+            iter_opts.set_upper_bound(&range.end, 0);
+
+            buffer.push_str(&format!("RangeCacheIterator\n"));
+            let mut iter = snap.iterator_opt(cf, iter_opts.clone()).unwrap();
+            iter.seek_to_first().unwrap();
+            buffer.push_str(&format!("  CF: {}\n", cf));
+            while iter.valid().unwrap_or(false) {
+                let key = iter.key();
+                let val = iter.value();
+                buffer.push_str(&format!(
+                    "    key: {}, value: {}\n",
+                    hex::encode_upper(key),
+                    hex::encode_upper(val),
+                ));
+                if !iter.next().unwrap_or(false) {
+                    break;
+                }
+            }
+
+            buffer.push_str(&format!("RawIterator\n"));
+            let mut iter = snap.iterator_opt(cf, iter_opts.clone()).unwrap();
+            iter.seek_to_first().unwrap();
+            let raw_iter = &mut iter.iter;
+            buffer.push_str(&format!("  CF: {}\n", cf));
+            while raw_iter.valid() {
+                let key = raw_iter.key();
+                let val = raw_iter.value();
+                buffer.push_str(&format!(
+                    "    key: {}, value: {}\n",
+                    hex::encode_upper(key.as_bytes()),
+                    hex::encode_upper(val.as_bytes()),
+                ));
+
+                if key.as_slice() >= range.end.as_slice() {
+                    break;
+                }
+                let guard = &epoch::pin();
+                raw_iter.next(guard)
+            }
+        };
+        scan(CF_WRITE);
+        scan(CF_DEFAULT);
+        scan(CF_LOCK);
+        buffer
+    }
+
+    pub fn schedule_audit(&self) {
+        let snap = self.rocks_engine.as_ref().unwrap().snapshot(None);
+        let mut ranges_to_audit = vec![];
+        let ranges: Vec<_> = {
+            let mut core = self.core().write();
+            core.range_manager
+                .ranges()
+                .iter()
+                .map(|(r, meta)| (r.clone(), meta.safe_point()))
+                .collect()
+        };
+        for range in ranges {
+            let read_ts = TimeStamp::physical_now() - Duration::from_secs(40).as_millis() as u64;
+            let read_ts = TimeStamp::compose(read_ts, 0).into_inner();
+
+            if let Ok(range_snap) = self.snapshot(range.0.clone(), read_ts, snap.sequence_number())
+            {
+                ranges_to_audit.push((range_snap, range.1));
+            } else {
+                warn!(
+                    "failed to get snap in audit";
+                    "range" => ?range,
+                );
+            }
+        }
+        if !ranges_to_audit.is_empty() {
+            self.bg_worker_manager()
+                .schedule_task(BackgroundTask::Audit((ranges_to_audit, snap)))
+                .unwrap();
+        }
     }
 
     pub fn alloc_write_batch_id(&self) -> u64 {
@@ -588,6 +724,34 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
 
     fn enabled(&self) -> bool {
         self.config.value().enabled
+    }
+
+    fn evict_range(&self, range: CacheRange) {
+        self.evict_range(&range);
+    }
+
+    fn dump_cache(&self, region_id: u64) -> String {
+        let mut buffer = String::default();
+        let range;
+        {
+            let core = self.core.read();
+            buffer.push_str(&format!(
+                "range_manager:\n{}\n",
+                core.range_manager.dump_cache(region_id),
+            ));
+            range = core.range_manager.get_range_by_id(region_id);
+        }
+        if let Some(range) = range {
+            buffer.push_str(&format!("---\nengine:\n{}\n", self.dump_cache(range)));
+        }
+        {
+            let core = self.core.read();
+            buffer.push_str(&format!(
+                "---\ncached_write_batch:\n{}\n",
+                core.dump_cached_write_batch(region_id),
+            ));
+        }
+        buffer
     }
 }
 

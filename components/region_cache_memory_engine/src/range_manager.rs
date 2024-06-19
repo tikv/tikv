@@ -12,6 +12,7 @@ use std::{
 use collections::HashMap;
 use engine_rocks::RocksSnapshot;
 use engine_traits::{CacheRange, FailedReason};
+use kvproto::metapb;
 use tikv_util::info;
 
 use crate::read::RangeCacheSnapshotMeta;
@@ -160,7 +161,7 @@ pub struct RangeManager {
     // The key in this map is the id of the write batch, and the value is a collection
     // the ranges of this batch. So, when the write batch is consumed by the in-memory engine,
     // all ranges of it are cleared from `ranges_being_written`.
-    ranges_being_written: HashMap<u64, Vec<CacheRange>>,
+    pub(crate) ranges_being_written: HashMap<u64, Vec<CacheRange>>,
     range_evictions: AtomicU64,
 }
 
@@ -219,6 +220,10 @@ impl RangeManager {
         self.ranges.keys().any(|r| r.overlaps(range))
     }
 
+    pub fn get_overlapped_range(&self, range: &CacheRange) -> Option<CacheRange> {
+        self.ranges.keys().find(|r| r.overlaps(range)).cloned()
+    }
+
     fn overlap_with_evicting_range(&self, range: &CacheRange) -> bool {
         self.ranges_being_deleted.iter().any(|r| r.overlaps(range))
     }
@@ -252,7 +257,7 @@ impl RangeManager {
         };
         let meta = self.ranges.get_mut(&range_key).unwrap();
 
-        if read_ts <= meta.safe_point {
+        if read_ts < meta.safe_point {
             return Err(FailedReason::TooOldRead);
         }
 
@@ -417,7 +422,11 @@ impl RangeManager {
 
     pub fn on_delete_ranges(&mut self, ranges: &[CacheRange]) {
         for r in ranges {
-            self.ranges_being_deleted.remove(r);
+            self.ranges_being_deleted.remove(&r);
+            info!(
+                "range eviction done";
+                "range" => ?r,
+            );
         }
     }
 
@@ -478,6 +487,69 @@ impl RangeManager {
 
     pub fn get_and_reset_range_evictions(&self) -> u64 {
         self.range_evictions.swap(0, Ordering::Relaxed)
+    }
+
+    pub fn get_range_by_id(&self, region_id: u64) -> Option<CacheRange> {
+        let tag = CacheRange::new_tag(region_id);
+
+        self.ranges
+            .iter()
+            .find(|(range, _)| tag == range.tag)
+            .map(|(r, _)| r.clone())
+    }
+
+    pub fn dump_cache(&self, region_id: u64) -> String {
+        let tag = CacheRange::new_tag(region_id);
+
+        // historical_ranges
+        let mut buffer = "historical_ranges:\n".to_owned();
+        for (range, meta) in self
+            .historical_ranges
+            .iter()
+            .filter(|(range, _)| tag == range.tag)
+        {
+            buffer.push_str(&format!("  range: {:?}, meta: {:?}\n", range, meta));
+        }
+
+        // ranges_being_deleted
+        buffer.push_str("ranges_being_deleted:\n");
+        for range in self
+            .ranges_being_deleted
+            .iter()
+            .filter(|range| tag == range.tag)
+        {
+            buffer.push_str(&format!("  range: {:?}\n", range));
+        }
+
+        // ranges
+        buffer.push_str("ranges:\n");
+        for (range, meta) in self.ranges.iter().filter(|(range, _)| tag == range.tag) {
+            buffer.push_str(&format!("  range: {:?}, meta: {:?}\n", range, meta));
+        }
+
+        // pending_ranges
+        buffer.push_str("pending_ranges:\n");
+        for range in self.pending_ranges.iter().filter(|range| tag == range.tag) {
+            buffer.push_str(&format!("  range: {:?}\n", range));
+        }
+
+        // pending_ranges_loading_data
+        buffer.push_str("pending_ranges_loading_data:\n");
+        for range in self
+            .pending_ranges_loading_data
+            .iter()
+            .filter(|range| tag == range.0.tag)
+        {
+            buffer.push_str(&format!("  range: {:?}\n", range));
+        }
+
+        // ranges_in_gc
+        buffer.push_str("ranges_in_gc:\n");
+        for range in self.ranges_in_gc.iter().filter(|range| tag == range.tag) {
+            buffer.push_str(&format!("  range: {:?}\n", range));
+        }
+
+        buffer
     }
 }
 

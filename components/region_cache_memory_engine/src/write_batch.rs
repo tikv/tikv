@@ -1,16 +1,20 @@
+use core::slice::SlicePattern;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
+    fmt::Debug,
     sync::{atomic::Ordering, Arc},
     time::Duration,
 };
 
 use bytes::Bytes;
+use collections::HashMap;
 use crossbeam::epoch;
 use engine_traits::{
     CacheRange, MiscExt, Mutable, RangeCacheEngine, Result, WriteBatch, WriteBatchExt,
     WriteOptions, CF_DEFAULT,
 };
-use tikv_util::{box_err, config::ReadableSize, error, info, time::Instant, warn};
+use raftstore::store::fsm::apply::{PRINTF_LOCK, PRINTF_LOG};
+use tikv_util::{box_err, config::ReadableSize, debug, error, info, time::Instant, warn};
 
 use crate::{
     background::BackgroundTask,
@@ -79,6 +83,7 @@ impl std::fmt::Debug for RangeCacheWriteBatch {
 
 impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
     fn from(engine: &RangeCacheMemoryEngine) -> Self {
+        let id = rand::random::<u64>();
         Self {
             id: engine.alloc_write_batch_id(),
             range_cache_status: RangeCacheStatus::NotInCache,
@@ -98,6 +103,7 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
 
 impl RangeCacheWriteBatch {
     pub fn with_capacity(engine: &RangeCacheMemoryEngine, cap: usize) -> Self {
+        let id = rand::random::<u64>();
         Self {
             id: engine.alloc_write_batch_id(),
             range_cache_status: RangeCacheStatus::NotInCache,
@@ -182,6 +188,7 @@ impl RangeCacheWriteBatch {
         let mut have_entry_applied = false;
         // Some entries whose ranges may be marked as evicted above, but it does not
         // matter, they will be deleted later.
+        let mut have_entry = false;
         let res = entries_to_write
             .into_iter()
             .chain(std::mem::take(&mut self.buffer))
@@ -242,14 +249,6 @@ impl RangeCacheWriteBatch {
             if !ranges_to_delete.is_empty() {
                 ranges.append(&mut ranges_to_delete);
                 continue;
-            }
-
-            if let Some((.., canceled)) = range_manager
-                .pending_ranges_loading_data
-                .iter_mut()
-                .find(|(range, ..)| range.overlaps(&r))
-            {
-                *canceled = true;
             }
         }
         ranges
@@ -347,10 +346,19 @@ impl RangeCacheWriteBatch {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 enum WriteBatchEntryInternal {
     PutValue(Bytes),
     Deletion,
+}
+
+impl Debug for WriteBatchEntryInternal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PutValue(_) => write!(f, "PutValue"),
+            Self::Deletion => write!(f, "Deletion"),
+        }
+    }
 }
 
 impl WriteBatchEntryInternal {
@@ -374,11 +382,23 @@ impl WriteBatchEntryInternal {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) struct RangeCacheWriteBatchEntry {
     cf: usize,
-    key: Bytes,
+    pub key: Bytes,
     inner: WriteBatchEntryInternal,
+}
+
+impl Debug for RangeCacheWriteBatchEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Range Cache Entry: Key {}, Value {:?}, CF {}",
+            log_wrappers::hex_encode_upper(&self.key),
+            self.inner,
+            self.cf,
+        )
+    }
 }
 
 impl RangeCacheWriteBatchEntry {
@@ -429,6 +449,16 @@ impl RangeCacheWriteBatchEntry {
         key.set_memory_controller(memory_controller.clone());
         value.set_memory_controller(memory_controller);
         handle.insert(key, value, guard);
+
+        if PRINTF_LOG.load(Ordering::Relaxed)
+            || (self.cf == 1 && PRINTF_LOCK.load(Ordering::Relaxed))
+        {
+            info!(
+                "write to memory";
+                "entry" => ?self,
+                "seqno" => seq,
+            );
+        }
 
         Ok(())
     }
@@ -612,7 +642,7 @@ impl Mutable for RangeCacheWriteBatch {
         Ok(())
     }
 
-    fn delete_range_cf(&mut self, _: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+    fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let range = CacheRange::new(begin_key.to_vec(), end_key.to_vec());
         self.engine.evict_range(&range);
         Ok(())

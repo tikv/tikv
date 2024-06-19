@@ -497,6 +497,10 @@ pub trait Snapshot: Sync + Send + Clone {
     }
 
     fn ext(&self) -> Self::Ext<'_>;
+
+    fn sequence_number(&self) -> u64 {
+        0
+    }
 }
 
 pub trait SnapshotExt {
@@ -531,6 +535,18 @@ pub trait SnapshotExt {
 
     fn get_buckets(&self) -> Option<Arc<BucketMeta>> {
         None
+    }
+
+    fn range_cache_engine_snap(&self) -> bool {
+        false
+    }
+
+    fn snapshot_read_ts(&self) -> u64 {
+        0
+    }
+
+    fn snapshot_seqno(&self) -> u64 {
+        0
     }
 }
 

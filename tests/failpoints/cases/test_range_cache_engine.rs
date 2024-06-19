@@ -3,14 +3,16 @@ use std::{
     time::Duration,
 };
 
-use engine_traits::{CacheRange, RangeCacheEngine, SnapshotContext, CF_DEFAULT, CF_WRITE};
+use engine_traits::{
+    CacheRange, IterOptions, RangeCacheEngine, SnapshotContext, CF_DEFAULT, CF_WRITE,
+};
 use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use test_raftstore::{
     make_cb, new_node_cluster_with_hybrid_engine_with_no_range_cache, new_put_cmd, new_request,
     Cluster, HybridEngineImpl, NodeCluster, Simulator,
 };
-use tikv_util::HandyRwLock;
+use tikv_util::{config::ReadableSize, time::Instant, HandyRwLock};
 use txn_types::Key;
 
 #[test]
@@ -535,4 +537,157 @@ fn test_load_with_eviction() {
         .unwrap();
     assert_eq!(&val, b"v");
     rx.try_recv().unwrap_err();
+}
+
+extern crate test;
+use engine_traits::{Iterable, Iterator, KvEngine, Mutable, WriteBatch, WriteBatchExt};
+#[bench]
+fn test_xx(b: &mut test::Bencher) {
+    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+    cluster.cfg.storage.block_cache.capacity = Some(ReadableSize::gb(5));
+    cluster.run();
+
+    let engine = cluster.get_engine(1);
+    let disk_engine = engine.disk_engine();
+    let mut wb = disk_engine.write_batch();
+    for i in 0..100000 {
+        for j in 0..1000 {
+            let idx = i * 1000 + j;
+            let key = format!("zkey{:0100}", idx);
+            let val = format!("{:0100}", idx);
+            wb.put(key.as_bytes(), val.as_bytes()).unwrap();
+        }
+        wb.write();
+        wb.clear();
+    }
+    disk_engine.sync().unwrap();
+
+    let snap = disk_engine.snapshot(None);
+    let iter_opt = IterOptions::default();
+    let mut iter = snap.iterator_opt("default", iter_opt).unwrap();
+    let time = Instant::now();
+    iter.seek_to_first();
+    while iter.valid().unwrap() {
+        iter.next();
+    }
+    println!("{:?}", time.saturating_elapsed());
+
+    let time = Instant::now();
+    iter.seek_to_first();
+    while iter.valid().unwrap() {
+        iter.next();
+    }
+    println!("{:?}", time.saturating_elapsed());
+
+    let r = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
+    engine.region_cache_engine().load_range(r.clone());
+    cluster.put(b"a", b"val").unwrap();
+
+    {
+        let core = engine.region_cache_engine().core();
+        let mut guard = core.read();
+        while !guard.range_manager().contains_range(&r) {
+            drop(guard);
+            std::thread::sleep(Duration::from_millis(100));
+            guard = core.read();
+        }
+    }
+
+    let snap = engine
+        .region_cache_engine()
+        .snapshot(r.clone(), 100, u64::MAX)
+        .unwrap();
+    let mut iter_opt = IterOptions::default();
+    iter_opt.set_lower_bound(&r.start, 0);
+    iter_opt.set_upper_bound(&r.end, 0);
+    let mut iter = snap.iterator_opt("default", iter_opt).unwrap();
+    let time = Instant::now();
+    iter.seek_to_first();
+    while iter.valid().unwrap() {
+        iter.next();
+    }
+    println!("{:?}", time.saturating_elapsed());
+}
+
+#[test]
+fn test_yy() {
+    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+    cluster.cfg.storage.block_cache.capacity = Some(ReadableSize::gb(5));
+    cluster.cfg.coprocessor.region_max_keys = Some(1000000000);
+    cluster.cfg.coprocessor.region_split_keys = Some(2000000000);
+    cluster.cfg.coprocessor.region_split_size = Some(ReadableSize::gb(100));
+    cluster.cfg.coprocessor.region_max_size = Some(ReadableSize::gb(200));
+    cluster.run();
+
+    let outer = 100000;
+    let engine = cluster.get_engine(1);
+    let disk_engine = engine.disk_engine();
+    let mut wb = disk_engine.write_batch();
+    for i in 0..outer {
+        for j in 0..1000 {
+            let idx = i * 10000 + j;
+            let key = format!("zkey{:0100}", idx);
+            let val = format!("{:0100}", idx);
+            wb.put(key.as_bytes(), val.as_bytes()).unwrap();
+        }
+        wb.write();
+        wb.clear();
+    }
+    disk_engine.sync().unwrap();
+
+    let snap = disk_engine.snapshot(None);
+    let iter_opt = IterOptions::default();
+    let mut iter = snap.iterator_opt("default", iter_opt).unwrap();
+    let time = Instant::now();
+    for i in (outer - 100)..outer {
+        for j in 0..100 {
+            let idx = i * 10000 + 1;
+            let key = format!("zkey{:0100}", idx);
+            assert!(iter.seek(key.as_bytes()).unwrap());
+        }
+    }
+    println!("{:?}", time.saturating_elapsed());
+
+    let time = Instant::now();
+    for i in (outer - 100)..outer {
+        for j in 0..100 {
+            let idx = i * 10000 + 1;
+            let key = format!("zkey{:0100}", idx);
+            assert!(iter.seek(key.as_bytes()).unwrap());
+        }
+    }
+    println!("{:?}", time.saturating_elapsed());
+
+    let r = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
+    engine.region_cache_engine().load_range(r.clone());
+    cluster.put(b"a", b"val").unwrap();
+
+    {
+        let core = engine.region_cache_engine().core();
+        let mut guard = core.read();
+        while !guard.range_manager().contains_range(&r) {
+            drop(guard);
+            std::thread::sleep(Duration::from_millis(100));
+            guard = core.read();
+        }
+    }
+
+    let snap = engine
+        .region_cache_engine()
+        .snapshot(r.clone(), 100, u64::MAX)
+        .unwrap();
+    let mut iter_opt = IterOptions::default();
+    iter_opt.set_lower_bound(&r.start, 0);
+    iter_opt.set_upper_bound(&r.end, 0);
+    let mut iter = snap.iterator_opt("default", iter_opt).unwrap();
+    println!("sl begins");
+    let time = Instant::now();
+    for i in (outer - 100)..outer {
+        for j in 0..100 {
+            let idx = i * 10000 + 1;
+            let key = format!("zkey{:0100}", idx);
+            assert!(iter.seek(key.as_bytes()).unwrap());
+        }
+    }
+    println!("{:?}", time.saturating_elapsed());
 }

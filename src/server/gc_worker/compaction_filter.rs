@@ -21,9 +21,11 @@ use engine_rocks::{
 };
 use engine_traits::{KvEngine, MiscExt, MvccProperties, WriteBatch, WriteOptions};
 use file_system::{IoType, WithIoType};
+use hybrid_engine::HybridEngine;
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
 use raftstore::coprocessor::RegionInfoProvider;
+use region_cache_memory_engine::RangeCacheMemoryEngine;
 use tikv_util::{
     time::Instant,
     worker::{ScheduleError, Scheduler},
@@ -302,10 +304,18 @@ impl<B: WriteBatch> DeleteBatch<B> {
         match &mut self.batch {
             Either::Left(batch) => {
                 let key = Key::from_encoded_slice(key).append_ts(ts);
+                info!(
+                    "delete rocksdb key";
+                    "key" => log_wrappers::Value(key.as_encoded()),
+                );
                 batch.delete(key.as_encoded())?;
             }
             Either::Right(keys) => {
                 let key = Key::from_encoded_slice(keys::origin_key(key)).append_ts(ts);
+                info!(
+                    "delete rocksdb key";
+                    "key" => log_wrappers::Value(key.as_encoded()),
+                );
                 keys.push(key);
             }
         }
@@ -695,6 +705,7 @@ impl CompactionFilter for WriteCompactionFilter {
         value: &[u8],
         value_type: CompactionFilterValueType,
     ) -> CompactionFilterDecision {
+        return CompactionFilterDecision::Keep;
         if self.encountered_errors {
             // If there are already some errors, do nothing.
             return CompactionFilterDecision::Keep;

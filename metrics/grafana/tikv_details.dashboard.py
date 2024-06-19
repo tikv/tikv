@@ -4084,7 +4084,7 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req="select"'],
+                            label_selectors=['req=~"select|select_by_range_cache"'],
                             by_labels=["tag"],
                         ),
                     ),
@@ -4097,7 +4097,7 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req="index"'],
+                            label_selectors=['req=~"index|index_by_range_cache"'],
                             by_labels=["tag"],
                         ),
                     ),
@@ -4114,7 +4114,7 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req="select"'],
+                            label_selectors=['req=~"select|select_by_range_cache"'],
                             by_labels=["cf", "tag"],
                         ),
                     ),
@@ -4127,7 +4127,7 @@ def CoprocessorDetail() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_coprocessor_scan_details",
-                            label_selectors=['req="index"'],
+                            label_selectors=['req=~"index|index_by_range_cache"'],
                             by_labels=["cf", "tag"],
                         ),
                     ),

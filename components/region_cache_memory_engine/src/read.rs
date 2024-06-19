@@ -1,7 +1,12 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use core::slice::SlicePattern;
-use std::{fmt::Debug, ops::Deref, result, sync::Arc};
+use std::{
+    fmt::Debug,
+    ops::Deref,
+    result,
+    sync::{atomic::Ordering, Arc},
+};
 
 use bytes::Bytes;
 use crossbeam::epoch::{self};
@@ -12,9 +17,10 @@ use engine_traits::{
     CF_DEFAULT,
 };
 use prometheus::local::LocalHistogram;
+use raftstore::store::fsm::apply::PRINTF_LOG;
 use skiplist_rs::{base::OwnedIter, SkipList};
 use slog_global::error;
-use tikv_util::{box_err, time::Instant};
+use tikv_util::{box_err, info, time::Instant};
 
 use crate::{
     background::BackgroundTask,
@@ -50,7 +56,7 @@ pub struct RangeCacheSnapshotMeta {
 }
 
 impl RangeCacheSnapshotMeta {
-    fn new(range_id: u64, range: CacheRange, snapshot_ts: u64, sequence_number: u64) -> Self {
+    pub fn new(range_id: u64, range: CacheRange, snapshot_ts: u64, sequence_number: u64) -> Self {
         Self {
             range_id,
             range,
@@ -62,9 +68,9 @@ impl RangeCacheSnapshotMeta {
 
 #[derive(Clone, Debug)]
 pub struct RangeCacheSnapshot {
-    snapshot_meta: RangeCacheSnapshotMeta,
-    skiplist_engine: SkiplistEngine,
-    engine: RangeCacheMemoryEngine,
+    pub snapshot_meta: RangeCacheSnapshotMeta,
+    pub skiplist_engine: SkiplistEngine,
+    pub engine: RangeCacheMemoryEngine,
 }
 
 impl RangeCacheSnapshot {
@@ -107,7 +113,11 @@ impl Drop for RangeCacheSnapshot {
     }
 }
 
-impl Snapshot for RangeCacheSnapshot {}
+impl Snapshot for RangeCacheSnapshot {
+    fn read_ts(&self) -> u64 {
+        self.snapshot_meta.snapshot_ts
+    }
+}
 
 impl Iterable for RangeCacheSnapshot {
     type Iterator = RangeCacheIterator;
@@ -131,11 +141,10 @@ impl Iterable for RangeCacheSnapshot {
             || upper_bound > self.snapshot_meta.range.end
         {
             return Err(Error::Other(box_err!(
-                "the bounderies required [{}, {}] exceeds the range of the snapshot [{}, {}]",
+                "the bounderies required [{}, {}] exceeds the range of the snapshot, range: {:?}",
                 log_wrappers::Value(&lower_bound),
                 log_wrappers::Value(&upper_bound),
-                log_wrappers::Value(&self.snapshot_meta.range.start),
-                log_wrappers::Value(&self.snapshot_meta.range.end)
+                self.snapshot_meta.range
             )));
         }
 
@@ -148,6 +157,7 @@ impl Iterable for RangeCacheSnapshot {
             sequence_number: self.sequence_number(),
             saved_user_key: vec![],
             saved_value: None,
+            read_ts: self.snapshot_meta.snapshot_ts,
             direction: Direction::Uninit,
             statistics: self.engine.statistics(),
             prefix_extractor,
@@ -192,14 +202,18 @@ impl Peekable for RangeCacheSnapshot {
             InternalKey {
                 user_key,
                 v_type: ValueType::Value,
-                ..
+                sequence,
             } if user_key == key => {
-                let value = iter.value().clone_bytes();
-                self.engine
-                    .statistics()
-                    .record_ticker(Tickers::BytesRead, value.len() as u64);
-                perf_counter_add!(get_read_bytes, value.len() as u64);
-                Ok(Some(RangeCacheDbVector(value)))
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    info!(
+                        "get_value_cf_opt in memory engine";
+                        "key" => log_wrappers::Value(key),
+                        "cf" => cf,
+                        "seqno" => self.sequence_number(),
+                        "find_seqno" => sequence,
+                    );
+                }
+                Ok(Some(RangeCacheDbVector(iter.value().clone_bytes())))
             }
             _ => Ok(None),
         }
@@ -220,14 +234,14 @@ impl SnapshotMiscExt for RangeCacheSnapshot {
 
 pub struct RangeCacheIterator {
     valid: bool,
-    iter: OwnedIter<Arc<SkipList<InternalBytes, InternalBytes>>, InternalBytes, InternalBytes>,
+    pub iter: OwnedIter<Arc<SkipList<InternalBytes, InternalBytes>>, InternalBytes, InternalBytes>,
     // The lower bound is inclusive while the upper bound is exclusive if set
     // Note: bounds (region boundaries) have no mvcc versions
-    lower_bound: Vec<u8>,
-    upper_bound: Vec<u8>,
+    pub lower_bound: Vec<u8>,
+    pub upper_bound: Vec<u8>,
     // A snapshot sequence number passed from RocksEngine Snapshot to guarantee suitable
     // visibility.
-    sequence_number: u64,
+    pub sequence_number: u64,
 
     saved_user_key: Vec<u8>,
     // This is only used by backwawrd iteration where the value we want may not be pointed by the
@@ -240,6 +254,8 @@ pub struct RangeCacheIterator {
     prefix: Option<Vec<u8>>,
 
     direction: Direction,
+
+    pub read_ts: u64,
 
     statistics: Arc<Statistics>,
     local_stats: LocalStatistics,
@@ -459,6 +475,14 @@ impl RangeCacheIterator {
             self.iter.next(guard);
         }
     }
+
+    #[inline]
+    fn collects_read_flow_stats(&mut self) {
+        // Updating stats and perf context counters
+        let read_bytes = (self.key().len() + self.value().len()) as u64;
+        self.local_stats.bytes_read += read_bytes;
+        perf_counter_add!(iter_read_bytes, read_bytes);
+    }
 }
 
 impl Iterator for RangeCacheIterator {
@@ -488,7 +512,6 @@ impl Iterator for RangeCacheIterator {
 
         perf_counter_add!(internal_key_skipped_count, 1);
         self.local_stats.number_db_next += 1;
-
         self.valid = self.iter.valid();
         if self.valid {
             // self.valid can be changed after this
@@ -663,18 +686,20 @@ mod tests {
     use bytes::{BufMut, Bytes};
     use crossbeam::epoch;
     use engine_rocks::{
-        raw::DBStatisticsTickerType, util::new_engine_opt, RocksDbOptions, RocksStatistics,
+        raw::DBStatisticsTickerType,
+        util::{new_engine, new_engine_opt},
+        RocksDbOptions, RocksStatistics,
     };
     use engine_traits::{
         CacheRange, FailedReason, IterMetricsCollector, IterOptions, Iterable, Iterator,
         MetricsExt, Mutable, Peekable, RangeCacheEngine, ReadOptions, WriteBatch, WriteBatchExt,
-        CF_DEFAULT, CF_LOCK, CF_WRITE,
+        CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
     };
     use skiplist_rs::SkipList;
     use tempfile::Builder;
     use tikv_util::config::VersionTrack;
 
-    use super::{RangeCacheIterator, RangeCacheSnapshot};
+    use super::{RangeCacheIterator, RangeCacheSnapshot, MAX_SEQUENCE_NUMBER};
     use crate::{
         engine::{cf_to_id, SkiplistEngine},
         keys::{
@@ -1416,6 +1441,20 @@ mod tests {
         )));
         let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
         engine.new_range(range.clone());
+
+        let path = Builder::new().prefix("test_load").tempdir().unwrap();
+        let path_str = path.path().to_str().unwrap();
+        let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+
+        let mut wb = rocks_engine.write_batch();
+        wb.put(b"aaa", b"val");
+        wb.put(b"aaa", b"val2");
+        wb.put(b"aaa", b"val3");
+        wb.write();
+
+        let mut iter = rocks_engine.iterator("default").unwrap();
+        iter.seek_for_prev(b"aaa").unwrap();
+        println!("{:?}", iter.value());
 
         {
             let mut core = engine.core.write();

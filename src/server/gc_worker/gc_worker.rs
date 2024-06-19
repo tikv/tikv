@@ -753,17 +753,17 @@ impl<E: Engine> GcRunnerCore<E> {
             let delete_files_start_time = Instant::now();
             for cf in cfs {
                 local_storage
-                .delete_ranges_cf(
-                    &WriteOptions::default(),
-                    cf,
-                    DeleteStrategy::DeleteFiles,
-                    &[Range::new(&start_data_key, &end_data_key)],
-                )
-                .map_err(|e| {
-                    let e: Error = box_err!(e);
-                    warn!("unsafe destroy range failed at delete_files_in_range_cf"; "err" => ?e);
-                    e
-                })?;
+                    .delete_ranges_cf(
+                        &WriteOptions::default(),
+                        cf,
+                        DeleteStrategy::DeleteFiles,
+                        &[Range::new(&start_data_key, &end_data_key)],
+                    )
+                    .map_err(|e| {
+                        let e: Error = box_err!(e);
+                        warn!("unsafe destroy range failed at delete_files_in_range_cf"; "err" => ?e);
+                        e
+                    })?;
             }
 
             info!(
@@ -789,17 +789,17 @@ impl<E: Engine> GcRunnerCore<E> {
                         e
                     })?;
                 local_storage
-                .delete_ranges_cf(
-                    &WriteOptions::default(),
-                    cf,
-                    DeleteStrategy::DeleteBlobs,
-                    &[Range::new(&start_data_key, &end_data_key)],
-                )
-                .map_err(|e| {
-                    let e: Error = box_err!(e);
-                    warn!("unsafe destroy range failed at delete_blob_files_in_range"; "err" => ?e);
-                    e
-                })?;
+                    .delete_ranges_cf(
+                        &WriteOptions::default(),
+                        cf,
+                        DeleteStrategy::DeleteBlobs,
+                        &[Range::new(&start_data_key, &end_data_key)],
+                    )
+                    .map_err(|e| {
+                        let e: Error = box_err!(e);
+                        warn!("unsafe destroy range failed at delete_blob_files_in_range"; "err" => ?e);
+                        e
+                    })?;
             }
 
             info!(

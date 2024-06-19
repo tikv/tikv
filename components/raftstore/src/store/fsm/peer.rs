@@ -19,7 +19,8 @@ use std::{
 use batch_system::{BasicMailbox, Fsm};
 use collections::{HashMap, HashSet};
 use engine_traits::{
-    Engines, KvEngine, RaftEngine, RaftLogBatch, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT,
+    CacheRange, Engines, KvEngine, RaftEngine, RaftLogBatch, SstMetaInfo, WriteBatchExt, CF_LOCK,
+    CF_RAFT,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -79,7 +80,7 @@ use crate::{
         demote_failed_voters_request,
         entry_storage::MAX_WARMED_UP_CACHE_KEEP_TIME,
         fsm::{
-            apply,
+            apply::{self, PRINTF_LOG, TXN_LOG},
             store::{PollContext, StoreMeta},
             ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeObserver, ChangePeer,
             ExecResult, SwitchWitness,
@@ -2428,12 +2429,14 @@ where
         fail_point!("on_apply_res", |_| {});
         match res {
             ApplyTaskRes::Apply(mut res) => {
-                debug!(
-                    "async apply finish";
-                    "region_id" => self.region_id(),
-                    "peer_id" => self.fsm.peer_id(),
-                    "res" => ?res,
-                );
+                if TXN_LOG.load(Ordering::Relaxed) {
+                    info!(
+                        "async apply finish";
+                        "region_id" => self.region_id(),
+                        "peer_id" => self.fsm.peer_id(),
+                        "res" => ?res.apply_state,
+                    );
+                }
                 if self.fsm.peer.wait_data {
                     return;
                 }
@@ -4843,6 +4846,14 @@ where
 
     fn on_ready_prepare_merge(&mut self, region: metapb::Region, state: MergeState) {
         fail_point!("on_apply_res_prepare_merge");
+        let range = CacheRange::from_region(&region);
+        let range2 = CacheRange::from_region(&state.get_target());
+        info!(
+            "evict range due to merge";
+            "source_range" => ?range,
+            "target_range" => ?range2,
+        );
+
         {
             let mut meta = self.ctx.store_meta.lock().unwrap();
             meta.set_region(
@@ -4852,6 +4863,9 @@ where
                 RegionChangeReason::PrepareMerge,
             );
         }
+
+        self.ctx.engines.kv.evict_range(range);
+        self.ctx.engines.kv.evict_range(range2);
 
         self.fsm.peer.pending_merge_state = Some(state);
         let state = self.fsm.peer.pending_merge_state.as_ref().unwrap();
@@ -4941,6 +4955,20 @@ where
         region: metapb::Region,
         source: metapb::Region,
     ) {
+        let range = CacheRange::from_region(&region);
+
+        // if keys::enc_end_key(&region) == keys::enc_start_key(source) {
+        //     region.set_end_key(source.get_end_key().to_vec());
+        // } else {
+        //     region.set_start_key(source.get_start_key().to_vec());
+        // }
+
+        info!(
+            "evict range due to commit merge";
+            "range" => ?range,
+        );
+        self.ctx.engines.kv.evict_range(range);
+
         self.register_split_region_check_tick();
         let mut meta = self.ctx.store_meta.lock().unwrap();
 

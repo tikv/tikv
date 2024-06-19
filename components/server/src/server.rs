@@ -226,7 +226,7 @@ pub fn run_tikv(
 
     dispatch_api_version!(config.storage.api_version(), {
         if !config.raft_engine.enable {
-            if cfg!(feature = "memory-engine") && config.range_cache_engine.enabled {
+            if config.range_cache_engine.enabled {
                 run_impl::<HybridEngine<RocksEngine, RangeCacheMemoryEngine>, RocksEngine, API>(
                     config,
                     service_event_tx,
@@ -240,7 +240,7 @@ pub fn run_tikv(
                 )
             }
         } else {
-            if cfg!(feature = "memory-engine") && config.range_cache_engine.enabled {
+            if config.range_cache_engine.enabled {
                 run_impl::<HybridEngine<RocksEngine, RangeCacheMemoryEngine>, RaftLogEngine, API>(
                     config,
                     service_event_tx,
@@ -296,6 +296,7 @@ where
     resolved_ts_scheduler: Option<Scheduler<Task>>,
     grpc_service_mgr: GrpcServiceManager,
     snap_br_rejector: Option<Arc<PrepareDiskSnapObserver>>,
+    dump_cache_engine: Option<Arc<dyn Fn(u64) -> String + Send + Sync + 'static>>,
 }
 
 struct TikvEngines<EK: KvEngine, ER: RaftEngine> {
@@ -414,19 +415,15 @@ where
             config.coprocessor.clone(),
         ));
 
+        let cfg_controller_clone = cfg_controller.clone();
         // Region stats manager collects region heartbeat for use by in-memory engine.
         let region_stats_manager_enabled_cb: Arc<dyn Fn() -> bool + Send + Sync> =
-            if cfg!(feature = "memory-engine") {
-                let cfg_controller_clone = cfg_controller.clone();
-                Arc::new(move || {
-                    cfg_controller_clone
-                        .get_current()
-                        .range_cache_engine
-                        .enabled
-                })
-            } else {
-                Arc::new(|| false)
-            };
+            Arc::new(move || {
+                cfg_controller_clone
+                    .get_current()
+                    .range_cache_engine
+                    .enabled
+            });
 
         let region_info_accessor = RegionInfoAccessor::new(
             coprocessor_host.as_mut().unwrap(),
@@ -506,6 +503,7 @@ where
             resolved_ts_scheduler: None,
             grpc_service_mgr: GrpcServiceManager::new(tx),
             snap_br_rejector: None,
+            dump_cache_engine: None,
         }
     }
 
@@ -524,6 +522,8 @@ where
             self.region_info_accessor.region_leaders(),
         );
 
+        let engine_ = engines.kv.clone();
+        self.dump_cache_engine = Some(Arc::new(move |region_id| engine_.dump_cache(region_id)));
         self.engines = Some(TikvEngines {
             engines,
             store_meta,
@@ -1576,6 +1576,7 @@ where
                     return;
                 }
             };
+            status_server.set_dump_cache_engine(self.dump_cache_engine.clone().unwrap());
             // Start the status server.
             if let Err(e) = status_server.start(self.core.config.server.status_addr.clone()) {
                 error_unknown!(%e; "failed to bind addr for status service");

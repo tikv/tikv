@@ -1,7 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, mem, sync::Arc,
+    borrow::Cow,
+    future::Future,
+    iter::FromIterator,
+    marker::PhantomData,
+    mem,
+    sync::{atomic::Ordering, Arc},
     time::Duration,
 };
 
@@ -20,6 +25,7 @@ use futures::{
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri};
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
+use raftstore::store::fsm::apply::{PRINTF_LOG, TXN_LOG};
 use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;
@@ -259,6 +265,7 @@ impl<E: Engine> Endpoint<E> {
                 let quota_limiter = self.quota_limiter.clone();
                 builder = Box::new(move |snap, req_ctx| {
                     let data_version = snap.ext().get_data_version();
+                    let range_cache_snap = snap.ext().range_cache_engine_snap();
                     let store = SnapshotStore::new(
                         snap,
                         start_ts.into(),
@@ -441,6 +448,11 @@ impl<E: Engine> Endpoint<E> {
                 .await?;
         let latest_buckets = snapshot.ext().get_buckets();
 
+        let snapshot_seqno = snapshot.ext().snapshot_seqno();
+        let range_cache_snap = snapshot.ext().range_cache_engine_snap();
+        let read_ts = snapshot.ext().snapshot_read_ts();
+        tracker.adjust_request_type(range_cache_snap);
+
         // Check if the buckets version is latest.
         // skip if request don't carry this bucket version.
         if let Some(ref buckets) = latest_buckets
@@ -454,6 +466,11 @@ impl<E: Engine> Endpoint<E> {
             err.set_bucket_version_not_match(bucket_not_match);
             return Err(Error::Region(err));
         }
+
+        if TXN_LOG.load(Ordering::Relaxed) {
+            info!("cop handle_unary_request_impl snapshot got"; "req_ctx" => ?tracker.req_ctx, "range_cache_snap" => snapshot.ext().range_cache_engine_snap());
+        }
+
         // When snapshot is retrieved, deadline may exceed.
         tracker.on_snapshot_finished();
         tracker.req_ctx.deadline.check()?;
@@ -493,12 +510,26 @@ impl<E: Engine> Endpoint<E> {
         let (exec_details, exec_details_v2) = tracker.get_exec_details();
         tracker.on_finish_all_items();
 
+        if TXN_LOG.load(Ordering::Relaxed) {
+            info!("cop handle finish"; "return_rows" => exec_summary.num_produced_rows,  "req_ctx" => ?tracker.req_ctx);
+        }
+
         let mut resp = match result {
             Ok(resp) => {
                 COPR_RESP_SIZE.inc_by(resp.data.len() as u64);
                 resp
             }
-            Err(e) => make_error_response(e).into(),
+            Err(e) => {
+                warn!(
+                    "encounter errors";
+                    "error" => ?&e,
+                    "start_ts" => ?tracker.req_ctx.txn_start_ts,
+                    "range_cache_engien" => range_cache_snap,
+                    "snaphost_read_ts" => read_ts,
+                    "snaphost_seqno" => snapshot_seqno,
+                );
+                make_error_response(e).into()
+            }
         };
         resp.set_exec_details(exec_details);
         resp.set_exec_details_v2(exec_details_v2);
