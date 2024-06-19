@@ -19,6 +19,7 @@ use chrono::{
     format::{self, Fixed, Item, Parsed},
     DateTime, FixedOffset, Local, NaiveTime, TimeZone, Timelike,
 };
+pub use heck::KebabCase;
 use online_config::ConfigValue;
 use serde::{
     de::{self, Unexpected, Visitor},
@@ -1522,7 +1523,6 @@ macro_rules! numeric_enum_serializing_mod {
             use serde::{Serializer, Deserializer};
             use serde::de::{self, Unexpected, Visitor};
             use super::$enum;
-            use case_macros::*;
 
             pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
                 where S: Serializer
@@ -1556,10 +1556,13 @@ macro_rules! numeric_enum_serializing_mod {
                     fn visit_str<E>(self, value: &str) -> Result<$enum, E>
                         where E: de::Error
                     {
-                        match value {
-                            $(kebab_case!($variant) => Ok($enum::$variant), )*
-                            _ => Err(E::invalid_value(Unexpected::Str(value), &self))
-                        }
+                        use $crate::config::KebabCase;
+                        $(
+                            if value == stringify!($variant).to_kebab_case() {
+                                return Ok($enum::$variant)
+                            }
+                        )*
+                        Err(E::invalid_value(Unexpected::Str(value), &self))
                     }
                 }
 
@@ -1571,10 +1574,11 @@ macro_rules! numeric_enum_serializing_mod {
                 use toml;
                 use super::$enum;
                 use serde::{Deserialize, Serialize};
+                use $crate::config::KebabCase;
 
                 #[test]
                 fn test_serde() {
-                    #[derive(Serialize, Deserialize, PartialEq)]
+                    #[derive(Serialize, Deserialize, PartialEq, Debug)]
                     struct EnumHolder {
                         #[serde(with = "super")]
                         e: $enum,
@@ -1591,6 +1595,15 @@ macro_rules! numeric_enum_serializing_mod {
                         let h: EnumHolder = toml::from_str(&exp).unwrap();
                         assert!(h == holder);
                     }
+                    $({
+                        let s = stringify!($variant);
+                        let res = format!("e = \"{}\"\n", s.to_kebab_case());
+                        let h: EnumHolder = toml::from_str(&res).unwrap();
+                        assert!(h.e == $enum::$variant);
+                    })*
+                    let s = format!("{}-bad-variant---", stringify!($enum));
+                    let res = format!("e = \"{}\"\n", s.to_kebab_case());
+                    toml::from_str::<EnumHolder>(&res).unwrap_err();
                 }
             }
         }
