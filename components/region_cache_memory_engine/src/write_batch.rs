@@ -3,6 +3,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Debug,
     sync::{atomic::Ordering, Arc},
+    time::Duration,
 };
 
 use bytes::Bytes;
@@ -13,20 +14,14 @@ use engine_traits::{
     WriteOptions, CF_DEFAULT,
 };
 use raftstore::store::fsm::apply::{PRINTF_LOCK, PRINTF_LOG};
-use tikv_util::{
-    box_err,
-    config::ReadableSize,
-    debug, error, info,
-    time::{Duration, Instant},
-    warn,
-};
+use tikv_util::{box_err, config::ReadableSize, debug, error, info, time::Instant, warn};
 
 use crate::{
     background::BackgroundTask,
     engine::{cf_to_id, id_to_cf, is_lock_cf, SkiplistEngine},
     keys::{encode_key, InternalBytes, ValueType, ENC_KEY_SEQ_LENGTH},
     memory_controller::{MemoryController, MemoryUsage},
-    metrics::{PREPARE_FOR_WRITE_DURATION_HISTOGRAM, WRITE_DURATION_HISTOGRAM},
+    metrics::{RANGE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM, WRITE_DURATION_HISTOGRAM},
     range_manager::{RangeCacheStatus, RangeManager},
     RangeCacheMemoryEngine,
 };
@@ -72,7 +67,8 @@ pub struct RangeCacheWriteBatch {
     // the ranges that reaches the hard limit and need to be evicted
     ranges_to_evict: BTreeSet<CacheRange>,
 
-    prepare_apply: Duration,
+    // record the total durations of the prepare work for write in the write batch
+    prepare_for_write_duration: Duration,
 }
 
 impl std::fmt::Debug for RangeCacheWriteBatch {
@@ -100,7 +96,7 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
             memory_usage_reach_hard_limit: false,
             current_range: None,
             ranges_to_evict: BTreeSet::default(),
-            prepare_apply: Duration::default(),
+            prepare_for_write_duration: Duration::default(),
         }
     }
 }
@@ -121,7 +117,7 @@ impl RangeCacheWriteBatch {
             memory_usage_reach_hard_limit: false,
             current_range: None,
             ranges_to_evict: BTreeSet::default(),
-            prepare_apply: Duration::default(),
+            prepare_for_write_duration: Duration::default(),
         }
     }
 
@@ -234,10 +230,8 @@ impl RangeCacheWriteBatch {
             }
         }
 
-        let dur = std::mem::take(&mut self.prepare_apply);
-        PREPARE_FOR_WRITE_DURATION_HISTOGRAM
-            .with_label_values(&["prepare_apply"])
-            .observe(dur.as_secs_f64());
+        let dur = std::mem::take(&mut self.prepare_for_write_duration);
+        RANGE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM.observe(dur.as_secs_f64());
 
         res
     }
@@ -611,7 +605,7 @@ impl WriteBatch for RangeCacheWriteBatch {
         self.set_range_cache_status(self.engine.prepare_for_apply(self.id, &range));
         self.memory_usage_reach_hard_limit = false;
         self.current_range = Some(range);
-        self.prepare_apply += time.saturating_elapsed();
+        self.prepare_for_write_duration += time.saturating_elapsed();
     }
 }
 

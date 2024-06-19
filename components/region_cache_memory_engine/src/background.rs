@@ -958,6 +958,7 @@ impl Runnable for BackgroundRunner {
         match task {
             BackgroundTask::SetRocksEngine(rocks_engine) => {
                 self.rocks_engine = Some(rocks_engine);
+                fail::fail_point!("in_memory_engine_set_rocks_engine");
             }
             BackgroundTask::Audit((ranges_snap, rocksdb_snap)) => {
                 let core = self.core.engine.clone();
@@ -1358,7 +1359,7 @@ impl RunnableWithTimer for BackgroundRunner {
     fn on_timeout(&mut self) {
         let mem_usage = self.core.memory_controller.mem_usage();
         RANGE_CACHE_MEMORY_USAGE.set(mem_usage as i64);
-        
+
         let core = self.core.engine.read();
         let pending = core.range_manager.pending_ranges.len();
         let cached = core.range_manager.ranges().len();

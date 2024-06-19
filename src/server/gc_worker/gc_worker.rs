@@ -1534,7 +1534,7 @@ pub mod test_gc_worker {
 
 #[cfg(test)]
 mod tests {
-    
+
     use std::{
         collections::{BTreeMap, BTreeSet},
         path::Path,

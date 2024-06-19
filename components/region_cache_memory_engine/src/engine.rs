@@ -699,9 +699,16 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
     type DiskEngine = RocksEngine;
     fn set_disk_engine(&mut self, disk_engine: Self::DiskEngine) {
         self.rocks_engine = Some(disk_engine.clone());
-        self.bg_worker_manager()
+        if let Err(e) = self
+            .bg_worker_manager()
             .schedule_task(BackgroundTask::SetRocksEngine(disk_engine))
-            .unwrap();
+        {
+            error!(
+                "schedule set rocks_engine failed";
+                "err" => ?e,
+            );
+            assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+        }
     }
 
     type RangeHintService = PdRangeHintService;

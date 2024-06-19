@@ -1096,7 +1096,7 @@ def gRPC() -> RowPanel:
             graph_panel(
                 title="gRPC request sources duration",
                 description="The duration of different sources of gRPC request",
-                yaxes=yaxes(left_format=UNITS.SECONDS),
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
                 lines=False,
                 stack=True,
                 targets=[
@@ -4261,18 +4261,6 @@ def RangeCacheMemoryEngine() -> RowPanel:
             graph_hides=["count", "avg"],
             yaxis_format=UNITS.SECONDS,
             metric="tikv_range_cache_engine_prepare_for_write_duration_seconds",
-        )
-    )
-    layout.row(
-        heatmap_panel_graph_panel_histogram_quantile_pairs(
-            heatmap_title="Upgrade wait duration",
-            heatmap_description="The time consumed of prepare for apply in range cache engine",
-            graph_title="99% Range cache engine prepare for apply duration per server",
-            graph_description="The time consumed of prepare for apply in range cache engine per TiKV instance",
-            graph_by_labels=["instance"],
-            graph_hides=["count", "avg"],
-            yaxis_format=UNITS.SECONDS,
-            metric="tikv_range_cache_upgrade_wait_duration_seconds",
         )
     )
     layout.row(
