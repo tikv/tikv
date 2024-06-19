@@ -964,16 +964,10 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
                     // (See https://tokio.rs/tokio/tutorial/shared-state)
                     // Use &mut and mark the type for making rust-analyzer happy.
                     let progress: &mut Progress<_> = &mut prs.lock().unwrap();
-                    let batch = match progress.forward(batch_size, request.replica_read) {
+                    match progress.forward(batch_size, request.replica_read) {
+                        Some(batch) => (batch, progress.codec.is_raw_kv, progress.cf),
                         None => return,
-                        Some(batch) => {
-                            if batch.is_empty() {
-                                continue;
-                            }
-                            batch
-                        },
-                    };
-                    (batch, progress.codec.is_raw_kv, progress.cf)
+                    }
                 };
 
                 for brange in batch {
