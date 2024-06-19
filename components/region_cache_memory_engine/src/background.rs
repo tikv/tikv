@@ -422,7 +422,14 @@ impl BackgroundRunnerCore {
             "current_safe_point" => safe_ts,
         );
 
-        std::mem::take(&mut filter.metrics)
+        let mut metrics = std::mem::take(&mut filter.metrics);
+        if filter.cached_mvcc_delete_key.is_some() {
+            metrics.filtered += 1;
+        }
+        if filter.cached_skiplist_delete_key.is_some() {
+            metrics.filtered += 1;
+        }
+        metrics
     }
 
     fn on_gc_finished(&mut self, ranges: BTreeSet<CacheRange>) {
@@ -1231,13 +1238,11 @@ impl Drop for Filter {
     fn drop(&mut self) {
         if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
             let guard = &epoch::pin();
-            self.metrics.filtered += 1;
             self.write_cf_handle
                 .remove(&InternalBytes::from_vec(cached_delete_key), guard);
         }
         if let Some(cached_delete_key) = self.cached_skiplist_delete_key.take() {
             let guard = &epoch::pin();
-            self.metrics.filtered += 1;
             self.write_cf_handle
                 .remove(&InternalBytes::from_vec(cached_delete_key), guard);
         }
@@ -1329,6 +1334,7 @@ impl Filter {
         if user_key != self.last_user_key {
             self.last_user_key = user_key.to_vec();
         } else {
+            self.metrics.filtered += 1;
             self.write_cf_handle
                 .remove(&InternalBytes::from_bytes(key.clone()), guard);
             return Ok(());
@@ -1649,6 +1655,7 @@ pub mod tests {
             iter.next(guard);
         }
         assert_eq!(count, 8);
+        assert_eq!(4, filter.metrics.filtered);
         drop(filter);
 
         assert_eq!(2, element_count(&write));
@@ -1994,7 +2001,8 @@ pub mod tests {
             None,
             engine.expected_region_size(),
         );
-        worker.core.gc_range(&range1, 100, 100);
+        let filter = worker.core.gc_range(&range1, 100, 100);
+        assert_eq!(2, filter.filtered);
 
         verify(b"k05", 15, 18, &write);
         verify(b"k05", 14, 19, &default);
@@ -2009,6 +2017,7 @@ pub mod tests {
             engine.expected_region_size(),
         );
         worker.core.gc_range(&range2, 100, 100);
+        assert_eq!(2, filter.filtered);
 
         verify(b"k35", 15, 20, &write);
         verify(b"k35", 14, 21, &default);
@@ -2056,7 +2065,8 @@ pub mod tests {
             engine.expected_region_size(),
         );
 
-        worker.core.gc_range(&range, 20, 200);
+        let filter = worker.core.gc_range(&range, 20, 200);
+        assert_eq!(1, filter.filtered);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
     }
@@ -2157,22 +2167,26 @@ pub mod tests {
         let s3 = engine.snapshot(range.clone(), 20, u64::MAX);
 
         // nothing will be removed due to snapshot 5
-        worker.core.gc_range(&range, 30, 100);
+        let filter = worker.core.gc_range(&range, 30, 100);
+        assert_eq!(0, filter.filtered);
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
         drop(s1);
-        worker.core.gc_range(&range, 30, 100);
+        let filter = worker.core.gc_range(&range, 30, 100);
+        assert_eq!(1, filter.filtered);
         assert_eq!(5, element_count(&default));
         assert_eq!(5, element_count(&write));
 
         drop(s2);
-        worker.core.gc_range(&range, 30, 100);
+        let filter = worker.core.gc_range(&range, 30, 100);
+        assert_eq!(1, filter.filtered);
         assert_eq!(4, element_count(&default));
         assert_eq!(4, element_count(&write));
 
         drop(s3);
-        worker.core.gc_range(&range, 30, 100);
+        let filter = worker.core.gc_range(&range, 30, 100);
+        assert_eq!(1, filter.filtered);
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
     }
