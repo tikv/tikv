@@ -1,6 +1,8 @@
 > [!NOTE]
 >
 > This component is fork from the [_crossbeam-rs/crossbeam_](https://github.com/crossbeam-rs/crossbeam) project, based on the commit [`407375cb`](https://github.com/crossbeam-rs/crossbeam/commit/407375cb0dd55c60fcfb3e6764c745da3bef3739).
+>
+> TODO: Remove this component when [crossbeam-rs/crossbeam#1091](https://github.com/crossbeam-rs/crossbeam/pull/1091) is merged.
 
 ------
 
