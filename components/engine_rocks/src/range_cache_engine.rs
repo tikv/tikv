@@ -8,4 +8,7 @@ impl RangeCacheEngineExt for RocksEngine {
     fn range_cache_engine_enabled(&self) -> bool {
         false
     }
+
+    #[inline]
+    fn evict_range(&self, _: &engine_traits::CacheRange) {}
 }

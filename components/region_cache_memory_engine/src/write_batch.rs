@@ -243,14 +243,6 @@ impl RangeCacheWriteBatch {
                 ranges.append(&mut ranges_to_delete);
                 continue;
             }
-
-            if let Some((.., canceled)) = range_manager
-                .pending_ranges_loading_data
-                .iter_mut()
-                .find(|(range, ..)| range.overlaps(&r))
-            {
-                *canceled = true;
-            }
         }
         ranges
     }

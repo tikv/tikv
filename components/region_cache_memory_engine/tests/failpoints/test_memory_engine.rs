@@ -400,7 +400,7 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     let range1_clone = range1.clone();
     let range2_clone = range2.clone();
     let range3_clone = range3.clone();
-    let _ = std::thread::spawn(move || {
+    let handle = std::thread::spawn(move || {
         let mut wb = engine_clone.write_batch();
         wb.prepare_for_range(range1_clone);
         wb.put_cf(CF_LOCK, b"k02", b"val").unwrap();
@@ -494,4 +494,6 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
     verify_data(&range3, 0);
+
+    let _ = handle.join();
 }
