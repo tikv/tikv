@@ -446,7 +446,7 @@ mod all {
             let data = std::fs::read(dir.path()).unwrap();
             // assert it contains data...
             assert_ne!(data.len(), 0);
-            // ... and is plain zstd compression.
+            // ... and is not plain zstd compression. (As it was encrypted.)
             assert_ne!(
                 u32::from_le_bytes([data[0], data[1], data[2], data[3]]),
                 0xFD2FB528,
