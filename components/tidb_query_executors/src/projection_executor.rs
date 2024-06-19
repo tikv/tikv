@@ -1,14 +1,17 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
 use tidb_query_common::{storage::IntervalRange, Result};
 use tidb_query_datatype::{
-    codec::{batch::LazyBatchColumnVec, data_type::*},
+    codec::{
+        batch::{LazyBatchColumn, LazyBatchColumnVec},
+        data_type::*,
+    },
     expr::{EvalConfig, EvalContext},
 };
-use tidb_query_expr::{RpnExpression, RpnExpressionBuilder};
+use tidb_query_expr::{RpnExpression, RpnExpressionBuilder, RpnExpressionNode};
 use tipb::{Expr, FieldType, Projection};
 
 use crate::interface::*;
@@ -19,6 +22,13 @@ pub struct BatchProjectionExecutor<Src: BatchExecutor> {
     schema: Vec<FieldType>,
 
     exprs: Vec<RpnExpression>,
+    // use no_dup_column_ref_only to recognize whether the projection executor contains only
+    // no-duplicate column references if so, we can optimize the projection executor by
+    // avoiding unnecessary column copying
+    no_dup_column_ref_only: bool,
+    // column_offsets is used to store the column offsets of the no-duplicate column references
+    // Note: the column_offsets is only valid when no_dup_column_ref_only is true
+    column_offsets: Vec<usize>,
 }
 
 // We assign a dummy type `Box<dyn BatchExecutor<StorageStats = ()>>` so that we
@@ -46,24 +56,54 @@ impl<Src: BatchExecutor> BatchProjectionExecutor<Src> {
     #[cfg(test)]
     pub fn new_for_test(src: Src, exprs: Vec<RpnExpression>) -> Self {
         let schema = get_schema_from_exprs(src.schema(), &exprs);
-
+        let exprs_len = exprs.len();
+        let mut no_dup_column_ref_only = true;
+        let mut column_offset_set = HashSet::with_capacity(exprs_len);
+        let mut column_offset_vec = Vec::with_capacity(exprs_len);
+        for expr in &exprs {
+            if no_dup_column_ref_only && expr.len() == 1 {
+                check_column_ref(
+                    expr,
+                    &mut column_offset_set,
+                    &mut no_dup_column_ref_only,
+                    &mut column_offset_vec,
+                );
+            } else {
+                no_dup_column_ref_only = false;
+                break;
+            }
+        }
         Self {
             context: EvalContext::default(),
             src,
             schema,
             exprs,
+            no_dup_column_ref_only,
+            column_offsets: column_offset_vec,
         }
     }
 
     pub fn new(config: Arc<EvalConfig>, src: Src, exprs_def: Vec<Expr>) -> Result<Self> {
-        let mut exprs = Vec::with_capacity(exprs_def.len());
+        let exprs_len = exprs_def.len();
+        let mut exprs = Vec::with_capacity(exprs_len);
         let mut ctx = EvalContext::new(config);
+        let mut no_dup_column_ref_only = true;
+        let mut column_offset_set = HashSet::with_capacity(exprs_len);
+        let mut column_offset_vec = Vec::with_capacity(exprs_len);
         for def in exprs_def {
-            exprs.push(RpnExpressionBuilder::build_from_expr_tree(
-                def,
-                &mut ctx,
-                src.schema().len(),
-            )?);
+            let rpn_expression =
+                RpnExpressionBuilder::build_from_expr_tree(def, &mut ctx, src.schema().len())?;
+            if no_dup_column_ref_only && rpn_expression.len() == 1 {
+                check_column_ref(
+                    &rpn_expression,
+                    &mut column_offset_set,
+                    &mut no_dup_column_ref_only,
+                    &mut column_offset_vec,
+                );
+            } else {
+                no_dup_column_ref_only = false;
+            }
+            exprs.push(rpn_expression);
         }
         let schema = get_schema_from_exprs(src.schema(), &exprs);
 
@@ -72,7 +112,31 @@ impl<Src: BatchExecutor> BatchProjectionExecutor<Src> {
             src,
             schema,
             exprs,
+            no_dup_column_ref_only,
+            column_offsets: column_offset_vec,
         })
+    }
+}
+
+// check_column_ref checks whether the RpnExpression contains only one column
+// reference and no duplicate column references
+fn check_column_ref(
+    rpn_expression: &RpnExpression,
+    column_offset_set: &mut HashSet<usize>,
+    no_dup_column_ref_only: &mut bool,
+    column_offset_vec: &mut Vec<usize>,
+) {
+    match rpn_expression[0] {
+        RpnExpressionNode::ColumnRef { offset, .. } => {
+            if !column_offset_set.insert(offset) {
+                *no_dup_column_ref_only = false;
+            } else {
+                column_offset_vec.push(offset);
+            }
+        }
+        _ => {
+            *no_dup_column_ref_only = false;
+        }
     }
 }
 
@@ -99,35 +163,49 @@ impl<Src: BatchExecutor> BatchExecutor for BatchProjectionExecutor<Src> {
         let logical_len = logical_rows.len();
 
         if is_drained.is_ok() && logical_len != 0 {
-            for expr in &self.exprs {
-                match expr.eval(
-                    &mut self.context,
-                    child_schema,
-                    &mut src_result.physical_columns,
-                    &logical_rows,
-                    logical_len,
-                ) {
-                    Err(e) => {
-                        is_drained = is_drained.and(Err(e));
-                        logical_rows.clear();
-                        break;
-                    }
-                    Ok(col) => {
-                        if col.is_scalar() {
-                            eval_result.push(VectorValue::from_scalar(
-                                col.scalar_value().unwrap(),
-                                logical_len,
-                            ));
-                        } else {
-                            eval_result.push(col.take_vector_value().unwrap());
+            if self.no_dup_column_ref_only {
+                for offset in self.column_offsets.iter() {
+                    // Little trick here, we push a None column to the end of the physical columns,
+                    // and then swap it with the offset column and then remove
+                    // the end column, this is to avoid the overhead of moving all the columns after
+                    // the offset column
+                    src_result
+                        .physical_columns
+                        .push(LazyBatchColumn::from(VectorValue::Int(vec![None].into())));
+                    eval_result.push(src_result.physical_columns.swap_remove(*offset));
+                }
+            } else {
+                for expr in &self.exprs {
+                    match expr.eval(
+                        &mut self.context,
+                        child_schema,
+                        &mut src_result.physical_columns,
+                        &logical_rows,
+                        logical_len,
+                    ) {
+                        Err(e) => {
+                            is_drained = is_drained.and(Err(e));
+                            logical_rows.clear();
+                            break;
+                        }
+                        Ok(col) => {
+                            if col.is_scalar() {
+                                eval_result.push(LazyBatchColumn::from(VectorValue::from_scalar(
+                                    col.scalar_value().unwrap(),
+                                    logical_len,
+                                )));
+                            } else {
+                                eval_result
+                                    .push(LazyBatchColumn::from(col.take_vector_value().unwrap()));
+                            }
                         }
                     }
                 }
-            }
 
-            if !self.exprs.is_empty() && is_drained.is_ok() {
-                logical_rows.clear();
-                logical_rows.extend(0..logical_len);
+                if !self.exprs.is_empty() && is_drained.is_ok() {
+                    logical_rows.clear();
+                    logical_rows.extend(0..logical_len);
+                }
             }
         }
 
@@ -329,15 +407,15 @@ mod tests {
         let mut exec = BatchProjectionExecutor::new_for_test(src_exec, exprs);
         assert_eq!(exec.schema().len(), 2);
         let r = block_on(exec.next_batch(1));
-        assert_eq!(&r.logical_rows, &[0, 1]);
+        assert_eq!(&r.logical_rows, &[2, 0]);
         assert_eq!(r.physical_columns.columns_len(), 2);
         assert_eq!(
             r.physical_columns[0].decoded().to_int_vec(),
-            vec![Some(1), None]
+            vec![None, None, Some(1), None, Some(5)]
         );
         assert_eq!(
             r.physical_columns[1].decoded().to_real_vec(),
-            vec![None, Real::new(7.0).ok()]
+            vec![Real::new(7.0).ok(), Real::new(-5.0).ok(), None, None, None]
         );
         assert!(r.is_drained.unwrap().is_remain());
 
@@ -347,10 +425,16 @@ mod tests {
         assert!(r.is_drained.unwrap().is_remain());
 
         let r = block_on(exec.next_batch(1));
-        assert_eq!(&r.logical_rows, &[0]);
+        assert_eq!(&r.logical_rows, &[1]);
         assert_eq!(r.physical_columns.columns_len(), 2);
-        assert_eq!(r.physical_columns[0].decoded().to_int_vec(), vec![None]);
-        assert_eq!(r.physical_columns[1].decoded().to_real_vec(), vec![None]);
+        assert_eq!(
+            r.physical_columns[0].decoded().to_int_vec(),
+            vec![Some(1), None]
+        );
+        assert_eq!(
+            r.physical_columns[1].decoded().to_real_vec(),
+            vec![None, None]
+        );
         assert!(r.is_drained.unwrap().stop());
     }
 
@@ -529,7 +613,7 @@ mod tests {
             .collect();
         let mut exec = BatchProjectionExecutor::new_for_test(src_exec, exprs);
 
-        let r = block_on(exec.next_batch(1));
+        let r: BatchExecuteResult = block_on(exec.next_batch(1));
         assert!(r.logical_rows.is_empty());
         r.is_drained.unwrap_err();
     }

@@ -1302,9 +1302,11 @@ mod tests {
     use hybrid_engine::{HybridEngine, HybridEngineSnapshot};
     use keys::DATA_PREFIX;
     use kvproto::{metapb::RegionEpoch, raft_cmdpb::*};
-    use region_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheMemoryEngine};
+    use region_cache_memory_engine::{
+        RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
+    };
     use tempfile::{Builder, TempDir};
-    use tikv_util::{codec::number::NumberEncoder, time::monotonic_raw_now};
+    use tikv_util::{codec::number::NumberEncoder, config::VersionTrack, time::monotonic_raw_now};
     use time::Duration;
     use txn_types::WriteBatchFlags;
 
@@ -2487,7 +2489,9 @@ mod tests {
         let disk_engine =
             engine_test::kv::new_engine(path.path().to_str().unwrap(), ALL_CFS).unwrap();
         let (ch, rx, _) = HybridEngineMockRouter::new();
-        let memory_engine = RangeCacheMemoryEngine::new(&engine_config);
+        let config = Arc::new(VersionTrack::new(engine_config));
+        let memory_engine =
+            RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(config));
         let engine = HybridEngine::new(disk_engine, memory_engine.clone());
         let mut reader = LocalReader::new(
             engine.clone(),

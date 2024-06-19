@@ -43,7 +43,7 @@ use kvproto::{
     },
 };
 use parking_lot::RwLockUpgradableReadGuard;
-use pd_client::INVALID_ID;
+use pd_client::{Feature, INVALID_ID};
 use protobuf::Message;
 use raft::{
     self,
@@ -51,7 +51,7 @@ use raft::{
     GetEntriesContext, LightReady, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
     INVALID_INDEX, NO_LIMIT,
 };
-use rand::seq::SliceRandom;
+use rand::{seq::SliceRandom, Rng};
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
@@ -119,6 +119,12 @@ const SHRINK_CACHE_CAPACITY: usize = 64;
 // 1s
 const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000;
 const REGION_READ_PROGRESS_CAP: usize = 128;
+
+const SNAP_GEN_PRECHECK_FEATURE: Feature = Feature::require(8, 2, 0);
+// The maximum tick interval between precheck requests. The tick interval helps
+// prevent sending the precheck requests too aggressively.
+const SNAP_GEN_PRECHECK_MAX_TICK_INTERVAL: usize = 5;
+
 #[doc(hidden)]
 pub const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
 
@@ -917,6 +923,10 @@ where
     /// * `Some(false)` => initial state, not be recorded.
     /// * `Some(true)` => busy on apply, and already recorded.
     pub busy_on_apply: Option<bool>,
+    /// The index of last commited idx in the leader. It's used to check whether
+    /// this peer has raft log gaps and whether should be marked busy on
+    /// apply.
+    pub last_leader_committed_idx: Option<u64>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1067,6 +1077,7 @@ where
             unsafe_recovery_state: None,
             snapshot_recovery_state: None,
             busy_on_apply: Some(false),
+            last_leader_committed_idx: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1182,7 +1193,7 @@ where
     #[inline]
     pub fn maybe_update_apply_unpersisted_log_state(&mut self, applied_index: u64) {
         if self.min_safe_index_for_unpersisted_apply > 0
-            && self.min_safe_index_for_unpersisted_apply < applied_index
+            && self.min_safe_index_for_unpersisted_apply <= applied_index
         {
             if self.max_apply_unpersisted_log_limit > 0
                 && self
@@ -2639,6 +2650,34 @@ where
         }
     }
 
+    pub fn handle_gen_snap_task<T: Transport>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
+        if let Some(mut gen_task) = self.mut_store().take_gen_snap_task() {
+            // If the snapshot gen precheck feature is enabled, the leader needs
+            // to complete a precheck with the target follower before the
+            // snapshot generation.
+            if ctx.feature_gate.can_enable(SNAP_GEN_PRECHECK_FEATURE) {
+                // Continuously send snap gen precheck requests to the follower
+                // until an approval is received. Use random tick counts to
+                // space out the requests.
+                if gen_task.precheck_remaining_ticks == 0 {
+                    let to_peer = gen_task.to_peer.clone();
+                    self.send_snap_gen_precheck_request(ctx, &to_peer);
+                    gen_task.precheck_remaining_ticks =
+                        rand::thread_rng().gen_range(1..=SNAP_GEN_PRECHECK_MAX_TICK_INTERVAL);
+                } else {
+                    gen_task.precheck_remaining_ticks -= 1;
+                }
+                // Put the gen snap task back since we haven't scheduled it yet.
+                self.get_store().set_gen_snap_task(gen_task);
+            } else {
+                self.pending_request_snapshot_count
+                    .fetch_add(1, Ordering::SeqCst);
+                ctx.apply_router
+                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
+            }
+        }
+    }
+
     pub fn handle_raft_ready_append<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
@@ -2700,13 +2739,7 @@ where
 
         if !self.raft_group.has_ready() {
             fail_point!("before_no_ready_gen_snap_task", |_| None);
-            // Generating snapshot task won't set ready for raft group.
-            if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
-                self.pending_request_snapshot_count
-                    .fetch_add(1, Ordering::SeqCst);
-                ctx.apply_router
-                    .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
-            }
+            self.handle_gen_snap_task(ctx);
             return None;
         }
 
@@ -2783,12 +2816,7 @@ where
         // needs to be sent to the apply system.
         // Always sending snapshot task behind apply task, so it gets latest
         // snapshot.
-        if let Some(gen_task) = self.mut_store().take_gen_snap_task() {
-            self.pending_request_snapshot_count
-                .fetch_add(1, Ordering::SeqCst);
-            ctx.apply_router
-                .schedule_task(self.region_id, ApplyTask::Snapshot(gen_task));
-        }
+        self.handle_gen_snap_task(ctx);
 
         let state_role = ready.ss().map(|ss| ss.raft_state);
         let has_new_entries = !ready.entries().is_empty();
@@ -2922,7 +2950,13 @@ where
             if for_witness {
                 // inform next round to check apply status
                 ctx.router
-                    .send_casual_msg(snap_region.get_id(), CasualMessage::SnapshotApplied)
+                    .send_casual_msg(
+                        snap_region.get_id(),
+                        CasualMessage::SnapshotApplied {
+                            peer_id: self.peer.get_id(),
+                            tombstone: false,
+                        },
+                    )
                     .unwrap();
             }
             // When applying snapshot, there is no log applied and not compacted yet.
@@ -5322,6 +5356,37 @@ where
             }
         }
     }
+
+    pub fn update_last_leader_committed_idx(&mut self, committed_index: u64) {
+        if self.is_leader() {
+            // Ignore.
+            return;
+        }
+
+        let local_committed_index = self.get_store().commit_index();
+        if committed_index < local_committed_index {
+            warn!(
+                "stale committed index";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.peer_id(),
+                "last_committed_index" => committed_index,
+                "local_index" => local_committed_index,
+            );
+        } else {
+            self.last_leader_committed_idx = Some(committed_index);
+            debug!(
+                "update last committed index from leader";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.peer_id(),
+                "last_committed_index" => committed_index,
+                "local_index" => local_committed_index,
+            );
+        }
+    }
+
+    pub fn needs_update_last_leader_committed_idx(&self) -> bool {
+        self.busy_on_apply.is_some() && self.last_leader_committed_idx.is_none()
+    }
 }
 
 #[derive(Default, Debug)]
@@ -5640,6 +5705,28 @@ where
             self.check_stale_conf_ver = check_conf_ver;
             self.check_stale_peers = check_peers;
         }
+    }
+
+    pub fn send_snap_gen_precheck_request<T: Transport>(
+        &self,
+        ctx: &mut PollContext<EK, ER, T>,
+        to_peer: &metapb::Peer,
+    ) {
+        let mut extra_msg = ExtraMessage::default();
+        extra_msg.set_type(ExtraMessageType::MsgSnapGenPrecheckRequest);
+        self.send_extra_message(extra_msg, &mut ctx.trans, to_peer);
+    }
+
+    pub fn send_snap_gen_precheck_response<T: Transport>(
+        &self,
+        ctx: &mut PollContext<EK, ER, T>,
+        to_peer: &metapb::Peer,
+        passed: bool,
+    ) {
+        let mut extra_msg = ExtraMessage::default();
+        extra_msg.set_type(ExtraMessageType::MsgSnapGenPrecheckResponse);
+        extra_msg.set_snap_gen_precheck_passed(passed);
+        self.send_extra_message(extra_msg, &mut ctx.trans, to_peer);
     }
 
     pub fn send_want_rollback_merge<T: Transport>(

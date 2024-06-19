@@ -56,7 +56,7 @@ use region_cache_memory_engine::RangeCacheMemoryEngine;
 use resource_control::ResourceGroupManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
-use tikv::server::Result as ServerResult;
+use tikv::{config::TikvConfig, server::Result as ServerResult};
 use tikv_util::{
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
@@ -214,10 +214,7 @@ where
         // TODO: In the future, maybe it's better to test both case where
         // `use_delete_range` is true and false
         Cluster {
-            cfg: Config {
-                tikv: new_tikv_config_with_api_ver(id, api_version),
-                prefer_mem: true,
-            },
+            cfg: Config::new(new_tikv_config_with_api_ver(id, api_version), true),
             leaders: HashMap::default(),
             count,
             paths: vec![],
@@ -238,6 +235,11 @@ where
             raft_statistics: vec![],
             range_cache_engine_enabled_with_whole_range: false,
         }
+    }
+
+    pub fn set_cfg(&mut self, mut cfg: TikvConfig) {
+        cfg.cfg_path = self.cfg.tikv.cfg_path.clone();
+        self.cfg.tikv = cfg;
     }
 
     // To destroy temp dir later.
@@ -273,7 +275,12 @@ where
 
     fn create_engine(&mut self, router: Option<RaftRouter<EK, RaftTestEngine>>) {
         let (engines, key_manager, dir, sst_worker, kv_statistics, raft_statistics) =
-            create_test_engine(router, self.io_rate_limiter.clone(), &self.cfg);
+            create_test_engine(
+                router,
+                self.io_rate_limiter.clone(),
+                self.pd_client.clone(),
+                &self.cfg,
+            );
         self.dbs.push(engines);
         self.key_managers.push(key_manager);
         self.paths.push(dir);
