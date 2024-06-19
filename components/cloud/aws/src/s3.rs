@@ -609,7 +609,7 @@ impl BlobStorage for S3Storage {
     async fn put(
         &self,
         name: &str,
-        mut reader: PutResource,
+        mut reader: PutResource<'_>,
         content_length: u64,
     ) -> io::Result<()> {
         let key = self.maybe_prefix_key(name);

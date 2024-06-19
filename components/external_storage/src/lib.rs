@@ -54,7 +54,7 @@ pub fn record_storage_create(start: Instant, storage: &dyn ExternalStorage) {
 /// This wrapper would remove the lifetime at the argument of the generated
 /// async function in order to make rustc happy. (And reduce the length of
 /// signature of write.) see https://github.com/rust-lang/rust/issues/63033
-pub struct UnpinReader(pub Box<dyn AsyncRead + Unpin + Send>);
+pub struct UnpinReader<'a>(pub Box<dyn AsyncRead + Unpin + Send + 'a>);
 
 pub type ExternalData<'a> = Box<dyn AsyncRead + Unpin + Send + 'a>;
 
@@ -104,7 +104,12 @@ pub trait ExternalStorage: 'static + Send + Sync + Any {
     fn url(&self) -> io::Result<url::Url>;
 
     /// Write all contents of the read to the given path.
-    async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()>;
+    async fn write(
+        &self,
+        name: &str,
+        reader: UnpinReader<'_>,
+        content_length: u64,
+    ) -> io::Result<()>;
 
     /// Read all contents of the given path.
     fn read(&self, name: &str) -> ExternalData<'_>;
@@ -167,7 +172,12 @@ impl ExternalStorage for Arc<dyn ExternalStorage> {
         (**self).url()
     }
 
-    async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()> {
+    async fn write(
+        &self,
+        name: &str,
+        reader: UnpinReader<'_>,
+        content_length: u64,
+    ) -> io::Result<()> {
         (**self).write(name, reader, content_length).await
     }
 
@@ -209,7 +219,12 @@ impl ExternalStorage for Box<dyn ExternalStorage> {
         self.as_ref().url()
     }
 
-    async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()> {
+    async fn write(
+        &self,
+        name: &str,
+        reader: UnpinReader<'_>,
+        content_length: u64,
+    ) -> io::Result<()> {
         self.as_ref().write(name, reader, content_length).await
     }
 

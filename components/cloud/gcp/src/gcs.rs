@@ -294,7 +294,12 @@ impl BlobStorage for GcsStorage {
         Box::new(self.config.clone()) as Box<dyn BlobConfig>
     }
 
-    async fn put(&self, name: &str, reader: PutResource, content_length: u64) -> io::Result<()> {
+    async fn put(
+        &self,
+        name: &str,
+        reader: PutResource<'_>,
+        content_length: u64,
+    ) -> io::Result<()> {
         if content_length == 0 {
             // It is probably better to just write the empty file
             // However, currently going forward results in a body write aborted error

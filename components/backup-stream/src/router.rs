@@ -2037,7 +2037,7 @@ mod tests {
         async fn write(
             &self,
             name: &str,
-            reader: UnpinReader,
+            reader: UnpinReader<'_>,
             content_length: u64,
         ) -> io::Result<()> {
             (self.error_on_write)()?;
@@ -2397,7 +2397,7 @@ mod tests {
         async fn write(
             &self,
             _name: &str,
-            mut reader: UnpinReader,
+            mut reader: UnpinReader<'_>,
             content_length: u64,
         ) -> io::Result<()> {
             let mut data = Vec::new();

@@ -209,7 +209,12 @@ impl<S: ExternalStorage> ExternalStorage for EncryptedExternalStorage<S> {
     fn url(&self) -> io::Result<url::Url> {
         self.storage.url()
     }
-    async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()> {
+    async fn write(
+        &self,
+        name: &str,
+        reader: UnpinReader<'_>,
+        content_length: u64,
+    ) -> io::Result<()> {
         self.storage.write(name, reader, content_length).await
     }
     fn read(&self, name: &str) -> ExternalData<'_> {
@@ -266,7 +271,12 @@ impl<Blob: BlobStorage> ExternalStorage for BlobStore<Blob> {
     fn url(&self) -> io::Result<url::Url> {
         (**self).config().url()
     }
-    async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()> {
+    async fn write(
+        &self,
+        name: &str,
+        reader: UnpinReader<'_>,
+        content_length: u64,
+    ) -> io::Result<()> {
         (**self)
             .put(name, PutResource(reader.0), content_length)
             .await

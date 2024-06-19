@@ -76,7 +76,12 @@ impl ExternalStorage for HdfsStorage {
         Ok(self.remote.clone())
     }
 
-    async fn write(&self, name: &str, reader: UnpinReader, _content_length: u64) -> io::Result<()> {
+    async fn write(
+        &self,
+        name: &str,
+        reader: UnpinReader<'_>,
+        _content_length: u64,
+    ) -> io::Result<()> {
         if name.contains(path::MAIN_SEPARATOR) {
             return Err(io::Error::new(
                 io::ErrorKind::Other,

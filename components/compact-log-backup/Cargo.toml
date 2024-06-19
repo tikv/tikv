@@ -29,6 +29,8 @@ prometheus = { version = "0.13", default-features = false, features = ["nightly"
 thiserror = "1"
 dashmap = "5"
 bytes = "1"
+crc64fast = "0.1"
+file_system = { workspace = true }
 
 [dev-dependencies]
 pprof = { version = "0.13", default-features = false, features = [

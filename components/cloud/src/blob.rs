@@ -17,11 +17,11 @@ pub trait BlobConfig: 'static + Send + Sync {
 ///
 /// See the documentation of [external_storage::UnpinReader] for why those
 /// wrappers exists.
-pub struct PutResource(pub Box<dyn AsyncRead + Send + Unpin>);
+pub struct PutResource<'a>(pub Box<dyn AsyncRead + Send + Unpin + 'a>);
 
 pub type BlobStream<'a> = Box<dyn AsyncRead + Unpin + Send + 'a>;
 
-impl AsyncRead for PutResource {
+impl<'a> AsyncRead for PutResource<'a> {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -31,8 +31,8 @@ impl AsyncRead for PutResource {
     }
 }
 
-impl From<Box<dyn AsyncRead + Send + Unpin>> for PutResource {
-    fn from(s: Box<dyn AsyncRead + Send + Unpin>) -> Self {
+impl<'a> From<Box<dyn AsyncRead + Send + Unpin + 'a>> for PutResource<'a> {
+    fn from(s: Box<dyn AsyncRead + Send + Unpin + 'a>) -> Self {
         Self(s)
     }
 }
@@ -44,7 +44,8 @@ pub trait BlobStorage: 'static + Send + Sync {
     fn config(&self) -> Box<dyn BlobConfig>;
 
     /// Write all contents of the read to the given path.
-    async fn put(&self, name: &str, reader: PutResource, content_length: u64) -> io::Result<()>;
+    async fn put(&self, name: &str, reader: PutResource<'_>, content_length: u64)
+    -> io::Result<()>;
 
     /// Read all contents of the given path.
     fn get(&self, name: &str) -> BlobStream<'_>;
@@ -87,7 +88,12 @@ impl BlobStorage for Box<dyn BlobStorage> {
         (**self).config()
     }
 
-    async fn put(&self, name: &str, reader: PutResource, content_length: u64) -> io::Result<()> {
+    async fn put(
+        &self,
+        name: &str,
+        reader: PutResource<'_>,
+        content_length: u64,
+    ) -> io::Result<()> {
         let fut = (**self).put(name, reader, content_length);
         fut.await
     }

@@ -22,6 +22,8 @@ pub enum ErrorKind {
     Engine(#[from] engine_traits::Error),
     #[error("Codec {0}")]
     Codec(#[from] codec::Error),
+    #[error("Uncategorised Error {0}")]
+    Other(String),
 }
 
 impl<T: Into<ErrorKind>> From<T> for Error {
@@ -32,6 +34,33 @@ impl<T: Into<ErrorKind>> From<T> for Error {
             notes: String::new(),
             attached_frames: vec![*Location::caller()],
         }
+    }
+}
+
+pub trait TraceResultExt {
+    #[track_caller]
+    fn trace_err(self) -> Self;
+}
+
+impl<T> TraceResultExt for Result<T> {
+    #[track_caller]
+    fn trace_err(self) -> Result<T> {
+        self.map_err(|err| err.attach_current_frame())
+    }
+}
+
+pub trait OtherErrExt<T> {
+    fn adapt_err(self) -> Result<T>;
+}
+
+impl<T, E: Display> OtherErrExt<T> for std::result::Result<T, E> {
+    #[track_caller]
+    fn adapt_err(self) -> Result<T> {
+        self.map_err(|err| Error {
+            kind: ErrorKind::Other(err.to_string()),
+            notes: String::new(),
+            attached_frames: vec![*Location::caller()],
+        })
     }
 }
 

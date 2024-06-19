@@ -5,9 +5,16 @@ use engine_traits::{
     CfName, ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,
 };
 use external_storage::ExternalStorage;
-use futures::io::AllowStdIo;
+use futures::{
+    io::{AllowStdIo, Cursor},
+    lock::Mutex,
+};
+use kvproto::import_sstpb::SstMeta;
 use tikv_util::{
-    codec::stream_event::Iterator as KvStreamIter, config::ReadableSize, time::Instant,
+    codec::stream_event::Iterator as KvStreamIter,
+    config::ReadableSize,
+    stream::{retry_all_ext, RetryExt},
+    time::Instant,
 };
 use tokio_stream::Stream;
 
@@ -18,6 +25,7 @@ use super::{
     storage::{LogFile, LogFileId},
     util::{Cooperate, ExecuteAllExt},
 };
+use crate::errors::{OtherErrExt, TraceResultExt};
 
 #[derive(Debug, Display)]
 #[display(fmt = "compaction(region={},size={},cf={})", region_id, size, cf)]
@@ -210,7 +218,7 @@ impl<S: Stream<Item = Result<LogFile>>> Stream for CollectCompaction<S> {
                     *this.last_compactions =
                         Some(this.collector.take_pending_compactions().collect())
                 }
-                Some(Err(err)) => return Some(Err(err.attach_current_frame())).into(),
+                Some(Err(err)) => return Some(Err(err).trace_err()).into(),
                 Some(Ok(item)) => {
                     if let Some(comp) = this.collector.add_new_file(item) {
                         return Some(Ok(comp)).into();
@@ -260,6 +268,12 @@ impl<DB> CompactWorker<DB> {
             _great_phantom: PhantomData,
         }
     }
+}
+
+struct WrittenSst {
+    content: Vec<u8>,
+    meta: kvproto::brpb::File,
+    physical_size: u64,
 }
 
 impl<DB: SstExt> CompactWorker<DB>
@@ -334,33 +348,67 @@ where
     }
 
     #[tracing::instrument(skip_all)]
+    /// write the `sorted_items` to a in-mem SST.
+    ///
+    /// # Panics
+    ///
+    /// For now, if the `sorted_items` is empty, it will panic.
+    /// But it is reasonable to return an error in this scenario if needed.
     async fn write_sst(
         &mut self,
+        name: &str,
         cf: CfName,
-        sorted_items: impl Iterator<Item = &Record>,
+        sorted_items: &[Record],
         ext: &mut CompactLogExt<'_>,
-    ) -> Result<(u64, impl std::io::Read + 'static)> {
+    ) -> Result<WrittenSst> {
         let mut w = <DB as SstExt>::SstWriterBuilder::new()
             .set_cf(cf)
             .set_compression_type(Self::COMPRESSION)
             .set_in_memory(true)
-            .build(&"in-mem.sst")?;
+            .build(name)?;
+        let mut meta = kvproto::brpb::File::default();
+        meta.set_start_key(sorted_items[0].key.clone());
+        meta.set_end_key(sorted_items.last().unwrap().key.clone());
+        meta.set_cf(cf.to_owned());
+        meta.name = name.to_owned();
+        meta.end_version = u64::MAX;
 
         for item in sorted_items {
             self.co.step().await;
+            let mut d = crc64fast::Digest::new();
+            d.write(&item.key);
+            d.write(&item.value);
+            let ts = item.ts().trace_err()?;
+            meta.crc64xor ^= d.sum64();
+            meta.start_version = meta.start_version.min(ts);
+            meta.end_version = meta.end_version.max(ts);
             w.put(&item.key, &item.value)?;
             ext.with_compact_stat(|stat| {
                 stat.logical_key_bytes_out += item.key.len() as u64;
                 stat.logical_value_bytes_out += item.value.len() as u64;
-            })
+            });
+            meta.total_kvs += 1;
+            meta.total_bytes += item.key.len() as u64 + item.value.len() as u64;
         }
         let (info, out) = w.finish_read()?;
         ext.with_compact_stat(|stat| {
             stat.keys_out += info.num_entries();
             stat.physical_bytes_out += info.file_size();
         });
+        let (mut rd, hasher) = file_system::Sha256Reader::new(out).adapt_err()?;
+        // This will copy about 128MiB of memory... But collecting it is necessary for
+        // retrying...
+        let mut out = Vec::with_capacity(info.file_size() as usize);
+        std::io::copy(&mut rd, &mut out)?;
+        hasher.lock().unwrap().finish().adapt_err()?;
 
-        Ok((info.file_size(), out))
+        let result = WrittenSst {
+            content: out,
+            meta,
+            physical_size: info.file_size(),
+        };
+
+        Ok(result)
     }
 
     #[tracing::instrument(skip_all, fields(c=%c))]
@@ -381,51 +429,52 @@ where
             return Ok(());
         }
 
-        let mut retry_time = 0;
-        let max_retry_times = 32;
-        loop {
-            let begin = Instant::now();
-            let (size, out) = match self.write_sst(c.cf, sorted_items.iter(), &mut ext).await {
-                Ok((size, out)) => (size, out),
-                Err(e) => {
-                    eprintln!("retry the error3: {:?}", e);
-                    retry_time += 1;
-                    if retry_time > max_retry_times {
-                        return Err(e);
-                    }
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                    continue;
-                }
-            };
-            ext.with_compact_stat(|stat| stat.write_sst_duration += begin.saturating_elapsed());
+        let out_name = format!(
+            "compact-out/{}-{}-{}-{}.sst",
+            c.input_min_ts, c.input_max_ts, c.cf, c.region_id
+        );
+        let begin = Instant::now();
+        assert!(!sorted_items.is_empty());
+        let sst = self
+            .write_sst(&out_name, c.cf, sorted_items.as_slice(), &mut ext)
+            .await?;
 
-            let begin = Instant::now();
-            let out_name = format!(
-                "compact-out/{}-{}-{}-{}.sst",
-                c.input_min_ts, c.input_max_ts, c.cf, c.region_id
-            );
-            match self
-                .output
-                .write(
-                    &out_name,
-                    external_storage::UnpinReader(Box::new(AllowStdIo::new(out))),
-                    size,
-                )
-                .await
+        ext.with_compact_stat(|stat| stat.write_sst_duration += begin.saturating_elapsed());
+
+        let begin = Instant::now();
+        retry_all_ext(
             {
-                Ok(_) => (),
-                Err(e) => {
-                    eprintln!("retry the error4: {:?}", e);
-                    retry_time += 1;
-                    if retry_time > max_retry_times {
-                        return Err(e.into());
+                || {
+                    let out = &self.output;
+                    let out_name = out_name.clone();
+                    let content = &sst.content;
+                    let size = sst.physical_size;
+                    async move {
+                        out.write(
+                            &out_name,
+                            external_storage::UnpinReader(Box::new(Cursor::new(&content))),
+                            size,
+                        )
+                        .await
                     }
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                    continue;
                 }
-            }
-            ext.with_compact_stat(|stat| stat.save_duration += begin.saturating_elapsed());
-            return Ok(());
-        }
+            },
+            RetryExt::default(),
+        )
+        .await?;
+
+        ext.with_compact_stat(|stat| stat.save_duration += begin.saturating_elapsed());
+        return Ok(());
+    }
+}
+
+mod meta {
+    use kvproto::import_sstpb::SstMeta;
+
+    use super::Compaction;
+
+    struct CompactMeta {
+        from_compaction: Compaction,
+        generated: SstMeta,
     }
 }

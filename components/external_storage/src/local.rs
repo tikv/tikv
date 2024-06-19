@@ -64,7 +64,12 @@ impl ExternalStorage for LocalStorage {
         Ok(url_for(self.base.as_path()))
     }
 
-    async fn write(&self, name: &str, reader: UnpinReader, _content_length: u64) -> io::Result<()> {
+    async fn write(
+        &self,
+        name: &str,
+        reader: UnpinReader<'_>,
+        _content_length: u64,
+    ) -> io::Result<()> {
         let p = Path::new(name);
         if p.is_absolute() {
             return Err(io::Error::new(
