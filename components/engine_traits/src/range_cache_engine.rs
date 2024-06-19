@@ -51,6 +51,10 @@ pub trait RangeCacheEngine:
     fn evict_range(&self, range: &CacheRange);
 }
 
+pub trait RangeCacheEngineExt {
+    fn range_cache_engine_enabled(&self) -> bool;
+}
+
 /// A service that should run in the background to retrieve and apply cache
 /// hints.
 ///

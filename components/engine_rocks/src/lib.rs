@@ -46,6 +46,7 @@ mod logger;
 pub use crate::logger::*;
 mod misc;
 pub use crate::misc::*;
+pub mod range_cache_engine;
 pub mod range_properties;
 mod snapshot;
 pub use crate::snapshot::*;
