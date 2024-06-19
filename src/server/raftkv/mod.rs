@@ -647,6 +647,8 @@ where
         let tracker = store_cb.read_tracker().unwrap();
 
         let snap_ctx = if self.engine.range_cache_engine_enabled() {
+            // when range cache engine is enabled, we need snapshot context to determine
+            // whether we should use range cache engine snapshot for this request.
             ctx.start_ts.map(|ts| SnapshotContext {
                 read_ts: ts.into_inner(),
                 range: None,
