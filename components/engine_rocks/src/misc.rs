@@ -460,9 +460,6 @@ impl MiscExt for RocksEngine {
     fn get_disk_engine(&self) -> &Self::DiskEngine {
         self
     }
-
-    #[inline]
-    fn evict_range(&self, _: &engine_traits::CacheRange) {}
 }
 
 #[cfg(test)]

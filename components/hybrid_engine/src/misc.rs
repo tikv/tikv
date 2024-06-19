@@ -144,11 +144,6 @@ where
     fn get_disk_engine(&self) -> &Self::DiskEngine {
         self.disk_engine().get_disk_engine()
     }
-
-    #[inline]
-    fn evict_range(&self, range: &CacheRange) {
-        self.region_cache_engine().evict_range(range);
-    }
 }
 
 #[cfg(test)]
