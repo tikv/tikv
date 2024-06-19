@@ -24,7 +24,7 @@ use tokio::sync::OnceCell;
 use txn_types::Key;
 
 use super::{statistic::LoadStatistic, storage::LogFileId, util::Cooperate};
-use crate::compact::errors::Result;
+use crate::errors::Result;
 
 #[derive(Clone)]
 pub struct Source {

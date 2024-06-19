@@ -24,7 +24,7 @@ use super::{
     statistic::{CollectCompactionStatistic, LoadMetaStatistic},
     storage::{LoadFromExt, StreamyMetaStorage},
 };
-use crate::compact::{
+use crate::{
     errors::Result,
     statistic::{CompactStatistic, LoadStatistic},
 };

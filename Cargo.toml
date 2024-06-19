@@ -265,7 +265,7 @@ members = [
   "components/cloud/azure",
   "components/cloud/gcp",
   "components/codec",
-  "components/collections",
+  "components/collections", "components/compact-log-backup",
   "components/concurrency_manager",
   "components/coprocessor_plugin_api",
   "components/crypto",
@@ -447,6 +447,7 @@ tracing = { version = "0.1.39", default-features = false, features = [
 ] }
 openssl = "0.10"
 openssl-sys = "0.9"
+compact-log-backup = {path = "components/compact-log-backup"}
 
 [profile.dev.package.grpcio-sys]
 debug = false

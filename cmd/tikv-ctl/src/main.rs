@@ -20,6 +20,7 @@ use std::{
 };
 
 use collections::HashMap;
+use compact_log_backup::execute as compact_log;
 use crypto::fips;
 use encryption_export::{
     create_backend, data_key_manager_from_config, DataKeyManager, DecrypterReader, Iv,
@@ -412,13 +413,13 @@ fn main() {
                     .exit();
                 }
             };
-            let exec = backup_stream::compact_logs::Execution {
+            let exec = compact_log::Execution {
                 from_ts,
                 until_ts,
                 max_concurrent_compaction: max_compaction_num,
                 external_storage,
             };
-            exec.run(backup_stream::compact_logs::LogToTerm::default())
+            exec.run(compact_log::LogToTerm::default())
                 .expect("failed to execute compact-log-backup")
         }
         // Commands below requires either the data dir or the host.

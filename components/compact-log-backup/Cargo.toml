@@ -1,0 +1,38 @@
+[package]
+name = "compact-log-backup"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+async-compression = { version = "0.3.14", features = ["tokio", "zstd"] }
+encryption = { workspace = true }
+engine_rocks = { workspace = true }
+engine_traits = { workspace = true }
+derive_more = "0.99.3"
+tracing = { workspace = true }
+tracing-active-tree = { workspace = true }
+txn_types = { workspace = true }
+tikv_util = { workspace = true }
+
+kvproto = { workspace = true }
+protobuf = { version = "2.8", features = ["bytes"] }
+tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio-stream = "0.1"
+tokio-util = { version = "0.7", features = ["compat"] }
+external_storage = { workspace = true }
+futures = "0.3"
+futures-io = "0.3"
+pin-project = "1.0"
+prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
+thiserror = "1"
+dashmap = "5"
+bytes = "1"
+
+[dev-dependencies]
+pprof = { version = "0.13", default-features = false, features = [
+  "flamegraph",
+  "protobuf-codec",
+] } 
+test_util = { workspace = true }

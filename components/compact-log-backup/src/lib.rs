@@ -1,15 +1,18 @@
-pub mod compaction;
-pub mod errors;
+mod compaction;
+mod errors;
+mod source;
+mod statistic;
+mod storage;
+
 pub mod execute;
-pub mod source;
-pub mod statistic;
-pub mod storage;
 
 #[cfg(test)]
 mod test;
 
 mod util {
     use std::{future::Future, task::Poll};
+
+    use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
     pub struct Cooperate {
         work_count: usize,
@@ -101,5 +104,19 @@ mod util {
         }
         result.append(&mut futures::future::try_join_all(pending_futures.into_iter()).await?);
         Ok(result)
+    }
+
+    /// Transform a str to a [`engine_traits::CfName`]\(`&'static str`).
+    /// If the argument isn't one of `""`, `"DEFAULT"`, `"default"`, `"WRITE"`,
+    /// `"write"`, `"LOCK"`, `"lock"`... returns "ERR_CF". (Which would be
+    /// ignored then.)
+    pub fn cf_name(s: &str) -> CfName {
+        match s {
+            "" | "DEFAULT" | "default" => CF_DEFAULT,
+            "WRITE" | "write" => CF_WRITE,
+            "LOCK" | "lock" => CF_LOCK,
+            "RAFT" | "raft" => CF_RAFT,
+            _ => "ERR_CF",
+        }
     }
 }

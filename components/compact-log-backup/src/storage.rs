@@ -24,7 +24,7 @@ use super::{
     errors::{Error, Result},
     statistic::LoadMetaStatistic,
 };
-use crate::utils;
+use crate::util;
 
 const METADATA_PREFIX: &'static str = "v1/backupmeta";
 
@@ -317,7 +317,7 @@ impl MetaFile {
                     },
                     real_size: log_file.length,
                     region_id: log_file.region_id as _,
-                    cf: utils::cf_name(&log_file.cf),
+                    cf: util::cf_name(&log_file.cf),
                     max_ts: log_file.max_ts,
                     min_ts: log_file.min_ts,
                     max_key: Arc::from(log_file.take_end_key().into_boxed_slice()),

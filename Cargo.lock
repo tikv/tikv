@@ -1052,6 +1052,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "compact-log-backup"
+version = "0.1.0"
+dependencies = [
+ "async-compression",
+ "bytes",
+ "dashmap",
+ "derive_more",
+ "encryption",
+ "engine_rocks",
+ "engine_traits",
+ "external_storage",
+ "futures 0.3.15",
+ "futures-io",
+ "kvproto",
+ "pin-project",
+ "pprof",
+ "prometheus",
+ "protobuf",
+ "test_util",
+ "thiserror",
+ "tikv_util",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+ "tracing-active-tree",
+ "txn_types",
+]
+
+[[package]]
 name = "concurrency_manager"
 version = "0.0.1"
 dependencies = [
@@ -6585,12 +6615,12 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "backup",
- "backup-stream",
  "base64 0.13.0",
  "cc",
  "cdc",
  "clap 2.33.0",
  "collections",
+ "compact-log-backup",
  "concurrency_manager",
  "crossbeam",
  "crypto",

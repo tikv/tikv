@@ -7,12 +7,10 @@ use kvproto::brpb::{Gcs, StorageBackend, S3};
 
 use super::{compaction::CollectCompaction, execute::Execution, storage::LoadFromExt};
 use crate::{
-    compact::{
-        compaction::{CollectCompactionConfig, CompactLogExt, CompactWorker},
-        statistic::{CompactStatistic, LoadStatistic},
-        storage::StreamyMetaStorage,
-    },
-    compact_logs::ExecHooks,
+    compaction::{CollectCompactionConfig, CompactLogExt, CompactWorker},
+    execute::ExecHooks,
+    statistic::{CompactStatistic, LoadStatistic},
+    storage::StreamyMetaStorage,
 };
 
 #[tokio::test]
@@ -105,7 +103,7 @@ fn cli_playground() {
     impl ExecHooks for EventuallyStatistic {
         fn after_a_compaction_end(
             &mut self,
-            _cid: crate::compact_logs::CId,
+            _cid: crate::execute::CId,
             lst: LoadStatistic,
             cst: CompactStatistic,
         ) {
