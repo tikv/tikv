@@ -5,7 +5,10 @@ use std::{
     fmt::{self, Debug},
     ops::Bound,
     result,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use crossbeam::epoch::{self, default_collector, Guard};
@@ -15,6 +18,7 @@ use engine_traits::{
     CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
+use raftstore::coprocessor::RegionInfoProvider;
 use skiplist_rs::{
     base::{Entry, OwnedIter},
     SkipList,
@@ -24,7 +28,9 @@ use tikv_util::{config::VersionTrack, info};
 
 use crate::{
     background::{BackgroundTask, BgWorkManager, PdRangeHintService},
-    keys::{encode_key_for_eviction, InternalBytes},
+    keys::{
+        encode_key_for_boundary_with_mvcc, encode_key_for_boundary_without_mvcc, InternalBytes,
+    },
     memory_controller::MemoryController,
     range_manager::{LoadFailedReason, RangeCacheStatus, RangeManager},
     read::{RangeCacheIterator, RangeCacheSnapshot},
@@ -102,6 +108,14 @@ impl SkiplistHandle {
     ) -> OwnedIter<Arc<SkipList<InternalBytes, InternalBytes>>, InternalBytes, InternalBytes> {
         self.0.owned_iter()
     }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// A single global set of skiplists shared by all cached ranges
@@ -140,7 +154,12 @@ impl SkiplistEngine {
 
     pub(crate) fn delete_range(&self, range: &CacheRange) {
         DATA_CFS.iter().for_each(|&cf| {
-            let (start, end) = encode_key_for_eviction(range);
+            let (start, end) = if cf == CF_LOCK {
+                encode_key_for_boundary_without_mvcc(range)
+            } else {
+                encode_key_for_boundary_with_mvcc(range)
+            };
+
             let handle = self.cf_handle(cf);
             let mut iter = handle.iterator();
             let guard = &epoch::pin();
@@ -194,15 +213,37 @@ impl RangeCacheMemoryEngineCore {
         &mut self.range_manager
     }
 
-    pub(crate) fn has_cached_write_batch(&self, cache_range: &CacheRange) -> bool {
-        self.cached_write_batch.contains_key(cache_range)
+    // `cached_range` must not exist in the `cached_write_batch`
+    pub fn init_cached_write_batch(&mut self, cache_range: &CacheRange) {
+        assert!(
+            self.cached_write_batch
+                .insert(cache_range.clone(), vec![])
+                .is_none()
+        );
     }
 
-    pub(crate) fn take_cache_write_batch(
+    pub fn has_cached_write_batch(&self, cache_range: &CacheRange) -> bool {
+        self.cached_write_batch
+            .get(cache_range)
+            .map_or(false, |entries| !entries.is_empty())
+    }
+
+    pub(crate) fn take_cached_write_batch_entries(
         &mut self,
         cache_range: &CacheRange,
-    ) -> Option<Vec<(u64, RangeCacheWriteBatchEntry)>> {
-        self.cached_write_batch.remove(cache_range)
+    ) -> Vec<(u64, RangeCacheWriteBatchEntry)> {
+        std::mem::take(self.cached_write_batch.get_mut(cache_range).unwrap())
+    }
+
+    pub fn remove_cached_write_batch(&mut self, cache_range: &CacheRange) {
+        self.cached_write_batch
+            .remove(cache_range)
+            .unwrap_or_else(|| {
+                panic!(
+                    "range cannot be found in cached_write_batch: {:?}",
+                    cache_range
+                );
+            });
     }
 
     // ensure that the transfer from `pending_ranges_loading_data` to
@@ -211,7 +252,6 @@ impl RangeCacheMemoryEngineCore {
         core: &mut RwLockWriteGuard<'_, Self>,
         range: &CacheRange,
     ) {
-        fail::fail_point!("on_pending_range_completes_loading");
         assert!(!core.has_cached_write_batch(range));
         let range_manager = core.mut_range_manager();
         let (r, _, canceled) = range_manager
@@ -243,28 +283,51 @@ impl RangeCacheMemoryEngineCore {
 /// cached region), we resort to using a the disk engine's snapshot instead.
 #[derive(Clone)]
 pub struct RangeCacheMemoryEngine {
+    bg_work_manager: Arc<BgWorkManager>,
     pub(crate) core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
     pub(crate) rocks_engine: Option<RocksEngine>,
-    bg_work_manager: Arc<BgWorkManager>,
     memory_controller: Arc<MemoryController>,
     statistics: Arc<Statistics>,
     config: Arc<VersionTrack<RangeCacheEngineConfig>>,
+
+    // The increment amount of tombstones in the lock cf.
+    // When reaching to the threshold, a CleanLockTombstone task will be scheduled to clean lock cf
+    // tombstones.
+    pub(crate) lock_modification_bytes: Arc<AtomicU64>,
+
+    // `write_batch_id_allocator` is used to allocate id for each write batch
+    write_batch_id_allocator: Arc<AtomicU64>,
 }
 
 impl RangeCacheMemoryEngine {
     pub fn new(range_cache_engine_context: RangeCacheEngineContext) -> Self {
+        RangeCacheMemoryEngine::with_region_info_provider(range_cache_engine_context, None)
+    }
+
+    pub fn with_region_info_provider(
+        range_cache_engine_context: RangeCacheEngineContext,
+        region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
+    ) -> Self {
         info!("init range cache memory engine";);
         let core = Arc::new(RwLock::new(RangeCacheMemoryEngineCore::new()));
         let skiplist_engine = { core.read().engine().clone() };
 
-        let RangeCacheEngineContext { config, statistics } = range_cache_engine_context;
+        let RangeCacheEngineContext {
+            config,
+            statistics,
+            pd_client,
+        } = range_cache_engine_context;
         assert!(config.value().enabled);
         let memory_controller = Arc::new(MemoryController::new(config.clone(), skiplist_engine));
 
         let bg_work_manager = Arc::new(BgWorkManager::new(
             core.clone(),
+            pd_client,
             config.value().gc_interval.0,
+            config.value().load_evict_interval.0,
+            config.value().expected_region_size(),
             memory_controller.clone(),
+            region_info_provider,
         ));
 
         Self {
@@ -274,7 +337,13 @@ impl RangeCacheMemoryEngine {
             memory_controller,
             statistics,
             config,
+            lock_modification_bytes: Arc::default(),
+            write_batch_id_allocator: Arc::default(),
         }
+    }
+
+    pub fn expected_region_size(&self) -> usize {
+        self.config.value().expected_region_size()
     }
 
     pub fn new_range(&self, range: CacheRange) {
@@ -296,12 +365,13 @@ impl RangeCacheMemoryEngine {
     /// immediately due to some ongoing snapshots.
     pub fn evict_range(&self, range: &CacheRange) {
         let mut core = self.core.write();
-        if core.range_manager.evict_range(range) {
+        let ranges_to_delete = core.range_manager.evict_range(range);
+        if !ranges_to_delete.is_empty() {
             drop(core);
             // The range can be deleted directly.
             if let Err(e) = self
                 .bg_worker_manager()
-                .schedule_task(BackgroundTask::DeleteRange(vec![range.clone()]))
+                .schedule_task(BackgroundTask::DeleteRange(ranges_to_delete))
             {
                 error!(
                     "schedule delete range failed";
@@ -314,13 +384,19 @@ impl RangeCacheMemoryEngine {
 
     // It handles the pending range and check whether to buffer write for this
     // range.
-    pub(crate) fn prepare_for_apply(&self, range: &CacheRange) -> RangeCacheStatus {
-        let core = self.core.upgradable_read();
-        let range_manager = core.range_manager();
+    pub(crate) fn prepare_for_apply(
+        &self,
+        write_batch_id: u64,
+        range: &CacheRange,
+    ) -> RangeCacheStatus {
+        let mut core = self.core.write();
+        let range_manager = core.mut_range_manager();
         if range_manager.pending_ranges_in_loading_contains(range) {
+            range_manager.record_in_ranges_being_written(write_batch_id, range);
             return RangeCacheStatus::Loading;
         }
         if range_manager.contains_range(range) {
+            range_manager.record_in_ranges_being_written(write_batch_id, range);
             return RangeCacheStatus::Cached;
         }
 
@@ -352,8 +428,6 @@ impl RangeCacheMemoryEngine {
                 }
             })
         {
-            let mut core = RwLockUpgradableReadGuard::upgrade(core);
-
             if overlapped {
                 core.mut_range_manager().pending_ranges.swap_remove(idx);
                 return RangeCacheStatus::NotInCache;
@@ -376,12 +450,19 @@ impl RangeCacheMemoryEngine {
             range_manager
                 .pending_ranges_loading_data
                 .push_back((range.clone(), rocks_snap, false));
+
+            range_manager.record_in_ranges_being_written(write_batch_id, range);
+
             info!(
                 "Range to load";
                 "Tag" => &range.tag,
                 "Cached" => range_manager.ranges().len(),
                 "Pending" => range_manager.pending_ranges_loading_data.len(),
             );
+
+            // init cached write batch to cache the writes before loading complete
+            core.init_cached_write_batch(range);
+
             if let Err(e) = self
                 .bg_worker_manager()
                 .schedule_task(BackgroundTask::LoadRange)
@@ -409,7 +490,7 @@ impl RangeCacheMemoryEngine {
     // cached and which writes should be written directly.
     pub(crate) fn handle_pending_range_in_loading_buffer(
         &self,
-        seq: u64,
+        seq: &mut u64,
         pending_range_in_loading_buffer: Vec<RangeCacheWriteBatchEntry>,
     ) -> (Vec<RangeCacheWriteBatchEntry>, SkiplistEngine) {
         if !pending_range_in_loading_buffer.is_empty() {
@@ -420,10 +501,14 @@ impl RangeCacheMemoryEngine {
             if !group_entries_to_cache.is_empty() {
                 let mut core = RwLockUpgradableReadGuard::upgrade(core);
                 for (range, write_batches) in group_entries_to_cache {
-                    core.cached_write_batch
-                        .entry(range)
-                        .or_default()
-                        .extend(write_batches.into_iter().map(|e| (seq, e)));
+                    core.cached_write_batch.entry(range).or_default().extend(
+                        write_batches.into_iter().map(|e| {
+                            // We should confirm the sequence number for cached entries, and
+                            // also increased for each of them.
+                            *seq += 1;
+                            (*seq - 1, e)
+                        }),
+                    );
                 }
             }
             (entries_to_write, engine)
@@ -437,12 +522,17 @@ impl RangeCacheMemoryEngine {
         &self.bg_work_manager
     }
 
-    pub(crate) fn memory_controller(&self) -> Arc<MemoryController> {
+    pub fn memory_controller(&self) -> Arc<MemoryController> {
         self.memory_controller.clone()
     }
 
-    pub(crate) fn statistics(&self) -> Arc<Statistics> {
+    pub fn statistics(&self) -> Arc<Statistics> {
         self.statistics.clone()
+    }
+
+    pub fn alloc_write_batch_id(&self) -> u64 {
+        self.write_batch_id_allocator
+            .fetch_add(1, Ordering::Relaxed)
     }
 }
 
@@ -472,7 +562,17 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
 
     type DiskEngine = RocksEngine;
     fn set_disk_engine(&mut self, disk_engine: Self::DiskEngine) {
-        self.rocks_engine = Some(disk_engine);
+        self.rocks_engine = Some(disk_engine.clone());
+        if let Err(e) = self
+            .bg_worker_manager()
+            .schedule_task(BackgroundTask::SetRocksEngine(disk_engine))
+        {
+            error!(
+                "schedule set rocks_engine failed";
+                "err" => ?e,
+            );
+            assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+        }
     }
 
     type RangeHintService = PdRangeHintService;
@@ -504,21 +604,28 @@ impl Iterable for RangeCacheMemoryEngine {
 pub mod tests {
     use std::sync::Arc;
 
-    use engine_traits::CacheRange;
-    use tikv_util::config::VersionTrack;
+    use crossbeam::epoch;
+    use engine_traits::{CacheRange, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use tikv_util::config::{ReadableSize, VersionTrack};
 
-    use crate::{RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine};
+    use super::SkiplistEngine;
+    use crate::{
+        keys::{construct_key, construct_user_key, encode_key},
+        memory_controller::MemoryController,
+        InternalBytes, RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
+        ValueType,
+    };
 
     #[test]
     fn test_overlap_with_pending() {
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new(Arc::new(
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let range1 = CacheRange::new(b"k1".to_vec(), b"k3".to_vec());
         engine.load_range(range1).unwrap();
 
         let range2 = CacheRange::new(b"k1".to_vec(), b"k5".to_vec());
-        engine.prepare_for_apply(&range2);
+        engine.prepare_for_apply(1, &range2);
         assert!(
             engine.core.read().range_manager().pending_ranges.is_empty()
                 && engine
@@ -533,7 +640,7 @@ pub mod tests {
         engine.load_range(range1).unwrap();
 
         let range2 = CacheRange::new(b"k2".to_vec(), b"k5".to_vec());
-        engine.prepare_for_apply(&range2);
+        engine.prepare_for_apply(1, &range2);
         assert!(
             engine.core.read().range_manager().pending_ranges.is_empty()
                 && engine
@@ -543,5 +650,108 @@ pub mod tests {
                     .pending_ranges_loading_data
                     .is_empty()
         );
+    }
+
+    #[test]
+    fn test_delete_range() {
+        let delete_range_cf = |cf| {
+            let skiplist = SkiplistEngine::default();
+            let handle = skiplist.cf_handle(cf);
+
+            let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig {
+                enabled: true,
+                gc_interval: Default::default(),
+                load_evict_interval: Default::default(),
+                soft_limit_threshold: Some(ReadableSize(300)),
+                hard_limit_threshold: Some(ReadableSize(500)),
+                expected_region_size: Some(ReadableSize::mb(20)),
+            }));
+            let mem_controller = Arc::new(MemoryController::new(config.clone(), skiplist.clone()));
+
+            let guard = &epoch::pin();
+
+            let insert_kv = |k, mvcc, v: &[u8], seq| {
+                let user_key = construct_key(k, mvcc);
+                let mut key = encode_key(&user_key, seq, ValueType::Value);
+                let mut val = InternalBytes::from_vec(v.to_vec());
+                key.set_memory_controller(mem_controller.clone());
+                val.set_memory_controller(mem_controller.clone());
+                handle.insert(key, val, guard);
+            };
+
+            insert_kv(0, 1, b"val", 100);
+            insert_kv(1, 2, b"val", 101);
+            insert_kv(1, 3, b"val", 102);
+            insert_kv(2, 2, b"val", 103);
+            insert_kv(9, 2, b"val", 104);
+            insert_kv(10, 2, b"val", 105);
+
+            let start = construct_user_key(1);
+            let end = construct_user_key(10);
+            let range = CacheRange::new(start, end);
+            skiplist.delete_range(&range);
+
+            let mut iter = handle.iterator();
+            iter.seek_to_first(guard);
+            let expect = construct_key(0, 1);
+            let expect = encode_key(&expect, 100, ValueType::Value);
+            assert_eq!(iter.key(), &expect);
+            iter.next(guard);
+
+            let expect = construct_key(10, 2);
+            let expect = encode_key(&expect, 105, ValueType::Value);
+            assert_eq!(iter.key(), &expect);
+            iter.next(guard);
+            assert!(!iter.valid());
+        };
+        delete_range_cf(CF_DEFAULT);
+        delete_range_cf(CF_WRITE);
+    }
+
+    #[test]
+    fn test_delete_range_for_lock_cf() {
+        let skiplist = SkiplistEngine::default();
+        let lock_handle = skiplist.cf_handle(CF_LOCK);
+
+        let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig {
+            enabled: true,
+            gc_interval: Default::default(),
+            load_evict_interval: Default::default(),
+            soft_limit_threshold: Some(ReadableSize(300)),
+            hard_limit_threshold: Some(ReadableSize(500)),
+            expected_region_size: Some(ReadableSize::mb(20)),
+        }));
+        let mem_controller = Arc::new(MemoryController::new(config.clone(), skiplist.clone()));
+
+        let guard = &epoch::pin();
+
+        let insert_kv = |k, v: &[u8], seq| {
+            let mut key = encode_key(k, seq, ValueType::Value);
+            let mut val = InternalBytes::from_vec(v.to_vec());
+            key.set_memory_controller(mem_controller.clone());
+            val.set_memory_controller(mem_controller.clone());
+            lock_handle.insert(key, val, guard);
+        };
+
+        insert_kv(b"k", b"val", 100);
+        insert_kv(b"k1", b"val1", 101);
+        insert_kv(b"k2", b"val2", 102);
+        insert_kv(b"k3", b"val3", 103);
+        insert_kv(b"k4", b"val4", 104);
+
+        let range = CacheRange::new(b"k1".to_vec(), b"k4".to_vec());
+        skiplist.delete_range(&range);
+
+        let mut iter = lock_handle.iterator();
+        iter.seek_to_first(guard);
+        let expect = encode_key(b"k", 100, ValueType::Value);
+        assert_eq!(iter.key(), &expect);
+
+        iter.next(guard);
+        let expect = encode_key(b"k4", 104, ValueType::Value);
+        assert_eq!(iter.key(), &expect);
+
+        iter.next(guard);
+        assert!(!iter.valid());
     }
 }

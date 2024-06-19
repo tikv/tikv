@@ -126,8 +126,10 @@ mod tests {
         let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig {
             enabled: true,
             gc_interval: Default::default(),
+            load_evict_interval: Default::default(),
             soft_limit_threshold: Some(ReadableSize(300)),
             hard_limit_threshold: Some(ReadableSize(500)),
+            expected_region_size: Default::default(),
         }));
         let mc = MemoryController::new(config, skiplist_engine.clone());
         assert_eq!(mc.acquire(100), MemoryUsage::NormalUsage(100));
