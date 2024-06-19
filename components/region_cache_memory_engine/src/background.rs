@@ -1231,11 +1231,13 @@ impl Drop for Filter {
     fn drop(&mut self) {
         if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
             let guard = &epoch::pin();
+            self.metrics.filtered += 1;
             self.write_cf_handle
                 .remove(&InternalBytes::from_vec(cached_delete_key), guard);
         }
         if let Some(cached_delete_key) = self.cached_skiplist_delete_key.take() {
             let guard = &epoch::pin();
+            self.metrics.filtered += 1;
             self.write_cf_handle
                 .remove(&InternalBytes::from_vec(cached_delete_key), guard);
         }
@@ -1290,6 +1292,7 @@ impl Filter {
         // deleted at last to avoid these older keys visible.
         if v_type == ValueType::Deletion {
             if let Some(cache_skiplist_delete_key) = self.cached_skiplist_delete_key.take() {
+                self.metrics.filtered += 1;
                 // Reaching here in two cases:
                 // 1. There are two ValueType::Deletion in the same user key.
                 // 2. Two consecutive ValueType::Deletion of different user keys.
@@ -1307,10 +1310,12 @@ impl Filter {
             } = decode_key(cache_skiplist_delete_key);
             let guard = &epoch::pin();
             if cache_skiplist_delete_user_key == user_key {
+                self.metrics.filtered += 1;
                 self.write_cf_handle
                     .remove(&InternalBytes::from_bytes(key.clone()), guard);
                 return Ok(());
             } else {
+                self.metrics.filtered += 1;
                 self.write_cf_handle.remove(
                     &InternalBytes::from_vec(self.cached_skiplist_delete_key.take().unwrap()),
                     guard,
@@ -1336,6 +1341,7 @@ impl Filter {
             self.mvcc_key_prefix.extend_from_slice(mvcc_key_prefix);
             self.remove_older = false;
             if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
+                self.metrics.filtered += 1;
                 self.write_cf_handle
                     .remove(&InternalBytes::from_vec(cached_delete_key), guard);
             }
