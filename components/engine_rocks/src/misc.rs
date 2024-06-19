@@ -461,6 +461,7 @@ impl MiscExt for RocksEngine {
         self
     }
 
+    #[inline]
     fn evict_range(&self, _: &engine_traits::CacheRange) {}
 }
 
