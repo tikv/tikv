@@ -328,13 +328,16 @@ pub struct Config {
     pub raft_write_size_limit: ReadableSize,
 
     /// When the size of raft db writebatch is smaller than this value, write
-    /// will spin for a while, waiting until the size reaches this value.
-    pub raft_write_batch_size_thd: ReadableSize,
+    /// will yield for a while to make the writebatch larger, which will reduce
+    /// the write amplification.
+    #[doc(hidden)]
+    pub raft_write_batch_size_hint: ReadableSize,
 
     /// When the size of raft db writebatch is smaller than this value, write
-    /// will spin for a while, waiting until the size reaches this value.
+    /// will yield for a while. This is used to reduce the write amplification.
     /// Unit: nanoseconds.
-    pub raft_write_batch_size_spin: u64,
+    #[doc(hidden)]
+    pub raft_write_yield_interval: u64,
 
     pub waterfall_metrics: bool,
 
@@ -525,8 +528,8 @@ impl Default for Config {
             cmd_batch: true,
             cmd_batch_concurrent_ready_max_count: 1,
             raft_write_size_limit: ReadableSize::mb(1),
-            raft_write_batch_size_thd: ReadableSize::kb(16),
-            raft_write_batch_size_spin: 50,
+            raft_write_batch_size_hint: ReadableSize::kb(4),
+            raft_write_yield_interval: 50,
             waterfall_metrics: true,
             io_reschedule_concurrent_max_count: 4,
             io_reschedule_hotpot_duration: ReadableDuration::secs(5),
@@ -1198,11 +1201,11 @@ impl Config {
             .with_label_values(&["raft_write_size_limit"])
             .set(self.raft_write_size_limit.0 as f64);
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["raft_write_batch_size_thd"])
-            .set(self.raft_write_batch_size_thd.0 as f64);
+            .with_label_values(&["raft_write_batch_size_hint"])
+            .set(self.raft_write_batch_size_hint.0 as f64);
         CONFIG_RAFTSTORE_GAUGE
-            .with_label_values(&["raft_write_batch_size_spin"])
-            .set(self.raft_write_batch_size_spin as f64);
+            .with_label_values(&["raft_write_yield_interval"])
+            .set(self.raft_write_yield_interval as f64);
         CONFIG_RAFTSTORE_GAUGE
             .with_label_values(&["waterfall_metrics"])
             .set((self.waterfall_metrics as i32).into());
