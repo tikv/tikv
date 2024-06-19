@@ -10,7 +10,10 @@ use std::{
 
 use api_version::KvFormat;
 use futures::{compat::Stream01CompatExt, stream::StreamExt};
-use grpcio::{ChannelBuilder, Environment, ResourceQuota, Server as GrpcServer, ServerBuilder};
+use grpcio::{
+    ChannelBuilder, CompressionAlgorithms, Environment, ResourceQuota, Server as GrpcServer,
+    ServerBuilder,
+};
 use grpcio_health::{create_health, HealthService};
 use health_controller::HealthController;
 use kvproto::tikvpb::*;
@@ -102,6 +105,8 @@ where
             .http2_max_ping_strikes(i32::MAX) // For pings without data from clients.
             .keepalive_time(self.cfg.value().grpc_keepalive_time.into())
             .keepalive_timeout(self.cfg.value().grpc_keepalive_timeout.into())
+            .default_compression_algorithm(CompressionAlgorithms::GRPC_COMPRESS_GZIP)
+            .default_gzip_compression_level(4)
             .build_args();
 
         let sb = ServerBuilder::new(Arc::clone(&env))
