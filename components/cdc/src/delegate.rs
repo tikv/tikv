@@ -432,7 +432,7 @@ impl Delegate {
                         assert_eq!(*x.get(), start_ts);
                     }
                 },
-                PendingLock::Untrack { key } => match locks.entry(key) {
+                PendingLock::Untrack { key } => match locks.entry(key.clone()) {
                     BTreeMapEntry::Vacant(..) => {
                         warn!("untrack lock not found when try to finish prepare lock tracker";
                         "key" => %key);
