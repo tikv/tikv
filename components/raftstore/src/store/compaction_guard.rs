@@ -144,7 +144,7 @@ impl<P: RegionInfoProvider> CompactionGuardGenerator<P> {
             }
         };
         self.use_guard = if let Some((start, end)) = res {
-            match self.provider.get_regions_in_range(start, end) {
+            match self.provider.get_regions_in_range(start, end, false) {
                 Ok(regions) => {
                     // The regions returned from region_info_provider should have been sorted,
                     // but we sort it again just in case.

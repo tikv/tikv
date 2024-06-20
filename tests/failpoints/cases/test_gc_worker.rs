@@ -83,7 +83,12 @@ impl RegionInfoProvider for MockRegionInfoProvider {
     ) -> CopResult<()> {
         Ok(())
     }
-    fn get_regions_in_range(&self, _start_key: &[u8], _end_key: &[u8]) -> CopResult<Vec<Region>> {
+    fn get_regions_in_range(
+        &self,
+        _start_key: &[u8],
+        _end_key: &[u8],
+        _: bool,
+    ) -> CopResult<Vec<Region>> {
         Ok(vec![])
     }
 }
