@@ -47,7 +47,7 @@ use crate::{
     initializer::KvEntry,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::{Conn, ConnId, RequestId, FeatureGate},
+    service::{Conn, ConnId, FeatureGate, RequestId},
     txn_source::TxnSource,
     Error, Result,
 };
@@ -1455,7 +1455,7 @@ mod tests {
             let (event, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
             rx_wrap.set(Some(rx));
             if let CdcEvent::Event(mut e) = event.unwrap().0 {
-                assert_eq!(e.get_request_id(), request_id);
+                assert_eq!(e.get_request_id(), request_id.0);
                 let event = e.event.take().unwrap();
                 match event {
                     Event_oneof_event::Error(err) => err,
@@ -1605,7 +1605,9 @@ mod tests {
         assert!(delegate.handle.is_observing());
 
         // Subscribe with an invalid epoch.
-        delegate.subscribe(new_downstream(RequestId(1), 2)).unwrap_err();
+        delegate
+            .subscribe(new_downstream(RequestId(1), 2))
+            .unwrap_err();
         assert_eq!(delegate.downstreams().len(), 1);
 
         // Unsubscribe all downstreams.
