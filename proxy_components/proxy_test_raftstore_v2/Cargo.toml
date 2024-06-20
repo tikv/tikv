@@ -54,9 +54,8 @@ resource_control = { workspace = true }
 resource_metering = { workspace = true }
 security = { workspace = true }
 server = { workspace = true }
-slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
-# better to not use slog-global, but pass in the logger
-slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
+slog = { workspace = true }
+slog-global = { workspace = true }
 tempfile = "3.0"
 test_pd_client = { workspace = true }
 test_raftstore = { workspace = true }
