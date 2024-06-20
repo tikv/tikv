@@ -47,7 +47,7 @@ use crate::{
     initializer::KvEntry,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::{Conn, ConnId, FeatureGate},
+    service::{Conn, ConnId, RequestId, FeatureGate},
     txn_source::TxnSource,
     Error, Result,
 };
@@ -133,7 +133,7 @@ pub struct Downstream {
     pub region_epoch: RegionEpoch,
     /// The request ID set by CDC to identify events corresponding different
     /// requests.
-    pub req_id: u64,
+    pub req_id: RequestId,
     pub conn_id: ConnId,
 
     pub kv_api: ChangeDataRequestKvApi,
@@ -167,7 +167,7 @@ impl Downstream {
     pub fn new(
         peer: String,
         region_epoch: RegionEpoch,
-        req_id: u64,
+        req_id: RequestId,
         conn_id: ConnId,
         kv_api: ChangeDataRequestKvApi,
         filter_loop: bool,
@@ -194,7 +194,7 @@ impl Downstream {
 
     /// Sink events to the downstream.
     pub fn sink_event(&self, mut event: Event, force: bool) -> Result<()> {
-        event.set_request_id(self.req_id);
+        event.set_request_id(self.req_id as u64);
         if self.sink.is_none() {
             info!("cdc drop event, no sink";
                 "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => self.req_id);
@@ -680,7 +680,7 @@ impl Delegate {
                 v.push(self.region_id, advanced_to);
                 if !features.contains(FeatureGate::BATCH_RESOLVED_TS) {
                     let k = (d.conn_id, self.region_id);
-                    advance.dispersed.insert(k, d.req_id);
+                    advance.dispersed.insert(k, d.req_id.0);
                 }
             };
 
@@ -746,7 +746,7 @@ impl Delegate {
 
     pub(crate) fn convert_to_grpc_events(
         region_id: u64,
-        request_id: u64,
+        request_id: RequestId,
         entries: Vec<Option<KvEntry>>,
         filter_loop: bool,
         observed_range: &ObservedRange,
@@ -835,7 +835,7 @@ impl Delegate {
                 };
                 CdcEvent::Event(Event {
                     region_id,
-                    request_id,
+                    request_id.0,
                     event: Some(Event_oneof_event::Entries(event_entries)),
                     ..Default::default()
                 })
@@ -906,7 +906,7 @@ impl Delegate {
             let event = Event {
                 region_id: self.region_id,
                 index,
-                request_id: downstream.req_id,
+                request_id: downstream.req_id.0,
                 event: Some(Event_oneof_event::Entries(EventEntries {
                     entries: filtered_entries.into(),
                     ..Default::default()
@@ -964,7 +964,7 @@ impl Delegate {
             }
             let event = Event {
                 region_id: self.region_id,
-                request_id: downstream.req_id,
+                request_id: downstream.req_id.0,
                 event: Some(Event_oneof_event::Entries(EventEntries {
                     entries: filtered_entries.into(),
                     ..Default::default()
@@ -1427,7 +1427,7 @@ mod tests {
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (sink, mut drain) = crate::channel::channel(1, quota.clone());
         let rx = drain.drain();
-        let request_id = 123;
+        let request_id = RequestId(123);
         let mut downstream = Downstream::new(
             String::new(),
             region_epoch,
@@ -1548,8 +1548,8 @@ mod tests {
 
     #[test]
     fn test_delegate_subscribe_unsubscribe() {
-        let new_downstream = |id: u64, region_version: u64| {
-            let peer = format!("{}", id);
+        let new_downstream = |id: RequestId, region_version: u64| {
+            let peer = format!("{:?}", id);
             let mut epoch = RegionEpoch::default();
             epoch.set_conf_ver(region_version);
             epoch.set_version(region_version);
@@ -1572,14 +1572,14 @@ mod tests {
         assert!(delegate.handle.is_observing());
 
         // Subscribe once.
-        let downstream1 = new_downstream(1, 1);
+        let downstream1 = new_downstream(RequestId(1), 1);
         let downstream1_id = downstream1.id;
         delegate.subscribe(downstream1).unwrap();
         assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
         assert!(delegate.handle.is_observing());
 
         // Subscribe twice and then unsubscribe the second downstream.
-        let downstream2 = new_downstream(2, 1);
+        let downstream2 = new_downstream(RequestId(2), 1);
         let downstream2_id = downstream2.id;
         delegate.subscribe(downstream2).unwrap();
         assert!(!delegate.unsubscribe(downstream2_id, None));
@@ -1587,7 +1587,7 @@ mod tests {
         assert!(delegate.handle.is_observing());
 
         // `on_region_ready` when the delegate isn't resolved.
-        delegate.subscribe(new_downstream(1, 2)).unwrap();
+        delegate.subscribe(new_downstream(RequestId(1), 2)).unwrap();
         let mut region = Region::default();
         region.mut_region_epoch().set_conf_ver(1);
         region.mut_region_epoch().set_version(1);
@@ -1605,7 +1605,7 @@ mod tests {
         assert!(delegate.handle.is_observing());
 
         // Subscribe with an invalid epoch.
-        delegate.subscribe(new_downstream(1, 2)).unwrap_err();
+        delegate.subscribe(new_downstream(RequestId(1), 2)).unwrap_err();
         assert_eq!(delegate.downstreams().len(), 1);
 
         // Unsubscribe all downstreams.

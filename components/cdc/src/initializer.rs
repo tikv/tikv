@@ -59,7 +59,7 @@ use crate::{
     endpoint::Deregister,
     metrics::*,
     old_value::{near_seek_old_value, OldValueCursors},
-    service::ConnId,
+    service::{ConnId, RequestId},
     Error, Result, Task,
 };
 
@@ -86,7 +86,7 @@ pub(crate) enum Scanner<S: Snapshot> {
 pub(crate) struct Initializer<E> {
     pub(crate) region_id: u64,
     pub(crate) conn_id: ConnId,
-    pub(crate) request_id: u64,
+    pub(crate) request_id: RequestId,
     pub(crate) checkpoint_ts: TimeStamp,
     pub(crate) region_epoch: RegionEpoch,
 
@@ -714,7 +714,7 @@ mod tests {
         let initializer = Initializer {
             region_id: 1,
             conn_id: ConnId::new(),
-            request_id: 0,
+            request_id: RequestId(0),
             checkpoint_ts: 1.into(),
             region_epoch: RegionEpoch::default(),
 
