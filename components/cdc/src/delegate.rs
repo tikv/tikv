@@ -75,7 +75,7 @@ pub enum DownstreamState {
     /// It's just created and rejects change events and resolved timestamps.
     Uninitialized,
     /// It has got a snapshot for incremental scan, and change events will be
-    /// accepted. However it still rejects resolved timestamps.
+    /// accepted. However, it still rejects resolved timestamps.
     Initializing,
     /// Incremental scan is finished so that resolved timestamps are acceptable
     /// now.
@@ -319,7 +319,7 @@ impl MiniLock {
 /// A CDC delegate of a raftstore region peer.
 ///
 /// It converts raft commands into CDC events and broadcast to downstreams.
-/// It also track trancation on the fly in order to compute resolved ts.
+/// It also tracks transaction on the fly in order to compute resolved ts.
 pub struct Delegate {
     pub region_id: u64,
     pub handle: ObserveHandle,
