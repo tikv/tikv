@@ -1,6 +1,6 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{MvccProperties, MvccPropertiesExt, Result};
+use engine_traits::{DefaultCfProperties, MvccProperties, MvccPropertiesExt, Result};
 use txn_types::TimeStamp;
 
 use crate::{decode_properties::DecodeProperties, RocksEngine, RocksTtlProperties, UserProperties};
@@ -13,8 +13,36 @@ pub const PROP_NUM_PUTS: &str = "tikv.num_puts";
 pub const PROP_NUM_DELETES: &str = "tikv.num_deletes";
 pub const PROP_NUM_VERSIONS: &str = "tikv.num_versions";
 pub const PROP_MAX_ROW_VERSIONS: &str = "tikv.max_row_versions";
+pub const PROP_NUM_VALUE_IN_BLOB: &str = "tikv.num_value_in_blob";
+pub const PROP_BLOB_FILES: &str = "tikv.blob_files";
 pub const PROP_ROWS_INDEX: &str = "tikv.rows_index";
 pub const PROP_ROWS_INDEX_DISTANCE: u64 = 10000;
+
+pub struct RocksDefaultCfProperties;
+
+impl RocksDefaultCfProperties {
+    pub fn encode(default_props: &DefaultCfProperties) -> UserProperties {
+        let mut props = UserProperties::new();
+        props.encode_u64(PROP_MIN_TS, default_props.min_ts.into_inner());
+        props.encode_u64(PROP_MAX_TS, default_props.max_ts.into_inner());
+        props.encode_u64(PROP_NUM_ROWS, default_props.num_rows);
+        props.encode_u64(PROP_NUM_VALUE_IN_BLOB, default_props.num_value_in_blob);
+        props.encode_u64s(PROP_BLOB_FILES, default_props.blob_files.iter().copied());
+        props
+    }
+
+    pub fn decode<T: DecodeProperties>(props: &T) -> Result<DefaultCfProperties> {
+        let mut res = DefaultCfProperties::default();
+        res.min_ts = props.decode_u64(PROP_MIN_TS)?.into();
+        res.max_ts = props.decode_u64(PROP_MAX_TS)?.into();
+        res.num_rows = props.decode_u64(PROP_NUM_ROWS)?;
+        res.num_value_in_blob = props.decode_u64(PROP_NUM_VALUE_IN_BLOB)?;
+        props.decode_u64s(PROP_BLOB_FILES, |n| {
+            res.blob_files.insert(n);
+        })?;
+        Ok(res)
+    }
+}
 
 pub struct RocksMvccProperties;
 

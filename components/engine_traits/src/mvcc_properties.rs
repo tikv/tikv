@@ -2,9 +2,30 @@
 
 use std::cmp;
 
+use collections::HashSet;
 use txn_types::TimeStamp;
 
 use crate::TtlProperties;
+
+pub struct DefaultCfProperties {
+    pub min_ts: TimeStamp,
+    pub max_ts: TimeStamp,
+    pub num_rows: u64,
+    pub num_value_in_blob: u64,
+    pub blob_files: HashSet<u64>,
+}
+
+impl Default for DefaultCfProperties {
+    fn default() -> Self {
+        Self {
+            min_ts: TimeStamp::max(),
+            max_ts: TimeStamp::zero(),
+            num_rows: 0,
+            num_value_in_blob: 0,
+            blob_files: Default::default(),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct MvccProperties {

@@ -88,6 +88,14 @@ pub trait DecodeProperties {
         let buf = self.decode(k)?;
         IndexHandles::decode(buf)
     }
+
+    fn decode_u64s(&self, k: &str, mut consume: impl FnMut(u64)) -> Result<()> {
+        let k = &mut k.as_bytes();
+        while !k.is_empty() {
+            consume(number::decode_var_u64(k)?);
+        }
+        Ok(())
+    }
 }
 
 impl DecodeProperties for rocksdb::UserCollectedProperties {
