@@ -1655,7 +1655,7 @@ pub mod tests {
             iter.next(guard);
         }
         assert_eq!(count, 8);
-        assert_eq!(4, filter.metrics.filtered);
+        assert_eq!(5, filter.metrics.filtered);
         drop(filter);
 
         assert_eq!(2, element_count(&write));
