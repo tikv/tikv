@@ -30,6 +30,8 @@ use crate::{
     RangeCacheMemoryEngine,
 };
 
+// The max snapshot number that can exist in the RocksDB. This is typically used
+// for search.
 pub const MAX_SEQUENCE_NUMBER: u64 = (1 << 56) - 1;
 
 #[derive(PartialEq)]
