@@ -35,6 +35,9 @@ pub fn validate_kv_api(kv_api: ChangeDataRequestKvApi, api_version: ApiVersion) 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct ConnId(usize);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RequestId(pub u64);
+
 impl ConnId {
     pub fn new() -> ConnId {
         ConnId(CONNECTION_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
@@ -89,7 +92,7 @@ pub struct Conn {
 
 #[derive(PartialEq, Eq, Hash)]
 struct DownstreamKey {
-    request_id: u64,
+    request_id: RequestId,
     region_id: u64,
 }
 
@@ -143,7 +146,7 @@ impl Conn {
         &self.sink
     }
 
-    pub fn get_downstream(&self, request_id: u64, region_id: u64) -> Option<DownstreamId> {
+    pub fn get_downstream(&self, request_id: RequestId, region_id: u64) -> Option<DownstreamId> {
         let key = DownstreamKey {
             request_id,
             region_id,
@@ -153,7 +156,7 @@ impl Conn {
 
     pub fn subscribe(
         &mut self,
-        request_id: u64,
+        request_id: RequestId,
         region_id: u64,
         downstream_id: DownstreamId,
         downstream_state: Arc<AtomicCell<DownstreamState>>,
@@ -174,7 +177,7 @@ impl Conn {
         }
     }
 
-    pub fn unsubscribe(&mut self, request_id: u64, region_id: u64) -> Option<DownstreamId> {
+    pub fn unsubscribe(&mut self, request_id: RequestId, region_id: u64) -> Option<DownstreamId> {
         let key = DownstreamKey {
             request_id,
             region_id,
@@ -182,7 +185,7 @@ impl Conn {
         self.downstreams.remove(&key).map(|value| value.id)
     }
 
-    pub fn unsubscribe_request(&mut self, request_id: u64) -> Vec<(u64, DownstreamId)> {
+    pub fn unsubscribe_request(&mut self, request_id: RequestId) -> Vec<(u64, DownstreamId)> {
         let mut downstreams = Vec::new();
         self.downstreams.retain(|key, value| -> bool {
             if key.request_id == request_id {
@@ -196,7 +199,7 @@ impl Conn {
 
     pub fn iter_downstreams<F>(&self, mut f: F)
     where
-        F: FnMut(u64, u64, DownstreamId, &Arc<AtomicCell<DownstreamState>>),
+        F: FnMut(RequestId, u64, DownstreamId, &Arc<AtomicCell<DownstreamState>>),
     {
         for (key, value) in &self.downstreams {
             f(key.request_id, key.region_id, value.id, &value.state);
@@ -335,21 +338,18 @@ impl Service {
         conn_id: ConnId,
     ) -> Result<(), String> {
         let observed_range =
-            match ObservedRange::new(request.start_key.clone(), request.end_key.clone()) {
-                Ok(observed_range) => observed_range,
-                Err(e) => {
-                    warn!(
+            ObservedRange::new(request.start_key.clone(), request.end_key.clone()).unwrap_or_else(|e| {
+                warn!(
                         "cdc invalid observed start key or end key version";
                         "downstream" => ?peer, "region_id" => request.region_id,
                         "error" => ?e,
                     );
-                    ObservedRange::default()
-                }
-            };
+                ObservedRange::default()
+            });
         let downstream = Downstream::new(
             peer.to_owned(),
             request.get_region_epoch().clone(),
-            request.request_id,
+            RequestId(request.request_id),
             conn_id,
             request.kv_api,
             request.filter_loop,
@@ -371,13 +371,13 @@ impl Service {
         let task = if request.region_id != 0 {
             Task::Deregister(Deregister::Region {
                 conn_id,
-                request_id: request.request_id,
+                request_id: RequestId(request.request_id),
                 region_id: request.region_id,
             })
         } else {
             Task::Deregister(Deregister::Request {
                 conn_id,
-                request_id: request.request_id,
+                request_id: RequestId(request.request_id),
             })
         };
         scheduler.schedule(task).map_err(|e| format!("{:?}", e))

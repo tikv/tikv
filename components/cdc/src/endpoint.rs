@@ -64,7 +64,7 @@ use crate::{
     initializer::Initializer,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::{validate_kv_api, Conn, ConnId, FeatureGate},
+    service::{validate_kv_api, Conn, ConnId, RequestId, FeatureGate},
     CdcObserver, Error,
 };
 
@@ -75,16 +75,16 @@ pub enum Deregister {
     Conn(ConnId),
     Request {
         conn_id: ConnId,
-        request_id: u64,
+        request_id: RequestId,
     },
     Region {
         conn_id: ConnId,
-        request_id: u64,
+        request_id: RequestId,
         region_id: u64,
     },
     Downstream {
         conn_id: ConnId,
-        request_id: u64,
+        request_id: RequestId,
         region_id: u64,
         downstream_id: DownstreamId,
         err: Option<Error>,
@@ -355,7 +355,7 @@ impl ResolvedRegionHeap {
 pub(crate) struct Advance {
     // multiplexing means one region can be subscribed multiple times in one `Conn`,
     // in which case progresses are grouped by (ConnId, request_id).
-    pub(crate) multiplexing: HashMap<(ConnId, u64), ResolvedRegionHeap>,
+    pub(crate) multiplexing: HashMap<(ConnId, RequestId), ResolvedRegionHeap>,
 
     // exclusive means one region can only be subscribed one time in one `Conn`,
     // in which case progresses are grouped by ConnId.
