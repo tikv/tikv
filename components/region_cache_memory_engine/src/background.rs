@@ -62,6 +62,7 @@ use crate::{
         LabelRule, RegionLabelAddedCb, RegionLabelRulesManager, RegionLabelServiceBuilder,
     },
     write_batch::RangeCacheWriteBatchEntry,
+    BackgroundTask::ManualLoad,
 };
 
 /// Try to extract the key and `u64` timestamp from `encoded_key`.
@@ -97,6 +98,7 @@ pub enum BackgroundTask {
     CleanLockTombstone(u64),
     SetRocksEngine(RocksEngine),
     Audit((Vec<(RangeCacheSnapshot, u64)>, RocksSnapshot)),
+    ManualLoad(CacheRange),
 }
 
 impl Display for BackgroundTask {
@@ -115,6 +117,9 @@ impl Display for BackgroundTask {
                 .finish(),
             BackgroundTask::Audit(_) => f.debug_struct("audit").finish(),
             BackgroundTask::SetRocksEngine(_) => f.debug_struct("SetDiskEngine").finish(),
+            BackgroundTask::ManualLoad(ref r) => {
+                f.debug_struct("ManualLoad").field("range", r).finish()
+            }
         }
     }
 }
@@ -140,6 +145,7 @@ pub struct BgWorkManager {
     worker: Worker,
     scheduler: Scheduler<BackgroundTask>,
     delete_range_scheduler: Scheduler<BackgroundTask>,
+    manual_load_scheduler: Scheduler<BackgroundTask>,
     tick_stopper: Option<(JoinHandle<()>, Sender<bool>)>,
     core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
 }
@@ -234,7 +240,7 @@ impl BgWorkManager {
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
         let worker = Worker::new("range-cache-background-worker");
-        let (runner, delete_range_scheduler) = BackgroundRunner::new(
+        let (runner, delete_range_scheduler, manual_load_scheduler) = BackgroundRunner::new(
             core.clone(),
             memory_controller,
             region_info_provider,
@@ -253,6 +259,7 @@ impl BgWorkManager {
             worker,
             scheduler,
             delete_range_scheduler,
+            manual_load_scheduler,
             tick_stopper: Some((h, tx)),
             core,
         }
@@ -269,13 +276,20 @@ impl BgWorkManager {
 
     pub fn start_bg_hint_service(&self, range_hint_service: PdRangeHintService) {
         let core = self.core.clone();
+        let scheduler = self.manual_load_scheduler.clone();
         range_hint_service.start(self.worker.remote(), move |cache_range: &CacheRange| {
             let mut engine = core.write();
             info!(
                 "load range due to hint service";
                 "range" => ?cache_range,
             );
-            engine.mut_range_manager().load_range(cache_range.clone())?;
+            if let Err(e) = scheduler.schedule(BackgroundTask::ManualLoad(cache_range.clone())) {
+                error!(
+                    "schedule manual load failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+            }
             // TODO (afeinberg): This does not actually load the range. The load happens
             // the apply thread begins to apply raft entries. To force this (for read-only
             // use-cases) we should propose a No-Op command.
@@ -735,6 +749,8 @@ pub struct BackgroundRunner {
     delete_range_scheduler: Scheduler<BackgroundTask>,
     delete_range_worker: Worker,
 
+    manual_load_worker: Worker,
+
     gc_range_remote: Remote<yatp::task::future::TaskCell>,
     gc_range_worker: Worker,
 
@@ -756,6 +772,7 @@ pub struct BackgroundRunner {
 
 impl Drop for BackgroundRunner {
     fn drop(&mut self) {
+        self.manual_load_worker.stop();
         self.range_load_worker.stop();
         self.delete_range_worker.stop();
         self.gc_range_worker.stop();
@@ -775,7 +792,7 @@ impl BackgroundRunner {
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
         expected_region_size: usize,
-    ) -> (Self, Scheduler<BackgroundTask>) {
+    ) -> (Self, Scheduler<BackgroundTask>, Scheduler<BackgroundTask>) {
         let range_load_worker = Builder::new("background-range-load-worker")
             // Range load now is implemented sequentially, so we must use exactly one thread to handle it.
             // todo(SpadeA): if the load speed is a bottleneck, we may consider to use multiple threads to load ranges.
@@ -787,6 +804,14 @@ impl BackgroundRunner {
         let delete_range_runner = DeleteRangeRunner::new(engine.clone());
         let delete_range_scheduler =
             delete_range_worker.start_with_timer("delete-range-runner", delete_range_runner);
+
+        let manual_load_worker = Worker::new("manual-load-worker");
+        let manual_load_runner = ManualLoadRunner::new(
+            region_info_provider.as_ref().unwrap().clone(),
+            engine.clone(),
+        );
+        let manual_load_scheduler =
+            manual_load_worker.start_with_timer("manual-load-runner", manual_load_runner);
 
         let audit_worker = Worker::new("audit-worker");
         let audit_remote = audit_worker.remote();
@@ -823,6 +848,7 @@ impl BackgroundRunner {
                 range_load_remote,
                 delete_range_worker,
                 delete_range_scheduler: delete_range_scheduler.clone(),
+                manual_load_worker,
                 gc_range_worker,
                 gc_range_remote,
                 load_evict_worker,
@@ -835,6 +861,7 @@ impl BackgroundRunner {
                 rocks_engine: None,
             },
             delete_range_scheduler,
+            manual_load_scheduler,
         )
     }
 }
@@ -1351,6 +1378,7 @@ impl Runnable for BackgroundRunner {
 
                 self.lock_cleanup_remote.spawn(f);
             }
+            BackgroundTask::ManualLoad(_) => unreachable!(),
         }
     }
 }
@@ -1475,6 +1503,78 @@ impl RunnableWithTimer for DeleteRangeRunner {
 
     fn get_interval(&self) -> Duration {
         Duration::from_millis(500)
+    }
+}
+
+pub struct ManualLoadRunner {
+    ranges: BTreeSet<CacheRange>,
+    region_info_provider: Arc<dyn RegionInfoProvider>,
+    engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
+}
+
+impl ManualLoadRunner {
+    fn new(
+        region_info_provider: Arc<dyn RegionInfoProvider>,
+        engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
+    ) -> Self {
+        Self {
+            ranges: BTreeSet::default(),
+            region_info_provider,
+            engine,
+        }
+    }
+
+    fn load_regions_in_range(&self, range: &CacheRange) {
+        match self.region_info_provider.get_regions_in_range(
+            &range.start[1..],
+            &range.end[1..],
+            true,
+        ) {
+            Ok(regions) => {
+                let mut core = self.engine.write();
+                let mut range_manager = core.mut_range_manager();
+                for r in &regions {
+                    let range_to_load = CacheRange::from_region(r);
+                    if let Err(e) = range_manager.load_range(range_to_load.clone()) {
+                        info!("manual load range failed"; "cache_range" => ?&range_to_load, "err" => ?e);
+                    } else {
+                        info!("manual load range succeed"; "cache_range" => ?&range_to_load);
+                    }
+                }
+            }
+            Err(e) => {
+                error!(
+                    "get regions in range failed";
+                    "error" => ?e,
+                );
+            }
+        }
+    }
+}
+
+impl Runnable for ManualLoadRunner {
+    type Task = BackgroundTask;
+
+    fn run(&mut self, task: Self::Task) {
+        match task {
+            BackgroundTask::ManualLoad(r) => {
+                self.load_regions_in_range(&r);
+                self.ranges.insert(r);
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl RunnableWithTimer for ManualLoadRunner {
+    fn on_timeout(&mut self) {
+        for r in &self.ranges {
+            self.load_regions_in_range(r);
+        }
+    }
+
+    fn get_interval(&self) -> Duration {
+        Duration::from_secs(20)
     }
 }
 

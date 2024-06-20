@@ -83,7 +83,6 @@ impl std::fmt::Debug for RangeCacheWriteBatch {
 
 impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
     fn from(engine: &RangeCacheMemoryEngine) -> Self {
-        let id = rand::random::<u64>();
         Self {
             id: engine.alloc_write_batch_id(),
             range_cache_status: RangeCacheStatus::NotInCache,
@@ -103,7 +102,6 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
 
 impl RangeCacheWriteBatch {
     pub fn with_capacity(engine: &RangeCacheMemoryEngine, cap: usize) -> Self {
-        let id = rand::random::<u64>();
         Self {
             id: engine.alloc_write_batch_id(),
             range_cache_status: RangeCacheStatus::NotInCache,
@@ -188,7 +186,6 @@ impl RangeCacheWriteBatch {
         let mut have_entry_applied = false;
         // Some entries whose ranges may be marked as evicted above, but it does not
         // matter, they will be deleted later.
-        let mut have_entry = false;
         let res = entries_to_write
             .into_iter()
             .chain(std::mem::take(&mut self.buffer))
