@@ -38,7 +38,6 @@ impl<T: Into<ErrorKind>> From<T> for Error {
 }
 
 pub trait TraceResultExt {
-    #[track_caller]
     fn trace_err(self) -> Self;
 }
 

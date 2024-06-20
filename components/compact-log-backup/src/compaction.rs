@@ -1,10 +1,11 @@
-use std::{collections::HashMap, marker::PhantomData, sync::Arc, task::ready};
+use std::{collections::HashMap, marker::PhantomData, sync::Arc, task::ready, time::Duration};
 
 use derive_more::Display;
 use engine_traits::{
     CfName, ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,
 };
 use external_storage::ExternalStorage;
+use file_system::Sha256Reader;
 use futures::{
     io::{AllowStdIo, Cursor},
     lock::Mutex,
@@ -13,7 +14,8 @@ use kvproto::import_sstpb::SstMeta;
 use tikv_util::{
     codec::stream_event::Iterator as KvStreamIter,
     config::ReadableSize,
-    stream::{retry_all_ext, RetryExt},
+    retry_expr,
+    stream::{retry_all_ext, retry_ext, RetryExt},
     time::Instant,
 };
 use tokio_stream::Stream;
@@ -270,8 +272,8 @@ impl<DB> CompactWorker<DB> {
     }
 }
 
-struct WrittenSst {
-    content: Vec<u8>,
+struct WrittenSst<S> {
+    content: S,
     meta: kvproto::brpb::File,
     physical_size: u64,
 }
@@ -360,7 +362,7 @@ where
         cf: CfName,
         sorted_items: &[Record],
         ext: &mut CompactLogExt<'_>,
-    ) -> Result<WrittenSst> {
+    ) -> Result<WrittenSst<<DB::SstWriter as SstWriter>::ExternalSstFileReader>> {
         let mut w = <DB as SstExt>::SstWriterBuilder::new()
             .set_cf(cf)
             .set_compression_type(Self::COMPRESSION)
@@ -395,12 +397,6 @@ where
             stat.keys_out += info.num_entries();
             stat.physical_bytes_out += info.file_size();
         });
-        let (mut rd, hasher) = file_system::Sha256Reader::new(out).adapt_err()?;
-        // This will copy about 128MiB of memory... But collecting it is necessary for
-        // retrying...
-        let mut out = Vec::with_capacity(info.file_size() as usize);
-        std::io::copy(&mut rd, &mut out)?;
-        hasher.lock().unwrap().finish().adapt_err()?;
 
         let result = WrittenSst {
             content: out,
@@ -409,6 +405,24 @@ where
         };
 
         Ok(result)
+    }
+
+    async fn upload_compaction_artefact(
+        &mut self,
+        sst: &mut WrittenSst<<DB::SstWriter as SstWriter>::ExternalSstFileReader>,
+    ) -> Result<()> {
+        use engine_traits::ExternalSstFileReader;
+        sst.content.reset()?;
+        let (rd, hasher) = Sha256Reader::new(&mut sst.content).adapt_err()?;
+        self.output
+            .write(
+                &sst.meta.name,
+                external_storage::UnpinReader(Box::new(AllowStdIo::new(rd))),
+                sst.physical_size,
+            )
+            .await?;
+        sst.meta.sha256 = hasher.lock().unwrap().finish().adapt_err()?.to_vec();
+        Ok(())
     }
 
     #[tracing::instrument(skip_all, fields(c=%c))]
@@ -435,34 +449,16 @@ where
         );
         let begin = Instant::now();
         assert!(!sorted_items.is_empty());
-        let sst = self
+        let mut sst = self
             .write_sst(&out_name, c.cf, sorted_items.as_slice(), &mut ext)
             .await?;
 
         ext.with_compact_stat(|stat| stat.write_sst_duration += begin.saturating_elapsed());
 
         let begin = Instant::now();
-        retry_all_ext(
-            {
-                || {
-                    let out = &self.output;
-                    let out_name = out_name.clone();
-                    let content = &sst.content;
-                    let size = sst.physical_size;
-                    async move {
-                        out.write(
-                            &out_name,
-                            external_storage::UnpinReader(Box::new(Cursor::new(&content))),
-                            size,
-                        )
-                        .await
-                    }
-                }
-            },
-            RetryExt::default(),
-        )
-        .await?;
-
+        // `retry_ext` isn't available here, it will complain that we return something
+        // captures.
+        retry_expr! { self.upload_compaction_artefact(&mut sst) }.await?;
         ext.with_compact_stat(|stat| stat.save_duration += begin.saturating_elapsed());
         return Ok(());
     }

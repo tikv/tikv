@@ -30,7 +30,7 @@ pub trait SstReader: RefIterable + Sized + Send {
 /// SstWriter is used to create sst files that can be added to database later.
 pub trait SstWriter: Send {
     type ExternalSstFileInfo: ExternalSstFileInfo;
-    type ExternalSstFileReader: std::io::Read + Send;
+    type ExternalSstFileReader: ExternalSstFileReader;
 
     /// Add key, value to currently opened file
     /// REQUIRES: key is after any previously added key according to comparator.
@@ -48,6 +48,10 @@ pub trait SstWriter: Send {
 
     /// Finalize writing to sst file and read the contents into the buffer.
     fn finish_read(self) -> Result<(Self::ExternalSstFileInfo, Self::ExternalSstFileReader)>;
+}
+
+pub trait ExternalSstFileReader: std::io::Read + Send {
+    fn reset(&mut self) -> Result<()>;
 }
 
 // compression type used for write sst file
