@@ -433,7 +433,10 @@ impl Delegate {
                     }
                 },
                 PendingLock::Untrack { key } => match locks.entry(key) {
-                    BTreeMapEntry::Vacant(..) => unreachable!(),
+                    BTreeMapEntry::Vacant(..) => {
+                        warn!("untrack lock not found when try to finish prepare lock tracker";
+                        "key" => %key);
+                    }
                     BTreeMapEntry::Occupied(x) => {
                         x.remove();
                     }
