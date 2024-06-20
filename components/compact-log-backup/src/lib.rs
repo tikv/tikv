@@ -10,7 +10,7 @@ pub mod execute;
 mod test;
 
 mod util {
-    use std::{future::Future, task::Poll};
+    use std::{fmt::Display, future::Future, task::Poll};
 
     use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
@@ -118,5 +118,18 @@ mod util {
             "RAFT" | "raft" => CF_RAFT,
             _ => "ERR_CF",
         }
+    }
+
+    #[derive(Debug)]
+    struct HexU64(u64);
+
+    impl Display for HexU64 {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "{:016X}", self.0)
+        }
+    }
+
+    pub fn aligned_u64(v: u64) -> impl Display {
+        HexU64(v)
     }
 }

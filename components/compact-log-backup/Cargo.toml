@@ -15,7 +15,7 @@ tracing = { workspace = true }
 tracing-active-tree = { workspace = true }
 txn_types = { workspace = true }
 tikv_util = { workspace = true }
-
+hex = "0.4"
 kvproto = { workspace = true }
 protobuf = { version = "2.8", features = ["bytes"] }
 tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }

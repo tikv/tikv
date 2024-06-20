@@ -151,12 +151,31 @@ impl<E> Default for RetryExt<E> {
 }
 
 #[doc(hidden)]
-pub use rand::thread_rng as __thread_rng;
-#[doc(hidden)]
-pub use rand::Rng as __rand_Rng;
-#[doc(hidden)]
-pub use tokio::time::sleep as __tokio_sleep;
+pub mod __macro_helper {
+    #[doc(hidden)]
+    pub use rand::thread_rng as __thread_rng;
+    #[doc(hidden)]
+    pub use rand::Rng as __rand_Rng;
+    #[doc(hidden)]
+    pub use tokio::time::sleep as __tokio_sleep;
+}
 
+#[derive(Debug)]
+pub struct JustRetry<E>(pub E);
+
+impl<E> RetryError for JustRetry<E> {
+    fn is_retryable(&self) -> bool {
+        true
+    }
+}
+
+/// retry_expr! executes retry over an expression itself. The expression will be
+/// evaluated multi-times. This would be useful when your action cannot be
+/// sealed into a `FnMut`, say, the action captures some local variables, rustc
+/// will complain that `FnMut` cannot return reference to things it captures.
+///
+/// When possible, prefer using `retry_ext`, which is a normal function. Normal
+/// functions are more friendly to static analysis.
 #[macro_export]
 macro_rules! retry_expr {
     ($action:expr) => {
@@ -164,26 +183,31 @@ macro_rules! retry_expr {
     };
     ($action:expr, $ext:expr) => {
         async {
+            use $crate::stream::{RetryError, __macro_helper};
+
             let mut ext: RetryExt<_> = $ext;
             let max_retry_times = ext.max_retry_times;
             let mut retry_wait_dur = Duration::from_secs(1);
             let mut retry_time = 0;
             loop {
                 match { $action }.await {
-                    Ok(r) => break Ok(r),
+                    Ok(r) => return Ok(r),
                     Err(e) => {
                         if let Some(ref mut f) = ext.on_failure {
                             f(&e);
                         }
+                        if !RetryError::is_retryable(&e) {
+                            return Err(e);
+                        }
                         retry_time += 1;
                         if retry_time > max_retry_times {
-                            break Err(e);
+                            return Err(e);
                         }
                     }
                 }
-                use $crate::stream::__rand_Rng;
-                let backoff = $crate::stream::__thread_rng().gen_range(0..1000);
-                $crate::stream::__tokio_sleep(retry_wait_dur + Duration::from_millis(backoff))
+                use __macro_helper::__rand_Rng;
+                let backoff = __macro_helper::__thread_rng().gen_range(0..1000);
+                __macro_helper::__tokio_sleep(retry_wait_dur + Duration::from_millis(backoff))
                     .await;
                 retry_wait_dur = ext.max_retry_delay.min(retry_wait_dur * 2);
             }
@@ -193,12 +217,18 @@ macro_rules! retry_expr {
 
 /// Retires a future execution. Comparing to `retry`, this version allows more
 /// configurations.
-pub async fn retry_all_ext<'a, G, T, F, E>(mut action: G, ext: RetryExt<E>) -> Result<T, E>
+pub async fn retry_all_ext<'a, G, T, F, E>(
+    mut action: G,
+    ext: RetryExt<JustRetry<E>>,
+) -> Result<T, E>
 where
     G: FnMut() -> F,
     F: Future<Output = Result<T, E>>,
 {
-    retry_expr!(action(), ext).await
+    use futures::TryFutureExt;
+    retry_expr!(action().map_err(JustRetry), ext)
+        .await
+        .map_err(|err| err.0)
 }
 
 /// Retires a future execution. Comparing to `retry`, this version allows more
@@ -209,36 +239,14 @@ where
     F: Future<Output = Result<T, E>>,
     E: RetryError,
 {
-    let max_retry_times = (|| {
+    ext.max_retry_times = (|| {
         fail::fail_point!("retry_count", |t| t
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(MAX_RETRY_TIMES));
-        MAX_RETRY_TIMES
+            .and_then(|v| dbg!(v.parse::<usize>().ok()))
+            .unwrap_or(ext.max_retry_times));
+        ext.max_retry_times
     })();
 
-    let mut retry_wait_dur = Duration::from_secs(1);
-    let mut retry_time = 0;
-    loop {
-        match action().await {
-            Ok(r) => return Ok(r),
-            Err(e) => {
-                if let Some(ref mut f) = ext.on_failure {
-                    f(&e);
-                }
-                if !e.is_retryable() {
-                    return Err(e);
-                }
-                retry_time += 1;
-                if retry_time > max_retry_times {
-                    return Err(e);
-                }
-            }
-        }
-
-        let backoff = thread_rng().gen_range(0..1000);
-        sleep(retry_wait_dur + Duration::from_millis(backoff)).await;
-        retry_wait_dur = MAX_RETRY_DELAY.min(retry_wait_dur * 2);
-    }
+    retry_expr!(action(), ext).await
 }
 
 // Return an error if the future does not finish by the timeout

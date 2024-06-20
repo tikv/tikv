@@ -4,18 +4,19 @@ use derive_more::Display;
 use engine_traits::{
     CfName, ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,
 };
-use external_storage::ExternalStorage;
+use external_storage::{ExternalStorage, UnpinReader};
 use file_system::Sha256Reader;
 use futures::{
+    future::TryFutureExt,
     io::{AllowStdIo, Cursor},
     lock::Mutex,
 };
-use kvproto::import_sstpb::SstMeta;
+use kvproto::{brpb, import_sstpb::SstMeta};
 use tikv_util::{
     codec::stream_event::Iterator as KvStreamIter,
     config::ReadableSize,
     retry_expr,
-    stream::{retry_all_ext, retry_ext, RetryExt},
+    stream::{retry_all_ext, retry_ext, JustRetry, RetryExt},
     time::Instant,
 };
 use tokio_stream::Stream;
@@ -27,9 +28,12 @@ use super::{
     storage::{LogFile, LogFileId},
     util::{Cooperate, ExecuteAllExt},
 };
-use crate::errors::{OtherErrExt, TraceResultExt};
+use crate::{
+    errors::{OtherErrExt, TraceResultExt},
+    util,
+};
 
-#[derive(Debug, Display)]
+#[derive(Debug, Display, Clone)]
 #[display(fmt = "compaction(region={},size={},cf={})", region_id, size, cf)]
 pub struct Compaction {
     pub source: Vec<LogFileId>,
@@ -409,6 +413,7 @@ where
 
     async fn upload_compaction_artefact(
         &mut self,
+        c: &Compaction,
         sst: &mut WrittenSst<<DB::SstWriter as SstWriter>::ExternalSstFileReader>,
     ) -> Result<()> {
         use engine_traits::ExternalSstFileReader;
@@ -422,6 +427,24 @@ where
             )
             .await?;
         sst.meta.sha256 = hasher.lock().unwrap().finish().adapt_err()?.to_vec();
+        let mut meta = brpb::LogFileCompactionMeta::new();
+        meta.set_compaction(c.brpb_compaction());
+        meta.mut_output().push(sst.meta.clone());
+        let meta_name = format!(
+            "{}_{}_{}.compaction.meta",
+            util::aligned_u64(c.input_min_ts),
+            util::aligned_u64(c.input_max_ts),
+            hex::encode(&sst.meta.sha256),
+        );
+        let mut meta_bytes = vec![];
+        protobuf::Message::write_to_vec(&meta, &mut meta_bytes)?;
+        self.output
+            .write(
+                &meta_name,
+                UnpinReader(Box::new(Cursor::new(&meta_bytes))),
+                meta_bytes.len() as u64,
+            )
+            .await;
         Ok(())
     }
 
@@ -458,19 +481,59 @@ where
         let begin = Instant::now();
         // `retry_ext` isn't available here, it will complain that we return something
         // captures.
-        retry_expr! { self.upload_compaction_artefact(&mut sst) }.await?;
+        retry_expr! { self.upload_compaction_artefact(&c, &mut sst).map_err(JustRetry) }
+            .await
+            .map_err(|err| err.0)?;
         ext.with_compact_stat(|stat| stat.save_duration += begin.saturating_elapsed());
         return Ok(());
     }
 }
 
 mod meta {
-    use kvproto::import_sstpb::SstMeta;
+    use std::{
+        collections::{hash_map::Entry, HashMap},
+        sync::Arc,
+    };
+
+    use kvproto::brpb;
 
     use super::Compaction;
+    use crate::storage::LogFileId;
 
-    struct CompactMeta {
-        from_compaction: Compaction,
-        generated: SstMeta,
+    impl Compaction {
+        pub fn brpb_compaction(&self) -> brpb::LogFileCompaction {
+            let mut out = brpb::LogFileCompaction::default();
+            let mut source = HashMap::<Arc<str>, brpb::Source>::new();
+            for id in self.source {
+                match source.entry(Arc::clone(&id.name)) {
+                    Entry::Occupied(mut o) => o.get_mut().mut_spans().push(id.span()),
+                    Entry::Vacant(v) => {
+                        let mut so = brpb::Source::new();
+                        so.mut_spans().push(id.span());
+                        so.path = id.name.to_string();
+                        v.insert(so);
+                    }
+                }
+            }
+            out.set_region_id(self.region_id);
+            out.set_cf(self.cf.to_owned());
+            out.set_size(self.size);
+            out.set_input_min_ts(self.input_min_ts);
+            out.set_input_max_ts(self.input_max_ts);
+            out.set_compact_from_ts(self.compact_from_ts);
+            out.set_compact_to_ts(self.compact_to_ts);
+            out.set_min_key(self.min_key.to_vec());
+            out.set_max_key(self.max_key.to_vec());
+            out
+        }
+    }
+
+    impl LogFileId {
+        pub fn span(&self) -> brpb::Span {
+            let mut span = brpb::Span::new();
+            span.set_offset(self.offset);
+            span.set_length(self.length);
+            span
+        }
     }
 }
