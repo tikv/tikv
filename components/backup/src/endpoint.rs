@@ -1109,8 +1109,9 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             }
         };
         let backend = Arc::<dyn ExternalStorage>::from(backend);
-        let concurrency = self.config_manager.0.read().unwrap().num_threads;
-        self.pool.borrow_mut().adjust_with(concurrency);
+        let cur_num_threads = self.config_manager.0.read().unwrap().num_threads;
+        self.pool.borrow_mut().adjust_with(cur_num_threads);
+        let concurrency = cur_num_threads * 3;
         let (tx, rx) = async_channel::bounded(1);
         for _ in 0..concurrency {
             self.spawn_backup_worker(
