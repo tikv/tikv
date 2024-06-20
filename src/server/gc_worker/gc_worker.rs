@@ -252,7 +252,7 @@ fn get_regions_for_range_of_keys(
     if keys.len() >= 2 {
         let start = keys.first().unwrap().as_encoded();
         let end = keys.last().unwrap().as_encoded();
-        let regions = box_try!(region_provider.get_regions_in_range(start, end))
+        let regions = box_try!(region_provider.get_regions_in_range(start, end, false))
             .into_iter()
             .filter(|r| find_peer(r, store_id).is_some())
             .peekable()
