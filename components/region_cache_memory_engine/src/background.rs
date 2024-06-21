@@ -213,6 +213,7 @@ impl BgWorkManager {
         core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
         pd_client: Arc<dyn PdClient>,
         gc_interval: Duration,
+        reload_period: Duration,
         load_evict_interval: Duration,
         expected_region_size: usize,
         memory_controller: Arc<MemoryController>,
@@ -223,6 +224,7 @@ impl BgWorkManager {
             core.clone(),
             memory_controller,
             region_info_provider,
+            reload_period,
             expected_region_size,
         );
         let scheduler = worker.start_with_timer("range-cache-engine-background", runner);
@@ -760,6 +762,7 @@ impl BackgroundRunner {
         engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
+        reload_period: Duration,
         expected_region_size: usize,
     ) -> (Self, Scheduler<BackgroundTask>, Scheduler<BackgroundTask>) {
         let range_load_worker = Builder::new("background-range-load-worker")
@@ -778,6 +781,7 @@ impl BackgroundRunner {
         let manual_load_runner = ManualLoadRunner::new(
             region_info_provider.as_ref().unwrap().clone(),
             engine.clone(),
+            reload_period,
         );
         let manual_load_scheduler =
             manual_load_worker.start_with_timer("manual-load-runner", manual_load_runner);
@@ -1213,17 +1217,20 @@ pub struct ManualLoadRunner {
     ranges: BTreeSet<CacheRange>,
     region_info_provider: Arc<dyn RegionInfoProvider>,
     engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
+    reload_period: Duration,
 }
 
 impl ManualLoadRunner {
     fn new(
         region_info_provider: Arc<dyn RegionInfoProvider>,
         engine: Arc<RwLock<RangeCacheMemoryEngineCore>>,
+        reload_period: Duration,
     ) -> Self {
         Self {
             ranges: BTreeSet::default(),
             region_info_provider,
             engine,
+            reload_period,
         }
     }
 
@@ -1277,7 +1284,7 @@ impl RunnableWithTimer for ManualLoadRunner {
     }
 
     fn get_interval(&self) -> Duration {
-        Duration::from_secs(20)
+        self.reload_period
     }
 }
 
