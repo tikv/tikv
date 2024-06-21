@@ -27,7 +27,6 @@ use kvproto::{
     metapb::RegionEpoch,
     raft_serverpb::{RaftLocalState, RaftMessage},
 };
-use ordered_float::OrderedFloat;
 use parking_lot::Mutex;
 use protobuf::Message;
 use raft::eraftpb::Entry;
@@ -389,7 +388,7 @@ struct WriteTaskBatchRecorder {
     history: VecDeque<usize>,
     sum: usize,
     avg: usize,
-    trend: OrderedFloat<f64>,
+    trend: f64,
     /// Yield interval in microseconds.
     yield_interval: u64,
     /// The count of yield.
@@ -406,7 +405,7 @@ impl WriteTaskBatchRecorder {
             capacity: 30, // default
             sum: 0,
             avg: 0,
-            trend: OrderedFloat(1.0),
+            trend: 1.0,
             yield_interval,
             yield_count: 0,
             yield_max_count: 1,
@@ -419,7 +418,7 @@ impl WriteTaskBatchRecorder {
     }
 
     #[cfg(test)]
-    fn get_trend(&self) -> OrderedFloat<f64> {
+    fn get_trend(&self) -> f64 {
         self.trend
     }
 
@@ -444,13 +443,10 @@ impl WriteTaskBatchRecorder {
 
         if len >= self.capacity && self.batch_size_hint > 0 {
             // The trend ranges from 0.5 to 2.0.
-            self.trend = std::cmp::min(
-                OrderedFloat(2.0),
-                OrderedFloat(self.avg as f64 / self.batch_size_hint as f64),
-            );
-            self.trend = self.trend.max(OrderedFloat(0.5));
+            let trend = self.avg as f64 / self.batch_size_hint as f64;
+            self.trend = trend.clamp(0.5, 2.0);
         } else {
-            self.trend = OrderedFloat(1.0);
+            self.trend = 1.0;
         }
     }
 
