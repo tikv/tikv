@@ -1657,14 +1657,18 @@ mod tests {
         let provider = MockRegionInfoProvider::new(regions);
 
         // Test ranges covering all regions
-        let regions = provider.get_regions_in_range(b"k01", b"k15").unwrap();
+        let regions = provider
+            .get_regions_in_range(b"k01", b"k15", false)
+            .unwrap();
         assert!(regions.len() == 3);
         assert!(regions[0].id == 1);
         assert!(regions[1].id == 2);
         assert!(regions[2].id == 3);
 
         // Test ranges covering partial regions
-        let regions = provider.get_regions_in_range(b"k04", b"k10").unwrap();
+        let regions = provider
+            .get_regions_in_range(b"k04", b"k10", false)
+            .unwrap();
         assert!(regions.len() == 2);
         assert!(regions[0].id == 2);
         assert!(regions[1].id == 3);

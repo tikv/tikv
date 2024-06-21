@@ -43,7 +43,6 @@ use crate::{
         LabelRule, RegionLabelAddedCb, RegionLabelRulesManager, RegionLabelServiceBuilder,
     },
     write_batch::RangeCacheWriteBatchEntry,
-    BackgroundTask::ManualLoad,
 };
 
 /// Try to extract the key and `u64` timestamp from `encoded_key`.
@@ -126,7 +125,7 @@ pub struct BgWorkManager {
     delete_range_scheduler: Scheduler<BackgroundTask>,
     manual_load_scheduler: Scheduler<BackgroundTask>,
     tick_stopper: Option<(JoinHandle<()>, Sender<bool>)>,
-    core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
+    _core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
 }
 
 impl Drop for BgWorkManager {
@@ -242,7 +241,7 @@ impl BgWorkManager {
             delete_range_scheduler,
             manual_load_scheduler,
             tick_stopper: Some((h, tx)),
-            core,
+            _core: core,
         }
     }
 
@@ -1864,10 +1863,11 @@ pub mod tests {
         iter_opts.set_lower_bound(&range.start, 0);
         iter_opts.set_upper_bound(&range.end, 0);
 
-        let (worker, _) = BackgroundRunner::new(
+        let (worker, ..) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
+            RangeCacheEngineConfig::config_for_test().reload_period.0,
             engine.expected_region_size(),
         );
         worker.core.gc_range(&range, 40, 100);
@@ -1938,10 +1938,11 @@ pub mod tests {
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
 
-        let (worker, _) = BackgroundRunner::new(
+        let (worker, ..) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
+            RangeCacheEngineConfig::config_for_test().reload_period.0,
             engine.expected_region_size(),
         );
 
@@ -2100,10 +2101,11 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let (worker, _) = BackgroundRunner::new(
+        let (worker, ..) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
+            RangeCacheEngineConfig::config_for_test().reload_period.0,
             engine.expected_region_size(),
         );
         let filter = worker.core.gc_range(&range1, 100, 100);
@@ -2115,10 +2117,11 @@ pub mod tests {
         assert_eq!(4, element_count(&default));
         assert_eq!(4, element_count(&write));
 
-        let (worker, _) = BackgroundRunner::new(
+        let (worker, ..) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
+            RangeCacheEngineConfig::config_for_test().reload_period.0,
             engine.expected_region_size(),
         );
         worker.core.gc_range(&range2, 100, 100);
@@ -2163,10 +2166,11 @@ pub mod tests {
         assert_eq!(1, element_count(&default));
         assert_eq!(2, element_count(&write));
 
-        let (worker, _) = BackgroundRunner::new(
+        let (worker, ..) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
+            RangeCacheEngineConfig::config_for_test().reload_period.0,
             engine.expected_region_size(),
         );
 
@@ -2261,10 +2265,11 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let (worker, _) = BackgroundRunner::new(
+        let (worker, ..) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller,
             None,
+            RangeCacheEngineConfig::config_for_test().reload_period.0,
             engine.expected_region_size(),
         );
         let s1 = engine.snapshot(range.clone(), 10, u64::MAX);
@@ -2388,10 +2393,11 @@ pub mod tests {
         engine.new_range(r1);
         engine.new_range(r2);
 
-        let (mut runner, _) = BackgroundRunner::new(
+        let (mut runner, ..) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller,
             None,
+            RangeCacheEngineConfig::config_for_test().reload_period.0,
             engine.expected_region_size(),
         );
         let ranges = runner.core.ranges_for_gc().unwrap();

@@ -163,22 +163,22 @@ fn test_region_collection_get_regions_in_range() {
     for node_id in cluster.get_node_ids() {
         let engine = &region_info_providers[&node_id];
 
-        let result = engine.get_regions_in_range(b"", b"").unwrap();
+        let result = engine.get_regions_in_range(b"", b"", false).unwrap();
         assert_eq!(result, regions);
 
-        let result = engine.get_regions_in_range(b"k1", b"k3").unwrap();
+        let result = engine.get_regions_in_range(b"k1", b"k3", false).unwrap();
         assert_eq!(&result, &regions[1..3]);
 
-        let result = engine.get_regions_in_range(b"k3", b"k8").unwrap();
+        let result = engine.get_regions_in_range(b"k3", b"k8", false).unwrap();
         assert_eq!(&result, &regions[2..5]);
 
-        let result = engine.get_regions_in_range(b"k6", b"k8").unwrap();
+        let result = engine.get_regions_in_range(b"k6", b"k8", false).unwrap();
         assert_eq!(&result, &regions[3..5]);
 
-        let result = engine.get_regions_in_range(b"k7", b"k99").unwrap();
+        let result = engine.get_regions_in_range(b"k7", b"k99", false).unwrap();
         assert_eq!(&result, &regions[4..6]);
 
-        let result = engine.get_regions_in_range(b"k99", b"").unwrap();
+        let result = engine.get_regions_in_range(b"k99", b"", false).unwrap();
         assert_eq!(&result, &regions[5..6]);
     }
 
