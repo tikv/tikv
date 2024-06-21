@@ -785,7 +785,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let downstream_state = downstream.get_state();
 
         // The connection can be deregistered by some internal errors. Clients will
-        // be always notified by closing the GRPC server stream, so it's OK to drop
+        // always be notified by closing the GRPC server stream, so it's OK to drop
         // the task directly.
         let conn = match self.connections.get_mut(&conn_id) {
             Some(conn) => conn,
@@ -831,7 +831,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let release_scan_task_counter = tikv_util::DeferContext::new(move || {
             scan_task_counter.fetch_sub(1, Ordering::Relaxed);
         });
-        if scan_task_count + 1 > self.config.incremental_scan_concurrency_limit as isize {
+        if scan_task_count == self.config.incremental_scan_concurrency_limit as isize {
             debug!("cdc rejects registration, too many scan tasks";
                 "region_id" => region_id,
                 "conn_id" => ?conn_id,

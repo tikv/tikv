@@ -319,7 +319,7 @@ impl MiniLock {
 /// A CDC delegate of a raftstore region peer.
 ///
 /// It converts raft commands into CDC events and broadcast to downstreams.
-/// It also track trancation on the fly in order to compute resolved ts.
+/// It also tracks transactions on the fly in order to compute resolved ts.
 pub struct Delegate {
     pub region_id: u64,
     pub handle: ObserveHandle,
@@ -508,7 +508,7 @@ impl Delegate {
     /// Return error if subscribe fails and the `Delegate` won't be changed.
     pub fn subscribe(&mut self, downstream: Downstream) -> StdResult<(), (Error, Downstream)> {
         if let LockTracker::Prepared { ref region, .. } = &self.lock_tracker {
-            // Check if the downstream is out dated.
+            // Check if the downstream is outdated.
             if let Err(e) = Self::check_epoch_on_ready(&downstream, region) {
                 return Err((e, downstream));
             }
