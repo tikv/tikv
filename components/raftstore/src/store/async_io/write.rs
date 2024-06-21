@@ -463,9 +463,8 @@ impl WriteTaskBatchRecorder {
     fn yield_for_a_while(&mut self) {
         self.yield_count += 1;
 
-        let trend: f64 = self.trend.into();
         yield_at_least(Duration::from_nanos(
-            (self.yield_interval as f64 * (1.0 / trend)) as u64,
+            (self.yield_interval as f64 * (1.0 / self.trend)) as u64,
         ));
     }
 }
