@@ -3,12 +3,14 @@
 use std::{
     io::{Error as IoError, ErrorKind, Read, Result as IoResult, Seek, SeekFrom, Write},
     pin::Pin,
+    task::ready,
 };
 
 use file_system::File;
 use futures_util::{
     io::AsyncRead,
     task::{Context, Poll},
+    AsyncWrite,
 };
 use kvproto::encryptionpb::EncryptionMethod;
 use openssl::symm::{Cipher as OCipher, Crypter as OCrypter, Mode};
@@ -171,6 +173,36 @@ impl EncrypterWriter<File> {
     #[inline]
     pub fn sync_all(&self) -> IoResult<()> {
         self.0.sync_all()
+    }
+}
+
+// SAFETY: all callings to `Pin::map_unchecked_mut` are trivial projection.
+impl<W: AsyncWrite> AsyncWrite for DecrypterWriter<W> {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<IoResult<usize>> {
+        unsafe { self.map_unchecked_mut(|this| &mut this.0) }.poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+        unsafe { self.map_unchecked_mut(|this| &mut this.0) }.poll_flush(cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+        unsafe { self.map_unchecked_mut(|this| &mut this.0) }.poll_close(cx)
+    }
+}
+
+// SAFETY: all callings to `Pin::map_unchecked_mut` are trivial projection.
+impl<W: AsyncWrite> AsyncWrite for EncrypterWriter<W> {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<IoResult<usize>> {
+        unsafe { self.map_unchecked_mut(|this| &mut this.0) }.poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+        unsafe { self.map_unchecked_mut(|this| &mut this.0) }.poll_flush(cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+        unsafe { self.map_unchecked_mut(|this| &mut this.0) }.poll_close(cx)
     }
 }
 
@@ -366,6 +398,64 @@ impl<W: Seek> Seek for CrypterWriter<W> {
     }
 }
 
+impl<W: AsyncWrite> AsyncWrite for CrypterWriter<W> {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<IoResult<usize>> {
+        // SAFETY: trivial projection.
+        let (mut writer, crypt) = unsafe {
+            let this = self.get_unchecked_mut();
+            (Pin::new_unchecked(&mut this.writer), &mut this.crypter)
+        };
+        let crypter = match crypt.as_mut() {
+            Some(crypter) => crypter,
+            None => {
+                return writer.poll_write(cx, buf);
+            }
+        };
+
+        // All encrypted content must be written. The write uses an internal buffer to
+        // store the encrypted content. For async writing, the write may be
+        // suspended. We need a status to record whether we have already encrypted
+        // something.
+        loop {
+            match crypter.async_write {
+                AsyncWriteState::Consuming { count } => {
+                    let res = ready!(writer.as_mut().poll_write(cx, &crypter.buffer[..count]));
+                    crypter.async_write = AsyncWriteState::Idle;
+
+                    // We need to reset the status on failed or partial write.
+                    let n = *res.as_ref().unwrap_or(&0);
+                    if n < count {
+                        let missing = count - n;
+                        let new_offset = crypter.offset - missing as u64;
+                        // Match the behavior of sync `write`. Rollback offset for partital writes.
+                        // NOTE: it is also possible to have the semantic of `write_all` or
+                        // `BufWriter`.
+                        crypter.lazy_reset_crypter(new_offset);
+                    }
+                    res?;
+                    return Ok(n).into();
+                }
+                AsyncWriteState::Idle => {
+                    let buf = crypter.do_crypter(buf)?;
+                    let count = buf.len();
+                    crypter.async_write = AsyncWriteState::Consuming { count };
+                }
+            }
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+        let writer = unsafe { Pin::new_unchecked(&mut self.get_unchecked_mut().writer) };
+        AsyncWrite::poll_flush(writer, cx)
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+        // SAFETY: trivial projection.
+        let writer = unsafe { Pin::new_unchecked(&mut self.get_unchecked_mut().writer) };
+        AsyncWrite::poll_close(writer, cx)
+    }
+}
+
 impl CrypterWriter<File> {
     #[inline]
     pub fn sync_all(&self) -> IoResult<()> {
@@ -420,6 +510,14 @@ struct CrypterCore {
     block_size: usize,
 
     buffer: Vec<u8>,
+
+    async_write: AsyncWriteState,
+}
+
+#[derive(PartialEq, Eq, Debug)]
+enum AsyncWriteState {
+    Consuming { count: usize },
+    Idle,
 }
 
 impl CrypterCore {
@@ -434,6 +532,7 @@ impl CrypterCore {
             crypter: None,
             block_size: 0,
             buffer: Vec::new(),
+            async_write: AsyncWriteState::Idle,
         })
     }
 
@@ -514,6 +613,15 @@ impl CrypterCore {
     }
 
     pub fn do_crypter(&mut self, buf: &[u8]) -> IoResult<&[u8]> {
+        assert_eq!(
+            self.async_write,
+            AsyncWriteState::Idle,
+            concat!(
+                "unreachable: try to override the encrypted content when there is pending async writing.",
+                "(canceled future? concurrency call to `write`?)"
+            )
+        );
+
         if self.crypter.is_none() {
             self.reset_crypter(self.offset)?;
         }
@@ -551,9 +659,10 @@ impl CrypterCore {
 
 #[cfg(test)]
 mod tests {
-    use std::{cmp::min, io::Cursor};
+    use std::{cmp::min, io::Cursor, task::Waker};
 
     use byteorder::{BigEndian, ByteOrder};
+    use matches::assert_matches;
     use openssl::rand;
 
     use super::*;
@@ -562,6 +671,7 @@ mod tests {
     struct DecoratedCursor {
         cursor: Cursor<Vec<u8>>,
         read_size: usize,
+        inject_write_err: Option<Box<dyn FnMut() -> std::io::Result<()>>>,
     }
 
     impl DecoratedCursor {
@@ -569,6 +679,7 @@ mod tests {
             Self {
                 cursor: Cursor::new(buff.to_vec()),
                 read_size,
+                inject_write_err: None,
             }
         }
 
@@ -585,6 +696,32 @@ mod tests {
         ) -> Poll<IoResult<usize>> {
             let len = min(self.read_size, buf.len());
             Poll::Ready(self.cursor.read(&mut buf[..len]))
+        }
+    }
+
+    impl AsyncWrite for DecoratedCursor {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<IoResult<usize>> {
+            if let Some(err_func) = &mut self.inject_write_err {
+                err_func()?;
+            }
+            let max_size = self.read_size;
+            let n = self
+                .cursor
+                .get_mut()
+                .write(&buf[..buf.len().min(max_size)])?;
+            Ok(n).into()
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+            Ok(()).into()
+        }
+
+        fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+            Ok(()).into()
         }
     }
 
@@ -844,8 +981,150 @@ mod tests {
         }
     }
 
+    async fn test_async_write() {
+        use futures_util::AsyncWriteExt;
+
+        let methods = [
+            EncryptionMethod::Plaintext,
+            EncryptionMethod::Aes128Ctr,
+            EncryptionMethod::Aes192Ctr,
+            EncryptionMethod::Aes256Ctr,
+            #[cfg(feature = "sm4")]
+            EncryptionMethod::Sm4Ctr,
+        ];
+        let iv = Iv::new_ctr().unwrap();
+        let size = 128;
+        let mut plain_text = vec![0; size];
+        rand::rand_bytes(&mut plain_text).unwrap();
+
+        for method in methods {
+            let key = generate_data_key(method).unwrap().1;
+            let pipe = DecoratedCursor::new(vec![], 17);
+            let mut writer = EncrypterWriter::new(pipe, method, &key, iv).unwrap();
+            AsyncWriteExt::write_all(&mut writer, plain_text.as_slice())
+                .await
+                .unwrap();
+            futures_util::AsyncWriteExt::flush(&mut writer)
+                .await
+                .unwrap();
+            let enc_buf = writer.finalize().unwrap().cursor.into_inner();
+            if method == EncryptionMethod::Plaintext {
+                assert_eq!(enc_buf, plain_text);
+            } else {
+                assert_ne!(enc_buf, plain_text);
+            }
+            let dec_pipe = DecoratedCursor::new(vec![], 15);
+            let mut writer = DecrypterWriter::new(dec_pipe, method, &key, iv).unwrap();
+            AsyncWriteExt::write_all(&mut writer, enc_buf.as_slice())
+                .await
+                .unwrap();
+            futures_util::AsyncWriteExt::flush(&mut writer)
+                .await
+                .unwrap();
+            let dec_buf = writer.finalize().unwrap().cursor.into_inner();
+            assert_eq!(plain_text, dec_buf);
+        }
+    }
+
     #[test]
-    fn test_async_read() {
-        futures::executor::block_on(test_poll_read());
+    #[should_panic(
+        expected = "try to override the encrypted content when there is pending async writing."
+    )]
+    fn test_abort_poll() {
+        struct YieldOnce<R>(R, bool);
+        impl<R: AsyncWrite + Unpin> AsyncWrite for YieldOnce<R> {
+            fn poll_write(
+                self: Pin<&mut Self>,
+                cx: &mut Context<'_>,
+                buf: &[u8],
+            ) -> Poll<IoResult<usize>> {
+                if self.1 {
+                    self.get_mut().1 = false;
+                    cx.waker().wake_by_ref();
+                    Poll::Pending
+                } else {
+                    Pin::new(&mut self.get_mut().0).poll_write(cx, buf)
+                }
+            }
+
+            fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+                Pin::new(&mut self.get_mut().0).poll_flush(cx)
+            }
+
+            fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<IoResult<()>> {
+                Pin::new(&mut self.get_mut().0).poll_close(cx)
+            }
+        }
+        impl<R: Write> Write for YieldOnce<R> {
+            fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
+                self.0.write(buf)
+            }
+
+            fn flush(&mut self) -> IoResult<()> {
+                Ok(())
+            }
+        }
+        impl<R> YieldOnce<R> {
+            fn new(r: R) -> Self {
+                Self(r, true)
+            }
+        }
+
+        let iv = Iv::new_ctr().unwrap();
+        let method = EncryptionMethod::Aes256Ctr;
+        let size = 128;
+        let plain_text = vec![0; size];
+        let buf = DecoratedCursor::new(vec![], size);
+        let key = generate_data_key(method).unwrap().1;
+        let mut wt = EncrypterWriter::new(YieldOnce::new(buf), method, &key, iv).unwrap();
+        let waker = Waker::noop();
+        let mut cx = Context::from_waker(&waker);
+        assert_matches!(
+            Pin::new(&mut wt).poll_write(&mut cx, &plain_text[..size / 2]),
+            Poll::Pending
+        );
+        std::io::Write::write(&mut wt.0, &plain_text[size / 2..]).unwrap();
+    }
+
+    async fn test_failure() {
+        use futures_util::AsyncWriteExt;
+
+        let methods = [
+            EncryptionMethod::Plaintext,
+            EncryptionMethod::Aes128Ctr,
+            EncryptionMethod::Aes192Ctr,
+            EncryptionMethod::Aes256Ctr,
+            #[cfg(feature = "sm4")]
+            EncryptionMethod::Sm4Ctr,
+        ];
+        let iv = Iv::new_ctr().unwrap();
+        let size = 128;
+        let mut plain_text = vec![0; size];
+        rand::rand_bytes(&mut plain_text).unwrap();
+
+        for method in methods {
+            let key = generate_data_key(method).unwrap().1;
+            let mut pipe = DecoratedCursor::new(vec![], 17);
+            pipe.inject_write_err = Some(Box::new(move || {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "injected error",
+                ))
+            }));
+            let mut writer = EncrypterWriter::new(pipe, method, &key, iv).unwrap();
+            let err = AsyncWriteExt::write_all(&mut writer, plain_text.as_slice())
+                .await
+                .unwrap_err();
+            assert_eq!(err.to_string(), "injected error")
+        }
+    }
+
+    #[test]
+    fn test_async() {
+        futures::executor::block_on(async {
+            test_poll_read().await;
+            test_async_write().await;
+            test_failure().await;
+        });
     }
 }

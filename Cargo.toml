@@ -69,7 +69,6 @@ async-trait = "0.1"
 backtrace = "0.3"
 batch-system = { workspace = true }
 byteorder = "1.2"
-case_macros = { workspace = true }
 causal_ts = { workspace = true }
 chrono = { workspace = true }
 codec = { workspace = true }
@@ -248,7 +247,6 @@ members = [
   "components/backup",
   "components/backup-stream",
   "components/batch-system",
-  "components/case_macros",
   "components/causal_ts",
   "components/cdc",
   "components/cloud",
@@ -325,7 +323,6 @@ azure = { path = "components/cloud/azure" }
 backup = { path = "components/backup", default-features = false }
 backup-stream = { path = "components/backup-stream", default-features = false }
 batch-system = { path = "components/batch-system" }
-case_macros = { path = "components/case_macros" }
 causal_ts = { path = "components/causal_ts" }
 cdc = { path = "components/cdc", default-features = false }
 # Do not enable default-features because it implicitly enables oldtime which is
@@ -438,6 +435,7 @@ tracing = { version = "0.1.39", default-features = false, features = [
 ] }
 openssl = "0.10"
 openssl-sys = "0.9"
+heck = "0.3"
 
 [profile.dev.package.grpcio-sys]
 debug = false

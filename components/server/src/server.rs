@@ -73,7 +73,10 @@ use raftstore::{
     },
     RaftRouterCompactedEventSender,
 };
-use region_cache_memory_engine::{config::RangeCacheConfigManager, RangeCacheMemoryEngine};
+use region_cache_memory_engine::{
+    config::RangeCacheConfigManager, RangeCacheEngineContext, RangeCacheMemoryEngine,
+    RangeCacheMemoryEngineStatistics,
+};
 use resolved_ts::{LeadershipResolver, Task};
 use resource_control::ResourceGroupManager;
 use security::SecurityManager;
@@ -276,6 +279,7 @@ where
     snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
     engines: Option<TikvEngines<EK, ER>>,
     kv_statistics: Option<Arc<RocksStatistics>>,
+    range_cache_engine_statistics: Option<Arc<RangeCacheMemoryEngineStatistics>>,
     raft_statistics: Option<Arc<RocksStatistics>>,
     servers: Option<Servers<EK, ER, F>>,
     region_info_accessor: RegionInfoAccessor,
@@ -485,6 +489,7 @@ where
             snap_mgr: None,
             engines: None,
             kv_statistics: None,
+            range_cache_engine_statistics: None,
             raft_statistics: None,
             servers: None,
             region_info_accessor,
@@ -743,6 +748,7 @@ where
         let snap_mgr = SnapManagerBuilder::default()
             .max_write_bytes_per_sec(bps)
             .max_total_size(self.core.config.server.snap_max_total_size.0)
+            .concurrent_recv_snap_limit(self.core.config.server.concurrent_recv_snap_limit)
             .encryption_key_manager(self.core.encryption_key_manager.clone())
             .max_per_file_size(self.core.config.raft_store.max_snapshot_file_raw_size.0)
             .enable_multi_snapshot_files(
@@ -849,20 +855,25 @@ where
             .unwrap_or_else(|e| fatal!("failed to bootstrap raft_server id: {}", e));
 
         self.snap_mgr = Some(snap_mgr.clone());
+
+        // Create coprocessor endpoint.
+        let copr = coprocessor::Endpoint::new(
+            &server_config.value(),
+            cop_read_pool_handle,
+            self.concurrency_manager.clone(),
+            resource_tag_factory,
+            self.quota_limiter.clone(),
+            self.resource_manager.clone(),
+        );
+        let copr_config_manager = copr.config_manager();
+
         // Create server
         let server = Server::new(
             raft_server.id(),
             &server_config,
             &self.security_mgr,
             storage.clone(),
-            coprocessor::Endpoint::new(
-                &server_config.value(),
-                cop_read_pool_handle,
-                self.concurrency_manager.clone(),
-                resource_tag_factory,
-                self.quota_limiter.clone(),
-                self.resource_manager.clone(),
-            ),
+            copr,
             coprocessor_v2::Endpoint::new(&self.core.config.coprocessor_v2),
             self.resolver.clone().unwrap(),
             Either::Left(snap_mgr.clone()),
@@ -881,6 +892,7 @@ where
                 server.get_snap_worker_scheduler(),
                 server_config.clone(),
                 server.get_grpc_mem_quota().clone(),
+                copr_config_manager,
             )),
         );
 
@@ -928,6 +940,7 @@ where
                     pd_client::meta_storage::Source::LogBackup,
                 ))),
                 self.core.config.log_backup.clone(),
+                self.core.config.resolved_ts.clone(),
                 backup_stream_scheduler.clone(),
                 backup_stream_ob,
                 self.region_info_accessor.clone(),
@@ -1070,6 +1083,7 @@ where
         let cdc_endpoint = cdc::Endpoint::new(
             self.core.config.server.cluster_id,
             &self.core.config.cdc,
+            &self.core.config.resolved_ts,
             self.core.config.storage.engine == EngineType::RaftKv2,
             self.core.config.storage.api_version(),
             self.pd_client.clone(),
@@ -1324,6 +1338,7 @@ where
         let mut engine_metrics = EngineMetricsManager::<RocksEngine, ER>::new(
             self.tablet_registry.clone().unwrap(),
             self.kv_statistics.clone(),
+            self.range_cache_engine_statistics.clone(),
             self.core.config.rocksdb.titan.enabled.map_or(false, |v| v),
             self.engines.as_ref().unwrap().engines.raft.clone(),
             self.raft_statistics.clone(),
@@ -1667,16 +1682,23 @@ where
         let disk_engine = factory
             .create_shared_db(&self.core.store_path)
             .unwrap_or_else(|s| fatal!("failed to create kv engine: {}", s));
-        let range_cache_engine_config = Arc::new(VersionTrack::new(
-            self.core.config.range_cache_engine.clone(),
-        ));
+        let mut range_cache_engine_config = self.core.config.range_cache_engine.clone();
+        let _ = range_cache_engine_config
+            .expected_region_size
+            .get_or_insert(self.core.config.coprocessor.region_split_size());
+        let range_cache_engine_config = Arc::new(VersionTrack::new(range_cache_engine_config));
+        let range_cache_engine_context =
+            RangeCacheEngineContext::new(range_cache_engine_config.clone(), self.pd_client.clone());
+        let range_cache_engine_statistics = range_cache_engine_context.statistics();
         let kv_engine: EK = KvEngineBuilder::build(
-            range_cache_engine_config.clone(),
+            range_cache_engine_context,
             disk_engine.clone(),
             Some(self.pd_client.clone()),
+            Some(Arc::new(self.region_info_accessor.clone())),
         );
         let range_cache_config_manager = RangeCacheConfigManager(range_cache_engine_config);
         self.kv_statistics = Some(factory.rocks_statistics());
+        self.range_cache_engine_statistics = Some(range_cache_engine_statistics);
         let engines = Engines::new(kv_engine, raft_engine);
 
         let cfg_controller = self.cfg_controller.as_mut().unwrap();

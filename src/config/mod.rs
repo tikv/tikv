@@ -69,7 +69,8 @@ use serde::{
 use serde_json::{to_value, Map, Value};
 use tikv_util::{
     config::{
-        self, LogFormat, RaftDataStateMachine, ReadableDuration, ReadableSize, TomlWriter, MIB,
+        self, LogFormat, RaftDataStateMachine, ReadableDuration, ReadableSchedule, ReadableSize,
+        TomlWriter, MIB,
     },
     logger::{get_level_by_string, get_string_by_level, set_log_level},
     sys::SysQuota,
@@ -1234,7 +1235,10 @@ impl TitanDbConfig {
 #[serde(default)]
 #[serde(rename_all = "kebab-case")]
 pub struct DbConfig {
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     #[online_config(skip)]
+    #[deprecated = "Rocksdb log is replaced by tikv log. Please use `log.file` to config log."]
     pub info_log_level: RocksLogLevel,
     #[serde(with = "rocks_config::recovery_mode_serde")]
     #[online_config(skip)]
@@ -1260,11 +1264,20 @@ pub struct DbConfig {
     #[online_config(skip)]
     pub stats_dump_period: Option<ReadableDuration>,
     pub compaction_readahead_size: ReadableSize,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     #[online_config(skip)]
+    #[deprecated = "Rocksdb log is replaced by tikv log. Please use `log.file` to config log."]
     pub info_log_max_size: ReadableSize,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     #[online_config(skip)]
+    #[deprecated = "Rocksdb log is replaced with tikv log. Please use `log.file` to config log."]
     pub info_log_roll_time: ReadableDuration,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     #[online_config(skip)]
+    #[deprecated = "Rocksdb log is replaced with tikv log. Please use `log.file` to config log."]
     pub info_log_keep_log_file_num: u64,
     #[online_config(skip)]
     pub info_log_dir: String,
@@ -1504,9 +1517,6 @@ impl DbConfig {
             self.stats_dump_period.unwrap_or_default().as_secs() as usize
         );
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
-        opts.set_max_log_file_size(self.info_log_max_size.0);
-        opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
-        opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
         opts.set_bytes_per_sync(self.bytes_per_sync.0);
         opts.set_wal_bytes_per_sync(self.wal_bytes_per_sync.0);
         opts.set_max_subcompactions(self.max_sub_compactions);
@@ -1531,7 +1541,6 @@ impl DbConfig {
         if for_engine == EngineType::RaftKv {
             opts.set_info_log(RocksdbLogger);
         }
-        opts.set_info_log_level(self.info_log_level.into());
         if let Some(true) = self.titan.enabled {
             opts.set_titandb_options(&self.titan.build_opts());
         }
@@ -1818,15 +1827,27 @@ pub struct RaftDbConfig {
     #[online_config(skip)]
     pub stats_dump_period: ReadableDuration,
     pub compaction_readahead_size: ReadableSize,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     #[online_config(skip)]
+    #[deprecated = "Rocksdb log is replaced by tikv log. Please use `log.file` to config log."]
     pub info_log_max_size: ReadableSize,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     #[online_config(skip)]
+    #[deprecated = "Rocksdb log is replaced by tikv log. Please use `log.file` to config log."]
     pub info_log_roll_time: ReadableDuration,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     #[online_config(skip)]
+    #[deprecated = "Rocksdb log is replaced by tikv log. Please use `log.file` to config log."]
     pub info_log_keep_log_file_num: u64,
     #[online_config(skip)]
     pub info_log_dir: String,
+    #[doc(hidden)]
+    #[serde(skip_serializing)]
     #[online_config(skip)]
+    #[deprecated = "Rocksdb log is replaced by tikv log. Please use `log.file` to config log."]
     pub info_log_level: RocksLogLevel,
     pub max_sub_compactions: u32,
     pub writable_file_max_buffer_size: ReadableSize,
@@ -1856,6 +1877,7 @@ impl Default for RaftDbConfig {
             max_background_gc: bg_job_limits.max_titan_background_gc as i32,
             ..Default::default()
         };
+        #[allow(deprecated)]
         RaftDbConfig {
             wal_recovery_mode: DBRecoveryMode::PointInTime,
             wal_dir: "".to_owned(),
@@ -1911,11 +1933,7 @@ impl RaftDbConfig {
         }
         opts.set_stats_dump_period_sec(self.stats_dump_period.as_secs() as usize);
         opts.set_compaction_readahead_size(self.compaction_readahead_size.0);
-        opts.set_max_log_file_size(self.info_log_max_size.0);
-        opts.set_log_file_time_to_roll(self.info_log_roll_time.as_secs());
-        opts.set_keep_log_file_num(self.info_log_keep_log_file_num);
         opts.set_info_log(RaftDbLogger);
-        opts.set_info_log_level(self.info_log_level.into());
         opts.set_max_subcompactions(self.max_sub_compactions);
         opts.set_writable_file_max_buffer_size(self.writable_file_max_buffer_size.0 as i32);
         opts.set_use_direct_io_for_flush_and_compaction(
@@ -1984,6 +2002,34 @@ impl RaftEngineConfig {
             self.config.memory_limit = Some(RaftEngineReadableSize(memory_limit as u64));
         }
         Ok(())
+    }
+
+    fn optimize_for(&mut self, raft_store: &RaftstoreConfig, raft_kv_v2: bool) {
+        if raft_kv_v2 {
+            return;
+        }
+        let default_config = RawRaftEngineConfig::default();
+        let cur_batch_compression_thd = self.config().batch_compression_threshold;
+        // Currently, it only takes whether the configuration
+        // batch-compression-threshold of RaftEngine are set manually
+        // into consideration to determine whether the RaftEngine is customized.
+        let customized = cur_batch_compression_thd != default_config.batch_compression_threshold;
+        // As the async-io is enabled by default (raftstore.store_io_pool_size == 1),
+        // testing records shows that using 4kb as the default value can achieve
+        // better performance and reduce the IO overhead.
+        // Meanwhile, the batch_compression_threshold cannot be modified dynamically if
+        // the threads count of async-io are changed manually.
+        if !customized && raft_store.store_io_pool_size > 0 {
+            let adaptive_batch_comp_thd = RaftEngineReadableSize(std::cmp::max(
+                cur_batch_compression_thd.0 / (raft_store.store_io_pool_size + 1) as u64,
+                RaftEngineReadableSize::kb(4).0,
+            ));
+            self.mut_config().batch_compression_threshold = adaptive_batch_comp_thd;
+            warn!(
+                "raft-engine.batch-compression-threshold {} should be adpative to the size of async-io. Set it to {} instead.",
+                cur_batch_compression_thd, adaptive_batch_comp_thd,
+            );
+        }
     }
 
     pub fn config(&self) -> RawRaftEngineConfig {
@@ -3694,6 +3740,8 @@ impl TikvConfig {
         if self.storage.engine == EngineType::RaftKv2 {
             self.raft_store.store_io_pool_size = cmp::max(self.raft_store.store_io_pool_size, 1);
         }
+        self.raft_engine
+            .optimize_for(&self.raft_store, self.storage.engine == EngineType::RaftKv2);
         if self.storage.block_cache.capacity.is_none() {
             let total_mem = SysQuota::memory_limit_in_bytes();
             let capacity = if self.storage.engine == EngineType::RaftKv2 {
@@ -4621,7 +4669,11 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
         ConfigValue::Usize(_) => ConfigValue::from(v.parse::<usize>()?),
         ConfigValue::Bool(_) => ConfigValue::from(v.parse::<bool>()?),
         ConfigValue::String(_) => ConfigValue::String(v.to_owned()),
-        _ => unreachable!(),
+        ConfigValue::Schedule(_) => {
+            let schedule = v.parse::<ReadableSchedule>()?;
+            ConfigValue::from(schedule)
+        }
+        ConfigValue::Skip | ConfigValue::None | ConfigValue::Module(_) => unreachable!(),
     };
     Ok(res)
 }
@@ -4875,10 +4927,12 @@ impl ConfigController {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::{
+        sync::{mpsc::channel, Arc},
+        time::Duration,
+    };
 
     use api_version::{ApiV1, KvFormat};
-    use case_macros::*;
     use engine_rocks::raw::LRUCacheOptions;
     use engine_traits::{CfOptions as _, CfOptionsExt, DbOptions as _, DbOptionsExt};
     use futures::executor::block_on;
@@ -4933,21 +4987,6 @@ mod tests {
     fn create_mock_kv_data(path: &Path) {
         fs::create_dir_all(path.join("db")).unwrap();
         fs::File::create(path.join("db").join("CURRENT")).unwrap();
-    }
-
-    #[test]
-    fn test_case_macro() {
-        let h = kebab_case!(HelloWorld);
-        assert_eq!(h, "hello-world");
-
-        let h = kebab_case!(WelcomeToMyHouse);
-        assert_eq!(h, "welcome-to-my-house");
-
-        let h = snake_case!(HelloWorld);
-        assert_eq!(h, "hello_world");
-
-        let h = snake_case!(WelcomeToMyHouse);
-        assert_eq!(h, "welcome_to_my_house");
     }
 
     #[test]
@@ -5666,22 +5705,26 @@ mod tests {
         assert_eq!(flow_controller.enabled(), true);
     }
 
+    struct MockCfgManager(Box<dyn Fn(ConfigChange) + Send + Sync>);
+
+    impl ConfigManager for MockCfgManager {
+        fn dispatch(&mut self, change: ConfigChange) -> online_config::Result<()> {
+            (self.0)(change);
+            Ok(())
+        }
+    }
+
     #[test]
     fn test_change_resolved_ts_config() {
-        use crossbeam::channel;
-
-        pub struct TestConfigManager(channel::Sender<ConfigChange>);
-        impl ConfigManager for TestConfigManager {
-            fn dispatch(&mut self, change: ConfigChange) -> online_config::Result<()> {
-                self.0.send(change).unwrap();
-                Ok(())
-            }
-        }
-
         let (cfg, _dir) = TikvConfig::with_tmp().unwrap();
         let cfg_controller = ConfigController::new(cfg);
-        let (tx, rx) = channel::unbounded();
-        cfg_controller.register(Module::ResolvedTs, Box::new(TestConfigManager(tx)));
+        let (tx, rx) = channel();
+        cfg_controller.register(
+            Module::ResolvedTs,
+            Box::new(MockCfgManager(Box::new(move |c| {
+                tx.send(c).unwrap();
+            }))),
+        );
 
         // Return error if try to update not support config or unknow config
         cfg_controller
@@ -6312,12 +6355,14 @@ mod tests {
         let cfg_controller = ConfigController::new(cfg.clone());
         let (scheduler, _receiver) = dummy_scheduler();
         let version_tracker = Arc::new(VersionTrack::new(cfg.server.clone()));
+        let cop_manager = MockCfgManager(Box::new(|_| {}));
         cfg_controller.register(
             Module::Server,
             Box::new(ServerConfigManager::new(
                 scheduler,
                 version_tracker.clone(),
                 ResourceQuota::new(None),
+                Box::new(cop_manager),
             )),
         );
 
@@ -6367,6 +6412,39 @@ mod tests {
             default_cfg.server.end_point_request_max_handle_duration(),
             ReadableDuration::secs(900)
         );
+    }
+
+    #[test]
+    fn test_change_coprocessor_endpoint_config() {
+        let (mut cfg, _dir) = TikvConfig::with_tmp().unwrap();
+        cfg.validate().unwrap();
+        let cfg_controller = ConfigController::new(cfg.clone());
+        let (scheduler, _receiver) = dummy_scheduler();
+        let version_tracker = Arc::new(VersionTrack::new(cfg.server.clone()));
+
+        let (cop_tx, cop_rx) = channel();
+        let cop_manager = MockCfgManager(Box::new(move |c| {
+            cop_tx.send(c).unwrap();
+        }));
+        cfg_controller.register(
+            Module::Server,
+            Box::new(ServerConfigManager::new(
+                scheduler,
+                version_tracker.clone(),
+                ResourceQuota::new(None),
+                Box::new(cop_manager),
+            )),
+        );
+
+        cfg_controller
+            .update_config("server.end-point-memory-quota", "32MB")
+            .unwrap();
+        let mut change = cop_rx.try_recv().unwrap();
+        let quota = change.remove("end_point_memory_quota").unwrap();
+        let cap: ReadableSize = quota.into();
+        assert_eq!(cap, ReadableSize::mb(32));
+        cfg.server.end_point_memory_quota = ReadableSize::mb(32);
+        assert_eq_debug(&cfg_controller.get_current(), &cfg);
     }
 
     #[test]
@@ -6932,6 +7010,14 @@ mod tests {
         default_cfg
             .raft_store
             .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
+        default_cfg.raft_engine.optimize_for(
+            &default_cfg.raft_store,
+            default_cfg.storage.engine == EngineType::RaftKv2,
+        );
+        assert_eq!(
+            default_cfg.raft_engine.config().batch_compression_threshold,
+            RaftEngineReadableSize::kb(4)
+        );
         default_cfg.security.redact_info_log = Some(false);
         default_cfg.coprocessor.region_max_size = Some(default_cfg.coprocessor.region_max_size());
         default_cfg.coprocessor.region_max_keys = Some(default_cfg.coprocessor.region_max_keys());
@@ -7024,6 +7110,10 @@ mod tests {
 
         cfg.coprocessor
             .optimize_for(default_cfg.storage.engine == EngineType::RaftKv2);
+        cfg.raft_engine.optimize_for(
+            &cfg.raft_store,
+            default_cfg.storage.engine == EngineType::RaftKv2,
+        );
 
         assert_eq_debug(&cfg, &default_cfg);
     }
