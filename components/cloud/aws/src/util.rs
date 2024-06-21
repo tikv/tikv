@@ -54,10 +54,11 @@ impl RetryError for CredentialsErrorWrapper {
 pub fn new_http_client() -> impl HttpClient + 'static {
     let mut hyper_builder = Client::builder();
     hyper_builder.http1_read_buf_exact_size(READ_BUF_SIZE);
+    let openssl_conn = hyper_openssl::HttpsConnector::new().unwrap();
 
     HyperClientBuilder::new()
         .hyper_builder(hyper_builder)
-        .build_https()
+        .build(openssl_conn)
 }
 
 pub fn new_credentials_provider() -> DefaultCredentialsProvider {

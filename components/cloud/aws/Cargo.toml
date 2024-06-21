@@ -11,13 +11,13 @@ failpoints = ["fail/failpoints"]
 [dependencies]
 async-trait = "0.1"
 
-aws-config = "1.2.1"
+aws-config = { version = "1.2.1", features = [], default-features = false}
 aws-credential-types = { version = "1.2.0", features = ["hardcoded-credentials"] }
-aws-sdk-kms = "1.22.0"
-aws-sdk-s3 = "1.16.0"
-aws-smithy-runtime = "1.4.0"
-aws-smithy-runtime-api = "1.5.0"
-aws-smithy-types =  { version = "1.1.8", features = ["byte-stream-poll-next"] }
+aws-sdk-kms = { version = "1.22.0", features = [], default-features = false }
+aws-sdk-s3 = { version = "1.16.0", features = ["rt-tokio"], default-features = false }
+aws-smithy-runtime = { version = "1.4.0", features = [ "client", "connector-hyper-0-14-x" ], default-features = false }
+aws-smithy-runtime-api = { version = "1.5.0", features = [], default-features = false }
+aws-smithy-types = { version = "1.1.8", features = ["byte-stream-poll-next"] }
 
 base64 = "0.13.0"
 bytes = "1.0"
@@ -45,6 +45,8 @@ tokio = { version = "1.5", features = ["time"] }
 tokio-util = { version = "0.7" }
 url = "2.0"
 uuid = { version = "0.8", features = ["v4"] }
+
+hyper-openssl = "0.9"
 
 [dev-dependencies]
 aws-smithy-runtime = { version = "1.4.0", features = ["test-util", "client"] }
