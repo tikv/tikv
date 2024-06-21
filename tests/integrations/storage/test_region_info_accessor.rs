@@ -1,6 +1,8 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    collections::BTreeSet,
+    num::NonZeroUsize,
     sync::{mpsc::channel, Arc},
     thread,
     time::Duration,
@@ -161,22 +163,22 @@ fn test_region_collection_get_regions_in_range() {
     for node_id in cluster.get_node_ids() {
         let engine = &region_info_providers[&node_id];
 
-        let result = engine.get_regions_in_range(b"", b"").unwrap();
+        let result = engine.get_regions_in_range(b"", b"", false).unwrap();
         assert_eq!(result, regions);
 
-        let result = engine.get_regions_in_range(b"k1", b"k3").unwrap();
+        let result = engine.get_regions_in_range(b"k1", b"k3", false).unwrap();
         assert_eq!(&result, &regions[1..3]);
 
-        let result = engine.get_regions_in_range(b"k3", b"k8").unwrap();
+        let result = engine.get_regions_in_range(b"k3", b"k8", false).unwrap();
         assert_eq!(&result, &regions[2..5]);
 
-        let result = engine.get_regions_in_range(b"k6", b"k8").unwrap();
+        let result = engine.get_regions_in_range(b"k6", b"k8", false).unwrap();
         assert_eq!(&result, &regions[3..5]);
 
-        let result = engine.get_regions_in_range(b"k7", b"k99").unwrap();
+        let result = engine.get_regions_in_range(b"k7", b"k99", false).unwrap();
         assert_eq!(&result, &regions[4..6]);
 
-        let result = engine.get_regions_in_range(b"k99", b"").unwrap();
+        let result = engine.get_regions_in_range(b"k99", b"", false).unwrap();
         assert_eq!(&result, &regions[5..6]);
     }
 
@@ -203,15 +205,15 @@ fn test_region_collection_get_top_regions() {
     let regions = prepare_cluster(&mut cluster);
     let mut regions = regions.into_iter().map(|r| r.get_id()).collect::<Vec<_>>();
     regions.sort();
-    let mut all_results = Vec::<u64>::new();
+    let mut all_results = BTreeSet::<u64>::new();
     for node_id in cluster.get_node_ids() {
         let engine = &region_info_providers[&node_id];
 
         let result = engine
-            .get_top_regions(10)
+            .get_top_regions(NonZeroUsize::new(10))
             .unwrap()
             .into_iter()
-            .map(|r| r.get_id())
+            .map(|(r, _)| r.get_id())
             .collect::<Vec<_>>();
 
         for region_id in &result {
@@ -225,15 +227,14 @@ fn test_region_collection_get_top_regions() {
         }
         // All the regions for which this node is the leader.
         let result = engine
-            .get_top_regions(0)
+            .get_top_regions(None)
             .unwrap()
             .into_iter()
-            .map(|r| r.get_id())
+            .map(|(r, _)| r.get_id())
             .collect::<Vec<_>>();
         all_results.extend(result.iter());
     }
-    all_results.sort();
-    assert_eq!(all_results, regions);
+    assert_eq!(all_results.into_iter().collect::<Vec<_>>(), regions);
 
     for (_, p) in region_info_providers {
         p.stop();

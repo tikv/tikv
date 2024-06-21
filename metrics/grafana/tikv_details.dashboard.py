@@ -315,6 +315,13 @@ def Cluster() -> RowPanel:
                         ),
                         legend_format=r"{{instance}}-read",
                     ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_range_cache_memory_engine_flow",
+                            label_selectors=['type=~"bytes_read|iter_bytes_read"'],
+                        ),
+                        legend_format=r"{{instance}}-range-cache-engine-read-",
+                    ),
                 ],
             ),
         ]
@@ -4109,10 +4116,36 @@ def RangeCacheMemoryEngine() -> RowPanel:
                     ),
                 ],
             ),
+            graph_panel(
+                title="Range Count",
+                description="The count of different types of range",
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_range_cache_count",
+                            by_labels=["instance", "type"],
+                        ),
+                        legend_format="{{instance}}--{{type}}",
+                    ),
+                ],
+            ),
         ]
     )
     layout.row(
         [
+            graph_panel(
+                title="Memory Usage",
+                description="The memory usage of the range cache memory engine",
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_avg(
+                            "tikv_range_cache_memory_usage_bytes",
+                            by_labels=["instance"],
+                        ),
+                    ),
+                ],
+            ),
             graph_panel(
                 title="GC Filter",
                 description="Rang cache engine garbage collection information",
@@ -4123,6 +4156,152 @@ def RangeCacheMemoryEngine() -> RowPanel:
                             by_labels=["type"],
                         ),
                         legend_format="{{type}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Range load duration",
+                description="The handle duration of range load",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_range_load_duration_secs_bucket",
+            ),
+            heatmap_panel(
+                title="Range gc duration",
+                description="The handle duration of range gc",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_range_gc_duration_secs_bucket",
+            ),
+        ]
+    )
+    layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Write duration",
+            heatmap_description="The time consumed of write in range cache engine",
+            graph_title="99% Range cache engine write duration per server",
+            graph_description="The time consumed of write in range cache engine per TiKV instance",
+            graph_by_labels=["instance"],
+            graph_hides=["count", "avg"],
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_range_cache_engine_write_duration_seconds",
+        )
+    )
+    layout.row(
+        heatmap_panel_graph_panel_histogram_quantile_pairs(
+            heatmap_title="Prepare for write duration",
+            heatmap_description="The time consumed of prepare for write in range cache engine",
+            graph_title="99% Range cache engine prepare for write duration per server",
+            graph_description="The time consumed of prepare for write in range cache engine per TiKV instance",
+            graph_by_labels=["instance"],
+            graph_hides=["count", "avg"],
+            yaxis_format=UNITS.SECONDS,
+            metric="tikv_range_cache_engine_prepare_for_write_duration_seconds",
+        )
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Iterator operations",
+                description="The count of different type of iteration operations",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_range_cache_memory_engine_locate",
+                            label_selectors=[
+                                'type="number_db_seek"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="seek",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_range_cache_memory_engine_locate",
+                            label_selectors=[
+                                'type="number_db_seek_found"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="seek_found",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_range_cache_memory_engine_locate",
+                            label_selectors=[
+                                'type="number_db_next"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="next",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_range_cache_memory_engine_locate",
+                            label_selectors=[
+                                'type="number_db_next_found"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="next_found",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_range_cache_memory_engine_locate",
+                            label_selectors=[
+                                'type="number_db_prev"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="prev",
+                    ),
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_range_cache_memory_engine_locate",
+                            label_selectors=[
+                                'type="number_db_prev_found"',
+                            ],
+                            by_labels=[],  # override default by instance.
+                        ),
+                        legend_format="prev_found",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Seek duration",
+                description="The time consumed when executing seek operation",
+                yaxes=yaxes(left_format=UNITS.SECONDS, log_base=2),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            1,
+                            "tikv_range_cache_memory_engine_seek_duration",
+                        ),
+                        legend_format="max",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_range_cache_memory_engine_seek_duration",
+                        ),
+                        legend_format="99%",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.95,
+                            "tikv_range_cache_memory_engine_seek_duration",
+                        ),
+                        legend_format="95%",
+                    ),
+                    target(
+                        expr=expr_histogram_avg(
+                            "tikv_range_cache_memory_engine_seek_duration",
+                            by_labels=["type"],
+                        ),
+                        legend_format="avg",
                     ),
                 ],
             ),

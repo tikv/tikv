@@ -1,11 +1,13 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    cmp::Ordering,
     collections::{
-        BTreeMap, BTreeSet,
+        BTreeMap,
         Bound::{Excluded, Unbounded},
     },
     fmt::{Display, Formatter, Result as FmtResult},
+    num::NonZeroUsize,
     sync::{mpsc, Arc, Mutex, RwLock},
     time::Duration,
 };
@@ -159,11 +161,12 @@ pub enum RegionInfoQuery {
     GetRegionsInRange {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
+        leader_only: bool,
         callback: Callback<Vec<Region>>,
     },
     GetTopRegions {
         count: usize,
-        callback: Callback<Vec<Region>>,
+        callback: Callback<TopRegions>,
     },
     /// Gets all contents from the collection. Only used for testing.
     DebugDump(mpsc::Sender<(RegionsMap, RegionRangesMap)>),
@@ -546,6 +549,7 @@ impl RegionCollector {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
         callback: Callback<Vec<Region>>,
+        leader_only: bool,
     ) {
         let end_key = RangeKey::from_end_key(end_key);
         let mut regions = vec![];
@@ -557,52 +561,69 @@ impl RegionCollector {
             if RangeKey::from_start_key(region_info.region.get_start_key().to_vec()) > end_key {
                 break;
             }
-            regions.push(region_info.region.clone());
+            if !leader_only || region_info.role == StateRole::Leader {
+                regions.push(region_info.region.clone());
+            }
         }
         callback(regions);
     }
 
     /// Used by the in-memory engine (if enabled.)
-    /// If `count` is 0, return all the regions for which this node is the
-    /// leader. Otherwise, return the top `count` regions from
-    /// `self.region_activity`. Top regions are determined by comparing
-    /// `read_keys + written_keys` in each region's most recent region stat.
-    /// If count > 0 and size of `self.region_activity` is `> 0`, remove but the
-    /// top `count` regions from `self.region_activity`.
+    /// If `count` is 0, return all the regions.
+    ///
+    /// Otherwise, return the top `count` regions for which this node is the
+    /// leader from `self.region_activity`. Top regions are determined by
+    /// comparing `read_keys` in each region's most recent
+    /// region stat.
     ///
     /// Note: this function is `O(N log(N))` with respect to size of
     /// region_activity. This is acceptable, as region_activity is populated
     /// by heartbeats for this node's region, so N cannot be greater than
     /// approximately `300_000``.
-    pub fn handle_get_top_regions(&mut self, count: usize, callback: Callback<Vec<Region>>) {
+    pub fn handle_get_top_regions(&mut self, count: usize, callback: Callback<TopRegions>) {
+        let compare_fn = |a: &RegionActivity, b: &RegionActivity| {
+            let a = a.region_stat.read_keys;
+            let b = b.region_stat.read_keys;
+            b.cmp(&a)
+        };
         let top_regions = if count == 0 {
             self.regions
                 .values()
-                .filter(|ri| ri.role == StateRole::Leader)
-                .map(|ri| ri.region.clone())
+                .map(|ri| {
+                    (
+                        ri.region.clone(),
+                        self.region_activity.get(&ri.region.get_id()),
+                    )
+                })
+                .sorted_by(|(_, a), (_, b)| match (a, b) {
+                    (None, None) => Ordering::Equal,
+                    (None, Some(_)) => Ordering::Greater,
+                    (Some(_), None) => Ordering::Less,
+                    (Some(a), Some(b)) => compare_fn(a, b),
+                })
+                .map(|(r, ra)| {
+                    (
+                        r,
+                        ra.map(|ra| ra.region_stat.approximate_size)
+                            .unwrap_or_default(),
+                    )
+                })
                 .collect::<Vec<_>>()
         } else {
             let count = usize::max(count, self.region_activity.len());
             self.region_activity
                 .iter()
-                .sorted_by(|(_, activity_0), (_, activity_1)| {
-                    // TODO: Make this extensible e.g., allow considering MVCC/tombstone stats.
-                    let a = activity_0.region_stat.read_keys + activity_0.region_stat.written_keys;
-                    let b = activity_1.region_stat.read_keys + activity_1.region_stat.written_keys;
-                    b.cmp(&a)
+                .filter_map(|(id, ac)| {
+                    self.regions
+                        .get(id)
+                        .filter(|ri| ri.role == StateRole::Leader)
+                        .map(|ri| (ri, ac))
                 })
+                .sorted_by(|(_, activity_0), (_, activity_1)| compare_fn(activity_0, activity_1))
                 .take(count)
-                .flat_map(|(id, _)| self.regions.get(id).map(|ri| ri.region.clone()))
+                .map(|(ri, ac)| (ri.region.clone(), ac.region_stat.approximate_size))
                 .collect::<Vec<_>>()
         };
-        if count > 0 && self.region_activity.len() > count {
-            let top_region_ids = top_regions
-                .iter()
-                .map(Region::get_id)
-                .collect::<BTreeSet<_>>();
-            self.region_activity
-                .retain(|id, _| top_region_ids.contains(id))
-        }
         callback(top_regions)
     }
 
@@ -679,9 +700,10 @@ impl Runnable for RegionCollector {
             RegionInfoQuery::GetRegionsInRange {
                 start_key,
                 end_key,
+                leader_only,
                 callback,
             } => {
-                self.handle_get_regions_in_range(start_key, end_key, callback);
+                self.handle_get_regions_in_range(start_key, end_key, callback, leader_only);
             }
             RegionInfoQuery::GetTopRegions { count, callback } => {
                 self.handle_get_top_regions(count, callback);
@@ -788,6 +810,9 @@ impl RegionInfoAccessor {
     }
 }
 
+/// Top regions result: region and its approximate size.
+pub type TopRegions = Vec<(Region, u64)>;
+
 pub trait RegionInfoProvider: Send + Sync {
     /// Get a iterator of regions that contains `from` or have keys larger than
     /// `from`, and invoke the callback to process the result.
@@ -807,10 +832,15 @@ pub trait RegionInfoProvider: Send + Sync {
         unimplemented!()
     }
 
-    fn get_regions_in_range(&self, _start_key: &[u8], _end_key: &[u8]) -> Result<Vec<Region>> {
+    fn get_regions_in_range(
+        &self,
+        _start_key: &[u8],
+        _end_key: &[u8],
+        _leader_only: bool,
+    ) -> Result<Vec<Region>> {
         unimplemented!()
     }
-    fn get_top_regions(&self, _count: usize) -> Result<Vec<Region>> {
+    fn get_top_regions(&self, _count: Option<NonZeroUsize>) -> Result<TopRegions> {
         unimplemented!()
     }
 }
@@ -862,11 +892,17 @@ impl RegionInfoProvider for RegionInfoAccessor {
             )
         })
     }
-    fn get_regions_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<Vec<Region>> {
+    fn get_regions_in_range(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+        leader_only: bool,
+    ) -> Result<Vec<Region>> {
         let (tx, rx) = mpsc::channel();
         let msg = RegionInfoQuery::GetRegionsInRange {
             start_key: start_key.to_vec(),
             end_key: end_key.to_vec(),
+            leader_only,
             callback: Box::new(move |regions| {
                 if let Err(e) = tx.send(regions) {
                     warn!("failed to send get_regions_in_range result: {:?}", e);
@@ -885,10 +921,10 @@ impl RegionInfoProvider for RegionInfoAccessor {
                 })
             })
     }
-    fn get_top_regions(&self, count: usize) -> Result<Vec<Region>> {
+    fn get_top_regions(&self, count: Option<NonZeroUsize>) -> Result<TopRegions> {
         let (tx, rx) = mpsc::channel();
         let msg = RegionInfoQuery::GetTopRegions {
-            count,
+            count: count.map_or_else(|| 0, usize::from),
             callback: Box::new(move |regions| {
                 if let Err(e) = tx.send(regions) {
                     warn!("failed to send get_top_regions result: {:?}", e);
@@ -938,7 +974,12 @@ impl Clone for MockRegionInfoProvider {
 }
 
 impl RegionInfoProvider for MockRegionInfoProvider {
-    fn get_regions_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<Vec<Region>> {
+    fn get_regions_in_range(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+        _: bool,
+    ) -> Result<Vec<Region>> {
         let mut regions = Vec::new();
         let (tx, rx) = mpsc::channel();
         let end_key = RangeKey::from_end_key(end_key.to_vec());
@@ -986,7 +1027,7 @@ impl RegionInfoProvider for MockRegionInfoProvider {
             .ok_or(box_err!("Not found region containing {:?}", key))
     }
 
-    fn get_top_regions(&self, _count: usize) -> Result<Vec<Region>> {
+    fn get_top_regions(&self, _count: Option<NonZeroUsize>) -> Result<TopRegions> {
         let mut regions = Vec::new();
         let (tx, rx) = mpsc::channel();
 
@@ -994,7 +1035,7 @@ impl RegionInfoProvider for MockRegionInfoProvider {
             b"",
             Box::new(move |iter| {
                 for region_info in iter {
-                    tx.send(region_info.region.clone()).unwrap();
+                    tx.send((region_info.region.clone(), 0)).unwrap();
                 }
             }),
         )?;
@@ -1616,14 +1657,18 @@ mod tests {
         let provider = MockRegionInfoProvider::new(regions);
 
         // Test ranges covering all regions
-        let regions = provider.get_regions_in_range(b"k01", b"k15").unwrap();
+        let regions = provider
+            .get_regions_in_range(b"k01", b"k15", false)
+            .unwrap();
         assert!(regions.len() == 3);
         assert!(regions[0].id == 1);
         assert!(regions[1].id == 2);
         assert!(regions[2].id == 3);
 
         // Test ranges covering partial regions
-        let regions = provider.get_regions_in_range(b"k04", b"k10").unwrap();
+        let regions = provider
+            .get_regions_in_range(b"k04", b"k10", false)
+            .unwrap();
         assert!(regions.len() == 2);
         assert!(regions[0].id == 2);
         assert!(regions[1].id == 3);

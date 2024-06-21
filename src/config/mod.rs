@@ -58,6 +58,7 @@ use raftstore::{
     coprocessor::{Config as CopConfig, RegionInfoAccessor},
     store::{CompactionGuardGeneratorFactory, Config as RaftstoreConfig, SplitConfig},
 };
+use region_cache_memory_engine::RangeCacheEngineConfig;
 use resource_control::Config as ResourceControlConfig;
 use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
@@ -68,7 +69,8 @@ use serde::{
 use serde_json::{to_value, Map, Value};
 use tikv_util::{
     config::{
-        self, LogFormat, RaftDataStateMachine, ReadableDuration, ReadableSize, TomlWriter, MIB,
+        self, LogFormat, RaftDataStateMachine, ReadableDuration, ReadableSchedule, ReadableSize,
+        TomlWriter, MIB,
     },
     logger::{get_level_by_string, get_string_by_level, set_log_level},
     sys::SysQuota,
@@ -3444,9 +3446,6 @@ pub struct TikvConfig {
     #[online_config(skip)]
     pub memory_usage_high_water: f64,
 
-    // Memory quota used for in-memory engine. 0 means not enable it.
-    pub region_cache_memory_limit: ReadableSize,
-
     #[online_config(submodule)]
     pub log: LogConfig,
 
@@ -3527,6 +3526,9 @@ pub struct TikvConfig {
 
     #[online_config(submodule)]
     pub resource_control: ResourceControlConfig,
+
+    #[online_config(submodule)]
+    pub range_cache_engine: RangeCacheEngineConfig,
 }
 
 impl Default for TikvConfig {
@@ -3546,7 +3548,6 @@ impl Default for TikvConfig {
             abort_on_panic: false,
             memory_usage_limit: None,
             memory_usage_high_water: 0.9,
-            region_cache_memory_limit: ReadableSize::mb(0),
             log: LogConfig::default(),
             memory: MemoryConfig::default(),
             quota: QuotaConfig::default(),
@@ -3573,6 +3574,7 @@ impl Default for TikvConfig {
             log_backup: BackupStreamConfig::default(),
             causal_ts: CausalTsConfig::default(),
             resource_control: ResourceControlConfig::default(),
+            range_cache_engine: RangeCacheEngineConfig::default(),
         }
     }
 }
@@ -3941,6 +3943,7 @@ impl TikvConfig {
         self.resource_metering.validate()?;
         self.quota.validate()?;
         self.causal_ts.validate()?;
+        self.range_cache_engine.validate()?;
 
         // Validate feature TTL with Titan configuration.
         if matches!(self.rocksdb.titan.enabled, Some(true)) && self.storage.enable_ttl {
@@ -4649,7 +4652,11 @@ fn to_change_value(v: &str, typed: &ConfigValue) -> CfgResult<ConfigValue> {
         ConfigValue::Usize(_) => ConfigValue::from(v.parse::<usize>()?),
         ConfigValue::Bool(_) => ConfigValue::from(v.parse::<bool>()?),
         ConfigValue::String(_) => ConfigValue::String(v.to_owned()),
-        _ => unreachable!(),
+        ConfigValue::Schedule(_) => {
+            let schedule = v.parse::<ReadableSchedule>()?;
+            ConfigValue::from(schedule)
+        }
+        ConfigValue::Skip | ConfigValue::None | ConfigValue::Module(_) => unreachable!(),
     };
     Ok(res)
 }
@@ -4718,6 +4725,7 @@ pub enum Module {
     Rocksdb,
     Raftdb,
     RaftEngine,
+    RangeCacheEngine,
     Storage,
     Security,
     Encryption,
@@ -4749,6 +4757,7 @@ impl From<&str> for Module {
             "rocksdb" => Module::Rocksdb,
             "raftdb" => Module::Raftdb,
             "raft_engine" => Module::RaftEngine,
+            "range_cache_engine" => Module::RangeCacheEngine,
             "storage" => Module::Storage,
             "security" => Module::Security,
             "import" => Module::Import,

@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use engine_traits::{self, Result};
-use rocksdb::{DBIterator, DB};
+use engine_traits::{self, IterMetricsCollector, MetricsExt, Result};
+use rocksdb::{DBIterator, PerfContext, DB};
 
 use crate::r2e;
 
@@ -18,6 +18,25 @@ impl RocksEngineIterator {
 
     pub fn sequence(&self) -> Option<u64> {
         self.0.sequence()
+    }
+}
+
+pub struct RocksIterMetricsCollector;
+
+impl IterMetricsCollector for RocksIterMetricsCollector {
+    fn internal_delete_skipped_count(&self) -> u64 {
+        PerfContext::get().internal_delete_skipped_count()
+    }
+
+    fn internal_key_skipped_count(&self) -> u64 {
+        PerfContext::get().internal_key_skipped_count()
+    }
+}
+
+impl MetricsExt for RocksEngineIterator {
+    type Collector = RocksIterMetricsCollector;
+    fn metrics_collector(&self) -> Self::Collector {
+        RocksIterMetricsCollector {}
     }
 }
 

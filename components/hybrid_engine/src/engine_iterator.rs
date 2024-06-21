@@ -1,6 +1,8 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{Iterable, Iterator, KvEngine, RangeCacheEngine, Result};
+use engine_traits::{
+    IterMetricsCollector, Iterable, Iterator, KvEngine, MetricsExt, RangeCacheEngine, Result,
+};
 use tikv_util::Either;
 
 pub struct HybridEngineIterator<EK, EC>
@@ -94,6 +96,56 @@ where
         match self.iter {
             Either::Left(ref iter) => iter.valid(),
             Either::Right(ref iter) => iter.valid(),
+        }
+    }
+}
+
+pub struct HybridEngineIterMetricsCollector<EK, EC>
+where
+    EK: KvEngine,
+    EC: RangeCacheEngine,
+{
+    collector: Either<
+        <<EK::Snapshot as Iterable>::Iterator as MetricsExt>::Collector,
+        <<EC::Snapshot as Iterable>::Iterator as MetricsExt>::Collector,
+    >,
+}
+
+impl<EK, EC> IterMetricsCollector for HybridEngineIterMetricsCollector<EK, EC>
+where
+    EK: KvEngine,
+    EC: RangeCacheEngine,
+{
+    fn internal_delete_skipped_count(&self) -> u64 {
+        match &self.collector {
+            Either::Left(c) => c.internal_delete_skipped_count(),
+            Either::Right(c) => c.internal_delete_skipped_count(),
+        }
+    }
+
+    fn internal_key_skipped_count(&self) -> u64 {
+        match &self.collector {
+            Either::Left(c) => c.internal_key_skipped_count(),
+            Either::Right(c) => c.internal_key_skipped_count(),
+        }
+    }
+}
+
+impl<EK, EC> MetricsExt for HybridEngineIterator<EK, EC>
+where
+    EK: KvEngine,
+    EC: RangeCacheEngine,
+{
+    type Collector = HybridEngineIterMetricsCollector<EK, EC>;
+
+    fn metrics_collector(&self) -> Self::Collector {
+        match self.iter {
+            Either::Left(ref iter) => HybridEngineIterMetricsCollector {
+                collector: Either::Left(iter.metrics_collector()),
+            },
+            Either::Right(ref iter) => HybridEngineIterMetricsCollector {
+                collector: Either::Right(iter.metrics_collector()),
+            },
         }
     }
 }
