@@ -780,13 +780,14 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
         let region_id = request.region_id;
         let request_id = request.request_id;
+        let conn_id = downstream.conn_id;
         let downstream_id = downstream.id;
         let downstream_state = downstream.get_state();
 
         // The connection can be deregistered by some internal errors. Clients will
         // be always notified by closing the GRPC server stream, so it's OK to drop
         // the task directly.
-        let conn = match self.connections.get_mut(&downstream.conn_id) {
+        let conn = match self.connections.get_mut(&conn_id) {
             Some(conn) => conn,
             None => {
                 info!("cdc register region on an deregistered connection, ignore";

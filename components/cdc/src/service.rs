@@ -335,17 +335,14 @@ impl Service {
         conn_id: ConnId,
     ) -> Result<(), String> {
         let observed_range =
-            match ObservedRange::new(request.start_key.clone(), request.end_key.clone()) {
-                Ok(observed_range) => observed_range,
-                Err(e) => {
-                    warn!(
+            ObservedRange::new(request.start_key.clone(), request.end_key.clone()).unwrap_or_else(|e| {
+                warn!(
                         "cdc invalid observed start key or end key version";
                         "downstream" => ?peer, "region_id" => request.region_id,
                         "error" => ?e,
                     );
-                    ObservedRange::default()
-                }
-            };
+                ObservedRange::default()
+            });
         let downstream = Downstream::new(
             peer.to_owned(),
             request.get_region_epoch().clone(),
@@ -358,7 +355,6 @@ impl Service {
         let task = Task::Register {
             request,
             downstream,
-            conn_id,
         };
         scheduler.schedule(task).map_err(|e| format!("{:?}", e))
     }
