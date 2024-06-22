@@ -2812,6 +2812,13 @@ where
         fail_point!("apply_after_prepare_merge");
         PEER_ADMIN_CMD_COUNTER.prepare_merge.success.inc();
 
+        let range = CacheRange::from_region(&region);
+        info!(
+            "evict range due to prepare merge";
+            "source_range" => ?range,
+        );
+        ctx.engine.evict_range(&range);
+
         Ok((
             AdminResponse::default(),
             ApplyResult::Res(ExecResult::PrepareMerge {
@@ -2960,6 +2967,13 @@ where
             });
 
         PEER_ADMIN_CMD_COUNTER.commit_merge.success.inc();
+
+        let range = CacheRange::from_region(&region);
+        info!(
+            "evict range due to commit merge";
+            "range" => ?range,
+        );
+        ctx.engine.evict_range(&range);
 
         let resp = AdminResponse::default();
         Ok((

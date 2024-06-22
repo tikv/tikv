@@ -20,6 +20,26 @@ use tempfile::Builder;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 use txn_types::{Key, TimeStamp};
 
+#[test]
+fn test_set_disk_engine() {
+    let (tx, rx) = sync_channel(0);
+    fail::cfg_callback("in_memory_engine_set_rocks_engine", move || {
+        let _ = tx.send(true);
+    })
+    .unwrap();
+    let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
+        VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+    )));
+    let path = Builder::new()
+        .prefix("test_set_disk_engine")
+        .tempdir()
+        .unwrap();
+    let path_str = path.path().to_str().unwrap();
+    let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+    engine.set_disk_engine(rocks_engine.clone());
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+}
+
 // We should not use skiplist.get directly as we only cares keys without
 // sequence number suffix
 fn key_exist(sl: &SkiplistHandle, key: &InternalBytes, guard: &epoch::Guard) -> bool {
@@ -380,7 +400,7 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     let range1_clone = range1.clone();
     let range2_clone = range2.clone();
     let range3_clone = range3.clone();
-    let _ = std::thread::spawn(move || {
+    let handle = std::thread::spawn(move || {
         let mut wb = engine_clone.write_batch();
         wb.prepare_for_range(range1_clone);
         wb.put_cf(CF_LOCK, b"k02", b"val").unwrap();
@@ -474,4 +494,6 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
     verify_data(&range3, 0);
+
+    let _ = handle.join();
 }
