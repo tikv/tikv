@@ -26,7 +26,7 @@ test-engines-panic = ["tikv/test-engines-panic"]
 [dependencies]
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
-crossbeam = "0.8"
+crossbeam = { workspace = true }
 engine_traits = { workspace = true }
 fail = "0.5"
 futures = "0.3"

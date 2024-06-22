@@ -19,8 +19,8 @@ codec = { workspace = true }
 collections = { workspace = true }
 cpu-time = "1.0.0"
 crc32fast = "1.2"
-crossbeam = "0.8"
-crossbeam-skiplist = "0.1"
+crossbeam = { workspace = true }
+crossbeam-skiplist = { workspace = true }
 derive_more = "0.99.3"
 error_code = { workspace = true }
 fail = "0.5"
