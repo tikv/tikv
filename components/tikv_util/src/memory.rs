@@ -8,6 +8,7 @@ use std::{
     },
 };
 
+use collections::HashMap;
 use kvproto::{
     encryptionpb::EncryptionMeta,
     kvrpcpb::LockInfo,
@@ -28,20 +29,77 @@ pub unsafe fn vec_transmute<F, T>(from: Vec<F>) -> Vec<T> {
     Vec::from_raw_parts(ptr as _, len, cap)
 }
 
+/// Query the number of bytes of an object.
 pub trait HeapSize {
-    fn heap_size(&self) -> usize {
+    /// Return the approximate number of bytes it owns in heap.
+    ///
+    /// N.B. the implementation should be performant, as it is often called on
+    /// performance critical path.
+    fn approximate_heap_size(&self) -> usize {
         0
     }
 }
 
-impl HeapSize for [u8] {
-    fn heap_size(&self) -> usize {
-        self.len() * mem::size_of::<u8>()
+macro_rules! impl_zero_heap_size{
+    ( $($typ: ty,)+ ) => {
+        $(
+            impl HeapSize for $typ {
+                fn approximate_heap_size(&self) -> usize { 0 }
+            }
+        )+
+    }
+}
+
+impl_zero_heap_size! {
+    bool, u8, u64,
+}
+
+// Do not impl HeapSize for [T], because type coercions make it error-prone.
+// E.g., Vec[u8] may be casted to &[u8] which does not own any byte in heap.
+impl<T: HeapSize> HeapSize for Vec<T> {
+    fn approximate_heap_size(&self) -> usize {
+        let cap_bytes = self.capacity() * std::mem::size_of::<T>();
+        if self.is_empty() {
+            cap_bytes
+        } else {
+            // Prefer an approximation of its actually heap size, because we
+            // want the time complexity to be O(1).
+            self.len() * self[0].approximate_heap_size() + cap_bytes
+        }
+    }
+}
+
+impl<A: HeapSize, B: HeapSize> HeapSize for (A, B) {
+    fn approximate_heap_size(&self) -> usize {
+        self.0.approximate_heap_size() + self.1.approximate_heap_size()
+    }
+}
+
+impl<T: HeapSize> HeapSize for Option<T> {
+    fn approximate_heap_size(&self) -> usize {
+        match self {
+            Some(t) => t.approximate_heap_size(),
+            None => 0,
+        }
+    }
+}
+
+impl<K: HeapSize, V: HeapSize> HeapSize for HashMap<K, V> {
+    fn approximate_heap_size(&self) -> usize {
+        let cap_bytes = self.capacity() * (mem::size_of::<K>() + mem::size_of::<V>());
+        if self.is_empty() {
+            cap_bytes
+        } else {
+            let kv = self.iter().next().unwrap();
+            // Prefer an approximation of its actually heap size, because we
+            // want the time complexity to be O(1).
+            cap_bytes + self.len() * (kv.0.approximate_heap_size() + kv.1.approximate_heap_size())
+        }
     }
 }
 
 impl HeapSize for Region {
-    fn heap_size(&self) -> usize {
+    fn approximate_heap_size(&self) -> usize {
         let mut size = self.start_key.capacity() + self.end_key.capacity();
         size += mem::size_of::<RegionEpoch>();
         size += self.peers.capacity() * mem::size_of::<Peer>();
@@ -53,7 +111,7 @@ impl HeapSize for Region {
 }
 
 impl HeapSize for ReadIndexRequest {
-    fn heap_size(&self) -> usize {
+    fn approximate_heap_size(&self) -> usize {
         self.key_ranges
             .iter()
             .map(|r| r.start_key.capacity() + r.end_key.capacity())
@@ -62,7 +120,7 @@ impl HeapSize for ReadIndexRequest {
 }
 
 impl HeapSize for LockInfo {
-    fn heap_size(&self) -> usize {
+    fn approximate_heap_size(&self) -> usize {
         self.primary_lock.capacity()
             + self.key.capacity()
             + self.secondaries.iter().map(|k| k.len()).sum::<usize>()
@@ -70,7 +128,7 @@ impl HeapSize for LockInfo {
 }
 
 impl HeapSize for RaftCmdRequest {
-    fn heap_size(&self) -> usize {
+    fn approximate_heap_size(&self) -> usize {
         mem::size_of::<raft_cmdpb::RaftRequestHeader>()
             + self.requests.capacity() * mem::size_of::<raft_cmdpb::Request>()
             + mem::size_of_val(&self.admin_request)
@@ -108,6 +166,10 @@ impl OwnedAllocated {
         self.allocated += bytes;
         Ok(())
     }
+
+    pub fn source(&self) -> &MemoryQuota {
+        &self.from
+    }
 }
 
 impl Drop for OwnedAllocated {
@@ -134,6 +196,22 @@ impl MemoryQuota {
 
     pub fn set_capacity(&self, capacity: usize) {
         self.capacity.store(capacity, Ordering::Relaxed);
+    }
+
+    pub fn alloc_force(&self, bytes: usize) {
+        let mut in_use_bytes = self.in_use.load(Ordering::Relaxed);
+        loop {
+            let new_in_use_bytes = in_use_bytes + bytes;
+            match self.in_use.compare_exchange_weak(
+                in_use_bytes,
+                new_in_use_bytes,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return,
+                Err(current) => in_use_bytes = current,
+            }
+        }
     }
 
     pub fn alloc(&self, bytes: usize) -> Result<(), MemoryQuotaExceeded> {
@@ -231,5 +309,73 @@ mod tests {
         assert_eq!(quota.in_use(), 12);
         drop(allocated2);
         assert_eq!(quota.in_use(), 4);
+    }
+
+    #[test]
+    fn test_alloc_force() {
+        let quota = MemoryQuota::new(100);
+        quota.alloc(10).unwrap();
+        assert_eq!(quota.in_use(), 10);
+        quota.alloc_force(100);
+        assert_eq!(quota.in_use(), 110);
+
+        quota.free(10);
+        assert_eq!(quota.in_use(), 100);
+        quota.alloc(10).unwrap_err();
+        assert_eq!(quota.in_use(), 100);
+
+        quota.alloc_force(20);
+        assert_eq!(quota.in_use(), 120);
+        quota.free(110);
+        assert_eq!(quota.in_use(), 10);
+
+        quota.alloc(10).unwrap();
+        assert_eq!(quota.in_use(), 20);
+        quota.free(10);
+        assert_eq!(quota.in_use(), 10);
+
+        // Resize to a smaller capacity
+        quota.set_capacity(10);
+        quota.alloc(100).unwrap_err();
+        assert_eq!(quota.in_use(), 10);
+        quota.alloc_force(100);
+        assert_eq!(quota.in_use(), 110);
+        // Resize to a larger capacity
+        quota.set_capacity(120);
+        quota.alloc(10).unwrap();
+        assert_eq!(quota.in_use(), 120);
+        quota.alloc_force(100);
+        assert_eq!(quota.in_use(), 220);
+        // Free more then it has.
+        quota.free(230);
+        assert_eq!(quota.in_use(), 0);
+    }
+
+    #[test]
+    fn test_approximate_heap_size() {
+        let mut vu8 = Vec::with_capacity(16);
+        assert_eq!(vu8.approximate_heap_size(), 16);
+        vu8.extend([1u8, 2, 3]);
+        assert_eq!(vu8.approximate_heap_size(), 16);
+
+        let ovu8 = Some(vu8);
+        assert_eq!(ovu8.approximate_heap_size(), 16);
+
+        let ovu82 = (ovu8, Some(Vec::<u8>::with_capacity(16)));
+        assert_eq!(ovu82.approximate_heap_size(), 16 * 2);
+
+        let mut mu8u64 = HashMap::<u8, u64>::default();
+        mu8u64.reserve(16);
+        assert_eq!(mu8u64.approximate_heap_size(), mu8u64.capacity() * (1 + 8));
+
+        let mut mu8vu64 = HashMap::<u8, Vec<u64>>::default();
+        mu8vu64.reserve(16);
+        mu8vu64.insert(1, Vec::with_capacity(2));
+        mu8vu64.insert(2, Vec::with_capacity(2));
+        assert_eq!(
+            mu8vu64.approximate_heap_size(),
+            mu8vu64.capacity() * (1 + mem::size_of::<Vec<u64>>())
+                + 2 * (Vec::<u64>::with_capacity(2).approximate_heap_size())
+        );
     }
 }

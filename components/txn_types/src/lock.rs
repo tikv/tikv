@@ -4,9 +4,12 @@ use std::{borrow::Cow, mem::size_of};
 
 use byteorder::ReadBytesExt;
 use kvproto::kvrpcpb::{IsolationLevel, LockInfo, Op, WriteConflictReason};
-use tikv_util::codec::{
-    bytes::{self, BytesEncoder},
-    number::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN},
+use tikv_util::{
+    codec::{
+        bytes::{self, BytesEncoder},
+        number::{self, NumberEncoder, MAX_VAR_I64_LEN, MAX_VAR_U64_LEN},
+    },
+    memory::HeapSize,
 };
 
 use crate::{
@@ -129,6 +132,15 @@ impl std::fmt::Debug for Lock {
             .field("txn_source", &self.txn_source)
             .field("is_locked_with_conflict", &self.is_locked_with_conflict)
             .finish()
+    }
+}
+
+impl HeapSize for Lock {
+    fn approximate_heap_size(&self) -> usize {
+        self.primary.approximate_heap_size()
+            + self.short_value.approximate_heap_size()
+            + self.secondaries.approximate_heap_size()
+            + self.rollback_ts.approximate_heap_size()
     }
 }
 
