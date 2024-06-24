@@ -405,7 +405,8 @@ impl RangeCacheWriteBatchEntry {
     }
 
     fn memory_size_required_for_key_value(key: &[u8], value: &[u8]) -> usize {
-        key.len() + value.len() + ENC_KEY_SEQ_LENGTH + 2 * MEM_CONTROLLER_OVERHEAD /* one for key and one for value */
+        InternalBytes::memory_size_required(key.len() + ENC_KEY_SEQ_LENGTH)
+            + InternalBytes::memory_size_required(value.len())
     }
 
     pub fn data_size(&self) -> usize {
