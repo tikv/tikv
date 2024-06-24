@@ -14,7 +14,7 @@ mod all {
             atomic::{AtomicBool, Ordering},
             Arc,
         },
-        time::{Duration, Instant},
+        time::Duration,
     };
 
     use backup_stream::{

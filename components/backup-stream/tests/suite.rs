@@ -478,6 +478,7 @@ impl Suite {
             .await
     }
 
+    #[allow(dead_code)]
     pub async fn write_records_batched(
         &mut self,
         from: usize,
@@ -506,7 +507,7 @@ impl Suite {
                     Self::PROMISED_LONG_VALUE.to_vec()
                 };
 
-                let k = Key::from_raw(&key).append_ts(commit_ts);
+                let k = Key::from_raw(key).append_ts(commit_ts);
                 muts.push(mutation(raw_key, value));
                 inserted.insert(k.into_encoded());
             }
