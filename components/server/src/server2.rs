@@ -735,6 +735,7 @@ where
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
                 BackupStreamResolver::V2(self.router.clone().unwrap(), PhantomData),
+                self.core.encryption_key_manager.clone(),
             );
             backup_stream_worker.start(backup_stream_endpoint);
             self.core.to_stop.push(backup_stream_worker);
