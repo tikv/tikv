@@ -14,7 +14,7 @@ mod all {
             atomic::{AtomicBool, Ordering},
             Arc,
         },
-        time::Duration,
+        time::{Duration, Instant},
     };
 
     use backup_stream::{
@@ -432,9 +432,9 @@ mod all {
             .build();
 
         suite.must_register_task(1, "encryption");
-        let items = run_async_test(suite.write_records(0, 128, 1));
+        let items = run_async_test(suite.write_records_batched(0, 128, 1));
         // So the old files can be "flushed" to disk.
-        let items2 = run_async_test(suite.write_records(256, 128, 1));
+        let items2 = run_async_test(suite.write_records_batched(256, 128, 1));
         suite.sync();
 
         let files = WalkDir::new(suite.temp_files.path())

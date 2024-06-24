@@ -478,6 +478,51 @@ impl Suite {
             .await
     }
 
+    pub async fn write_records_batched(
+        &mut self,
+        from: usize,
+        n: usize,
+        for_table: i64,
+    ) -> HashSet<Vec<u8>> {
+        let mut inserted = HashSet::default();
+        let mut keys = HashMap::new();
+        let start_ts = self.cluster.pd_client.get_tso().await.unwrap();
+        for sn in (from..(from + n)).map(|x| x * 2) {
+            let sn = sn as u64;
+            let key = make_record_key(for_table, sn);
+            let enc_key = Key::from_raw(&key).into_encoded();
+            let region = self.cluster.get_region_id(&enc_key);
+            let v = keys.entry(region).or_insert_with(|| vec![]);
+            v.push((key, sn));
+        }
+        let commit_ts = self.cluster.pd_client.get_tso().await.unwrap();
+        for (region, keys) in keys {
+            let mut muts = vec![];
+            for (key, sn) in &keys {
+                let raw_key = make_record_key(for_table, *sn);
+                let value = if sn % 4 == 0 {
+                    Self::PROMISED_SHORT_VALUE.to_vec()
+                } else {
+                    Self::PROMISED_LONG_VALUE.to_vec()
+                };
+
+                let k = Key::from_raw(&key).append_ts(commit_ts);
+                muts.push(mutation(raw_key, value));
+                inserted.insert(k.into_encoded());
+            }
+            let pk = muts[0].key.clone();
+            self.must_kv_prewrite(region, muts, pk, start_ts);
+            self.must_kv_commit(
+                region,
+                keys.into_iter().map(|(k, _)| k).collect(),
+                start_ts,
+                commit_ts,
+            );
+        }
+
+        inserted
+    }
+
     pub async fn write_records(
         &mut self,
         from: usize,
