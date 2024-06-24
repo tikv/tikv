@@ -77,7 +77,7 @@ concurrency_manager = { workspace = true }
 coprocessor_plugin_api = { workspace = true }
 crc32fast = "1.2"
 crc64fast = "0.1"
-crossbeam = "0.8"
+crossbeam = { workspace = true }
 crypto = { workspace = true }
 dashmap = "5"
 encryption_export = { workspace = true }
@@ -266,6 +266,7 @@ members = [
   "components/collections",
   "components/concurrency_manager",
   "components/coprocessor_plugin_api",
+  "components/crossbeam-skiplist",
   "components/crypto",
   "components/encryption",
   "components/encryption/export",
@@ -348,6 +349,7 @@ codec = { path = "components/codec" }
 collections = { path = "components/collections" }
 concurrency_manager = { path = "components/concurrency_manager" }
 coprocessor_plugin_api = { path = "components/coprocessor_plugin_api" }
+crossbeam-skiplist = { path = "components/crossbeam-skiplist" }
 encryption = { path = "components/encryption" }
 encryption_export = { path = "components/encryption/export" }
 engine_panic = { path = "components/engine_panic" }
@@ -445,6 +447,10 @@ tracing = { version = "0.1.39", default-features = false, features = [
 openssl = "0.10"
 openssl-sys = "0.9"
 heck = "0.3"
+crossbeam = "0.8"
+crossbeam-channel = "0.5"
+crossbeam-utils = "0.8"
+crossbeam-epoch = "0.9"
 
 [profile.dev.package.grpcio-sys]
 debug = false

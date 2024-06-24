@@ -282,7 +282,9 @@ fn test_node_lease_unsafe_during_leader_transfers() {
 }
 
 #[test_case(test_raftstore::new_node_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
+// transfer leader means eviction, so hybrid_engine with range cache memory
+// engine does not fit in.
+// #[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
 // #[test_case(test_raftstore_v2::new_node_cluster)]
 // TODO: batch get snapshot is not supported in raftstore v2 currently.
 //       https://github.com/tikv/tikv/issues/14876
@@ -455,7 +457,8 @@ fn test_node_callback_when_destroyed() {
 /// Test if the callback proposed by read index is cleared correctly.
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
+// transfer leader means eviction
+// #[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
 fn test_lease_read_callback_destroy() {
     // Only server cluster can fake sending message successfully in raftstore layer.
     let mut cluster = new_cluster(0, 3);
