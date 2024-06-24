@@ -25,7 +25,7 @@ use raftstore::{
     router::CdcHandle,
 };
 use resolved_ts::{resolve_by_raft, LeadershipResolver};
-use tikv::config::BackupStreamConfig;
+use tikv::config::{BackupStreamConfig, ResolvedTsConfig};
 use tikv_util::{
     box_err,
     config::ReadableDuration,
@@ -115,6 +115,7 @@ where
         store_id: u64,
         store: S,
         config: BackupStreamConfig,
+        resolved_ts_config: ResolvedTsConfig,
         scheduler: Scheduler<Task>,
         observer: BackupStreamObserver,
         accessor: R,
@@ -176,6 +177,7 @@ where
             meta_client.clone(),
             ((config.num_threads + 1) / 2).max(1),
             resolver,
+            resolved_ts_config.advance_ts_interval.0,
         );
         pool.spawn(root!(op_loop));
         let mut checkpoint_mgr = CheckpointManager::default();

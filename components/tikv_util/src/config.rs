@@ -19,6 +19,7 @@ use chrono::{
     format::{self, Fixed, Item, Parsed},
     DateTime, FixedOffset, Local, NaiveTime, TimeZone, Timelike,
 };
+pub use heck::KebabCase;
 use online_config::ConfigValue;
 use serde::{
     de::{self, Unexpected, Visitor},
@@ -1522,7 +1523,6 @@ macro_rules! numeric_enum_serializing_mod {
             use serde::{Serializer, Deserializer};
             use serde::de::{self, Unexpected, Visitor};
             use super::$enum;
-            use case_macros::*;
 
             pub fn serialize<S>(mode: &$enum, serializer: S) -> Result<S::Ok, S::Error>
                 where S: Serializer
@@ -1556,10 +1556,13 @@ macro_rules! numeric_enum_serializing_mod {
                     fn visit_str<E>(self, value: &str) -> Result<$enum, E>
                         where E: de::Error
                     {
-                        match value {
-                            $(kebab_case!($variant) => Ok($enum::$variant), )*
-                            _ => Err(E::invalid_value(Unexpected::Str(value), &self))
-                        }
+                        use $crate::config::KebabCase;
+                        $(
+                            if value == stringify!($variant).to_kebab_case() {
+                                return Ok($enum::$variant)
+                            }
+                        )*
+                        Err(E::invalid_value(Unexpected::Str(value), &self))
                     }
                 }
 
@@ -1571,10 +1574,11 @@ macro_rules! numeric_enum_serializing_mod {
                 use toml;
                 use super::$enum;
                 use serde::{Deserialize, Serialize};
+                use $crate::config::KebabCase;
 
                 #[test]
                 fn test_serde() {
-                    #[derive(Serialize, Deserialize, PartialEq)]
+                    #[derive(Serialize, Deserialize, PartialEq, Debug)]
                     struct EnumHolder {
                         #[serde(with = "super")]
                         e: $enum,
@@ -1591,6 +1595,15 @@ macro_rules! numeric_enum_serializing_mod {
                         let h: EnumHolder = toml::from_str(&exp).unwrap();
                         assert!(h == holder);
                     }
+                    $({
+                        let s = stringify!($variant);
+                        let res = format!("e = \"{}\"\n", s.to_kebab_case());
+                        let h: EnumHolder = toml::from_str(&res).unwrap();
+                        assert!(h.e == $enum::$variant);
+                    })*
+                    let s = format!("{}-bad-variant---", stringify!($enum));
+                    let res = format!("e = \"{}\"\n", s.to_kebab_case());
+                    toml::from_str::<EnumHolder>(&res).unwrap_err();
                 }
             }
         }
@@ -2068,8 +2081,9 @@ mod tests {
 
     #[test]
     fn test_readable_schedule() {
+        // Tests HHMM offsets for timezones.
         let schedule = ReadableSchedule(
-            vec!["09:30 +00:00", "23:00 +00:00"]
+            vec!["09:30 +0000", "11:15 +0530", "23:00 +0000"]
                 .into_iter()
                 .flat_map(ReadableOffsetTime::from_str)
                 .collect::<Vec<_>>(),
@@ -2080,12 +2094,14 @@ mod tests {
         let time_c = DateTime::parse_from_rfc3339("2023-10-27T23:15:00-00:00").unwrap();
         let time_d = DateTime::parse_from_rfc3339("2023-10-27T23:00:00-00:00").unwrap();
         let time_e = DateTime::parse_from_rfc3339("2023-10-27T20:00:00-00:00").unwrap();
+        let time_f = DateTime::parse_from_rfc3339("2024-05-29T05:45:00-00:00").unwrap();
 
         // positives for schedule by hour
         assert!(schedule.is_scheduled_this_hour(&time_a));
         assert!(schedule.is_scheduled_this_hour(&time_b));
         assert!(schedule.is_scheduled_this_hour(&time_c));
         assert!(schedule.is_scheduled_this_hour(&time_d));
+        assert!(schedule.is_scheduled_this_hour(&time_f));
 
         // negatives for schedule by hour
         assert!(!schedule.is_scheduled_this_hour(&time_e));
@@ -2093,11 +2109,34 @@ mod tests {
         // positives for schedule by hour and minute
         assert!(schedule.is_scheduled_this_hour_minute(&time_a));
         assert!(schedule.is_scheduled_this_hour_minute(&time_d));
+        assert!(schedule.is_scheduled_this_hour_minute(&time_f));
 
         // negatives for schedule by hour and minute
         assert!(!schedule.is_scheduled_this_hour_minute(&time_b));
         assert!(!schedule.is_scheduled_this_hour_minute(&time_c));
         assert!(!schedule.is_scheduled_this_hour_minute(&time_e));
+    }
+
+    #[test]
+    fn test_readable_schedule_col_separated_offsets() {
+        // Test that HH:MM offsets are supported.
+        let schedule = ReadableSchedule(
+            vec!["09:30 +00:00", "11:15 +05:30", "23:00 +00:00"]
+                .into_iter()
+                .flat_map(ReadableOffsetTime::from_str)
+                .collect::<Vec<_>>(),
+        );
+
+        let time_a = DateTime::parse_from_rfc3339("2023-10-27T09:30:57-00:00").unwrap();
+        let time_b = DateTime::parse_from_rfc3339("2023-10-27T23:00:00-00:00").unwrap();
+        let time_c = DateTime::parse_from_rfc3339("2024-05-29T05:45:00-00:00").unwrap();
+        let time_d = DateTime::parse_from_rfc3339("2023-10-27T20:00:00-00:00").unwrap();
+
+        assert!(schedule.is_scheduled_this_hour(&time_a));
+        assert!(schedule.is_scheduled_this_hour(&time_b));
+        assert!(schedule.is_scheduled_this_hour(&time_c));
+        assert!(schedule.is_scheduled_this_hour_minute(&time_c));
+        assert!(!schedule.is_scheduled_this_hour_minute(&time_d));
     }
 
     #[test]
