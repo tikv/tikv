@@ -1005,12 +1005,51 @@ impl Runnable for BackgroundRunner {
                             let read_ts = iter.read_ts;
                             let mut disk_iter =
                                 rocksdb_snap.iterator_opt(cf, opts.clone()).unwrap();
-                            let valid = iter.seek_to_first().unwrap();
-                            if !valid {
+                            let m_valid = iter.seek_to_first().unwrap();
+                            let d_valid = disk_iter.seek_to_first().unwrap();
+                            if !m_valid {
+                                if d_valid {
+                                    if *cf == CF_LOCK {
+                                        error!(
+                                            "seek_to_first result not equal";
+                                            "lower" => log_wrappers::Value(&iter.lower_bound),
+                                            "upper" => log_wrappers::Value(&iter.upper_bound),
+                                            "cache_key" => log_wrappers::Value(&iter.key()),
+                                            "seqno" => iter.sequence_number,
+                                            "cf" => ?cf,
+                                        );
+                                        unreachable!();
+                                    }
+                                    let (key, ts) = split_ts(disk_iter.key()).unwrap();
+                                    if ts > safe_ts {
+                                        error!(
+                                            "seek_to_first result not equal";
+                                            "lower" => log_wrappers::Value(&iter.lower_bound),
+                                            "upper" => log_wrappers::Value(&iter.upper_bound),
+                                            "disk_key" => log_wrappers::Value(&disk_iter.key()),
+                                            "disk_key_ts" => ts,
+                                            "seqno" => iter.sequence_number,
+                                            "cf" => ?cf,
+                                        );
+                                        unreachable!();
+                                    }
+                                    let write = parse_write(disk_iter.value()).unwrap();
+                                    if write.write_type == WriteType::Put {
+                                        error!(
+                                            "seek_to_first result not equal";
+                                            "lower" => log_wrappers::Value(&iter.lower_bound),
+                                            "upper" => log_wrappers::Value(&iter.upper_bound),
+                                            "disk_key" => log_wrappers::Value(&disk_iter.key()),
+                                            "disk_key_ts" => ts,
+                                            "seqno" => iter.sequence_number,
+                                            "cf" => ?cf,
+                                        );
+                                        unreachable!();
+                                    }
+                                }
                                 continue;
                             }
-                            let valid = disk_iter.seek_to_first().unwrap();
-                            if !valid {
+                            if !d_valid {
                                 error!(
                                     "seek_to_first result not equal";
                                     "lower" => log_wrappers::Value(&iter.lower_bound),
