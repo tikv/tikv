@@ -279,18 +279,15 @@ impl Service {
         peer: &str,
     ) -> semver::Version {
         let version_field = request.get_header().get_ticdc_version();
-        match semver::Version::parse(version_field) {
-            Ok(v) => v,
-            Err(e) => {
-                warn!(
-                    "empty or invalid TiCDC version, please upgrading TiCDC";
-                    "version" => version_field,
-                    "downstream" => ?peer, "region_id" => request.region_id,
-                    "error" => ?e,
-                );
-                semver::Version::new(0, 0, 0)
-            }
-        }
+        semver::Version::parse(version_field).unwrap_or_else(|e| {
+            warn!(
+                "empty or invalid TiCDC version, please upgrading TiCDC";
+                "version" => version_field,
+                "downstream" => ?peer, "region_id" => request.region_id,
+                "error" => ?e,
+            );
+            semver::Version::new(0, 0, 0)
+        })
     }
 
     fn set_conn_version(
@@ -337,13 +334,13 @@ impl Service {
         request: ChangeDataRequest,
         conn_id: ConnId,
     ) -> Result<(), String> {
-        let observed_range =
-            ObservedRange::new(request.start_key.clone(), request.end_key.clone()).unwrap_or_else(|e| {
+        let observed_range = ObservedRange::new(request.start_key.clone(), request.end_key.clone())
+            .unwrap_or_else(|e| {
                 warn!(
-                        "cdc invalid observed start key or end key version";
-                        "downstream" => ?peer, "region_id" => request.region_id,
-                        "error" => ?e,
-                    );
+                    "cdc invalid observed start key or end key version";
+                    "downstream" => ?peer, "region_id" => request.region_id,
+                    "error" => ?e,
+                );
                 ObservedRange::default()
             });
         let downstream = Downstream::new(
