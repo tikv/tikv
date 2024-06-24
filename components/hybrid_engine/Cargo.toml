@@ -27,7 +27,7 @@ tempfile = "3.0"
 prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
 prometheus-static-metric = "0.5"
 lazy_static = "1.4.0"
-crossbeam = "0.8"
+crossbeam = { workspace = true }
 fail = "0.5"
 
 [dev-dependencies]

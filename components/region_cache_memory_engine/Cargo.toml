@@ -19,7 +19,7 @@ engine_traits = { workspace = true }
 collections = { workspace = true }
 skiplist-rs = { git = "https://github.com/tikv/skiplist-rs.git", branch = "main" }
 bytes = "1.0"
-crossbeam = "0.8"
+crossbeam = { workspace = true }
 futures = { version = "0.3", features = ["compat"] }
 tikv_util = { workspace = true }
 txn_types = { workspace = true }
