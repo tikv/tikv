@@ -47,7 +47,7 @@ use crate::{
     initializer::KvEntry,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::{Conn, ConnId, RequestId, FeatureGate},
+    service::{Conn, ConnId, FeatureGate, RequestId},
     txn_source::TxnSource,
     Error, Result,
 };
@@ -194,7 +194,7 @@ impl Downstream {
 
     /// Sink events to the downstream.
     pub fn sink_event(&self, mut event: Event, force: bool) -> Result<()> {
-        event.set_request_id(self.req_id as u64);
+        event.set_request_id(self.req_id.0);
         if self.sink.is_none() {
             info!("cdc drop event, no sink";
                 "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => self.req_id);
@@ -835,7 +835,7 @@ impl Delegate {
                 };
                 CdcEvent::Event(Event {
                     region_id,
-                    request_id.0,
+                    request_id: request_id.0,
                     event: Some(Event_oneof_event::Entries(event_entries)),
                     ..Default::default()
                 })
@@ -1605,7 +1605,9 @@ mod tests {
         assert!(delegate.handle.is_observing());
 
         // Subscribe with an invalid epoch.
-        delegate.subscribe(new_downstream(RequestId(1), 2)).unwrap_err();
+        delegate
+            .subscribe(new_downstream(RequestId(1), 2))
+            .unwrap_err();
         assert_eq!(delegate.downstreams().len(), 1);
 
         // Unsubscribe all downstreams.
