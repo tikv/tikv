@@ -323,6 +323,8 @@ pub struct RegionSubscriptionManager<S, R> {
     messenger: WeakSender<ObserveOp>,
     scan_pool_handle: ScanPoolHandle,
     scans: Arc<FutureWaitGroup>,
+
+    advance_ts_interval: Duration,
 }
 
 /// Create a pool for doing initial scanning.
@@ -358,6 +360,7 @@ where
         meta_cli: MetadataClient<S>,
         scan_pool_size: usize,
         resolver: BackupStreamResolver<HChkLd, E>,
+        advance_ts_interval: Duration,
     ) -> (Sender<ObserveOp>, future![()])
     where
         E: KvEngine,
@@ -377,6 +380,7 @@ where
             scans: FutureWaitGroup::new(),
             failure_count: HashMap::new(),
             memory_manager: Arc::clone(&initial_loader.quota),
+            advance_ts_interval,
         };
         let fut = op.region_operator_loop(rx, resolver);
         (tx, fut)
@@ -454,7 +458,13 @@ where
                         warn!("waiting for initial scanning done timed out, forcing progress!";
                             "take" => ?now.saturating_elapsed(), "timedout" => %timedout);
                     }
-                    let regions = resolver.resolve(self.subs.current_regions(), min_ts).await;
+                    let regions = resolver
+                        .resolve(
+                            self.subs.current_regions(),
+                            min_ts,
+                            Some(self.advance_ts_interval),
+                        )
+                        .await;
                     let cps = self.subs.resolve_with(min_ts, regions);
                     let min_region = cps.iter().min_by_key(|rs| rs.checkpoint);
                     // If there isn't any region observed, the `min_ts` can be used as resolved ts
@@ -1077,6 +1087,7 @@ mod test {
                 messenger: tx.downgrade(),
                 scan_pool_handle: spawn_executors_to(init, pool.handle()),
                 scans: FutureWaitGroup::new(),
+                advance_ts_interval: Duration::from_secs(1),
             };
             let events = Arc::new(Mutex::new(vec![]));
             let ob_events = Arc::clone(&events);

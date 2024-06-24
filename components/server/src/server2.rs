@@ -67,6 +67,7 @@ use raftstore_v2::{
     router::{DiskSnapBackupHandle, PeerMsg, RaftRouter},
     StateStorage,
 };
+use region_cache_memory_engine::RangeCacheMemoryEngineStatistics;
 use resolved_ts::Task;
 use resource_control::ResourceGroupManager;
 use security::SecurityManager;
@@ -232,6 +233,7 @@ struct TikvServer<ER: RaftEngine> {
     snap_mgr: Option<TabletSnapManager>, // Will be filled in `init_servers`.
     engines: Option<TikvEngines<RocksEngine, ER>>,
     kv_statistics: Option<Arc<RocksStatistics>>,
+    range_cache_engine_statistics: Option<Arc<RangeCacheMemoryEngineStatistics>>,
     raft_statistics: Option<Arc<RocksStatistics>>,
     servers: Option<Servers<RocksEngine, ER>>,
     region_info_accessor: Option<RegionInfoAccessor>,
@@ -380,6 +382,7 @@ where
             snap_mgr: None,
             engines: None,
             kv_statistics: None,
+            range_cache_engine_statistics: None,
             raft_statistics: None,
             servers: None,
             region_info_accessor: None,
@@ -652,6 +655,7 @@ where
         let cdc_endpoint = cdc::Endpoint::new(
             self.core.config.server.cluster_id,
             &self.core.config.cdc,
+            &self.core.config.resolved_ts,
             self.core.config.storage.engine == EngineType::RaftKv2,
             self.core.config.storage.api_version(),
             self.pd_client.clone(),
@@ -723,6 +727,7 @@ where
                     pd_client::meta_storage::Source::LogBackup,
                 ))),
                 self.core.config.log_backup.clone(),
+                self.core.config.resolved_ts.clone(),
                 backup_stream_scheduler.clone(),
                 backup_stream_ob,
                 self.region_info_accessor.as_ref().unwrap().clone(),
@@ -730,6 +735,7 @@ where
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
                 BackupStreamResolver::V2(self.router.clone().unwrap(), PhantomData),
+                self.core.encryption_key_manager.clone(),
             );
             backup_stream_worker.start(backup_stream_endpoint);
             self.core.to_stop.push(backup_stream_worker);
@@ -756,6 +762,17 @@ where
 
         let node = self.node.as_ref().unwrap();
 
+        // Create coprocessor endpoint.
+        let copr = coprocessor::Endpoint::new(
+            &server_config.value(),
+            cop_read_pool_handle,
+            self.concurrency_manager.clone(),
+            resource_tag_factory,
+            self.quota_limiter.clone(),
+            self.resource_manager.clone(),
+        );
+        let copr_config_manager = copr.config_manager();
+
         self.snap_mgr = Some(snap_mgr.clone());
         // Create server
         let server = Server::new(
@@ -763,14 +780,7 @@ where
             &server_config,
             &self.security_mgr,
             storage,
-            coprocessor::Endpoint::new(
-                &server_config.value(),
-                cop_read_pool_handle,
-                self.concurrency_manager.clone(),
-                resource_tag_factory,
-                self.quota_limiter.clone(),
-                self.resource_manager.clone(),
-            ),
+            copr,
             coprocessor_v2::Endpoint::new(&self.core.config.coprocessor_v2),
             self.resolver.clone().unwrap(),
             Either::Right(snap_mgr.clone()),
@@ -789,6 +799,7 @@ where
                 server.get_snap_worker_scheduler(),
                 server_config.clone(),
                 server.get_grpc_mem_quota().clone(),
+                copr_config_manager,
             )),
         );
 
@@ -1092,6 +1103,7 @@ where
         let mut engine_metrics = EngineMetricsManager::<RocksEngine, ER>::new(
             self.tablet_registry.clone().unwrap(),
             self.kv_statistics.clone(),
+            self.range_cache_engine_statistics.clone(),
             self.core.config.rocksdb.titan.enabled.map_or(false, |v| v),
             self.engines.as_ref().unwrap().raft_engine.clone(),
             self.raft_statistics.clone(),

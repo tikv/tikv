@@ -485,6 +485,7 @@ dependencies = [
  "crossbeam",
  "crossbeam-channel",
  "dashmap",
+ "encryption",
  "engine_panic",
  "engine_rocks",
  "engine_test",
@@ -783,10 +784,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "case_macros"
-version = "0.1.0"
-
-[[package]]
 name = "cast"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1052,7 +1049,7 @@ name = "concurrency_manager"
 version = "0.0.1"
 dependencies = [
  "criterion",
- "crossbeam-skiplist",
+ "crossbeam-skiplist 0.1.3",
  "fail",
  "futures 0.3.15",
  "kvproto",
@@ -1216,9 +1213,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ae5588f6b3c3cb05239e90bd110f257254aecd01e4635400391aeae07497845"
+checksum = "2801af0d36612ae591caa9568261fddce32ce6e08a7275ea334a06a4ad021a2c"
 dependencies = [
  "cfg-if 1.0.0",
  "crossbeam-channel",
@@ -1230,9 +1227,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-channel"
-version = "0.5.11"
+version = "0.5.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "176dc175b78f56c0f321911d9c8eb2b77a78a4860b9c19db83835fea1a46649b"
+checksum = "33480d6946193aa8033910124896ca395333cae7e2d1113d1fef6c3272217df2"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -1250,16 +1247,11 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.8"
+version = "0.9.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1145cf131a2c6ba0615079ab6a638f7e1973ac9c2634fcbeaaad6114246efe8c"
+checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
 dependencies = [
- "autocfg",
- "cfg-if 1.0.0",
  "crossbeam-utils",
- "lazy_static",
- "memoffset 0.6.4",
- "scopeguard",
 ]
 
 [[package]]
@@ -1274,21 +1266,28 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-skiplist"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "883a5821d7d079fcf34ac55f27a833ee61678110f6b97637cc74513c0d0b42fc"
+version = "0.1.3"
 dependencies = [
- "cfg-if 1.0.0",
  "crossbeam-epoch",
  "crossbeam-utils",
- "scopeguard",
+ "rand 0.8.5",
+]
+
+[[package]]
+name = "crossbeam-skiplist"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df29de440c58ca2cc6e587ec3d22347551a32435fbde9d2bff64e78a9ffa151b"
+dependencies = [
+ "crossbeam-epoch",
+ "crossbeam-utils",
 ]
 
 [[package]]
 name = "crossbeam-utils"
-version = "0.8.19"
+version = "0.8.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "248e3bacc7dc6baa3b21e405ee045c3047101a49145e7e9eca583ab4c2ca5345"
+checksum = "22ec99545bb0ed0ea7bb9b8e1e9122ea386ff8a48c0922e43f36d45ab09e0e80"
 
 [[package]]
 name = "crypto"
@@ -1545,7 +1544,6 @@ name = "engine_rocks"
 version = "0.0.1"
 dependencies = [
  "api_version",
- "case_macros",
  "collections",
  "derive_more",
  "encryption",
@@ -1622,7 +1620,6 @@ dependencies = [
 name = "engine_traits"
 version = "0.0.1"
 dependencies = [
- "case_macros",
  "collections",
  "encryption",
  "error_code",
@@ -2430,21 +2427,18 @@ checksum = "95505c38b4572b2d910cecb0281560f54b440a19336cbbcb27bf6ce6adc6f5a8"
 
 [[package]]
 name = "hermit-abi"
-version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "307c3c9f937f38e3534b1d6447ecf090cafcc9744e4a6360e8b037b2cf5af120"
-dependencies = [
- "libc 0.2.151",
-]
-
-[[package]]
-name = "hermit-abi"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee512640fe35acbfb4bb779db6f0d80704c2cacfa2e39b601ef3e3f47d1ae4c7"
 dependencies = [
  "libc 0.2.151",
 ]
+
+[[package]]
+name = "hermit-abi"
+version = "0.3.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d231dfb89cfffdbc30e7fc41579ed6066ad03abda9e567ccafae602b97ec5024"
 
 [[package]]
 name = "hex"
@@ -2542,8 +2536,10 @@ checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 name = "hybrid_engine"
 version = "0.0.1"
 dependencies = [
+ "crossbeam",
  "engine_rocks",
  "engine_traits",
+ "fail",
  "lazy_static",
  "online_config",
  "prometheus",
@@ -2844,7 +2840,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#4fa2b26b2d8003523908b124ab6e70580023eee6"
+source = "git+https://github.com/pingcap/kvproto.git#0ad602a429126e39bd4a87c687be64f9ae173c02"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -3443,11 +3439,11 @@ dependencies = [
 
 [[package]]
 name = "num_cpus"
-version = "1.13.1"
+version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19e64526ebdee182341572e50e9ad03965aa510cd94427a4549448f285e957a1"
+checksum = "4161fcb6d602d4d2081af7c3a45852d875a03dd337a6bfdd6e06407b61342a43"
 dependencies = [
- "hermit-abi 0.1.3",
+ "hermit-abi 0.3.9",
  "libc 0.2.151",
 ]
 
@@ -4158,8 +4154,8 @@ dependencies = [
 
 [[package]]
 name = "raft-engine"
-version = "0.4.1"
-source = "git+https://github.com/tikv/raft-engine.git#e505d631c8c6d63f7fc63d83ea6e8fb88cf970a5"
+version = "0.4.2"
+source = "git+https://github.com/tikv/raft-engine.git#cd1533d79cfea02d005b458bd70fd9675846c9c6"
 dependencies = [
  "byteorder",
  "crc32fast",
@@ -4192,8 +4188,8 @@ dependencies = [
 
 [[package]]
 name = "raft-engine-ctl"
-version = "0.4.1"
-source = "git+https://github.com/tikv/raft-engine.git#fa56f891fdf0b1cb5b7849b7bee3c5dadbb96103"
+version = "0.4.2"
+source = "git+https://github.com/tikv/raft-engine.git#cd1533d79cfea02d005b458bd70fd9675846c9c6"
 dependencies = [
  "clap 3.1.6",
  "env_logger 0.10.0",
@@ -4603,12 +4599,15 @@ dependencies = [
  "keys",
  "kvproto",
  "lazy_static",
+ "libc 0.2.151",
  "log_wrappers",
  "online_config",
  "parking_lot 0.12.1",
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
+ "raftstore",
+ "rand 0.8.5",
  "security",
  "serde",
  "serde_derive",
@@ -4619,6 +4618,7 @@ dependencies = [
  "tempfile",
  "test_pd",
  "test_pd_client",
+ "test_util",
  "thiserror",
  "tikv_util",
  "txn_types",
@@ -4713,7 +4713,7 @@ dependencies = [
  "byteorder",
  "collections",
  "crossbeam",
- "crossbeam-skiplist",
+ "crossbeam-skiplist 0.1.3",
  "dashmap",
  "fail",
  "file_system",
@@ -6119,6 +6119,7 @@ dependencies = [
  "api_version",
  "collections",
  "engine_rocks",
+ "engine_traits",
  "futures 0.3.15",
  "kvproto",
  "pd_client",
@@ -6451,7 +6452,6 @@ dependencies = [
  "backtrace",
  "batch-system",
  "byteorder",
- "case_macros",
  "causal_ts",
  "chrono",
  "codec",
@@ -6748,7 +6748,7 @@ dependencies = [
  "cpu-time",
  "crc32fast",
  "crossbeam",
- "crossbeam-skiplist",
+ "crossbeam-skiplist 0.1.3",
  "derive_more",
  "error_code",
  "fail",
@@ -6756,6 +6756,7 @@ dependencies = [
  "futures-util",
  "gag",
  "grpcio",
+ "heck 0.3.1",
  "http",
  "kvproto",
  "lazy_static",
@@ -7083,7 +7084,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 1.0.0",
+ "cfg-if 0.1.10",
  "static_assertions",
 ]
 
@@ -7710,7 +7711,7 @@ version = "0.0.1"
 source = "git+https://github.com/tikv/yatp.git?branch=master#793be4d789d4bd15292fe4d06e38063b4ec9d48e"
 dependencies = [
  "crossbeam-deque",
- "crossbeam-skiplist",
+ "crossbeam-skiplist 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "crossbeam-utils",
  "dashmap",
  "fail",

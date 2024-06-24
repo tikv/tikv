@@ -40,6 +40,11 @@ name = "deadlock_detector"
 harness = false
 path = "benches/deadlock_detector/mod.rs"
 
+[[bench]]
+name = "memory"
+harness = false
+path = "benches/memory/mod.rs"
+
 [features]
 default = ["failpoints", "testexport", "test-engine-kv-rocksdb", "test-engine-raft-raft-engine"]
 failpoints = ["fail/failpoints", "tikv/failpoints", "pd_client/failpoints"]
@@ -72,7 +77,7 @@ batch-system = { workspace = true }
 cdc = { workspace = true }
 collections = { workspace = true }
 crc64fast = "0.1"
-crossbeam = "0.8"
+crossbeam = { workspace = true }
 encryption = { workspace = true }
 engine_rocks_helper = { workspace = true }
 error_code = { workspace = true }

@@ -7,19 +7,26 @@ license = "Apache-2.0"
 
 [features]
 testexport = []
+failpoints = ["fail/failpoints"]
+
+[[test]]
+name = "failpoints"
+path = "tests/failpoints/mod.rs"
+required-features = ["failpoints"]
 
 [dependencies]
 engine_traits = { workspace = true }
 collections = { workspace = true }
 skiplist-rs = { git = "https://github.com/tikv/skiplist-rs.git", branch = "main" }
 bytes = "1.0"
-crossbeam = "0.8"
+crossbeam = { workspace = true }
 futures = { version = "0.3", features = ["compat"] }
 tikv_util = { workspace = true }
 txn_types = { workspace = true }
 kvproto = { workspace = true }
 log_wrappers = { workspace = true }
 pd_client = { workspace = true }
+raftstore = { workspace = true }
 dashmap = "5.1"
 security = { workspace = true }
 serde = "1.0"
@@ -38,8 +45,11 @@ lazy_static = "1.4.0"
 hex = "0.4"
 thiserror = "1.0"
 online_config = { workspace = true }
+libc = "0.2"
+rand = "0.8"
 
 [dev-dependencies]
 tempfile = "3.0"
 test_pd = { workspace = true }
 test_pd_client = { workspace = true }
+test_util = { workspace = true }

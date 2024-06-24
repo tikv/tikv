@@ -94,6 +94,18 @@ impl LazyBatchColumnVec {
         self.columns[0].len()
     }
 
+    /// Adaptor for `Vec::swap_remove`.
+    #[inline]
+    pub fn swap_remove(&mut self, index: usize) -> LazyBatchColumn {
+        self.columns.swap_remove(index)
+    }
+
+    /// Adaptor for `Vec::push`.
+    #[inline]
+    pub fn push(&mut self, value: LazyBatchColumn) {
+        self.columns.push(value)
+    }
+
     /// Asserts that all columns have equal length.
     #[inline]
     pub fn assert_columns_equal_length(&self) {

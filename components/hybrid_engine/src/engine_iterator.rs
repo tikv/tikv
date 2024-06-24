@@ -116,14 +116,14 @@ where
     EK: KvEngine,
     EC: RangeCacheEngine,
 {
-    fn internal_delete_skipped_count(&self) -> usize {
+    fn internal_delete_skipped_count(&self) -> u64 {
         match &self.collector {
             Either::Left(c) => c.internal_delete_skipped_count(),
             Either::Right(c) => c.internal_delete_skipped_count(),
         }
     }
 
-    fn internal_key_skipped_count(&self) -> usize {
+    fn internal_key_skipped_count(&self) -> u64 {
         match &self.collector {
             Either::Left(c) => c.internal_key_skipped_count(),
             Either::Right(c) => c.internal_key_skipped_count(),

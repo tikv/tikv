@@ -10,6 +10,7 @@ use std::{
 };
 
 use concurrency_manager::ConcurrencyManager;
+use encryption::DataKeyManager;
 use engine_traits::KvEngine;
 use error_code::ErrorCodeExt;
 use futures::{stream::AbortHandle, FutureExt, TryFutureExt};
@@ -24,7 +25,7 @@ use raftstore::{
     router::CdcHandle,
 };
 use resolved_ts::{resolve_by_raft, LeadershipResolver};
-use tikv::config::BackupStreamConfig;
+use tikv::config::{BackupStreamConfig, ResolvedTsConfig};
 use tikv_util::{
     box_err,
     config::ReadableDuration,
@@ -114,6 +115,7 @@ where
         store_id: u64,
         store: S,
         config: BackupStreamConfig,
+        resolved_ts_config: ResolvedTsConfig,
         scheduler: Scheduler<Task>,
         observer: BackupStreamObserver,
         accessor: R,
@@ -121,13 +123,16 @@ where
         pd_client: Arc<PDC>,
         concurrency_manager: ConcurrencyManager,
         resolver: BackupStreamResolver<RT, E>,
+        data_key_manager: Option<Arc<DataKeyManager>>,
     ) -> Self {
         crate::metrics::STREAM_ENABLED.inc();
         let pool = create_tokio_runtime((config.num_threads / 2).max(1), "backup-stream")
             .expect("failed to create tokio runtime for backup stream worker.");
 
         let meta_client = MetadataClient::new(store, store_id);
-        let range_router = Router::new(scheduler.clone(), router::Config::from(config.clone()));
+        let mut conf = router::Config::from(config.clone());
+        conf.data_key_manager = data_key_manager;
+        let range_router = Router::new(scheduler.clone(), conf);
 
         // spawn a worker to watch task changes from etcd periodically.
         let meta_client_clone = meta_client.clone();
@@ -172,6 +177,7 @@ where
             meta_client.clone(),
             ((config.num_threads + 1) / 2).max(1),
             resolver,
+            resolved_ts_config.advance_ts_interval.0,
         );
         pool.spawn(root!(op_loop));
         let mut checkpoint_mgr = CheckpointManager::default();
@@ -760,7 +766,7 @@ where
             Err(err) => {
                 err.report(format!("failed to resume backup stream task {}", task_name));
                 let sched = self.scheduler.clone();
-                tokio::task::spawn(root!("retry_resume"; async move {
+                self.pool.spawn(root!("retry_resume"; async move {
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     sched
                         .schedule(Task::WatchTask(TaskOp::ResumeTask(task_name)))
@@ -1165,9 +1171,14 @@ where
     RT: CdcHandle<EK> + 'static,
     EK: KvEngine,
 {
-    pub async fn resolve(&mut self, regions: Vec<u64>, min_ts: TimeStamp) -> Vec<u64> {
+    pub async fn resolve(
+        &mut self,
+        regions: Vec<u64>,
+        min_ts: TimeStamp,
+        timeout: Option<Duration>,
+    ) -> Vec<u64> {
         match self {
-            BackupStreamResolver::V1(x) => x.resolve(regions, min_ts).await,
+            BackupStreamResolver::V1(x) => x.resolve(regions, min_ts, timeout).await,
             BackupStreamResolver::V2(x, _) => {
                 let x = x.clone();
                 resolve_by_raft(regions, min_ts, x).await

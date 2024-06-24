@@ -69,7 +69,6 @@ async-trait = "0.1"
 backtrace = "0.3"
 batch-system = { workspace = true }
 byteorder = "1.2"
-case_macros = { workspace = true }
 causal_ts = { workspace = true }
 chrono = { workspace = true }
 codec = { workspace = true }
@@ -78,7 +77,7 @@ concurrency_manager = { workspace = true }
 coprocessor_plugin_api = { workspace = true }
 crc32fast = "1.2"
 crc64fast = "0.1"
-crossbeam = "0.8"
+crossbeam = { workspace = true }
 crypto = { workspace = true }
 dashmap = "5"
 encryption_export = { workspace = true }
@@ -257,7 +256,6 @@ members = [
   "components/backup",
   "components/backup-stream",
   "components/batch-system",
-  "components/case_macros",
   "components/causal_ts",
   "components/cdc",
   "components/cloud",
@@ -268,6 +266,7 @@ members = [
   "components/collections",
   "components/concurrency_manager",
   "components/coprocessor_plugin_api",
+  "components/crossbeam-skiplist",
   "components/crypto",
   "components/encryption",
   "components/encryption/export",
@@ -334,7 +333,6 @@ azure = { path = "components/cloud/azure" }
 backup = { path = "components/backup", default-features = false }
 backup-stream = { path = "components/backup-stream", default-features = false }
 batch-system = { path = "components/batch-system" }
-case_macros = { path = "components/case_macros" }
 causal_ts = { path = "components/causal_ts" }
 cdc = { path = "components/cdc", default-features = false }
 # Do not enable default-features because it implicitly enables oldtime which is
@@ -351,6 +349,7 @@ codec = { path = "components/codec" }
 collections = { path = "components/collections" }
 concurrency_manager = { path = "components/concurrency_manager" }
 coprocessor_plugin_api = { path = "components/coprocessor_plugin_api" }
+crossbeam-skiplist = { path = "components/crossbeam-skiplist" }
 encryption = { path = "components/encryption" }
 encryption_export = { path = "components/encryption/export" }
 engine_panic = { path = "components/engine_panic" }
@@ -447,6 +446,11 @@ tracing = { version = "0.1.39", default-features = false, features = [
 ] }
 openssl = "0.10"
 openssl-sys = "0.9"
+heck = "0.3"
+crossbeam = "0.8"
+crossbeam-channel = "0.5"
+crossbeam-utils = "0.8"
+crossbeam-epoch = "0.9"
 
 [profile.dev.package.grpcio-sys]
 debug = false

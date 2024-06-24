@@ -20,12 +20,15 @@ use std::{cmp::Ordering, ops::Deref, sync::Arc, time::Duration};
 use futures::future::BoxFuture;
 use kvproto::{
     metapb,
-    pdpb::{self, UpdateServiceGcSafePointResponse},
+    pdpb::{self, UpdateServiceGcSafePointRequest, UpdateServiceGcSafePointResponse},
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
     resource_manager::TokenBucketsRequest,
 };
 use pdpb::QueryStats;
-use tikv_util::time::{Instant, UnixSecs};
+use tikv_util::{
+    memory::HeapSize,
+    time::{Instant, UnixSecs},
+};
 use txn_types::TimeStamp;
 
 pub use self::{
@@ -131,6 +134,12 @@ impl BucketMeta {
     // total size of the whole buckets
     pub fn total_size(&self) -> u64 {
         self.sizes.iter().sum()
+    }
+}
+
+impl HeapSize for BucketMeta {
+    fn approximate_heap_size(&self) -> usize {
+        self.keys.approximate_heap_size() + self.sizes.approximate_heap_size()
     }
 }
 
@@ -545,11 +554,11 @@ pub fn take_peer_address(store: &mut metapb::Store) -> String {
 
 fn check_update_service_safe_point_resp(
     resp: &UpdateServiceGcSafePointResponse,
-    required_safepoint: u64,
+    req: &UpdateServiceGcSafePointRequest,
 ) -> Result<()> {
-    if resp.min_safe_point > required_safepoint {
+    if req.get_ttl() > 0 && resp.min_safe_point > req.get_safe_point() {
         return Err(Error::UnsafeServiceGcSafePoint {
-            requested: required_safepoint.into(),
+            requested: req.get_safe_point().into(),
             current_minimal: resp.min_safe_point.into(),
         });
     }
