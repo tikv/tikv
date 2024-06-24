@@ -70,17 +70,17 @@ pub enum ConsistencyCheckMethod {
 }
 
 /// Default region split size.
-pub const SPLIT_SIZE: ReadableSize = ReadableSize::mb(96);
+pub const SPLIT_SIZE: ReadableSize = ReadableSize::mb(256);
 pub const RAFTSTORE_V2_SPLIT_SIZE: ReadableSize = ReadableSize::gb(10);
 
 /// Default batch split limit.
 pub const BATCH_SPLIT_LIMIT: u64 = 10;
 
 // A bucket will be split only when its size is larger than 2x of
-// DEFAULT_BUCKET_SIZE So the avg of the actual bucket size is 75MB, which is
-// slightly less than region size We don't use 48MB size because it will enable
-// the automatic bucket under default 96MB region size.
-pub const DEFAULT_BUCKET_SIZE: ReadableSize = ReadableSize::mb(50);
+// DEFAULT_BUCKET_SIZE So the avg of the actual bucket size is 200MB, which is
+// slightly less than region size. We don't use 48MB size because it will enable
+// the automatic bucket under default 256MB region size.
+pub const DEFAULT_BUCKET_SIZE: ReadableSize = ReadableSize::mb(133);
 
 pub const DEFAULT_REGION_BUCKET_MERGE_SIZE_RATIO: f64 = 0.33;
 
