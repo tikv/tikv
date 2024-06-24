@@ -62,6 +62,8 @@ const KV_WB_DEFAULT_SIZE: usize = 16 * 1024;
 const RAFT_WB_SHRINK_SIZE: usize = 10 * 1024 * 1024;
 const RAFT_WB_DEFAULT_SIZE: usize = 256 * 1024;
 const RAFT_WB_SPLIT_SIZE: usize = ReadableSize::gb(1).0 as usize;
+/// The default size of the raft write batch recorder.
+const RAFT_WB_DEFAULT_RECORDER_SIZE: usize = 30;
 
 /// Notify the event to the specified region.
 pub trait PersistedNotifier: Clone + Send + 'static {
@@ -375,12 +377,12 @@ impl<W: WriteBatch, L: RaftLogBatch> ExtraBatchWrite<W, L> {
 }
 
 /// WriteTaskBatchRecorder is a sliding window, used to record the batch size
-/// and calculate the yield interval.
+/// and calculate the wait duration.
 /// If the batch size is smaller than the threshold, it will return a
-/// recommended yield duration for the caller as a hint to wait for more writes.
-/// The yield interval is calculated based on the trend of the change of the
+/// recommended wait duration for the caller as a hint to wait for more writes.
+/// The wait duration is calculated based on the trend of the change of the
 /// batch size. The range of the trend is [0.5, 2.0]. If the batch size is
-/// increasing, the trend will be larger than 1.0, and the yield interval will
+/// increasing, the trend will be larger than 1.0, and the wait duration will
 /// be shorter.
 struct WriteTaskBatchRecorder {
     batch_size_hint: usize,
@@ -389,26 +391,26 @@ struct WriteTaskBatchRecorder {
     sum: usize,
     avg: usize,
     trend: f64,
-    /// Yield interval in microseconds.
-    yield_interval: u64,
-    /// The count of yield.
-    yield_count: u64,
-    /// The max count of yield.
-    yield_max_count: u64,
+    /// Wait duration in nanoseconds.
+    wait_duration: Duration,
+    /// The count of wait.
+    wait_count: u64,
+    /// The max count of wait.
+    wait_max_count: u64,
 }
 
 impl WriteTaskBatchRecorder {
-    fn new(batch_size_hint: usize, yield_interval: u64) -> Self {
+    fn new(batch_size_hint: usize, wait_duration: Duration) -> Self {
         Self {
             batch_size_hint,
             history: VecDeque::new(),
-            capacity: 30, // default
+            capacity: RAFT_WB_DEFAULT_RECORDER_SIZE,
             sum: 0,
             avg: 0,
             trend: 1.0,
-            yield_interval,
-            yield_count: 0,
-            yield_max_count: 1,
+            wait_duration,
+            wait_count: 0,
+            wait_max_count: 1,
         }
     }
 
@@ -423,9 +425,9 @@ impl WriteTaskBatchRecorder {
     }
 
     #[inline]
-    fn update_config(&mut self, batch_size: usize, yield_interval: u64) {
+    fn update_config(&mut self, batch_size: usize, wait_duration: Duration) {
         self.batch_size_hint = batch_size;
-        self.yield_interval = yield_interval;
+        self.wait_duration = wait_duration;
     }
 
     fn record(&mut self, size: usize) {
@@ -451,20 +453,20 @@ impl WriteTaskBatchRecorder {
     }
 
     #[inline]
-    fn reset_yield_count(&mut self) {
-        self.yield_count = 0;
+    fn reset_wait_count(&mut self) {
+        self.wait_count = 0;
     }
 
     #[inline]
-    fn should_yield(&self, batch_size: usize) -> bool {
-        batch_size < self.batch_size_hint && self.yield_count < self.yield_max_count
+    fn should_wait(&self, batch_size: usize) -> bool {
+        batch_size < self.batch_size_hint && self.wait_count < self.wait_max_count
     }
 
-    fn yield_for_a_while(&mut self) {
-        self.yield_count += 1;
-
+    fn wait_for_a_while(&mut self) {
+        self.wait_count += 1;
+        // Use a simple linear function to calculate the wait duration.
         yield_at_least(Duration::from_nanos(
-            (self.yield_interval as f64 * (1.0 / self.trend)) as u64,
+            (self.wait_duration.as_nanos() as f64 * (1.0 / self.trend)) as u64,
         ));
     }
 }
@@ -497,7 +499,7 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn new(raft_wb: ER::LogBatch, write_batch_size_hint: usize, write_yield_interval: u64) -> Self {
+    fn new(raft_wb: ER::LogBatch, write_batch_size_hint: usize, write_wait_duration: u64) -> Self {
         Self {
             raft_wbs: vec![raft_wb],
             raft_states: HashMap::default(),
@@ -507,7 +509,10 @@ where
             persisted_cbs: vec![],
             readies: HashMap::default(),
             raft_wb_split_size: RAFT_WB_SPLIT_SIZE,
-            recorder: WriteTaskBatchRecorder::new(write_batch_size_hint, write_yield_interval),
+            recorder: WriteTaskBatchRecorder::new(
+                write_batch_size_hint,
+                Duration::from_nanos(write_wait_duration),
+            ),
         }
     }
 
@@ -600,7 +605,7 @@ where
         self.state_size = 0;
         self.tasks.clear();
         self.readies.clear();
-        self.recorder.reset_yield_count();
+        self.recorder.reset_wait_count();
     }
 
     #[inline]
@@ -666,17 +671,18 @@ where
     }
 
     #[inline]
-    fn update_config(&mut self, batch_size: usize, yield_interval: u64) {
-        self.recorder.update_config(batch_size, yield_interval);
+    fn update_config(&mut self, batch_size: usize, wait_duration: u64) {
+        self.recorder
+            .update_config(batch_size, Duration::from_nanos(wait_duration));
     }
 
     #[inline]
-    fn should_yield(&self) -> bool {
-        self.recorder.should_yield(self.get_raft_size())
+    fn should_wait(&self) -> bool {
+        self.recorder.should_wait(self.get_raft_size())
     }
 
-    fn yield_for_a_while(&mut self) {
-        self.recorder.yield_for_a_while();
+    fn wait_for_a_while(&mut self) {
+        self.recorder.wait_for_a_while();
     }
 }
 
@@ -722,7 +728,7 @@ where
         let batch = WriteTaskBatch::new(
             raft_engine.log_batch(RAFT_WB_DEFAULT_SIZE),
             cfg.value().raft_write_batch_size_hint.0 as usize,
-            cfg.value().raft_write_yield_interval,
+            cfg.value().raft_write_wait_duration,
         );
         let perf_context =
             ER::get_perf_context(cfg.value().perf_level, PerfContextKind::RaftstoreStore);
@@ -763,11 +769,11 @@ where
                         stopped |= self.handle_msg(msg);
                     }
                     Err(TryRecvError::Empty) => {
-                        // If the size of the batch is small enough, it will yield for
+                        // If the size of the batch is small enough, it will wait for
                         // a while to make the batch larger. This can reduce the IOPS
                         // amplification if there are many trivial writes.
-                        if self.batch.should_yield() {
-                            self.batch.yield_for_a_while();
+                        if self.batch.should_wait() {
+                            self.batch.wait_for_a_while();
                             continue;
                         } else {
                             break;
@@ -1012,7 +1018,7 @@ where
             self.metrics.waterfall_metrics = incoming.waterfall_metrics;
             self.batch.update_config(
                 incoming.raft_write_batch_size_hint.0 as usize,
-                incoming.raft_write_yield_interval,
+                incoming.raft_write_wait_duration,
             );
         }
     }

@@ -532,6 +532,12 @@ impl Default for ThreadReadId {
     }
 }
 
+/// Yield the CPU to other threads or processes for at least `elaspsed`
+/// duration synchronously.
+///
+/// Attention, this function is only suitable for short-time spinning, so
+/// the `elaspsed` should be small, like 1ms. And the caller should not
+/// rely on it to guarantee the exact time to sleep.
 pub fn yield_at_least(elaspsed: Duration) {
     let now = Instant::now_coarse();
     while now.saturating_elapsed() < elaspsed {
