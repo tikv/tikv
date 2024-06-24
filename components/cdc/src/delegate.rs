@@ -1921,4 +1921,19 @@ mod tests {
         assert_eq!(v, 0);
         assert_eq!(quota.in_use(), 17);
     }
+
+    #[test]
+    fn test_lock_tracker_untrack_vacant() {
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let mut delegate = Delegate::new(1, quota.clone(), Default::default());
+        assert!(delegate.init_lock_tracker());
+        assert!(!delegate.init_lock_tracker());
+
+        delegate.pop_lock(Key::from_raw(b"key1")).unwrap();
+        let mut scaned_locks = BTreeMap::default();
+        scaned_locks.insert(Key::from_raw(b"key2"), MiniLock::from_ts(100));
+        delegate
+            .finish_prepare_lock_tracker(Default::default(), scaned_locks)
+            .unwrap();
+    }
 }
