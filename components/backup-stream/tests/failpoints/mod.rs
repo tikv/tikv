@@ -452,6 +452,17 @@ mod all {
                 0xFD2FB528,
                 "not encrypted: found plain zstd header"
             );
+            // ... and doesn't contains the raw value.
+            assert!(
+                !data
+                    .windows(Suite::PROMISED_SHORT_VALUE.len())
+                    .any(|w| w == Suite::PROMISED_SHORT_VALUE)
+            );
+            assert!(
+                !data
+                    .windows(Suite::PROMISED_LONG_VALUE.len())
+                    .any(|w| w == Suite::PROMISED_LONG_VALUE)
+            );
         }
 
         fail::remove("log_backup::FileCore::should_swap_out::return_true");
