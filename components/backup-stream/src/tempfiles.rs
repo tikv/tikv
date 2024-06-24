@@ -505,9 +505,7 @@ impl FileCore {
     }
 
     fn should_swap_out(&self, new_data_size: usize) -> bool {
-        fail::fail_point!("log_backup::FileCore::should_swap_out::return_true", |_| {
-            true
-        });
+        fail::fail_point!("log_backup_always_swap_out", |_| { true });
         let mem_use = self.the_pool.current.load(Ordering::Acquire);
         // If this write will trigger a reallocation...
         let realloc_exceeds_quota = self.in_mem.len() + new_data_size > self.in_mem.capacity()

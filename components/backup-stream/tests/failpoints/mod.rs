@@ -408,11 +408,7 @@ mod all {
     fn encryption() {
         let key_folder = TempDir::new().unwrap();
         let key_file = key_folder.path().join("key.txt");
-        fail::cfg(
-            "log_backup::FileCore::should_swap_out::return_true",
-            "return()",
-        )
-        .unwrap();
+        fail::cfg("log_backup_always_swap_out", "return()").unwrap();
         std::fs::write(&key_file, "42".repeat(32) + "\n").unwrap();
 
         let mut suite = SuiteBuilder::new_named("encryption")
@@ -465,7 +461,7 @@ mod all {
             );
         }
 
-        fail::remove("log_backup::FileCore::should_swap_out::return_true");
+        fail::remove("log_backup_always_swap_out");
 
         suite.force_flush_files("encryption");
         suite.sync();
