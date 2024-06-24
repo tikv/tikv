@@ -373,7 +373,7 @@ pub(crate) struct Advance {
 
 impl Advance {
     fn emit_resolved_ts(&mut self, connections: &HashMap<ConnId, Conn>) -> (u64, TimeStamp) {
-        let handle_send_result = |conn: &Conn, res: std::result::Result<(), SendError>| -> bool {
+        let handle_send_result = |conn: &Conn, res: Result<(), SendError>| -> bool {
             match res {
                 Ok(_) => return true,
                 Err(SendError::Disconnected) => {
