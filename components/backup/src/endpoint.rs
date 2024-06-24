@@ -1144,9 +1144,8 @@ impl<E: Engine, R: RegionInfoProvider + Clone + 'static> Endpoint<E, R> {
             }
         };
         let backend = Arc::<dyn ExternalStorage>::from(backend);
-        let cur_num_threads = self.config_manager.0.read().unwrap().num_threads;
-        self.pool.borrow_mut().adjust_with(cur_num_threads);
-        let concurrency = cur_num_threads * 3;
+        let concurrency = self.config_manager.0.read().unwrap().num_threads;
+        self.pool.borrow_mut().adjust_with(concurrency);
         let (tx, rx) = async_channel::bounded(1);
         for _ in 0..concurrency {
             self.spawn_backup_worker(
@@ -1960,6 +1959,18 @@ pub mod tests {
         }
     }
 
+    fn fake_empty_marker() -> Vec<super::BackupRange> {
+        return vec![super::BackupRange{
+            start_key: None,
+            end_key: None,
+            region: Region::new(),
+            peer: Peer::new(),
+            codec: KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
+            cf: "",
+            uses_replica_read: false,
+        }];
+    }
+
     #[test]
     fn test_seek_ranges_2() {
         let (_tmp, endpoint) = new_endpoint();
@@ -1969,7 +1980,7 @@ pub mod tests {
             (b"6".to_vec(), b"8".to_vec(), 2),
         ]);
         let sub_ranges: Vec<(&[u8], &[u8])> = vec![(b"1", b"11"), (b"3", b"7"), (b"8", b"9")];
-        let expect: Vec<(&[u8], &[u8])> = vec![(b"3", b"4"), (b"6", b"7")];
+        let expect: Vec<(&[u8], &[u8])> = vec![(b"", b""), (b"3", b"4"), (b"6", b"7"), (b"", b"")];
 
         let mut ranges = Vec::with_capacity(sub_ranges.len());
         for &(start_key, end_key) in &sub_ranges {
@@ -1997,9 +2008,13 @@ pub mod tests {
 
             if !r.is_empty() {
                 ranges.append(&mut r);
+            } else {
+                // append the empty marker
+                ranges.append(&mut fake_empty_marker());
             }
         }
 
+        assert!(ranges.len() == expect.len());
         for (a, b) in ranges.into_iter().zip(expect) {
             assert_eq!(
                 a.start_key.map_or_else(Vec::new, |k| k.into_raw().unwrap()),
