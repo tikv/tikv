@@ -396,11 +396,16 @@ impl RangeCacheWriteBatchEntry {
     }
 
     pub fn calc_put_entry_size(key: &[u8], value: &[u8]) -> usize {
-        key.len() + value.len() + ENC_KEY_SEQ_LENGTH + 2 * MEM_CONTROLLER_OVERHEAD /* one for key and one for value */
+        RangeCacheWriteBatchEntry::memory_size_required_for_key_value(key, value)
     }
 
     pub fn cal_delete_entry_size(key: &[u8]) -> usize {
-        key.len() + ENC_KEY_SEQ_LENGTH
+        // delete also has value which is an empty bytes
+        RangeCacheWriteBatchEntry::memory_size_required_for_key_value(key, b"")
+    }
+
+    fn memory_size_required_for_key_value(key: &[u8], value: &[u8]) -> usize {
+        key.len() + value.len() + ENC_KEY_SEQ_LENGTH + 2 * MEM_CONTROLLER_OVERHEAD /* one for key and one for value */
     }
 
     pub fn data_size(&self) -> usize {
@@ -864,12 +869,12 @@ mod tests {
         let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(config),
         )));
-        let r1 = CacheRange::new(b"kk00".to_vec(), b"kk10".to_vec());
-        let r2 = CacheRange::new(b"kk10".to_vec(), b"kk20".to_vec());
-        let r3 = CacheRange::new(b"kk20".to_vec(), b"kk30".to_vec());
-        let r4 = CacheRange::new(b"kk30".to_vec(), b"kk40".to_vec());
-        let r5 = CacheRange::new(b"kk40".to_vec(), b"kk50".to_vec());
-        for r in [&r1, &r2, &r3, &r4, &r5] {
+        let range1 = CacheRange::new(b"kk00".to_vec(), b"kk10".to_vec());
+        let range2 = CacheRange::new(b"kk10".to_vec(), b"kk20".to_vec());
+        let range3 = CacheRange::new(b"kk20".to_vec(), b"kk30".to_vec());
+        let range4 = CacheRange::new(b"kk30".to_vec(), b"kk40".to_vec());
+        let range5 = CacheRange::new(b"kk40".to_vec(), b"kk50".to_vec());
+        for r in [&range1, &range2, &range3, &range4, &range5] {
             engine.new_range(r.clone());
             {
                 let mut core = engine.core.write();
@@ -880,66 +885,72 @@ mod tests {
 
         let val1: Vec<u8> = (0..150).map(|_| 0).collect();
         let mut wb = RangeCacheWriteBatch::from(&engine);
-        wb.prepare_for_range(r1.clone());
+        wb.prepare_for_range(range1.clone());
         // memory required:
         // 4(key) + 8(sequencen number) + 150(value) + 16(2 Arc<MemoryController) = 178
         wb.put(b"kk01", &val1).unwrap();
-        wb.prepare_for_range(r2.clone());
+        wb.prepare_for_range(range2.clone());
         // Now, 356
         wb.put(b"kk11", &val1).unwrap();
-        wb.prepare_for_range(r3.clone());
+        wb.prepare_for_range(range3.clone());
         // Now, 534
         wb.put(b"kk21", &val1).unwrap();
+        // memory required:
+        // 4(key) + 8(sequence number) + 16(2 Arc<MemoryController>) = 28
+        // Now, 562
+        wb.delete(b"kk21").unwrap();
         let val2: Vec<u8> = (0..500).map(|_| 2).collect();
         // The memory will fail to acquire
         wb.put(b"kk22", &val2).unwrap();
 
-        // The memory capacity is enough the the following two inserts
+        // The memory capacity is enough for the following two inserts
         let val3: Vec<u8> = (0..150).map(|_| 3).collect();
-        wb.prepare_for_range(r4.clone());
-        // Now, 712
+        wb.prepare_for_range(range4.clone());
+        // Now, 740
         wb.put(b"kk32", &val3).unwrap();
 
+        // The memory will fail to acquire
         let val4: Vec<u8> = (0..300).map(|_| 3).collect();
-        wb.prepare_for_range(r5.clone());
+        wb.prepare_for_range(range5.clone());
         wb.put(b"kk41", &val4).unwrap();
 
         let memory_controller = engine.memory_controller();
-        // We should have allocated 896 as calculated above
-        assert_eq!(712, memory_controller.mem_usage());
+        // We should have allocated 740 as calculated above
+        assert_eq!(740, memory_controller.mem_usage());
         wb.write_impl(1000).unwrap();
-        // We dont count the node overhead in write batch, so after they are written
-        // into the engine, the mem usage can even exceed the hard limit. But this
-        // should be fine as this amount should be at most MB level.
-        assert_eq!(1096, memory_controller.mem_usage());
+        // We dont count the node overhead (96 bytes for each node) in write batch, so
+        // after they are written into the engine, the mem usage can even exceed
+        // the hard limit. But this should be fine as this amount should be at
+        // most MB level.
+        assert_eq!(1220, memory_controller.mem_usage());
 
-        let snap1 = engine.snapshot(r1.clone(), 1000, 1010).unwrap();
+        let snap1 = engine.snapshot(range1.clone(), 1000, 1010).unwrap();
         assert_eq!(snap1.get_value(b"kk01").unwrap().unwrap(), &val1);
-        let snap2 = engine.snapshot(r2.clone(), 1000, 1010).unwrap();
+        let snap2 = engine.snapshot(range2.clone(), 1000, 1010).unwrap();
         assert_eq!(snap2.get_value(b"kk11").unwrap().unwrap(), &val1);
 
         assert_eq!(
-            engine.snapshot(r3.clone(), 1000, 1000).unwrap_err(),
+            engine.snapshot(range3.clone(), 1000, 1000).unwrap_err(),
             FailedReason::NotCached
         );
 
-        let snap4 = engine.snapshot(r4.clone(), 1000, 1010).unwrap();
+        let snap4 = engine.snapshot(range4.clone(), 1000, 1010).unwrap();
         assert_eq!(snap4.get_value(b"kk32").unwrap().unwrap(), &val3);
 
         assert_eq!(
-            engine.snapshot(r5.clone(), 1000, 1010).unwrap_err(),
+            engine.snapshot(range5.clone(), 1000, 1010).unwrap_err(),
             FailedReason::NotCached
         );
 
-        // For range 3, one write is buffered but the other is rejected, so the range 3
-        // is evicted and the keys of it are deleted. After flush the epoch, we should
-        // get 1096-178(kv)-96(node overhead) = 822 memory usage.
+        // For range3, one write is buffered but others is rejected, so the range3 is
+        // evicted and the keys of it are deleted. After flush the epoch, we should
+        // get 1220-178-28(kv)-96*2(node overhead) = 822 memory usage.
         flush_epoch();
         wait_evict_done(&engine);
         assert_eq!(822, memory_controller.mem_usage());
 
         drop(snap1);
-        engine.evict_range(&r1);
+        engine.evict_range(&range1);
         flush_epoch();
         wait_evict_done(&engine);
         assert_eq!(548, memory_controller.mem_usage());

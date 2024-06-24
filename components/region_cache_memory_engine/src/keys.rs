@@ -24,7 +24,7 @@ pub struct InternalBytes {
 
 impl Drop for InternalBytes {
     fn drop(&mut self) {
-        let size = self.bytes.len() + MEM_CONTROLLER_OVERHEAD;
+        let size = InternalBytes::memory_size_required(&self.bytes);
         let controller = self.memory_controller.take();
         if let Some(controller) = controller {
             // Reclaim the memory though the bytes have not been drop. This time
@@ -76,6 +76,11 @@ impl InternalBytes {
             ..
         } = decode_key(other.as_slice());
         user_key == other_user_key
+    }
+
+    #[inline]
+    pub fn memory_size_required(bytes: &[u8]) -> usize {
+        bytes.len() + MEM_CONTROLLER_OVERHEAD
     }
 }
 
