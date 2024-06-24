@@ -1909,7 +1909,7 @@ pub mod tests {
     }
 
     fn fake_empty_marker() -> Vec<super::BackupRange> {
-        return vec![super::BackupRange{
+        vec![super::BackupRange {
             start_key: None,
             end_key: None,
             region: Region::new(),
@@ -1917,7 +1917,7 @@ pub mod tests {
             codec: KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
             cf: "",
             uses_replica_read: false,
-        }];
+        }]
     }
 
     #[test]
