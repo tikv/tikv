@@ -781,8 +781,8 @@ impl<R: RegionInfoProvider> Progress<R> {
     /// The size of the returned BackupRanges should <= `ranges`
     ///
     /// Notice: Returning an empty BackupRanges means that no leader region
-    /// corresponding   to the current range is sought. The caller should
-    /// call `forward` again to   seek regions for the next range.
+    /// corresponding to the current range is sought. The caller should
+    /// call `forward` again to seek regions for the next range.
     fn forward(&mut self, limit: usize, replica_read: bool) -> Option<Vec<BackupRange>> {
         if self.finished {
             return None;
