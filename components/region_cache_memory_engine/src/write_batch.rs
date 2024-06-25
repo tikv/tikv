@@ -400,7 +400,7 @@ impl RangeCacheWriteBatchEntry {
     }
 
     pub fn cal_delete_entry_size(key: &[u8]) -> usize {
-        key.len() + ENC_KEY_SEQ_LENGTH
+        key.len() + ENC_KEY_SEQ_LENGTH + 2 * MEM_CONTROLLER_OVERHEAD /* one for key and one for value */
     }
 
     pub fn data_size(&self) -> usize {
