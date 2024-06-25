@@ -36,6 +36,9 @@ pub(crate) const MEM_CONTROLLER_OVERHEAD: usize = 8;
 // default, the memtable size for lock cf is 32MB. As not all ranges will be
 // cached in the memory, just use half of it here.
 const AMOUNT_TO_CLEAN_TOMBSTONE: u64 = ReadableSize::mb(16).0;
+// The value of the delete entry in the in-memory engine. It's just a emptry
+// slice.
+const DELETE_ENTRY_VAL: &'statc [u8] = b"";
 
 // `prepare_for_range` should be called before raft command apply for each peer
 // delegate. It sets `range_cache_status` which is used to determine whether the
@@ -354,7 +357,7 @@ impl WriteBatchEntryInternal {
             ),
             WriteBatchEntryInternal::Deletion => (
                 encode_key(key, seq, ValueType::Deletion),
-                InternalBytes::from_bytes(Bytes::new()),
+                InternalBytes::from_bytes(Bytes::from_static(DELETE_ENTRY_VAL)),
             ),
         }
     }
@@ -399,12 +402,14 @@ impl RangeCacheWriteBatchEntry {
         RangeCacheWriteBatchEntry::memory_size_required_for_key_value(key, value)
     }
 
-    pub fn cal_delete_entry_size(key: &[u8]) -> usize {
+    pub fn calc_delete_entry_size(key: &[u8]) -> usize {
         // delete also has value which is an empty bytes
-        RangeCacheWriteBatchEntry::memory_size_required_for_key_value(key, b"")
+        RangeCacheWriteBatchEntry::memory_size_required_for_key_value(key, DELETE_ENTRY_VAL)
     }
 
     fn memory_size_required_for_key_value(key: &[u8], value: &[u8]) -> usize {
+        // The key will be encoded with sequence number when it is written to in-memory
+        // engine, so we have to acquire the sequence number suffix memory usage.
         InternalBytes::memory_size_required(key.len() + ENC_KEY_SEQ_LENGTH)
             + InternalBytes::memory_size_required(value.len())
     }
@@ -596,7 +601,7 @@ impl Mutable for RangeCacheWriteBatch {
 
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
         self.process_cf_operation(
-            || RangeCacheWriteBatchEntry::cal_delete_entry_size(key),
+            || RangeCacheWriteBatchEntry::calc_delete_entry_size(key),
             || RangeCacheWriteBatchEntry::deletion(cf, key),
         );
         Ok(())
