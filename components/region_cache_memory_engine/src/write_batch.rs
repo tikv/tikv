@@ -38,7 +38,7 @@ pub(crate) const MEM_CONTROLLER_OVERHEAD: usize = 8;
 const AMOUNT_TO_CLEAN_TOMBSTONE: u64 = ReadableSize::mb(16).0;
 // The value of the delete entry in the in-memory engine. It's just a emptry
 // slice.
-const DELETE_ENTRY_VAL: &'statc [u8] = b"";
+const DELETE_ENTRY_VAL: &'static [u8] = b"";
 
 // `prepare_for_range` should be called before raft command apply for each peer
 // delegate. It sets `range_cache_status` which is used to determine whether the
