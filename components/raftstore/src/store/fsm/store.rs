@@ -834,7 +834,11 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         let count = msgs.len();
         #[allow(const_evaluatable_unchecked)]
         let mut distribution = [0; StoreMsg::<EK>::COUNT];
-        let detail = msgs.get(0).map_or("".to_string(), |m| format!("{:?}", m));
+        let detail = if msgs.len() == 1 {
+            msgs.get(0).map(|m| format!("{:?}", m))
+        } else {
+            None
+        };
         for m in msgs.drain(..) {
             distribution[m.discriminant()] += 1;
             match m {
