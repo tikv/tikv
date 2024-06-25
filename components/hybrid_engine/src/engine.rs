@@ -25,7 +25,7 @@ where
     EC: RangeCacheEngine,
 {
     disk_engine: EK,
-    region_cache_engine: EC,
+    range_cache_engine: EC,
 }
 
 impl<EK, EC> HybridEngine<EK, EC>
@@ -41,12 +41,12 @@ where
         &mut self.disk_engine
     }
 
-    pub fn region_cache_engine(&self) -> &EC {
-        &self.region_cache_engine
+    pub fn range_cache_engine(&self) -> &EC {
+        &self.range_cache_engine
     }
 
-    pub fn mut_region_cache_engine(&mut self) -> &mut EC {
-        &mut self.region_cache_engine
+    pub fn mut_range_cache_engine(&mut self) -> &mut EC {
+        &mut self.range_cache_engine
     }
 }
 
@@ -55,10 +55,10 @@ where
     EK: KvEngine,
     EC: RangeCacheEngine,
 {
-    pub fn new(disk_engine: EK, region_cache_engine: EC) -> Self {
+    pub fn new(disk_engine: EK, range_cache_engine: EC) -> Self {
         Self {
             disk_engine,
-            region_cache_engine,
+            range_cache_engine,
         }
     }
 }
@@ -74,10 +74,10 @@ where
 
     fn snapshot(&self, ctx: Option<SnapshotContext>) -> Self::Snapshot {
         let disk_snap = self.disk_engine.snapshot(ctx.clone());
-        let region_cache_snap = if !self.region_cache_engine.enabled() {
+        let range_cache_snap = if !self.range_cache_engine.enabled() {
             None
         } else if let Some(ctx) = ctx {
-            match self.region_cache_engine.snapshot(
+            match self.range_cache_engine.snapshot(
                 ctx.range.unwrap(),
                 ctx.read_ts,
                 disk_snap.sequence_number(),
@@ -105,10 +105,10 @@ where
                 .inc();
             None
         };
-        if region_cache_snap.is_none() {
+        if range_cache_snap.is_none() {
             SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
         }
-        HybridEngineSnapshot::new(disk_snap, region_cache_snap)
+        HybridEngineSnapshot::new(disk_snap, range_cache_snap)
     }
 
     fn sync(&self) -> engine_traits::Result<()> {
@@ -156,7 +156,7 @@ where
 {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
-        if let Some(range) = self.region_cache_engine.get_range_for_key(key) {
+        if let Some(range) = self.range_cache_engine.get_range_for_key(key) {
             batch.prepare_for_range(range);
         }
         batch.put(key, value)?;
@@ -166,7 +166,7 @@ where
 
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
-        if let Some(range) = self.region_cache_engine.get_range_for_key(key) {
+        if let Some(range) = self.range_cache_engine.get_range_for_key(key) {
             batch.prepare_for_range(range);
         }
         batch.put_cf(cf, key, value)?;
@@ -176,7 +176,7 @@ where
 
     fn delete(&self, key: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
-        if let Some(range) = self.region_cache_engine.get_range_for_key(key) {
+        if let Some(range) = self.range_cache_engine.get_range_for_key(key) {
             batch.prepare_for_range(range);
         }
         batch.delete(key)?;
@@ -186,7 +186,7 @@ where
 
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
-        if let Some(range) = self.region_cache_engine.get_range_for_key(key) {
+        if let Some(range) = self.range_cache_engine.get_range_for_key(key) {
             batch.prepare_for_range(range);
         }
         batch.delete_cf(cf, key)?;
@@ -196,7 +196,7 @@ where
 
     fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
-        if let Some(range) = self.region_cache_engine.get_range_for_key(begin_key) {
+        if let Some(range) = self.range_cache_engine.get_range_for_key(begin_key) {
             batch.prepare_for_range(range);
         }
         batch.delete_range(begin_key, end_key)?;
@@ -206,7 +206,7 @@ where
 
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let mut batch = self.write_batch();
-        if let Some(range) = self.region_cache_engine.get_range_for_key(begin_key) {
+        if let Some(range) = self.range_cache_engine.get_range_for_key(begin_key) {
             batch.prepare_for_range(range);
         }
         batch.delete_range_cf(cf, begin_key, end_key)?;
@@ -223,7 +223,7 @@ mod tests {
     use engine_rocks::util::new_engine;
     use engine_traits::{CacheRange, KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
-    use region_cache_memory_engine::{
+    use range_cache_memory_engine::{
         config::RangeCacheConfigManager, RangeCacheEngineConfig, RangeCacheEngineContext,
         RangeCacheMemoryEngine,
     };
@@ -253,18 +253,18 @@ mod tests {
 
         let hybrid_engine = HybridEngine::new(disk_engine, memory_engine.clone());
         let s = hybrid_engine.snapshot(None);
-        assert!(!s.region_cache_snapshot_available());
+        assert!(!s.range_cache_snapshot_available());
 
         let mut snap_ctx = SnapshotContext {
             read_ts: 15,
             range: Some(range.clone()),
         };
         let s = hybrid_engine.snapshot(Some(snap_ctx.clone()));
-        assert!(s.region_cache_snapshot_available());
+        assert!(s.range_cache_snapshot_available());
 
         snap_ctx.read_ts = 5;
         let s = hybrid_engine.snapshot(Some(snap_ctx.clone()));
-        assert!(!s.region_cache_snapshot_available());
+        assert!(!s.range_cache_snapshot_available());
 
         let mut config_manager = RangeCacheConfigManager(config.clone());
         let mut config_change = ConfigChange::new();
@@ -273,6 +273,6 @@ mod tests {
         assert!(!config.value().enabled);
         snap_ctx.read_ts = 15;
         let s = hybrid_engine.snapshot(Some(snap_ctx));
-        assert!(!s.region_cache_snapshot_available());
+        assert!(!s.range_cache_snapshot_available());
     }
 }

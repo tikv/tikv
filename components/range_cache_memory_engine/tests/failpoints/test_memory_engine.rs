@@ -11,7 +11,7 @@ use engine_traits::{
     CacheRange, Mutable, RangeCacheEngine, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK,
     CF_WRITE, DATA_CFS,
 };
-use region_cache_memory_engine::{
+use range_cache_memory_engine::{
     decode_key, encode_key_for_boundary_without_mvcc, encoding_for_filter, test_util::put_data,
     BackgroundTask, InternalBytes, InternalKey, RangeCacheEngineConfig, RangeCacheEngineContext,
     RangeCacheMemoryEngine, SkiplistHandle, ValueType,

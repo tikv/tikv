@@ -31,7 +31,7 @@ use raftstore::{
     },
     Result,
 };
-use region_cache_memory_engine::RangeCacheEngineConfig;
+use range_cache_memory_engine::RangeCacheEngineConfig;
 use resource_control::ResourceGroupManager;
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
