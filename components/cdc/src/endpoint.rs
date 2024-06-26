@@ -827,7 +827,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let release_scan_task_counter = tikv_util::DeferContext::new(move || {
             scan_task_counter.fetch_sub(1, Ordering::Relaxed);
         });
-        if scan_task_count == self.config.incremental_scan_concurrency_limit as isize {
+        if scan_task_count >= self.config.incremental_scan_concurrency_limit as isize {
             debug!("cdc rejects registration, too many scan tasks";
                 "region_id" => region_id,
                 "conn_id" => ?conn_id,
