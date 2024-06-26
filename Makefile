@@ -36,6 +36,8 @@ ENABLE_FEATURES ?=
 
 ENABLE_FEATURES += memory-engine
 
+export RUSTFLAGS := $(RUSTFLAGS) --cfg tokio_unstable
+
 # Frame pointer is enabled by default. The purpose is to provide stable and
 # reliable stack backtraces (for CPU Profiling).
 #

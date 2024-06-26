@@ -153,6 +153,11 @@ fn run_impl<EK, CER, F>(
     CER: ConfiguredRaftEngine,
     F: KvFormat,
 {
+    console_subscriber::ConsoleLayer::builder()
+        .retention(Duration::from_secs(60))
+        .server_addr(([127, 0, 0, 1], 5555))
+        .init();
+
     let mut tikv = TikvServer::<EK, CER, F>::init(config, service_event_tx.clone());
     // Must be called after `TikvServer::init`.
     let memory_limit = tikv.core.config.memory_usage_limit.unwrap().0;

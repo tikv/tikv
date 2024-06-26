@@ -40,6 +40,7 @@ chrono = { workspace = true }
 clap = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
+console-subscriber = "0.3"
 crossbeam = { workspace = true }
 encryption = { workspace = true }
 encryption_export = { workspace = true }
@@ -82,7 +83,7 @@ tempfile = "3.0"
 tikv = { workspace = true }
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
-tokio = { version = "1.5", features = ["rt-multi-thread"] }
+tokio = { version = "1.5", features = ["rt-multi-thread", "tracing"] }
 toml = "0.5"
 txn_types = { workspace = true }
 yatp = { workspace = true }
