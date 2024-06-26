@@ -769,11 +769,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         }
     }
 
-    pub fn on_register(
-        &mut self,
-        mut request: ChangeDataRequest,
-        mut downstream: Downstream,
-    ) {
+    pub fn on_register(&mut self, mut request: ChangeDataRequest, mut downstream: Downstream) {
         let kv_api = request.get_kv_api();
         let api_version = self.api_version;
         let filter_loop = downstream.filter_loop;
