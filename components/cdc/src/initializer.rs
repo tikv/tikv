@@ -276,6 +276,7 @@ impl<E: KvEngine> Initializer<E> {
             assert!(!has_remain);
             let mut locks = BTreeMap::<Key, MiniLock>::new();
             for (key, lock) in key_locks {
+                // When `decode_lock`, only consider `Put` and `Delete`
                 if matches!(lock.lock_type, LockType::Put | LockType::Delete) {
                     locks.insert(key, MiniLock::new(lock.ts, lock.txn_source));
                 }

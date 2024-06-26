@@ -31,8 +31,8 @@ async-trait = { version = "0.1" }
 bytes = "1"
 chrono = { workspace = true }
 concurrency_manager = { workspace = true }
-crossbeam = "0.8"
-crossbeam-channel = "0.5"
+crossbeam = { workspace = true }
+crossbeam-channel = { workspace = true }
 dashmap = "5"
 encryption = { workspace = true }
 engine_rocks = { workspace = true }
