@@ -83,8 +83,6 @@ pub(crate) enum Scanner<S: Snapshot> {
     RawKvScanner(RawMvccIterator<<S as Snapshot>::Iter>),
 }
 
-// Initializer is responsible for the incremental scan phase.
-// todo: add more detailed logs.
 pub(crate) struct Initializer<E> {
     pub(crate) region_id: u64,
     pub(crate) conn_id: ConnId,
