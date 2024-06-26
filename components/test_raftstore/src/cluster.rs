@@ -52,7 +52,7 @@ use raftstore::{
     },
     Error, Result,
 };
-use region_cache_memory_engine::RangeCacheMemoryEngine;
+use range_cache_memory_engine::RangeCacheMemoryEngine;
 use resource_control::ResourceGroupManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
@@ -2233,7 +2233,7 @@ impl<T: Simulator<HybridEngineImpl>> Cluster<HybridEngineImpl, T> {
             .get(&node_id)
             .unwrap()
             .kv
-            .region_cache_engine()
+            .range_cache_engine()
             .clone()
     }
 }

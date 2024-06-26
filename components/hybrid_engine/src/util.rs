@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use engine_rocks::{util::new_engine, RocksEngine};
 use engine_traits::{RangeCacheEngine, Result, CF_DEFAULT, CF_LOCK, CF_WRITE};
-use region_cache_memory_engine::{
+use range_cache_memory_engine::{
     RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
 };
 use tempfile::{Builder, TempDir};
