@@ -146,7 +146,7 @@ impl<E: KvEngine> Initializer<E> {
             region_epoch,
             ChangeObserver::from_cdc(self.region_id, self.observe_handle.clone()),
             // NOTE: raftstore handles requests in serial for every region.
-            // That's why we can determine whehter to build a lock resolver or not
+            // That's why we can determine whether to build a lock resolver or not
             // without check and compare snapshot sequence number.
             Callback::read(Box::new(move |resp| {
                 if let Err(e) = sched.schedule(Task::InitDownstream {
