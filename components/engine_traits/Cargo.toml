@@ -10,7 +10,6 @@ failpoints = ["fail/failpoints"]
 testexport = []
 
 [dependencies]
-case_macros = { workspace = true }
 collections = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"

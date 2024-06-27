@@ -377,6 +377,7 @@ fn recv_snap<R: RaftExtension + 'static>(
         snap_mgr.register(context.key.clone(), SnapEntry::Receiving);
         defer!(snap_mgr.deregister(&context_key, &SnapEntry::Receiving));
         while let Some(item) = stream.next().await {
+            fail_point!("receiving_snapshot_callback");
             fail_point!("receiving_snapshot_net_error", |_| {
                 Err(box_err!("{} failed to receive snapshot", context_key))
             });
@@ -394,6 +395,9 @@ fn recv_snap<R: RaftExtension + 'static>(
                 return Err(e);
             }
         }
+        // Notify the snapshot manager that a snapshot has been received,
+        // freeing up the associated resource in the concurrency limiter.
+        snap_mgr.recv_snap_complete(context.raft_msg.region_id);
         context.finish(raft_router)
     };
     async move {
@@ -468,6 +472,10 @@ impl<R: RaftExtension + 'static> Runner<R> {
             info!("refresh snapshot manager config";
             "speed_limit"=> limit,
             "max_total_snap_size"=> max_total_size);
+            if incoming.concurrent_recv_snap_limit > 0 {
+                self.snap_mgr
+                    .set_concurrent_recv_snap_limit(incoming.concurrent_recv_snap_limit);
+            }
             self.cfg = incoming.clone();
         }
     }

@@ -7,8 +7,8 @@ use engine_traits::{CacheRange, RangeCacheEngine, SnapshotContext, CF_DEFAULT, C
 use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
 use kvproto::raft_cmdpb::RaftCmdRequest;
 use test_raftstore::{
-    make_cb, new_node_cluster_with_hybrid_engine_with_no_range_cache, new_put_cmd, new_request,
-    Cluster, HybridEngineImpl, NodeCluster, Simulator,
+    make_cb, new_node_cluster_with_hybrid_engine_with_no_range_cache, new_peer, new_put_cmd,
+    new_request, Cluster, HybridEngineImpl, NodeCluster, Simulator,
 };
 use tikv_util::HandyRwLock;
 use txn_types::Key;
@@ -189,7 +189,7 @@ fn test_write_batch_cache_during_load() {
     }
 
     let (tx1, rx1) = sync_channel(1);
-    fail::cfg_callback("on_pending_range_completes_loading", move || {
+    fail::cfg_callback("pending_range_completes_loading", move || {
         tx1.send(true).unwrap();
     })
     .unwrap();
@@ -535,4 +535,66 @@ fn test_load_with_eviction() {
         .unwrap();
     assert_eq!(&val, b"v");
     rx.try_recv().unwrap_err();
+}
+
+#[test]
+fn test_evictions_after_transfer_leader() {
+    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 2);
+    cluster.run();
+
+    let r = cluster.get_region(b"");
+    cluster.must_transfer_leader(r.id, new_peer(1, 1));
+
+    let cache_range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
+    let range_cache_engine = {
+        let range_cache_engine = cluster.get_range_cache_engine(1);
+        let mut core = range_cache_engine.core().write();
+        core.mut_range_manager().new_range(cache_range.clone());
+        drop(core);
+        range_cache_engine
+    };
+
+    range_cache_engine
+        .snapshot(cache_range.clone(), 100, 100)
+        .unwrap();
+
+    cluster.must_transfer_leader(r.id, new_peer(2, 2));
+    range_cache_engine
+        .snapshot(cache_range, 100, 100)
+        .unwrap_err();
+}
+
+#[test]
+fn test_eviction_after_merge() {
+    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+    cluster.run();
+    let r = cluster.get_region(b"");
+    cluster.must_split(&r, b"key1");
+
+    let r = cluster.get_region(b"");
+    let range1 = CacheRange::from_region(&r);
+    let r2 = cluster.get_region(b"key1");
+    let range2 = CacheRange::from_region(&r2);
+
+    let range_cache_engine = {
+        let range_cache_engine = cluster.get_range_cache_engine(1);
+        let mut core = range_cache_engine.core().write();
+        core.mut_range_manager().new_range(range1.clone());
+        core.mut_range_manager().new_range(range2.clone());
+        drop(core);
+        range_cache_engine
+    };
+
+    range_cache_engine
+        .snapshot(range1.clone(), 100, 100)
+        .unwrap();
+    range_cache_engine
+        .snapshot(range2.clone(), 100, 100)
+        .unwrap();
+
+    let pd_client = Arc::clone(&cluster.pd_client);
+    pd_client.must_merge(r.get_id(), r2.get_id());
+
+    range_cache_engine.snapshot(range1, 100, 100).unwrap_err();
+    range_cache_engine.snapshot(range2, 100, 100).unwrap_err();
 }
