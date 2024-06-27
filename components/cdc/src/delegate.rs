@@ -1455,7 +1455,7 @@ mod tests {
             let (event, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
             rx_wrap.set(Some(rx));
             if let CdcEvent::Event(mut e) = event.unwrap().0 {
-                assert_eq!(e.get_request_id(), request_id);
+                assert_eq!(e.get_request_id(), request_id.0);
                 let event = e.event.take().unwrap();
                 match event {
                     Event_oneof_event::Error(err) => err,
