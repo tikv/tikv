@@ -121,7 +121,7 @@ impl<'de> Deserialize<'de> for RedactOption {
         impl<'de> de::Visitor<'de> for RedactOptionVisitor {
             type Value = RedactOption;
 
-            fn expecting(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+            fn expecting(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
                 fmt.write_str("string or bool")
             }
 
@@ -288,7 +288,7 @@ mod tests {
             RedactOption::from_str("MARKER").unwrap(),
             RedactOption::Marker
         );
-        assert!(RedactOption::from_str("Marker").is_err());
+        RedactOption::from_str("Marker").unwrap_err();
 
         let mut template = r#""#;
         let mut test_config: TestRedactInfo = toml::from_str(template).unwrap();
@@ -340,7 +340,7 @@ mod tests {
         template = r#"
             redact-info-log = "Maker"
         "#;
-        assert!(toml::from_str::<RedactOption>(template).is_err());
+        toml::from_str::<RedactOption>(template).unwrap_err();
     }
 
     #[test]
