@@ -35,7 +35,7 @@ pub fn validate_kv_api(kv_api: ChangeDataRequestKvApi, api_version: ApiVersion) 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct ConnId(usize);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct RequestId(pub u64);
 
 impl ConnId {

@@ -194,10 +194,10 @@ impl Downstream {
 
     /// Sink events to the downstream.
     pub fn sink_event(&self, mut event: Event, force: bool) -> Result<()> {
-        event.set_request_id(self.req_id as u64);
+        event.set_request_id(self.req_id.0);
         if self.sink.is_none() {
             info!("cdc drop event, no sink";
-                "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => self.req_id);
+                "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
             return Err(Error::Sink(SendError::Disconnected));
         }
         let sink = self.sink.as_ref().unwrap();
@@ -205,13 +205,13 @@ impl Downstream {
             Ok(_) => Ok(()),
             Err(SendError::Disconnected) => {
                 debug!("cdc send event failed, disconnected";
-                    "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => self.req_id);
+                    "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
                 Err(Error::Sink(SendError::Disconnected))
             }
             // TODO handle errors.
             Err(e @ SendError::Full) | Err(e @ SendError::Congested) => {
                 info!("cdc send event failed, full";
-                    "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => self.req_id);
+                    "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
                 Err(Error::Sink(e))
             }
         }
@@ -543,7 +543,7 @@ impl Delegate {
                     warn!("cdc send unsubscribe failed";
                         "region_id" => region_id, "error" => ?err, "origin_error" => ?error_event,
                         "downstream_id" => ?d.id, "downstream" => ?d.peer,
-                        "request_id" => d.req_id, "conn_id" => ?d.conn_id);
+                        "request_id" => ?d.req_id, "conn_id" => ?d.conn_id);
                 }
             }
             d.state.store(DownstreamState::Stopped);
@@ -578,12 +578,12 @@ impl Delegate {
                 warn!("cdc send region error failed";
                     "region_id" => region_id, "error" => ?err, "origin_error" => ?error,
                     "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
-                    "request_id" => downstream.req_id, "conn_id" => ?downstream.conn_id);
+                    "request_id" => ?downstream.req_id, "conn_id" => ?downstream.conn_id);
             } else {
                 info!("cdc send region error success";
                     "region_id" => region_id, "origin_error" => ?error,
                     "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
-                    "request_id" => downstream.req_id, "conn_id" => ?downstream.conn_id);
+                    "request_id" => ?downstream.req_id, "conn_id" => ?downstream.conn_id);
             }
         };
 
@@ -1118,7 +1118,7 @@ impl Delegate {
                 "region_id" => region.id,
                 "downstream_id" => ?downstream.id,
                 "conn_id" => ?downstream.conn_id,
-                "req_id" => downstream.req_id,
+                "req_id" => ?downstream.req_id,
                 "err" => ?e
             );
             // Downstream is outdated, mark stop.
@@ -1719,7 +1719,7 @@ mod tests {
         let mut downstream = Downstream::new(
             "peer".to_owned(),
             RegionEpoch::default(),
-            1,
+            RequestId(1),
             ConnId::new(),
             ChangeDataRequestKvApi::TiDb,
             false,
@@ -1786,7 +1786,7 @@ mod tests {
         let mut downstream = Downstream::new(
             "peer".to_owned(),
             RegionEpoch::default(),
-            1,
+            RequestId(1),
             ConnId::new(),
             ChangeDataRequestKvApi::TiDb,
             filter_loop,
