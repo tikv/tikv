@@ -766,6 +766,26 @@ pub struct InspectedRaftMessage {
     pub msg: RaftMessage,
 }
 
+impl fmt::Debug for InspectedRaftMessage {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.msg.has_extra_msg() {
+            write!(
+                fmt,
+                "[{}] Raft Message with extra message {:?}",
+                self.msg.get_region_id(),
+                self.msg.get_extra_msg().get_type()
+            )
+        } else {
+            write!(
+                fmt,
+                "[{}] Raft Message {:?}",
+                self.msg.get_region_id(),
+                self.msg.get_message().get_msg_type()
+            )
+        }
+    }
+}
+
 /// Message that can be sent to a peer.
 #[allow(clippy::large_enum_variant)]
 #[derive(EnumCount, EnumVariantNames)]
@@ -812,21 +832,7 @@ impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             PeerMsg::RaftMessage(m, _) => {
-                if m.msg.has_extra_msg() {
-                    write!(
-                        fmt,
-                        "[{}] Raft Message with extra message {:?}",
-                        m.msg.get_region_id(),
-                        m.msg.get_message().get_msg_type()
-                    )
-                } else {
-                    write!(
-                        fmt,
-                        "[{}] Raft Message {:?}",
-                        m.msg.get_region_id(),
-                        m.msg.get_message().get_msg_type()
-                    )
-                }
+                write!(fmt, "{:?}", m)
             }
             PeerMsg::RaftCommand(_) => write!(fmt, "Raft Command"),
             PeerMsg::Tick(tick) => write! {
@@ -942,21 +948,7 @@ where
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             StoreMsg::RaftMessage(m) => {
-                if m.msg.has_extra_msg() {
-                    write!(
-                        fmt,
-                        "[{}] Raft Message with extra message {:?}",
-                        m.msg.get_region_id(),
-                        m.msg.get_message().get_msg_type()
-                    )
-                } else {
-                    write!(
-                        fmt,
-                        "[{}] Raft Message {:?}",
-                        m.msg.get_region_id(),
-                        m.msg.get_message().get_msg_type()
-                    )
-                }
+                write!(fmt, "{:?}", m)
             }
             StoreMsg::StoreUnreachable { store_id } => {
                 write!(fmt, "Store {}  is unreachable", store_id)
