@@ -3000,11 +3000,14 @@ checksum = "b5e6163cb8c49088c2c36f57875e58ccd8c87c7427f7fbd50ea6710b2f3f2e8f"
 name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
+ "atomic",
  "hex 0.4.2",
  "protobuf",
+ "serde",
  "slog",
  "slog-term",
  "tikv_alloc",
+ "toml",
 ]
 
 [[package]]
@@ -5079,6 +5082,7 @@ dependencies = [
  "encryption",
  "grpcio",
  "kvproto",
+ "log_wrappers",
  "serde",
  "serde_derive",
  "serde_json",
@@ -6142,6 +6146,7 @@ dependencies = [
  "fail",
  "grpcio",
  "kvproto",
+ "log_wrappers",
  "rand 0.8.5",
  "rand_isaac",
  "security",

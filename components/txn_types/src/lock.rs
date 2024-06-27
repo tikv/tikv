@@ -1208,9 +1208,9 @@ mod tests {
             generation: 0 \
             }"
         );
-        log_wrappers::set_redact_info_log(true);
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(true));
         let redact_result = format!("{:?}", lock);
-        log_wrappers::set_redact_info_log(false);
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(false));
         assert_eq!(
             redact_result,
             "Lock { \
@@ -1255,9 +1255,9 @@ mod tests {
             generation: 10 \
             }"
         );
-        log_wrappers::set_redact_info_log(true);
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(true));
         let redact_result = format!("{:?}", lock);
-        log_wrappers::set_redact_info_log(false);
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(false));
         assert_eq!(
             redact_result,
             "Lock { \
@@ -1330,9 +1330,9 @@ mod tests {
             last_change: Exist { last_change_ts: TimeStamp(8), estimated_versions_to_last_change: 2 }\
             , is_locked_with_conflict: false }"
         );
-        log_wrappers::set_redact_info_log(true);
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(true));
         let redact_result = format!("{:?}", pessimistic_lock);
-        log_wrappers::set_redact_info_log(false);
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(false));
         assert_eq!(
             redact_result,
             "PessimisticLock { primary_key: ?, start_ts: TimeStamp(5), ttl: 1000, \
