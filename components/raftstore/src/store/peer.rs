@@ -58,6 +58,7 @@ use tikv_util::{
     box_err,
     codec::number::decode_u64,
     debug, error, info,
+    store::find_peer_by_id,
     sys::disk::DiskUsage,
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, InstantExt},
     warn,
@@ -1792,7 +1793,7 @@ where
                 "send raft msg";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer.get_id(),
-                "msg_type" => ?msg_type,
+                "msg_type" => %util::MsgType(&msg),
                 "msg_size" => msg.get_message().compute_size(),
                 "to" => to_peer_id,
                 "disk_usage" => ?msg.get_disk_usage(),
@@ -2655,7 +2656,38 @@ where
         }
     }
 
+    /// Cancel the snapshot generation task under the following conditions:
+    ///
+    /// 1. The requesting peer is removed by a configuration change.
+    /// 2. The requesting peer becomes unreachable, e.g., TiKV goes down or a
+    ///    network partition occurs.
+    pub fn maybe_cancel_gen_snap_task(&mut self, unreachable_store_id: Option<u64>) {
+        let Some(gen_task) = self.mut_store().mut_gen_snap_task() else {
+            return;
+        };
+        let cancel_by_store_id =
+            unreachable_store_id.map_or(false, |s| gen_task.to_peer.get_store_id() == s);
+        let to_peer = gen_task.to_peer.clone();
+        let cancel_by_peer_not_found = find_peer_by_id(self.region(), to_peer.get_id()).is_none();
+        if cancel_by_store_id || cancel_by_peer_not_found {
+            self.mut_store().take_gen_snap_task();
+            self.mut_store().cancel_generating_snap(None);
+            warn!(
+                "cancel generate snap task";
+                "region_id" => self.region_id,
+                "peer_id" => self.peer_id(),
+                "to_peer" => ?to_peer,
+                "cancel_by_peer_not_found" => cancel_by_peer_not_found,
+                "cancel_by_store_id" => cancel_by_store_id,
+            );
+        }
+    }
+
     pub fn handle_gen_snap_task<T: Transport>(&mut self, ctx: &mut PollContext<EK, ER, T>) {
+        // Check if gen snap task need to be cancelled, otherwise it will block
+        // snapshot and subsequent conf changes.
+        self.maybe_cancel_gen_snap_task(None);
+
         if let Some(mut gen_task) = self.mut_store().take_gen_snap_task() {
             // If the snapshot gen precheck feature is enabled, the leader needs
             // to complete a precheck with the target follower before the
@@ -5586,7 +5618,7 @@ where
             "region_id" => self.region_id,
             "peer_id" => self.peer.get_id(),
             "msg_type" => ?ty,
-            "to" => to.get_id()
+            "to" => ?to
         );
         send_msg.set_extra_msg(msg);
         send_msg.set_to_peer(to.clone());
