@@ -64,7 +64,7 @@ use crate::{
     initializer::Initializer,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::{validate_kv_api, Conn, ConnId, RequestId, FeatureGate},
+    service::{validate_kv_api, Conn, ConnId, FeatureGate, RequestId},
     CdcObserver, Error,
 };
 
@@ -2966,7 +2966,7 @@ mod tests {
                 request: req.clone(),
                 downstream,
             });
-            assert_eq!(suite.connections[&conn_id].downstreams_count(), i);
+            assert_eq!(suite.connections[&conn_id].downstreams_count(), i as usize);
         }
 
         // Deregister the request.
