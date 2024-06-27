@@ -7,7 +7,7 @@ use std::{
 
 use encryption::Error as EncryptionError;
 use error_code::ErrorCodeExt;
-use grpcio::Error as GrpcError;
+use futures::channel::mpsc::SendError;
 use kvproto::{errorpb::Error as StoreError, metapb::*};
 use pd_client::Error as PdError;
 use protobuf::ProtobufError;
@@ -30,7 +30,7 @@ pub enum Error {
     OutOfQuota { region_id: u64 },
 
     #[error("gRPC meet error {0}")]
-    Grpc(#[from] GrpcError),
+    Grpc(#[from] tonic::Status),
     #[error("Protobuf meet error {0}")]
     Protobuf(#[from] ProtobufError),
     #[error("I/O Error: {0}")]
@@ -39,6 +39,8 @@ pub enum Error {
     Txn(#[from] TxnError),
     #[error("TiKV scheduler error: {0}")]
     Sched(#[from] ScheduleError<Task>),
+    #[error("Send to channel failed: {0}")]
+    Channel(#[from] SendError),
     #[error("PD client meet error: {0}")]
     Pd(#[from] PdError),
     #[error("Error during requesting raftstore: {0:?}")]
@@ -66,6 +68,7 @@ impl ErrorCodeExt for Error {
             Error::Io(_) => IO,
             Error::Txn(_) => TXN,
             Error::Sched(_) => SCHED,
+            Error::Channel(_) => SCHED,
             Error::Pd(_) => PD,
             Error::RaftRequest(_) => RAFTREQ,
             Error::Contextual { inner_error, .. } => inner_error.error_code(),
@@ -90,6 +93,15 @@ pub type Result<T> = StdResult<T, Error>;
 impl From<StoreError> for Error {
     fn from(e: StoreError) -> Self {
         Self::RaftRequest(e)
+    }
+}
+
+impl From<Error> for tonic::Status {
+    fn from(value: Error) -> Self {
+        match value {
+            Error::Grpc(e) => e,
+            e @ _ => tonic::Status::unknown(format!("{:?}", e)),
+        }
     }
 }
 

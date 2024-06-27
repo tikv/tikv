@@ -11,15 +11,17 @@ use std::{
     time::Duration,
 };
 
-use futures::future;
+use futures::{
+    channel::mpsc::UnboundedSender,
+    future::{self, TryFutureExt},
+};
 use futures_util::{
     future::{BoxFuture, FutureExt},
     sink::SinkExt,
     stream::{AbortHandle, Abortable, StreamExt},
 };
-use grpcio::{RpcStatus, RpcStatusCode, WriteFlags};
 use kvproto::{
-    backup::{
+    brpb::{
         PrepareSnapshotBackupEventType as PEvnT, PrepareSnapshotBackupRequest as PReq,
         PrepareSnapshotBackupRequestType as PReqT, PrepareSnapshotBackupResponse as PResp,
     },
@@ -54,51 +56,50 @@ enum Error {
 }
 
 enum HandleErr {
-    AbortStream(RpcStatus),
+    AbortStream(tonic::Status),
     SendErrResp(errorpb::Error),
 }
 
-pub struct ResultSink(grpcio::DuplexSink<PResp>);
+pub struct ResultSink(UnboundedSender<tonic::Result<PResp>>);
 
-impl From<grpcio::DuplexSink<PResp>> for ResultSink {
-    fn from(value: grpcio::DuplexSink<PResp>) -> Self {
+impl From<UnboundedSender<tonic::Result<PResp>>> for ResultSink {
+    fn from(value: UnboundedSender<tonic::Result<PResp>>) -> Self {
         Self(value)
     }
 }
 
 impl ResultSink {
     async fn send(
-        mut self,
+        &mut self,
         result: Result<PResp>,
         error_extra_info: impl FnOnce(&mut PResp),
-    ) -> grpcio::Result<Self> {
-        match result {
+    ) -> tonic::Result<()> {
+        let res = match result {
             // Note: should we batch here?
-            Ok(item) => self.0.send((item, WriteFlags::default())).await?,
+            Ok(item) => Ok(item),
             Err(err) => match err.into() {
-                HandleErr::AbortStream(status) => {
-                    self.0.fail(status.clone()).await?;
-                    return Err(grpcio::Error::RpcFinished(Some(status)));
-                }
+                HandleErr::AbortStream(status) => Err(status),
                 HandleErr::SendErrResp(err) => {
                     let mut resp = PResp::default();
                     error_extra_info(&mut resp);
                     resp.set_error(err);
-                    self.0.send((resp, WriteFlags::default())).await?;
+                    Ok(resp)
                 }
             },
-        }
-        Ok(self)
+        };
+        self.0
+            .send(res)
+            .map_err(|e| tonic::Status::aborted(format!("send failed: {:?}", e)))
+            .await
     }
 }
 
 impl From<Error> for HandleErr {
     fn from(value: Error) -> Self {
         match value {
-            Error::Uninitialized => HandleErr::AbortStream(RpcStatus::with_message(
-                grpcio::RpcStatusCode::UNAVAILABLE,
-                "coprocessor not initialized".to_owned(),
-            )),
+            Error::Uninitialized => {
+                HandleErr::AbortStream(tonic::Status::unavailable("coprocessor not initialized"))
+            }
             Error::RaftStore(r) => HandleErr::SendErrResp(errorpb::Error::from(r)),
             Error::WaitApplyAborted(reason) => HandleErr::SendErrResp({
                 let mut err = errorpb::Error::default();
@@ -112,10 +113,8 @@ impl From<Error> for HandleErr {
                 }
                 err
             }),
-            Error::LeaseExpired => HandleErr::AbortStream(RpcStatus::with_message(
-                grpcio::RpcStatusCode::FAILED_PRECONDITION,
-                "the lease has expired, you may not send `wait_apply` because it is no meaning"
-                    .to_string(),
+            Error::LeaseExpired => HandleErr::AbortStream(tonic::Status::failed_precondition(
+                "the lease has expired, you may not send `wait_apply` because it is no meaning",
             )),
         }
     }
@@ -219,7 +218,7 @@ impl<SR: SnapshotBrHandle + 'static> Drop for StreamHandleLoop<SR> {
 enum StreamHandleEvent {
     Req(PReq),
     WaitApplyDone(Region, Result<()>),
-    ConnectionGone(Option<grpcio::Error>),
+    ConnectionGone(Option<tonic::Status>),
     Abort,
 }
 
@@ -265,7 +264,7 @@ impl<SR: SnapshotBrHandle + 'static> StreamHandleLoop<SR> {
 
     async fn next_event(
         &mut self,
-        input: &mut (impl Stream<Item = grpcio::Result<PReq>> + Unpin),
+        input: &mut (impl Stream<Item = tonic::Result<PReq>> + Unpin),
     ) -> StreamHandleEvent {
         let pending_regions = &mut self.pending_regions;
         let wait_applies = future::poll_fn(|cx| {
@@ -305,19 +304,19 @@ impl<SR: SnapshotBrHandle + 'static> StreamHandleLoop<SR> {
 
     pub async fn run(
         mut self,
-        mut input: impl Stream<Item = grpcio::Result<PReq>> + Unpin,
+        mut input: impl Stream<Item = tonic::Result<PReq>> + Unpin,
         mut sink: ResultSink,
-    ) -> grpcio::Result<()> {
+    ) -> tonic::Result<()> {
         loop {
             match self.next_event(&mut input).await {
                 StreamHandleEvent::Req(req) => match req.get_ty() {
                     PReqT::UpdateLease => {
                         let lease_dur = Duration::from_secs(req.get_lease_in_seconds());
-                        sink = sink
-                            .send(self.env.update_lease(lease_dur), |resp| {
-                                resp.set_ty(PEvnT::UpdateLeaseResult);
-                            })
-                            .await?;
+                        let result = self.env.update_lease(lease_dur);
+                        sink.send(result, |resp| {
+                            resp.set_ty(PEvnT::UpdateLeaseResult);
+                        })
+                        .await?;
                     }
                     PReqT::WaitApply => {
                         let regions = req.get_regions();
@@ -327,11 +326,7 @@ impl<SR: SnapshotBrHandle + 'static> StreamHandleLoop<SR> {
                         }
                     }
                     PReqT::Finish => {
-                        sink.send(Ok(self.env.reset()), |_| {})
-                            .await?
-                            .0
-                            .close()
-                            .await?;
+                        sink.send(Ok(self.env.reset()), |_| {}).await?;
                         return Ok(());
                     }
                 },
@@ -342,12 +337,11 @@ impl<SR: SnapshotBrHandle + 'static> StreamHandleLoop<SR> {
                         resp.set_ty(PEvnT::WaitApplyDone);
                         resp
                     });
-                    sink = sink
-                        .send(resp, |resp| {
-                            resp.set_ty(PEvnT::WaitApplyDone);
-                            resp.set_region(region);
-                        })
-                        .await?;
+                    sink.send(resp, |resp| {
+                        resp.set_ty(PEvnT::WaitApplyDone);
+                        resp.set_region(region);
+                    })
+                    .await?;
                 }
                 StreamHandleEvent::ConnectionGone(err) => {
                     warn!("the client has gone, aborting loop"; "err" => ?err);
@@ -358,13 +352,9 @@ impl<SR: SnapshotBrHandle + 'static> StreamHandleLoop<SR> {
                 }
                 StreamHandleEvent::Abort => {
                     warn!("Aborted disk snapshot prepare loop by the server.");
-                    return sink
-                        .0
-                        .fail(RpcStatus::with_message(
-                            RpcStatusCode::CANCELLED,
-                            "the loop has been aborted by server".to_string(),
-                        ))
-                        .await;
+                    let err = tonic::Status::cancelled("the loop has been aborted by server");
+                    let _ = sink.0.send(Err(err.clone())).await;
+                    return Err(err);
                 }
             }
         }

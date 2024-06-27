@@ -355,7 +355,8 @@ async fn cleanup_cache(
     }
     let mut resp = TabletSnapshotResponse::default();
     resp.mut_files().set_file_name(missing.clone().into());
-    sink.send((resp, WriteFlags::default())).await?;
+    // sink.send((resp, WriteFlags::default())).await?;
+    let _ = sink.send((resp, WriteFlags::default())).await;
     Ok((reused, missing))
 }
 
@@ -557,7 +558,7 @@ async fn recv_snap_imp<'a>(
 
 // pub(crate) async fn recv_snap<R: RaftExtension + 'static>(
 //     stream: tonic::Streaming<TabletSnapshotRequest>,
-//     tx: futures::channel::oneshot::Sender<StdResult<(), tonic::Status>>,
+//     tx: futures::channel::oneshot::Sender<tonic::Result<()>>,
 //     snap_mgr: TabletSnapManager,
 //     raft_router: R,
 //     cache_builder: impl SnapCacheBuilder,

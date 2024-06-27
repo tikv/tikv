@@ -550,7 +550,7 @@ enum RaftCallRes {
 
 struct RaftCall<R, M, B> {
     sender: AsyncRaftSender<R, M, B>,
-    receiver: tokio::task::JoinHandle<Result<tonic::Response<Done>, tonic::Status>>,
+    receiver: tokio::task::JoinHandle<tonic::Result<tonic::Response<Done>>>,
     lifetime: Option<oneshot::Sender<RaftCallRes>>,
     store_id: u64,
 }
@@ -580,7 +580,6 @@ where
 
 #[derive(Clone)]
 pub struct ConnectionBuilder<S, R> {
-    env: Arc<Environment>,
     cfg: Arc<VersionTrack<Config>>,
     security_mgr: Arc<SecurityManager>,
     resolver: S,
@@ -591,7 +590,6 @@ pub struct ConnectionBuilder<S, R> {
 
 impl<S, R> ConnectionBuilder<S, R> {
     pub fn new(
-        env: Arc<Environment>,
         cfg: Arc<VersionTrack<Config>>,
         security_mgr: Arc<SecurityManager>,
         resolver: S,
@@ -600,7 +598,6 @@ impl<S, R> ConnectionBuilder<S, R> {
         loads: Arc<ThreadLoadPool>,
     ) -> ConnectionBuilder<S, R> {
         ConnectionBuilder {
-            env,
             cfg,
             security_mgr,
             resolver,

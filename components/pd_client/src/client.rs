@@ -933,7 +933,7 @@ impl MetaStorageClient for RpcClient {
             let mut meta_storage = client.inner.rl().meta_storage.clone();
             Box::pin(async move {
                 fail::fail_point!("meta_storage_get", req.key.ends_with(b"rejectme"), |_| {
-                    Err(super::Error::Grpc(grpcio::Error::RemoteStopped))
+                    Err(super::Error::Grpc(tonic::Status::aborted("RemoteStopped")))
                 });
                 let resp = meta_storage.get(req).await?.into_inner();
                 PD_REQUEST_HISTOGRAM_VEC
@@ -1020,7 +1020,7 @@ impl Stream for StreamWatchResult {
             Either::Left(e) => {
                 return Poll::Ready(e.take().map(Err));
             }
-            Either::Right(r) => Pin::new(r).poll_next(cx).map_err(|e| Error::Tonic(e)),
+            Either::Right(r) => Pin::new(r).poll_next(cx).map_err(|e| Error::Grpc(e)),
         }
     }
 }

@@ -10,7 +10,6 @@ use futures::{
     executor::block_on,
     stream, SinkExt, Stream, StreamExt,
 };
-use grpcio::WriteFlags;
 use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
 use protobuf::Message;
 use tikv_util::{
@@ -321,7 +320,7 @@ impl<'a> Drain {
     // Forwards contents to the sink, simulates StreamExt::forward.
     pub async fn forward<S, E>(&'a mut self, sink: &mut S) -> Result<(), E>
     where
-        S: futures::Sink<(ChangeDataEvent, WriteFlags), Error = E> + Unpin,
+        S: futures::Sink<tonic::Result<ChangeDataEvent>, Error = E> + Unpin,
     {
         let total_event_bytes = CDC_GRPC_ACCUMULATE_MESSAGE_BYTES.with_label_values(&["event"]);
         let total_resolved_ts_bytes =
@@ -343,8 +342,8 @@ impl<'a> Drain {
             memory_quota.free(bytes as _);
             for (i, e) in resps.into_iter().enumerate() {
                 // Buffer messages and flush them at once.
-                let write_flags = WriteFlags::default().buffer_hint(i + 1 != resps_len);
-                sink.feed((e, write_flags)).await?;
+                // let write_flags = WriteFlags::default().buffer_hint(i + 1 != resps_len);
+                sink.feed(Ok(e)).await?;
             }
             sink.flush().await?;
             total_event_bytes.inc_by(event_bytes as u64);

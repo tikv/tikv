@@ -86,6 +86,7 @@ tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 time = { workspace = true }
 tokio = { version = "1.5", features = ["sync", "rt-multi-thread"] }
+tonic = { workspace = true }
 tracker = { workspace = true }
 txn_types = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }

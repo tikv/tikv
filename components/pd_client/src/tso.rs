@@ -162,7 +162,7 @@ async fn run_tso(
                 PD_PENDING_TSO_REQUEST_GAUGE.set(pending_requests.len() as i64);
             }
             Some(Err(e)) => {
-                break Err(Error::Tonic(e));
+                break Err(Error::Grpc(e));
             }
             None => {
                 break Ok(());

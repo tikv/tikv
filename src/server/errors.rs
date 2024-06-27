@@ -4,7 +4,6 @@ use std::{error::Error as StdError, io::Error as IoError, net::AddrParseError, r
 
 use engine_traits::Error as EngineTraitError;
 use futures::channel::{mpsc::SendError, oneshot::Canceled};
-use grpcio::Error as GrpcError;
 use hyper::Error as HttpError;
 use openssl::error::ErrorStack as OpenSslError;
 use pd_client::Error as PdError;
@@ -29,10 +28,7 @@ pub enum Error {
     Protobuf(#[from] ProtobufError),
 
     #[error("{0:?}")]
-    Grpc(#[from] GrpcError),
-
-    #[error("{0:?}")]
-    Tonic(#[from] tonic::Status),
+    Grpc(#[from] tonic::Status),
 
     #[error("{0:?}")]
     Codec(#[from] CodecError),
@@ -80,7 +76,7 @@ pub enum Error {
 impl From<Error> for tonic::Status {
     fn from(err: Error) -> Self {
         match err {
-            Error::Tonic(s) => s,
+            Error::Grpc(s) => s,
             e @ _ => tonic::Status::unknown(format!("{:?}", e)),
         }
     }

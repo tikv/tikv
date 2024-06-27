@@ -1086,7 +1086,7 @@ where
         syncer.report_for_self(self_report);
     }
 
-    fn on_check_pending_admin(&mut self, ch: UnboundedSender<CheckAdminResponse>) {
+    fn on_check_pending_admin(&mut self, ch: UnboundedSender<tonic::Result<CheckAdminResponse>>) {
         if !self.fsm.peer.is_leader() {
             // no need to check non-leader pending conf change.
             // in snapshot recovery after we stopped all conf changes from PD.
@@ -1110,7 +1110,7 @@ where
             || self.fsm.peer.is_merging()
             || self.fsm.peer.is_splitting();
         resp.set_has_pending_admin(pending_admin);
-        if let Err(err) = ch.unbounded_send(resp) {
+        if let Err(err) = ch.unbounded_send(Ok(resp)) {
             warn!("failed to send check admin response";
             "err" => ?err,
             "region_id" => self.region().get_id(),

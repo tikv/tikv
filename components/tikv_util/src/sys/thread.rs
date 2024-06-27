@@ -4,7 +4,15 @@
 //! information. Only Linux platform is implemented correctly, for other
 //! platform, it only guarantees successful compilation.
 
-use std::{io, io::Result, sync::Mutex, thread};
+use std::{
+    io,
+    io::Result,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    },
+    thread,
+};
 
 use collections::HashMap;
 use tikv_alloc::{add_thread_memory_accessor, remove_thread_memory_accessor};
@@ -489,6 +497,16 @@ impl ThreadBuildWrapper for futures::executor::ThreadPoolBuilder {
             remove_thread_name_from_map();
             remove_thread_memory_accessor();
         })
+    }
+}
+
+// return a closure that generate string with an auto-incremental numeric
+// suffix.
+pub fn ordered_thread_name(prefix: &'static str) -> impl Fn() -> String + Send + Sync + 'static {
+    let counter = AtomicU64::new(0);
+    move || {
+        let count = counter.fetch_add(1, Ordering::Relaxed);
+        format!("{}_{}", prefix, count)
     }
 }
 

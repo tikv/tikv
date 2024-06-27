@@ -717,7 +717,7 @@ macro_rules! sync_request {
                     Err(e) => {
                         error!("request failed"; "err" => ?e);
                         if retry == 0 {
-                            break Err(Error::Tonic(e));
+                            break Err(Error::Grpc(e));
                         }
                     }
                 }
@@ -755,7 +755,7 @@ where
             Err(e) => {
                 error!("request failed"; "err" => ?e);
                 if retry == 0 {
-                    return Err(Error::Tonic(e));
+                    return Err(Error::Grpc(e));
                 }
             }
         }
@@ -858,7 +858,7 @@ impl PdConnector {
                 .spawn(async move { endpoint.connect().await })
                 .await
                 .unwrap()
-                .map_err(|e| Error::Tonic(tonic::Status::unknown(format!("{:?}", e))))?
+                .map_err(|e| Error::Grpc(tonic::Status::unknown(format!("{:?}", e))))?
         };
         fail_point!("cluster_id_is_not_ready", |_| {
             Ok((
@@ -874,7 +874,7 @@ impl PdConnector {
             .observe(timer.saturating_elapsed_secs());
         match response {
             Ok(resp) => Ok((client, resp.into_inner())),
-            Err(e) => Err(Error::Tonic(e)),
+            Err(e) => Err(Error::Grpc(e)),
         }
     }
 
@@ -1019,7 +1019,7 @@ impl PdConnector {
                     info!("connected to PD member"; "endpoints" => ep);
                     return Ok((Some((client, ep.clone(), resp)), false));
                 }
-                Err(Error::Tonic(e)) => {
+                Err(Error::Grpc(e)) => {
                     if e.code() == tonic::Code::Unavailable
                         || e.code() == tonic::Code::DeadlineExceeded
                     {

@@ -27,7 +27,7 @@ impl SnapshotBrHandle for UnimplementedHandle {
 
     fn broadcast_check_pending_admin(
         &self,
-        _tx: UnboundedSender<CheckAdminResponse>,
+        _tx: UnboundedSender<tonic::Result<CheckAdminResponse>>,
     ) -> crate::Result<()> {
         Err(crate::Error::Other(box_err!(
             "broadcast_check_pending_admin not implemented; note: {}",

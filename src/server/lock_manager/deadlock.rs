@@ -14,7 +14,6 @@ use futures::{
     sink::SinkExt,
     stream::{StreamExt, TryStreamExt},
 };
-use grpcio::Environment;
 use kvproto::{deadlock::*, deadlock_grpc::deadlock_server::Deadlock, metapb::Region};
 use pd_client::{PdClient, INVALID_ID};
 use raft::StateRole;
@@ -395,9 +394,7 @@ pub enum Task {
     /// The detect request of other nodes.
     DetectRpc {
         stream: tonic::Streaming<DeadlockRequest>,
-        tx: futures::channel::mpsc::UnboundedSender<
-            std::result::Result<DeadlockResponse, tonic::Status>,
-        >,
+        tx: futures::channel::mpsc::UnboundedSender<tonic::Result<DeadlockResponse>>,
     },
     /// If the node has the leader region and the role of the node changes,
     /// a `ChangeRole` task will be scheduled.
@@ -616,8 +613,6 @@ where
 {
     /// The store id of the node.
     store_id: u64,
-    /// Used to create clients to the leader.
-    env: Arc<Environment>,
     /// The leader's id and address if exists.
     leader_info: Option<(u64, String)>,
     /// The connection to the leader.
@@ -660,7 +655,6 @@ where
         assert!(store_id != INVALID_ID);
         Self {
             store_id,
-            env: client::env(),
             leader_info: None,
             leader_client: None,
             pd_client,
@@ -784,7 +778,6 @@ where
         // Create the connection to the leader and registers the callback to receive
         // the deadlock response.
         let mut leader_client = Client::new(
-            Arc::clone(&self.env),
             Arc::clone(&self.security_mgr),
             leader_addr,
             self.grpc_handle.clone(),
@@ -954,9 +947,7 @@ where
     fn handle_detect_rpc(
         &self,
         stream: tonic::Streaming<DeadlockRequest>,
-        mut tx: futures::channel::mpsc::UnboundedSender<
-            std::result::Result<DeadlockResponse, tonic::Status>,
-        >,
+        mut tx: futures::channel::mpsc::UnboundedSender<tonic::Result<DeadlockResponse>>,
     ) {
         // TODO: Support batch checking.
         if !self.is_leader() {
@@ -1092,7 +1083,7 @@ impl Deadlock for Service {
     async fn get_wait_for_entries(
         &self,
         request: tonic::Request<WaitForEntriesRequest>,
-    ) -> std::result::Result<tonic::Response<WaitForEntriesResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<WaitForEntriesResponse>> {
         let (cb, f) = paired_future_callback();
         if !self.waiter_mgr_scheduler.dump_wait_table(cb) {
             return Err(tonic::Status::resource_exhausted(

@@ -60,6 +60,7 @@ sst_importer = { workspace = true }
 thiserror = "1.0"
 tikv_util = { workspace = true }
 time = { workspace = true }
+tonic = { workspace = true }
 tracker = { workspace = true }
 txn_types = { workspace = true }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }

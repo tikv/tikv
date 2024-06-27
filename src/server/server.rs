@@ -11,9 +11,7 @@ use std::{
 
 use api_version::KvFormat;
 use futures::{compat::Stream01CompatExt, stream::StreamExt, FutureExt};
-use grpcio::{
-    ChannelBuilder, Environment, ResourceQuota, Server as GrpcioGrpcServer, ServerBuilder,
-};
+use grpcio::ResourceQuota;
 use health_controller::HealthController;
 use kvproto::{
     tikvpb::*,
@@ -63,7 +61,7 @@ pub const READPOOL_NORMAL_THREAD_PREFIX: &str = "store-read-norm";
 pub const STATS_THREAD_PREFIX: &str = "transport-stats";
 
 pub trait GrpcBuilderFactory {
-    fn create_builder(&self, env: Arc<Environment>) -> Result<ServerBuilderWithAddr>;
+    fn create_builder(&self) -> Result<ServerBuilderWithAddr>;
 }
 pub struct ServerBuilderWithAddr {
     pub builder: Router,
@@ -121,11 +119,11 @@ impl<S> GrpcBuilderFactory for BuilderFactory<S>
 where
     S: Tikv + Send + Clone + 'static,
 {
-    fn create_builder(&self, env: Arc<Environment>) -> Result<ServerBuilderWithAddr> {
+    fn create_builder(&self) -> Result<ServerBuilderWithAddr> {
         let addr = SocketAddr::from_str(&self.cfg.value().addr)?;
         let ip: String = format!("{}", addr.ip());
-        let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
-            .resize_memory(self.cfg.value().grpc_memory_pool_quota.0 as usize);
+        // let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
+        //     .resize_memory(self.cfg.value().grpc_memory_pool_quota.0 as usize);
 
         let builder = GrpcServer::builder()
             .initial_stream_window_size(self.cfg.value().grpc_stream_initial_window_size.0 as u32)
@@ -144,7 +142,6 @@ where
 /// It hosts various internal components, including gRPC, the raftstore router
 /// and a snapshot worker.
 pub struct Server<S: StoreAddrResolver + 'static, E: Engine> {
-    env: Arc<Environment>,
     grpc_handle: tokio::runtime::Handle,
     /// A GrpcServer builder or a GrpcServer.
     ///
@@ -187,7 +184,6 @@ where
         snap_mgr: Either<SnapManager, TabletSnapManager>,
         gc_worker: GcWorker<E>,
         check_leader_scheduler: Scheduler<CheckLeaderTask>,
-        env: Arc<Environment>,
         grpc_handle: tokio::runtime::Handle,
         yatp_read_pool: Option<ReadPool>,
         debug_thread_pool: Arc<Runtime>,
@@ -221,7 +217,7 @@ where
             Some(cfg.value().health_feedback_interval.0)
         };
 
-        let proxy = Proxy::new(security_mgr.clone(), &env, Arc::new(cfg.value().clone()));
+        let proxy = Proxy::new(security_mgr.clone(), Arc::new(cfg.value().clone()));
         let kv_service = KvService::new(
             cfg.value().cluster_id,
             store_id,
@@ -250,10 +246,9 @@ where
         let addr = SocketAddr::from_str(&cfg.value().addr)?;
         let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
             .resize_memory(cfg.value().grpc_memory_pool_quota.0 as usize);
-        let builder = Either::Left(builder_factory.create_builder(env.clone())?);
+        let builder = Either::Left(builder_factory.create_builder()?);
 
         let conn_builder = ConnectionBuilder::new(
-            env.clone(),
             Arc::clone(cfg),
             security_mgr.clone(),
             resolver,
@@ -266,7 +261,6 @@ where
         let trans = ServerTransport::new(raft_client);
 
         let svr = Server {
-            env: Arc::clone(&env),
             grpc_handle,
             builder_or_server: Some(builder),
             grpc_mem_quota: mem_quota,
@@ -297,10 +291,6 @@ where
 
     pub fn transport(&self) -> ServerTransport<E::RaftExtension, S> {
         self.trans.clone()
-    }
-
-    pub fn env(&self) -> Arc<Environment> {
-        self.env.clone()
     }
 
     pub fn get_grpc_mem_quota(&self) -> &ResourceQuota {
@@ -463,7 +453,7 @@ where
         let start = Instant::now();
         // Prepare the builder for resume grpc server. And if the builder cannot be
         // created, then pause will be skipped.
-        let builder = Either::Left(self.builder_factory.create_builder(self.env.clone())?);
+        let builder = Either::Left(self.builder_factory.create_builder()?);
         if let Some(Either::Right(tx)) = self.builder_or_server.take() {
             let _ = tx.send(());
         }

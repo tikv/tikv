@@ -551,7 +551,7 @@ where
     UnsafeRecoveryWaitApply(UnsafeRecoveryWaitApplySyncer),
     UnsafeRecoveryFillOutReport(UnsafeRecoveryFillOutReportSyncer),
     SnapshotBrWaitApply(SnapshotBrWaitApplyRequest),
-    CheckPendingAdmin(UnboundedSender<CheckAdminResponse>),
+    CheckPendingAdmin(UnboundedSender<tonic::Result<CheckAdminResponse>>),
 }
 
 /// Message that will be sent to a peer.

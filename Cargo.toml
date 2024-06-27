@@ -449,7 +449,7 @@ tracing = { version = "0.1.39", default-features = false, features = [
 ] }
 openssl = "0.10"
 openssl-sys = "0.9"
-tonic = { git = "https://github.com/glorv/tonic", branch = "patch-health" }
+tonic = { git = "https://github.com/glorv/tonic", branch = "patch-health", features = ["tls", "transport", "codegen"] }
 tonic-health = { git = "https://github.com/glorv/tonic", branch = "patch-health" }
 
 tokio = { version = "1.5", features = ["rt-multi-thread"] }

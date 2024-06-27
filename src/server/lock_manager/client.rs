@@ -41,7 +41,6 @@ pub struct Client {
 
 impl Client {
     pub fn new(
-        env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
         addr: &str,
         handle: tokio::runtime::Handle,
@@ -65,7 +64,7 @@ impl Client {
     ) -> DeadlockFuture<tonic::Response<tonic::Streaming<DeadlockResponse>>> {
         let (tx, rx) = mpsc::unbounded();
         let mut client = self.client.clone();
-        let send_task = Box::pin(async move { client.detect(rx).await.map_err(Error::Tonic) });
+        let send_task = Box::pin(async move { client.detect(rx).await.map_err(Error::Grpc) });
         self.sender = Some(tx);
 
         send_task

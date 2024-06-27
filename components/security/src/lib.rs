@@ -14,10 +14,11 @@ use std::{
 use collections::HashSet;
 use encryption::EncryptionConfig;
 use grpcio::{
-    CertificateRequestType, Channel, ChannelBuilder, ChannelCredentialsBuilder, CheckResult,
-    RpcContext, RpcStatus, RpcStatusCode, ServerBuilder, ServerChecker, ServerCredentialsBuilder,
+    CertificateRequestType, ChannelBuilder, ChannelCredentialsBuilder, CheckResult, RpcContext,
+    RpcStatus, RpcStatusCode, ServerBuilder, ServerChecker, ServerCredentialsBuilder,
     ServerCredentialsFetcher,
 };
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
@@ -147,24 +148,27 @@ impl SecurityManager {
         })
     }
 
-    pub fn connect(&self, mut cb: ChannelBuilder, addr: &str) -> Channel {
-        if self.cfg.ca_path.is_empty() {
-            cb.connect(addr)
-        } else {
+    pub async fn connect(&self, mut cb: Endpoint) -> Result<Channel, tonic::transport::Error> {
+        if !self.cfg.ca_path.is_empty() {
             if !self.cfg.override_ssl_target.is_empty() {
-                cb = cb.override_ssl_target(self.cfg.override_ssl_target.clone());
+                // TODO: support override_ssl_target
+                // cb = cb.override_ssl_target(self.cfg.override_ssl_target.
+                // clone());
             }
             // Fill in empty certificate information if read fails.
             // Returning empty certificates delays error processing until
             // actual connection in grpc.
             let (ca, cert, key) = self.cfg.load_certs().unwrap_or_default();
-
-            let cred = ChannelCredentialsBuilder::new()
-                .root_cert(ca)
-                .cert(cert, key)
-                .build();
-            cb.secure_connect(addr, cred)
+            let mut tls_cfg = ClientTlsConfig::new();
+            if !ca.is_empty() {
+                tls_cfg = tls_cfg.ca_certificate(Certificate::from_pem(ca));
+            }
+            if !cert.is_empty() && !key.is_empty() {
+                tls_cfg = tls_cfg.identity(Identity::from_pem(cert, key));
+            }
+            cb = cb.tls_config(tls_cfg)?;
         }
+        cb.connect().await
     }
 
     pub fn bind(&self, mut sb: ServerBuilder, addr: &str, port: u16) -> ServerBuilder {

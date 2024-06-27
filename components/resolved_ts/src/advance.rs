@@ -548,7 +548,7 @@ async fn get_tikv_client(
         {
             Ok(c) => c,
             Err(e) => {
-                return Err(pd_client::Error::Tonic(tonic::Status::invalid_argument(
+                return Err(pd_client::Error::Grpc(tonic::Status::invalid_argument(
                     format!("{:?}", e),
                 )));
             }

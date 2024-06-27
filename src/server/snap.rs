@@ -75,13 +75,11 @@ fn get_snap_timeout(size: u64) -> Duration {
 pub enum Task {
     Recv {
         stream: tonic::Streaming<SnapshotChunk>,
-        tx: Sender<StdResult<(), tonic::Status>>,
+        tx: Sender<tonic::Result<()>>,
     },
     RecvTablet {
         stream: tonic::Streaming<TabletSnapshotRequest>,
-        tx: futures::channel::mpsc::UnboundedSender<
-            StdResult<TabletSnapshotResponse, tonic::Status>,
-        >,
+        tx: futures::channel::mpsc::UnboundedSender<tonic::Result<TabletSnapshotResponse>>,
     },
     Send {
         addr: String,
@@ -224,6 +222,7 @@ pub fn send_snap(
     let addr = tikv_util::format_url(addr);
     let channel = Channel::from_shared(addr)
         .unwrap()
+        //.tls_config()
         .initial_stream_window_size(cfg.grpc_stream_initial_window_size.0 as u32)
         .http2_keep_alive_interval(cfg.grpc_keepalive_time.0)
         .keep_alive_timeout(cfg.grpc_keepalive_timeout.0)
@@ -237,7 +236,7 @@ pub fn send_snap(
         let chunks = Arc::new(Mutex::new(chunks));
         let task = client
             .snapshot(SnapChunkWrapper::new(chunks.clone()))
-            .map_err(Error::Tonic);
+            .map_err(Error::Grpc);
 
         let wait_timeout = GLOBAL_TIMER_HANDLE
             .delay(StdInstant::now() + get_snap_timeout(total_size))
@@ -360,7 +359,7 @@ impl RecvSnapContext {
 
 fn recv_snap<R: RaftExtension + 'static>(
     stream: tonic::Streaming<SnapshotChunk>,
-    tx: Sender<StdResult<(), tonic::Status>>,
+    tx: Sender<tonic::Result<()>>,
     snap_mgr: SnapManager,
     raft_router: R,
 ) -> impl Future<Output = Result<()>> {
@@ -406,7 +405,7 @@ fn recv_snap<R: RaftExtension + 'static>(
                 tx.send(Err(status))
             }
         }
-        .map_err(|e| Error::Tonic(tonic::Status::unknown(format!("{:?}", e))))
+        .map_err(|e| Error::Grpc(tonic::Status::unknown(format!("{:?}", e))))
     }
 }
 

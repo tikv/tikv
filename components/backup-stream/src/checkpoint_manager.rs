@@ -7,7 +7,6 @@ use futures::{
     future::BoxFuture,
     FutureExt, SinkExt, StreamExt,
 };
-use grpcio::{RpcStatus, RpcStatusCode, WriteFlags};
 use kvproto::{
     errorpb::{Error as PbError, *},
     logbackuppb::{FlushEvent, SubscribeFlushEventResponse},
@@ -94,7 +93,7 @@ impl SubscriptionManager {
                 for es in events.chunks(1024) {
                     let mut resp = SubscribeFlushEventResponse::default();
                     resp.set_events(es.to_vec().into());
-                    sub.feed((resp, WriteFlags::default())).await?;
+                    sub.feed(Ok(resp)).await?;
                 }
                 sub.flush().await
             };
@@ -127,8 +126,9 @@ impl SubscriptionManager {
 
 // Note: can we make it more generic...?
 #[cfg(not(test))]
-pub type Subscription =
-    grpcio::ServerStreamingSink<kvproto::logbackuppb::SubscribeFlushEventResponse>;
+pub type Subscription = futures::channel::mpsc::UnboundedSender<
+    tonic::Result<kvproto::logbackuppb::SubscribeFlushEventResponse>,
+>;
 
 #[cfg(test)]
 pub type Subscription = tests::MockSink;
@@ -301,7 +301,7 @@ impl CheckpointManager {
         });
     }
 
-    pub fn add_subscriber(&mut self, sub: Subscription) -> BoxFuture<'static, Result<()>> {
+    pub fn add_subscriber(&mut self, mut sub: Subscription) -> BoxFuture<'static, Result<()>> {
         let mgr = self.manager_handle.as_ref().cloned();
         let initial_data = self
             .checkpoint_ts
@@ -321,15 +321,11 @@ impl CheckpointManager {
             let mut mgr = match mgr {
                 Ok(mgr) => mgr,
                 Err(err) => {
-                    sub.fail(RpcStatus::with_message(
-                        RpcStatusCode::UNAVAILABLE,
-                        "subscription manager not get ready.".to_owned(),
-                    ))
-                    .await
-                    .map_err(|err| {
+                    let err = tonic::Status::unavailable("subscription manager not get ready.");
+                    sub.send(Err(err.clone())).await.map_err(|err| {
                         annotate!(err, "failed to send request to subscriber manager")
                     })?;
-                    return Err(err);
+                    return Err(err.into());
                 }
             };
             mgr.send(SubscriptionOp::Add(sub))

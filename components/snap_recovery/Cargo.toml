@@ -19,7 +19,6 @@ encryption_export = { workspace = true }
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 futures = { version = "0.3", features = ["executor"] }
-grpcio = { workspace = true }
 itertools = "0.10"
 keys = { workspace = true }
 kvproto = { workspace = true }
@@ -41,5 +40,6 @@ tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.17", features = ["rt"] }
 toml = "0.5"
+tonic = { workspace = true }
 txn_types = { workspace = true }
 

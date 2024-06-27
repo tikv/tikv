@@ -112,7 +112,7 @@ where
     async fn get(
         &self,
         request: tonic::Request<GetRequest>,
-    ) -> std::result::Result<tonic::Response<GetResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<GetResponse>> {
         const TAG: &str = "debug_get";
         let mut req = request.into_inner();
         let db = req.get_db();
@@ -136,7 +136,7 @@ where
     async fn raft_log(
         &self,
         request: tonic::Request<RaftLogRequest>,
-    ) -> std::result::Result<tonic::Response<RaftLogResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<RaftLogResponse>> {
         const TAG: &str = "debug_raft_log";
         let req = request.into_inner();
         let region_id = req.get_region_id();
@@ -159,7 +159,7 @@ where
     async fn region_info(
         &self,
         request: tonic::Request<RegionInfoRequest>,
-    ) -> std::result::Result<tonic::Response<RegionInfoResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<RegionInfoResponse>> {
         const TAG: &str = "debug_region_log";
         let req = request.into_inner();
         let region_id = req.get_region_id();
@@ -189,7 +189,7 @@ where
     async fn region_size(
         &self,
         request: tonic::Request<RegionSizeRequest>,
-    ) -> std::result::Result<tonic::Response<RegionSizeResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<RegionSizeResponse>> {
         const TAG: &str = "debug_region_size";
         let mut req = request.into_inner();
         let region_id = req.get_region_id();
@@ -255,7 +255,7 @@ where
     async fn compact(
         &self,
         request: tonic::Request<CompactRequest>,
-    ) -> std::result::Result<tonic::Response<CompactResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<CompactResponse>> {
         let debugger = self.debugger.clone();
         let req = request.into_inner();
         let res = self.pool.spawn(async move {
@@ -280,7 +280,7 @@ where
     async fn inject_fail_point(
         &self,
         request: tonic::Request<InjectFailPointRequest>,
-    ) -> std::result::Result<tonic::Response<InjectFailPointResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<InjectFailPointResponse>> {
         const TAG: &str = "debug_inject_fail_point";
         let mut req = request.into_inner();
         self.pool
@@ -304,7 +304,7 @@ where
     async fn recover_fail_point(
         &self,
         request: tonic::Request<RecoverFailPointRequest>,
-    ) -> std::result::Result<tonic::Response<RecoverFailPointResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<RecoverFailPointResponse>> {
         const TAG: &str = "debug_recover_fail_point";
         let mut req = request.into_inner();
         self.pool
@@ -325,7 +325,7 @@ where
     async fn list_fail_points(
         &self,
         _request: tonic::Request<ListFailPointsRequest>,
-    ) -> std::result::Result<tonic::Response<ListFailPointsResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<ListFailPointsResponse>> {
         const TAG: &str = "debug_list_fail_points";
 
         self.pool
@@ -349,7 +349,7 @@ where
     async fn get_metrics(
         &self,
         request: tonic::Request<GetMetricsRequest>,
-    ) -> std::result::Result<tonic::Response<GetMetricsResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<GetMetricsResponse>> {
         const TAG: &str = "debug_get_metrics";
         let req = request.into_inner();
         let debugger = self.debugger.clone();
@@ -374,7 +374,7 @@ where
     async fn check_region_consistency(
         &self,
         request: tonic::Request<RegionConsistencyCheckRequest>,
-    ) -> std::result::Result<tonic::Response<RegionConsistencyCheckResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<RegionConsistencyCheckResponse>> {
         let req = request.into_inner();
         let region_id = req.get_region_id();
         let f = self.raft_router.check_consistency(region_id);
@@ -393,7 +393,7 @@ where
     async fn modify_tikv_config(
         &self,
         request: tonic::Request<ModifyTikvConfigRequest>,
-    ) -> std::result::Result<tonic::Response<ModifyTikvConfigResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<ModifyTikvConfigResponse>> {
         const TAG: &str = "modify_tikv_config";
         let mut req = request.into_inner();
         let config_name = req.take_config_name();
@@ -411,7 +411,7 @@ where
     async fn get_region_properties(
         &self,
         request: tonic::Request<GetRegionPropertiesRequest>,
-    ) -> std::result::Result<tonic::Response<GetRegionPropertiesResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<GetRegionPropertiesResponse>> {
         const TAG: &str = "get_region_properties";
         let debugger = self.debugger.clone();
         let req = request.into_inner();
@@ -435,7 +435,7 @@ where
     async fn get_range_properties(
         &self,
         request: tonic::Request<GetRangePropertiesRequest>,
-    ) -> std::result::Result<tonic::Response<GetRangePropertiesResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<GetRangePropertiesResponse>> {
         const TAG: &str = "get_range_properties";
         let debugger = self.debugger.clone();
         let req = request.into_inner();
@@ -461,7 +461,7 @@ where
     async fn get_store_info(
         &self,
         _request: tonic::Request<GetStoreInfoRequest>,
-    ) -> std::result::Result<tonic::Response<GetStoreInfoResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<GetStoreInfoResponse>> {
         const TAG: &str = "debug_get_store_id";
         let debugger = self.debugger.clone();
 
@@ -486,7 +486,7 @@ where
     async fn get_cluster_info(
         &self,
         _request: tonic::Request<GetClusterInfoRequest>,
-    ) -> std::result::Result<tonic::Response<GetClusterInfoResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<GetClusterInfoResponse>> {
         const TAG: &str = "debug_get_cluster_id";
         let debugger = self.debugger.clone();
 
@@ -508,7 +508,7 @@ where
     async fn get_all_regions_in_store(
         &self,
         _request: tonic::Request<GetAllRegionsInStoreRequest>,
-    ) -> std::result::Result<tonic::Response<GetAllRegionsInStoreResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<GetAllRegionsInStoreResponse>> {
         const TAG: &str = "debug_get_all_regions_in_store";
         let debugger = self.debugger.clone();
 
@@ -530,7 +530,7 @@ where
     async fn reset_to_version(
         &self,
         request: tonic::Request<ResetToVersionRequest>,
-    ) -> std::result::Result<tonic::Response<ResetToVersionResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<ResetToVersionResponse>> {
         let req = request.into_inner();
         self.debugger.reset_to_version(req.get_ts());
         Ok(tonic::Response::new(ResetToVersionResponse::default()))
@@ -539,7 +539,7 @@ where
     async fn flashback_to_version(
         &self,
         request: tonic::Request<FlashbackToVersionRequest>,
-    ) -> std::result::Result<tonic::Response<FlashbackToVersionResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<FlashbackToVersionResponse>> {
         let debugger = self.debugger.clone();
         let req = request.into_inner();
         self.pool
@@ -566,7 +566,7 @@ where
     async fn get_region_read_progress(
         &self,
         request: tonic::Request<GetRegionReadProgressRequest>,
-    ) -> std::result::Result<tonic::Response<GetRegionReadProgressResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<GetRegionReadProgressResponse>> {
         let req = request.into_inner();
         let mut resp = GetRegionReadProgressResponse::default();
         {

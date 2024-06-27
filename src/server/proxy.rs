@@ -77,18 +77,12 @@ impl ClientPool {
 
     fn get_connection(
         &mut self,
-        env: &Weak<Environment>,
         mgr: &SecurityManager,
         cfg: &Config,
         addr: &str,
     ) -> Option<Client> {
         if self.last_pos == self.pool.len() {
             if self.last_pos < cfg.forward_max_connections_per_address {
-                let env = match env.upgrade() {
-                    Some(e) => e,
-                    None => return None,
-                };
-
                 let addr = tikv_util::format_url(addr);
                 let ch = Channel::from_shared(addr)
                     .unwrap()
@@ -119,17 +113,16 @@ impl ClientPool {
 /// A proxy struct that maintains connections to different addresses.
 pub struct Proxy {
     mgr: Arc<SecurityManager>,
-    env: Weak<Environment>,
+    // env: Weak<Environment>,
     cfg: Arc<Config>,
     // todo: Release client if it's not used anymore. For example, become tombstone.
     pool: HashMap<String, ClientPool>,
 }
 
 impl Proxy {
-    pub fn new(mgr: Arc<SecurityManager>, env: &Arc<Environment>, cfg: Arc<Config>) -> Proxy {
+    pub fn new(mgr: Arc<SecurityManager>, cfg: Arc<Config>) -> Proxy {
         Proxy {
             mgr,
-            env: Arc::downgrade(env),
             cfg,
             pool: HashMap::default(),
         }
@@ -172,7 +165,6 @@ impl Proxy {
 impl Clone for Proxy {
     fn clone(&self) -> Proxy {
         Proxy {
-            env: self.env.clone(),
             mgr: self.mgr.clone(),
             cfg: self.cfg.clone(),
             pool: HashMap::default(),

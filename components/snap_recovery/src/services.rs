@@ -21,15 +21,13 @@ use engine_rocks::{
 use engine_traits::{CfNamesExt, CfOptionsExt, Engines, KvEngine, RaftEngine};
 use futures::{
     channel::mpsc,
-    executor::{ThreadPool, ThreadPoolBuilder},
     stream::{AbortHandle, Aborted},
     FutureExt, SinkExt, StreamExt,
 };
-use grpcio::{
-    ClientStreamingSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode, ServerStreamingSink,
-    UnarySink, WriteFlags,
+use kvproto::{
+    raft_serverpb::StoreIdent, recover_data_grpc::recover_data_server::RecoverData,
+    recoverdatapb::*,
 };
-use kvproto::{raft_serverpb::StoreIdent, recoverdatapb::*};
 use raftstore::{
     router::RaftStoreRouter,
     store::{
@@ -60,13 +58,24 @@ pub enum Error {
     InvalidArgument(String),
 
     #[error("{0:?}")]
-    Grpc(#[from] grpcio::Error),
+    Grpc(#[from] tonic::Status),
 
     #[error("Engine {0:?}")]
     Engine(#[from] engine_traits::Error),
 
     #[error("{0:?}")]
     Other(#[from] Box<dyn StdError + Sync + Send>),
+}
+
+impl From<Error> for tonic::Status {
+    fn from(e: Error) -> Self {
+        match e {
+            Error::InvalidArgument(s) => Self::invalid_argument(s),
+            Error::Grpc(e) => e,
+            Error::Engine(e) => Self::unknown(format!("{:?}", e)),
+            Error::Other(e) => Self::unknown(format!("{:?}", e)),
+        }
+    }
 }
 
 /// Service handles the recovery messages from backup restore.
@@ -78,7 +87,7 @@ where
 {
     engines: Engines<EK, ER>,
     router: RaftRouter<EK, ER>,
-    threads: ThreadPool,
+    runtime: Arc<tokio::runtime::Runtime>,
 
     /// The handle to last call of recover region RPC.
     ///
@@ -128,17 +137,21 @@ where
     /// `thread pool`.
     pub fn new(engines: Engines<EK, ER>, router: RaftRouter<EK, ER>) -> RecoveryService<EK, ER> {
         let props = tikv_util::thread_group::current_properties();
-        let threads = ThreadPoolBuilder::new()
-            .pool_size(4)
-            .name_prefix("recovery-service")
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .thread_name_fn(tikv_util::sys::thread::ordered_thread_name(
+                "recovery-service",
+            ))
+            .enable_all()
             .with_sys_and_custom_hooks(
                 move || {
                     tikv_util::thread_group::set_properties(props.clone());
                 },
                 || {},
             )
-            .create()
+            .build()
             .unwrap();
+        let runtime = Arc::new(runtime);
 
         // config rocksdb l0 to optimize the restore
         // also for massive data applied during the restore, it easy to reach the write
@@ -151,7 +164,7 @@ where
         RecoveryService {
             engines,
             router,
-            threads,
+            runtime,
             last_recovery_region_rpc: Arc::default(),
         }
     }
@@ -268,58 +281,41 @@ fn compact(engine: RocksEngine) -> Result<()> {
     Ok(())
 }
 
+#[tonic::async_trait]
 impl<EK, ER> RecoverData for RecoveryService<EK, ER>
 where
     EK: KvEngine<DiskEngine = RocksEngine>,
     ER: RaftEngine,
 {
-    // 1. br start to ready region meta
-    fn read_region_meta(
-        &mut self,
-        ctx: RpcContext<'_>,
-        _req: ReadRegionMetaRequest,
-        mut sink: ServerStreamingSink<RegionMeta>,
-    ) {
+    /// Server streaming response type for the ReadRegionMeta method.
+    type ReadRegionMetaStream = tonic::codegen::BoxStream<RegionMeta>;
+    async fn read_region_meta(
+        &self,
+        request: tonic::Request<ReadRegionMetaRequest>,
+    ) -> tonic::Result<tonic::Response<Self::ReadRegionMetaStream>> {
         let (tx, rx) = mpsc::unbounded();
         // tx only clone once within RegionMetaCollector, so that it drop automatically
         // when work thread done
         let meta_collector = RegionMetaCollector::new(self.engines.clone(), tx);
         info!("start to collect region meta");
         meta_collector.start_report();
-        let send_task = async move {
-            let mut s = rx.map(|resp| Ok((resp, WriteFlags::default())));
-            sink.send_all(&mut s).await?;
-            sink.close().await?;
-            Ok(())
-        }
-        .map(|res: Result<()>| match res {
-            Ok(_) => {
-                debug!("collect region meta done");
-            }
-            Err(e) => {
-                error!("rcollect region meta failure"; "error" => ?e);
-            }
-        });
 
         // Hacking: Sometimes, the client may omit the RPC call to `recover_region` if
         // no leader should be register to some (unfortunate) store. So we abort
         // last recover region here too, anyway this RPC implies a consequent
         // `recover_region` for now.
-        self.abort_last_recover_region(format_args!("read_region_meta by {}", ctx.peer()));
-        self.threads.spawn_ok(send_task);
+        self.abort_last_recover_region(format_args!("read_region_meta by {}", ""));
+        Ok(tonic::Response::new(Box::pin(rx.map(|resp| Ok(resp))) as _))
     }
 
-    // 2. br start to recover region
-    // assign region leader and wait leader apply to last log
-    fn recover_region(
-        &mut self,
-        ctx: RpcContext<'_>,
-        mut stream: RequestStream<RecoverRegionRequest>,
-        sink: ClientStreamingSink<RecoverRegionResponse>,
-    ) {
+    async fn recover_region(
+        &self,
+        request: tonic::Request<tonic::Streaming<RecoverRegionRequest>>,
+    ) -> tonic::Result<tonic::Response<RecoverRegionResponse>> {
         let mut raft_router = Mutex::new(self.router.clone());
-        let store_id = self.get_store_id();
+        let store_id = self.get_store_id()?;
         info!("start to recover the region");
+        let mut stream = request.into_inner();
         let task = async move {
             let mut leaders = Vec::new();
             while let Some(req) = stream.next().await {
@@ -385,66 +381,52 @@ where
             );
 
             let mut resp = RecoverRegionResponse::default();
-            match store_id {
-                Ok(id) => resp.set_store_id(id),
-                Err(e) => error!("failed to get store id"; "error" => ?e),
-            };
+            resp.set_store_id(store_id);
 
             resp
         };
 
         let (state, task) = RecoverRegionState::wrap_task(task);
-        self.replace_last_recover_region(format!("recover_region by {}", ctx.peer()), state);
-        self.threads.spawn_ok(async move {
-            let res = match task.await {
-                Ok(resp) => sink.success(resp),
-                Err(Aborted) => sink.fail(RpcStatus::new(RpcStatusCode::ABORTED)),
-            };
-            if let Err(err) = res.await {
-                warn!("failed to response recover region rpc"; "err" => %err);
+        self.replace_last_recover_region(format!("recover_region by {}", "ctx.peer()"), state);
+        match self.runtime.spawn(task).await {
+            Ok(Ok(r)) => Ok(tonic::Response::new(r)),
+            Ok(Err(e)) => Err(tonic::Status::aborted(format!("{:?}", e))),
+            Err(e) => {
+                warn!("failed to response recover region rpc"; "err" => %e);
+                Err(tonic::Status::unknown("join recover region task failed"))
             }
-        });
+        }
     }
-
-    // 3. ensure all region peer/follower apply to last
-    fn wait_apply(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        _req: WaitApplyRequest,
-        sink: UnarySink<WaitApplyResponse>,
-    ) {
+    async fn wait_apply(
+        &self,
+        request: tonic::Request<WaitApplyRequest>,
+    ) -> std::result::Result<tonic::Response<WaitApplyResponse>, tonic::Status> {
         let router = self.router.clone();
         info!("wait_apply start");
-        let task = async move {
-            let now = Instant::now();
-            let (tx, rx) = oneshot::channel();
-            RecoveryService::wait_apply_last(router, tx);
-            match rx.await {
-                Ok(id) => {
-                    info!("follower apply to last log"; "report" => ?id);
-                }
-                Err(e) => {
-                    error!("follower failed to apply to last log"; "error" => ?e);
-                }
+        let now = Instant::now();
+        let (tx, rx) = oneshot::channel();
+        RecoveryService::wait_apply_last(router, tx);
+        match rx.await {
+            Ok(id) => {
+                info!("follower apply to last log"; "report" => ?id);
             }
-            info!(
-                "all region apply to last log";
-                "spent_time" => now.elapsed().as_secs(),
-            );
-            let resp = WaitApplyResponse::default();
-            let _ = sink.success(resp).await;
-        };
-
-        self.threads.spawn_ok(task);
+            Err(e) => {
+                error!("follower failed to apply to last log"; "error" => ?e);
+            }
+        }
+        info!(
+            "all region apply to last log";
+            "spent_time" => now.elapsed().as_secs(),
+        );
+        Ok(tonic::Response::new(WaitApplyResponse::default()))
     }
-
-    // 4.resolve kv data to a backup resolved-tss
-    fn resolve_kv_data(
-        &mut self,
-        _ctx: RpcContext<'_>,
-        req: ResolveKvDataRequest,
-        mut sink: ServerStreamingSink<ResolveKvDataResponse>,
-    ) {
+    /// Server streaming response type for the ResolveKvData method.
+    type ResolveKvDataStream = tonic::codegen::BoxStream<ResolveKvDataResponse>;
+    async fn resolve_kv_data(
+        &self,
+        request: tonic::Request<ResolveKvDataRequest>,
+    ) -> tonic::Result<tonic::Response<Self::ResolveKvDataStream>> {
+        let req = request.into_inner();
         // implement a resolve/delete data funciton
         let resolved_ts = req.get_resolved_ts();
         let (tx, rx) = mpsc::unbounded();
@@ -456,29 +438,13 @@ where
         info!("start to resolve kv data");
         resolver.start();
         let db = self.engines.kv.get_disk_engine().clone();
-        let store_id = self.get_store_id();
-        let send_task = async move {
-            let id = store_id?;
-            let mut s = rx.map(|mut resp| {
-                // TODO: a metric need here
-                resp.set_store_id(id);
-                Ok((resp, WriteFlags::default()))
-            });
-            sink.send_all(&mut s).await?;
-            compact(db.clone())?;
-            sink.close().await?;
-            Ok(())
-        }
-        .map(|res: Result<()>| match res {
-            Ok(_) => {
-                info!("resolve kv data done");
-            }
-            Err(e) => {
-                error!("resolve kv data error"; "error" => ?e);
-            }
+        let store_id = self.get_store_id()?;
+        let stream = rx.map(move |mut resp| {
+            resp.set_store_id(store_id);
+            Ok::<_, tonic::Status>(resp)
         });
 
-        self.threads.spawn_ok(send_task);
+        Ok(tonic::Response::new(Box::pin(stream) as _))
     }
 }
 

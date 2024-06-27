@@ -1,14 +1,19 @@
 // Copyright 2020 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
+use std::{
+    result::Result as StdResult,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
 use collections::{HashMap, HashMapEntry};
 use crossbeam::atomic::AtomicCell;
-use futures::stream::TryStreamExt;
-use grpcio::{DuplexSink, RequestStream, RpcContext, RpcStatus, RpcStatusCode};
+use futures::{
+    channel::mpsc::{self, UnboundedSender},
+    stream::TryStreamExt,
+};
 use kvproto::{
     cdcpb::{
         ChangeDataEvent, ChangeDataRequest, ChangeDataRequestKvApi, ChangeDataRequest_oneof_request,
@@ -245,27 +250,35 @@ impl EventFeedHeaders {
 pub struct Service {
     scheduler: Scheduler<Task>,
     memory_quota: Arc<MemoryQuota>,
+    grpc_handle: tokio::runtime::Handle,
 }
 
 impl Service {
     /// Create a ChangeData service.
     ///
     /// It requires a scheduler of an `Endpoint` in order to schedule tasks.
-    pub fn new(scheduler: Scheduler<Task>, memory_quota: Arc<MemoryQuota>) -> Service {
+    pub fn new(
+        scheduler: Scheduler<Task>,
+        memory_quota: Arc<MemoryQuota>,
+        grpc_handle: tokio::runtime::Handle,
+    ) -> Service {
         Service {
             scheduler,
             memory_quota,
+            grpc_handle,
         }
     }
 
     // Parse HTTP/2 headers. Only for `Self::event_feed_v2`.
-    fn parse_headers(ctx: &RpcContext<'_>) -> Result<EventFeedHeaders, String> {
+    fn parse_headers(
+        req: &tonic::Request<tonic::Streaming<ChangeDataRequest>>,
+    ) -> Result<EventFeedHeaders, String> {
         let mut header = EventFeedHeaders::default();
-        let metadata = ctx.request_headers();
-        for i in 0..metadata.len() {
-            let (key, value) = metadata.get(i).unwrap();
-            if key == EventFeedHeaders::FEATURES_KEY {
-                header.features = EventFeedHeaders::parse_features(value)?;
+        for kv in req.metadata().iter() {
+            if let tonic::metadata::KeyAndValueRef::Ascii(k, v) = kv {
+                if k.as_str() == EventFeedHeaders::FEATURES_KEY {
+                    header.features = EventFeedHeaders::parse_features(v.as_bytes())?;
+                }
             }
         }
         Ok(header)
@@ -398,52 +411,42 @@ impl Service {
     // * stream-multiplexing: a region can be subscribed multiple times in one
     //   `Conn` with different `request_id`.
     fn handle_event_feed(
-        &mut self,
-        ctx: RpcContext<'_>,
-        stream: RequestStream<ChangeDataRequest>,
-        mut sink: DuplexSink<ChangeDataEvent>,
+        &self,
+        peer_str: &str,
+        request: tonic::Request<tonic::Streaming<ChangeDataRequest>>,
+        mut tx: UnboundedSender<tonic::Result<ChangeDataEvent>>,
         event_feed_v2: bool,
-    ) {
-        sink.enhance_batch(true);
+    ) -> tonic::Result<()> {
+        // sink.enhance_batch(true);
         let (event_sink, mut event_drain) =
             channel(CDC_CHANNLE_CAPACITY, self.memory_quota.clone());
-        let conn = Conn::new(event_sink, ctx.peer());
+        let conn = Conn::new(event_sink, peer_str.to_owned());
         let conn_id = conn.get_id();
         let mut explicit_features = vec![];
 
         if event_feed_v2 {
-            let headers = match Self::parse_headers(&ctx) {
+            let headers = match Self::parse_headers(&request) {
                 Ok(headers) => headers,
                 Err(e) => {
-                    let peer = ctx.peer();
-                    error!("cdc connection with bad headers"; "downstream" => ?peer, "headers" => &e);
-                    ctx.spawn(async move {
-                        let status = RpcStatus::with_message(RpcStatusCode::UNIMPLEMENTED, e);
-                        if let Err(e) = sink.fail(status).await {
-                            error!("cdc failed to send error"; "downstream" => ?peer, "error" => ?e);
-                        }
-                    });
-                    return;
+                    // let peer = ctx.peer();
+                    error!("cdc connection with bad headers"; "downstream" => ?peer_str, "headers" => &e);
+                    return Err(tonic::Status::unimplemented(e));
                 }
             };
             explicit_features = headers.features;
         }
-        info!("cdc connection created"; "downstream" => ctx.peer(), "features" => ?explicit_features);
+        info!("cdc connection created"; "downstream" => peer_str, "features" => ?explicit_features);
 
         if let Err(e) = self.scheduler.schedule(Task::OpenConn { conn }) {
-            let peer = ctx.peer();
-            error!("cdc connection initiate failed"; "downstream" => ?peer, "error" => ?e);
-            ctx.spawn(async move {
-                let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN, format!("{:?}", e));
-                if let Err(e) = sink.fail(status).await {
-                    error!("cdc failed to send error"; "downstream" => ?peer, "error" => ?e);
-                }
-            });
-            return;
+            // let peer = ctx.peer();
+            error!("cdc connection initiate failed"; "downstream" => peer_str, "error" => ?e);
+            return Err(tonic::Status::unknown(format!("{:?}", e)));
         }
 
-        let peer = ctx.peer();
+        // let peer = ctx.peer();
+        let peer = peer_str.to_string();
         let scheduler = self.scheduler.clone();
+        let stream = request.into_inner();
         let recv_req = async move {
             let mut stream = stream.map_err(|e| format!("{:?}", e));
             if let Some(request) = stream.try_next().await? {
@@ -462,8 +465,9 @@ impl Service {
             Ok::<(), String>(())
         };
 
-        let peer = ctx.peer();
-        ctx.spawn(async move {
+        // let peer = ctx.peer();
+        let peer = peer_str.to_string();
+        self.grpc_handle.spawn(async move {
             if let Err(e) = recv_req.await {
                 warn!("cdc receive failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
             } else {
@@ -471,16 +475,18 @@ impl Service {
             }
         });
 
-        let peer = ctx.peer();
-        ctx.spawn(async move {
+        // let peer = ctx.peer();
+        let peer = peer_str.to_string();
+        self.grpc_handle.spawn(async move {
             #[cfg(feature = "failpoints")]
             sleep_before_drain_change_event().await;
-            if let Err(e) = event_drain.forward(&mut sink).await {
+            if let Err(e) = event_drain.forward(&mut tx).await {
                 warn!("cdc send failed"; "error" => ?e, "downstream" => peer, "conn_id" => ?conn_id);
             } else {
                 info!("cdc send closed"; "downstream" => peer, "conn_id" => ?conn_id);
             }
         });
+        Ok(())
     }
 }
 
@@ -490,37 +496,22 @@ impl ChangeData for Service {
     async fn event_feed(
         &self,
         request: tonic::Request<tonic::Streaming<ChangeDataRequest>>,
-    ) -> std::result::Result<tonic::Response<Self::EventFeedStream>, tonic::Status> {
-        unimplemented!()
+    ) -> tonic::Result<tonic::Response<Self::EventFeedStream>> {
+        let (tx, rx) = mpsc::unbounded();
+        self.handle_event_feed("", request, tx, false)?;
+        Ok(tonic::Response::new(Box::pin(rx) as _))
     }
     /// Server streaming response type for the EventFeedV2 method.
     type EventFeedV2Stream = tonic::codegen::BoxStream<ChangeDataEvent>;
     async fn event_feed_v2(
         &self,
         request: tonic::Request<tonic::Streaming<ChangeDataRequest>>,
-    ) -> std::result::Result<tonic::Response<Self::EventFeedV2Stream>, tonic::Status> {
-        unimplemented!()
+    ) -> tonic::Result<tonic::Response<Self::EventFeedV2Stream>> {
+        let (tx, rx) = mpsc::unbounded();
+        self.handle_event_feed("", request, tx, true)?;
+        Ok(tonic::Response::new(Box::pin(rx) as _))
     }
 }
-// impl ChangeData for Service {
-// fn event_feed(
-// &mut self,
-// ctx: RpcContext<'_>,
-// stream: RequestStream<ChangeDataRequest>,
-// sink: DuplexSink<ChangeDataEvent>,
-// ) {
-// self.handle_event_feed(ctx, stream, sink, false);
-// }
-//
-// fn event_feed_v2(
-// &mut self,
-// ctx: RpcContext<'_>,
-// stream: RequestStream<ChangeDataRequest>,
-// sink: DuplexSink<ChangeDataEvent>,
-// ) {
-// self.handle_event_feed(ctx, stream, sink, true);
-// }
-// }
 
 #[cfg(feature = "failpoints")]
 async fn sleep_before_drain_change_event() {

@@ -10,7 +10,7 @@ use std::{
 
 use engine_traits::{CompactExt, CF_DEFAULT, CF_WRITE};
 use file_system::{set_io_type, IoType};
-use futures::{stream::TryStreamExt, FutureExt, TryFutureExt};
+use futures::{channel::mpsc, stream::TryStreamExt, FutureExt, SinkExt, TryFutureExt};
 use kvproto::{
     encryptionpb::EncryptionMethod,
     import_sstpb::{
@@ -48,11 +48,11 @@ use txn_types::{Key, WriteRef, WriteType};
 
 use super::{
     ingest::{async_snapshot, ingest, IngestLatch, SuspendDeadline},
-    make_rpc_error, pb_error_inc, raft_writer,
+    pb_error_inc, raft_writer,
 };
 use crate::{
     import::duplicate_detect::DuplicateDetector,
-    send_rpc_response,
+    rpc_metrics,
     server::CONFIG_ROCKSDB_GAUGE,
     storage::{self, errors::extract_region_error_from_error},
 };
@@ -508,12 +508,157 @@ fn check_local_region_stale(
     }
 }
 
+macro_rules! impl_write {
+    (
+        $fn:ident, $service:expr, $request:expr, $resp_ty:ident, $chunk_ty:ident, $writer_fn:ident
+    ) => {{
+        let import = $service.importer.clone();
+        let tablets = $service.tablets.clone();
+        let region_info_accessor = $service.region_info_accessor.clone();
+        let (rx, buf_driver) = create_stream_with_buffer(
+            $request.into_inner(),
+            $service.cfg.rl().stream_channel_window,
+        );
+        let mut rx = rx.map_err(Error::from);
+
+        let timer = Instant::now_coarse();
+        let label = stringify!($fn);
+        let resource_manager = $service.resource_manager.clone();
+        let handle_task = async move {
+            let (res, rx) = async move {
+                let first_req = match rx.try_next().await {
+                    Ok(r) => r,
+                    Err(e) => return (Err(e), Some(rx)),
+                };
+                let (meta, resource_limiter) = match first_req {
+                    Some(r) => {
+                        let limiter = resource_manager.as_ref().and_then(|m| {
+                            m.get_background_resource_limiter(
+                                r.get_context()
+                                    .get_resource_control_context()
+                                    .get_resource_group_name(),
+                                r.get_context().get_request_source(),
+                            )
+                        });
+                        match r.chunk {
+                            Some($chunk_ty::Meta(m)) => (m, limiter),
+                            _ => return (Err(Error::InvalidChunk), Some(rx)),
+                        }
+                    }
+                    _ => return (Err(Error::InvalidChunk), Some(rx)),
+                };
+                // wait the region epoch on this TiKV to catch up with the epoch
+                // in request, which comes from PD and represents the majority
+                // peers' status.
+                let region_id = meta.get_region_id();
+                let (cb, f) = paired_future_callback();
+                if let Err(e) = region_info_accessor
+                    .find_region_by_id(region_id, cb)
+                    .map_err(|e| {
+                        // when region not found, we can't tell whether it's stale or ahead, so
+                        // we just return the safest case
+                        Error::RequestTooOld(format!(
+                            "failed to find region {} err {:?}",
+                            region_id, e
+                        ))
+                    })
+                {
+                    return (Err(e), Some(rx));
+                };
+                let res = match f.await {
+                    Ok(r) => r,
+                    Err(e) => return (Err(From::from(e)), Some(rx)),
+                };
+                if let Err(e) = check_local_region_stale(region_id, meta.get_region_epoch(), res) {
+                    return (Err(e), Some(rx));
+                };
+
+                let tablet = match tablets.get(region_id) {
+                    Some(t) => t,
+                    None => {
+                        return (
+                            Err(Error::RequestTooOld(format!(
+                                "region {} not found",
+                                region_id
+                            ))),
+                            Some(rx),
+                        );
+                    }
+                };
+
+                let writer = match import.$writer_fn(&*tablet, meta) {
+                    Ok(w) => w,
+                    Err(e) => {
+                        error!("build writer failed {:?}", e);
+                        return (Err(Error::InvalidChunk), Some(rx));
+                    }
+                };
+                let result = rx
+                    .try_fold(
+                        (writer, resource_limiter),
+                        |(mut writer, limiter), req| async move {
+                            if get_disk_status(0) != DiskUsage::Normal {
+                                warn!("Upload failed due to not enough disk space");
+                                return Err(Error::DiskSpaceNotEnough);
+                            }
+
+                            let batch = match req.chunk {
+                                Some($chunk_ty::Batch(b)) => b,
+                                _ => return Err(Error::InvalidChunk),
+                            };
+                            let f = async {
+                                writer.write(batch)?;
+                                Ok(writer)
+                            };
+                            with_resource_limiter(f, limiter.clone())
+                                .await
+                                .map(|w| (w, limiter))
+                        },
+                    )
+                    .await;
+                let (writer, resource_limiter) = match result {
+                    Ok(r) => r,
+                    Err(e) => return (Err(e), None),
+                };
+
+                let finish_fn = async {
+                    let metas = writer.finish()?;
+                    import.verify_checksum(&metas)?;
+                    Ok(metas)
+                };
+
+                let metas: Result<_> = with_resource_limiter(finish_fn, resource_limiter).await;
+                let metas = match metas {
+                    Ok(r) => r,
+                    Err(e) => return (Err(e), None),
+                };
+                let mut resp = $resp_ty::default();
+                resp.set_metas(metas.into());
+                (Ok(resp), None)
+            }
+            .await;
+            $crate::rpc_metrics!(&res, label, timer);
+            res
+        };
+
+        $service.threads.spawn(buf_driver);
+        match $service.threads.spawn(handle_task).await {
+            Ok(Ok(r)) => Ok(tonic::Response::new(r)),
+            Ok(Err(e)) => Err(tonic::Status::internal(format!("{:?}", e))),
+            Err(e) => Err(tonic::Status::unknown(format!(
+                "failed to join ingest result: {:?}",
+                e
+            ))),
+        }
+    }};
+}
+
 #[tonic::async_trait]
 impl<E: Engine> ImportSST for ImportSstService<E> {
     async fn switch_mode(
         &self,
         request: tonic::Request<SwitchModeRequest>,
-    ) -> StdResult<tonic::Response<SwitchModeResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<SwitchModeResponse>> {
         let label = "switch_mode";
         IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
         let timer = Instant::now_coarse();
@@ -569,21 +714,68 @@ impl<E: Engine> ImportSST for ImportSstService<E> {
     async fn get_mode(
         &self,
         request: tonic::Request<GetModeRequest>,
-    ) -> StdResult<tonic::Response<GetModeResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<GetModeResponse>> {
         Err(tonic::Status::unimplemented("Not yet implemented"))
     }
     /// Upload an SST file to a server.
     async fn upload(
         &self,
         request: tonic::Request<tonic::Streaming<UploadRequest>>,
-    ) -> StdResult<tonic::Response<UploadResponse>, tonic::Status> {
-        Err(tonic::Status::unimplemented("Not yet implemented"))
+    ) -> tonic::Result<tonic::Response<UploadResponse>> {
+        let label = "upload";
+        let timer = Instant::now_coarse();
+        let import = self.importer.clone();
+        let (rx, buf_driver) =
+            create_stream_with_buffer(request.into_inner(), self.cfg.rl().stream_channel_window);
+        let mut map_rx = rx.map_err(Error::from);
+
+        let handle_task = async move {
+            // So stream will not be dropped until response is sent.
+            let rx = &mut map_rx;
+            let res = async move {
+                let first_chunk = rx.try_next().await?;
+                let meta = match first_chunk {
+                    Some(ref chunk) if chunk.has_meta() => chunk.get_meta(),
+                    _ => return Err(Error::InvalidChunk),
+                };
+                let file = import.create(meta)?;
+                let mut file = rx
+                    .try_fold(file, |mut file, chunk| async move {
+                        if get_disk_status(0) != DiskUsage::Normal {
+                            warn!("Upload failed due to not enough disk space");
+                            return Err(Error::DiskSpaceNotEnough);
+                        }
+
+                        let start = Instant::now_coarse();
+                        let data = chunk.get_data();
+                        if data.is_empty() {
+                            return Err(Error::InvalidChunk);
+                        }
+                        file.append(data)?;
+                        IMPORT_UPLOAD_CHUNK_BYTES.observe(data.len() as f64);
+                        IMPORT_UPLOAD_CHUNK_DURATION.observe(start.saturating_elapsed_secs());
+                        Ok(file)
+                    })
+                    .await?;
+                file.finish().map(|_| UploadResponse::default())
+            }
+            .await;
+            rpc_metrics!(&res, label, timer);
+            res
+        };
+
+        self.threads.spawn(buf_driver);
+        match self.threads.spawn(handle_task).await {
+            Ok(Ok(r)) => Ok(tonic::Response::new(r)),
+            Ok(Err(e)) => Err(tonic::Status::unknown(format!("{:?}", e))),
+            Err(e) => Err(tonic::Status::unknown(format!("{:?}", e))),
+        }
     }
     /// Ingest an uploaded SST file to a region.
     async fn ingest(
         &self,
         request: tonic::Request<IngestRequest>,
-    ) -> StdResult<tonic::Response<IngestResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<IngestResponse>> {
         let label = "ingest";
         IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
         let timer = Instant::now_coarse();
@@ -625,13 +817,74 @@ impl<E: Engine> ImportSST for ImportSstService<E> {
     async fn compact(
         &self,
         request: tonic::Request<CompactRequest>,
-    ) -> StdResult<tonic::Response<CompactResponse>, tonic::Status> {
-        Err(tonic::Status::unimplemented("Not yet implemented"))
+    ) -> tonic::Result<tonic::Response<CompactResponse>> {
+        let label = "compact";
+        let timer = Instant::now_coarse();
+        let tablets = self.tablets.clone();
+
+        let req = request.into_inner();
+        let handle_task = async move {
+            let (start, end) = if !req.has_range() {
+                (None, None)
+            } else {
+                (
+                    Some(req.get_range().get_start()),
+                    Some(req.get_range().get_end()),
+                )
+            };
+            let output_level = if req.get_output_level() == -1 {
+                None
+            } else {
+                Some(req.get_output_level())
+            };
+
+            let region_id = req.get_context().get_region_id();
+            let tablet = match tablets.get(region_id) {
+                Some(tablet) => tablet,
+                None => {
+                    let e = Err(Error::Engine(
+                        format!("region {} not found", region_id).into(),
+                    ));
+                    rpc_metrics!(&e, label, timer);
+                    return e;
+                }
+            };
+
+            let res = tablet.compact_files_in_range(start, end, output_level);
+            match &res {
+                Ok(_) => info!(
+                    "compact files in range";
+                    "start" => start.map(log_wrappers::Value::key),
+                    "end" => end.map(log_wrappers::Value::key),
+                    "output_level" => ?output_level, "takes" => ?timer.saturating_elapsed()
+                ),
+                Err(e) => error!(%*e;
+                    "compact files in range failed";
+                    "start" => start.map(log_wrappers::Value::key),
+                    "end" => end.map(log_wrappers::Value::key),
+                    "output_level" => ?output_level,
+                ),
+            }
+            let res = res
+                .map_err(|e| Error::Engine(box_err!(e)))
+                .map(|_| CompactResponse::default());
+            rpc_metrics!(&res, label, timer);
+            res
+        };
+
+        match self.threads.spawn(handle_task).await {
+            Ok(Ok(r)) => Ok(tonic::Response::new(r)),
+            Ok(Err(e)) => Err(tonic::Status::internal(format!("{:?}", e))),
+            Err(e) => Err(tonic::Status::unknown(format!(
+                "failed to join ingest result: {:?}",
+                e
+            ))),
+        }
     }
     async fn set_download_speed_limit(
         &self,
         request: tonic::Request<SetDownloadSpeedLimitRequest>,
-    ) -> StdResult<tonic::Response<SetDownloadSpeedLimitResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<SetDownloadSpeedLimitResponse>> {
         let label = "set_download_speed_limit";
         let _timer = Instant::now_coarse();
 
@@ -650,7 +903,7 @@ impl<E: Engine> ImportSST for ImportSstService<E> {
     async fn download(
         &self,
         request: tonic::Request<DownloadRequest>,
-    ) -> StdResult<tonic::Response<DownloadResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<DownloadResponse>> {
         let mut req = request.into_inner();
         let label = "download";
         IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
@@ -741,20 +994,28 @@ impl<E: Engine> ImportSST for ImportSstService<E> {
     async fn write(
         &self,
         request: tonic::Request<tonic::Streaming<WriteRequest>>,
-    ) -> StdResult<tonic::Response<WriteResponse>, tonic::Status> {
-        Err(tonic::Status::unimplemented("Not yet implemented"))
+    ) -> tonic::Result<tonic::Response<WriteResponse>> {
+        impl_write!(write, self, request, WriteResponse, Chunk, new_txn_writer)
     }
     async fn raw_write(
         &self,
         request: tonic::Request<tonic::Streaming<RawWriteRequest>>,
-    ) -> StdResult<tonic::Response<RawWriteResponse>, tonic::Status> {
-        Err(tonic::Status::unimplemented("Not yet implemented"))
+    ) -> tonic::Result<tonic::Response<RawWriteResponse>> {
+        impl_write!(
+            raw_write,
+            self,
+            request,
+            RawWriteResponse,
+            RawChunk,
+            new_raw_writer
+        )
     }
+
     /// Ingest Multiple files in one request
     async fn multi_ingest(
         &self,
         request: tonic::Request<MultiIngestRequest>,
-    ) -> StdResult<tonic::Response<IngestResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<IngestResponse>> {
         let label = "multi-ingest";
         IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
         let timer = Instant::now_coarse();
@@ -794,15 +1055,63 @@ impl<E: Engine> ImportSST for ImportSstService<E> {
     async fn duplicate_detect(
         &self,
         request: tonic::Request<DuplicateDetectRequest>,
-    ) -> StdResult<tonic::Response<tonic::codegen::BoxStream<DuplicateDetectResponse>>, tonic::Status>
-    {
-        Err(tonic::Status::unimplemented("Not yet implemented"))
+    ) -> tonic::Result<tonic::Response<tonic::codegen::BoxStream<DuplicateDetectResponse>>> {
+        let mut request = request.into_inner();
+        let label = "duplicate_detect";
+        let timer = Instant::now_coarse();
+        let context = request.take_context();
+        let start_key = request.take_start_key();
+        let min_commit_ts = request.get_min_commit_ts();
+        let end_key = if request.get_end_key().is_empty() {
+            None
+        } else {
+            Some(request.take_end_key())
+        };
+        let key_only = request.get_key_only();
+        let mut engine = self.engine.clone();
+        let snap_res = async_snapshot(&mut engine, &context);
+        let (mut tx, rx) = mpsc::unbounded();
+        let handle_task = async move {
+            let res = snap_res.await;
+            let snapshot = match res {
+                Ok(snap) => snap,
+                Err(e) => {
+                    let mut resp = DuplicateDetectResponse::default();
+                    pb_error_inc(label, &e);
+                    resp.set_region_error(e);
+                    if let Err(e) = tx.send(Ok(resp)).await {
+                        warn!(
+                            "connection send message fail";
+                            "err" => %e
+                        );
+                    };
+                    IMPORT_RPC_DURATION
+                        .with_label_values(&[label, "ok"])
+                        .observe(timer.saturating_elapsed_secs());
+                    return;
+                }
+            };
+            let detector =
+                DuplicateDetector::new(snapshot, start_key, end_key, min_commit_ts, key_only)
+                    .unwrap();
+            for resp in detector {
+                if let Err(e) = tx.send(Ok(resp)).await {
+                    warn!(
+                        "connection send message fail";
+                        "err" => %e
+                    );
+                    break;
+                }
+            }
+        };
+        self.threads.spawn(handle_task);
+        Ok(tonic::Response::new(Box::pin(rx) as _))
     }
     /// Apply download & apply increment kv files to TiKV.
     async fn apply(
         &self,
         request: tonic::Request<ApplyRequest>,
-    ) -> StdResult<tonic::Response<ApplyResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<ApplyResponse>> {
         let label = "apply";
         IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
         let start = Instant::now();
@@ -847,7 +1156,7 @@ impl<E: Engine> ImportSST for ImportSstService<E> {
     async fn clear_files(
         &self,
         request: tonic::Request<ClearRequest>,
-    ) -> StdResult<tonic::Response<ClearResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<ClearResponse>> {
         let label = "clear_files";
         let timer = Instant::now_coarse();
         let importer = Arc::clone(&self.importer);
@@ -888,701 +1197,38 @@ impl<E: Engine> ImportSST for ImportSstService<E> {
     async fn suspend_import_rpc(
         &self,
         request: tonic::Request<SuspendImportRpcRequest>,
-    ) -> StdResult<tonic::Response<SuspendImportRpcResponse>, tonic::Status> {
-        Err(tonic::Status::unimplemented("Not yet implemented"))
+    ) -> tonic::Result<tonic::Response<SuspendImportRpcResponse>> {
+        let label = "suspend_import_rpc";
+        let timer = Instant::now_coarse();
+        let req = request.into_inner();
+        if req.should_suspend_imports && req.get_duration_in_secs() > SUSPEND_REQUEST_MAX_SECS {
+            let err = Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "you are going to suspend the import RPCs too long. (for {} seconds, max acceptable duration is {} seconds)",
+                    req.get_duration_in_secs(),
+                    SUSPEND_REQUEST_MAX_SECS
+                ),
+            )));
+            rpc_metrics!(&err, label, timer);
+            err?;
+        }
+
+        let suspended = if req.should_suspend_imports {
+            info!("suspend incoming import RPCs."; "for_second" => req.get_duration_in_secs(), "caller" => req.get_caller());
+            self.suspend
+                .suspend_requests(Duration::from_secs(req.get_duration_in_secs()))
+        } else {
+            info!("allow incoming import RPCs."; "caller" => req.get_caller());
+            self.suspend.allow_requests()
+        };
+        let mut resp = SuspendImportRpcResponse::default();
+        resp.set_already_suspended(suspended);
+        let res = Ok(resp);
+        rpc_metrics!(&res, label, timer);
+        Ok(tonic::Response::new(res.unwrap()))
     }
 }
-
-// #[macro_export]
-// macro_rules! impl_write {
-// ($fn:ident, $req_ty:ident, $resp_ty:ident, $chunk_ty:ident, $writer_fn:ident)
-// => { fn $fn(
-// &mut self,
-// _ctx: RpcContext<'_>,
-// stream: RequestStream<$req_ty>,
-// sink: ClientStreamingSink<$resp_ty>,
-// ) {
-// let import = self.importer.clone();
-// let tablets = self.tablets.clone();
-// let region_info_accessor = self.region_info_accessor.clone();
-// let (rx, buf_driver) =
-// create_stream_with_buffer(stream, self.cfg.rl().stream_channel_window);
-// let mut rx = rx.map_err(Error::from);
-//
-// let timer = Instant::now_coarse();
-// let label = stringify!($fn);
-// let resource_manager = self.resource_manager.clone();
-// let handle_task = async move {
-// let (res, rx) = async move {
-// let first_req = match rx.try_next().await {
-// Ok(r) => r,
-// Err(e) => return (Err(e), Some(rx)),
-// };
-// let (meta, resource_limiter) = match first_req {
-// Some(r) => {
-// let limiter = resource_manager.as_ref().and_then(|m| {
-// m.get_background_resource_limiter(
-// r.get_context()
-// .get_resource_control_context()
-// .get_resource_group_name(),
-// r.get_context().get_request_source(),
-// )
-// });
-// match r.chunk {
-// Some($chunk_ty::Meta(m)) => (m, limiter),
-// _ => return (Err(Error::InvalidChunk), Some(rx)),
-// }
-// }
-// _ => return (Err(Error::InvalidChunk), Some(rx)),
-// };
-// wait the region epoch on this TiKV to catch up with the epoch
-// in request, which comes from PD and represents the majority
-// peers' status.
-// let region_id = meta.get_region_id();
-// let (cb, f) = paired_future_callback();
-// if let Err(e) = region_info_accessor
-// .find_region_by_id(region_id, cb)
-// .map_err(|e| {
-// when region not found, we can't tell whether it's stale or ahead, so
-// we just return the safest case
-// Error::RequestTooOld(format!(
-// "failed to find region {} err {:?}",
-// region_id, e
-// ))
-// })
-// {
-// return (Err(e), Some(rx));
-// };
-// let res = match f.await {
-// Ok(r) => r,
-// Err(e) => return (Err(From::from(e)), Some(rx)),
-// };
-// if let Err(e) =
-// check_local_region_stale(region_id, meta.get_region_epoch(), res)
-// {
-// return (Err(e), Some(rx));
-// };
-//
-// let tablet = match tablets.get(region_id) {
-// Some(t) => t,
-// None => {
-// return (
-// Err(Error::RequestTooOld(format!(
-// "region {} not found",
-// region_id
-// ))),
-// Some(rx),
-// );
-// }
-// };
-//
-// let writer = match import.$writer_fn(&*tablet, meta) {
-// Ok(w) => w,
-// Err(e) => {
-// error!("build writer failed {:?}", e);
-// return (Err(Error::InvalidChunk), Some(rx));
-// }
-// };
-// let result = rx
-// .try_fold(
-// (writer, resource_limiter),
-// |(mut writer, limiter), req| async move {
-// if get_disk_status(0) != DiskUsage::Normal {
-// warn!("Upload failed due to not enough disk space");
-// return Err(Error::DiskSpaceNotEnough);
-// }
-//
-// let batch = match req.chunk {
-// Some($chunk_ty::Batch(b)) => b,
-// _ => return Err(Error::InvalidChunk),
-// };
-// let f = async {
-// writer.write(batch)?;
-// Ok(writer)
-// };
-// with_resource_limiter(f, limiter.clone())
-// .await
-// .map(|w| (w, limiter))
-// },
-// )
-// .await;
-// let (writer, resource_limiter) = match result {
-// Ok(r) => r,
-// Err(e) => return (Err(e), None),
-// };
-//
-// let finish_fn = async {
-// let metas = writer.finish()?;
-// import.verify_checksum(&metas)?;
-// Ok(metas)
-// };
-//
-// let metas: Result<_> = with_resource_limiter(finish_fn,
-// resource_limiter).await; let metas = match metas {
-// Ok(r) => r,
-// Err(e) => return (Err(e), None),
-// };
-// let mut resp = $resp_ty::default();
-// resp.set_metas(metas.into());
-// (Ok(resp), None)
-// }
-// .await;
-// $crate::send_rpc_response!(res, sink, label, timer);
-// don't drop rx before send response
-// _ = rx;
-// };
-//
-// self.threads.spawn(buf_driver);
-// self.threads.spawn(handle_task);
-// }
-// };
-// }
-//
-// impl<E: Engine> ImportSst for ImportSstService<E> {
-// Switch mode for v1 and v2 is quite different.
-//
-// For v1, once it enters import mode, all regions are in import mode as there's
-// only one kv rocksdb.
-//
-// V2 is different. The switch mode with import mode request carries a range
-// where only regions overlapped with the range can enter import mode.
-// And unlike v1, where some rocksdb configs will be changed when entering
-// import mode, the config of the rocksdb will not change when entering import
-// mode due to implementation complexity (a region's rocksdb can change
-// overtime due to snapshot, split, and merge, which brings some
-// implemention complexities). If it really needs, we will implement it in the
-// future.
-// fn switch_mode(
-// &mut self,
-// ctx: RpcContext<'_>,
-// mut req: SwitchModeRequest,
-// sink: UnarySink<SwitchModeResponse>,
-// ) {
-// let label = "switch_mode";
-// IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
-// let timer = Instant::now_coarse();
-//
-// let res = {
-// fn mf(cf: &str, name: &str, v: f64) {
-// CONFIG_ROCKSDB_GAUGE.with_label_values(&[cf, name]).set(v);
-// }
-//
-// match &self.tablets {
-// LocalTablets::Singleton(tablet) => match req.get_mode() {
-// SwitchMode::Normal => self.importer.enter_normal_mode(tablet.clone(), mf),
-// SwitchMode::Import => self.importer.enter_import_mode(tablet.clone(), mf),
-// },
-// LocalTablets::Registry(_) => {
-// if req.get_mode() == SwitchMode::Import {
-// if !req.get_ranges().is_empty() {
-// let ranges = req.take_ranges().to_vec();
-// self.importer.ranges_enter_import_mode(ranges);
-// Ok(true)
-// } else {
-// Err(sst_importer::Error::Engine(
-// "partitioned-raft-kv only support switch mode with range set"
-// .into(),
-// ))
-// }
-// } else {
-// case SwitchMode::Normal
-// if !req.get_ranges().is_empty() {
-// let ranges = req.take_ranges().to_vec();
-// self.importer.clear_import_mode_regions(ranges);
-// Ok(true)
-// } else {
-// Err(sst_importer::Error::Engine(
-// "partitioned-raft-kv only support switch mode with range set"
-// .into(),
-// ))
-// }
-// }
-// }
-// }
-// };
-// match res {
-// Ok(_) => info!("switch mode"; "mode" => ?req.get_mode()),
-// Err(ref e) => error!(%*e; "switch mode failed"; "mode" => ?req.get_mode(),),
-// }
-//
-// let task = async move {
-// defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
-// crate::send_rpc_response!(Ok(SwitchModeResponse::default()), sink, label,
-// timer); };
-// ctx.spawn(task);
-// }
-//
-// Receive SST from client and save the file for later ingesting.
-// fn upload(
-// &mut self,
-// _ctx: RpcContext<'_>,
-// stream: RequestStream<UploadRequest>,
-// sink: ClientStreamingSink<UploadResponse>,
-// ) {
-// let label = "upload";
-// let timer = Instant::now_coarse();
-// let import = self.importer.clone();
-// let (rx, buf_driver) =
-// create_stream_with_buffer(stream, self.cfg.rl().stream_channel_window);
-// let mut map_rx = rx.map_err(Error::from);
-//
-// let handle_task = async move {
-// So stream will not be dropped until response is sent.
-// let rx = &mut map_rx;
-// let res = async move {
-// let first_chunk = rx.try_next().await?;
-// let meta = match first_chunk {
-// Some(ref chunk) if chunk.has_meta() => chunk.get_meta(),
-// _ => return Err(Error::InvalidChunk),
-// };
-// let file = import.create(meta)?;
-// let mut file = rx
-// .try_fold(file, |mut file, chunk| async move {
-// if get_disk_status(0) != DiskUsage::Normal {
-// warn!("Upload failed due to not enough disk space");
-// return Err(Error::DiskSpaceNotEnough);
-// }
-//
-// let start = Instant::now_coarse();
-// let data = chunk.get_data();
-// if data.is_empty() {
-// return Err(Error::InvalidChunk);
-// }
-// file.append(data)?;
-// IMPORT_UPLOAD_CHUNK_BYTES.observe(data.len() as f64);
-// IMPORT_UPLOAD_CHUNK_DURATION.observe(start.saturating_elapsed_secs());
-// Ok(file)
-// })
-// .await?;
-// file.finish().map(|_| UploadResponse::default())
-// }
-// .await;
-// crate::send_rpc_response!(res, sink, label, timer);
-// };
-//
-// self.threads.spawn(buf_driver);
-// self.threads.spawn(handle_task);
-// }
-//
-// clear_files the KV files after apply finished.
-// it will remove the direcotry in import path.
-// fn clear_files(
-// &mut self,
-// _ctx: RpcContext<'_>,
-// req: ClearRequest,
-// sink: UnarySink<ClearResponse>,
-// ) {
-// let label = "clear_files";
-// let timer = Instant::now_coarse();
-// let importer = Arc::clone(&self.importer);
-// let start = Instant::now();
-// let mut resp = ClearResponse::default();
-//
-// let handle_task = async move {
-// Records how long the apply task waits to be scheduled.
-// sst_importer::metrics::IMPORTER_APPLY_DURATION
-// .with_label_values(&["queue"])
-// .observe(start.saturating_elapsed().as_secs_f64());
-//
-// if let Err(e) = importer.remove_dir(req.get_prefix()) {
-// let mut import_err = ImportPbError::default();
-// import_err.set_message(format!("failed to remove directory: {}", e));
-// resp.set_error(import_err);
-// }
-// sst_importer::metrics::IMPORTER_APPLY_DURATION
-// .with_label_values(&[label])
-// .observe(start.saturating_elapsed().as_secs_f64());
-// crate::send_rpc_response!(Ok(resp), sink, label, timer);
-// };
-// self.threads.spawn(handle_task);
-// }
-//
-// Downloads KV file and performs key-rewrite then apply kv into this tikv
-// store.
-// fn apply(&mut self, _ctx: RpcContext<'_>, req: ApplyRequest, sink:
-// UnarySink<ApplyResponse>) { let label = "apply";
-// IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
-// let start = Instant::now();
-// let importer = self.importer.clone();
-// let limiter = self.limiter.clone();
-// let max_raft_size = self.raft_entry_max_size.0 as usize;
-// let applier = self.writer.clone();
-//
-// let handle_task = async move {
-// defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
-// Records how long the apply task waits to be scheduled.
-// sst_importer::metrics::IMPORTER_APPLY_DURATION
-// .with_label_values(&["queue"])
-// .observe(start.saturating_elapsed().as_secs_f64());
-//
-// let mut resp = ApplyResponse::default();
-//
-// match Self::apply_imp(req, importer, applier, limiter, max_raft_size).await {
-// Ok(Some(r)) => resp.set_range(r),
-// Err(e) => resp.set_error(e),
-// _ => {}
-// }
-//
-// debug!("finished apply kv file with {:?}", resp);
-// crate::send_rpc_response!(Ok(resp), sink, label, start);
-// };
-// self.threads.spawn(handle_task);
-// }
-//
-// Downloads the file and performs key-rewrite for later ingesting.
-// fn download(
-// &mut self,
-// _ctx: RpcContext<'_>,
-// req: DownloadRequest,
-// sink: UnarySink<DownloadResponse>,
-// ) {
-// let label = "download";
-// IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
-// let timer = Instant::now_coarse();
-// let importer = Arc::clone(&self.importer);
-// let limiter = self.limiter.clone();
-// let region_id = req.get_sst().get_region_id();
-// let tablets = self.tablets.clone();
-// let start = Instant::now();
-// let resource_limiter = self.resource_manager.as_ref().and_then(|r| {
-// r.get_background_resource_limiter(
-// req.get_context()
-// .get_resource_control_context()
-// .get_resource_group_name(),
-// req.get_context().get_request_source(),
-// )
-// });
-//
-// let handle_task = async move {
-// defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
-// Records how long the download task waits to be scheduled.
-// sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
-// .with_label_values(&["queue"])
-// .observe(start.saturating_elapsed().as_secs_f64());
-//
-// FIXME: download() should be an async fn, to allow BR to cancel
-// a download task.
-// Unfortunately, this currently can't happen because the S3Storage
-// is not Send + Sync. See the documentation of S3Storage for reason.
-// let cipher = req
-// .cipher_info
-// .to_owned()
-// .filter(|c| c.cipher_type != EncryptionMethod::Plaintext as i32);
-//
-// let tablet = match tablets.get(region_id) {
-// Some(tablet) => tablet,
-// None => {
-// let error = sst_importer::Error::Engine(box_err!(
-// "region {} not found, maybe it's not a replica of this store",
-// region_id
-// ));
-// let mut resp = DownloadResponse::default();
-// resp.set_error(error.into());
-// return crate::send_rpc_response!(Ok(resp), sink, label, timer);
-// }
-// };
-//
-// let res = with_resource_limiter(
-// importer.download_ext(
-// req.get_sst(),
-// req.get_storage_backend(),
-// req.get_name(),
-// req.get_rewrite_rule(),
-// cipher,
-// limiter,
-// tablet.into_owned(),
-// DownloadExt::default()
-// .cache_key(req.get_storage_cache_id())
-// .req_type(req.get_request_type()),
-// ),
-// resource_limiter,
-// );
-// let mut resp = DownloadResponse::default();
-// match res.await {
-// Ok(range) => match range {
-// Some(r) => resp.set_range(r),
-// None => resp.set_is_empty(true),
-// },
-// Err(e) => resp.set_error(e.into()),
-// }
-// crate::send_rpc_response!(Ok(resp), sink, label, timer);
-// };
-//
-// self.threads.spawn(handle_task);
-// }
-//
-// Ingest the file by sending a raft command to raftstore.
-//
-// If the ingestion fails because the region is not found or the epoch does
-// not match, the remaining files will eventually be cleaned up by
-// CleanupSstWorker.
-// fn ingest(
-// &mut self,
-// _: RpcContext<'_>,
-// mut req: IngestRequest,
-// sink: UnarySink<IngestResponse>,
-// ) {
-// let label = "ingest";
-// IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
-// let timer = Instant::now_coarse();
-// let import = self.importer.clone();
-// let engine = self.engine.clone();
-// let suspend = self.suspend.clone();
-// let tablets = self.tablets.clone();
-// let store_meta = self.store_meta.clone();
-// let ingest_latch = self.ingest_latch.clone();
-//
-// let handle_task = async move {
-// defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
-// let mut multi_ingest = MultiIngestRequest::default();
-// multi_ingest.set_context(req.take_context());
-// multi_ingest.mut_ssts().push(req.take_sst());
-// let res = ingest(
-// multi_ingest,
-// engine,
-// &suspend,
-// &tablets,
-// &store_meta,
-// &import,
-// &ingest_latch,
-// label,
-// )
-// .await;
-// crate::send_rpc_response!(res, sink, label, timer);
-// };
-// self.threads.spawn(handle_task);
-// }
-//
-// Ingest multiple files by sending a raft command to raftstore.
-// fn multi_ingest(
-// &mut self,
-// _: RpcContext<'_>,
-// req: MultiIngestRequest,
-// sink: UnarySink<IngestResponse>,
-// ) {
-// let label = "multi-ingest";
-// IMPORT_RPC_COUNT.with_label_values(&[label]).inc();
-// let timer = Instant::now_coarse();
-// let import = self.importer.clone();
-// let engine = self.engine.clone();
-// let suspend = self.suspend.clone();
-// let tablets = self.tablets.clone();
-// let store_meta = self.store_meta.clone();
-// let ingest_latch = self.ingest_latch.clone();
-//
-// let handle_task = async move {
-// defer! { IMPORT_RPC_COUNT.with_label_values(&[label]).dec() }
-// let res = ingest(
-// req,
-// engine,
-// &suspend,
-// &tablets,
-// &store_meta,
-// &import,
-// &ingest_latch,
-// label,
-// )
-// .await;
-// crate::send_rpc_response!(res, sink, label, timer);
-// };
-// self.threads.spawn(handle_task);
-// }
-//
-// fn compact(
-// &mut self,
-// _ctx: RpcContext<'_>,
-// req: CompactRequest,
-// sink: UnarySink<CompactResponse>,
-// ) {
-// let label = "compact";
-// let timer = Instant::now_coarse();
-// let tablets = self.tablets.clone();
-//
-// let handle_task = async move {
-// let (start, end) = if !req.has_range() {
-// (None, None)
-// } else {
-// (
-// Some(req.get_range().get_start()),
-// Some(req.get_range().get_end()),
-// )
-// };
-// let output_level = if req.get_output_level() == -1 {
-// None
-// } else {
-// Some(req.get_output_level())
-// };
-//
-// let region_id = req.get_context().get_region_id();
-// let tablet = match tablets.get(region_id) {
-// Some(tablet) => tablet,
-// None => {
-// let e = Error::Engine(format!("region {} not found", region_id).into());
-// crate::send_rpc_response!(Err(e), sink, label, timer);
-// return;
-// }
-// };
-//
-// let res = tablet.compact_files_in_range(start, end, output_level);
-// match res {
-// Ok(_) => info!(
-// "compact files in range";
-// "start" => start.map(log_wrappers::Value::key),
-// "end" => end.map(log_wrappers::Value::key),
-// "output_level" => ?output_level, "takes" => ?timer.saturating_elapsed()
-// ),
-// Err(ref e) => error!(%*e;
-// "compact files in range failed";
-// "start" => start.map(log_wrappers::Value::key),
-// "end" => end.map(log_wrappers::Value::key),
-// "output_level" => ?output_level,
-// ),
-// }
-// let res = res
-// .map_err(|e| Error::Engine(box_err!(e)))
-// .map(|_| CompactResponse::default());
-// crate::send_rpc_response!(res, sink, label, timer);
-// };
-//
-// self.threads.spawn(handle_task);
-// }
-//
-// fn set_download_speed_limit(
-// &mut self,
-// ctx: RpcContext<'_>,
-// req: SetDownloadSpeedLimitRequest,
-// sink: UnarySink<SetDownloadSpeedLimitResponse>,
-// ) {
-// let label = "set_download_speed_limit";
-// let timer = Instant::now_coarse();
-//
-// let speed_limit = req.get_speed_limit();
-// self.limiter.set_speed_limit(if speed_limit > 0 {
-// speed_limit as f64
-// } else {
-// f64::INFINITY
-// });
-//
-// let ctx_task = async move {
-// crate::send_rpc_response!(
-// Ok(SetDownloadSpeedLimitResponse::default()),
-// sink,
-// label,
-// timer
-// );
-// };
-//
-// ctx.spawn(ctx_task);
-// }
-//
-// fn duplicate_detect(
-// &mut self,
-// _ctx: RpcContext<'_>,
-// mut request: DuplicateDetectRequest,
-// mut sink: ServerStreamingSink<DuplicateDetectResponse>,
-// ) {
-// let label = "duplicate_detect";
-// let timer = Instant::now_coarse();
-// let context = request.take_context();
-// let start_key = request.take_start_key();
-// let min_commit_ts = request.get_min_commit_ts();
-// let end_key = if request.get_end_key().is_empty() {
-// None
-// } else {
-// Some(request.take_end_key())
-// };
-// let key_only = request.get_key_only();
-// let snap_res = async_snapshot(&mut self.engine, &context);
-// let handle_task = async move {
-// let res = snap_res.await;
-// let snapshot = match res {
-// Ok(snap) => snap,
-// Err(e) => {
-// let mut resp = DuplicateDetectResponse::default();
-// pb_error_inc(label, &e);
-// resp.set_region_error(e);
-// match sink
-// .send((resp, WriteFlags::default().buffer_hint(true)))
-// .await
-// {
-// Ok(_) => {
-// IMPORT_RPC_DURATION
-// .with_label_values(&[label, "ok"])
-// .observe(timer.saturating_elapsed_secs());
-// }
-// Err(e) => {
-// warn!(
-// "connection send message fail";
-// "err" => %e
-// );
-// }
-// }
-// let _ = sink.close().await;
-// return;
-// }
-// };
-// let detector =
-// DuplicateDetector::new(snapshot, start_key, end_key, min_commit_ts, key_only)
-// .unwrap();
-// for resp in detector {
-// if let Err(e) = sink
-// .send((resp, WriteFlags::default().buffer_hint(true)))
-// .await
-// {
-// warn!(
-// "connection send message fail";
-// "err" => %e
-// );
-// break;
-// }
-// }
-// let _ = sink.close().await;
-// };
-// self.threads.spawn(handle_task);
-// }
-//
-// impl_write!(write, WriteRequest, WriteResponse, Chunk, new_txn_writer);
-//
-// impl_write!(
-// raw_write,
-// RawWriteRequest,
-// RawWriteResponse,
-// RawChunk,
-// new_raw_writer
-// );
-//
-// fn suspend_import_rpc(
-// &mut self,
-// ctx: RpcContext<'_>,
-// req: SuspendImportRpcRequest,
-// sink: UnarySink<SuspendImportRpcResponse>,
-// ) {
-// let label = "suspend_import_rpc";
-// let timer = Instant::now_coarse();
-//
-// if req.should_suspend_imports && req.get_duration_in_secs() >
-// SUSPEND_REQUEST_MAX_SECS { ctx.spawn(async move {
-// send_rpc_response!(Err(Error::Io(
-// std::io::Error::new(std::io::ErrorKind::InvalidInput,
-// format!("you are going to suspend the import RPCs too long. (for {} seconds,
-// max acceptable duration is {} seconds)", req.get_duration_in_secs(),
-// SUSPEND_REQUEST_MAX_SECS)))), sink, label, timer); });
-// return;
-// }
-//
-// let suspended = if req.should_suspend_imports {
-// info!("suspend incoming import RPCs."; "for_second" =>
-// req.get_duration_in_secs(), "caller" => req.get_caller()); self.suspend
-// .suspend_requests(Duration::from_secs(req.get_duration_in_secs()))
-// } else {
-// info!("allow incoming import RPCs."; "caller" => req.get_caller());
-// self.suspend.allow_requests()
-// };
-// let mut resp = SuspendImportRpcResponse::default();
-// resp.set_already_suspended(suspended);
-// ctx.spawn(async move { send_rpc_response!(Ok(resp), sink, label, timer) });
-// }
-// }
 
 fn write_needs_restore(write: &[u8]) -> bool {
     let w = WriteRef::parse(write);

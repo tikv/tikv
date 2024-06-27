@@ -19,7 +19,6 @@ use crossbeam::atomic::AtomicCell;
 use engine_traits::KvEngine;
 use fail::fail_point;
 use futures::compat::Future01CompatExt;
-use grpcio::Environment;
 use kvproto::{
     cdcpb::{
         ChangeDataRequest, ClusterIdMismatch as ErrorClusterIdMismatch,
@@ -421,7 +420,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         observer: CdcObserver,
         store_meta: Arc<StdMutex<S>>,
         concurrency_manager: ConcurrencyManager,
-        _env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
         sink_memory_quota: Arc<MemoryQuota>,
         causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,

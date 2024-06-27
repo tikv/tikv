@@ -40,7 +40,6 @@ use engine_traits::{
 };
 use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetricsManager};
 use futures::executor::block_on;
-use grpcio::{EnvBuilder, Environment};
 use health_controller::HealthController;
 use hybrid_engine::HybridEngine;
 use kvproto::{
@@ -48,6 +47,8 @@ use kvproto::{
     deadlock_grpc::deadlock_server::DeadlockServer, debugpb_grpc::debug_server::DebugServer,
     diagnosticspb_grpc::diagnostics_server::DiagnosticsServer,
     import_sstpb_grpc::import_s_s_t_server::ImportSSTServer, kvrpcpb::ApiVersion,
+    logbackup_grpc::log_backup_server::LogBackupServer,
+    recover_data_grpc::recover_data_server::RecoverDataServer,
     resource_usage_agent_grpc::resource_metering_pub_sub_server::ResourceMeteringPubSubServer,
 };
 use pd_client::{
@@ -82,6 +83,7 @@ use resolved_ts::{LeadershipResolver, Task};
 use resource_control::ResourceGroupManager;
 use security::SecurityManager;
 use service::{service_event::ServiceEvent, service_manager::GrpcServiceManager};
+use snap_recovery::RecoveryService;
 use tikv::{
     config::{
         ConfigController, DbConfigManger, DbType, LogConfigManager, MemoryConfigManager, TikvConfig,
@@ -123,7 +125,10 @@ use tikv_util::{
     memory::MemoryQuota,
     mpsc as TikvMpsc,
     quota_limiter::{QuotaLimitConfigManager, QuotaLimiter},
-    sys::{disk, path_in_diff_mount_point, register_memory_usage_high_water, SysQuota, thread::ThreadBuildWrapper},
+    sys::{
+        disk, path_in_diff_mount_point, register_memory_usage_high_water,
+        thread::ThreadBuildWrapper, SysQuota,
+    },
     thread_group::GroupProperties,
     time::{Instant, Monitor},
     worker::{Builder as WorkerBuilder, LazyWorker, Scheduler, Worker},
@@ -284,7 +289,6 @@ where
     region_info_accessor: RegionInfoAccessor,
     coprocessor_host: Option<CoprocessorHost<EK>>,
     concurrency_manager: ConcurrencyManager,
-    env: Arc<Environment>,
     grpc_tonic_runtime: tokio::runtime::Runtime,
     check_leader_worker: Worker,
     sst_worker: Option<Box<LazyWorker<String>>>,
@@ -292,6 +296,7 @@ where
     resource_manager: Option<Arc<ResourceGroupManager>>,
     causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
+    br_snap_recovery_mode: bool, // use for br snapshot recovery
     resolved_ts_scheduler: Option<Scheduler<Task>>,
     grpc_service_mgr: GrpcServiceManager,
     snap_br_rejector: Option<Arc<PrepareDiskSnapObserver>>,
@@ -334,22 +339,6 @@ where
                 .unwrap_or_else(|e| fatal!("failed to create security manager: {}", e)),
         );
         let props = tikv_util::thread_group::current_properties();
-        let env = Arc::new(
-            EnvBuilder::new()
-                .cq_count(config.server.grpc_concurrency)
-                .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
-                .after_start(move || {
-                    tikv_util::thread_group::set_properties(props.clone());
-
-                    // SAFETY: we will call `remove_thread_memory_accessor` at before_stop.
-                    unsafe { add_thread_memory_accessor() };
-                    tikv_alloc::thread_allocate_exclusive_arena().unwrap();
-                })
-                .before_stop(|| {
-                    remove_thread_memory_accessor();
-                })
-                .build(),
-        );
         let grpc_tonic_runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(config.server.grpc_concurrency)
             .thread_name(thd_name!(GRPC_THREAD_PREFIX))
@@ -362,6 +351,30 @@ where
             Arc::clone(&security_mgr),
             grpc_tonic_runtime.handle().clone(),
         );
+        // check if TiKV need to run in snapshot recovery mode
+        let is_recovering_marked = match pd_client.is_recovering_marked() {
+            Err(e) => {
+                warn!(
+                    "failed to get recovery mode from PD";
+                    "error" => ?e,
+                );
+                false
+            }
+            Ok(marked) => marked,
+        };
+
+        if is_recovering_marked {
+            // Run a TiKV server in recovery modeß
+            info!("TiKV running in Snapshot Recovery Mode");
+            snap_recovery::init_cluster::enter_snap_recovery_mode(&mut config);
+            // connect_to_pd_cluster retreived the cluster id from pd
+            let cluster_id = config.server.cluster_id;
+            snap_recovery::init_cluster::start_recovery(
+                config.clone(),
+                cluster_id,
+                pd_client.clone(),
+            );
+        }
 
         // Initialize and check config
         let cfg_controller = TikvServerCore::init_config(config);
@@ -477,7 +490,6 @@ where
             region_info_accessor,
             coprocessor_host,
             concurrency_manager,
-            env,
             grpc_tonic_runtime,
             check_leader_worker,
             sst_worker: None,
@@ -485,6 +497,7 @@ where
             resource_manager,
             causal_ts_provider,
             tablet_registry: None,
+            br_snap_recovery_mode: is_recovering_marked,
             resolved_ts_scheduler: None,
             grpc_service_mgr: GrpcServiceManager::new(tx),
             snap_br_rejector: None,
@@ -863,7 +876,6 @@ where
             Either::Left(snap_mgr.clone()),
             gc_worker.clone(),
             check_leader_scheduler,
-            self.env.clone(),
             self.grpc_tonic_runtime.handle().clone(),
             unified_read_pool,
             debug_thread_pool,
@@ -1076,7 +1088,6 @@ where
             cdc_ob,
             engines.store_meta.clone(),
             self.concurrency_manager.clone(),
-            server.env(),
             self.security_mgr.clone(),
             cdc_memory_quota.clone(),
             self.causal_ts_provider.clone(),
@@ -1248,7 +1259,12 @@ where
             self.resource_manager.clone(),
         );
 
-        let backup_service = backup::Service::new(backup_scheduler);
+        let env = backup::disk_snap::Env::new(
+            Arc::new(Mutex::new(self.router.clone())),
+            self.snap_br_rejector.take().unwrap(),
+            Some(backup_endpoint.io_pool_handle().clone()),
+        );
+        let backup_service = backup::Service::new(backup_scheduler, env);
         if servers
             .server
             .register_service(BackupServer::new(backup_service))
@@ -1266,6 +1282,7 @@ where
         let cdc_service = cdc::Service::new(
             servers.cdc_scheduler.clone(),
             servers.cdc_memory_quota.clone(),
+            self.grpc_tonic_runtime.handle().clone(),
         );
         if servers
             .server
@@ -1282,6 +1299,31 @@ where
             .is_some()
         {
             warn!("failed to register resource metering pubsub service");
+        }
+
+        if let Some(sched) = servers.backup_stream_scheduler.take() {
+            let pitr_service = backup_stream::Service::new(sched);
+            if servers
+                .server
+                .register_service(LogBackupServer::new(pitr_service))
+                .is_some()
+            {
+                fatal!("failed to register log backup service");
+            }
+        }
+
+        // the present tikv in recovery mode, start recovery service
+        if self.br_snap_recovery_mode {
+            let recovery_service =
+                RecoveryService::new(engines.engines.clone(), self.router.clone());
+
+            if servers
+                .server
+                .register_service(RecoverDataServer::new(recovery_service))
+                .is_some()
+            {
+                fatal!("failed to register recovery service");
+            }
         }
     }
 

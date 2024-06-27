@@ -212,10 +212,7 @@ fn get_store_id_from_metadata<T>(req: &tonic::Request<T>) -> Option<&str> {
         .and_then(|v| v.to_str().ok())
 }
 
-fn to_tonic_result<T>(
-    res: Result<T, Error>,
-    fn_name: &str,
-) -> Result<tonic::Response<T>, tonic::Status> {
+fn to_tonic_result<T>(res: Result<T, Error>, fn_name: &str) -> tonic::Result<tonic::Response<T>> {
     match res {
         Ok(r) => Ok(tonic::Response::new(r)),
         Err(e) => {
@@ -335,25 +332,25 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn kv_get(
         &self,
         request: tonic::Request<GetRequest>,
-    ) -> std::result::Result<tonic::Response<GetResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<GetResponse>> {
         handle_request!(kv_get, future_get, self, request, has_time_detail)
     }
     async fn kv_scan(
         &self,
         request: tonic::Request<ScanRequest>,
-    ) -> std::result::Result<tonic::Response<ScanResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<ScanResponse>> {
         handle_request!(kv_scan, future_scan, self, request)
     }
     async fn kv_prewrite(
         &self,
         request: tonic::Request<PrewriteRequest>,
-    ) -> std::result::Result<tonic::Response<PrewriteResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<PrewriteResponse>> {
         handle_request!(kv_prewrite, future_prewrite, self, request, has_time_detail)
     }
     async fn kv_pessimistic_lock(
         &self,
         request: tonic::Request<PessimisticLockRequest>,
-    ) -> std::result::Result<tonic::Response<PessimisticLockResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<PessimisticLockResponse>> {
         handle_request!(
             kv_pessimistic_lock,
             future_acquire_pessimistic_lock,
@@ -365,7 +362,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn kv_pessimistic_rollback(
         &self,
         request: tonic::Request<PessimisticRollbackRequest>,
-    ) -> std::result::Result<tonic::Response<PessimisticRollbackResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<PessimisticRollbackResponse>> {
         handle_request!(
             kv_pessimistic_rollback,
             future_pessimistic_rollback,
@@ -377,7 +374,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn kv_txn_heart_beat(
         &self,
         request: tonic::Request<TxnHeartBeatRequest>,
-    ) -> std::result::Result<tonic::Response<TxnHeartBeatResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<TxnHeartBeatResponse>> {
         handle_request!(
             kv_txn_heart_beat,
             future_txn_heart_beat,
@@ -389,7 +386,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn kv_check_txn_status(
         &self,
         request: tonic::Request<CheckTxnStatusRequest>,
-    ) -> std::result::Result<tonic::Response<CheckTxnStatusResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<CheckTxnStatusResponse>> {
         handle_request!(
             kv_check_txn_status,
             future_check_txn_status,
@@ -401,7 +398,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn kv_check_secondary_locks(
         &self,
         request: tonic::Request<CheckSecondaryLocksRequest>,
-    ) -> std::result::Result<tonic::Response<CheckSecondaryLocksResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<CheckSecondaryLocksResponse>> {
         handle_request!(
             kv_check_secondary_locks,
             future_check_secondary_locks,
@@ -413,31 +410,31 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn kv_commit(
         &self,
         request: tonic::Request<CommitRequest>,
-    ) -> std::result::Result<tonic::Response<CommitResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<CommitResponse>> {
         handle_request!(kv_commit, future_commit, self, request, has_time_detail)
     }
     async fn kv_import(
         &self,
         request: tonic::Request<ImportRequest>,
-    ) -> std::result::Result<tonic::Response<ImportResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<ImportResponse>> {
         unimplemented!()
     }
     async fn kv_cleanup(
         &self,
         request: tonic::Request<CleanupRequest>,
-    ) -> std::result::Result<tonic::Response<CleanupResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<CleanupResponse>> {
         handle_request!(kv_cleanup, future_cleanup, self, request)
     }
     async fn kv_batch_get(
         &self,
         request: tonic::Request<BatchGetRequest>,
-    ) -> std::result::Result<tonic::Response<BatchGetResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<BatchGetResponse>> {
         handle_request!(kv_batch_get, future_batch_get, self, request)
     }
     async fn kv_batch_rollback(
         &self,
         request: tonic::Request<BatchRollbackRequest>,
-    ) -> std::result::Result<tonic::Response<BatchRollbackResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<BatchRollbackResponse>> {
         handle_request!(
             kv_batch_rollback,
             future_batch_rollback,
@@ -449,7 +446,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn kv_scan_lock(
         &self,
         request: tonic::Request<ScanLockRequest>,
-    ) -> std::result::Result<tonic::Response<ScanLockResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<ScanLockResponse>> {
         handle_request!(
             kv_scan_lock,
             future_scan_lock,
@@ -461,7 +458,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn kv_resolve_lock(
         &self,
         request: tonic::Request<ResolveLockRequest>,
-    ) -> std::result::Result<tonic::Response<ResolveLockResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<ResolveLockResponse>> {
         handle_request!(
             kv_resolve_lock,
             future_resolve_lock,
@@ -473,89 +470,89 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn kv_gc(
         &self,
         request: tonic::Request<GcRequest>,
-    ) -> std::result::Result<tonic::Response<GcResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<GcResponse>> {
         unimplemented!()
     }
 
     async fn kv_delete_range(
         &self,
         request: tonic::Request<DeleteRangeRequest>,
-    ) -> std::result::Result<tonic::Response<DeleteRangeResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<DeleteRangeResponse>> {
         handle_request!(kv_delete_range, future_delete_range, self, request)
     }
 
     async fn kv_flush(
         &self,
         request: tonic::Request<FlushRequest>,
-    ) -> std::result::Result<tonic::Response<FlushResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<FlushResponse>> {
         handle_request!(kv_flush, future_flush, self, request)
     }
     async fn kv_buffer_batch_get(
         &self,
         request: tonic::Request<BufferBatchGetRequest>,
-    ) -> std::result::Result<tonic::Response<BufferBatchGetResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<BufferBatchGetResponse>> {
         handle_request!(kv_buffer_batch_get, future_buffer_batch_get, self, request)
     }
     /// Raw commands; no transaction support.
     async fn raw_get(
         &self,
         request: tonic::Request<RawGetRequest>,
-    ) -> std::result::Result<tonic::Response<RawGetResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<RawGetResponse>> {
         handle_request!(raw_get, future_raw_get, self, request)
     }
     async fn raw_batch_get(
         &self,
         request: tonic::Request<RawBatchGetRequest>,
-    ) -> std::result::Result<tonic::Response<RawBatchGetResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<RawBatchGetResponse>> {
         handle_request!(raw_batch_get, future_raw_batch_get, self, request)
     }
     async fn raw_put(
         &self,
         request: tonic::Request<RawPutRequest>,
-    ) -> std::result::Result<tonic::Response<RawPutResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<RawPutResponse>> {
         handle_request!(raw_put, future_raw_put, self, request)
     }
     async fn raw_batch_put(
         &self,
         request: tonic::Request<RawBatchPutRequest>,
-    ) -> std::result::Result<tonic::Response<RawBatchPutResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<RawBatchPutResponse>> {
         handle_request!(raw_batch_put, future_raw_batch_put, self, request)
     }
     async fn raw_delete(
         &self,
         request: tonic::Request<RawDeleteRequest>,
-    ) -> std::result::Result<tonic::Response<RawDeleteResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<RawDeleteResponse>> {
         handle_request!(raw_delete, future_raw_delete, self, request)
     }
     async fn raw_batch_delete(
         &self,
         request: tonic::Request<RawBatchDeleteRequest>,
-    ) -> std::result::Result<tonic::Response<RawBatchDeleteResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<RawBatchDeleteResponse>> {
         handle_request!(raw_batch_delete, future_raw_batch_delete, self, request)
     }
     async fn raw_scan(
         &self,
         request: tonic::Request<RawScanRequest>,
-    ) -> std::result::Result<tonic::Response<RawScanResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<RawScanResponse>> {
         handle_request!(raw_scan, future_raw_scan, self, request)
     }
     async fn raw_delete_range(
         &self,
         request: tonic::Request<RawDeleteRangeRequest>,
-    ) -> std::result::Result<tonic::Response<RawDeleteRangeResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<RawDeleteRangeResponse>> {
         handle_request!(raw_delete_range, future_raw_delete_range, self, request)
     }
     async fn raw_batch_scan(
         &self,
         request: tonic::Request<RawBatchScanRequest>,
-    ) -> std::result::Result<tonic::Response<RawBatchScanResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<RawBatchScanResponse>> {
         handle_request!(raw_batch_scan, future_raw_batch_scan, self, request)
     }
     /// Get TTL of the key. Returns 0 if TTL is not set for the key.
     async fn raw_get_key_ttl(
         &self,
         request: tonic::Request<RawGetKeyTtlRequest>,
-    ) -> std::result::Result<tonic::Response<RawGetKeyTtlResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<RawGetKeyTtlResponse>> {
         handle_request!(raw_get_key_ttl, future_raw_get_key_ttl, self, request)
     }
     /// Compare if the value in database equals to
@@ -565,7 +562,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn raw_compare_and_swap(
         &self,
         request: tonic::Request<RawCasRequest>,
-    ) -> std::result::Result<tonic::Response<RawCasResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<RawCasResponse>> {
         handle_request!(
             raw_compare_and_swap,
             future_raw_compare_and_swap,
@@ -576,7 +573,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn raw_checksum(
         &self,
         request: tonic::Request<RawChecksumRequest>,
-    ) -> std::result::Result<tonic::Response<RawChecksumResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<RawChecksumResponse>> {
         handle_request!(raw_checksum, future_raw_checksum, self, request)
     }
 
@@ -584,13 +581,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn mvcc_get_by_key(
         &self,
         request: tonic::Request<MvccGetByKeyRequest>,
-    ) -> std::result::Result<tonic::Response<MvccGetByKeyResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<MvccGetByKeyResponse>> {
         handle_request!(mvcc_get_by_key, future_mvcc_get_by_key, self, request)
     }
     async fn mvcc_get_by_start_ts(
         &self,
         request: tonic::Request<MvccGetByStartTsRequest>,
-    ) -> std::result::Result<tonic::Response<MvccGetByStartTsResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<MvccGetByStartTsResponse>> {
         handle_request!(
             mvcc_get_by_start_ts,
             future_mvcc_get_by_start_ts,
@@ -602,8 +599,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn kv_prepare_flashback_to_version(
         &self,
         request: tonic::Request<PrepareFlashbackToVersionRequest>,
-    ) -> std::result::Result<tonic::Response<PrepareFlashbackToVersionResponse>, tonic::Status>
-    {
+    ) -> tonic::Result<tonic::Response<PrepareFlashbackToVersionResponse>> {
         reject_if_cluster_id_mismatch!(request.get_ref(), self);
         let begin_instant = Instant::now();
 
@@ -622,7 +618,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn kv_flashback_to_version(
         &self,
         request: tonic::Request<FlashbackToVersionRequest>,
-    ) -> std::result::Result<tonic::Response<FlashbackToVersionResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<FlashbackToVersionResponse>> {
         reject_if_cluster_id_mismatch!(request.get_ref(), self);
         let begin_instant = Instant::now();
         let req = request.into_inner();
@@ -641,7 +637,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn coprocessor(
         &self,
         request: tonic::Request<Request>,
-    ) -> std::result::Result<tonic::Response<Response>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<Response>> {
         reject_if_cluster_id_mismatch!(request.get_ref(), self);
         // forward_unary!(self.proxy, coprocessor, ctx, req, sink);
         let req = request.into_inner();
@@ -679,7 +675,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn raw_coprocessor(
         &self,
         request: tonic::Request<RawCoprocessorRequest>,
-    ) -> std::result::Result<tonic::Response<RawCoprocessorResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<RawCoprocessorResponse>> {
         let req = request.into_inner();
         reject_if_cluster_id_mismatch!(&req, self);
         let source = req.get_context().get_request_source().to_owned();
@@ -711,7 +707,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn unsafe_destroy_range(
         &self,
         request: tonic::Request<UnsafeDestroyRangeRequest>,
-    ) -> std::result::Result<tonic::Response<UnsafeDestroyRangeResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<UnsafeDestroyRangeResponse>> {
         let begin_instant = Instant::now();
         let mut req = request.into_inner();
 
@@ -753,26 +749,26 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn register_lock_observer(
         &self,
         request: tonic::Request<RegisterLockObserverRequest>,
-    ) -> std::result::Result<tonic::Response<RegisterLockObserverResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<RegisterLockObserverResponse>> {
         unimplemented!()
     }
 
     async fn check_lock_observer(
         &self,
         request: tonic::Request<CheckLockObserverRequest>,
-    ) -> std::result::Result<tonic::Response<CheckLockObserverResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<CheckLockObserverResponse>> {
         unimplemented!()
     }
     async fn remove_lock_observer(
         &self,
         request: tonic::Request<RemoveLockObserverRequest>,
-    ) -> std::result::Result<tonic::Response<RemoveLockObserverResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<RemoveLockObserverResponse>> {
         unimplemented!()
     }
     async fn physical_scan_lock(
         &self,
         request: tonic::Request<PhysicalScanLockRequest>,
-    ) -> std::result::Result<tonic::Response<PhysicalScanLockResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<PhysicalScanLockResponse>> {
         unimplemented!()
     }
 
@@ -780,8 +776,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn coprocessor_stream(
         &self,
         request: tonic::Request<Request>,
-    ) -> std::result::Result<tonic::Response<tonic::codegen::BoxStream<Response>>, tonic::Status>
-    {
+    ) -> tonic::Result<tonic::Response<tonic::codegen::BoxStream<Response>>> {
         let req = request.into_inner();
         reject_if_cluster_id_mismatch!(req, self);
         let begin_instant = Instant::now();
@@ -818,14 +813,14 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn batch_coprocessor(
         &self,
         request: tonic::Request<BatchRequest>,
-    ) -> std::result::Result<tonic::Response<Self::BatchCoprocessorStream>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<Self::BatchCoprocessorStream>> {
         unimplemented!()
     }
 
     async fn raft(
         &self,
         request: tonic::Request<tonic::Streaming<RaftMessage>>,
-    ) -> std::result::Result<tonic::Response<Done>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<Done>> {
         let source_store_id = get_store_id_from_metadata(&request);
         let message_received =
             source_store_id.map(|x| MESSAGE_RECV_BY_STORE.with_label_values(&[&format!("{}", x)]));
@@ -859,7 +854,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn batch_raft(
         &self,
         request: tonic::Request<tonic::Streaming<BatchRaftMessage>>,
-    ) -> std::result::Result<tonic::Response<Done>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<Done>> {
         let source_store_id = get_store_id_from_metadata(&request);
         let message_received =
             source_store_id.map(|x| MESSAGE_RECV_BY_STORE.with_label_values(&[&format!("{}", x)]));
@@ -898,7 +893,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn snapshot(
         &self,
         request: tonic::Request<tonic::Streaming<SnapshotChunk>>,
-    ) -> std::result::Result<tonic::Response<Done>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<Done>> {
         let (tx, rx) = futures::channel::oneshot::channel();
         let stream = request.into_inner();
         let task = SnapTask::Recv { stream, tx };
@@ -934,7 +929,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn split_region(
         &self,
         request: tonic::Request<SplitRegionRequest>,
-    ) -> std::result::Result<tonic::Response<SplitRegionResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<SplitRegionResponse>> {
         // forward_unary!(self.proxy, split_region, ctx, req, sink);
         let begin_instant = Instant::now();
 
@@ -1009,7 +1004,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn read_index(
         &self,
         request: tonic::Request<ReadIndexRequest>,
-    ) -> std::result::Result<tonic::Response<ReadIndexResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<ReadIndexResponse>> {
         unimplemented!()
     }
 
@@ -1106,13 +1101,13 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn dispatch_mpp_task(
         &self,
         request: tonic::Request<DispatchTaskRequest>,
-    ) -> std::result::Result<tonic::Response<DispatchTaskResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<DispatchTaskResponse>> {
         unimplemented!()
     }
     async fn cancel_mpp_task(
         &self,
         request: tonic::Request<CancelTaskRequest>,
-    ) -> std::result::Result<tonic::Response<CancelTaskResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<CancelTaskResponse>> {
         unimplemented!()
     }
     /// Server streaming response type for the EstablishMPPConnection method.
@@ -1120,27 +1115,26 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn establish_mpp_connection(
         &self,
         request: tonic::Request<EstablishMppConnectionRequest>,
-    ) -> std::result::Result<tonic::Response<Self::EstablishMPPConnectionStream>, tonic::Status>
-    {
+    ) -> tonic::Result<tonic::Response<Self::EstablishMPPConnectionStream>> {
         unimplemented!()
     }
     async fn is_alive(
         &self,
         request: tonic::Request<IsAliveRequest>,
-    ) -> std::result::Result<tonic::Response<IsAliveResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<IsAliveResponse>> {
         unimplemented!()
     }
     async fn report_mpp_task_status(
         &self,
         request: tonic::Request<ReportTaskStatusRequest>,
-    ) -> std::result::Result<tonic::Response<ReportTaskStatusResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<ReportTaskStatusResponse>> {
         unimplemented!()
     }
 
     async fn check_leader(
         &self,
         request: tonic::Request<CheckLeaderRequest>,
-    ) -> std::result::Result<tonic::Response<CheckLeaderResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<CheckLeaderResponse>> {
         let begin_instant = Instant::now();
         // TODO: let addr = ctx.peer();
         let addr = "";
@@ -1174,7 +1168,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn get_store_safe_ts(
         &self,
         request: tonic::Request<StoreSafeTsRequest>,
-    ) -> std::result::Result<tonic::Response<StoreSafeTsResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<StoreSafeTsResponse>> {
         let key_range = request.into_inner().take_key_range();
         let (cb, resp) = paired_future_callback();
         if let Err(e) = self
@@ -1197,7 +1191,7 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn get_lock_wait_info(
         &self,
         _request: tonic::Request<GetLockWaitInfoRequest>,
-    ) -> std::result::Result<tonic::Response<GetLockWaitInfoResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<GetLockWaitInfoResponse>> {
         let (cb, f) = paired_future_callback();
         self.storage.dump_wait_for_entries(cb);
         let res = match f.await {
@@ -1214,43 +1208,43 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn compact(
         &self,
         request: tonic::Request<CompactRequest>,
-    ) -> std::result::Result<tonic::Response<CompactResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<CompactResponse>> {
         unimplemented!()
     }
     async fn get_lock_wait_history(
         &self,
         request: tonic::Request<GetLockWaitHistoryRequest>,
-    ) -> std::result::Result<tonic::Response<GetLockWaitHistoryResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<GetLockWaitHistoryResponse>> {
         unimplemented!()
     }
     async fn get_ti_flash_system_table(
         &self,
         request: tonic::Request<TiFlashSystemTableRequest>,
-    ) -> std::result::Result<tonic::Response<TiFlashSystemTableResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<TiFlashSystemTableResponse>> {
         unimplemented!()
     }
     async fn try_add_lock(
         &self,
         request: tonic::Request<TryAddLockRequest>,
-    ) -> std::result::Result<tonic::Response<TryAddLockResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<TryAddLockResponse>> {
         unimplemented!()
     }
     async fn try_mark_delete(
         &self,
         request: tonic::Request<TryMarkDeleteRequest>,
-    ) -> std::result::Result<tonic::Response<TryMarkDeleteResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<TryMarkDeleteResponse>> {
         unimplemented!()
     }
     async fn establish_disagg_task(
         &self,
         request: tonic::Request<EstablishDisaggTaskRequest>,
-    ) -> std::result::Result<tonic::Response<EstablishDisaggTaskResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<EstablishDisaggTaskResponse>> {
         unimplemented!()
     }
     async fn cancel_disagg_task(
         &self,
         request: tonic::Request<CancelDisaggTaskRequest>,
-    ) -> std::result::Result<tonic::Response<CancelDisaggTaskResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<CancelDisaggTaskResponse>> {
         unimplemented!()
     }
     /// Server streaming response type for the FetchDisaggPages method.
@@ -1258,20 +1252,20 @@ impl<E: Engine, L: LockManager, F: KvFormat> Tikv for Service<E, L, F> {
     async fn fetch_disagg_pages(
         &self,
         request: tonic::Request<FetchDisaggPagesRequest>,
-    ) -> std::result::Result<tonic::Response<Self::FetchDisaggPagesStream>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<Self::FetchDisaggPagesStream>> {
         unimplemented!()
     }
     async fn get_disagg_config(
         &self,
         request: tonic::Request<GetDisaggConfigRequest>,
-    ) -> std::result::Result<tonic::Response<GetDisaggConfigResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<GetDisaggConfigResponse>> {
         unimplemented!()
     }
 
     async fn get_health_feedback(
         &self,
         request: tonic::Request<GetHealthFeedbackRequest>,
-    ) -> std::result::Result<tonic::Response<GetHealthFeedbackResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<GetHealthFeedbackResponse>> {
         reject_if_cluster_id_mismatch!(request.get_ref(), self);
         let attacher = HealthFeedbackAttacher::new(
             self.store_id,
@@ -1842,7 +1836,7 @@ fn future_scan_lock<E: Engine, L: LockManager, F: KvFormat>(
 }
 
 async fn future_gc(_: GcRequest) -> ServerResult<GcResponse> {
-    Err(Error::Tonic(tonic::Status::unimplemented("")))
+    Err(Error::Grpc(tonic::Status::unimplemented("")))
 }
 
 fn future_delete_range<E: Engine, L: LockManager, F: KvFormat>(

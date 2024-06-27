@@ -73,7 +73,7 @@ impl Diagnostics for Service {
             log::search(log_file, req)
                 .map(|stream| {
                     stream.map(|resp| {
-                        let res: std::result::Result<_, tonic::Status> = Ok(resp);
+                        let res: tonic::Result<_> = Ok(resp);
                         res
                     })
                 })
@@ -88,7 +88,7 @@ impl Diagnostics for Service {
     async fn server_info(
         &self,
         request: tonic::Request<ServerInfoRequest>,
-    ) -> std::result::Result<tonic::Response<ServerInfoResponse>, tonic::Status> {
+    ) -> tonic::Result<tonic::Response<ServerInfoResponse>> {
         let req = request.into_inner();
         let tp = req.get_tp();
 

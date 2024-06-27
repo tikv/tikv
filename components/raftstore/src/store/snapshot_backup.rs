@@ -61,7 +61,7 @@ pub trait SnapshotBrHandle: Sync + Send + Clone {
     fn broadcast_wait_apply(&self, req: SnapshotBrWaitApplyRequest) -> crate::Result<()>;
     fn broadcast_check_pending_admin(
         &self,
-        tx: UnboundedSender<CheckAdminResponse>,
+        tx: UnboundedSender<tonic::Result<CheckAdminResponse>>,
     ) -> crate::Result<()>;
 }
 
@@ -83,7 +83,7 @@ impl<EK: KvEngine, ER: RaftEngine> SnapshotBrHandle for Arc<Mutex<RaftRouter<EK,
 
     fn broadcast_check_pending_admin(
         &self,
-        tx: UnboundedSender<CheckAdminResponse>,
+        tx: UnboundedSender<tonic::Result<CheckAdminResponse>>,
     ) -> crate::Result<()> {
         self.lock().unwrap().broadcast_normal(|| {
             PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.clone()))

@@ -434,14 +434,16 @@ impl Config {
         Ok(())
     }
 
-    /// Gets configured grpc compression algorithm.
-    pub fn grpc_compression_algorithm(&self) -> CompressionAlgorithms {
-        match self.grpc_compression_type {
-            GrpcCompressionType::None => CompressionAlgorithms::GRPC_COMPRESS_NONE,
-            GrpcCompressionType::Deflate => CompressionAlgorithms::GRPC_COMPRESS_DEFLATE,
-            GrpcCompressionType::Gzip => CompressionAlgorithms::GRPC_COMPRESS_GZIP,
-        }
-    }
+    // /// Gets configured grpc compression algorithm.
+    // pub fn grpc_compression_algorithm(&self) -> CompressionAlgorithms {
+    //     match self.grpc_compression_type {
+    //         GrpcCompressionType::None =>
+    // CompressionAlgorithms::GRPC_COMPRESS_NONE,
+    //         GrpcCompressionType::Deflate =>
+    // CompressionAlgorithms::GRPC_COMPRESS_DEFLATE,
+    //         GrpcCompressionType::Gzip =>
+    // CompressionAlgorithms::GRPC_COMPRESS_GZIP,     }
+    // }
 
     pub fn end_point_request_max_handle_duration(&self) -> ReadableDuration {
         if let Some(end_point_request_max_handle_duration) =

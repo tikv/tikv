@@ -8,7 +8,6 @@ use std::{
 use encryption::Error as EncryptionError;
 use error_code::{self, ErrorCode, ErrorCodeExt};
 use futures::channel::oneshot::Canceled;
-use grpcio::Error as GrpcError;
 use kvproto::{errorpb, import_sstpb, kvrpcpb::ApiVersion};
 use tikv_util::codec::Error as CodecError;
 use uuid::Error as UuidError;
@@ -19,7 +18,6 @@ pub fn error_inc(type_: &str, err: &Error) {
     let label = match err {
         Error::Io(..) => "io",
         Error::Grpc(..) => "grpc",
-        Error::Tonic(..) => "grpc",
         Error::Uuid(..) => "uuid",
         Error::RocksDb(..) => "rocksdb",
         Error::EngineTraits(..) => "engine_traits",
@@ -45,10 +43,7 @@ pub enum Error {
     Io(#[from] IoError),
 
     #[error("{0}")]
-    Grpc(#[from] GrpcError),
-
-    #[error("{0}")]
-    Tonic(#[from] tonic::Status),
+    Grpc(#[from] tonic::Status),
 
     #[error("{0}")]
     Uuid(#[from] UuidError),
@@ -202,7 +197,7 @@ impl ErrorCodeExt for Error {
     fn error_code(&self) -> ErrorCode {
         match self {
             Error::Io(_) => error_code::sst_importer::IO,
-            Error::Grpc(_) | Error::Tonic(_) => error_code::sst_importer::GRPC,
+            Error::Grpc(_) => error_code::sst_importer::GRPC,
             Error::Uuid(_) => error_code::sst_importer::UUID,
             Error::Future(_) => error_code::sst_importer::FUTURE,
             Error::RocksDb(_) => error_code::sst_importer::ROCKSDB,
@@ -230,6 +225,15 @@ impl ErrorCodeExt for Error {
             Error::RequestTooNew(_) => error_code::sst_importer::REQUEST_TOO_NEW,
             Error::RequestTooOld(_) => error_code::sst_importer::REQUEST_TOO_OLD,
             Error::DiskSpaceNotEnough => error_code::sst_importer::DISK_SPACE_NOT_ENOUGH,
+        }
+    }
+}
+
+impl From<Error> for tonic::Status {
+    fn from(value: Error) -> Self {
+        match value {
+            Error::Grpc(e) => e,
+            e @ _ => tonic::Status::unknown(format!("{:?}", e)),
         }
     }
 }
