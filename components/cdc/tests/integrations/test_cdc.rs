@@ -2831,7 +2831,7 @@ fn test_cdc_rollback_prewrites_with_txn_source() {
         let cdc_event = receive_event(true);
         if cdc_event.has_resolved_ts() {
             let resolved_ts = cdc_event.get_resolved_ts().get_ts();
-            assert_eq!(resolved_ts, start_tso);
+            assert_eq!(resolved_ts, start_tso.into_inner());
             break;
         }
     }
