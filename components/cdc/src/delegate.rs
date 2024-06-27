@@ -835,7 +835,7 @@ impl Delegate {
                 };
                 CdcEvent::Event(Event {
                     region_id,
-                    request_id.0,
+                    request_id: request_id.0,
                     event: Some(Event_oneof_event::Entries(event_entries)),
                     ..Default::default()
                 })
