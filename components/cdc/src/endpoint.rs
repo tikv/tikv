@@ -163,7 +163,6 @@ pub enum Task {
     Register {
         request: ChangeDataRequest,
         downstream: Downstream,
-        conn_id: ConnId,
     },
     Deregister(Deregister),
     OpenConn {
@@ -221,14 +220,13 @@ impl fmt::Debug for Task {
             Task::Register {
                 ref request,
                 ref downstream,
-                ref conn_id,
                 ..
             } => de
                 .field("type", &"register")
                 .field("register request", request)
                 .field("request", request)
                 .field("id", &downstream.id)
-                .field("conn_id", conn_id)
+                .field("conn_id", &downstream.conn_id)
                 .finish(),
             Task::Deregister(deregister) => de
                 .field("type", &"deregister")
@@ -375,7 +373,7 @@ pub(crate) struct Advance {
 
 impl Advance {
     fn emit_resolved_ts(&mut self, connections: &HashMap<ConnId, Conn>) -> (u64, TimeStamp) {
-        let handle_send_result = |conn: &Conn, res: std::result::Result<(), SendError>| -> bool {
+        let handle_send_result = |conn: &Conn, res: Result<(), SendError>| -> bool {
             match res {
                 Ok(_) => return true,
                 Err(SendError::Disconnected) => {
@@ -771,23 +769,19 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         }
     }
 
-    pub fn on_register(
-        &mut self,
-        mut request: ChangeDataRequest,
-        mut downstream: Downstream,
-        conn_id: ConnId,
-    ) {
+    pub fn on_register(&mut self, mut request: ChangeDataRequest, mut downstream: Downstream) {
         let kv_api = request.get_kv_api();
         let api_version = self.api_version;
         let filter_loop = downstream.filter_loop;
 
         let region_id = request.region_id;
         let request_id = request.request_id;
+        let conn_id = downstream.conn_id;
         let downstream_id = downstream.id;
         let downstream_state = downstream.get_state();
 
         // The connection can be deregistered by some internal errors. Clients will
-        // be always notified by closing the GRPC server stream, so it's OK to drop
+        // always be notified by closing the GRPC server stream, so it's OK to drop
         // the task directly.
         let conn = match self.connections.get_mut(&conn_id) {
             Some(conn) => conn,
@@ -833,7 +827,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let release_scan_task_counter = tikv_util::DeferContext::new(move || {
             scan_task_counter.fetch_sub(1, Ordering::Relaxed);
         });
-        if scan_task_count + 1 > self.config.incremental_scan_concurrency_limit as isize {
+        if scan_task_count >= self.config.incremental_scan_concurrency_limit as isize {
             debug!("cdc rejects registration, too many scan tasks";
                 "region_id" => region_id,
                 "conn_id" => ?conn_id,
@@ -1196,8 +1190,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
             Task::Register {
                 request,
                 downstream,
-                conn_id,
-            } => self.on_register(request, downstream, conn_id),
+            } => self.on_register(request, downstream),
             Task::FinishScanLocks {
                 observe_id,
                 region,
@@ -1539,7 +1532,6 @@ mod tests {
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
-            conn_id,
         });
         let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
             .unwrap()
@@ -1575,7 +1567,6 @@ mod tests {
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
-            conn_id,
         });
         let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
             .unwrap()
@@ -1612,7 +1603,6 @@ mod tests {
         suite.run(Task::Register {
             request: req,
             downstream,
-            conn_id,
         });
         let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
             .unwrap()
@@ -1822,7 +1812,6 @@ mod tests {
         suite.run(Task::Register {
             request: req,
             downstream,
-            conn_id,
         });
         assert_eq!(suite.endpoint.capture_regions.len(), 1);
 
@@ -1875,7 +1864,6 @@ mod tests {
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
-            conn_id,
         });
         assert_eq!(suite.endpoint.capture_regions.len(), 1);
         suite
@@ -1897,7 +1885,6 @@ mod tests {
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
-            conn_id,
         });
         let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
             .unwrap()
@@ -1943,7 +1930,6 @@ mod tests {
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
-            conn_id,
         });
         // Region 100 is inserted into capture_regions.
         assert_eq!(suite.endpoint.capture_regions.len(), 2);
@@ -1975,7 +1961,6 @@ mod tests {
         suite.run(Task::Register {
             request: req,
             downstream,
-            conn_id,
         });
         // Drop CaptureChange message, it should cause scan task failure.
         let timeout = Duration::from_millis(100);
@@ -2042,7 +2027,6 @@ mod tests {
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
-            conn_id,
         });
         assert_eq!(suite.endpoint.capture_regions.len(), 1);
 
@@ -2060,7 +2044,6 @@ mod tests {
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
-            conn_id,
         });
         let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
             .unwrap()
@@ -2148,7 +2131,6 @@ mod tests {
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
-            conn_id,
         });
         let observe_id = suite.endpoint.capture_regions[&1].handle.id;
         suite
@@ -2188,7 +2170,6 @@ mod tests {
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
-            conn_id,
         });
         region.set_id(2);
         let observe_id = suite.endpoint.capture_regions[&2].handle.id;
@@ -2244,7 +2225,6 @@ mod tests {
         suite.run(Task::Register {
             request: req,
             downstream,
-            conn_id,
         });
         region.set_id(3);
         let observe_id = suite.endpoint.capture_regions[&3].handle.id;
@@ -2323,7 +2303,6 @@ mod tests {
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
-            conn_id,
         });
         assert_eq!(suite.endpoint.capture_regions.len(), 1);
 
@@ -2367,7 +2346,6 @@ mod tests {
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
-            conn_id,
         });
         assert_eq!(suite.endpoint.capture_regions.len(), 1);
 
@@ -2420,7 +2398,6 @@ mod tests {
         suite.run(Task::Register {
             request: req,
             downstream,
-            conn_id,
         });
         assert_eq!(suite.endpoint.capture_regions.len(), 1);
         let deregister = Deregister::Delegate {
@@ -2478,7 +2455,6 @@ mod tests {
                 suite.run(Task::Register {
                     request: req.clone(),
                     downstream,
-                    conn_id,
                 });
                 let observe_id = suite.endpoint.capture_regions[&region_id].handle.id;
                 let mut region = Region::default();
@@ -2607,7 +2583,6 @@ mod tests {
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
-            conn_id: conn_id_a,
         });
         assert_eq!(suite.endpoint.capture_regions.len(), 1);
         let observe_id = suite.endpoint.capture_regions[&1].handle.id;
@@ -2631,7 +2606,6 @@ mod tests {
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
-            conn_id: conn_id_b,
         });
         assert_eq!(suite.endpoint.capture_regions.len(), 1);
 
@@ -2763,7 +2737,6 @@ mod tests {
             suite.run(Task::Register {
                 request: req.clone(),
                 downstream,
-                conn_id,
             });
 
             let mut locks = BTreeMap::<Key, MiniLock>::default();
@@ -2855,7 +2828,6 @@ mod tests {
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
-            conn_id,
         });
         assert_eq!(suite.connections[&conn_id].downstreams_count(), 1);
 
@@ -2873,7 +2845,6 @@ mod tests {
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
-            conn_id,
         });
         assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
 
@@ -2891,7 +2862,6 @@ mod tests {
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
-            conn_id,
         });
         assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
         let cdc_event = channel::recv_timeout(&mut rx, Duration::from_millis(500))
@@ -2956,7 +2926,6 @@ mod tests {
         suite.run(Task::Register {
             request: req.clone(),
             downstream,
-            conn_id,
         });
         assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
 
@@ -2996,7 +2965,6 @@ mod tests {
             suite.run(Task::Register {
                 request: req.clone(),
                 downstream,
-                conn_id,
             });
             assert_eq!(suite.connections[&conn_id].downstreams_count(), i);
         }
@@ -3042,7 +3010,6 @@ mod tests {
             suite.run(Task::Register {
                 request: req.clone(),
                 downstream,
-                conn_id,
             });
             assert_eq!(suite.connections[&conn_id].downstreams_count(), i as usize);
         }
@@ -3111,7 +3078,6 @@ mod tests {
         suite.run(Task::Register {
             request: req,
             downstream,
-            conn_id,
         });
         assert!(suite.connections.is_empty());
     }
