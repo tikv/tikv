@@ -445,7 +445,9 @@ impl RangeCacheMemoryEngine {
                 "range_in_cache" => ?overlapped_range,
                 "range_for_prepare" => ?range,
             );
-            unreachable!()
+            drop(core);
+            self.evict_range(&overlapped_range);
+            return RangeCacheStatus::NotInCache;
         }
 
         let mut overlapped = false;
