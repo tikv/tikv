@@ -18,7 +18,7 @@ use file_system::{IoOp, IoType};
 use futures::executor::block_on;
 use grpcio::{self, ChannelBuilder, Environment};
 use kvproto::{
-    raft_serverpb::{RaftMessage, RaftSnapshotData},
+    raft_serverpb::{ExtraMessageType, RaftMessage, RaftSnapshotData},
     tikvpb::TikvClient,
 };
 use protobuf::Message as M1;
@@ -1040,4 +1040,54 @@ fn test_v2_leaner_snapshot_commit_index() {
     cluster.must_transfer_leader(1, new_peer(2, 2));
 
     cluster.must_put(b"k3", b"v3");
+}
+
+/// Snapshot should not be blocked when a peer is removed before receiving
+/// MsgSnapGenPrecheckRequest.
+#[test_case(test_raftstore::new_node_cluster)]
+fn test_remove_peer_after_requesting_snapshot() {
+    let mut cluster = new_cluster(0, 3);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+
+    // Use run conf change to make new node be initialized with term 0.
+    let r = cluster.run_conf_change();
+
+    // Add peer(3, 3) to store 3
+    cluster.must_put(b"k0", b"v0");
+    pd_client.must_add_peer(r, new_peer(3, 3));
+    must_get_equal(&cluster.get_engine(3), b"k0", b"v0");
+
+    // Add peer(2, 2) to store 2
+    //
+    // Drop MsgSnapGenPrecheckRequest to region 1 on store 2 before adding peer.
+    let (send_tx, send_rx) = mpsc::sync_channel(1);
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r, 2)
+            .msg_type(MessageType::MsgSnapshot)
+            .drop_extra_message(ExtraMessageType::MsgSnapGenPrecheckRequest)
+            .direction(Direction::Recv)
+            .set_msg_callback(Arc::new(move |m: &RaftMessage| {
+                if m.get_extra_msg().get_type() == ExtraMessageType::MsgSnapGenPrecheckRequest {
+                    let _ = send_tx.send(());
+                }
+            })),
+    ));
+    // Make sure add peer conf change is applied on leader side.
+    pd_client.must_add_peer(r, new_peer(2, 2));
+
+    // Make sure peer 2 has requested snapshot.
+    send_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    // Remove peer(2, 2) from store 2
+    pd_client.must_remove_peer(r, new_peer(2, 2));
+
+    // Clear filters and add peer(2, 4) to store 2.
+    cluster.clear_send_filters();
+    pd_client.must_add_peer(r, new_peer(2, 4));
+
+    // Transfer leader to peer 4 to make sure it has applied a snapshot.
+    cluster.must_transfer_leader(1, new_peer(2, 4));
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 }
