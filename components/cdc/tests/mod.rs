@@ -509,6 +509,27 @@ impl TestSuite {
         );
     }
 
+    pub fn must_kv_txn_heartbeat(
+        &mut self,
+        region_id: u64,
+        pk: Vec<u8>,
+        ts: TimeStamp,
+        advise_lock_ttl: TimeStamp,
+    ) {
+        let mut heartbeat_req = TxnHeartBeatRequest::default();
+        heartbeat_req.set_context(self.get_context(region_id));
+        heartbeat_req.primary_lock = pk;
+        heartbeat_req.start_version = ts.into_inner();
+        heartbeat_req.advise_lock_ttl = advise_lock_ttl.into_inner();
+        let heartbeat_resp = self
+            .get_tikv_client(region_id)
+            .kv_txn_heart_beat(&heartbeat_req)
+            .unwrap();
+        assert!(!heartbeat_resp.has_region_error());
+        assert!(!heartbeat_resp.has_error());
+        assert_eq!(heartbeat_resp.lock_ttl, advise_lock_ttl.into_inner());
+    }
+
     pub fn async_kv_commit(
         &mut self,
         region_id: u64,
@@ -523,6 +544,23 @@ impl TestSuite {
         commit_req.commit_version = commit_ts.into_inner();
         self.get_tikv_client(region_id)
             .kv_commit_async(&commit_req)
+            .unwrap()
+    }
+
+    pub fn async_kv_txn_heartbeat(
+        &mut self,
+        region_id: u64,
+        pk: Vec<u8>,
+        ts: TimeStamp,
+        advise_lock_ttl: TimeStamp,
+    ) -> ClientUnaryReceiver<TxnHeartBeatResponse> {
+        let mut heartbeat_req = TxnHeartBeatRequest::default();
+        heartbeat_req.set_context(self.get_context(region_id));
+        heartbeat_req.primary_lock = pk;
+        heartbeat_req.start_version = ts.into_inner();
+        heartbeat_req.advise_lock_ttl = advise_lock_ttl.into_inner();
+        self.get_tikv_client(region_id)
+            .kv_txn_heart_beat_async(&heartbeat_req)
             .unwrap()
     }
 

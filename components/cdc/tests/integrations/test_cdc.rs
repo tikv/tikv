@@ -2787,3 +2787,77 @@ fn test_cdc_partial_subscription() {
     }
     panic!("resolved_ts should exceed prewrite_tso");
 }
+
+#[test]
+fn test_cdc_rollback_prewrites_with_txn_source() {
+    let mut cluster = new_server_cluster(0, 1);
+    configure_for_lease_read(&mut cluster.cfg, Some(100), Some(10));
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let region = suite.cluster.get_region(&[]);
+    let rid = region.id;
+    let cf_tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+
+    let (mut req_tx, _, receive_event) = new_event_feed_v2(suite.get_region_cdc_client(rid));
+    let mut req = suite.new_changedata_request(rid);
+    req.request_id = 1;
+    req.checkpoint_ts = cf_tso.into_inner();
+    req.filter_loop = true;
+    req.set_start_key(Key::from_raw(b"a").into_encoded());
+    req.set_end_key(Key::from_raw(b"z").into_encoded());
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    let cdc_event = receive_event(false);
+    'WaitInit: for event in cdc_event.get_events() {
+        for entry in event.get_entries().get_entries() {
+            match entry.get_type() {
+                EventLogType::Prewrite => {}
+                EventLogType::Initialized => break 'WaitInit,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    let start_tso = cf_tso.next();
+    let k = b"key".to_vec();
+    let v = vec![b'x'; 16 * 1024];
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::Put);
+    mutation.key = k.clone();
+    mutation.value = v;
+    suite.must_kv_prewrite_with_source(rid, vec![mutation], k.clone(), start_tso, 1);
+
+    loop {
+        let cdc_event = receive_event(true);
+        if cdc_event.has_resolved_ts() {
+            let resolved_ts = cdc_event.get_resolved_ts().get_ts();
+            assert_eq!(resolved_ts, start_tso);
+            break;
+        }
+    }
+
+    suite.must_kv_rollback(rid, vec![k.clone()], start_tso);
+
+    // We can't receive the prewrite because it's with a txn_source,
+    // but we can receive the rollback.
+    let mut rollbacked = false;
+    for _ in 0..5 {
+        let cdc_event = receive_event(true);
+        if !rollbacked {
+            for event in cdc_event.get_events() {
+                for entry in event.get_entries().get_entries() {
+                    match entry.get_type() {
+                        EventLogType::Rollback => rollbacked = true,
+                        _ => unreachable!(),
+                    }
+                }
+            }
+        } else {
+            let resolved_ts = cdc_event.get_resolved_ts().get_ts();
+            if resolved_ts > 5 {
+                return;
+            }
+        }
+    }
+    panic!("resolved ts must be advanced correctly");
+}
