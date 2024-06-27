@@ -4,22 +4,19 @@ use std::{
 };
 
 use engine_rocks::RocksEngine;
-use external_storage::{BackendConfig, WalkExternalStorage};
+use external_storage::{BackendConfig, FullFeaturedStorage};
 use futures::stream::{self, StreamExt};
 use kvproto::brpb::StorageBackend;
-use tikv_util::info;
-use tokio::{
-    io::AsyncWriteExt,
-    runtime::Handle,
-    signal::{self, unix::SignalKind},
-};
-use tracing::{instrument::Instrumented, span, trace_span, Instrument, Span};
+use tokio::{io::AsyncWriteExt, runtime::Handle, signal::unix::SignalKind};
+use tracing::{trace_span, Instrument};
 use tracing_active_tree::{frame, root};
 use txn_types::TimeStamp;
 
 use super::{
     compaction::{
-        CollectCompaction, CollectCompactionConfig, CompactLogExt, CompactWorker, Compaction,
+        collector::{CollectCompaction, CollectCompactionConfig},
+        exec::{CompactLogExt, SingleCompactionExec},
+        Compaction,
     },
     statistic::{CollectCompactionStatistic, LoadMetaStatistic},
     storage::{LoadFromExt, StreamyMetaStorage},
@@ -83,7 +80,7 @@ impl ExecHooks for LogToTerm {
             c.cf,
             c.input_min_ts,
             c.input_max_ts,
-            c.source.len(),
+            c.inputs.len(),
             c.size,
             c.region_id
         );
@@ -156,11 +153,11 @@ impl ExecHooks for LogToTerm {
 
 impl Execution {
     pub fn run(self, hooks: impl ExecHooks) -> Result<()> {
-        let storage = external_storage::create_walkable_storage(
+        let storage = external_storage::create_full_featured_storage(
             &self.external_storage,
             BackendConfig::default(),
         )?;
-        let storage: Arc<dyn WalkExternalStorage> = Arc::from(storage);
+        let storage: Arc<dyn FullFeaturedStorage> = Arc::from(storage);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -187,7 +184,7 @@ impl Execution {
             locked_hooks.lock().unwrap().before_execution_started(&cx);
             let meta = StreamyMetaStorage::load_from_ext(storage.as_ref(), ext);
             let stream = meta.flat_map(|file| match file {
-                Ok(file) => stream::iter(file.logs).map(Ok).left_stream(),
+                Ok(file) => stream::iter(file.into_logs()).map(Ok).left_stream(),
                 Err(err) => stream::once(futures::future::err(err)).right_stream(),
             });
             let mut compact_stream = CollectCompaction::new(
@@ -219,8 +216,8 @@ impl Execution {
 
                 id += 1;
 
-                let mut compact_worker =
-                    CompactWorker::<RocksEngine>::inplace(Arc::clone(&storage) as _);
+                let compact_worker =
+                    SingleCompactionExec::<RocksEngine>::inplace(Arc::clone(&storage) as _);
                 let compact_work = async move {
                     let mut load_statistic = LoadStatistic::default();
                     let mut compact_statistic = CompactStatistic::default();

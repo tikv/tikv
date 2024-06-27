@@ -18,7 +18,7 @@ tikv_util = { workspace = true }
 hex = "0.4"
 kvproto = { workspace = true }
 protobuf = { version = "2.8", features = ["bytes"] }
-tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
 tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["compat"] }
 external_storage = { workspace = true }

@@ -5,7 +5,7 @@ use std::{io, path::Path, pin::Pin, result::Result, sync::Arc};
 use async_trait::async_trait;
 pub use aws::{Config as S3Config, S3Storage};
 pub use azure::{AzureStorage, Config as AzureConfig};
-use cloud::blob::{BlobObject, BlobStorage, PutResource, WalkBlobStorage};
+use cloud::blob::{BlobObject, BlobStorage, DeleteBlobStorage, PutResource, WalkBlobStorage};
 use encryption::DataKeyManager;
 use futures::prelude::Stream;
 use gcp::GcsStorage;
@@ -20,9 +20,9 @@ use crate::{
     NoopStorage, RestoreConfig, UnpinReader,
 };
 
-pub trait WalkExternalStorage: ExternalStorage + WalkBlobStorage {}
+pub trait FullFeaturedStorage: ExternalStorage + WalkBlobStorage + DeleteBlobStorage {}
 
-impl<T: ExternalStorage + WalkBlobStorage> WalkExternalStorage for T {}
+impl<T: ExternalStorage + WalkBlobStorage + DeleteBlobStorage> FullFeaturedStorage for T {}
 
 pub fn create_storage(
     storage_backend: &StorageBackend,
@@ -35,12 +35,12 @@ pub fn create_storage(
     }
 }
 
-pub fn create_walkable_storage(
+pub fn create_full_featured_storage(
     storage_backend: &StorageBackend,
     config: BackendConfig,
-) -> io::Result<Box<dyn WalkExternalStorage>> {
+) -> io::Result<Box<dyn FullFeaturedStorage>> {
     if let Some(backend) = &storage_backend.backend {
-        create_walkable_backend(backend, config)
+        create_full_featured_backend(backend, config)
     } else {
         Err(bad_storage_backend(storage_backend))
     }
@@ -79,12 +79,12 @@ fn blob_store<Blob: BlobStorage>(store: Blob) -> Box<dyn ExternalStorage> {
     Box::new(BlobStore::new(store)) as Box<dyn ExternalStorage>
 }
 
-fn create_walkable_backend(
+fn create_full_featured_backend(
     backend: &Backend,
     backend_config: BackendConfig,
-) -> io::Result<Box<dyn WalkExternalStorage>> {
+) -> io::Result<Box<dyn FullFeaturedStorage>> {
     let start = Instant::now();
-    let storage: Box<dyn WalkExternalStorage> = match backend {
+    let storage: Box<dyn FullFeaturedStorage> = match backend {
         Backend::S3(config) => {
             let mut s = S3Storage::from_input(config.clone())?;
             s.set_multi_part_size(backend_config.s3_multi_part_size);
@@ -193,6 +193,15 @@ impl<Blob: BlobStorage + WalkBlobStorage> WalkBlobStorage for BlobStore<Blob> {
         prefix: &'b str,
     ) -> Pin<Box<dyn Stream<Item = Result<BlobObject, io::Error>> + 'c>> {
         self.0.walk(prefix)
+    }
+}
+
+impl<Blob: BlobStorage + DeleteBlobStorage> DeleteBlobStorage for BlobStore<Blob> {
+    fn delete(
+        &self,
+        key: &str,
+    ) -> Pin<Box<dyn futures::prelude::Future<Output = io::Result<()>> + '_>> {
+        self.0.delete(key)
     }
 }
 

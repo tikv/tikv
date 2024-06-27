@@ -1,24 +1,21 @@
 use std::{
-    alloc::Layout,
     collections::HashMap,
     io::{Read, Seek},
     path::{Path, PathBuf},
-    ptr::NonNull,
     sync::{Arc, Mutex},
 };
 
 use async_compression::futures::write::ZstdDecoder;
-use bytes::BytesMut;
-use dashmap::{mapref::entry::Entry, DashMap};
+
+
 use external_storage::ExternalStorage;
 use futures::{
-    future::{Remote, TryFutureExt},
     io::{AllowStdIo, AsyncWriteExt, Cursor},
 };
 use prometheus::core::{Atomic, AtomicU64};
 use tikv_util::{
     codec::stream_event::{self, Iterator},
-    stream::{retry_all_ext, RetryError, RetryExt},
+    stream::{retry_all_ext, JustRetry, RetryExt},
 };
 use tokio::sync::OnceCell;
 use txn_types::Key;
@@ -77,7 +74,7 @@ impl CacheManager {
         // (error_during_downloading, physical_bytes_in)
         let stat = Arc::new((AtomicU64::new(0), AtomicU64::new(0)));
         let stat_ref = Arc::clone(&stat);
-        let ext = RetryExt::default().with_fail_hook(move |err: &RetryIo| {
+        let ext = RetryExt::default().with_fail_hook(move |err: &JustRetry<std::io::Error>| {
             eprintln!("retry the error: {:?}", err.0);
             stat_ref.0.inc_by(1)
         });
@@ -93,7 +90,7 @@ impl CacheManager {
                 let n = futures::io::copy(source, &mut decompress).await?;
                 stat.1.inc_by(n);
                 decompress.flush().await?;
-                std::result::Result::<_, RetryIo>::Ok(path)
+                std::result::Result::<_, std::io::Error>::Ok(path)
             }
         };
 
@@ -106,7 +103,7 @@ impl CacheManager {
         };
 
         let path = path_cell
-            .get_or_try_init(|| retry_all_ext(fetch, ext).map_err(|err| err.0))
+            .get_or_try_init(|| retry_all_ext(fetch, ext))
             .await?;
         let mut f = std::fs::File::options()
             .read(true)
@@ -121,7 +118,7 @@ impl CacheManager {
     }
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Record {
     pub key: Vec<u8>,
     pub value: Vec<u8>,
@@ -138,20 +135,6 @@ impl Record {
     }
 }
 
-struct RetryIo(std::io::Error);
-
-impl RetryError for RetryIo {
-    fn is_retryable(&self) -> bool {
-        self.0.kind() == std::io::ErrorKind::Interrupted
-    }
-}
-
-impl From<std::io::Error> for RetryIo {
-    fn from(e: std::io::Error) -> Self {
-        RetryIo(e)
-    }
-}
-
 impl Source {
     #[tracing::instrument(skip_all)]
     pub async fn load_remote(
@@ -161,7 +144,7 @@ impl Source {
     ) -> Result<Vec<u8>> {
         let error_during_downloading = Arc::new(AtomicU64::new(0));
         let counter = error_during_downloading.clone();
-        let ext = RetryExt::default().with_fail_hook(move |err: &RetryIo| {
+        let ext = RetryExt::default().with_fail_hook(move |err: &JustRetry<std::io::Error>| {
             eprintln!("retry the error2: {:?}", err.0);
             counter.inc_by(1)
         });
@@ -174,10 +157,10 @@ impl Source {
                 let source = storage.read_part(&id.name, id.offset, id.length);
                 let n = futures::io::copy(source, &mut decompress).await?;
                 decompress.flush().await?;
-                std::result::Result::<_, RetryIo>::Ok((content, n))
+                std::result::Result::<_, std::io::Error>::Ok((content, n))
             }
         };
-        let (content, size) = retry_all_ext(fetch, ext).await.map_err(|err| err.0)?;
+        let (content, size) = retry_all_ext(fetch, ext).await?;
         stat.as_mut().map(|stat| {
             stat.physical_bytes_in += size;
             stat.error_during_downloading += error_during_downloading.get();

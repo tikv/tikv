@@ -1,16 +1,16 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{fmt::Display, io};
+use std::{fmt::Display, io, pin::Pin};
 
 use async_trait::async_trait;
 use cloud::{
     blob::{
-        none_to_empty, BlobConfig, BlobObject, BlobStorage, BucketConf, PutResource,
-        StringNonEmpty, WalkBlobStorage,
+        none_to_empty, BlobConfig, BlobObject, BlobStorage, BucketConf, DeleteBlobStorage,
+        PutResource, StringNonEmpty, WalkBlobStorage,
     },
     metrics,
 };
 use futures_util::{
-    future::TryFutureExt,
+    future::{FutureExt, TryFutureExt},
     io::{self as async_io, AsyncRead, Cursor},
     stream::{self, StreamExt, TryStreamExt},
 };
@@ -440,6 +440,38 @@ impl WalkBlobStorage for GcsStorage {
         .map_ok(|data| stream::iter(data.into_iter().map(Ok)))
         .try_flatten();
         Box::pin(s)
+    }
+}
+
+impl DeleteBlobStorage for GcsStorage {
+    fn delete(
+        &self,
+        key: &str,
+    ) -> Pin<Box<dyn futures_util::Future<Output = Result<(), std::io::Error>> + '_>> {
+        let key = self.maybe_prefix_key(key);
+        async move {
+            let bucket = self.config.bucket.bucket.to_string();
+            let oid = ObjectId::new(bucket, key.clone()).or_invalid_input(format_args!(
+                "invalid object id bucket {} key {}",
+                self.config.bucket.bucket, key
+            ))?;
+            let req = Object::delete(&oid, None).or_io_error(format_args!(
+                "failed to delete object {} in bucket {}",
+                key, self.config.bucket.bucket
+            ))?;
+            let res = self
+                .make_request(req.map(|_e| Body::empty()), tame_gcs::Scopes::ReadWrite)
+                .await
+                .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
+            if !res.status().is_success() {
+                return Err(io::Error::from(status_code_error(
+                    res.status(),
+                    "bucket delete".to_string(),
+                )));
+            }
+            Ok(())
+        }
+        .boxed()
     }
 }
 

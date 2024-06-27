@@ -79,8 +79,7 @@ tracing-active-tree = { workspace = true }
 txn_types = { workspace = true }
 uuid = "0.8"
 yatp = { workspace = true }
-
-derive_more = "0.99.3"
+crc64fast = "0.1"
 
 [dev-dependencies]
 async-trait = "0.1"

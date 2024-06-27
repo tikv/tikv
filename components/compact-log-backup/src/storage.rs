@@ -1,24 +1,25 @@
 use std::{
     collections::VecDeque,
     future::Future,
+    path::Path,
     pin::Pin,
     sync::Arc,
     task::{ready, Context, Poll},
 };
 
 use derive_more::Display;
-use external_storage::{BlobObject, ExternalStorage, WalkBlobStorage, WalkExternalStorage};
+use external_storage::{BlobObject, ExternalStorage, FullFeaturedStorage, WalkBlobStorage};
 use futures::{
     future::{FusedFuture, FutureExt, TryFutureExt},
     io::AsyncReadExt,
     stream::{Fuse, FusedStream, StreamExt, TryStreamExt},
 };
+use kvproto::brpb::FileType;
 use prometheus::core::{Atomic, AtomicU64};
 use tikv_util::{stream::RetryExt, time::Instant};
 use tokio_stream::Stream;
-use tracing::{instrument::Instrumented, span::Entered, Span};
+use tracing::{span::Entered, Span};
 use tracing_active_tree::frame;
-use txn_types::TimeStamp;
 
 use super::{
     errors::{Error, Result},
@@ -26,21 +27,40 @@ use super::{
 };
 use crate::util;
 
-const METADATA_PREFIX: &'static str = "v1/backupmeta";
+pub const METADATA_PREFIX: &'static str = "v1/backupmeta";
+pub const COMPACTION_METADATA_PREFIX: &'static str = "v1/compaction_meta";
+pub const COMPACTION_OUT_PREFIX: &'static str = "compaction_out";
 
 #[derive(Debug)]
 pub struct MetaFile {
     pub name: Arc<str>,
-    pub logs: Vec<LogFile>,
+    pub physical_files: Vec<PhysicalLogFile>,
     pub min_ts: u64,
     pub max_ts: u64,
 }
 
+impl MetaFile {
+    pub fn into_logs(self) -> impl Iterator<Item = LogFile> {
+        self.physical_files
+            .into_iter()
+            .flat_map(|g| g.files.into_iter())
+    }
+}
+
 #[derive(Debug)]
+pub struct PhysicalLogFile {
+    pub size: u64,
+    pub name: Arc<str>,
+    pub files: Vec<LogFile>,
+}
+
+#[derive(Debug, Clone)]
 
 pub struct LogFile {
     pub id: LogFileId,
-    pub real_size: u64,
+    pub file_real_size: u64,
+    pub number_of_entries: i64,
+    pub crc64xor: u64,
     pub region_id: u64,
     pub cf: &'static str,
     pub min_ts: u64,
@@ -49,9 +69,17 @@ pub struct LogFile {
     pub min_key: Arc<[u8]>,
     pub max_key: Arc<[u8]>,
     pub is_meta: bool,
+    pub ty: FileType,
 }
 
-#[derive(Clone, Display)]
+impl LogFile {
+    pub fn hacky_key_value_size(&self) -> u64 {
+        const HEADER_SIZE_PER_ENTRY: u64 = std::mem::size_of::<u64>() as u64 * 2;
+        self.file_real_size - HEADER_SIZE_PER_ENTRY * self.number_of_entries as u64
+    }
+}
+
+#[derive(Clone, Display, Eq, PartialEq)]
 #[display(fmt = "{}@{}+{}", name, offset, length)]
 pub struct LogFileId {
     pub name: Arc<str>,
@@ -239,7 +267,7 @@ impl<'a> StreamyMetaStorage<'a> {
         }
     }
 
-    pub fn load_from_ext(s: &'a dyn WalkExternalStorage, ext: LoadFromExt<'a>) -> Self {
+    pub fn load_from_ext(s: &'a dyn FullFeaturedStorage, ext: LoadFromExt<'a>) -> Self {
         let files = s.walk(&METADATA_PREFIX).fuse();
         Self {
             prefetch: VecDeque::new(),
@@ -250,7 +278,7 @@ impl<'a> StreamyMetaStorage<'a> {
         }
     }
 
-    pub async fn count_objects(s: &'a dyn WalkExternalStorage) -> std::io::Result<u64> {
+    pub async fn count_objects(s: &'a dyn FullFeaturedStorage) -> std::io::Result<u64> {
         let mut n = 0;
         let mut items = s.walk(&METADATA_PREFIX);
         while let Some(_) = items.try_next().await? {
@@ -273,14 +301,7 @@ impl MetaFile {
 
         let error_cnt = Arc::new(AtomicU64::new(0));
         let error_cnt2 = Arc::clone(&error_cnt);
-        let blob_name = blob.key.clone();
-        let ext = RetryExt::default().with_fail_hook(move |err| {
-            eprintln!(
-                "[{}] warn: encountered error err={} downloading={}",
-                TimeStamp::physical_now(),
-                err,
-                blob_name
-            );
+        let ext = RetryExt::default().with_fail_hook(move |_err| {
             error_cnt.inc_by(1);
         });
 
@@ -307,15 +328,20 @@ impl MetaFile {
         for mut group in meta_file.take_file_groups().into_iter() {
             stat.physical_data_files_in += 1;
             let name = Arc::from(group.path.clone().into_boxed_str());
+            let mut g = PhysicalLogFile {
+                size: group.length,
+                name: Arc::clone(&name),
+                files: vec![],
+            };
             for mut log_file in group.take_data_files_info().into_iter() {
                 stat.logical_data_files_in += 1;
-                log_files.push(LogFile {
+                g.files.push(LogFile {
                     id: LogFileId {
                         name: Arc::clone(&name),
                         offset: log_file.range_offset,
                         length: log_file.range_length,
                     },
-                    real_size: log_file.length,
+                    file_real_size: log_file.length,
                     region_id: log_file.region_id as _,
                     cf: util::cf_name(&log_file.cf),
                     max_ts: log_file.max_ts,
@@ -324,14 +350,18 @@ impl MetaFile {
                     min_key: Arc::from(log_file.take_start_key().clone().into_boxed_slice()),
                     is_meta: log_file.is_meta,
                     min_start_ts: log_file.min_begin_ts_in_default_cf,
+                    ty: log_file.r_type,
+                    crc64xor: log_file.crc64xor,
+                    number_of_entries: log_file.number_of_entries,
                 })
             }
+            log_files.push(g);
         }
         drop(meta_file);
 
         let result = Self {
             name: Arc::from(blob.key.to_owned().into_boxed_str()),
-            logs: log_files,
+            physical_files: log_files,
             min_ts,
             max_ts,
         };

@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt::Display, io, marker::Unpin, pin::Pin, task::Poll};
+use std::{fmt::Display, future::Future, io, marker::Unpin, pin::Pin, task::Poll};
 
 use async_trait::async_trait;
 use futures::stream::Stream;
@@ -70,6 +70,20 @@ pub trait WalkBlobStorage: 'static + Send + Sync {
         &'a self,
         prefix: &'b str,
     ) -> Pin<Box<dyn Stream<Item = std::result::Result<BlobObject, io::Error>> + 'c>>;
+}
+
+pub trait DeleteBlobStorage: 'static + Send + Sync {
+    // For future developer: add `Send` or `Sync` when you need them.
+    // Or just use `async_trait`. Or use assoc types.
+    /// Delete a object.
+    ///
+    /// # Returns
+    ///
+    /// If the object exists and have been deleted, return `Ok(())`.
+    /// If the object doesn't exist, the implementation may(or may not) return
+    /// `Err({kind = NotFound})`.
+    /// If other errors encountered, return `Err(anything)`.
+    fn delete(&self, key: &str) -> Pin<Box<dyn Future<Output = io::Result<()>> + '_>>;
 }
 
 impl BlobConfig for dyn BlobStorage {

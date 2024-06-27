@@ -44,7 +44,10 @@ pub trait TraceResultExt {
 impl<T> TraceResultExt for Result<T> {
     #[track_caller]
     fn trace_err(self) -> Result<T> {
-        self.map_err(|err| err.attach_current_frame())
+        match self {
+            Ok(v) => Ok(v),
+            Err(err) => Err(err.attach_current_frame()),
+        }
     }
 }
 

@@ -14,9 +14,8 @@ use bytes::Bytes;
 use futures::stream::{self, Stream};
 use futures_util::io::AsyncRead;
 use http::status::StatusCode;
-use rand::{thread_rng, Rng};
 use rusoto_core::{request::HttpDispatchError, RusotoError};
-use tokio::{runtime::Builder, time::sleep};
+use tokio::runtime::Builder;
 
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(32);
 const MAX_RETRY_TIMES: usize = 14;
@@ -160,7 +159,8 @@ pub mod __macro_helper {
     pub use tokio::time::sleep as __tokio_sleep;
 }
 
-#[derive(Debug)]
+/// JustRetry wraps an error to [`RetryError`] which will always be retryed.
+#[derive(Debug, derive_more::Deref, derive_more::DerefMut, derive_more::Display)]
 pub struct JustRetry<E>(pub E);
 
 impl<E> RetryError for JustRetry<E> {
@@ -169,10 +169,12 @@ impl<E> RetryError for JustRetry<E> {
     }
 }
 
-/// retry_expr! executes retry over an expression itself. The expression will be
-/// evaluated multi-times. This would be useful when your action cannot be
-/// sealed into a `FnMut`, say, the action captures some local variables, rustc
-/// will complain that `FnMut` cannot return reference to things it captures.
+/// retry_expr! make a future that evaluates the expression and retry when it
+/// evaluated to an `Err`. The expression will be evaluated multi-times.
+///
+/// This would be useful when your action cannot be sealed into a `FnMut`, say,
+/// the action captures some local variables, rustc will complain that `FnMut`
+/// cannot return reference to things it captures.
 ///
 /// When possible, prefer using `retry_ext`, which is a normal function. Normal
 /// functions are more friendly to static analysis.
