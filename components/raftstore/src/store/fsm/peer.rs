@@ -634,11 +634,14 @@ where
         let count = msgs.len();
         #[allow(const_evaluatable_unchecked)]
         let mut distribution = [0; PeerMsg::<EK>::COUNT];
+        // As the detail of one msg is not very useful when handling multiple messages,
+        // only format the msg detail in slow log when there is only one message.
         let detail = if msgs.len() == 1 {
             msgs.get(0).map(|m| format!("{:?}", m))
         } else {
             None
         };
+
         for m in msgs.drain(..) {
             // skip handling remain messages if fsm is destroyed. This can aviod handling
             // arbitary messages(e.g. CasualMessage::ForceCompactRaftLogs) that may need
