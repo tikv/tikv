@@ -2,7 +2,7 @@
 
 use std::{sync::*, time::Duration};
 
-use cdc::{Task, Validate};
+use cdc::{service::RegionId, Task, Validate};
 use futures::{executor::block_on, SinkExt};
 use grpcio::WriteFlags;
 use kvproto::{cdcpb::*, kvrpcpb::*};
@@ -88,7 +88,7 @@ fn test_resolver_track_lock_memory_quota_exceeded() {
     let (tx, rx) = mpsc::channel();
     scheduler
         .schedule(Task::Validate(Validate::Region(
-            1,
+            RegionId(1),
             Box::new(move |delegate| {
                 tx.send(delegate.is_none()).unwrap();
             }),
@@ -140,7 +140,7 @@ fn test_pending_on_region_ready_memory_quota_exceeded() {
     let (tx, rx) = mpsc::channel();
     scheduler
         .schedule(Task::Validate(Validate::Region(
-            1,
+            RegionId(1),
             Box::new(move |delegate| {
                 tx.send(delegate.is_none()).unwrap();
             }),
@@ -204,7 +204,7 @@ fn test_pending_push_lock_memory_quota_exceeded() {
     let (tx, rx) = mpsc::channel();
     scheduler
         .schedule(Task::Validate(Validate::Region(
-            1,
+            RegionId(1),
             Box::new(move |delegate| {
                 tx.send(delegate.is_none()).unwrap();
             }),
@@ -263,7 +263,7 @@ fn test_scan_lock_memory_quota_exceeded() {
     let (tx, rx) = mpsc::channel();
     scheduler
         .schedule(Task::Validate(Validate::Region(
-            1,
+            RegionId(1),
             Box::new(move |delegate| {
                 tx.send(delegate.is_none()).unwrap();
             }),

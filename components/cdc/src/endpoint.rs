@@ -1516,7 +1516,7 @@ mod tests {
         let mut req_header = Header::default();
         req_header.set_cluster_id(0);
         let mut req = ChangeDataRequest::default();
-        req.set_region_id(regionId.0);
+        req.set_region_id(1);
         req.set_kv_api(ChangeDataRequestKvApi::TiDb);
         let region_epoch = req.get_region_epoch().clone();
 
@@ -2118,7 +2118,9 @@ mod tests {
         let mut req_header = Header::default();
         req_header.set_cluster_id(0);
         let mut req = ChangeDataRequest::default();
-        req.set_region_id(1);
+
+        let region_id = RegionId(1);
+        req.set_region_id(region_id.0);
         let region_epoch = req.get_region_epoch().clone();
         let downstream = Downstream::new(
             "".to_string(),
@@ -2134,10 +2136,10 @@ mod tests {
             request: req.clone(),
             downstream,
         });
-        let observe_id = suite.endpoint.capture_regions[&1].handle.id;
+        let observe_id = suite.endpoint.capture_regions[&region_id].handle.id;
         suite
             .capture_regions
-            .get_mut(&RegionId(1))
+            .get_mut(&region_id)
             .unwrap()
             .init_lock_tracker();
         suite.finish_scan_locks(observe_id, region.clone(), Default::default());
@@ -2173,11 +2175,12 @@ mod tests {
             request: req.clone(),
             downstream,
         });
-        region.set_id(2);
-        let observe_id = suite.endpoint.capture_regions[&2].handle.id;
+        let region_id = RegionId(2);
+        region.set_id(region_id.0);
+        let observe_id = suite.endpoint.capture_regions[&region_id].handle.id;
         suite
             .capture_regions
-            .get_mut(&RegionId(2))
+            .get_mut(&region_id)
             .unwrap()
             .init_lock_tracker();
         suite.finish_scan_locks(observe_id, region, Default::default());
@@ -2228,11 +2231,12 @@ mod tests {
             request: req,
             downstream,
         });
-        region.set_id(3);
-        let observe_id = suite.endpoint.capture_regions[&3].handle.id;
+        let region_id = RegionId(3);
+        region.set_id(region_id.0);
+        let observe_id = suite.endpoint.capture_regions[&region_id].handle.id;
         suite
             .capture_regions
-            .get_mut(&RegionId(3))
+            .get_mut(&region_id)
             .unwrap()
             .init_lock_tracker();
         suite.finish_scan_locks(observe_id, region, Default::default());
@@ -2438,11 +2442,12 @@ mod tests {
             suite.run(set_conn_version_task(conn_id, version));
 
             for region_id in region_ids {
-                suite.add_region(region_id, 100);
+                let region_id = RegionId(region_id);
+                suite.add_region(region_id.0, 100);
                 let mut req_header = Header::default();
                 req_header.set_cluster_id(0);
                 let mut req = ChangeDataRequest::default();
-                req.set_region_id(region_id);
+                req.set_region_id(region_id.0);
                 let region_epoch = req.get_region_epoch().clone();
                 let downstream = Downstream::new(
                     "".to_string(),
@@ -2460,29 +2465,28 @@ mod tests {
                 });
                 let observe_id = suite.endpoint.capture_regions[&region_id].handle.id;
                 let mut region = Region::default();
-                region.set_id(region_id);
+                region.set_id(region_id.0);
                 suite
                     .capture_regions
-                    .get_mut(&RegionId(region_id))
+                    .get_mut(&region_id)
                     .unwrap()
                     .init_lock_tracker();
                 suite.finish_scan_locks(observe_id, region, Default::default());
             }
         }
 
-        let assert_batch_resolved_ts = |drain: &mut channel::Drain,
-                                        regions: Vec<u64>,
-                                        resolved_ts: u64| {
-            let cdc_event = channel::recv_timeout(&mut drain.drain(), Duration::from_millis(500))
-                .unwrap()
-                .unwrap();
-            if let CdcEvent::ResolvedTs(r) = cdc_event.0 {
-                assert_eq!(r.regions, regions);
-                assert_eq!(r.ts, resolved_ts);
-            } else {
-                panic!("unknown cdc event {:?}", cdc_event);
-            }
-        };
+        let assert_batch_resolved_ts =
+            |drain: &mut channel::Drain, regions: Vec<u64>, resolved_ts: u64| {
+                let cdc_event = recv_timeout(&mut drain.drain(), Duration::from_millis(500))
+                    .unwrap()
+                    .unwrap();
+                if let CdcEvent::ResolvedTs(r) = cdc_event.0 {
+                    assert_eq!(r.regions, regions);
+                    assert_eq!(r.ts, resolved_ts);
+                } else {
+                    panic!("unknown cdc event {:?}", cdc_event);
+                }
+            };
 
         suite.run(Task::MinTs {
             regions: vec![1],
@@ -2506,7 +2510,7 @@ mod tests {
         // conn a must receive a resolved ts that contains region 1 and region 2.
         assert_batch_resolved_ts(conn_rxs.get_mut(0).unwrap(), vec![1, 2], 2);
         // conn b must not receive any messages.
-        channel::recv_timeout(
+        recv_timeout(
             &mut conn_rxs.get_mut(1).unwrap().drain(),
             Duration::from_millis(100),
         )
@@ -2570,7 +2574,9 @@ mod tests {
         let mut req_header = Header::default();
         req_header.set_cluster_id(0);
         let mut req = ChangeDataRequest::default();
-        req.set_region_id(1);
+
+        let region_id = RegionId(1);
+        req.set_region_id(region_id.0);
         req.mut_region_epoch().set_version(2);
         let region_epoch_2 = req.get_region_epoch().clone();
         let downstream = Downstream::new(
@@ -2587,7 +2593,7 @@ mod tests {
             downstream,
         });
         assert_eq!(suite.endpoint.capture_regions.len(), 1);
-        let observe_id = suite.endpoint.capture_regions[&1].handle.id;
+        let observe_id = suite.endpoint.capture_regions[&region_id].handle.id;
 
         // Register region 1 (epoch 1) at conn b.
         let mut req_header = Header::default();
@@ -2637,7 +2643,7 @@ mod tests {
             .mut_current_regions()
             .push(region);
         suite.run(Task::Deregister(Deregister::Delegate {
-            region_id: RegionId(1),
+            region_id,
             observe_id,
             err: Error::request(epoch_not_match),
         }));
@@ -2886,20 +2892,21 @@ mod tests {
         }));
         assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
 
+        let region_id = RegionId(1);
         // Deregister an unexist delegate.
         suite.run(Task::Deregister(Deregister::Delegate {
-            region_id: RegionId(1),
+            region_id,
             observe_id: ObserveId::new(),
             err: Error::Rocks("test error".to_owned()),
         }));
         assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
 
         // Deregister an exist downstream.
-        let downstream_id = suite.capture_regions[&1].downstreams()[0].id;
+        let downstream_id = suite.capture_regions[&region_id].downstreams()[0].id;
         suite.run(Task::Deregister(Deregister::Downstream {
             conn_id,
             request_id: RequestId(1),
-            region_id: RegionId(1),
+            region_id,
             downstream_id,
             err: Some(Error::Rocks("test error".to_owned())),
         }));
@@ -2932,9 +2939,9 @@ mod tests {
         assert_eq!(suite.connections[&conn_id].downstreams_count(), 2);
 
         // Deregister an exist delegate.
-        let observe_id = suite.capture_regions[&1].handle.id;
+        let observe_id = suite.capture_regions[&region_id].handle.id;
         suite.run(Task::Deregister(Deregister::Delegate {
-            region_id: RegionId(1),
+            region_id,
             observe_id,
             err: Error::Rocks("test error".to_owned()),
         }));

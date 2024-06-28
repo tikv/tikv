@@ -3,7 +3,7 @@
 use std::{sync::*, time::Duration};
 
 use api_version::{test_kv_format_impl, KvFormat};
-use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Task, Validate};
+use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, service::RegionId, Task, Validate};
 use concurrency_manager::ConcurrencyManager;
 use futures::{executor::block_on, SinkExt};
 use grpcio::WriteFlags;
@@ -35,7 +35,7 @@ fn test_cdc_basic_impl<F: KvFormat>() {
             // Even if there is no write,
             // it should always outputs an Initialized event.
             Event_oneof_event::Entries(es) => {
-                assert!(es.entries.len() == 1, "{:?}", es);
+                assert_eq!(es.entries.len(), 1, "{:?}", es);
                 let e = &es.entries[0];
                 assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
             }
@@ -49,7 +49,7 @@ fn test_cdc_basic_impl<F: KvFormat>() {
     let scheduler = suite.endpoints.values().next().unwrap().scheduler();
     scheduler
         .schedule(Task::Validate(Validate::Region(
-            1,
+            RegionId(1),
             Box::new(|delegate| {
                 let d = delegate.unwrap();
                 assert_eq!(d.downstreams().len(), 1);
@@ -117,7 +117,7 @@ fn test_cdc_basic_impl<F: KvFormat>() {
     // The delegate must be removed.
     scheduler
         .schedule(Task::Validate(Validate::Region(
-            1,
+            RegionId(1),
             Box::new(|delegate| {
                 assert!(delegate.is_none());
             }),
@@ -143,7 +143,7 @@ fn test_cdc_basic_impl<F: KvFormat>() {
     sleep_ms(200);
     scheduler
         .schedule(Task::Validate(Validate::Region(
-            1,
+            RegionId(1),
             Box::new(|delegate| {
                 let d = delegate.unwrap();
                 assert_eq!(d.downstreams().len(), 1);
@@ -157,7 +157,7 @@ fn test_cdc_basic_impl<F: KvFormat>() {
     sleep_ms(200);
     scheduler
         .schedule(Task::Validate(Validate::Region(
-            1,
+            RegionId(1),
             Box::new(|delegate| {
                 assert!(delegate.is_none());
             }),
@@ -212,7 +212,7 @@ fn test_cdc_rawkv_basic() {
     let scheduler = suite.endpoints.values().next().unwrap().scheduler();
     scheduler
         .schedule(Task::Validate(Validate::Region(
-            1,
+            RegionId(1),
             Box::new(|delegate| {
                 let d = delegate.unwrap();
                 assert_eq!(d.downstreams().len(), 1);
@@ -269,7 +269,7 @@ fn test_cdc_not_leader_impl<F: KvFormat>() {
         // Even if there is no write,
         // it should always outputs an Initialized event.
         Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1, "{:?}", es);
+            assert_eq!(es.entries.len(), 1, "{:?}", es);
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
@@ -277,6 +277,8 @@ fn test_cdc_not_leader_impl<F: KvFormat>() {
     }
     // Sleep a while to make sure the stream is registered.
     sleep_ms(1000);
+
+    let region_id = RegionId(1);
     // There must be a delegate.
     let scheduler = suite
         .endpoints
@@ -287,7 +289,7 @@ fn test_cdc_not_leader_impl<F: KvFormat>() {
     let tx_ = tx.clone();
     scheduler
         .schedule(Task::Validate(Validate::Region(
-            1,
+            region_id,
             Box::new(move |delegate| {
                 let d = delegate.unwrap();
                 assert_eq!(d.downstreams().len(), 1);
@@ -301,7 +303,7 @@ fn test_cdc_not_leader_impl<F: KvFormat>() {
             .obs
             .get(&leader.get_store_id())
             .unwrap()
-            .is_subscribed(1)
+            .is_subscribed(region_id)
             .is_some()
     );
 
@@ -328,7 +330,7 @@ fn test_cdc_not_leader_impl<F: KvFormat>() {
             .obs
             .get(&leader.get_store_id())
             .unwrap()
-            .is_subscribed(1)
+            .is_subscribed(region_id)
             .is_none()
     );
 
@@ -336,7 +338,7 @@ fn test_cdc_not_leader_impl<F: KvFormat>() {
     sleep_ms(200);
     scheduler
         .schedule(Task::Validate(Validate::Region(
-            1,
+            region_id,
             Box::new(move |delegate| {
                 assert!(delegate.is_none());
                 tx.send(()).unwrap();
@@ -362,7 +364,7 @@ fn test_cdc_not_leader_impl<F: KvFormat>() {
             .obs
             .get(&leader.get_store_id())
             .unwrap()
-            .is_subscribed(1)
+            .is_subscribed(region_id)
             .is_none()
     );
 
@@ -409,7 +411,7 @@ fn test_cdc_cluster_id_mismatch_impl<F: KvFormat>() {
         // Even if there is no write,
         // it should always outputs an Initialized event.
         Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1, "{:?}", es);
+            assert_eq!(es.entries.len(), 1, "{:?}", es);
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
@@ -439,7 +441,7 @@ fn test_cdc_stale_epoch_after_region_ready_impl<F: KvFormat>() {
         // Even if there is no write,
         // it should always outputs an Initialized event.
         Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1, "{:?}", es);
+            assert_eq!(es.entries.len(), 1, "{:?}", es);
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
@@ -470,7 +472,7 @@ fn test_cdc_stale_epoch_after_region_ready_impl<F: KvFormat>() {
         // Even if there is no write,
         // it should always outputs an Initialized event.
         Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1, "{:?}", es);
+            assert_eq!(es.entries.len(), 1, "{:?}", es);
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
@@ -691,7 +693,7 @@ fn test_cdc_tso_failure_impl<F: KvFormat>() {
         // Even if there is no write,
         // it should always outputs an Initialized event.
         Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1, "{:?}", es);
+            assert_eq!(es.entries.len(), 1, "{:?}", es);
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
@@ -782,7 +784,7 @@ fn test_region_split() {
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1, "{:?}", es);
+            assert_eq!(es.entries.len(), 1, "{:?}", es);
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }
@@ -833,7 +835,7 @@ fn test_duplicate_subscribe_impl<F: KvFormat>() {
         // Even if there is no write,
         // it should always outputs an Initialized event.
         Event_oneof_event::Entries(es) => {
-            assert!(es.entries.len() == 1, "{:?}", es);
+            assert_eq!(es.entries.len(), 1, "{:?}", es);
             let e = &es.entries[0];
             assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
         }

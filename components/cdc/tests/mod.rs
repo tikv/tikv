@@ -6,7 +6,7 @@ use std::{
 };
 
 use causal_ts::CausalTsProvider;
-use cdc::{recv_timeout, CdcObserver, Delegate, FeatureGate, Task, Validate};
+use cdc::{recv_timeout, service::RegionId, CdcObserver, Delegate, FeatureGate, Task, Validate};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
@@ -610,7 +610,7 @@ impl TestSuite {
             };
             scheduler
                 .schedule(Task::Validate(Validate::Region(
-                    region_id,
+                    RegionId(region_id),
                     Box::new(checker),
                 )))
                 .unwrap();

@@ -12,7 +12,7 @@ mod initializer;
 pub mod metrics;
 mod observer;
 mod old_value;
-mod service;
+pub mod service;
 mod txn_source;
 
 pub use channel::{recv_timeout, CdcEvent};

@@ -2,7 +2,7 @@
 
 use std::{sync::*, time::Duration};
 
-use cdc::{Task, Validate};
+use cdc::{service::RegionId, Task, Validate};
 use futures::{executor::block_on, SinkExt};
 use grpcio::WriteFlags;
 use kvproto::{cdcpb::*, kvrpcpb::*};
@@ -85,7 +85,7 @@ fn test_cdc_congest() {
     let (tx, rx) = mpsc::channel();
     scheduler
         .schedule(Task::Validate(Validate::Region(
-            1,
+            RegionId(1),
             Box::new(move |delegate| {
                 tx.send(delegate.is_none()).unwrap();
             }),
