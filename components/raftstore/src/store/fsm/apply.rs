@@ -107,7 +107,6 @@ pub const SHRINK_PENDING_CMD_QUEUE_CAP: usize = 64;
 pub const MAX_APPLY_BATCH_SIZE: usize = 64 * 1024 * 1024;
 
 pub static PRINTF_LOG: AtomicBool = AtomicBool::new(false);
-pub static PRINTF_LOCK: AtomicBool = AtomicBool::new(false);
 pub static TXN_LOG: AtomicBool = AtomicBool::new(false);
 
 pub struct PendingCmd<C> {
@@ -605,9 +604,17 @@ where
                 let sn = SequenceNumber::pre_write();
                 seqno = Some(sn);
             }
+            let count = self.kv_wb().count();
             let seq = self.kv_wb_mut().write_opt(&write_opts).unwrap_or_else(|e| {
                 panic!("failed to write to engine: {:?}", e);
             });
+            if PRINTF_LOG.load(Ordering::Relaxed) {
+                info!(
+                    "wrote to db";
+                    "seq" => seq,
+                    "write_batch_len" => count,
+                );
+            }
             if let Some(seqno) = seqno.as_mut() {
                 seqno.post_write(seq)
             }

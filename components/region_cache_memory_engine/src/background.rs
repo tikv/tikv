@@ -30,7 +30,7 @@ use parking_lot::{Mutex, RwLock};
 use pd_client::{PdClient, RpcClient};
 use raftstore::{
     coprocessor::RegionInfoProvider,
-    store::fsm::apply::{PRINTF_LOCK, PRINTF_LOG},
+    store::fsm::apply::{PRINTF_LOG},
 };
 use slog_global::{error, info, warn};
 use tikv_util::{
@@ -1233,7 +1233,7 @@ impl Runnable for BackgroundRunner {
 
                                             if PRINTF_LOG.load(Ordering::Relaxed)
                                                 || (cf == CF_LOCK
-                                                    && PRINTF_LOCK.load(Ordering::Relaxed))
+                                                    && PRINTF_LOG.load(Ordering::Relaxed))
                                             {
                                                 info!(
                                                     "write to memory in load";
@@ -1342,7 +1342,7 @@ impl Runnable for BackgroundRunner {
                         if user_key != last_user_key {
                             if let Some(remove) = cached_to_remove.take() {
                                 removed += 1;
-                                if PRINTF_LOCK.load(Ordering::Relaxed) {
+                                if PRINTF_LOG.load(Ordering::Relaxed) {
                                     info!(
                                         "clean lock";
                                         "key" => log_wrappers::Value(&remove),
@@ -1365,7 +1365,7 @@ impl Runnable for BackgroundRunner {
                             if v_type != ValueType::Deletion {
                                 let cached_to_remove_value =
                                     Lock::parse(iter.value().as_bytes().as_slice()).unwrap();
-                                if PRINTF_LOCK.load(Ordering::Relaxed) {
+                                if PRINTF_LOG.load(Ordering::Relaxed) {
                                     info!(
                                         "clean lock2";
                                         "key" => log_wrappers::Value(iter.key().as_bytes()),
@@ -1374,7 +1374,7 @@ impl Runnable for BackgroundRunner {
                                     );
                                 }
                             } else {
-                                if PRINTF_LOCK.load(Ordering::Relaxed) {
+                                if PRINTF_LOG.load(Ordering::Relaxed) {
                                     info!(
                                         "clean lock2";
                                         "key" => log_wrappers::Value(iter.key().as_bytes()),
@@ -1394,7 +1394,7 @@ impl Runnable for BackgroundRunner {
                     }
                     if let Some(remove) = cached_to_remove.take() {
                         removed += 1;
-                        if PRINTF_LOCK.load(Ordering::Relaxed) {
+                        if PRINTF_LOG.load(Ordering::Relaxed) {
                             info!(
                                 "clean lock";
                                 "key" => log_wrappers::Value(&remove),

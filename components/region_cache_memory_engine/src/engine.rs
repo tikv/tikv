@@ -19,10 +19,7 @@ use engine_traits::{
     SnapshotMiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
-use raftstore::{
-    coprocessor::RegionInfoProvider,
-    store::fsm::apply::{PRINTF_LOCK, PRINTF_LOG},
-};
+use raftstore::{coprocessor::RegionInfoProvider, store::fsm::apply::PRINTF_LOG};
 use skiplist_rs::{
     base::{Entry, OwnedIter},
     SkipList,
@@ -177,7 +174,7 @@ impl SkiplistEngine {
             while iter.valid() && iter.key() < &end {
                 handle.remove(iter.key(), guard);
                 if PRINTF_LOG.load(Ordering::Relaxed)
-                    || (cf == CF_LOCK && PRINTF_LOCK.load(Ordering::Relaxed))
+                    || (cf == CF_LOCK && PRINTF_LOG.load(Ordering::Relaxed))
                 {
                     info!(
                         "delete range";
@@ -495,6 +492,7 @@ impl RangeCacheMemoryEngine {
             let range_manager = core.mut_range_manager();
             range_manager.pending_ranges.swap_remove(idx);
             let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
+            let seq_num = rocks_snap.sequence_number();
             // Here, we use the range in `pending_ranges` rather than the parameter range as
             // the region may be splitted.
             range_manager
@@ -509,6 +507,7 @@ impl RangeCacheMemoryEngine {
                 "range" => ?range,
                 "Cached" => range_manager.ranges().len(),
                 "Pending" => range_manager.pending_ranges_loading_data.len(),
+                "seq" => seq_num,
             );
 
             // init cached write batch to cache the writes before loading complete

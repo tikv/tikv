@@ -13,7 +13,7 @@ use engine_traits::{
     CacheRange, MiscExt, Mutable, RangeCacheEngine, Result, WriteBatch, WriteBatchExt,
     WriteOptions, CF_DEFAULT,
 };
-use raftstore::store::fsm::apply::{PRINTF_LOCK, PRINTF_LOG};
+use raftstore::store::fsm::apply::PRINTF_LOG;
 use tikv_util::{box_err, config::ReadableSize, debug, error, info, time::Instant, warn};
 
 use crate::{
@@ -175,10 +175,12 @@ impl RangeCacheWriteBatch {
     // that all keys have unique sequence numbers.
     fn write_impl(&mut self, mut seq: u64) -> Result<()> {
         fail::fail_point!("on_write_impl");
-        info!(
-            "write impl";
-            "seq" => seq,
-        );
+        if PRINTF_LOG.load(Ordering::Relaxed) {
+            info!(
+                "write impl";
+                "seq" => seq,
+            );
+        }
         let ranges_to_delete = self.handle_ranges_to_evict();
         let (entries_to_write, engine) = self.engine.handle_pending_range_in_loading_buffer(
             &mut seq,
@@ -452,7 +454,7 @@ impl RangeCacheWriteBatchEntry {
         handle.insert(key, value, guard);
 
         if PRINTF_LOG.load(Ordering::Relaxed)
-            || (self.cf == 1 && PRINTF_LOCK.load(Ordering::Relaxed))
+            || (self.cf == 1 && PRINTF_LOG.load(Ordering::Relaxed))
         {
             info!(
                 "write to memory";
