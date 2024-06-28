@@ -47,7 +47,7 @@ use crate::{
     initializer::KvEntry,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::{Conn, ConnId, FeatureGate, RequestId},
+    service::{Conn, ConnId, FeatureGate, RegionId, RequestId},
     txn_source::TxnSource,
     Error, Result,
 };
@@ -217,22 +217,22 @@ impl Downstream {
         }
     }
 
-    pub fn sink_error_event(&self, region_id: u64, err_event: EventError) -> Result<()> {
+    pub fn sink_error_event(&self, region_id: RegionId, err_event: EventError) -> Result<()> {
         let mut change_data_event = Event::default();
         change_data_event.event = Some(Event_oneof_event::Error(err_event));
-        change_data_event.region_id = region_id;
+        change_data_event.region_id = region_id.0;
         // Try it's best to send error events.
         let force_send = true;
         self.sink_event(change_data_event, force_send)
     }
 
-    pub fn sink_region_not_found(&self, region_id: u64) -> Result<()> {
+    pub fn sink_region_not_found(&self, region_id: RegionId) -> Result<()> {
         let mut err_event = EventError::default();
-        err_event.mut_region_not_found().region_id = region_id;
+        err_event.mut_region_not_found().region_id = region_id.0;
         self.sink_error_event(region_id, err_event)
     }
 
-    pub fn sink_server_is_busy(&self, region_id: u64, reason: String) -> Result<()> {
+    pub fn sink_server_is_busy(&self, region_id: RegionId, reason: String) -> Result<()> {
         let mut err_event = EventError::default();
         err_event.mut_server_is_busy().reason = reason;
         self.sink_error_event(region_id, err_event)
@@ -321,7 +321,7 @@ impl MiniLock {
 /// It converts raft commands into CDC events and broadcast to downstreams.
 /// It also tracks transactions on the fly in order to compute resolved ts.
 pub struct Delegate {
-    pub region_id: u64,
+    pub region_id: RegionId,
     pub handle: ObserveHandle,
     memory_quota: Arc<MemoryQuota>,
 
@@ -466,7 +466,7 @@ impl Delegate {
             Error::MemoryQuotaExceeded(tikv_util::memory::MemoryQuotaExceeded)
         ));
 
-        info!("cdc region is ready"; "region_id" => self.region_id);
+        info!("cdc region is ready"; "region_id" => ?self.region_id);
         self.finish_prepare_lock_tracker(region, locks)?;
 
         let region = match &self.lock_tracker {
@@ -488,7 +488,7 @@ impl Delegate {
 
     /// Create a Delegate the given region.
     pub fn new(
-        region_id: u64,
+        region_id: RegionId,
         memory_quota: Arc<MemoryQuota>,
         txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
     ) -> Delegate {
@@ -541,7 +541,7 @@ impl Delegate {
             if let Some(error_event) = error_event {
                 if let Err(err) = d.sink_error_event(region_id, error_event.clone()) {
                     warn!("cdc send unsubscribe failed";
-                        "region_id" => region_id, "error" => ?err, "origin_error" => ?error_event,
+                        "region_id" => ?region_id, "error" => ?err, "origin_error" => ?error_event,
                         "downstream_id" => ?d.id, "downstream" => ?d.peer,
                         "request_id" => ?d.req_id, "conn_id" => ?d.conn_id);
                 }
@@ -568,7 +568,7 @@ impl Delegate {
         self.stop_observing();
 
         info!("cdc met region error";
-            "region_id" => self.region_id, "error" => ?err);
+            "region_id" => ?self.region_id, "error" => ?err);
         let region_id = self.region_id;
         let error = err.into_error_event(self.region_id);
         let send = move |downstream: &Downstream| {
@@ -576,12 +576,12 @@ impl Delegate {
             let error_event = error.clone();
             if let Err(err) = downstream.sink_error_event(region_id, error_event) {
                 warn!("cdc send region error failed";
-                    "region_id" => region_id, "error" => ?err, "origin_error" => ?error,
+                    "region_id" => ?region_id, "error" => ?err, "origin_error" => ?error,
                     "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
                     "request_id" => ?downstream.req_id, "conn_id" => ?downstream.conn_id);
             } else {
                 info!("cdc send region error success";
-                    "region_id" => region_id, "origin_error" => ?error,
+                    "region_id" => ?region_id, "origin_error" => ?error,
                     "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
                     "request_id" => ?downstream.req_id, "conn_id" => ?downstream.conn_id);
             }
@@ -620,7 +620,7 @@ impl Delegate {
                 {
                     warn!(
                         "cdc region scan locks too slow";
-                        "region_id" => self.region_id,
+                        "region_id" => ?self.region_id,
                         "elapsed" => ?elapsed,
                         "stage" => ?self.lock_tracker,
                     );
@@ -680,7 +680,7 @@ impl Delegate {
                 v.push(self.region_id, advanced_to);
                 if !features.contains(FeatureGate::BATCH_RESOLVED_TS) {
                     let k = (d.conn_id, self.region_id);
-                    advance.dispersed.insert(k, d.req_id.0);
+                    advance.dispersed.insert(k, d.req_id);
                 }
             };
 
@@ -697,7 +697,7 @@ impl Delegate {
             if now.duration_since(self.last_lag_warn) > WARN_LAG_INTERVAL {
                 warn!(
                     "cdc region downstreams are too slow";
-                    "region_id" => self.region_id,
+                    "region_id" => ?self.region_id,
                     "downstreams" => ?slow_downstreams,
                 );
                 self.last_lag_warn = now;
@@ -716,7 +716,7 @@ impl Delegate {
         if batch.cdc_id != self.handle.id {
             return Ok(());
         }
-        for cmd in batch.into_iter(self.region_id) {
+        for cmd in batch.into_iter(self.region_id.0) {
             let Cmd {
                 index,
                 term: _,
@@ -745,7 +745,7 @@ impl Delegate {
     }
 
     pub(crate) fn convert_to_grpc_events(
-        region_id: u64,
+        region_id: RegionId,
         request_id: RequestId,
         entries: Vec<Option<KvEntry>>,
         filter_loop: bool,
@@ -834,7 +834,7 @@ impl Delegate {
                     ..Default::default()
                 };
                 CdcEvent::Event(Event {
-                    region_id,
+                    region_id: region_id.0,
                     request_id: request_id.0,
                     event: Some(Event_oneof_event::Entries(event_entries)),
                     ..Default::default()
@@ -871,7 +871,7 @@ impl Delegate {
                 }
                 CmdType::Delete => self.sink_delete(req.take_delete(), &mut rows_builder)?,
                 _ => debug!("cdc skip other command";
-                    "region_id" => self.region_id,
+                    "region_id" => ?self.region_id,
                     "command" => ?req),
             };
         }
@@ -904,7 +904,7 @@ impl Delegate {
                 continue;
             }
             let event = Event {
-                region_id: self.region_id,
+                region_id: self.region_id.0,
                 index,
                 request_id: downstream.req_id.0,
                 event: Some(Event_oneof_event::Entries(EventEntries {
@@ -963,7 +963,7 @@ impl Delegate {
                 continue;
             }
             let event = Event {
-                region_id: self.region_id,
+                region_id: self.region_id.0,
                 request_id: downstream.req_id.0,
                 event: Some(Event_oneof_event::Entries(EventEntries {
                     entries: filtered_entries.into(),
@@ -1129,7 +1129,7 @@ impl Delegate {
     }
 
     fn stop_observing(&self) {
-        info!("cdc stop observing"; "region_id" => self.region_id, "failed" => self.failed);
+        info!("cdc stop observing"; "region_id" => ?self.region_id, "failed" => self.failed);
         // Stop observe further events.
         self.handle.stop_observing();
         // To inform transaction layer no more old values are required for the region.
@@ -1416,9 +1416,9 @@ mod tests {
 
     #[test]
     fn test_error() {
-        let region_id = 1;
+        let region_id = RegionId(1);
         let mut region = Region::default();
-        region.set_id(region_id);
+        region.set_id(region_id.0);
         region.mut_peers().push(Default::default());
         region.mut_region_epoch().set_version(2);
         region.mut_region_epoch().set_conf_ver(2);
@@ -1567,7 +1567,7 @@ mod tests {
         // Create a new delegate.
         let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
         let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-        let mut delegate = Delegate::new(1, memory_quota, txn_extra_op.clone());
+        let mut delegate = Delegate::new(RegionId(1), memory_quota, txn_extra_op.clone());
         assert_eq!(txn_extra_op.load(), TxnExtraOp::Noop);
         assert!(delegate.handle.is_observing());
 
@@ -1690,7 +1690,7 @@ mod tests {
         .unwrap();
         let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
         let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-        let mut delegate = Delegate::new(1, memory_quota, txn_extra_op);
+        let mut delegate = Delegate::new(RegionId(1), memory_quota, txn_extra_op);
         assert!(delegate.handle.is_observing());
         assert!(delegate.init_lock_tracker());
 
@@ -1753,7 +1753,7 @@ mod tests {
         .unwrap();
         let memory_quota = Arc::new(MemoryQuota::new(usize::MAX));
         let txn_extra_op = Arc::new(AtomicCell::new(TxnExtraOp::Noop));
-        let mut delegate = Delegate::new(1, memory_quota, txn_extra_op);
+        let mut delegate = Delegate::new(RegionId(1), memory_quota, txn_extra_op);
         assert!(delegate.handle.is_observing());
         assert!(delegate.init_lock_tracker());
 
@@ -1880,7 +1880,7 @@ mod tests {
     #[test]
     fn test_lock_tracker() {
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let mut delegate = Delegate::new(1, quota.clone(), Default::default());
+        let mut delegate = Delegate::new(RegionId(1), quota.clone(), Default::default());
         assert!(delegate.init_lock_tracker());
         assert!(!delegate.init_lock_tracker());
 
@@ -1927,7 +1927,7 @@ mod tests {
     #[test]
     fn test_lock_tracker_untrack_vacant() {
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let mut delegate = Delegate::new(1, quota.clone(), Default::default());
+        let mut delegate = Delegate::new(RegionId(1), quota.clone(), Default::default());
         assert!(delegate.init_lock_tracker());
         assert!(!delegate.init_lock_tracker());
 

@@ -14,6 +14,7 @@ use tikv_util::{error, warn, worker::Scheduler};
 use crate::{
     endpoint::{Deregister, Task},
     old_value::{self, OldValueCache},
+    service::RegionId,
     Error as CdcError,
 };
 
@@ -27,7 +28,7 @@ pub struct CdcObserver {
     sched: Scheduler<Task>,
     // A shared registry for managing observed regions.
     // TODO: it may become a bottleneck, find a better way to manage the registry.
-    observe_regions: Arc<RwLock<HashMap<u64, ObserveId>>>,
+    observe_regions: Arc<RwLock<HashMap<RegionId, ObserveId>>>,
 }
 
 impl CdcObserver {
@@ -60,7 +61,11 @@ impl CdcObserver {
     /// its scheduler.
     ///
     /// Return previous ObserveId if there is one.
-    pub fn subscribe_region(&self, region_id: u64, observe_id: ObserveId) -> Option<ObserveId> {
+    pub fn subscribe_region(
+        &self,
+        region_id: RegionId,
+        observe_id: ObserveId,
+    ) -> Option<ObserveId> {
         self.observe_regions
             .write()
             .unwrap()
@@ -70,7 +75,11 @@ impl CdcObserver {
     /// Stops observe the region.
     ///
     /// Return ObserverID if unsubscribe successfully.
-    pub fn unsubscribe_region(&self, region_id: u64, observe_id: ObserveId) -> Option<ObserveId> {
+    pub fn unsubscribe_region(
+        &self,
+        region_id: RegionId,
+        observe_id: ObserveId,
+    ) -> Option<ObserveId> {
         let mut regions = self.observe_regions.write().unwrap();
         // To avoid ABA problem, we must check the unique ObserveId.
         if let Some(oid) = regions.get(&region_id) {
@@ -82,7 +91,7 @@ impl CdcObserver {
     }
 
     /// Check whether the region is subscribed or not.
-    pub fn is_subscribed(&self, region_id: u64) -> Option<ObserveId> {
+    pub fn is_subscribed(&self, region_id: RegionId) -> Option<ObserveId> {
         self.observe_regions
             .read()
             .unwrap()
@@ -144,7 +153,7 @@ impl RoleObserver for CdcObserver {
     fn on_role_change(&self, ctx: &mut ObserverContext<'_>, role_change: &RoleChange) {
         if role_change.state != StateRole::Leader {
             let region_id = ctx.region().get_id();
-            if let Some(observe_id) = self.is_subscribed(region_id) {
+            if let Some(observe_id) = self.is_subscribed(RegionId(region_id)) {
                 let leader_id = if role_change.leader_id != raft::INVALID_ID {
                     Some(role_change.leader_id)
                 } else if role_change.prev_lead_transferee == role_change.vote {
@@ -159,7 +168,7 @@ impl RoleObserver for CdcObserver {
                 // Unregister all downstreams.
                 let store_err = RaftStoreError::NotLeader(region_id, leader);
                 let deregister = Deregister::Delegate {
-                    region_id,
+                    region_id: RegionId(region_id),
                     observe_id,
                     err: CdcError::request(store_err.into()),
                 };
@@ -184,11 +193,11 @@ impl RegionChangeObserver for CdcObserver {
                 RegionChangeReason::Split | RegionChangeReason::CommitMerge,
             ) => {
                 let region_id = ctx.region().get_id();
-                if let Some(observe_id) = self.is_subscribed(region_id) {
+                if let Some(observe_id) = self.is_subscribed(RegionId(region_id)) {
                     // Unregister all downstreams.
                     let store_err = RaftStoreError::RegionNotFound(region_id);
                     let deregister = Deregister::Delegate {
-                        region_id,
+                        region_id: RegionId(region_id),
                         observe_id,
                         err: CdcError::request(store_err.into()),
                     };
@@ -268,10 +277,10 @@ mod tests {
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
         let oid = ObserveId::new();
-        observer.subscribe_region(1, oid);
+        observer.subscribe_region(RegionId(1), oid);
         let mut ctx = ObserverContext::new(&region);
 
-        // NotLeader error should contains the new leader.
+        // NotLeader error should contain the new leader.
         observer.on_role_change(
             &mut ctx,
             &RoleChange {
@@ -289,9 +298,9 @@ mod tests {
                 observe_id,
                 err,
             }) => {
-                assert_eq!(region_id, 1);
+                assert_eq!(region_id.0, 1);
                 assert_eq!(observe_id, oid);
-                let store_err = RaftStoreError::NotLeader(region_id, Some(new_peer(2, 2)));
+                let store_err = RaftStoreError::NotLeader(region_id.0, Some(new_peer(2, 2)));
                 match err {
                     CdcError::Request(err) => assert_eq!(*err, store_err.into()),
                     _ => panic!("unexpected err"),
@@ -318,9 +327,9 @@ mod tests {
                 observe_id,
                 err,
             }) => {
-                assert_eq!(region_id, 1);
+                assert_eq!(region_id.0, 1);
                 assert_eq!(observe_id, oid);
-                let store_err = RaftStoreError::NotLeader(region_id, Some(new_peer(3, 3)));
+                let store_err = RaftStoreError::NotLeader(region_id.0, Some(new_peer(3, 3)));
                 match err {
                     CdcError::Request(err) => assert_eq!(*err, store_err.into()),
                     _ => panic!("unexpected err"),
@@ -334,10 +343,13 @@ mod tests {
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();
 
         // unsubscribed fail if observer id is different.
-        assert_eq!(observer.unsubscribe_region(1, ObserveId::new()), None);
+        assert_eq!(
+            observer.unsubscribe_region(RegionId(1), ObserveId::new()),
+            None
+        );
 
         // No event if it is unsubscribed.
-        let oid_ = observer.unsubscribe_region(1, oid).unwrap();
+        let oid_ = observer.unsubscribe_region(RegionId(1), oid).unwrap();
         assert_eq!(oid_, oid);
         observer.on_role_change(&mut ctx, &RoleChange::new(StateRole::Follower));
         rx.recv_timeout(Duration::from_millis(10)).unwrap_err();

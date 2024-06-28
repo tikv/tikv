@@ -38,6 +38,9 @@ pub struct ConnId(usize);
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct RequestId(pub u64);
 
+#[derive(Default, Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub struct RegionId(pub u64);
+
 impl ConnId {
     pub fn new() -> ConnId {
         ConnId(CONNECTION_ID_ALLOC.fetch_add(1, Ordering::SeqCst))
@@ -93,7 +96,7 @@ pub struct Conn {
 #[derive(PartialEq, Eq, Hash)]
 struct DownstreamKey {
     request_id: RequestId,
-    region_id: u64,
+    region_id: RegionId,
 }
 
 #[derive(Clone)]
@@ -146,7 +149,11 @@ impl Conn {
         &self.sink
     }
 
-    pub fn get_downstream(&self, request_id: RequestId, region_id: u64) -> Option<DownstreamId> {
+    pub fn get_downstream(
+        &self,
+        request_id: RequestId,
+        region_id: RegionId,
+    ) -> Option<DownstreamId> {
         let key = DownstreamKey {
             request_id,
             region_id,
@@ -157,7 +164,7 @@ impl Conn {
     pub fn subscribe(
         &mut self,
         request_id: RequestId,
-        region_id: u64,
+        region_id: RegionId,
         downstream_id: DownstreamId,
         downstream_state: Arc<AtomicCell<DownstreamState>>,
     ) -> Option<DownstreamId> {
@@ -177,7 +184,11 @@ impl Conn {
         }
     }
 
-    pub fn unsubscribe(&mut self, request_id: RequestId, region_id: u64) -> Option<DownstreamId> {
+    pub fn unsubscribe(
+        &mut self,
+        request_id: RequestId,
+        region_id: RegionId,
+    ) -> Option<DownstreamId> {
         let key = DownstreamKey {
             request_id,
             region_id,
@@ -185,7 +196,7 @@ impl Conn {
         self.downstreams.remove(&key).map(|value| value.id)
     }
 
-    pub fn unsubscribe_request(&mut self, request_id: RequestId) -> Vec<(u64, DownstreamId)> {
+    pub fn unsubscribe_request(&mut self, request_id: RequestId) -> Vec<(RegionId, DownstreamId)> {
         let mut downstreams = Vec::new();
         self.downstreams.retain(|key, value| -> bool {
             if key.request_id == request_id {
@@ -199,7 +210,7 @@ impl Conn {
 
     pub fn iter_downstreams<F>(&self, mut f: F)
     where
-        F: FnMut(RequestId, u64, DownstreamId, &Arc<AtomicCell<DownstreamState>>),
+        F: FnMut(RequestId, RegionId, DownstreamId, &Arc<AtomicCell<DownstreamState>>),
     {
         for (key, value) in &self.downstreams {
             f(key.request_id, key.region_id, value.id, &value.state);
@@ -368,7 +379,7 @@ impl Service {
             Task::Deregister(Deregister::Region {
                 conn_id,
                 request_id: RequestId(request.request_id),
-                region_id: request.region_id,
+                region_id: RegionId(request.region_id),
             })
         } else {
             Task::Deregister(Deregister::Request {

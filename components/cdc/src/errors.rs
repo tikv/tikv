@@ -13,7 +13,7 @@ use tikv::storage::{
 use tikv_util::memory::MemoryQuotaExceeded;
 use txn_types::Error as TxnTypesError;
 
-use crate::channel::SendError;
+use crate::{channel::SendError, service::RegionId};
 
 /// The error type for cdc.
 #[derive(Debug, Error)]
@@ -97,7 +97,7 @@ impl Error {
         }
     }
 
-    pub fn into_error_event(self, region_id: u64) -> ErrorEvent {
+    pub fn into_error_event(self, region_id: RegionId) -> ErrorEvent {
         let mut err_event = ErrorEvent::default();
         let mut err = self.extract_region_error();
         if err.has_not_leader() {
@@ -109,7 +109,7 @@ impl Error {
         } else {
             // TODO: Add more errors to the cdc protocol
             let mut region_not_found = errorpb::RegionNotFound::default();
-            region_not_found.set_region_id(region_id);
+            region_not_found.set_region_id(region_id.0);
             err_event.set_region_not_found(region_not_found);
         }
         err_event

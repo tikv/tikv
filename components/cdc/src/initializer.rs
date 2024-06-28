@@ -59,7 +59,7 @@ use crate::{
     endpoint::Deregister,
     metrics::*,
     old_value::{near_seek_old_value, OldValueCursors},
-    service::{ConnId, RequestId},
+    service::{ConnId, RegionId, RequestId},
     Error, Result, Task,
 };
 
@@ -84,7 +84,7 @@ pub(crate) enum Scanner<S: Snapshot> {
 }
 
 pub(crate) struct Initializer<E> {
-    pub(crate) region_id: u64,
+    pub(crate) region_id: RegionId,
     pub(crate) conn_id: ConnId,
     pub(crate) request_id: RequestId,
     pub(crate) checkpoint_ts: TimeStamp,
@@ -142,9 +142,9 @@ impl<E: KvEngine> Initializer<E> {
             tikv_util::future::paired_future_callback();
         let barrier = CdcEvent::Barrier(Some(incremental_scan_barrier_cb));
         if let Err(e) = cdc_handle.capture_change(
-            self.region_id,
+            self.region_id.0,
             region_epoch,
-            ChangeObserver::from_cdc(self.region_id, self.observe_handle.clone()),
+            ChangeObserver::from_cdc(self.region_id.0, self.observe_handle.clone()),
             // NOTE: raftstore handles requests in serial for every region.
             // That's why we can determine whether to build a lock resolver or not
             // without check and compare snapshot sequence number.
@@ -164,7 +164,7 @@ impl<E: KvEngine> Initializer<E> {
             })),
         ) {
             warn!("cdc send capture change cmd failed";
-            "region_id" => self.region_id, "error" => ?e);
+            "region_id" => ?self.region_id, "error" => ?e);
             return Err(Error::request(e.into()));
         }
 
@@ -190,7 +190,7 @@ impl<E: KvEngine> Initializer<E> {
     {
         if let Some(region_snapshot) = resp.snapshot {
             let region = region_snapshot.get_region().clone();
-            assert_eq!(self.region_id, region.get_id());
+            assert_eq!(self.region_id.0, region.get_id());
             self.async_incremental_scan(region_snapshot, region)
                 .await
                 .map(|_| ())
@@ -223,7 +223,7 @@ impl<E: KvEngine> Initializer<E> {
         let on_cancel = || -> Result<ScanStat> {
             info!(
                 "cdc async incremental scan canceled";
-                "region_id" => region_id,
+                "region_id" => ?region_id,
                 "downstream_id" => ?downstream_id,
                 "observe_id" => ?observe_id,
                 "conn_id" =>?conn_id,
@@ -255,7 +255,7 @@ impl<E: KvEngine> Initializer<E> {
 
         debug!(
             "cdc async incremental scan";
-            "region_id" => region_id,
+            "region_id" => ?region_id,
             "downstream_id" => ?downstream_id,
             "observe_id" => ?observe_id,
             "conn_id" => ?conn_id,
@@ -343,7 +343,7 @@ impl<E: KvEngine> Initializer<E> {
                 CDC_SCAN_LONG_DURATION_REGIONS.inc();
                 scan_long_time.store(true, Ordering::SeqCst);
                 warn!(
-                    "cdc incremental scan takes too long"; "region_id" => region_id, "conn_id" => ?self.conn_id,
+                    "cdc incremental scan takes too long"; "region_id" => ?region_id, "conn_id" => ?self.conn_id,
                     "downstream_id" => ?self.downstream_id, "takes" => ?start.saturating_elapsed()
                 );
             }
@@ -360,7 +360,7 @@ impl<E: KvEngine> Initializer<E> {
                 // If the last element is None, it means scanning is finished.
                 done = true;
             }
-            debug!("cdc scan entries"; "len" => entries.len(), "region_id" => region_id);
+            debug!("cdc scan entries"; "len" => entries.len(), "region_id" => ?region_id);
             fail_point!("before_schedule_incremental_scan");
             let start_sink = Instant::now_coarse();
             self.sink_scan_events(entries, done).await?;
@@ -373,7 +373,7 @@ impl<E: KvEngine> Initializer<E> {
         }
         let takes = start.saturating_elapsed();
         info!("cdc async incremental scan finished";
-            "region_id" => region_id,
+            "region_id" => ?region_id,
             "downstream_id" => ?downstream_id,
             "observe_id" => ?observe_id,
             "conn_id" => ?conn_id,
@@ -605,7 +605,7 @@ impl<E: KvEngine> Initializer<E> {
         let valid_count = total_count - filtered_count;
         let use_ts_filter = valid_count as f64 <= total_count as f64 * self.ts_filter_ratio;
         info!("cdc incremental scan uses ts filter: {}", use_ts_filter;
-            "region_id" => self.region_id,
+            "region_id" => ?self.region_id,
             "hint_min_ts" => hint_min_ts,
             "mvcc_versions" => total_count,
             "filtered_versions" => filtered_count,
@@ -712,7 +712,7 @@ mod tests {
             .unwrap();
         let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Initializing));
         let initializer = Initializer {
-            region_id: 1,
+            region_id: RegionId(1),
             conn_id: ConnId::new(),
             request_id: RequestId(0),
             checkpoint_ts: 1.into(),
