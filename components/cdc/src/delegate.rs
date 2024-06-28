@@ -938,7 +938,7 @@ impl Delegate {
                         }
                         BTreeMapEntry::Occupied(mut x) => {
                             *x.get_mut() += *lock_count_modify;
-                            assert!(*x.get() >= 0, "lock_count_modify should never be negative");
+                            assert!(*x.get() >= 0, "lock_count_modify should never be negative, start_ts: {}", entry.start_ts);
                             if *x.get() == 0 {
                                 x.remove();
                             }
