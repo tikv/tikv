@@ -630,7 +630,7 @@ where
         // As the detail of one msg is not very useful when handling multiple messages,
         // only format the msg detail in slow log when there is only one message.
         let detail = if msgs.len() == 1 {
-            msgs.get(0).map(|m| format!("{:?}", m))
+            msgs.first().map(|m| format!("{:?}", m))
         } else {
             None
         };
