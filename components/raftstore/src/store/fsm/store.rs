@@ -2275,7 +2275,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 "target peer doesn't exist, stale message";
                 "target_peer" => ?msg.get_to_peer(),
                 "region_id" => region_id,
-                "msg_type" => %util::MsgType(&msg),
+                "msg_type" => %util::MsgType(msg),
             );
             self.ctx.raft_metrics.message_dropped.stale_msg.inc();
             return Ok(false);
