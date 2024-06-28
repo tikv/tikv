@@ -46,11 +46,13 @@ impl Client {
         handle: tokio::runtime::Handle,
     ) -> Self {
         let addr = tikv_util::format_url(addr);
-        let channel = Channel::from_shared(addr)
+        let cb = Channel::from_shared(addr)
             .unwrap()
             .http2_keep_alive_interval(Duration::from_secs(10))
             .keep_alive_timeout(Duration::from_secs(3))
-            .executor(tikv_util::RuntimeExec::new(handle))
+            .executor(tikv_util::RuntimeExec::new(handle));
+         
+        let channel = security_mgr.set_tls_config(cb.clone()).unwrap_or(cb)
             .connect_lazy();
         let client = DeadlockClient::new(channel);
         Self {

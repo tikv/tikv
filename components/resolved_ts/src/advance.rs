@@ -308,7 +308,7 @@ impl LeadershipResolver {
         });
 
         let pd_client = &self.pd_client;
-        let security_mgr = &self.security_mgr;
+        let security_mgr = self.security_mgr.clone();
         let tikv_clients = &self.tikv_clients;
         // Approximate `LeaderInfo` size
         let leader_info_size = store_req_map
@@ -328,6 +328,7 @@ impl LeadershipResolver {
             CHECK_LEADER_REQ_ITEM_COUNT_HISTOGRAM.observe(region_num as f64);
 
             let handle = self.grpc_handle.clone();
+            let security_mgr = security_mgr.clone();
             // Check leadership for `regions` on `to_store`.
             let rpc = async move {
                 PENDING_CHECK_LEADER_REQ_COUNT.inc();
@@ -514,7 +515,7 @@ static CONN_ID: AtomicI32 = AtomicI32::new(0);
 async fn get_tikv_client(
     store_id: u64,
     pd_client: &Arc<dyn PdClient>,
-    security_mgr: &SecurityManager,
+    security_mgr: Arc<SecurityManager>,
     tikv_clients: &Mutex<HashMap<u64, TikvClient<Channel>>>,
     timeout: Duration,
     handle: tokio::runtime::Handle,
@@ -542,7 +543,7 @@ async fn get_tikv_client(
             .keep_alive_timeout(Duration::from_secs(3))
             .executor(tikv_util::RuntimeExec::new(handle.clone()));
         match handle
-            .spawn(async move { endpoint.connect().await })
+            .spawn(async move { security_mgr.connect(endpoint).await })
             .await
             .unwrap()
         {

@@ -836,12 +836,13 @@ async fn start<S, R>(
                 addr.clone(),
             ));
         }
-        let endpoint = addr_channel.as_ref().unwrap().0.clone();
+        let endpoint =  addr_channel.as_ref().unwrap().0.clone();
+        let security_mgr =  back_end.builder.security_mgr.clone();
 
         debug!("connecting to store"; "store_id" => back_end.store_id, "addr" => %addr);
         let channel = match back_end
             .handle
-            .spawn(async move { endpoint.connect().await })
+            .spawn(async move { security_mgr.connect(endpoint).await })
             .await
             .unwrap()
         {

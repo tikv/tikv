@@ -220,19 +220,17 @@ pub fn send_snap(
     };
 
     let addr = tikv_util::format_url(addr);
-    let channel = Channel::from_shared(addr)
+    let cb = Channel::from_shared(addr)
         .unwrap()
         //.tls_config()
         .initial_stream_window_size(cfg.grpc_stream_initial_window_size.0 as u32)
         .http2_keep_alive_interval(cfg.grpc_keepalive_time.0)
         .keep_alive_timeout(cfg.grpc_keepalive_timeout.0)
-        .executor(tikv_util::RuntimeExec::new(handle))
-        .connect_lazy();
-
-    // let channel = security_mgr.connect(cb, addr);
-    let mut client = TikvClient::new(channel);
+        .executor(tikv_util::RuntimeExec::new(handle));    
 
     let send_task = async move {
+        let channel = security_mgr.connect(cb).await.map_err(|e| Error::Grpc(tonic::Status::unknown(format!("{:?}", e))))?;
+        let mut client = TikvClient::new(channel);
         let chunks = Arc::new(Mutex::new(chunks));
         let task = client
             .snapshot(SnapChunkWrapper::new(chunks.clone()))

@@ -148,7 +148,7 @@ impl SecurityManager {
         })
     }
 
-    pub async fn connect(&self, mut cb: Endpoint) -> Result<Channel, tonic::transport::Error> {
+    pub fn set_tls_config(&self, mut cb: Endpoint) -> Result<Endpoint, tonic::transport::Error> {
         if !self.cfg.ca_path.is_empty() {
             if !self.cfg.override_ssl_target.is_empty() {
                 // TODO: support override_ssl_target
@@ -168,6 +168,11 @@ impl SecurityManager {
             }
             cb = cb.tls_config(tls_cfg)?;
         }
+        Ok(cb)
+    }
+
+    pub async fn connect(&self, cb: Endpoint) -> Result<Channel, tonic::transport::Error> {
+        let cb = self.set_tls_config(cb)?;
         cb.connect().await
     }
 

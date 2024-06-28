@@ -849,13 +849,14 @@ impl PdConnector {
         // let addr_trim = trim_http_prefix(addr);
         let addr = tikv_util::format_url(addr);
         let channel = {
-            let endpoint = tonic::transport::Channel::from_shared(addr)
+            let mut endpoint = tonic::transport::Channel::from_shared(addr)
                 .unwrap()
                 .http2_keep_alive_interval(Duration::from_secs(10))
                 .keep_alive_timeout(Duration::from_secs(3))
                 .executor(tikv_util::RuntimeExec::new(self.handle.clone()));
+            let security_mgr = self.security_mgr.clone();
             self.handle
-                .spawn(async move { endpoint.connect().await })
+                .spawn(async move {security_mgr.connect(endpoint).await})
                 .await
                 .unwrap()
                 .map_err(|e| Error::Grpc(tonic::Status::unknown(format!("{:?}", e))))?
