@@ -614,7 +614,7 @@ where
         }
     }
 
-    pub fn get_gen_snap_task(&self) -> Ref<Option<GenSnapTask>> {
+    pub fn get_gen_snap_task(&self) -> Ref<'_, Option<GenSnapTask>> {
         self.gen_snap_task.borrow()
     }
 

@@ -3103,7 +3103,7 @@ where
                 "region_id" => region_id,
                 "to_store_id" => to.get_store_id(),
                 "my_store_id" => self.store_id(),
-                "msg_type" => %util::MsgType(&msg),
+                "msg_type" => %util::MsgType(msg),
             );
             self.ctx
                 .raft_metrics
@@ -3173,7 +3173,7 @@ where
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
                     "target_peer" => ?target,
-                    "msg_type" => %util::MsgType(&msg),
+                    "msg_type" => %util::MsgType(msg),
                 );
                 self.ctx.raft_metrics.message_dropped.stale_msg.inc();
                 true
@@ -3420,7 +3420,7 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "snap" => ?snap_region,
                 "to_peer" => ?msg.get_to_peer(),
-                "msg_type" => %util::MsgType(&msg),
+                "msg_type" => %util::MsgType(msg),
             );
             self.ctx.raft_metrics.message_dropped.region_no_peer.inc();
             return Ok(Either::Left(key));
@@ -3433,7 +3433,7 @@ where
                     "stale delegate detected, skip";
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
-                    "msg_type" => %util::MsgType(&msg),
+                    "msg_type" => %util::MsgType(msg),
                 );
                 self.ctx.raft_metrics.message_dropped.stale_msg.inc();
                 return Ok(Either::Left(key));
@@ -3468,7 +3468,7 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "region" => ?region,
                     "snap" => ?snap_region,
-                    "msg_type" => %util::MsgType(&msg),
+                    "msg_type" => %util::MsgType(msg),
                 );
                 self.ctx.raft_metrics.message_dropped.region_overlap.inc();
                 return Ok(Either::Left(key));
