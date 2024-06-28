@@ -481,6 +481,10 @@ impl RangeManager {
         if self.overlap_with_evicting_range(&cache_range) {
             return Err(LoadFailedReason::Evicting);
         }
+        info!(
+            "load range";
+            "range" => ?cache_range,
+        );
         self.pending_ranges.push(cache_range);
         Ok(())
     }
