@@ -2,7 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use std::{
-    cell::RefCell,
+    cell::{Ref, RefCell},
     error,
     ops::{Deref, DerefMut},
     sync::{
@@ -29,6 +29,7 @@ use raft::{
     eraftpb::{self, ConfState, Entry, HardState, Snapshot},
     Error as RaftError, GetEntriesContext, RaftState, Ready, Storage, StorageError,
 };
+use rand::Rng;
 use tikv_util::{
     box_err, box_try, debug, defer, error, info,
     store::find_peer_by_id,
@@ -48,6 +49,10 @@ use crate::{
     },
     Error, Result,
 };
+
+// The maximum tick interval between precheck requests. The tick interval helps
+// prevent sending the precheck requests too aggressively.
+const SNAP_GEN_PRECHECK_MAX_TICK_INTERVAL: usize = 5;
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -589,16 +594,37 @@ where
         ))
     }
 
+    pub fn need_gen_snap_precheck(&self) -> Option<metapb::Peer> {
+        let mut gen_task = self.gen_snap_task.borrow_mut();
+        let task = gen_task.as_mut()?;
+        if task.precheck_remaining_ticks == 0 {
+            // Use random tick counts to space out the requests.
+            task.precheck_remaining_ticks =
+                rand::thread_rng().gen_range(1..=SNAP_GEN_PRECHECK_MAX_TICK_INTERVAL);
+            Some(task.to_peer.clone())
+        } else {
+            task.precheck_remaining_ticks -= 1;
+            None
+        }
+    }
+
+    pub fn set_gen_snap_task_for_balance(&self) {
+        if let Some(gen_task) = self.gen_snap_task.borrow_mut().as_mut() {
+            gen_task.set_for_balance();
+        }
+    }
+
+    pub fn get_gen_snap_task(&self) -> Ref<Option<GenSnapTask>> {
+        self.gen_snap_task.borrow()
+    }
+
     pub fn has_gen_snap_task(&self) -> bool {
         self.gen_snap_task.borrow().is_some()
     }
 
-    pub fn mut_gen_snap_task(&mut self) -> &mut Option<GenSnapTask> {
-        self.gen_snap_task.get_mut()
-    }
-
-    pub fn take_gen_snap_task(&mut self) -> Option<GenSnapTask> {
-        self.gen_snap_task.get_mut().take()
+    pub fn take_gen_snap_task(&self) -> Option<GenSnapTask> {
+        let mut task = self.gen_snap_task.borrow_mut();
+        (*task).take()
     }
 
     pub fn set_gen_snap_task(&self, task: GenSnapTask) {
@@ -864,7 +890,7 @@ where
     }
 
     /// Cancel generating snapshot.
-    pub fn cancel_generating_snap(&mut self, compact_to: Option<u64>) {
+    pub fn cancel_generating_snap(&self, compact_to: Option<u64>) {
         let snap_state = self.snap_state.borrow();
         if let SnapState::Generating {
             ref canceled,
