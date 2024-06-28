@@ -51,7 +51,7 @@ use raft::{
     GetEntriesContext, LightReady, ProgressState, RawNode, Ready, SnapshotStatus, StateRole,
     INVALID_INDEX, NO_LIMIT,
 };
-use rand::{seq::SliceRandom, Rng};
+use rand::seq::SliceRandom;
 use smallvec::SmallVec;
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
@@ -122,9 +122,6 @@ const MIN_BCAST_WAKE_UP_INTERVAL: u64 = 1_000;
 const REGION_READ_PROGRESS_CAP: usize = 128;
 
 const SNAP_GEN_PRECHECK_FEATURE: Feature = Feature::require(8, 2, 0);
-// The maximum tick interval between precheck requests. The tick interval helps
-// prevent sending the precheck requests too aggressively.
-const SNAP_GEN_PRECHECK_MAX_TICK_INTERVAL: usize = 5;
 
 #[doc(hidden)]
 pub const MAX_COMMITTED_SIZE_PER_READY: u64 = 16 * 1024 * 1024;
@@ -1946,9 +1943,7 @@ where
             }
         }
         if for_balance {
-            if let Some(gen_task) = self.mut_store().mut_gen_snap_task() {
-                gen_task.set_for_balance();
-            }
+            self.get_store().set_gen_snap_task_for_balance();
         }
         Ok(())
     }
@@ -2661,24 +2656,25 @@ where
     /// 1. The requesting peer is removed by a configuration change.
     /// 2. The requesting peer becomes unreachable, e.g., TiKV goes down or a
     ///    network partition occurs.
-    pub fn maybe_cancel_gen_snap_task(&mut self, unreachable_store_id: Option<u64>) {
-        let Some(gen_task) = self.mut_store().mut_gen_snap_task() else {
-            return;
+    pub fn maybe_cancel_gen_snap_task(&self, unreachable_store_id: Option<u64>) {
+        let to_peer = match self.get_store().get_gen_snap_task().as_ref() {
+            Some(task) => task.to_peer.clone(),
+            None => return,
         };
-        let cancel_by_store_id =
-            unreachable_store_id.map_or(false, |s| gen_task.to_peer.get_store_id() == s);
-        let to_peer = gen_task.to_peer.clone();
+        let cancel_by_unreachable_store =
+            unreachable_store_id.map_or(false, |s| to_peer.get_store_id() == s);
+        let to_peer = to_peer.clone();
         let cancel_by_peer_not_found = find_peer_by_id(self.region(), to_peer.get_id()).is_none();
-        if cancel_by_store_id || cancel_by_peer_not_found {
-            self.mut_store().take_gen_snap_task();
-            self.mut_store().cancel_generating_snap(None);
+        if cancel_by_unreachable_store || cancel_by_peer_not_found {
+            self.get_store().take_gen_snap_task();
+            self.get_store().cancel_generating_snap(None);
             warn!(
                 "cancel generate snap task";
                 "region_id" => self.region_id,
                 "peer_id" => self.peer_id(),
                 "to_peer" => ?to_peer,
                 "cancel_by_peer_not_found" => cancel_by_peer_not_found,
-                "cancel_by_store_id" => cancel_by_store_id,
+                "cancel_by_unreachable_store" => cancel_by_unreachable_store,
             );
         }
     }
@@ -2688,25 +2684,18 @@ where
         // snapshot and subsequent conf changes.
         self.maybe_cancel_gen_snap_task(None);
 
-        if let Some(mut gen_task) = self.mut_store().take_gen_snap_task() {
+        if self.get_store().has_gen_snap_task() {
             // If the snapshot gen precheck feature is enabled, the leader needs
             // to complete a precheck with the target follower before the
             // snapshot generation.
             if ctx.feature_gate.can_enable(SNAP_GEN_PRECHECK_FEATURE) {
                 // Continuously send snap gen precheck requests to the follower
-                // until an approval is received. Use random tick counts to
-                // space out the requests.
-                if gen_task.precheck_remaining_ticks == 0 {
-                    let to_peer = gen_task.to_peer.clone();
+                // until an approval is received.
+                if let Some(to_peer) = self.get_store().need_gen_snap_precheck() {
                     self.send_snap_gen_precheck_request(ctx, &to_peer);
-                    gen_task.precheck_remaining_ticks =
-                        rand::thread_rng().gen_range(1..=SNAP_GEN_PRECHECK_MAX_TICK_INTERVAL);
-                } else {
-                    gen_task.precheck_remaining_ticks -= 1;
                 }
-                // Put the gen snap task back since we haven't scheduled it yet.
-                self.get_store().set_gen_snap_task(gen_task);
             } else {
+                let gen_task = self.mut_store().take_gen_snap_task().unwrap();
                 self.pending_request_snapshot_count
                     .fetch_add(1, Ordering::SeqCst);
                 ctx.apply_router
@@ -5630,6 +5619,10 @@ where
                 "peer_id" => self.peer.get_id(),
                 "target" => ?to,
             );
+
+            if ty == ExtraMessageType::MsgSnapGenPrecheckRequest {
+                self.maybe_cancel_gen_snap_task(Some(to.get_store_id()))
+            }
         }
     }
 
@@ -5745,7 +5738,7 @@ where
     }
 
     pub fn send_snap_gen_precheck_request<T: Transport>(
-        &self,
+        &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         to_peer: &metapb::Peer,
     ) {
@@ -5755,7 +5748,7 @@ where
     }
 
     pub fn send_snap_gen_precheck_response<T: Transport>(
-        &self,
+        &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         to_peer: &metapb::Peer,
         passed: bool,
@@ -5767,7 +5760,7 @@ where
     }
 
     pub fn send_want_rollback_merge<T: Transport>(
-        &self,
+        &mut self,
         premerge_commit: u64,
         ctx: &mut PollContext<EK, ER, T>,
     ) {

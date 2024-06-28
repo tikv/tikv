@@ -1061,18 +1061,17 @@ fn test_remove_peer_after_requesting_snapshot() {
     // Add peer(2, 2) to store 2
     //
     // Drop MsgSnapGenPrecheckRequest to region 1 on store 2 before adding peer.
-    let (send_tx, send_rx) = mpsc::sync_channel(1);
-    cluster.add_send_filter(CloneFilterFactory(
-        RegionPacketFilter::new(r, 2)
-            .msg_type(MessageType::MsgSnapshot)
-            .drop_extra_message(ExtraMessageType::MsgSnapGenPrecheckRequest)
-            .direction(Direction::Recv)
-            .set_msg_callback(Arc::new(move |m: &RaftMessage| {
-                if m.get_extra_msg().get_type() == ExtraMessageType::MsgSnapGenPrecheckRequest {
-                    let _ = send_tx.send(());
-                }
-            })),
-    ));
+    let (send_tx, send_rx) = mpsc::channel();
+    cluster.add_send_filter(CloneFilterFactory(DropMessageFilter::new(Arc::new(
+        move |m| {
+            let is_precheck_2 = m.get_to_peer().get_id() == 2
+                && m.get_extra_msg().get_type() == ExtraMessageType::MsgSnapGenPrecheckRequest;
+            if is_precheck_2 {
+                let _ = send_tx.send(());
+            }
+            !is_precheck_2
+        },
+    ))));
     // Make sure add peer conf change is applied on leader side.
     pd_client.must_add_peer(r, new_peer(2, 2));
 
@@ -1086,8 +1085,55 @@ fn test_remove_peer_after_requesting_snapshot() {
     cluster.clear_send_filters();
     pd_client.must_add_peer(r, new_peer(2, 4));
 
-    // Transfer leader to peer 4 to make sure it has applied a snapshot.
-    cluster.must_transfer_leader(1, new_peer(2, 4));
+    // Make sure store 2 has applied a snapshot.
     cluster.must_put(b"k1", b"v1");
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
+}
+
+#[test_case(test_raftstore::new_node_cluster)]
+fn test_network_partition_after_requesting_snapshot() {
+    let mut cluster = new_cluster(0, 5);
+    let pd_client = cluster.pd_client.clone();
+    pd_client.disable_default_operator();
+
+    // Use run conf change to make new node be initialized with term 0.
+    let r = cluster.run_conf_change();
+
+    // Add peers.
+    cluster.must_put(b"k0", b"v0");
+    for id in 2..=3 {
+        pd_client.must_add_peer(r, new_peer(id, id));
+        must_get_equal(&cluster.get_engine(id), b"k0", b"v0");
+    }
+
+    // Add peer(4, 4) to store 4
+    //
+    // Drop MsgSnapGenPrecheckRequest to region 1 on store 4 before adding peer.
+    let (send_tx, send_rx) = mpsc::channel();
+    cluster.add_send_filter(CloneFilterFactory(
+        RegionPacketFilter::new(r, 4)
+            .msg_type(MessageType::MsgSnapshot)
+            .drop_extra_message(ExtraMessageType::MsgSnapGenPrecheckRequest)
+            .direction(Direction::Recv)
+            .set_msg_callback(Arc::new(move |m: &RaftMessage| {
+                if m.get_extra_msg().get_type() == ExtraMessageType::MsgSnapGenPrecheckRequest {
+                    let _ = send_tx.send(());
+                }
+            })),
+    ));
+    // Make sure add peer conf change is applied on leader side.
+    pd_client.must_add_peer(r, new_peer(4, 4));
+
+    // Make sure peer 4 has requested snapshot.
+    send_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    // Stop node 4.
+    cluster.stop_node(4);
+
+    // Add peer to store 5.
+    pd_client.must_add_peer(r, new_peer(5, 5));
+
+    // Make sure store 5 has applied a snapshot.
+    cluster.must_put(b"k1", b"v1");
+    must_get_equal(&cluster.get_engine(5), b"k1", b"v1");
 }
