@@ -1086,7 +1086,9 @@ impl Runnable for BackgroundRunner {
                                 }
                             };
                             next_to_match(cf, &mut iter, &mut disk_iter, false, &vec![], 0);
-                            check_default(&iter);
+                            if *cf == CF_WRITE {
+                                check_default(&iter);
+                            }
 
                             let (mut last_user_key, mut last_ts) = if *cf == CF_WRITE {
                                 let r = split_ts(iter.key()).unwrap();
@@ -1104,7 +1106,9 @@ impl Runnable for BackgroundRunner {
                                     &last_user_key,
                                     last_ts,
                                 );
-                                check_default(&iter);
+                                if *cf == CF_WRITE {
+                                    check_default(&iter);
+                                }
 
                                 if *cf == CF_WRITE {
                                     let (cur_user_key, ts) = split_ts(iter.key()).unwrap();
