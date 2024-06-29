@@ -25,7 +25,7 @@ use futures::{
 use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri};
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
-use raftstore::store::fsm::apply::{PRINTF_LOG, TXN_LOG};
+use raftstore::store::fsm::apply::TXN_LOG;
 use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
 use tidb_query_common::execute_stats::ExecSummary;

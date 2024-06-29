@@ -22,16 +22,13 @@ use crossbeam::{
 };
 use engine_rocks::{RocksEngine, RocksEngineIterator, RocksSnapshot};
 use engine_traits::{
-    iter_option, CacheRange, IterOptions, Iterable, Iterator, MiscExt, RangeHintService,
+    iter_option, CacheRange, IterOptions, Iterable, Iterator, MiscExt, Peekable, RangeHintService,
     SnapshotMiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use kvproto::metapb::Region;
 use parking_lot::{Mutex, RwLock};
 use pd_client::{PdClient, RpcClient};
-use raftstore::{
-    coprocessor::RegionInfoProvider,
-    store::fsm::apply::{PRINTF_LOG},
-};
+use raftstore::{coprocessor::RegionInfoProvider, store::fsm::apply::PRINTF_LOG};
 use slog_global::{error, info, warn};
 use tikv_util::{
     config::ReadableSize,
@@ -915,10 +912,12 @@ fn next_to_match(
                 );
                 unreachable!()
             }
+            assert_eq!(iter.value(), disk_iter.value());
             break;
         }
 
         if disk_key == key {
+            assert_eq!(iter.value(), disk_iter.value());
             break;
         }
 
@@ -1061,7 +1060,34 @@ impl Runnable for BackgroundRunner {
                                 unreachable!();
                             }
 
+                            let check_default = |iter: &RangeCacheIterator| {
+                                let write = WriteRef::parse(iter.value()).unwrap();
+                                match write.write_type {
+                                    WriteType::Put => {
+                                        if write.short_value.is_none() {
+                                            let start_ts = write.start_ts;
+                                            let (user_key, _) = split_ts(iter.key()).unwrap();
+                                            let key = Key::from_raw(user_key).append_ts(start_ts);
+                                            if let Ok(Some(_)) =
+                                                range_snap.get_value(key.as_encoded())
+                                            {
+                                            } else {
+                                                error!(
+                                                    "default not found";
+                                                    "default_key" => log_wrappers::Value(key.as_encoded()),
+                                                    "write_key" => log_wrappers::Value(&iter.key()),
+                                                    "safe_ts" => safe_ts,
+                                                    "seqno" => iter.sequence_number,
+                                                );
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            };
                             next_to_match(cf, &mut iter, &mut disk_iter, false, &vec![], 0);
+                            check_default(&iter);
+
                             let (mut last_user_key, mut last_ts) = if *cf == CF_WRITE {
                                 let r = split_ts(iter.key()).unwrap();
                                 (r.0.to_vec(), r.1)
@@ -1078,6 +1104,8 @@ impl Runnable for BackgroundRunner {
                                     &last_user_key,
                                     last_ts,
                                 );
+                                check_default(&iter);
+
                                 if *cf == CF_WRITE {
                                     let (cur_user_key, ts) = split_ts(iter.key()).unwrap();
                                     if last_user_key != cur_user_key {

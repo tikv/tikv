@@ -5,7 +5,7 @@ use std::{borrow::Cow, sync::atomic::Ordering};
 
 use engine_traits::{CF_DEFAULT, CF_LOCK, CF_WRITE};
 use kvproto::kvrpcpb::{IsolationLevel, WriteConflictReason};
-use raftstore::store::fsm::apply::{PRINTF_LOG, TXN_LOG};
+use raftstore::store::fsm::apply::TXN_LOG;
 use tikv_kv::SEEK_BOUND;
 use txn_types::{Key, LastChange, Lock, LockType, TimeStamp, TsSet, Value, WriteRef, WriteType};
 

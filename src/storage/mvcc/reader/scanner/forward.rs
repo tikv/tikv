@@ -5,7 +5,7 @@ use std::{borrow::Cow, cmp::Ordering, sync::atomic};
 
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel, WriteConflictReason};
-use raftstore::store::fsm::apply::{PRINTF_LOG, TXN_LOG};
+use raftstore::store::fsm::apply::TXN_LOG;
 use txn_types::{Key, LastChange, Lock, LockType, OldValue, TimeStamp, Value, WriteRef, WriteType};
 
 use super::ScannerConfig;
