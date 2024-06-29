@@ -5,7 +5,7 @@ use std::sync::mpsc::sync_channel;
 use crossbeam::epoch;
 use engine_traits::{CacheRange, Mutable, WriteBatch, WriteBatchExt};
 use hybrid_engine::util::hybrid_engine_for_tests;
-use region_cache_memory_engine::{decode_key, InternalKey, RangeCacheEngineConfig, ValueType};
+use range_cache_memory_engine::{decode_key, InternalKey, RangeCacheEngineConfig, ValueType};
 
 #[test]
 fn test_sequence_number_unique() {
@@ -19,7 +19,7 @@ fn test_sequence_number_unique() {
     })
     .unwrap();
 
-    let engine = hybrid_engine.region_cache_engine().clone();
+    let engine = hybrid_engine.range_cache_engine().clone();
     let r = CacheRange::new(b"k".to_vec(), b"k5".to_vec());
     engine.new_range(r.clone());
 

@@ -67,7 +67,7 @@ use raftstore_v2::{
     router::{DiskSnapBackupHandle, PeerMsg, RaftRouter},
     StateStorage,
 };
-use region_cache_memory_engine::RangeCacheMemoryEngineStatistics;
+use range_cache_memory_engine::RangeCacheMemoryEngineStatistics;
 use resolved_ts::Task;
 use resource_control::ResourceGroupManager;
 use security::SecurityManager;

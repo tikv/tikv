@@ -12,7 +12,7 @@ pub trait RangCacheEngineExt {
 
 impl RangCacheEngineExt for HybridEngineImpl {
     fn cache_all(&self) {
-        self.region_cache_engine().new_range(CacheRange::new(
+        self.range_cache_engine().new_range(CacheRange::new(
             DATA_MIN_KEY.to_vec(),
             DATA_MAX_KEY.to_vec(),
         ));

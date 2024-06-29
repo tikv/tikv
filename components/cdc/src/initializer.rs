@@ -59,7 +59,7 @@ use crate::{
     endpoint::Deregister,
     metrics::*,
     old_value::{near_seek_old_value, OldValueCursors},
-    service::ConnId,
+    service::{ConnId, RequestId},
     Error, Result, Task,
 };
 
@@ -86,7 +86,7 @@ pub(crate) enum Scanner<S: Snapshot> {
 pub(crate) struct Initializer<E> {
     pub(crate) region_id: u64,
     pub(crate) conn_id: ConnId,
-    pub(crate) request_id: u64,
+    pub(crate) request_id: RequestId,
     pub(crate) checkpoint_ts: TimeStamp,
     pub(crate) region_epoch: RegionEpoch,
 
@@ -146,7 +146,7 @@ impl<E: KvEngine> Initializer<E> {
             region_epoch,
             ChangeObserver::from_cdc(self.region_id, self.observe_handle.clone()),
             // NOTE: raftstore handles requests in serial for every region.
-            // That's why we can determine whehter to build a lock resolver or not
+            // That's why we can determine whether to build a lock resolver or not
             // without check and compare snapshot sequence number.
             Callback::read(Box::new(move |resp| {
                 if let Err(e) = sched.schedule(Task::InitDownstream {
@@ -714,7 +714,7 @@ mod tests {
         let initializer = Initializer {
             region_id: 1,
             conn_id: ConnId::new(),
-            request_id: 0,
+            request_id: RequestId(0),
             checkpoint_ts: 1.into(),
             region_epoch: RegionEpoch::default(),
 
