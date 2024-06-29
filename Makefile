@@ -93,6 +93,7 @@ endif
 ifeq ($(shell uname -p),arm64)
 ROCKSDB_SYS_SSE=0
 endif
+ROCKSDB_SYS_SSE=0
 
 # Build portable binary by default unless disable explicitly
 ifneq ($(ROCKSDB_SYS_PORTABLE),0)
@@ -160,9 +161,9 @@ export CARGO_BUILD_PIPELINING=true
 # This is a temporary workaround.
 # See: https://github.com/rust-lang/rust/issues/93166
 #      https://bugzilla.redhat.com/show_bug.cgi?id=1830472
-ifeq ($(TIKV_BUILD_RUSTC_TARGET),aarch64-unknown-linux-gnu)
-export RUSTFLAGS := $(RUSTFLAGS) -Ctarget-feature=-outline-atomics
-endif
+# ifeq ($(TIKV_BUILD_RUSTC_TARGET),aarch64-unknown-linux-gnu)
+# export RUSTFLAGS := $(RUSTFLAGS) -Ctarget-feature=-outline-atomics
+# endif
 
 # If both python and python3 are installed, it will choose python as a preferred option.
 PYTHON := $(shell command -v python 2> /dev/null || command -v python3 2> /dev/null)

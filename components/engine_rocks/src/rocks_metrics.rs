@@ -162,12 +162,6 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .block_cache_index_bytes_insert
                 .inc_by(value);
         }
-        TickerType::BlockCacheIndexBytesEvict => {
-            STORE_ENGINE_CACHE_EFFICIENCY
-                .get(name_enum)
-                .block_cache_index_bytes_evict
-                .inc_by(value);
-        }
         TickerType::BlockCacheFilterMiss => {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
@@ -190,12 +184,6 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
             STORE_ENGINE_CACHE_EFFICIENCY
                 .get(name_enum)
                 .block_cache_filter_bytes_insert
-                .inc_by(value);
-        }
-        TickerType::BlockCacheFilterBytesEvict => {
-            STORE_ENGINE_CACHE_EFFICIENCY
-                .get(name_enum)
-                .block_cache_filter_bytes_evict
                 .inc_by(value);
         }
         TickerType::BlockCacheDataMiss => {
@@ -357,12 +345,6 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
                 .iter_bytes_read
                 .inc_by(value);
         }
-        TickerType::NoFileCloses => {
-            STORE_ENGINE_FILE_STATUS
-                .get(name_enum)
-                .no_file_closes
-                .inc_by(value);
-        }
         TickerType::NoFileOpens => {
             STORE_ENGINE_FILE_STATUS
                 .get(name_enum)
@@ -409,12 +391,6 @@ pub fn flush_engine_ticker_metrics(t: TickerType, value: u64, name: &str) {
             STORE_ENGINE_WRITE_SERVED
                 .get(name_enum)
                 .write_done_by_other
-                .inc_by(value);
-        }
-        TickerType::WriteTimedout => {
-            STORE_ENGINE_WRITE_SERVED
-                .get(name_enum)
-                .write_timeout
                 .inc_by(value);
         }
         TickerType::WriteWithWal => {
@@ -673,46 +649,6 @@ pub fn flush_engine_histogram_metrics(t: HistType, value: HistogramData, name: &
             engine_histogram_metrics!(
                 STORE_ENGINE_MANIFEST_FILE_SYNC_VEC,
                 "manifest_file_sync",
-                name,
-                value
-            );
-        }
-        HistType::StallL0SlowdownCount => {
-            engine_histogram_metrics!(
-                STORE_ENGINE_STALL_L0_SLOWDOWN_COUNT_VEC,
-                "stall_l0_slowdown_count",
-                name,
-                value
-            );
-        }
-        HistType::StallMemtableCompactionCount => {
-            engine_histogram_metrics!(
-                STORE_ENGINE_STALL_MEMTABLE_COMPACTION_COUNT_VEC,
-                "stall_memtable_compaction_count",
-                name,
-                value
-            );
-        }
-        HistType::StallL0NumFilesCount => {
-            engine_histogram_metrics!(
-                STORE_ENGINE_STALL_L0_NUM_FILES_COUNT_VEC,
-                "stall_l0_num_files_count",
-                name,
-                value
-            );
-        }
-        HistType::HardRateLimitDelayCount => {
-            engine_histogram_metrics!(
-                STORE_ENGINE_HARD_RATE_LIMIT_DELAY_VEC,
-                "hard_rate_limit_delay",
-                name,
-                value
-            );
-        }
-        HistType::SoftRateLimitDelayCount => {
-            engine_histogram_metrics!(
-                STORE_ENGINE_SOFT_RATE_LIMIT_DELAY_VEC,
-                "soft_rate_limit_delay",
                 name,
                 value
             );
@@ -1586,31 +1522,6 @@ lazy_static! {
     pub static ref STORE_ENGINE_WAL_FILE_SYNC_MICROS_VEC: GaugeVec = register_gauge_vec!(
         "tikv_engine_wal_file_sync_micro_seconds",
         "Histogram of WAL file sync micros",
-        &["db", "type"]
-    ).unwrap();
-    pub static ref STORE_ENGINE_STALL_L0_SLOWDOWN_COUNT_VEC: GaugeVec = register_gauge_vec!(
-        "tikv_engine_stall_l0_slowdown_count",
-        "Histogram of stall l0 slowdown count",
-        &["db", "type"]
-    ).unwrap();
-    pub static ref STORE_ENGINE_STALL_MEMTABLE_COMPACTION_COUNT_VEC: GaugeVec = register_gauge_vec!(
-        "tikv_engine_stall_memtable_compaction_count",
-        "Histogram of stall memtable compaction count",
-        &["db", "type"]
-    ).unwrap();
-    pub static ref STORE_ENGINE_STALL_L0_NUM_FILES_COUNT_VEC: GaugeVec = register_gauge_vec!(
-        "tikv_engine_stall_l0_num_files_count",
-        "Histogram of stall l0 num files count",
-        &["db", "type"]
-    ).unwrap();
-    pub static ref STORE_ENGINE_HARD_RATE_LIMIT_DELAY_VEC: GaugeVec = register_gauge_vec!(
-        "tikv_engine_hard_rate_limit_delay_count",
-        "Histogram of hard rate limit delay count",
-        &["db", "type"]
-    ).unwrap();
-    pub static ref STORE_ENGINE_SOFT_RATE_LIMIT_DELAY_VEC: GaugeVec = register_gauge_vec!(
-        "tikv_engine_soft_rate_limit_delay_count",
-        "Histogram of soft rate limit delay count",
         &["db", "type"]
     ).unwrap();
     pub static ref STORE_ENGINE_NUM_FILES_IN_SINGLE_COMPACTION_VEC: GaugeVec = register_gauge_vec!(
