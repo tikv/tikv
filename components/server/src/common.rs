@@ -32,7 +32,7 @@ use hybrid_engine::HybridEngine;
 use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
 use raftstore::coprocessor::RegionInfoProvider;
-use region_cache_memory_engine::{
+use range_cache_memory_engine::{
     flush_range_cache_engine_statistics, RangeCacheEngineContext, RangeCacheMemoryEngine,
     RangeCacheMemoryEngineStatistics,
 };
