@@ -2663,10 +2663,8 @@ where
         };
         let cancel_by_unreachable_store =
             unreachable_store_id.map_or(false, |s| to_peer.get_store_id() == s);
-        let to_peer = to_peer.clone();
         let cancel_by_peer_not_found = find_peer_by_id(self.region(), to_peer.get_id()).is_none();
         if cancel_by_unreachable_store || cancel_by_peer_not_found {
-            self.get_store().take_gen_snap_task();
             self.get_store().cancel_generating_snap(None);
             warn!(
                 "cancel generate snap task";
@@ -5619,10 +5617,6 @@ where
                 "peer_id" => self.peer.get_id(),
                 "target" => ?to,
             );
-
-            if ty == ExtraMessageType::MsgSnapGenPrecheckRequest {
-                self.maybe_cancel_gen_snap_task(Some(to.get_store_id()))
-            }
         }
     }
 

@@ -891,6 +891,9 @@ where
 
     /// Cancel generating snapshot.
     pub fn cancel_generating_snap(&self, compact_to: Option<u64>) {
+        // Cancel snapshot precheck.
+        self.take_gen_snap_task();
+
         let snap_state = self.snap_state.borrow();
         if let SnapState::Generating {
             ref canceled,
