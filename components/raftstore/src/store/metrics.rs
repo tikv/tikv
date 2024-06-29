@@ -714,6 +714,21 @@ lazy_static! {
             "Total number of leader missed region."
         ).unwrap();
 
+    pub static ref READ_INDX_COAL_COUNTER: IntCounter = register_int_counter!(
+        "tikv_readIndex_coal",
+        "Total number of read index messages coalesced."
+    ).unwrap();
+
+    pub static ref READ_INDX_RETRY_COUNTER: IntCounter = register_int_counter!(
+        "tikv_readIndex_retry",
+        "Total number of read index messages retried."
+    ).unwrap();
+
+    pub static ref READ_INDX_RETRY_COAL_COUNTER: IntCounter = register_int_counter!(
+        "tikv_readIndex_retry_coal",
+        "Total number of retry read index messages coalesced."
+    ).unwrap();
+
     pub static ref CHECK_STALE_PEER_COUNTER: IntCounter = register_int_counter!(
         "tikv_raftstore_check_stale_peer",
         "Total number of checking stale peers."
