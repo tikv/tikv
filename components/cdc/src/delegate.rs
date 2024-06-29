@@ -938,7 +938,11 @@ impl Delegate {
                         }
                         BTreeMapEntry::Occupied(mut x) => {
                             *x.get_mut() += *lock_count_modify;
-                            assert!(*x.get() >= 0, "lock_count_modify should never be negative, start_ts: {}", entry.start_ts);
+                            assert!(
+                                *x.get() >= 0,
+                                "lock_count_modify should never be negative, start_ts: {}",
+                                entry.start_ts
+                            );
                             if *x.get() == 0 {
                                 x.remove();
                             }
@@ -1048,14 +1052,14 @@ impl Delegate {
     }
 
     fn sink_delete(&mut self, mut delete: DeleteRequest, rows: &mut RowsBuilder) -> Result<()> {
+        // RawKV (API v2, and only API v2 can use CDC) has no lock and will write to
+        // default cf only.
         match delete.cf.as_str() {
             "lock" => {
-                if ApiV2::parse_key_mode(delete.get_key()) != KeyMode::Raw {
-                    let key = Key::from_encoded(delete.take_key());
-                    let row = rows.txns_by_key.get_mut(&key).unwrap();
-                    assert_eq!(row.lock_count_modify, 0);
-                    row.lock_count_modify = self.pop_lock(key)?;
-                }
+                let key = Key::from_encoded(delete.take_key());
+                let row = rows.txns_by_key.get_mut(&key).unwrap();
+                assert_eq!(row.lock_count_modify, 0);
+                row.lock_count_modify = self.pop_lock(key)?;
             }
             "" | "default" | "write" => {}
             other => panic!("invalid cf {}", other),
