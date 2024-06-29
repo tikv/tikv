@@ -1184,7 +1184,7 @@ fn test_leader_step_down_after_requesting_snapshot() {
     must_get_equal(&cluster.get_engine(2), b"k1", b"v1");
 
     // Peer 1 should not send precheck after became follower.
-    while let Ok(_) = send_rx.try_recv() {}
+    while send_rx.try_recv().is_ok() {}
     let base_tick_interval = cluster.cfg.raft_store.raft_base_tick_interval.0;
     let election_ticks = cluster.cfg.raft_store.raft_election_timeout_ticks as u32;
     let election_timeout = base_tick_interval * election_ticks;
