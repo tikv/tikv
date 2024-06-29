@@ -3517,8 +3517,8 @@ where
             }
         }
         if retry_reqs != 0 {
-            ctx.raft_metrics.read_indx_retry.inc();
-            ctx.raft_metrics.read_indx_retry_coal.inc();
+            ctx.raft_metrics.read_indx_retry.inc_by(retry_reqs);
+            ctx.raft_metrics.read_indx_retry_coal.inc_by(retry_reqs - 1);
         }
     }
 
