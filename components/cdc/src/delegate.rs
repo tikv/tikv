@@ -951,7 +951,7 @@ impl Delegate {
                     }
                 }
 
-                if TxnSource::is_lossy_ddl_reorg_source_set(x.txn_source)
+                if TxnSource::is_lossy_ddl_reorg_source_set(entry.txn_source)
                     || downstream.filter_loop
                         && TxnSource::is_cdc_write_source_set(entry.txn_source)
                 {
