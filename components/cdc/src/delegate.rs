@@ -912,7 +912,7 @@ impl Delegate {
         Ok(())
     }
 
-    fn sink_downstream_tidb(&mut self, mut entries: Vec<(EventRow, isize)>) -> Result<()> {
+    fn sink_downstream_tidb(&mut self, entries: Vec<(EventRow, isize)>) -> Result<()> {
         let mut downstreams = Vec::with_capacity(self.downstreams.len());
         for d in &mut self.downstreams {
             if d.kv_api == ChangeDataRequestKvApi::TiDb && d.state.load().ready_for_change_events()
