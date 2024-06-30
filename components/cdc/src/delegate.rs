@@ -924,12 +924,13 @@ impl Delegate {
             return Ok(());
         }
 
-        // Drop lossy DDL entries.
-        entries.retain(|(x, _)| !TxnSource::is_lossy_ddl_reorg_source_set(x.txn_source));
-
         for downstream in downstreams {
             let mut filtered_entries = Vec::with_capacity(entries.len());
             for (entry, lock_count_modify) in &entries {
+                if !downstream.observed_range.contains_raw_key(&entry.key) {
+                    continue;
+                }
+
                 if *lock_count_modify != 0 && downstream.lock_heap.is_some() {
                     let lock_heap = downstream.lock_heap.as_mut().unwrap();
                     match lock_heap.entry(entry.start_ts.into()) {
@@ -950,7 +951,7 @@ impl Delegate {
                     }
                 }
 
-                if !downstream.observed_range.contains_raw_key(&entry.key)
+                if TxnSource::is_lossy_ddl_reorg_source_set(x.txn_source)
                     || downstream.filter_loop
                         && TxnSource::is_cdc_write_source_set(entry.txn_source)
                 {
