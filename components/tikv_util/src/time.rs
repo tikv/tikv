@@ -539,9 +539,25 @@ impl Default for ThreadReadId {
 /// the `elaspsed` should be small, like 1ms. And the caller should not
 /// rely on it to guarantee the exact time to sleep.
 pub fn yield_at_least(elaspsed: Duration) {
-    let now = Instant::now_coarse();
+    let now = Instant::now();
     while now.saturating_elapsed() < elaspsed {
         thread::yield_now();
+    }
+}
+
+/// Default ratio for spin duration.
+///
+/// Spin duration for one round is about 25~28us. So, heuristically, we can
+/// use 4 as the default ratio to make the spin duration about 100us.
+const SPIN_ROUND_DEFAULT_RATIO: u64 = 4;
+
+pub fn spin_at_least(elaspsed: Duration) {
+    let rounds = elaspsed.as_nanos() as u64 * SPIN_ROUND_DEFAULT_RATIO;
+    let now = Instant::now();
+    for i in 1..=rounds as u64 {
+        if i % 100 == 0 && now.saturating_elapsed() >= elaspsed {
+            return;
+        }
     }
 }
 

@@ -40,7 +40,7 @@ use tikv_util::{
     debug, info, slow_log,
     sys::thread::StdThreadBuildWrapper,
     thd_name,
-    time::{duration_to_sec, yield_at_least, Duration, Instant},
+    time::{duration_to_sec, spin_at_least, Duration, Instant},
     warn,
 };
 
@@ -465,7 +465,7 @@ impl WriteTaskBatchRecorder {
     fn wait_for_a_while(&mut self) {
         self.wait_count += 1;
         // Use a simple linear function to calculate the wait duration.
-        yield_at_least(Duration::from_nanos(
+        spin_at_least(Duration::from_nanos(
             (self.wait_duration.as_nanos() as f64 * (1.0 / self.trend)) as u64,
         ));
     }

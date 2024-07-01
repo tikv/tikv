@@ -291,7 +291,7 @@ fn test_write_task_batch_recorder() {
     assert_eq!(recorder.get_avg(), 512);
     assert_eq!(recorder.get_trend(), 0.5);
     assert!(recorder.should_wait(128));
-    let start = Instant::now_coarse();
+    let start = Instant::now();
     recorder.wait_for_a_while();
     assert!(start.saturating_elapsed() >= Duration::from_nanos(100));
     // [4096 ...]
@@ -303,7 +303,7 @@ fn test_write_task_batch_recorder() {
     assert!(!recorder.should_wait(128));
     recorder.reset_wait_count();
     assert!(recorder.should_wait(128));
-    let start = Instant::now_coarse();
+    let start = Instant::now();
     recorder.wait_for_a_while();
     assert!(start.saturating_elapsed() >= Duration::from_nanos(20));
 }
