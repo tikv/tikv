@@ -988,8 +988,9 @@ where
         let term = self.fsm.peer.raft_group.raft.term;
         if let Some(e) = &req.expected_epoch {
             if let Err(err) = compare_region_epoch(e, self.region(), true, true, true) {
-                warn!("epoch not match for wait apply, aborting."; "err" => %err, 
-                    "peer" => self.fsm.peer.peer_id(), 
+                warn!("epoch not match for wait apply, aborting.";
+                    "err" => %err,
+                    "peer" => self.fsm.peer.peer_id(),
                     "region" => self.fsm.peer.region().get_id());
                 let mut pberr = errorpb::Error::from(err);
                 req.syncer
@@ -1492,6 +1493,11 @@ where
             SignificantMsg::Unreachable { to_peer_id, .. } => {
                 if self.fsm.peer.is_leader() {
                     self.fsm.peer.raft_group.report_unreachable(to_peer_id);
+                    let unreachable_store_id =
+                        find_peer(self.fsm.peer.region(), to_peer_id).map(|p| p.get_store_id());
+                    self.fsm
+                        .peer
+                        .maybe_cancel_gen_snap_task(unreachable_store_id);
                 } else if to_peer_id == self.fsm.peer.leader_id() {
                     self.fsm.reset_hibernate_state(GroupState::Chaos);
                     self.register_raft_base_tick();
@@ -1501,6 +1507,7 @@ where
                 if let Some(peer_id) = find_peer(self.region(), store_id).map(|p| p.get_id()) {
                     if self.fsm.peer.is_leader() {
                         self.fsm.peer.raft_group.report_unreachable(peer_id);
+                        self.fsm.peer.maybe_cancel_gen_snap_task(Some(store_id));
                     } else if peer_id == self.fsm.peer.leader_id() {
                         self.fsm.reset_hibernate_state(GroupState::Chaos);
                         self.register_raft_base_tick();
@@ -3096,6 +3103,7 @@ where
                 "region_id" => region_id,
                 "to_store_id" => to.get_store_id(),
                 "my_store_id" => self.store_id(),
+                "msg_type" => %util::MsgType(msg),
             );
             self.ctx
                 .raft_metrics
@@ -3165,6 +3173,7 @@ where
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
                     "target_peer" => ?target,
+                    "msg_type" => %util::MsgType(msg),
                 );
                 self.ctx.raft_metrics.message_dropped.stale_msg.inc();
                 true
@@ -3299,7 +3308,8 @@ where
                 "receive stale gc message, ignore.";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
-                "to_peer_id" => msg.get_to_peer().get_id(),
+                "to_peer" => ?msg.get_to_peer(),
+                "from_peer" => ?msg.get_from_peer(),
             );
             self.ctx.raft_metrics.message_dropped.stale_msg.inc();
             return;
@@ -3310,6 +3320,7 @@ where
             "region_id" => self.fsm.region_id(),
             "peer_id" => self.fsm.peer_id(),
             "to_peer" => ?msg.get_to_peer(),
+            "from_peer" => ?msg.get_from_peer(),
         );
 
         // Destroy peer in next round in order to apply more committed entries if any.
@@ -3409,6 +3420,7 @@ where
                 "peer_id" => self.fsm.peer_id(),
                 "snap" => ?snap_region,
                 "to_peer" => ?msg.get_to_peer(),
+                "msg_type" => %util::MsgType(msg),
             );
             self.ctx.raft_metrics.message_dropped.region_no_peer.inc();
             return Ok(Either::Left(key));
@@ -3421,6 +3433,7 @@ where
                     "stale delegate detected, skip";
                     "region_id" => self.fsm.region_id(),
                     "peer_id" => self.fsm.peer_id(),
+                    "msg_type" => %util::MsgType(msg),
                 );
                 self.ctx.raft_metrics.message_dropped.stale_msg.inc();
                 return Ok(Either::Left(key));
@@ -3455,6 +3468,7 @@ where
                     "peer_id" => self.fsm.peer_id(),
                     "region" => ?region,
                     "snap" => ?snap_region,
+                    "msg_type" => %util::MsgType(msg),
                 );
                 self.ctx.raft_metrics.message_dropped.region_overlap.inc();
                 return Ok(Either::Left(key));
