@@ -278,6 +278,37 @@ impl TestWriters {
 }
 
 #[test]
+fn test_write_task_batch_recorder() {
+    let mut recorder = WriteTaskBatchRecorder::new(1024, Duration::from_nanos(50)); // 1kb, 50 nanoseconds
+    assert_eq!(recorder.get_avg(), 0);
+    assert_eq!(recorder.get_trend(), 1.0);
+    assert!(!recorder.should_wait(4096));
+    assert!(recorder.should_wait(512));
+    // [512 ...]
+    for _ in 0..30 {
+        recorder.record(512);
+    }
+    assert_eq!(recorder.get_avg(), 512);
+    assert_eq!(recorder.get_trend(), 0.5);
+    assert!(recorder.should_wait(128));
+    let start = Instant::now();
+    recorder.wait_for_a_while();
+    assert!(start.saturating_elapsed() >= Duration::from_nanos(100));
+    // [4096 ...]
+    for _ in 0..30 {
+        recorder.record(4096);
+    }
+    assert_eq!(recorder.get_avg(), 4096);
+    assert_eq!(recorder.get_trend(), 2.0);
+    assert!(!recorder.should_wait(128));
+    recorder.reset_wait_count();
+    assert!(recorder.should_wait(128));
+    let start = Instant::now();
+    recorder.wait_for_a_while();
+    assert!(start.saturating_elapsed() >= Duration::from_nanos(20));
+}
+
+#[test]
 fn test_worker() {
     let region_1 = 1;
     let region_2 = 2;
