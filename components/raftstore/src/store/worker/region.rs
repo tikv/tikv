@@ -969,6 +969,9 @@ where
                 start_key,
                 end_key,
             } => {
+                let mut range = CacheRange::new(start_key.to_vec(), end_key.to_vec());
+                range.tag = CacheRange::new_tag(region_id);
+                self.engine.evict_range(range);
                 let region_cleaner = self.region_cleaner.clone();
                 self.region_cleanup_pool
                     .spawn(async move {
