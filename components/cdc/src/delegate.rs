@@ -1058,9 +1058,14 @@ impl Delegate {
         match delete.cf.as_str() {
             "lock" => {
                 let key = Key::from_encoded(delete.take_key());
-                let row = rows.txns_by_key.get_mut(&key).unwrap();
-                assert_eq!(row.lock_count_modify, 0);
-                row.lock_count_modify = self.pop_lock(key)?;
+                let lock_count_modify = self.pop_lock(key.clone())?;
+                if lock_count_modify != 0 {
+                    // If lock_count_modify isn't 0 it means the deletion must come from a commit
+                    // or rollback, instead of any `Unlock` operations.
+                    let row = rows.txns_by_key.get_mut(&key).unwrap();
+                    assert_eq!(row.lock_count_modify, 0);
+                    row.lock_count_modify = lock_count_modify;
+                }
             }
             "" | "default" | "write" => {}
             other => panic!("invalid cf {}", other),
@@ -1140,6 +1145,8 @@ impl Delegate {
         self.txn_extra_op.store(TxnExtraOp::Noop);
     }
 }
+    // suite.must_kv_prewrite_with_source(rid, vec![mutation], k.clone(), start_tso,
+    // 1);
 
 #[derive(Default)]
 struct RowsBuilder {
