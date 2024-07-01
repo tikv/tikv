@@ -352,7 +352,7 @@ impl ResolvedRegionHeap {
 #[derive(Default, Debug)]
 pub(crate) struct Advance {
     // multiplexing means one region can be subscribed multiple times in one `Conn`,
-    // in which case progresses are grouped by (ConnId, request_id).
+    // in which case progresses are grouped by (ConnId, RequestId).
     pub(crate) multiplexing: HashMap<(ConnId, RequestId), ResolvedRegionHeap>,
 
     // exclusive means one region can only be subscribed one time in one `Conn`,
@@ -361,7 +361,7 @@ pub(crate) struct Advance {
 
     // To be compatible with old TiCDC client before v4.0.8.
     // TODO(qupeng): we can deprecate support for too old TiCDC clients.
-    // map[(ConnId, region_id)]->request_id.
+    // map[(ConnId, RegionId)] -> RequestId.
     pub(crate) dispersed: HashMap<(ConnId, RegionId), RequestId>,
 
     pub(crate) scan_finished: usize,
