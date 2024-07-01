@@ -637,6 +637,11 @@ impl Delegate {
             }
             advance.scan_finished += 1;
 
+            if downstream.kv_api == ChangeDataRequestKvApi::RawKv {
+                downstream.advanced_to = min_ts;
+                return Some(downstream.advanced_to);
+            }
+
             if downstream.lock_heap.is_none() {
                 let mut lock_heap = BTreeMap::<TimeStamp, isize>::new();
                 for (_, lock) in locks.range(downstream.observed_range.to_range()) {
