@@ -1145,8 +1145,6 @@ impl Delegate {
         self.txn_extra_op.store(TxnExtraOp::Noop);
     }
 }
-    // suite.must_kv_prewrite_with_source(rid, vec![mutation], k.clone(), start_tso,
-    // 1);
 
 #[derive(Default)]
 struct RowsBuilder {
