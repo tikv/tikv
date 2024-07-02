@@ -15,7 +15,7 @@ use kvproto::{cdcpb::*, kvrpcpb::*, tikvpb_grpc::TikvClient};
 use pd_client::PdClient;
 use test_raftstore::*;
 use tikv_util::{debug, worker::Scheduler, HandyRwLock};
-use txn_types::{TimeStamp, Key};
+use txn_types::{Key, TimeStamp};
 
 use crate::{new_event_feed, new_event_feed_v2, ClientReceiver, TestSuite, TestSuiteBuilder};
 
@@ -594,71 +594,6 @@ fn test_cdc_notify_pending_regions() {
         Some(Event_oneof_event::Error(ref e)) if e.has_region_not_found(),
     );
     fail::remove("cdc_before_initialize");
-}
-
-#[test]
-fn test_cdc_partial_subscriptions() {
-    let mut cluster = new_server_cluster(0, 1);
-    configure_for_lease_read(&mut cluster.cfg, Some(100), Some(10));
-    cluster.pd_client.disable_default_operator();
-    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
-    let region = suite.cluster.get_region(&[]);
-    let rid = region.id;
-    let cf_tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
-
-    let start_tso = cf_tso.next();
-    let k = b"key".to_vec();
-    let v = vec![b'x'; 16 * 1024];
-    let mut mutation = Mutation::default();
-    mutation.set_op(Op::Put);
-    mutation.key = k.clone();
-    mutation.value = v;
-    suite.must_kv_prewrite(rid, vec![mutation], k.clone(), start_tso);
-
-    fail::cfg("before_post_incremental_scan", "1*pause").unwrap();
-
-    let (mut req_tx_1, _, receive_event_1) = new_event_feed_v2(suite.get_region_cdc_client(rid));
-    let mut req = suite.new_changedata_request(rid);
-    req.request_id = 100;
-    req.checkpoint_ts = cf_tso.into_inner();
-    req.set_start_key(Key::from_raw(b"a").into_encoded());
-    req.set_end_key(Key::from_raw(b"z").into_encoded());
-    block_on(req_tx_1.send((req, WriteFlags::default()))).unwrap();
-
-    let (mut req_tx_2, _, receive_event_2) = new_event_feed_v2(suite.get_region_cdc_client(rid));
-    let mut req = suite.new_changedata_request(rid);
-    req.request_id = 200;
-    req.checkpoint_ts = cf_tso.into_inner();
-    req.set_start_key(Key::from_raw(b"b").into_encoded());
-    req.set_end_key(Key::from_raw(b"x").into_encoded());
-    block_on(req_tx_2.send((req, WriteFlags::default()))).unwrap();
-
-    let cdc_event = receive_event_1(false);
-    'WaitInit: for event in cdc_event.get_events() {
-        for entry in event.get_entries().get_entries() {
-            match entry.get_type() {
-                EventLogType::Prewrite => {}
-                EventLogType::Initialized => break 'WaitInit,
-                _ => unreachable!(),
-            }
-        }
-    }
-
-    let cdc_event = receive_event_2(false);
-    'WaitInit: for event in cdc_event.get_events() {
-        for entry in event.get_entries().get_entries() {
-            match entry.get_type() {
-                EventLogType::Prewrite => {}
-                EventLogType::Initialized => break 'WaitInit,
-                _ => unreachable!(),
-            }
-        }
-    }
-
-    suite.must_kv_rollback(rid, vec![k.clone()], start_tso);
-
-    std::thread::park();
-    fail::remove("before_post_incremental_scan");
 }
 
 #[test]
