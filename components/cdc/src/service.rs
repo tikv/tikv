@@ -352,6 +352,7 @@ impl Service {
         let task = Task::Register {
             request,
             downstream,
+            conn_id,
         };
         scheduler.schedule(task).map_err(|e| format!("{:?}", e))
     }
