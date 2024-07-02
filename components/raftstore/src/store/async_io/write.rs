@@ -813,7 +813,7 @@ where
                     "tag" => &self.tag,
                     "region_id" => task.region_id,
                     "peer_id" => task.peer_id,
-                    "msg_type" => %util::MsgType(&msg),
+                    "msg_type" => ?msg_type,
                     "msg_size" => msg.get_message().compute_size(),
                     "to" => to_peer_id,
                     "disk_usage" => ?msg.get_disk_usage(),
