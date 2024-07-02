@@ -40,6 +40,11 @@ pub struct RequestId(pub u64);
 
 #[derive(Default, Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct RegionId(pub u64);
+impl Debug for RegionId {
+  fn fmt(self, f) -> Result() {
+    write!(f, "{}", self.0)
+  }
+}
 
 impl ConnId {
     pub fn new() -> ConnId {
