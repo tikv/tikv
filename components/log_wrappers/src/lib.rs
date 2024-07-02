@@ -9,12 +9,14 @@ extern crate slog;
 extern crate tikv_alloc;
 
 pub mod hex;
-use std::{
-    fmt,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use std::{fmt, str::FromStr, sync::atomic::Ordering};
 
-use protobuf::atomic_flags::set_redact_bytes as proto_set_redact_bytes;
+use atomic::Atomic;
+use protobuf::atomic_flags::{
+    set_redact_level as proto_set_redact_level, RedactLevel, DEFAULT_REDACT_MARKER_HEAD,
+    DEFAULT_REDACT_MARKER_TAIL,
+};
+use serde::{de, Deserialize, Serialize, Serializer};
 
 pub use crate::hex::*;
 
@@ -61,40 +63,97 @@ impl<T: std::fmt::Debug> slog::Value for DebugValue<T> {
     }
 }
 
-#[cfg(test)]
-#[test]
-fn test_debug() {
-    let buffer = crate::test_util::SyncLoggerBuffer::new();
-    let logger = buffer.build_logger();
+/// RedactOption is exposed to user to manually control the redaction of log
+/// data.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RedactOption {
+    Flag(bool),
+    Marker,
+}
 
-    slog_info!(logger, "foo"; "bar" => DebugValue(&::std::time::Duration::from_millis(2500)));
-    assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: 2.5s\n");
+impl Default for RedactOption {
+    fn default() -> Self {
+        Self::Flag(false)
+    }
+}
 
-    buffer.clear();
-    slog_info!(logger, "foo"; "bar" => DebugValue(::std::time::Duration::from_millis(23)));
-    assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: 23ms\n");
+impl FromStr for RedactOption {
+    type Err = String;
+    fn from_str(s: &str) -> Result<RedactOption, String> {
+        match s {
+            "" => Ok(RedactOption::default()),
+            "on" | "ON" => Ok(RedactOption::Flag(true)),
+            "off" | "OFF" => Ok(RedactOption::Flag(false)),
+            "marker" | "MARKER" => Ok(RedactOption::Marker),
+            s => Err(format!("expect: marker, on | off, got: {:?}", s)),
+        }
+    }
+}
 
-    buffer.clear();
-    slog_info!(logger, "foo"; "bar" => DebugValue(&::std::time::Duration::from_secs(1000)));
-    assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: 1000s\n");
+impl Serialize for RedactOption {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Flag(flag) => flag.serialize(serializer),
+            Self::Marker => "marker".serialize(serializer),
+        }
+    }
+}
 
-    buffer.clear();
-    slog_info!(logger, "foo"; "bar" => Some(DebugValue(&::std::time::Duration::from_secs(1))));
-    assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: 1s\n");
+impl<'de> Deserialize<'de> for RedactOption {
+    fn deserialize<D>(deseralizer: D) -> Result<RedactOption, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        struct RedactOptionVisitor;
 
-    buffer.clear();
-    let v: Option<DebugValue<::std::time::Duration>> = None;
-    slog_info!(logger, "foo"; "bar" => v);
-    assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: None\n");
+        impl<'de> de::Visitor<'de> for RedactOptionVisitor {
+            type Value = RedactOption;
+
+            fn expecting(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+                fmt.write_str("string or bool")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<RedactOption, E>
+            where
+                E: de::Error,
+            {
+                FromStr::from_str(value).map_err(E::custom)
+            }
+
+            fn visit_bool<E>(self, flag: bool) -> Result<RedactOption, E>
+            where
+                E: de::Error,
+            {
+                Ok(RedactOption::Flag(flag))
+            }
+        }
+
+        deseralizer.deserialize_any(RedactOptionVisitor)
+    }
+}
+
+impl RedactOption {
+    fn convert(&self) -> RedactLevel {
+        match self {
+            Self::Flag(true) => RedactLevel::On,
+            Self::Marker => RedactLevel::Marker,
+            _ => RedactLevel::Off,
+        }
+    }
 }
 
 // Log user data to info log only when this flag is set to false.
-static REDACT_INFO_LOG: AtomicBool = AtomicBool::new(false);
+static REDACT_INFO_LOG: Atomic<RedactLevel> = Atomic::new(RedactLevel::Off);
 
 /// Set whether we should avoid user data to slog.
-pub fn set_redact_info_log(v: bool) {
-    REDACT_INFO_LOG.store(v, Ordering::Relaxed);
-    proto_set_redact_bytes(v);
+pub fn set_redact_info_log(config: RedactOption) {
+    let level = config.convert();
+    REDACT_INFO_LOG.store(level, Ordering::Relaxed);
+    // Also set the redact level in protobuf.
+    proto_set_redact_level(level);
 }
 
 pub struct Value<'a>(pub &'a [u8]);
@@ -117,10 +176,20 @@ impl<'a> slog::Value for Value<'a> {
         key: slog::Key,
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
-        if REDACT_INFO_LOG.load(Ordering::Relaxed) {
-            serializer.emit_arguments(key, &format_args!("?"))
-        } else {
-            serializer.emit_arguments(key, &format_args!("{}", crate::hex_encode_upper(self.0)))
+        match REDACT_INFO_LOG.load(Ordering::Relaxed) {
+            RedactLevel::Marker => serializer.emit_arguments(
+                key,
+                &format_args!(
+                    "{}{}{}",
+                    DEFAULT_REDACT_MARKER_HEAD,
+                    crate::hex_encode_upper(self.0),
+                    DEFAULT_REDACT_MARKER_TAIL,
+                ),
+            ),
+            RedactLevel::On => serializer.emit_arguments(key, &format_args!("?")),
+            _ => {
+                serializer.emit_arguments(key, &format_args!("{}", crate::hex_encode_upper(self.0)))
+            }
         }
     }
 }
@@ -128,11 +197,23 @@ impl<'a> slog::Value for Value<'a> {
 impl<'a> fmt::Display for Value<'a> {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if REDACT_INFO_LOG.load(Ordering::Relaxed) {
-            // Print placeholder instead of the value itself.
-            write!(f, "?")
-        } else {
-            write!(f, "{}", crate::hex_encode_upper(self.0))
+        match REDACT_INFO_LOG.load(Ordering::Relaxed) {
+            RedactLevel::Marker => {
+                write!(
+                    f,
+                    "{}{}{}",
+                    DEFAULT_REDACT_MARKER_HEAD,
+                    crate::hex_encode_upper(self.0),
+                    DEFAULT_REDACT_MARKER_TAIL
+                )
+            }
+            RedactLevel::On => {
+                // Print placeholder instead of the value itself.
+                write!(f, "?")
+            }
+            _ => {
+                write!(f, "{}", crate::hex_encode_upper(self.0))
+            }
         }
     }
 }
@@ -145,22 +226,149 @@ impl<'a> fmt::Debug for Value<'a> {
 }
 
 #[cfg(test)]
-#[test]
-fn test_log_key() {
-    let buffer = crate::test_util::SyncLoggerBuffer::new();
-    let logger = buffer.build_logger();
-    slog_info!(logger, "foo"; "bar" => Value::key(b"\xAB \xCD"));
-    assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: AB20CD\n");
-}
+mod tests {
+    use super::*;
 
-#[cfg(test)]
-#[test]
-#[ignore]
-fn test_redact_info_log() {
-    let buffer = crate::test_util::SyncLoggerBuffer::new();
-    let logger = buffer.build_logger();
-    set_redact_info_log(true);
-    slog_info!(logger, "foo"; "bar" => Value::key(b"\xAB \xCD"));
-    assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: ?\n");
-    set_redact_info_log(false);
+    #[test]
+    fn test_debug() {
+        let buffer = crate::test_util::SyncLoggerBuffer::new();
+        let logger = buffer.build_logger();
+
+        slog_info!(logger, "foo"; "bar" => DebugValue(&::std::time::Duration::from_millis(2500)));
+        assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: 2.5s\n");
+
+        buffer.clear();
+        slog_info!(logger, "foo"; "bar" => DebugValue(::std::time::Duration::from_millis(23)));
+        assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: 23ms\n");
+
+        buffer.clear();
+        slog_info!(logger, "foo"; "bar" => DebugValue(&::std::time::Duration::from_secs(1000)));
+        assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: 1000s\n");
+
+        buffer.clear();
+        slog_info!(logger, "foo"; "bar" => Some(DebugValue(&::std::time::Duration::from_secs(1))));
+        assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: 1s\n");
+
+        buffer.clear();
+        let v: Option<DebugValue<::std::time::Duration>> = None;
+        slog_info!(logger, "foo"; "bar" => v);
+        assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: None\n");
+    }
+
+    #[test]
+    fn test_log_key() {
+        let buffer = crate::test_util::SyncLoggerBuffer::new();
+        let logger = buffer.build_logger();
+        slog_info!(logger, "foo"; "bar" => Value::key(b"\xAB \xCD"));
+        assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: AB20CD\n");
+    }
+
+    #[test]
+    fn test_redact_options() {
+        #[derive(Default, Serialize, Deserialize)]
+        #[serde(default)]
+        #[serde(rename_all = "kebab-case")]
+        struct TestRedactInfo {
+            redact_info_log: RedactOption,
+        }
+
+        assert_eq!(
+            RedactOption::from_str("").unwrap(),
+            RedactOption::Flag(false)
+        );
+        assert_eq!(
+            RedactOption::from_str("on").unwrap(),
+            RedactOption::Flag(true)
+        );
+        assert_eq!(
+            RedactOption::from_str("off").unwrap(),
+            RedactOption::Flag(false)
+        );
+        assert_eq!(
+            RedactOption::from_str("marker").unwrap(),
+            RedactOption::Marker
+        );
+        assert_eq!(
+            RedactOption::from_str("MARKER").unwrap(),
+            RedactOption::Marker
+        );
+        RedactOption::from_str("Marker").unwrap_err();
+
+        let mut template = r#""#;
+        let mut test_config: TestRedactInfo = toml::from_str(template).unwrap();
+        assert_eq!(test_config.redact_info_log, RedactOption::default());
+        assert_eq!(test_config.redact_info_log.convert(), RedactLevel::Off);
+
+        template = r#"
+            redact-info-log = true  
+        "#;
+        test_config = toml::from_str(template).unwrap();
+        assert_eq!(test_config.redact_info_log, RedactOption::Flag(true));
+        assert_eq!(test_config.redact_info_log.convert(), RedactLevel::On);
+
+        template = r#"
+            redact-info-log = false  
+        "#;
+        test_config = toml::from_str(template).unwrap();
+        assert_eq!(test_config.redact_info_log, RedactOption::Flag(false));
+        assert_eq!(test_config.redact_info_log.convert(), RedactLevel::Off);
+
+        template = r#"
+            redact-info-log = "on"  
+        "#;
+        test_config = toml::from_str(template).unwrap();
+        assert_eq!(test_config.redact_info_log, RedactOption::Flag(true));
+        assert_eq!(test_config.redact_info_log.convert(), RedactLevel::On);
+
+        template = r#"
+            redact-info-log = "off" 
+        "#;
+        test_config = toml::from_str(template).unwrap();
+        assert_eq!(test_config.redact_info_log, RedactOption::Flag(false));
+        assert_eq!(test_config.redact_info_log.convert(), RedactLevel::Off);
+
+        template = r#"
+            redact-info-log = "marker"
+        "#;
+        test_config = toml::from_str(template).unwrap();
+        assert_eq!(test_config.redact_info_log, RedactOption::Marker);
+        assert_eq!(test_config.redact_info_log.convert(), RedactLevel::Marker);
+
+        template = r#"
+            redact-info-log = "MARKER"
+        "#;
+        test_config = toml::from_str(template).unwrap();
+        assert_eq!(test_config.redact_info_log, RedactOption::Marker);
+        assert_eq!(test_config.redact_info_log.convert(), RedactLevel::Marker);
+
+        template = r#"
+            redact-info-log = "Maker"
+        "#;
+        toml::from_str::<RedactOption>(template).unwrap_err();
+    }
+
+    #[test]
+    fn test_redact_info_log() {
+        let buffer = crate::test_util::SyncLoggerBuffer::new();
+        let logger = buffer.build_logger();
+        set_redact_info_log(RedactOption::Flag(true));
+        slog_info!(logger, "foo"; "bar" => Value::key(b"\xAB \xCD"));
+        assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: ?\n");
+
+        buffer.clear();
+        set_redact_info_log(RedactOption::default());
+        slog_info!(logger, "foo"; "bar" => Value::key(b"\xAB \xCD"));
+        assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: AB20CD\n");
+
+        buffer.clear();
+        set_redact_info_log(RedactOption::Marker);
+        slog_info!(logger, "foo"; "bar" => Value::key(b"\xAB \xCD"));
+        assert_eq!(
+            buffer.as_string(),
+            format!(
+                "TIME INFO foo, bar: {}AB20CD{}\n",
+                DEFAULT_REDACT_MARKER_HEAD, DEFAULT_REDACT_MARKER_TAIL
+            )
+        );
+    }
 }

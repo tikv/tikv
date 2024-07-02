@@ -18,6 +18,7 @@ use grpcio::{
     RpcContext, RpcStatus, RpcStatusCode, ServerBuilder, ServerChecker, ServerCredentialsBuilder,
     ServerCredentialsFetcher,
 };
+use log_wrappers::RedactOption;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
@@ -31,7 +32,7 @@ pub struct SecurityConfig {
     #[serde(skip)]
     pub override_ssl_target: String,
     pub cert_allowed_cn: HashSet<String>,
-    pub redact_info_log: Option<bool>,
+    pub redact_info_log: RedactOption,
     pub encryption: EncryptionConfig,
 }
 

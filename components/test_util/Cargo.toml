@@ -13,6 +13,7 @@ encryption_export = { workspace = true }
 fail = "0.5"
 grpcio = { workspace = true }
 kvproto = { workspace = true }
+log_wrappers = { workspace = true }
 rand = "0.8"
 rand_isaac = "0.3"
 security = { workspace = true }
