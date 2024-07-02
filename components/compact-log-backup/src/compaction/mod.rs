@@ -3,7 +3,11 @@ use std::sync::Arc;
 use derive_more::Display;
 use kvproto::brpb::{self, FileType};
 
-use crate::{storage::LogFileId, util};
+use crate::{
+    statistic::{CompactStatistic, LoadStatistic},
+    storage::LogFileId,
+    util,
+};
 
 #[derive(Debug, Clone)]
 pub struct Input {
@@ -29,13 +33,30 @@ pub struct Compaction {
     pub ty: FileType,
 }
 
-#[derive(Default)]
+#[derive(Debug)]
 pub struct CompactionResult {
+    pub origin: Compaction,
     pub meta: brpb::LogFileCompactionMeta,
 
     pub expected_crc64: Option<u64>,
     pub expected_keys: u64,
     pub expected_size: u64,
+    pub load_stat: LoadStatistic,
+    pub compact_stat: CompactStatistic,
+}
+
+impl CompactionResult {
+    pub fn of(origin: Compaction) -> Self {
+        Self {
+            meta: Default::default(),
+            expected_crc64: Some(0),
+            expected_keys: Default::default(),
+            expected_size: Default::default(),
+            load_stat: Default::default(),
+            compact_stat: Default::default(),
+            origin,
+        }
+    }
 }
 
 pub mod collector;

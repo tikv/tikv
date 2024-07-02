@@ -39,6 +39,7 @@ impl<T: Into<ErrorKind>> From<T> for Error {
 
 pub trait TraceResultExt {
     fn trace_err(self) -> Self;
+    fn annotate(self, message: impl Display) -> Self;
 }
 
 impl<T> TraceResultExt for Result<T> {
@@ -47,6 +48,17 @@ impl<T> TraceResultExt for Result<T> {
         match self {
             Ok(v) => Ok(v),
             Err(err) => Err(err.attach_current_frame()),
+        }
+    }
+
+    #[track_caller]
+    fn annotate(self, message: impl Display) -> Result<T> {
+        match self {
+            Ok(v) => Ok(v),
+            Err(mut err) => {
+                err.notes = message.to_string();
+                Err(err.attach_current_frame())
+            }
         }
     }
 }

@@ -6,12 +6,8 @@ use std::{
 };
 
 use async_compression::futures::write::ZstdDecoder;
-
-
 use external_storage::ExternalStorage;
-use futures::{
-    io::{AllowStdIo, AsyncWriteExt, Cursor},
-};
+use futures::io::{AllowStdIo, AsyncWriteExt, Cursor};
 use prometheus::core::{Atomic, AtomicU64};
 use tikv_util::{
     codec::stream_event::{self, Iterator},
@@ -188,8 +184,12 @@ impl Source {
 
         let mut co = Cooperate::new(4096);
         let mut iter = stream_event::EventIterator::new(&content);
-        iter.next()?;
-        while iter.valid() {
+        loop {
+            if !iter.valid() {
+                break;
+            }
+
+            iter.next()?;
             co.step().await;
             on_key_value(iter.key(), iter.value());
             stat.as_mut().map(|stat| {
@@ -197,7 +197,6 @@ impl Source {
                 stat.logical_key_bytes_in += iter.key().len() as u64;
                 stat.logical_value_bytes_in += iter.value().len() as u64;
             });
-            iter.next()?;
         }
         stat.as_mut().map(|stat| stat.files_in += 1);
         Ok(())

@@ -1057,6 +1057,7 @@ version = "0.1.0"
 dependencies = [
  "async-compression",
  "bytes",
+ "chrono",
  "crc64fast",
  "dashmap",
  "derive_more",
@@ -2878,7 +2879,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/YuJuncen/kvproto?branch=compact-log-backup#26bb0571d933801e79d84d793cc2c1d596a9d69f"
+source = "git+https://github.com/YuJuncen/kvproto?branch=compact-log-backup#705695618334cde6d8f1d9422b190e9fa9d43de3"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

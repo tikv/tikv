@@ -1,22 +1,27 @@
 use std::{
     collections::VecDeque,
     future::Future,
-    path::Path,
     pin::Pin,
     sync::Arc,
     task::{ready, Context, Poll},
 };
 
 use derive_more::Display;
-use external_storage::{BlobObject, ExternalStorage, FullFeaturedStorage, WalkBlobStorage};
+use external_storage::{
+    BlobObject, ExternalStorage, FullFeaturedStorage, UnpinReader, WalkBlobStorage,
+};
 use futures::{
     future::{FusedFuture, FutureExt, TryFutureExt},
-    io::AsyncReadExt,
+    io::{AsyncReadExt, Cursor},
     stream::{Fuse, FusedStream, StreamExt, TryStreamExt},
 };
-use kvproto::brpb::FileType;
+use kvproto::brpb::{FileType, Migration};
 use prometheus::core::{Atomic, AtomicU64};
-use tikv_util::{stream::RetryExt, time::Instant};
+use tikv_util::{
+    retry_expr,
+    stream::{JustRetry, RetryExt},
+    time::Instant,
+};
 use tokio_stream::Stream;
 use tracing::{span::Entered, Span};
 use tracing_active_tree::frame;
@@ -25,11 +30,11 @@ use super::{
     errors::{Error, Result},
     statistic::LoadMetaStatistic,
 };
-use crate::util;
+use crate::{errors::ErrorKind, util};
 
 pub const METADATA_PREFIX: &'static str = "v1/backupmeta";
-pub const COMPACTION_METADATA_PREFIX: &'static str = "v1/compaction_meta";
 pub const COMPACTION_OUT_PREFIX: &'static str = "compaction_out";
+pub const MIGRATION_PREFIX: &'static str = "v1/migrations";
 
 #[derive(Debug)]
 pub struct MetaFile {
@@ -74,7 +79,7 @@ pub struct LogFile {
 
 impl LogFile {
     pub fn hacky_key_value_size(&self) -> u64 {
-        const HEADER_SIZE_PER_ENTRY: u64 = std::mem::size_of::<u64>() as u64 * 2;
+        const HEADER_SIZE_PER_ENTRY: u64 = std::mem::size_of::<u32>() as u64 * 2;
         self.file_real_size - HEADER_SIZE_PER_ENTRY * self.number_of_entries as u64
     }
 }
@@ -368,4 +373,90 @@ impl MetaFile {
         stat.load_file_duration += begin.saturating_elapsed();
         Ok((result, stat))
     }
+}
+
+pub struct MigartionStorageWrapper<'a> {
+    storage: &'a dyn FullFeaturedStorage,
+    migartions_prefix: &'a str,
+}
+
+impl<'a> MigartionStorageWrapper<'a> {
+    pub fn new(storage: &'a dyn FullFeaturedStorage) -> Self {
+        Self {
+            storage,
+            migartions_prefix: &MIGRATION_PREFIX,
+        }
+    }
+
+    pub async fn write(&self, migration: Migration) -> Result<()> {
+        use protobuf::Message;
+        let id = self.largest_id().await?;
+        // Note: perhaps we need to verify that there isn't concurrency writing in the
+        // future.
+        let name = name_of_migration(id + 1, &migration);
+        let bytes = migration.write_to_bytes()?;
+        retry_expr!(
+            self.storage
+                .write(
+                    &format!("{}/{}", self.migartions_prefix, name),
+                    UnpinReader(Box::new(Cursor::new(&bytes))),
+                    bytes.len() as u64
+                )
+                .map_err(|err| JustRetry(err))
+        )
+        .await
+        .map_err(|err| err.0)?;
+        Ok(())
+    }
+
+    pub async fn largest_id(&self) -> Result<u64> {
+        self.storage
+            .walk(&self.migartions_prefix)
+            .err_into::<Error>()
+            .map(|v| {
+                v.and_then(|v| match id_of_migration(&v.key) {
+                    Some(v) => Ok(v),
+                    None => Err(Error::from(ErrorKind::Other(format!(
+                        "the file {} cannot be parsed as a migration",
+                        v
+                    )))),
+                })
+            })
+            .try_fold(u64::MIN, |val, new| futures::future::ok(val.max(new)))
+            .await
+    }
+}
+
+pub fn name_of_migration(id: u64, m: &Migration) -> String {
+    format!("{:08}_{:016X}.mgrt", id, hash_migration(m))
+}
+
+pub fn id_of_migration(name: &str) -> Option<u64> {
+    if name.len() < 8 {
+        return None;
+    }
+    name[..8].parse::<u64>().ok()
+}
+
+pub fn hash_migration(m: &Migration) -> u64 {
+    let mut crc64 = 0;
+    for compaction in m.compactions.iter() {
+        crc64 ^= compaction.artifactes_hash;
+    }
+    for df in m.delete_files.iter() {
+        let mut digest = crc64fast::Digest::new();
+        digest.write(df.as_bytes());
+        crc64 ^= digest.sum64();
+    }
+    for spans in m.delete_logical_files.iter() {
+        let mut crc = crc64fast::Digest::new();
+        crc.write(spans.get_path().as_bytes());
+        for span in spans.get_spans() {
+            let mut crc = crc.clone();
+            crc.write(&span.offset.to_le_bytes());
+            crc.write(&span.length.to_le_bytes());
+            crc64 ^= crc.sum64();
+        }
+    }
+    crc64 ^ m.truncated_to
 }

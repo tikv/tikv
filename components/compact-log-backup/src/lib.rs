@@ -12,7 +12,7 @@ mod test;
 mod util {
     use std::{fmt::Display, future::Future, task::Poll};
 
-    use engine_traits::{CfName, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
+    use engine_traits::{CfName, SstCompressionType, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
     pub struct Cooperate {
         work_count: usize,
@@ -131,5 +131,13 @@ mod util {
 
     pub fn aligned_u64(v: u64) -> impl Display {
         HexU64(v)
+    }
+
+    pub fn compression_type_to_u8(c: SstCompressionType) -> u8 {
+        match c {
+            SstCompressionType::Lz4 => 0,
+            SstCompressionType::Snappy => 1,
+            SstCompressionType::Zstd => 2,
+        }
     }
 }

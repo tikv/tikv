@@ -1,6 +1,6 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, str::FromStr, sync::Arc};
 
 use encryption::DataKeyManager;
 use kvproto::import_sstpb::SstMeta;
@@ -60,6 +60,19 @@ pub enum SstCompressionType {
     Lz4,
     Snappy,
     Zstd,
+}
+
+impl FromStr for SstCompressionType {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "lz4" => Ok(Self::Lz4),
+            "snappy" => Ok(Self::Snappy),
+            "zstd" => Ok(Self::Zstd),
+            otherwise => Err(format!("{} isn't a valid compression method", otherwise)),
+        }
+    }
 }
 
 /// A builder builds a SstWriter.

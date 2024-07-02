@@ -11,7 +11,10 @@ use kvproto::brpb::{self, Migration, SpansOfFile};
 use super::{Compaction, CompactionResult};
 use crate::{
     errors::Result,
-    storage::{LoadFromExt, LogFileId, MetaFile, PhysicalLogFile, StreamyMetaStorage},
+    storage::{
+        LoadFromExt, LogFileId, MetaFile, MigartionStorageWrapper, PhysicalLogFile,
+        StreamyMetaStorage,
+    },
 };
 
 impl CompactionResult {
@@ -54,7 +57,7 @@ impl Compaction {
             let mut crc = crc64fast::Digest::new();
             crc.write(input.id.name.as_bytes());
             crc.write(&input.id.offset.to_le_bytes());
-            crc.write(&input.key_value_size.to_le_bytes());
+            crc.write(&input.id.length.to_le_bytes());
             crc64_xor ^= crc.sum64();
         }
         let mut crc = crc64fast::Digest::new();
@@ -126,7 +129,7 @@ impl Ord for SortByOffset {
 
 pub struct CompactionRunInfoBuilder {
     files: HashMap<Arc<str>, BTreeSet<SortByOffset>>,
-    cfg: CompactionRunConfig,
+    compaction: brpb::LogFileCompactionRun,
 }
 
 #[derive(Default)]
@@ -188,15 +191,15 @@ impl CompactionRunConfig {
 }
 
 impl CompactionRunInfoBuilder {
-    pub fn new(cfg: CompactionRunConfig) -> Self {
+    pub fn new() -> Self {
         CompactionRunInfoBuilder {
             files: HashMap::new(),
-            cfg,
+            compaction: Default::default(),
         }
     }
 
-    pub fn add_compaction(&mut self, c: Compaction) {
-        for file in c.inputs {
+    pub fn add_compaction(&mut self, c: &CompactionResult) {
+        for file in &c.origin.inputs {
             if !self.files.contains_key(&file.id.name) {
                 self.files
                     .insert(Arc::clone(&file.id.name), Default::default());
@@ -204,11 +207,36 @@ impl CompactionRunInfoBuilder {
             self.files
                 .get_mut(&file.id.name)
                 .unwrap()
-                .insert(SortByOffset(file.id));
+                .insert(SortByOffset(file.id.clone()));
         }
+        self.compaction.artifactes_hash ^= c.origin.crc64();
     }
 
-    pub async fn find_expiring_files(&self, s: &dyn FullFeaturedStorage) -> Result<ExpiringFiles> {
+    pub fn mut_meta(&mut self) -> &mut brpb::LogFileCompactionRun {
+        &mut self.compaction
+    }
+
+    pub async fn write_migration(&self, s: &dyn FullFeaturedStorage) -> Result<()> {
+        let migration = self.migration(s).await?;
+        let wrapped_storage = MigartionStorageWrapper::new(s);
+        wrapped_storage.write(migration).await?;
+        Ok(())
+    }
+
+    pub async fn migration(&self, s: &dyn FullFeaturedStorage) -> Result<brpb::Migration> {
+        let mut migration = brpb::Migration::new();
+        let files = self.find_expiring_files(s).await?;
+        for file in files.to_delete() {
+            migration.delete_files.push(file.to_owned());
+        }
+        for span in files.spans() {
+            migration.delete_logical_files.push(span)
+        }
+        migration.set_compactions(vec![self.compaction.clone()].into());
+        Ok(migration)
+    }
+
+    async fn find_expiring_files(&self, s: &dyn FullFeaturedStorage) -> Result<ExpiringFiles> {
         let ext = LoadFromExt::default();
         let mut storage = StreamyMetaStorage::load_from_ext(s, ext);
 

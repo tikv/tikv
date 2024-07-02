@@ -189,7 +189,7 @@ macro_rules! retry_expr {
 
             let mut ext: RetryExt<_> = $ext;
             let max_retry_times = ext.max_retry_times;
-            let mut retry_wait_dur = Duration::from_secs(1);
+            let mut retry_wait_dur = ::std::time::Duration::from_secs(1);
             let mut retry_time = 0;
             loop {
                 match { $action }.await {
@@ -209,8 +209,10 @@ macro_rules! retry_expr {
                 }
                 use __macro_helper::__rand_Rng;
                 let backoff = __macro_helper::__thread_rng().gen_range(0..1000);
-                __macro_helper::__tokio_sleep(retry_wait_dur + Duration::from_millis(backoff))
-                    .await;
+                __macro_helper::__tokio_sleep(
+                    retry_wait_dur + ::std::time::Duration::from_millis(backoff),
+                )
+                .await;
                 retry_wait_dur = ext.max_retry_delay.min(retry_wait_dur * 2);
             }
         }

@@ -1,8 +1,6 @@
 use std::{
-    marker::PhantomData,
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
 };
 
 use engine_traits::{
@@ -27,7 +25,7 @@ use crate::{
     errors::{OtherErrExt, Result, TraceResultExt},
     source::{Record, Source},
     statistic::{CompactStatistic, LoadStatistic},
-    storage::{COMPACTION_METADATA_PREFIX, COMPACTION_OUT_PREFIX},
+    storage::COMPACTION_OUT_PREFIX,
     util,
     util::{Cooperate, ExecuteAllExt},
 };
@@ -37,24 +35,21 @@ pub struct SingleCompactionExec<DB> {
     output: Arc<dyn ExternalStorage>,
     co: Cooperate,
     out_prefix: PathBuf,
+    load_stat: LoadStatistic,
+    compact_stat: CompactStatistic,
 
-    // Note: maybe use the TiKV config to construct a DB?
-    _great_phantom: PhantomData<DB>,
+    db: Option<DB>,
 }
 
-pub struct CompactLogExt<'a> {
-    pub load_statistic: Option<&'a mut LoadStatistic>,
-    pub compact_statistic: Option<&'a mut CompactStatistic>,
+pub struct CompactLogExt {
     pub max_load_concurrency: usize,
     pub compression: SstCompressionType,
     pub compression_level: Option<i32>,
 }
 
-impl<'a> Default for CompactLogExt<'a> {
+impl<'a> Default for CompactLogExt {
     fn default() -> Self {
         Self {
-            load_statistic: Default::default(),
-            compact_statistic: Default::default(),
             max_load_concurrency: Default::default(),
             compression: SstCompressionType::Lz4,
             compression_level: None,
@@ -62,33 +57,35 @@ impl<'a> Default for CompactLogExt<'a> {
     }
 }
 
-impl<'a> CompactLogExt<'a> {
-    fn with_compact_stat(&mut self, f: impl FnOnce(&mut CompactStatistic)) {
-        if let Some(stat) = &mut self.compact_statistic {
-            f(stat)
-        }
-    }
+pub struct SingleCompactionArg<DB> {
+    pub out_prefix: Option<PathBuf>,
+    pub db: Option<DB>,
+    pub storage: Arc<dyn ExternalStorage>,
+}
 
-    fn with_load_stat(&mut self, f: impl FnOnce(&mut LoadStatistic)) {
-        if let Some(stat) = &mut self.load_statistic {
-            f(stat)
+impl<DB> From<SingleCompactionArg<DB>> for SingleCompactionExec<DB> {
+    fn from(value: SingleCompactionArg<DB>) -> Self {
+        Self {
+            source: Source::new(Arc::clone(&value.storage)),
+            output: value.storage,
+            co: Cooperate::new(4096),
+            out_prefix: value
+                .out_prefix
+                .unwrap_or_else(|| Path::new(COMPACTION_OUT_PREFIX).to_owned()),
+            db: value.db,
+            load_stat: Default::default(),
+            compact_stat: Default::default(),
         }
     }
 }
 
 impl<DB> SingleCompactionExec<DB> {
     pub fn inplace(storage: Arc<dyn ExternalStorage>) -> Self {
-        Self::with_output_prefix(storage, COMPACTION_OUT_PREFIX)
-    }
-
-    pub fn with_output_prefix(storage: Arc<dyn ExternalStorage>, pfx: impl AsRef<Path>) -> Self {
-        Self {
-            source: Source::new(Arc::clone(&storage)),
-            output: storage,
-            co: Cooperate::new(4096),
-            _great_phantom: PhantomData,
-            out_prefix: pfx.as_ref().to_owned(),
-        }
+        Self::from(SingleCompactionArg {
+            storage,
+            out_prefix: None,
+            db: None,
+        })
     }
 }
 
@@ -148,10 +145,9 @@ where
     async fn load(
         &mut self,
         c: &Compaction,
-        ext: &mut CompactLogExt<'_>,
+        ext: &mut CompactLogExt,
     ) -> Result<impl Iterator<Item = Vec<Record>>> {
         let mut eext = ExecuteAllExt::default();
-        let load_stat = ext.load_statistic.is_some();
         eext.max_concurrency = ext.max_load_concurrency;
 
         let items = super::util::execute_all_ext(
@@ -164,7 +160,7 @@ where
                         let mut out = vec![];
                         let mut stat = LoadStatistic::default();
                         source
-                            .load(f.id, load_stat.then_some(&mut stat), |k, v| {
+                            .load(f.id, Some(&mut stat), |k, v| {
                                 out.push(Record {
                                     key: k.to_owned(),
                                     value: v.to_owned(),
@@ -181,7 +177,7 @@ where
 
         let mut result = Vec::with_capacity(items.len());
         for (item, stat) in items {
-            ext.with_load_stat(|s| *s += stat);
+            self.load_stat += stat;
             result.push(item);
         }
         Ok(result.into_iter())
@@ -199,12 +195,15 @@ where
         name: &str,
         cf: CfName,
         sorted_items: &[Record],
-        ext: &mut CompactLogExt<'_>,
+        ext: &mut CompactLogExt,
     ) -> Result<WrittenSst<<DB::SstWriter as SstWriter>::ExternalSstFileReader>> {
         let mut wb = <DB as SstExt>::SstWriterBuilder::new()
             .set_cf(cf)
             .set_compression_type(Some(ext.compression))
             .set_in_memory(true);
+        if let Some(db) = self.db.as_ref() {
+            wb = wb.set_db(db);
+        }
         if let Some(level) = ext.compression_level {
             wb = wb.set_compression_level(level);
         }
@@ -226,18 +225,14 @@ where
             meta.start_version = meta.start_version.min(ts);
             meta.end_version = meta.end_version.max(ts);
             w.put(&item.key, &item.value)?;
-            ext.with_compact_stat(|stat| {
-                stat.logical_key_bytes_out += item.key.len() as u64;
-                stat.logical_value_bytes_out += item.value.len() as u64;
-            });
+            self.compact_stat.logical_key_bytes_out += item.key.len() as u64;
+            self.compact_stat.logical_value_bytes_out += item.value.len() as u64;
             meta.total_kvs += 1;
             meta.total_bytes += item.key.len() as u64 + item.value.len() as u64;
         }
         let (info, out) = w.finish_read()?;
-        ext.with_compact_stat(|stat| {
-            stat.keys_out += info.num_entries();
-            stat.physical_bytes_out += info.file_size();
-        });
+        self.compact_stat.keys_out += info.num_entries();
+        self.compact_stat.physical_bytes_out += info.file_size();
 
         let result = WrittenSst {
             content: out,
@@ -274,7 +269,12 @@ where
             util::aligned_u64(c.input_max_ts),
             util::aligned_u64(c.crc64())
         );
-        let meta_name = self.out_prefix.join(meta_name).display().to_string();
+        let meta_name = self
+            .out_prefix
+            .join("metas")
+            .join(meta_name)
+            .display()
+            .to_string();
         let mut meta_bytes = vec![];
         protobuf::Message::write_to_vec(&meta, &mut meta_bytes)?;
         self.output
@@ -288,14 +288,11 @@ where
     }
 
     #[tracing::instrument(skip_all, fields(c=%c))]
-    pub async fn compact_ext(
-        mut self,
-        c: Compaction,
-        mut ext: CompactLogExt<'_>,
-    ) -> Result<CompactionResult> {
+    pub async fn run(mut self, c: Compaction, mut ext: CompactLogExt) -> Result<CompactionResult> {
         let mut eext = ExecuteAllExt::default();
         eext.max_concurrency = ext.max_load_concurrency;
-        let mut result = CompactionResult::default();
+        let mut result = CompactionResult::of(c);
+        let c = &result.origin;
         for input in &c.inputs {
             if input.crc64xor == 0 {
                 result.expected_crc64 = None;
@@ -307,11 +304,11 @@ where
 
         let begin = Instant::now();
         let items = self.load(&c, &mut ext).await?;
-        ext.with_compact_stat(|stat| stat.load_duration += begin.saturating_elapsed());
+        self.compact_stat.load_duration += begin.saturating_elapsed();
 
         let begin = Instant::now();
         let (sorted_items, cdiff) = self.process_input(items).await;
-        ext.with_compact_stat(|stat| stat.sort_duration += begin.saturating_elapsed());
+        self.compact_stat.sort_duration += begin.saturating_elapsed();
         result
             .expected_crc64
             .as_mut()
@@ -320,28 +317,39 @@ where
         result.expected_size -= cdiff.decreaed_size;
 
         if sorted_items.is_empty() {
-            ext.with_compact_stat(|stat| stat.empty_generation += 1);
+            self.compact_stat.empty_generation += 1;
             return Ok(result);
         }
 
-        let out_name = format!(
-            "{}/{}-{}-{}-{}.sst",
-            COMPACTION_OUT_PREFIX, c.input_min_ts, c.input_max_ts, c.cf, c.region_id
-        );
+        let out_name = self
+            .out_prefix
+            .join("outputs")
+            .join(format!(
+                "{}_{}_{}_{}.sst",
+                util::aligned_u64(c.input_min_ts),
+                util::aligned_u64(c.input_max_ts),
+                c.cf,
+                c.region_id
+            ))
+            .display()
+            .to_string();
         let begin = Instant::now();
         assert!(!sorted_items.is_empty());
         let mut sst = self
             .write_sst(&out_name, c.cf, sorted_items.as_slice(), &mut ext)
             .await?;
 
-        ext.with_compact_stat(|stat| stat.write_sst_duration += begin.saturating_elapsed());
+        self.compact_stat.write_sst_duration += begin.saturating_elapsed();
 
         let begin = Instant::now();
         result.meta =
             retry_expr! { self.upload_compaction_artifact(&c, &mut sst).map_err(JustRetry) }
                 .await
                 .map_err(|err| err.0)?;
-        ext.with_compact_stat(|stat| stat.save_duration += begin.saturating_elapsed());
+        self.compact_stat.save_duration += begin.saturating_elapsed();
+
+        result.compact_stat = self.compact_stat;
+        result.load_stat = self.load_stat;
 
         return Ok(result);
     }

@@ -392,6 +392,9 @@ fn main() {
             until_ts,
             max_compaction_num,
             storage_base64,
+            compression,
+            compression_level,
+            name,
         } => {
             let maybe_external_storage = base64::decode(storage_base64)
                 .map_err(|err| format!("cannot parse base64: {}", err))
@@ -413,11 +416,18 @@ fn main() {
                     .exit();
                 }
             };
-            let exec = compact_log::Execution {
+            let cfg = compact_log::ExecutionConfig {
                 from_ts,
                 until_ts,
+                compression,
+                compression_level,
+            };
+            let exec = compact_log::Execution {
+                out_prefix: cfg.recommended_prefix(&name),
+                cfg,
                 max_concurrent_compaction: max_compaction_num,
                 external_storage,
+                db: None,
             };
             exec.run(compact_log::LogToTerm::default())
                 .expect("failed to execute compact-log-backup")
