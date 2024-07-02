@@ -42,7 +42,7 @@ use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetrics
 use futures::executor::block_on;
 use grpcio::{EnvBuilder, Environment};
 use health_controller::HealthController;
-use hybrid_engine::HybridEngine;
+use hybrid_engine::{observer::Observer as HybridEngineObserver, HybridEngine};
 use kvproto::{
     brpb::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
     debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
@@ -732,6 +732,12 @@ where
 
         ReplicaReadLockChecker::new(self.concurrency_manager.clone())
             .register(self.coprocessor_host.as_mut().unwrap());
+
+        // Hybrid engine observer.
+        if self.core.config.range_cache_engine.enabled {
+            let observer = HybridEngineObserver::new(Arc::new(engines.engines.kv.clone()));
+            observer.register_to(self.coprocessor_host.as_mut().unwrap());
+        }
 
         // Create snapshot manager, server.
         let snap_path = self
