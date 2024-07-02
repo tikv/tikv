@@ -75,7 +75,7 @@ pub enum DownstreamState {
     /// It's just created and rejects change events and resolved timestamps.
     Uninitialized,
     /// It has got a snapshot for incremental scan, and change events will be
-    /// accepted. However, it still rejects resolved timestamps.
+    /// accepted. However it still rejects resolved timestamps.
     Initializing,
     /// Incremental scan is finished so that resolved timestamps are acceptable
     /// now.
@@ -319,7 +319,7 @@ impl MiniLock {
 /// A CDC delegate of a raftstore region peer.
 ///
 /// It converts raft commands into CDC events and broadcast to downstreams.
-/// It also tracks transaction on the fly in order to compute resolved ts.
+/// It also track trancation on the fly in order to compute resolved ts.
 pub struct Delegate {
     pub region_id: u64,
     pub handle: ObserveHandle,
@@ -432,11 +432,8 @@ impl Delegate {
                         assert_eq!(*x.get(), start_ts);
                     }
                 },
-                PendingLock::Untrack { key } => match locks.entry(key.clone()) {
-                    BTreeMapEntry::Vacant(..) => {
-                        warn!("untrack lock not found when try to finish prepare lock tracker";
-                        "key" => %key);
-                    }
+                PendingLock::Untrack { key } => match locks.entry(key) {
+                    BTreeMapEntry::Vacant(..) => unreachable!(),
                     BTreeMapEntry::Occupied(x) => {
                         x.remove();
                     }
@@ -1920,20 +1917,5 @@ mod tests {
             .unwrap();
         assert_eq!(v, 0);
         assert_eq!(quota.in_use(), 17);
-    }
-
-    #[test]
-    fn test_lock_tracker_untrack_vacant() {
-        let quota = Arc::new(MemoryQuota::new(usize::MAX));
-        let mut delegate = Delegate::new(1, quota.clone(), Default::default());
-        assert!(delegate.init_lock_tracker());
-        assert!(!delegate.init_lock_tracker());
-
-        delegate.pop_lock(Key::from_raw(b"key1")).unwrap();
-        let mut scaned_locks = BTreeMap::default();
-        scaned_locks.insert(Key::from_raw(b"key2"), MiniLock::from_ts(100));
-        delegate
-            .finish_prepare_lock_tracker(Default::default(), scaned_locks)
-            .unwrap();
     }
 }
