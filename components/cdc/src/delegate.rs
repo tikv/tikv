@@ -16,6 +16,7 @@ use std::{
 use api_version::{ApiV2, KeyMode, KvFormat};
 use collections::HashMap;
 use crossbeam::atomic::AtomicCell;
+use futures::{executor::block_on, lock::Mutex};
 use kvproto::{
     cdcpb::{
         ChangeDataRequestKvApi, Error as EventError, Event, EventEntries, EventLogType, EventRow,
@@ -143,6 +144,8 @@ pub struct Downstream {
     sink: Option<Sink>,
     state: Arc<AtomicCell<DownstreamState>>,
 
+    event_error_handle: Arc<Mutex<EventErrorHandle>>,
+
     // Fields to handle ResolvedTs advancing. If `lock_heap` is none it means
     // the downstream hasn't finished the incremental scanning.
     lock_heap: Option<BTreeMap<TimeStamp, isize>>,
@@ -186,14 +189,17 @@ impl Downstream {
 
             sink: None,
             state: Arc::new(AtomicCell::new(DownstreamState::default())),
+            event_error_handle: Arc::new(Mutex::new(EventErrorHandle::default())),
 
             lock_heap: None,
             advanced_to: TimeStamp::zero(),
         }
     }
 
-    /// Sink events to the downstream.
-    pub fn sink_event(&self, mut event: Event, force: bool) -> Result<()> {
+    // NOTE: it's not allowed to sink `EventError` directly by this function,
+    // because the sink can be also used by an incremental scan. We must ensure
+    // no more events can be pushed to the sink after an `EventError` is sent.
+    fn sink_event(&self, mut event: Event, force: bool) -> Result<()> {
         event.set_request_id(self.req_id.0);
         if self.sink.is_none() {
             info!("cdc drop event, no sink";
@@ -218,12 +224,25 @@ impl Downstream {
     }
 
     pub fn sink_error_event(&self, region_id: u64, err_event: EventError) -> Result<()> {
-        let mut change_data_event = Event::default();
-        change_data_event.event = Some(Event_oneof_event::Error(err_event));
-        change_data_event.region_id = region_id;
-        // Try it's best to send error events.
-        let force_send = true;
-        self.sink_event(change_data_event, force_send)
+        let mut event_error_handle = block_on(self.event_error_handle.lock());
+        if event_error_handle.sent_out || event_error_handle.event_error.is_some() {
+            // Only keep one event error.
+            return Ok(());
+        }
+        if !event_error_handle.transferred_to_initializer || event_error_handle.initializer_stopped
+        {
+            event_error_handle.sent_out = true;
+            drop(event_error_handle);
+
+            let mut change_data_event = Event::default();
+            change_data_event.event = Some(Event_oneof_event::Error(err_event));
+            change_data_event.region_id = region_id;
+            self.sink_event(change_data_event, true)
+        } else {
+            event_error_handle.event_error = Some(err_event);
+            drop(event_error_handle);
+            Ok(())
+        }
     }
 
     pub fn sink_region_not_found(&self, region_id: u64) -> Result<()> {
@@ -244,6 +263,10 @@ impl Downstream {
 
     pub fn get_state(&self) -> Arc<AtomicCell<DownstreamState>> {
         self.state.clone()
+    }
+
+    pub fn get_event_error_handle(&self) -> Arc<Mutex<EventErrorHandle>> {
+        self.event_error_handle.clone()
     }
 }
 
@@ -1411,6 +1434,14 @@ impl ObservedRange {
         };
         (start, end)
     }
+}
+
+#[derive(Default)]
+pub struct EventErrorHandle {
+    pub transferred_to_initializer: bool,
+    pub initializer_stopped: bool,
+    pub event_error: Option<EventError>,
+    pub sent_out: bool,
 }
 
 const WARN_LAG_THRESHOLD: Duration = Duration::from_secs(600);

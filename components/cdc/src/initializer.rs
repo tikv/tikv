@@ -16,9 +16,10 @@ use engine_traits::{
     TablePropertiesExt, UserCollectedProperties, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN,
 };
 use fail::fail_point;
+use futures::{executor::block_on, lock::Mutex};
 use keys::{data_end_key, data_key};
 use kvproto::{
-    cdcpb::ChangeDataRequestKvApi,
+    cdcpb::{ChangeDataRequestKvApi, Event, Event_oneof_event},
     kvrpcpb::ExtraOp as TxnExtraOp,
     metapb::{Region, RegionEpoch},
 };
@@ -52,9 +53,10 @@ use tokio::sync::Semaphore;
 use txn_types::{Key, KvPair, LockType, OldValue, TimeStamp};
 
 use crate::{
-    channel::CdcEvent,
+    channel::{CdcEvent, SendError},
     delegate::{
-        post_init_downstream, Delegate, DownstreamId, DownstreamState, MiniLock, ObservedRange,
+        post_init_downstream, Delegate, DownstreamId, DownstreamState, EventErrorHandle, MiniLock,
+        ObservedRange,
     },
     endpoint::Deregister,
     metrics::*,
@@ -101,6 +103,7 @@ pub(crate) struct Initializer<E> {
     pub(crate) observe_handle: ObserveHandle,
     pub(crate) downstream_id: DownstreamId,
     pub(crate) downstream_state: Arc<AtomicCell<DownstreamState>>,
+    pub(crate) event_error_handle: Arc<Mutex<EventErrorHandle>>,
 
     pub(crate) tablet: Option<E>,
     pub(crate) sched: Scheduler<Task>,
@@ -333,6 +336,43 @@ impl<E: KvEngine> Initializer<E> {
         let scan_long_time = AtomicBool::new(false);
         defer!(if scan_long_time.load(Ordering::SeqCst) {
             CDC_SCAN_LONG_DURATION_REGIONS.dec();
+        });
+
+        let mut event_error_handle = self.event_error_handle.lock().await;
+        if !event_error_handle.sent_out {
+            event_error_handle.transferred_to_initializer = true;
+            drop(event_error_handle);
+        } else {
+            drop(event_error_handle);
+            return Err(box_err!("scan canceled by event error"));
+        }
+
+        let request_id = self.request_id;
+        let event_error_handle = self.event_error_handle.clone();
+        let sink = self.sink.clone();
+        defer!({
+            let mut handle = block_on(event_error_handle.lock());
+            if !handle.sent_out && handle.event_error.is_some() {
+                let error = handle.event_error.take().unwrap();
+                handle.sent_out = true;
+                drop(handle);
+
+                let mut change_data_event = Event::default();
+                change_data_event.event = Some(Event_oneof_event::Error(error));
+                change_data_event.region_id = region_id;
+                match sink.unbounded_send(CdcEvent::Event(change_data_event), true) {
+                    Ok(_) => {}
+                    Err(SendError::Disconnected) => {
+                        debug!("cdc send event failed, disconnected";
+                               "conn_id" => ?conn_id, "downstream_id" => ?downstream_id, "req_id" => ?request_id);
+                    }
+                    // TODO handle errors.
+                    Err(SendError::Full) | Err(SendError::Congested) => {
+                        info!("cdc send event failed, full";
+                              "conn_id" => ?conn_id, "downstream_id" => ?downstream_id, "req_id" => ?request_id);
+                    }
+                }
+            }
         });
 
         while !done {

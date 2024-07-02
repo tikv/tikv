@@ -891,6 +891,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
         let observed_range = downstream.observed_range.clone();
         let downstream_state = downstream.get_state();
+        let event_error_handle = downstream.get_event_error_handle();
         let sched = self.scheduler.clone();
 
         if let Err((err, downstream)) = delegate.subscribe(downstream) {
@@ -927,6 +928,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             observe_handle: delegate.handle.clone(),
             downstream_id,
             downstream_state,
+            event_error_handle,
 
             tablet: self.tablets.get(region_id).map(|t| t.into_owned()),
             sched,
