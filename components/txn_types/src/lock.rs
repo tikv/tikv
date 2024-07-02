@@ -1232,6 +1232,31 @@ mod tests {
             }"
         );
 
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Marker);
+        let redact_result = format!("{:?}", lock);
+        log_wrappers::set_redact_info_log(log_wrappers::RedactOption::Flag(false));
+        assert_eq!(
+            redact_result,
+            "Lock { \
+            lock_type: Put, \
+            primary_key: ‹706B›, \
+            start_ts: TimeStamp(100), \
+            ttl: 3, \
+            short_value: ‹73686F72745F76616C7565›, \
+            for_update_ts: TimeStamp(101), \
+            txn_size: 10, \
+            min_commit_ts: TimeStamp(127), \
+            use_async_commit: true, \
+            secondaries: [‹7365636F6E646172795F6B31›, ‹7365636F6E646172795F6B6B6B6B6B32›, \
+            ‹7365636F6E646172795F6B336B336B336B336B336B33›, ‹7365636F6E646172795F6B34›], \
+            rollback_ts: [], \
+            last_change: Exist { last_change_ts: TimeStamp(80), estimated_versions_to_last_change: 4 }, \
+            txn_source: 0, \
+            is_locked_with_conflict: false, \
+            generation: 0 \
+            }"
+        );
+
         lock.short_value = None;
         lock.secondaries = Vec::default();
         lock.generation = 10;
