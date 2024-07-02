@@ -4057,8 +4057,9 @@ dependencies = [
 [[package]]
 name = "protobuf"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaae4352ea01bf00e160480d8da966d3109"
+source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6d445fe5ff4e99621a800be0f2c54dc96f056bac"
 dependencies = [
+ "atomic",
  "bytes",
  "heck 0.3.1",
  "hex 0.3.2",
@@ -4081,7 +4082,7 @@ dependencies = [
 [[package]]
 name = "protobuf-codegen"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaae4352ea01bf00e160480d8da966d3109"
+source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6d445fe5ff4e99621a800be0f2c54dc96f056bac"
 dependencies = [
  "heck 0.3.1",
  "protobuf",

@@ -12,7 +12,10 @@ pub mod hex;
 use std::{fmt, str::FromStr, sync::atomic::Ordering};
 
 use atomic::Atomic;
-use protobuf::atomic_flags::set_redact_bytes as proto_set_redact_bytes;
+use protobuf::atomic_flags::{
+    set_redact_level as proto_set_redact_level, RedactLevel, DEFAULT_REDACT_MARKER_HEAD,
+    DEFAULT_REDACT_MARKER_TAIL,
+};
 use serde::{de, Deserialize, Serialize, Serializer};
 
 pub use crate::hex::*;
@@ -58,18 +61,6 @@ impl<T: std::fmt::Debug> slog::Value for DebugValue<T> {
     ) -> slog::Result {
         serializer.emit_arguments(key, &format_args!("{:?}", self.0))
     }
-}
-
-/// RedactLevel is used to control the redaction of log data.
-///
-/// Default is `Off`, means no redaction. And `Marker` is a
-/// special flag used to dedact the raw data.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-pub enum RedactLevel {
-    Off,
-    On,
-    Marker, // flag is ‹..›
 }
 
 /// RedactOption is exposed to user to manually control the redaction of log
@@ -161,8 +152,8 @@ static REDACT_INFO_LOG: Atomic<RedactLevel> = Atomic::new(RedactLevel::Off);
 pub fn set_redact_info_log(config: RedactOption) {
     let level = config.convert();
     REDACT_INFO_LOG.store(level, Ordering::Relaxed);
-    // TODO: make this configuration suitable for protobuf.
-    proto_set_redact_bytes(level == RedactLevel::On || level == RedactLevel::Marker);
+    // Also set the redact level in protobuf.
+    proto_set_redact_level(level);
 }
 
 pub struct Value<'a>(pub &'a [u8]);
@@ -186,8 +177,15 @@ impl<'a> slog::Value for Value<'a> {
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
         match REDACT_INFO_LOG.load(Ordering::Relaxed) {
-            RedactLevel::Marker => serializer
-                .emit_arguments(key, &format_args!("‹{}›", crate::hex_encode_upper(self.0))),
+            RedactLevel::Marker => serializer.emit_arguments(
+                key,
+                &format_args!(
+                    "{}{}{}",
+                    DEFAULT_REDACT_MARKER_HEAD,
+                    crate::hex_encode_upper(self.0),
+                    DEFAULT_REDACT_MARKER_TAIL,
+                ),
+            ),
             RedactLevel::On => serializer.emit_arguments(key, &format_args!("?")),
             _ => {
                 serializer.emit_arguments(key, &format_args!("{}", crate::hex_encode_upper(self.0)))
@@ -201,7 +199,13 @@ impl<'a> fmt::Display for Value<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match REDACT_INFO_LOG.load(Ordering::Relaxed) {
             RedactLevel::Marker => {
-                write!(f, "‹{}›", crate::hex_encode_upper(self.0))
+                write!(
+                    f,
+                    "{}{}{}",
+                    DEFAULT_REDACT_MARKER_HEAD,
+                    crate::hex_encode_upper(self.0),
+                    DEFAULT_REDACT_MARKER_TAIL
+                )
             }
             RedactLevel::On => {
                 // Print placeholder instead of the value itself.
@@ -350,10 +354,21 @@ mod tests {
         set_redact_info_log(RedactOption::Flag(true));
         slog_info!(logger, "foo"; "bar" => Value::key(b"\xAB \xCD"));
         assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: ?\n");
-        set_redact_info_log(RedactOption::default());
 
         buffer.clear();
+        set_redact_info_log(RedactOption::default());
         slog_info!(logger, "foo"; "bar" => Value::key(b"\xAB \xCD"));
         assert_eq!(&buffer.as_string(), "TIME INFO foo, bar: AB20CD\n");
+
+        buffer.clear();
+        set_redact_info_log(RedactOption::Marker);
+        slog_info!(logger, "foo"; "bar" => Value::key(b"\xAB \xCD"));
+        assert_eq!(
+            buffer.as_string(),
+            format!(
+                "TIME INFO foo, bar: {}AB20CD{}\n",
+                DEFAULT_REDACT_MARKER_HEAD, DEFAULT_REDACT_MARKER_TAIL
+            )
+        );
     }
 }
