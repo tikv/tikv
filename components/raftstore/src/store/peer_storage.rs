@@ -546,44 +546,35 @@ where
             *tried_cnt += 1;
         }
 
-        match find_peer_by_id(&self.region, to) {
-            Some(to_peer) => {
-                info!(
-                    "requesting snapshot";
-                    "region_id" => self.region.get_id(),
-                    "peer_id" => self.peer_id,
-                    "request_index" => request_index,
-                    "request_peer" => to,
-                );
+        info!(
+            "requesting snapshot";
+            "region_id" => self.region.get_id(),
+            "peer_id" => self.peer_id,
+            "request_index" => request_index,
+            "request_peer" => to,
+        );
 
-                let (sender, receiver) = mpsc::sync_channel(1);
-                let canceled = Arc::new(AtomicBool::new(false));
-                let index = Arc::new(AtomicU64::new(0));
-                *snap_state = SnapState::Generating {
-                    canceled: canceled.clone(),
-                    index: index.clone(),
-                    receiver,
-                };
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let canceled = Arc::new(AtomicBool::new(false));
+        let index = Arc::new(AtomicU64::new(0));
+        *snap_state = SnapState::Generating {
+            canceled: canceled.clone(),
+            index: index.clone(),
+            receiver,
+        };
 
-                let task = GenSnapTask::new(
-                    self.region.get_id(),
-                    index,
-                    canceled,
-                    sender,
-                    to_peer.clone(),
-                );
-                self.set_gen_snap_task(task);
-            }
-            None => {
-                warn!(
-                    "failed to find peer";
-                    "region_id" => self.region.get_id(),
-                    "peer_id" => self.peer_id,
-                    "times" => *tried_cnt,
-                    "request_peer" => to,
-                );
-            }
-        }
+        let store_id = self
+            .region()
+            .get_peers()
+            .iter()
+            .find(|p| p.id == to)
+            .map(|p| p.store_id)
+            .unwrap_or(0);
+        let task = GenSnapTask::new(self.region.get_id(), index, canceled, sender, store_id);
+
+        let mut gen_snap_task = self.gen_snap_task.borrow_mut();
+        assert!(gen_snap_task.is_none());
+        *gen_snap_task = Some(task);
         Err(raft::Error::Store(
             raft::StorageError::SnapshotTemporarilyUnavailable,
         ))
@@ -599,12 +590,6 @@ where
 
     pub fn take_gen_snap_task(&mut self) -> Option<GenSnapTask> {
         self.gen_snap_task.get_mut().take()
-    }
-
-    pub fn set_gen_snap_task(&self, task: GenSnapTask) {
-        let mut gen_snap_task = self.gen_snap_task.borrow_mut();
-        assert!(gen_snap_task.is_none(), "{:?}", gen_snap_task);
-        *gen_snap_task = Some(task);
     }
 
     pub fn on_compact_raftlog(&mut self, idx: u64) {
@@ -1667,8 +1652,7 @@ pub mod tests {
             Option::<Arc<TestPdClient>>::None,
         );
         worker.start_with_timer(runner);
-        let to_peer_id = s.peer_id;
-        let snap = s.snapshot(0, to_peer_id);
+        let snap = s.snapshot(0, 1);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
         assert_eq!(snap.unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
@@ -1692,11 +1676,11 @@ pub mod tests {
         let (tx, rx) = channel();
         s.set_snap_state(gen_snap_for_test(rx));
         // Empty channel should cause snapshot call to wait.
-        assert_eq!(s.snapshot(0, to_peer_id).unwrap_err(), unavailable);
+        assert_eq!(s.snapshot(0, 1).unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
 
         tx.send(snap.clone()).unwrap();
-        assert_eq!(s.snapshot(0, to_peer_id), Ok(snap.clone()));
+        assert_eq!(s.snapshot(0, 1), Ok(snap.clone()));
         assert_eq!(*s.snap_tried_cnt.borrow(), 0);
 
         let (tx, rx) = channel();
@@ -1704,7 +1688,7 @@ pub mod tests {
         s.set_snap_state(gen_snap_for_test(rx));
         // stale snapshot should be abandoned, snapshot index < request index.
         assert_eq!(
-            s.snapshot(snap.get_metadata().get_index() + 1, to_peer_id)
+            s.snapshot(snap.get_metadata().get_index() + 1, 0)
                 .unwrap_err(),
             unavailable
         );
@@ -1737,7 +1721,7 @@ pub mod tests {
         s.set_snap_state(gen_snap_for_test(rx));
         *s.snap_tried_cnt.borrow_mut() = 1;
         // stale snapshot should be abandoned, snapshot index < truncated index.
-        assert_eq!(s.snapshot(0, to_peer_id).unwrap_err(), unavailable);
+        assert_eq!(s.snapshot(0, 1).unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
 
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
@@ -1754,7 +1738,7 @@ pub mod tests {
             ref s => panic!("unexpected state {:?}", s),
         }
         // Disconnected channel should trigger another try.
-        assert_eq!(s.snapshot(0, to_peer_id).unwrap_err(), unavailable);
+        assert_eq!(s.snapshot(0, 1).unwrap_err(), unavailable);
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap_err();
         assert_eq!(*s.snap_tried_cnt.borrow(), 2);
@@ -1769,13 +1753,13 @@ pub mod tests {
             }
 
             // Scheduled job failed should trigger .
-            assert_eq!(s.snapshot(0, to_peer_id).unwrap_err(), unavailable);
+            assert_eq!(s.snapshot(0, 1).unwrap_err(), unavailable);
             let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
             generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap_err();
         }
 
         // When retry too many times, it should report a different error.
-        match s.snapshot(0, to_peer_id) {
+        match s.snapshot(0, 1) {
             Err(RaftError::Store(StorageError::Other(_))) => {}
             res => panic!("unexpected res: {:?}", res),
         }

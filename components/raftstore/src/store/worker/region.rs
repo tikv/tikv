@@ -871,7 +871,6 @@ where
                         .observe(create_time.saturating_elapsed_secs());
                     new_batch = false;
                     self.handle_apply(region_id, peer_id, status);
-                    self.mgr.set_pending_apply_count(self.pending_applies.len());
                 }
             }
         }
@@ -957,7 +956,6 @@ where
                 SNAP_COUNTER.apply.all.inc();
                 // to makes sure applying snapshots in order.
                 self.pending_applies.push_back(task);
-                self.mgr.set_pending_apply_count(self.pending_applies.len());
                 self.handle_pending_applies(false);
                 if !self.pending_applies.is_empty() {
                     // delay the apply and retry later
