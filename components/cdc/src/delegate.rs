@@ -640,6 +640,12 @@ impl Delegate {
             if downstream.lock_heap.is_none() {
                 let mut lock_heap = BTreeMap::<TimeStamp, isize>::new();
                 for (_, lock) in locks.range(downstream.observed_range.to_range()) {
+                    if TxnSource::is_lossy_ddl_reorg_source_set(lock.txn_source)
+                        || downstream.filter_loop
+                            && TxnSource::is_cdc_write_source_set(lock.txn_source)
+                    {
+                        continue;
+                    }
                     let lock_count = lock_heap.entry(lock.ts).or_default();
                     *lock_count += 1;
                 }
@@ -930,6 +936,13 @@ impl Delegate {
         for downstream in downstreams {
             let mut filtered_entries = Vec::with_capacity(entries.len());
             for (entry, lock_count_modify) in &entries {
+                if !downstream.observed_range.contains_raw_key(&entry.key)
+                    || downstream.filter_loop
+                        && TxnSource::is_cdc_write_source_set(entry.txn_source)
+                {
+                    continue;
+                }
+
                 if *lock_count_modify != 0 && downstream.lock_heap.is_some() {
                     let lock_heap = downstream.lock_heap.as_mut().unwrap();
                     match lock_heap.entry(entry.start_ts.into()) {
@@ -938,25 +951,12 @@ impl Delegate {
                         }
                         BTreeMapEntry::Occupied(mut x) => {
                             *x.get_mut() += *lock_count_modify;
-                            assert!(
-                                *x.get() >= 0,
-                                "lock_count_modify should never be negative, start_ts: {}",
-                                entry.start_ts
-                            );
                             if *x.get() == 0 {
                                 x.remove();
                             }
                         }
                     }
                 }
-
-                if !downstream.observed_range.contains_raw_key(&entry.key)
-                    || downstream.filter_loop
-                        && TxnSource::is_cdc_write_source_set(entry.txn_source)
-                {
-                    continue;
-                }
-
                 filtered_entries.push(entry.clone());
             }
             if filtered_entries.is_empty() {
@@ -1034,9 +1034,8 @@ impl Delegate {
                     return Ok(());
                 }
 
-                assert_eq!(row.lock_count_modify, 0);
-                let mini_lock = MiniLock::new(row.v.start_ts, txn_source);
-                row.lock_count_modify = self.push_lock(key, mini_lock)?;
+                row.lock_count_modify =
+                    self.push_lock(key, MiniLock::new(row.v.start_ts, txn_source))?;
 
                 let read_old_ts = std::cmp::max(for_update_ts, row.v.start_ts.into());
                 read_old_value(&mut row.v, read_old_ts)?;
@@ -1052,14 +1051,12 @@ impl Delegate {
     }
 
     fn sink_delete(&mut self, mut delete: DeleteRequest, rows: &mut RowsBuilder) -> Result<()> {
-        // RawKV (API v2, and only API v2 can use CDC) has no lock and will write to
-        // default cf only.
         match delete.cf.as_str() {
             "lock" => {
-                let key = Key::from_encoded(delete.take_key());
-                let row = rows.txns_by_key.get_mut(&key).unwrap();
-                assert_eq!(row.lock_count_modify, 0);
-                row.lock_count_modify = self.pop_lock(key)?;
+                if self.pop_lock(Key::from_encoded_slice(&delete.key))? != 0 {
+                    let key = Key::from_encoded(delete.take_key());
+                    rows.txns_by_key.get_mut(&key).unwrap().lock_count_modify -= 1;
+                }
             }
             "" | "default" | "write" => {}
             other => panic!("invalid cf {}", other),
