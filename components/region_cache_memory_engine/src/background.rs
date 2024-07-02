@@ -1067,7 +1067,8 @@ impl Runnable for BackgroundRunner {
                                         if write.short_value.is_none() {
                                             let start_ts = write.start_ts;
                                             let (user_key, _) = split_ts(iter.key()).unwrap();
-                                            let key = Key::from_raw(user_key).append_ts(start_ts);
+                                            let key = Key::from_encoded(user_key.to_vec())
+                                                .append_ts(start_ts.clone());
                                             if let Ok(Some(_)) =
                                                 range_snap.get_value(key.as_encoded())
                                             {
@@ -1076,9 +1077,11 @@ impl Runnable for BackgroundRunner {
                                                     "default not found";
                                                     "default_key" => log_wrappers::Value(key.as_encoded()),
                                                     "write_key" => log_wrappers::Value(&iter.key()),
+                                                    "start_ts" => start_ts,
                                                     "safe_ts" => safe_ts,
                                                     "seqno" => iter.sequence_number,
                                                 );
+                                                unreachable!();
                                             }
                                         }
                                     }
@@ -1802,27 +1805,27 @@ impl Filter {
             let guard = &epoch::pin();
             if cache_skiplist_delete_user_key == user_key {
                 self.metrics.filtered += 1;
+                self.write_cf_handle
+                    .remove(&InternalBytes::from_bytes(key.clone()), guard);
                 if PRINTF_LOG.load(Ordering::Relaxed) {
                     info!(
                         "gc filter write hidden by tombstone";
                         "key" => log_wrappers::Value(key),
                     );
                 }
-                self.write_cf_handle
-                    .remove(&InternalBytes::from_bytes(key.clone()), guard);
                 return Ok(());
             } else {
                 self.metrics.filtered += 1;
+                self.write_cf_handle.remove(
+                    &InternalBytes::from_vec(self.cached_skiplist_delete_key.take().unwrap()),
+                    guard,
+                );
                 if PRINTF_LOG.load(Ordering::Relaxed) {
                     info!(
                         "gc filter write tombstone";
                         "key" => log_wrappers::Value(&self.cached_skiplist_delete_key.as_ref().unwrap()),
                     );
                 }
-                self.write_cf_handle.remove(
-                    &InternalBytes::from_vec(self.cached_skiplist_delete_key.take().unwrap()),
-                    guard,
-                )
             }
         }
 
@@ -1834,6 +1837,12 @@ impl Filter {
         } else {
             self.write_cf_handle
                 .remove(&InternalBytes::from_bytes(key.clone()), guard);
+            if PRINTF_LOG.load(Ordering::Relaxed) {
+                info!(
+                    "gc filter write user key";
+                    "key" => log_wrappers::Value(&self.cached_skiplist_delete_key.as_ref().unwrap()),
+                );
+            }
             return Ok(());
         }
 

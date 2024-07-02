@@ -599,6 +599,12 @@ impl Iterator for RangeCacheIterator {
         assert!(self.prefix_extractor.is_none());
         self.direction = Direction::Forward;
         let seek_key = encode_seek_key(&self.lower_bound, self.sequence_number);
+        if PRINTF_LOG.load(Ordering::Relaxed) {
+            info!(
+                "seek to first";
+                "seek_key" => log_wrappers::Value(seek_key.as_bytes()),
+            );
+        }
         self.seek_internal(&seek_key);
 
         if self.valid {

@@ -102,6 +102,12 @@ impl SkiplistHandle {
 
     pub fn remove(&self, key: &InternalBytes, guard: &Guard) {
         if let Some(entry) = self.0.remove(key, guard) {
+            if PRINTF_LOG.load(Ordering::Relaxed) {
+                info!(
+                    "remove";
+                    "key" => log_wrappers::Value(key.as_bytes()),
+                );
+            }
             entry.release(guard);
         }
     }
@@ -173,9 +179,7 @@ impl SkiplistEngine {
             iter.seek(&start, guard);
             while iter.valid() && iter.key() < &end {
                 handle.remove(iter.key(), guard);
-                if PRINTF_LOG.load(Ordering::Relaxed)
-                    || (cf == CF_LOCK && PRINTF_LOG.load(Ordering::Relaxed))
-                {
+                if PRINTF_LOG.load(Ordering::Relaxed) {
                     info!(
                         "delete range";
                         "key" => log_wrappers::Value(iter.key().as_slice()),
