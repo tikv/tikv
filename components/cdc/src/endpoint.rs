@@ -64,7 +64,7 @@ use crate::{
     initializer::Initializer,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::{validate_kv_api, Conn, ConnId, FeatureGate, RequestId},
+    service::{validate_kv_api, Conn, ConnId, FeatureGate},
     CdcObserver, Error,
 };
 
@@ -75,16 +75,16 @@ pub enum Deregister {
     Conn(ConnId),
     Request {
         conn_id: ConnId,
-        request_id: RequestId,
+        request_id: u64,
     },
     Region {
         conn_id: ConnId,
-        request_id: RequestId,
+        request_id: u64,
         region_id: u64,
     },
     Downstream {
         conn_id: ConnId,
-        request_id: RequestId,
+        request_id: u64,
         region_id: u64,
         downstream_id: DownstreamId,
         err: Option<Error>,
@@ -353,7 +353,7 @@ impl ResolvedRegionHeap {
 pub(crate) struct Advance {
     // multiplexing means one region can be subscribed multiple times in one `Conn`,
     // in which case progresses are grouped by (ConnId, request_id).
-    pub(crate) multiplexing: HashMap<(ConnId, RequestId), ResolvedRegionHeap>,
+    pub(crate) multiplexing: HashMap<(ConnId, u64), ResolvedRegionHeap>,
 
     // exclusive means one region can only be subscribed one time in one `Conn`,
     // in which case progresses are grouped by ConnId.
@@ -388,10 +388,10 @@ impl Advance {
             false
         };
 
-        let send_cdc_events = |ts: u64, conn: &Conn, request_id: RequestId, regions: Vec<u64>| {
+        let send_cdc_events = |ts: u64, conn: &Conn, request_id: u64, regions: Vec<u64>| {
             let mut resolved_ts = ResolvedTs::default();
             resolved_ts.ts = ts;
-            resolved_ts.request_id = request_id.0;
+            resolved_ts.request_id = request_id;
             *resolved_ts.mut_regions() = regions;
 
             let res = conn
@@ -423,7 +423,7 @@ impl Advance {
         let exclusive = std::mem::take(&mut self.exclusive).into_iter();
         let unioned = multiplexing
             .map(|((a, b), c)| (a, b, c))
-            .chain(exclusive.map(|(a, c)| (a, RequestId(0), c)));
+            .chain(exclusive.map(|(a, c)| (a, 0, c)));
 
         let mut min_resolved: Option<(u64, TimeStamp)> = None;
         for (conn_id, req_id, mut region_ts_heap) in unioned {
@@ -775,7 +775,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let filter_loop = downstream.filter_loop;
 
         let region_id = request.region_id;
-        let request_id = RequestId(request.request_id);
+        let request_id = request.request_id;
         let conn_id = downstream.conn_id;
         let downstream_id = downstream.id;
         let downstream_state = downstream.get_state();
@@ -789,7 +789,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 info!("cdc register region on an deregistered connection, ignore";
                     "region_id" => region_id,
                     "conn_id" => ?conn_id,
-                    "req_id" => ?request_id,
+                    "req_id" => request_id,
                     "downstream_id" => ?downstream_id);
                 return;
             }
@@ -831,7 +831,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             debug!("cdc rejects registration, too many scan tasks";
                 "region_id" => region_id,
                 "conn_id" => ?conn_id,
-                "req_id" => ?request_id,
+                "req_id" => request_id,
                 "scan_task_count" => scan_task_count,
                 "incremental_scan_concurrency_limit" => self.config.incremental_scan_concurrency_limit,
             );
@@ -863,7 +863,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             error!("cdc duplicate register";
                 "region_id" => region_id,
                 "conn_id" => ?conn_id,
-                "req_id" => ?request_id,
+                "req_id" => request_id,
                 "downstream_id" => ?downstream_id);
             return;
         }
@@ -885,7 +885,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         info!("cdc register region";
             "region_id" => region_id,
             "conn_id" => ?conn.get_id(),
-            "req_id" => ?request_id,
+            "req_id" => request_id,
             "observe_id" => ?observe_id,
             "downstream_id" => ?downstream_id);
 
@@ -954,7 +954,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     CDC_SCAN_TASKS.with_label_values(&["abort"]).inc();
                     error!(
                         "cdc initialize fail: {}", e; "region_id" => region_id,
-                        "conn_id" => ?init.conn_id, "request_id" => ?init.request_id,
+                        "conn_id" => ?init.conn_id, "request_id" => init.request_id,
                     );
                     init.deregister_downstream(e)
                 }
@@ -1522,7 +1522,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch.clone(),
-            RequestId(1),
+            1,
             conn_id,
             ChangeDataRequestKvApi::RawKv,
             false,
@@ -1557,7 +1557,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch.clone(),
-            RequestId(2),
+            2,
             conn_id,
             ChangeDataRequestKvApi::TxnKv,
             false,
@@ -1593,7 +1593,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch,
-            RequestId(3),
+            3,
             conn_id,
             ChangeDataRequestKvApi::TxnKv,
             false,
@@ -1803,7 +1803,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch,
-            RequestId(0),
+            0,
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
@@ -1855,7 +1855,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch.clone(),
-            RequestId(1),
+            1,
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
@@ -1876,7 +1876,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch,
-            RequestId(1),
+            1,
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
@@ -1920,7 +1920,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch.clone(),
-            RequestId(1),
+            1,
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
@@ -1952,7 +1952,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch,
-            RequestId(1),
+            1,
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
@@ -2018,7 +2018,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch.clone(),
-            RequestId(1),
+            1,
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
@@ -2035,7 +2035,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch,
-            RequestId(2),
+            2,
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
@@ -2121,7 +2121,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch.clone(),
-            RequestId(0),
+            0,
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
@@ -2159,7 +2159,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch.clone(),
-            RequestId(0),
+            0,
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
@@ -2214,7 +2214,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch,
-            RequestId(3),
+            3,
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
@@ -2293,7 +2293,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch.clone(),
-            RequestId(0),
+            0,
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
@@ -2310,7 +2310,7 @@ mod tests {
         err_header.set_not_leader(Default::default());
         let deregister = Deregister::Downstream {
             conn_id,
-            request_id: RequestId(0),
+            request_id: 0,
             region_id: 1,
             downstream_id,
             err: Some(Error::request(err_header.clone())),
@@ -2336,7 +2336,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch.clone(),
-            RequestId(0),
+            0,
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
@@ -2351,7 +2351,7 @@ mod tests {
 
         let deregister = Deregister::Downstream {
             conn_id,
-            request_id: RequestId(0),
+            request_id: 0,
             region_id: 1,
             downstream_id,
             err: Some(Error::request(err_header.clone())),
@@ -2362,7 +2362,7 @@ mod tests {
 
         let deregister = Deregister::Downstream {
             conn_id,
-            request_id: RequestId(0),
+            request_id: 0,
             region_id: 1,
             downstream_id: new_downstream_id,
             err: Some(Error::request(err_header.clone())),
@@ -2389,7 +2389,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch,
-            RequestId(0),
+            0,
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
@@ -2445,7 +2445,7 @@ mod tests {
                 let downstream = Downstream::new(
                     "".to_string(),
                     region_epoch.clone(),
-                    RequestId(0),
+                    0,
                     conn_id,
                     ChangeDataRequestKvApi::TiDb,
                     false,
@@ -2574,7 +2574,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch_2.clone(),
-            RequestId(0),
+            0,
             conn_id_a,
             ChangeDataRequestKvApi::TiDb,
             false,
@@ -2597,7 +2597,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch_1,
-            RequestId(0),
+            0,
             conn_id_b,
             ChangeDataRequestKvApi::TiDb,
             false,
@@ -2726,7 +2726,7 @@ mod tests {
             let downstream = Downstream::new(
                 "".to_string(),
                 region_epoch.clone(),
-                RequestId(0),
+                0,
                 conn_id,
                 ChangeDataRequestKvApi::TiDb,
                 false,
@@ -2819,7 +2819,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch.clone(),
-            RequestId(1),
+            1,
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
@@ -2836,7 +2836,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch.clone(),
-            RequestId(2),
+            2,
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
@@ -2853,7 +2853,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch.clone(),
-            RequestId(2),
+            2,
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
@@ -2877,7 +2877,7 @@ mod tests {
         // Deregister an unexist downstream.
         suite.run(Task::Deregister(Deregister::Downstream {
             conn_id,
-            request_id: RequestId(1),
+            request_id: 1,
             region_id: 1,
             downstream_id: DownstreamId::new(),
             err: None,
@@ -2896,7 +2896,7 @@ mod tests {
         let downstream_id = suite.capture_regions[&1].downstreams()[0].id;
         suite.run(Task::Deregister(Deregister::Downstream {
             conn_id,
-            request_id: RequestId(1),
+            request_id: 1,
             region_id: 1,
             downstream_id,
             err: Some(Error::Rocks("test error".to_owned())),
@@ -2917,7 +2917,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch.clone(),
-            RequestId(1),
+            1,
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
@@ -2956,7 +2956,7 @@ mod tests {
             let downstream = Downstream::new(
                 "".to_string(),
                 region_epoch.clone(),
-                RequestId(i),
+                i as _,
                 conn_id,
                 ChangeDataRequestKvApi::TiDb,
                 false,
@@ -2966,18 +2966,18 @@ mod tests {
                 request: req.clone(),
                 downstream,
             });
-            assert_eq!(suite.connections[&conn_id].downstreams_count(), i as usize);
+            assert_eq!(suite.connections[&conn_id].downstreams_count(), i);
         }
 
         // Deregister the request.
         suite.run(Task::Deregister(Deregister::Request {
             conn_id,
-            request_id: RequestId(1),
+            request_id: 1,
         }));
         assert_eq!(suite.connections[&conn_id].downstreams_count(), 1);
         suite.run(Task::Deregister(Deregister::Request {
             conn_id,
-            request_id: RequestId(2),
+            request_id: 2,
         }));
         assert_eq!(suite.connections[&conn_id].downstreams_count(), 0);
         assert_eq!(suite.capture_regions.len(), 0);
@@ -3001,7 +3001,7 @@ mod tests {
             let downstream = Downstream::new(
                 "".to_string(),
                 region_epoch.clone(),
-                RequestId(1),
+                1,
                 conn_id,
                 ChangeDataRequestKvApi::TiDb,
                 false,
@@ -3017,7 +3017,7 @@ mod tests {
         // Deregister regions one by one in the request.
         suite.run(Task::Deregister(Deregister::Region {
             conn_id,
-            request_id: RequestId(1),
+            request_id: 1,
             region_id: 1,
         }));
         assert_eq!(suite.connections[&conn_id].downstreams_count(), 1);
@@ -3025,7 +3025,7 @@ mod tests {
 
         suite.run(Task::Deregister(Deregister::Region {
             conn_id,
-            request_id: RequestId(1),
+            request_id: 1,
             region_id: 2,
         }));
         assert_eq!(suite.connections[&conn_id].downstreams_count(), 0);
@@ -3069,7 +3069,7 @@ mod tests {
         let downstream = Downstream::new(
             "".to_string(),
             region_epoch.clone(),
-            RequestId(1),
+            1,
             conn_id,
             ChangeDataRequestKvApi::TiDb,
             false,
