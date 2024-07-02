@@ -12,7 +12,10 @@ use std::{
 use collections::{HashMap, HashSet};
 use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, SnapshotContext};
-use kvproto::{raft_cmdpb::RaftCmdRequest, raft_serverpb::RaftMessage};
+use kvproto::{
+    raft_cmdpb::RaftCmdRequest,
+    raft_serverpb::{ExtraMessageType, RaftMessage},
+};
 use raft::eraftpb::MessageType;
 use raftstore::{
     router::{LocalReadRouter, RaftStoreRouter},
@@ -386,6 +389,7 @@ pub struct RegionPacketFilter {
     direction: Direction,
     block: Either<Arc<AtomicUsize>, Arc<AtomicBool>>,
     drop_type: Vec<MessageType>,
+    drop_extra_type: Vec<ExtraMessageType>,
     skip_type: Vec<MessageType>,
     dropped_messages: Option<Arc<Mutex<Vec<RaftMessage>>>>,
     msg_callback: Option<Arc<dyn Fn(&RaftMessage) + Send + Sync>>,
@@ -393,6 +397,13 @@ pub struct RegionPacketFilter {
 
 impl Filter for RegionPacketFilter {
     fn before(&self, msgs: &mut Vec<RaftMessage>) -> Result<()> {
+        let need_drop_msg_type = |m: &RaftMessage| {
+            let msg_type = m.get_message().get_msg_type();
+            let extra_msg_type = m.get_extra_msg().get_type();
+            self.drop_type.is_empty()
+                || self.drop_type.contains(&msg_type)
+                || self.drop_extra_type.contains(&extra_msg_type)
+        };
         let retain = |m: &RaftMessage| {
             let region_id = m.get_region_id();
             let from_store_id = m.get_from_peer().get_store_id();
@@ -402,7 +413,7 @@ impl Filter for RegionPacketFilter {
             if self.region_id == region_id
                 && (self.direction.is_send() && self.store_id == from_store_id
                     || self.direction.is_recv() && self.store_id == to_store_id)
-                && (self.drop_type.is_empty() || self.drop_type.contains(&msg_type))
+                && need_drop_msg_type(m)
                 && !self.skip_type.contains(&msg_type)
             {
                 let res = match self.block {
@@ -444,6 +455,7 @@ impl RegionPacketFilter {
             store_id,
             direction: Direction::Both,
             drop_type: vec![],
+            drop_extra_type: vec![],
             skip_type: vec![],
             block: Either::Right(Arc::new(AtomicBool::new(true))),
             dropped_messages: None,
@@ -461,6 +473,12 @@ impl RegionPacketFilter {
     #[must_use]
     pub fn msg_type(mut self, m_type: MessageType) -> RegionPacketFilter {
         self.drop_type.push(m_type);
+        self
+    }
+
+    #[must_use]
+    pub fn drop_extra_message(mut self, m_type: ExtraMessageType) -> RegionPacketFilter {
+        self.drop_extra_type.push(m_type);
         self
     }
 

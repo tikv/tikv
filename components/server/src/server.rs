@@ -73,7 +73,7 @@ use raftstore::{
     },
     RaftRouterCompactedEventSender,
 };
-use region_cache_memory_engine::{
+use range_cache_memory_engine::{
     config::RangeCacheConfigManager, RangeCacheEngineContext, RangeCacheMemoryEngine,
     RangeCacheMemoryEngineStatistics,
 };

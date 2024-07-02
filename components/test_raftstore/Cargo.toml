@@ -48,7 +48,7 @@ protobuf = { version = "2.8", features = ["bytes"] }
 raft = { workspace = true }
 raftstore = { workspace = true, features = ["testexport"] }
 rand = "0.8"
-region_cache_memory_engine = { workspace = true }
+range_cache_memory_engine = { workspace = true }
 resolved_ts = { workspace = true }
 resource_control = { workspace = true }
 resource_metering = { workspace = true }

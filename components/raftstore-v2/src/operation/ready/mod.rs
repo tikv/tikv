@@ -601,7 +601,7 @@ impl<EK: KvEngine, ER: RaftEngine> Peer<EK, ER> {
         debug!(
             self.logger,
             "send raft msg";
-            "msg_type" => ?msg_type,
+            "msg_type" => %util::MsgType(&msg),
             "msg_size" => msg.get_message().compute_size(),
             "to" => to_peer_id,
         );

@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use engine_traits::{
     is_data_cf, CacheRange, KvEngine, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions,
 };
-use region_cache_memory_engine::{RangeCacheMemoryEngine, RangeCacheWriteBatch};
+use range_cache_memory_engine::{RangeCacheMemoryEngine, RangeCacheWriteBatch};
 
 use crate::engine::HybridEngine;
 
@@ -24,14 +24,14 @@ where
     fn write_batch(&self) -> Self::WriteBatch {
         HybridEngineWriteBatch {
             disk_write_batch: self.disk_engine().write_batch(),
-            cache_write_batch: self.region_cache_engine().write_batch(),
+            cache_write_batch: self.range_cache_engine().write_batch(),
         }
     }
 
     fn write_batch_with_cap(&self, cap: usize) -> Self::WriteBatch {
         HybridEngineWriteBatch {
             disk_write_batch: self.disk_engine().write_batch_with_cap(cap),
-            cache_write_batch: self.region_cache_engine().write_batch_with_cap(cap),
+            cache_write_batch: self.range_cache_engine().write_batch_with_cap(cap),
         }
     }
 }
@@ -155,7 +155,7 @@ mod tests {
         CacheRange, KvEngine, Mutable, Peekable, RangeCacheEngine, SnapshotContext, WriteBatch,
         WriteBatchExt,
     };
-    use region_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheStatus};
+    use range_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheStatus};
 
     use crate::util::hybrid_engine_for_tests;
 
@@ -195,7 +195,7 @@ mod tests {
         let actual: &[u8] = &snap.disk_snap().get_value(b"hello").unwrap().unwrap();
         assert_eq!(b"world", &actual);
         let actual: &[u8] = &snap
-            .region_cache_snap()
+            .range_cache_snap()
             .unwrap()
             .get_value(b"hello")
             .unwrap()
@@ -259,17 +259,17 @@ mod tests {
         wb.write().unwrap();
 
         hybrid_engine
-            .region_cache_engine()
+            .range_cache_engine()
             .snapshot(range1.clone(), 1000, 1000)
             .unwrap();
         hybrid_engine
-            .region_cache_engine()
+            .range_cache_engine()
             .snapshot(range2.clone(), 1000, 1000)
             .unwrap();
         assert_eq!(
             4,
             hybrid_engine
-                .region_cache_engine()
+                .range_cache_engine()
                 .core()
                 .read()
                 .engine()
@@ -283,14 +283,14 @@ mod tests {
         wb.write().unwrap();
 
         hybrid_engine
-            .region_cache_engine()
+            .range_cache_engine()
             .snapshot(range1, 1000, 1000)
             .unwrap_err();
         hybrid_engine
-            .region_cache_engine()
+            .range_cache_engine()
             .snapshot(range2, 1000, 1000)
             .unwrap_err();
-        let m_engine = hybrid_engine.region_cache_engine();
+        let m_engine = hybrid_engine.range_cache_engine();
 
         let mut times = 0;
         while times < 10 {
