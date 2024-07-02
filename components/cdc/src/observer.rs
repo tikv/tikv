@@ -56,7 +56,7 @@ impl CdcObserver {
             .register_region_change_observer(100, BoxRegionChangeObserver::new(self.clone()));
     }
 
-    /// Subscribe a region, the observer will sink events of the region into
+    /// Subscribe an region, the observer will sink events of the region into
     /// its scheduler.
     ///
     /// Return previous ObserveId if there is one.
