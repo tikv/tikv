@@ -475,6 +475,26 @@ impl TestSuite {
         );
     }
 
+    pub fn must_release_pessimistic_lock(
+        &mut self,
+        region_id: u64,
+        pk: Vec<u8>,
+        start_ts: TimeStamp,
+        for_update_ts: TimeStamp,
+    ) {
+        let mut req = PessimisticRollbackRequest::default();
+        req.set_context(self.get_context(region_id));
+        req.start_version = start_ts.into_inner();
+        req.for_update_ts = for_update_ts.into_inner();
+        req.set_keys(vec![pk].into_iter().collect());
+        let resp = self
+            .get_tikv_client(region_id)
+            .kv_pessimistic_rollback(&req)
+            .unwrap();
+        assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
+        assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
+    }
+
     pub fn must_kv_pessimistic_prewrite(
         &mut self,
         region_id: u64,
