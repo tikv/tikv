@@ -836,11 +836,24 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
 
         self.snap_mgr = Some(snap_mgr.clone());
+
+        // Create coprocessor endpoint.
+        let copr = coprocessor::Endpoint::new(
+            &server_config.value(),
+            cop_read_pool_handle,
+            self.concurrency_manager.clone(),
+            resource_tag_factory,
+            self.quota_limiter.clone(),
+            self.resource_manager.clone(),
+        );
+        let copr_config_manager = copr.config_manager();
+
         // Create server
         let server = Server::new(
             node.id(),
             &server_config,
             &self.security_mgr,
+<<<<<<< HEAD
             storage,
             coprocessor::Endpoint::new(
                 &server_config.value(),
@@ -853,6 +866,13 @@ impl<ER: RaftEngine> TiKvServer<ER> {
             self.router.clone(),
             self.resolver.clone(),
             snap_mgr.clone(),
+=======
+            storage.clone(),
+            copr,
+            coprocessor_v2::Endpoint::new(&self.core.config.coprocessor_v2),
+            self.resolver.clone().unwrap(),
+            Either::Left(snap_mgr.clone()),
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
             gc_worker.clone(),
             check_leader_scheduler,
             self.env.clone(),
@@ -867,6 +887,7 @@ impl<ER: RaftEngine> TiKvServer<ER> {
                 server.get_snap_worker_scheduler(),
                 server_config.clone(),
                 server.get_grpc_mem_quota().clone(),
+                copr_config_manager,
             )),
         );
 

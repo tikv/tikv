@@ -18,8 +18,16 @@ use kvproto::{
     metapb, pdpb,
     replication_modepb::{RegionReplicationStatus, ReplicationStatus, StoreDrAutoSyncStatus},
 };
+<<<<<<< HEAD
 use pdpb::{QueryStats, WatchGlobalConfigResponse};
 use tikv_util::time::{Instant, UnixSecs};
+=======
+use pdpb::QueryStats;
+use tikv_util::{
+    memory::HeapSize,
+    time::{Instant, UnixSecs},
+};
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
 use txn_types::TimeStamp;
 
 pub use self::{
@@ -119,6 +127,12 @@ impl BucketMeta {
         self.sizes[idx - 1] += self.sizes[idx];
         self.keys.remove(idx);
         self.sizes.remove(idx);
+    }
+}
+
+impl HeapSize for BucketMeta {
+    fn approximate_heap_size(&self) -> usize {
+        self.keys.approximate_heap_size() + self.sizes.approximate_heap_size()
     }
 }
 
