@@ -47,7 +47,7 @@ use crate::{
     initializer::KvEntry,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-    service::{Conn, ConnId, FeatureGate},
+    service::{Conn, ConnId, FeatureGate, RequestId},
     txn_source::TxnSource,
     Error, Result,
 };
@@ -133,7 +133,7 @@ pub struct Downstream {
     pub region_epoch: RegionEpoch,
     /// The request ID set by CDC to identify events corresponding different
     /// requests.
-    pub req_id: u64,
+    pub req_id: RequestId,
     pub conn_id: ConnId,
 
     pub kv_api: ChangeDataRequestKvApi,
@@ -167,7 +167,7 @@ impl Downstream {
     pub fn new(
         peer: String,
         region_epoch: RegionEpoch,
-        req_id: u64,
+        req_id: RequestId,
         conn_id: ConnId,
         kv_api: ChangeDataRequestKvApi,
         filter_loop: bool,
@@ -194,10 +194,10 @@ impl Downstream {
 
     /// Sink events to the downstream.
     pub fn sink_event(&self, mut event: Event, force: bool) -> Result<()> {
-        event.set_request_id(self.req_id);
+        event.set_request_id(self.req_id.0);
         if self.sink.is_none() {
             info!("cdc drop event, no sink";
-                "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => self.req_id);
+                "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
             return Err(Error::Sink(SendError::Disconnected));
         }
         let sink = self.sink.as_ref().unwrap();
@@ -205,13 +205,13 @@ impl Downstream {
             Ok(_) => Ok(()),
             Err(SendError::Disconnected) => {
                 debug!("cdc send event failed, disconnected";
-                    "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => self.req_id);
+                    "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
                 Err(Error::Sink(SendError::Disconnected))
             }
             // TODO handle errors.
             Err(e @ SendError::Full) | Err(e @ SendError::Congested) => {
                 info!("cdc send event failed, full";
-                    "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => self.req_id);
+                    "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => ?self.req_id);
                 Err(Error::Sink(e))
             }
         }
@@ -319,7 +319,7 @@ impl MiniLock {
 /// A CDC delegate of a raftstore region peer.
 ///
 /// It converts raft commands into CDC events and broadcast to downstreams.
-/// It also tracks transaction on the fly in order to compute resolved ts.
+/// It also tracks transactions on the fly in order to compute resolved ts.
 pub struct Delegate {
     pub region_id: u64,
     pub handle: ObserveHandle,
@@ -511,7 +511,7 @@ impl Delegate {
     /// Return error if subscribe fails and the `Delegate` won't be changed.
     pub fn subscribe(&mut self, downstream: Downstream) -> StdResult<(), (Error, Downstream)> {
         if let LockTracker::Prepared { ref region, .. } = &self.lock_tracker {
-            // Check if the downstream is out dated.
+            // Check if the downstream is outdated.
             if let Err(e) = Self::check_epoch_on_ready(&downstream, region) {
                 return Err((e, downstream));
             }
@@ -543,7 +543,7 @@ impl Delegate {
                     warn!("cdc send unsubscribe failed";
                         "region_id" => region_id, "error" => ?err, "origin_error" => ?error_event,
                         "downstream_id" => ?d.id, "downstream" => ?d.peer,
-                        "request_id" => d.req_id, "conn_id" => ?d.conn_id);
+                        "request_id" => ?d.req_id, "conn_id" => ?d.conn_id);
                 }
             }
             d.state.store(DownstreamState::Stopped);
@@ -578,12 +578,12 @@ impl Delegate {
                 warn!("cdc send region error failed";
                     "region_id" => region_id, "error" => ?err, "origin_error" => ?error,
                     "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
-                    "request_id" => downstream.req_id, "conn_id" => ?downstream.conn_id);
+                    "request_id" => ?downstream.req_id, "conn_id" => ?downstream.conn_id);
             } else {
                 info!("cdc send region error success";
                     "region_id" => region_id, "origin_error" => ?error,
                     "downstream_id" => ?downstream.id, "downstream" => ?downstream.peer,
-                    "request_id" => downstream.req_id, "conn_id" => ?downstream.conn_id);
+                    "request_id" => ?downstream.req_id, "conn_id" => ?downstream.conn_id);
             }
         };
 
@@ -640,12 +640,6 @@ impl Delegate {
             if downstream.lock_heap.is_none() {
                 let mut lock_heap = BTreeMap::<TimeStamp, isize>::new();
                 for (_, lock) in locks.range(downstream.observed_range.to_range()) {
-                    if TxnSource::is_lossy_ddl_reorg_source_set(lock.txn_source)
-                        || downstream.filter_loop
-                            && TxnSource::is_cdc_write_source_set(lock.txn_source)
-                    {
-                        continue;
-                    }
                     let lock_count = lock_heap.entry(lock.ts).or_default();
                     *lock_count += 1;
                 }
@@ -680,7 +674,7 @@ impl Delegate {
                 v.push(self.region_id, advanced_to);
                 if !features.contains(FeatureGate::BATCH_RESOLVED_TS) {
                     let k = (d.conn_id, self.region_id);
-                    advance.dispersed.insert(k, d.req_id);
+                    advance.dispersed.insert(k, d.req_id.0);
                 }
             };
 
@@ -746,7 +740,7 @@ impl Delegate {
 
     pub(crate) fn convert_to_grpc_events(
         region_id: u64,
-        request_id: u64,
+        request_id: RequestId,
         entries: Vec<Option<KvEntry>>,
         filter_loop: bool,
         observed_range: &ObservedRange,
@@ -835,7 +829,7 @@ impl Delegate {
                 };
                 CdcEvent::Event(Event {
                     region_id,
-                    request_id,
+                    request_id: request_id.0,
                     event: Some(Event_oneof_event::Entries(event_entries)),
                     ..Default::default()
                 })
@@ -906,7 +900,7 @@ impl Delegate {
             let event = Event {
                 region_id: self.region_id,
                 index,
-                request_id: downstream.req_id,
+                request_id: downstream.req_id.0,
                 event: Some(Event_oneof_event::Entries(EventEntries {
                     entries: filtered_entries.into(),
                     ..Default::default()
@@ -936,13 +930,6 @@ impl Delegate {
         for downstream in downstreams {
             let mut filtered_entries = Vec::with_capacity(entries.len());
             for (entry, lock_count_modify) in &entries {
-                if !downstream.observed_range.contains_raw_key(&entry.key)
-                    || downstream.filter_loop
-                        && TxnSource::is_cdc_write_source_set(entry.txn_source)
-                {
-                    continue;
-                }
-
                 if *lock_count_modify != 0 && downstream.lock_heap.is_some() {
                     let lock_heap = downstream.lock_heap.as_mut().unwrap();
                     match lock_heap.entry(entry.start_ts.into()) {
@@ -951,12 +938,25 @@ impl Delegate {
                         }
                         BTreeMapEntry::Occupied(mut x) => {
                             *x.get_mut() += *lock_count_modify;
+                            assert!(
+                                *x.get() >= 0,
+                                "lock_count_modify should never be negative, start_ts: {}",
+                                entry.start_ts
+                            );
                             if *x.get() == 0 {
                                 x.remove();
                             }
                         }
                     }
                 }
+
+                if !downstream.observed_range.contains_raw_key(&entry.key)
+                    || downstream.filter_loop
+                        && TxnSource::is_cdc_write_source_set(entry.txn_source)
+                {
+                    continue;
+                }
+
                 filtered_entries.push(entry.clone());
             }
             if filtered_entries.is_empty() {
@@ -964,7 +964,7 @@ impl Delegate {
             }
             let event = Event {
                 region_id: self.region_id,
-                request_id: downstream.req_id,
+                request_id: downstream.req_id.0,
                 event: Some(Event_oneof_event::Entries(EventEntries {
                     entries: filtered_entries.into(),
                     ..Default::default()
@@ -1034,8 +1034,9 @@ impl Delegate {
                     return Ok(());
                 }
 
-                row.lock_count_modify =
-                    self.push_lock(key, MiniLock::new(row.v.start_ts, txn_source))?;
+                assert_eq!(row.lock_count_modify, 0);
+                let mini_lock = MiniLock::new(row.v.start_ts, txn_source);
+                row.lock_count_modify = self.push_lock(key, mini_lock)?;
 
                 let read_old_ts = std::cmp::max(for_update_ts, row.v.start_ts.into());
                 read_old_value(&mut row.v, read_old_ts)?;
@@ -1051,12 +1052,14 @@ impl Delegate {
     }
 
     fn sink_delete(&mut self, mut delete: DeleteRequest, rows: &mut RowsBuilder) -> Result<()> {
+        // RawKV (API v2, and only API v2 can use CDC) has no lock and will write to
+        // default cf only.
         match delete.cf.as_str() {
             "lock" => {
-                if self.pop_lock(Key::from_encoded_slice(&delete.key))? != 0 {
-                    let key = Key::from_encoded(delete.take_key());
-                    rows.txns_by_key.get_mut(&key).unwrap().lock_count_modify -= 1;
-                }
+                let key = Key::from_encoded(delete.take_key());
+                let row = rows.txns_by_key.get_mut(&key).unwrap();
+                assert_eq!(row.lock_count_modify, 0);
+                row.lock_count_modify = self.pop_lock(key)?;
             }
             "" | "default" | "write" => {}
             other => panic!("invalid cf {}", other),
@@ -1118,7 +1121,7 @@ impl Delegate {
                 "region_id" => region.id,
                 "downstream_id" => ?downstream.id,
                 "conn_id" => ?downstream.conn_id,
-                "req_id" => downstream.req_id,
+                "req_id" => ?downstream.req_id,
                 "err" => ?e
             );
             // Downstream is outdated, mark stop.
@@ -1427,7 +1430,7 @@ mod tests {
         let quota = Arc::new(MemoryQuota::new(usize::MAX));
         let (sink, mut drain) = crate::channel::channel(1, quota.clone());
         let rx = drain.drain();
-        let request_id = 123;
+        let request_id = RequestId(123);
         let mut downstream = Downstream::new(
             String::new(),
             region_epoch,
@@ -1455,7 +1458,7 @@ mod tests {
             let (event, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
             rx_wrap.set(Some(rx));
             if let CdcEvent::Event(mut e) = event.unwrap().0 {
-                assert_eq!(e.get_request_id(), request_id);
+                assert_eq!(e.get_request_id(), request_id.0);
                 let event = e.event.take().unwrap();
                 match event {
                     Event_oneof_event::Error(err) => err,
@@ -1548,8 +1551,8 @@ mod tests {
 
     #[test]
     fn test_delegate_subscribe_unsubscribe() {
-        let new_downstream = |id: u64, region_version: u64| {
-            let peer = format!("{}", id);
+        let new_downstream = |id: RequestId, region_version: u64| {
+            let peer = format!("{:?}", id);
             let mut epoch = RegionEpoch::default();
             epoch.set_conf_ver(region_version);
             epoch.set_version(region_version);
@@ -1572,14 +1575,14 @@ mod tests {
         assert!(delegate.handle.is_observing());
 
         // Subscribe once.
-        let downstream1 = new_downstream(1, 1);
+        let downstream1 = new_downstream(RequestId(1), 1);
         let downstream1_id = downstream1.id;
         delegate.subscribe(downstream1).unwrap();
         assert_eq!(txn_extra_op.load(), TxnExtraOp::ReadOldValue);
         assert!(delegate.handle.is_observing());
 
         // Subscribe twice and then unsubscribe the second downstream.
-        let downstream2 = new_downstream(2, 1);
+        let downstream2 = new_downstream(RequestId(2), 1);
         let downstream2_id = downstream2.id;
         delegate.subscribe(downstream2).unwrap();
         assert!(!delegate.unsubscribe(downstream2_id, None));
@@ -1587,7 +1590,7 @@ mod tests {
         assert!(delegate.handle.is_observing());
 
         // `on_region_ready` when the delegate isn't resolved.
-        delegate.subscribe(new_downstream(1, 2)).unwrap();
+        delegate.subscribe(new_downstream(RequestId(1), 2)).unwrap();
         let mut region = Region::default();
         region.mut_region_epoch().set_conf_ver(1);
         region.mut_region_epoch().set_version(1);
@@ -1605,7 +1608,9 @@ mod tests {
         assert!(delegate.handle.is_observing());
 
         // Subscribe with an invalid epoch.
-        delegate.subscribe(new_downstream(1, 2)).unwrap_err();
+        delegate
+            .subscribe(new_downstream(RequestId(1), 2))
+            .unwrap_err();
         assert_eq!(delegate.downstreams().len(), 1);
 
         // Unsubscribe all downstreams.
@@ -1719,7 +1724,7 @@ mod tests {
         let mut downstream = Downstream::new(
             "peer".to_owned(),
             RegionEpoch::default(),
-            1,
+            RequestId(1),
             ConnId::new(),
             ChangeDataRequestKvApi::TiDb,
             false,
@@ -1786,7 +1791,7 @@ mod tests {
         let mut downstream = Downstream::new(
             "peer".to_owned(),
             RegionEpoch::default(),
-            1,
+            RequestId(1),
             ConnId::new(),
             ChangeDataRequestKvApi::TiDb,
             filter_loop,

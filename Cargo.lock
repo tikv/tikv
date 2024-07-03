@@ -2544,7 +2544,7 @@ dependencies = [
  "online_config",
  "prometheus",
  "prometheus-static-metric",
- "region_cache_memory_engine",
+ "range_cache_memory_engine",
  "slog",
  "slog-global",
  "tempfile",
@@ -4285,7 +4285,7 @@ dependencies = [
  "raft",
  "raft-proto",
  "rand 0.8.5",
- "region_cache_memory_engine",
+ "range_cache_memory_engine",
  "resource_control",
  "resource_metering",
  "serde",
@@ -4480,6 +4480,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "range_cache_memory_engine"
+version = "0.0.1"
+dependencies = [
+ "bytes",
+ "collections",
+ "crossbeam",
+ "dashmap",
+ "engine_rocks",
+ "engine_traits",
+ "fail",
+ "futures 0.3.15",
+ "hex 0.4.2",
+ "keys",
+ "kvproto",
+ "lazy_static",
+ "libc 0.2.151",
+ "log_wrappers",
+ "online_config",
+ "parking_lot 0.12.1",
+ "pd_client",
+ "prometheus",
+ "prometheus-static-metric",
+ "raftstore",
+ "rand 0.8.5",
+ "security",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "skiplist-rs",
+ "slog",
+ "slog-global",
+ "tempfile",
+ "test_pd",
+ "test_pd_client",
+ "test_util",
+ "thiserror",
+ "tikv_util",
+ "txn_types",
+ "yatp",
+]
+
+[[package]]
 name = "raw-cpuid"
 version = "10.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4586,48 +4628,6 @@ name = "regex-syntax"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08c74e62047bb2de4ff487b251e4a92e24f48745648451635cec7d591162d9f"
-
-[[package]]
-name = "region_cache_memory_engine"
-version = "0.0.1"
-dependencies = [
- "bytes",
- "collections",
- "crossbeam",
- "dashmap",
- "engine_rocks",
- "engine_traits",
- "fail",
- "futures 0.3.15",
- "hex 0.4.2",
- "keys",
- "kvproto",
- "lazy_static",
- "libc 0.2.151",
- "log_wrappers",
- "online_config",
- "parking_lot 0.12.1",
- "pd_client",
- "prometheus",
- "prometheus-static-metric",
- "raftstore",
- "rand 0.8.5",
- "security",
- "serde",
- "serde_derive",
- "serde_json",
- "skiplist-rs",
- "slog",
- "slog-global",
- "tempfile",
- "test_pd",
- "test_pd_client",
- "test_util",
- "thiserror",
- "tikv_util",
- "txn_types",
- "yatp",
-]
 
 [[package]]
 name = "remove_dir_all"
@@ -5319,7 +5319,7 @@ dependencies = [
  "raft_log_engine",
  "raftstore",
  "raftstore-v2",
- "region_cache_memory_engine",
+ "range_cache_memory_engine",
  "resolved_ts",
  "resource_control",
  "resource_metering",
@@ -6021,7 +6021,7 @@ dependencies = [
  "raft",
  "raftstore",
  "rand 0.8.5",
- "region_cache_memory_engine",
+ "range_cache_memory_engine",
  "resolved_ts",
  "resource_control",
  "resource_metering",
@@ -6532,8 +6532,8 @@ dependencies = [
  "raftstore",
  "raftstore-v2",
  "rand 0.7.3",
+ "range_cache_memory_engine",
  "regex",
- "region_cache_memory_engine",
  "reqwest",
  "resource_control",
  "resource_metering",

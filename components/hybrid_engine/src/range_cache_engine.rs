@@ -15,6 +15,6 @@ where
 
     #[inline]
     fn evict_range(&self, range: &CacheRange) {
-        self.region_cache_engine().evict_range(range);
+        self.range_cache_engine().evict_range(range);
     }
 }
