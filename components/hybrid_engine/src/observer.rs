@@ -217,6 +217,47 @@ mod tests {
         }
     }
 
+    fn new_admin_request_batch_split() -> RaftCmdRequest {
+        let mut request = RaftCmdRequest::default();
+        request
+            .mut_admin_request()
+            .set_cmd_type(AdminCmdType::BatchSplit);
+        request
+    }
+
+    #[test]
+    fn test_do_not_evict_range_region_split() {
+        let cache_engine = Arc::new(MockRangeCacheEngine::default());
+        let observer = Observer::new(cache_engine.clone());
+
+        let mut region = Region::default();
+        region.set_id(1);
+        region.mut_peers().push(Peer::default());
+        let mut ctx = ObserverContext::new(&region);
+
+        let mut pending_handle_ssts = None;
+        let mut delete_ssts = Vec::new();
+        let mut pending_delete_ssts = Vec::new();
+
+        let mut apply = ApplyCtxInfo {
+            pending_handle_ssts: &mut pending_handle_ssts,
+            delete_ssts: &mut delete_ssts,
+            pending_delete_ssts: &mut pending_delete_ssts,
+        };
+        let request = new_admin_request_batch_split();
+        let response = RaftCmdResponse::default();
+        let cmd = Cmd::new(0, 0, request, response);
+
+        // Must not evict range for region split.
+        //
+        // Enable range cache engine.
+        cache_engine.enabled.store(true, Ordering::Relaxed);
+        observer.post_exec_cmd(&mut ctx, &cmd, &RegionState::default(), &mut apply);
+        observer.on_flush_cmd();
+        let expected = CacheRange::from_region(&region);
+        assert!(&cache_engine.evicted_ranges.lock().unwrap().is_empty());
+    }
+
     #[test]
     fn test_evict_range_ingest_sst() {
         let cache_engine = Arc::new(MockRangeCacheEngine::default());
