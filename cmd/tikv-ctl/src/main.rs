@@ -432,7 +432,7 @@ fn main() {
                 external_storage,
                 db: Some(tmp_engine.rocks),
             };
-            exec.run(compact_log::LogToTerm::default())
+            exec.run(compact_log::hooks::LogToTerm::default())
                 .expect("failed to execute compact-log-backup")
         }
         // Commands below requires either the data dir or the host.

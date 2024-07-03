@@ -1,3 +1,5 @@
+pub mod hooks;
+
 use std::{
     borrow::Cow,
     collections::VecDeque,
@@ -5,32 +7,28 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use chrono::{DateTime, Duration, Local};
 use engine_rocks::RocksEngine;
 pub use engine_traits::SstCompressionType;
 use engine_traits::SstExt;
 use external_storage::{BackendConfig, FullFeaturedStorage};
 use futures::stream::{self, StreamExt};
-use hooks::{AfterFinishCtx, BeforeStartCtx, CId, ExecHooks};
+use hooks::{AfterFinishCtx, BeforeStartCtx, CId, CompactionFinishCtx, ExecHooks};
 use kvproto::brpb::StorageBackend;
-use tokio::{io::AsyncWriteExt, runtime::Handle, signal::unix::SignalKind};
+use tokio::runtime::Handle;
+use tokio_stream::Stream;
 use tracing::{trace_span, Instrument};
 use tracing_active_tree::{frame, root};
-use txn_types::TimeStamp;
 
 use super::{
     compaction::{
         collector::{CollectSubcompaction, CollectSubcompactionConfig},
         exec::{SubcompactExt, SubcompactionExec},
-        Subcompaction,
     },
-    statistic::{CollectCompactionStatistic, LoadMetaStatistic},
     storage::{LoadFromExt, StreamyMetaStorage},
 };
 use crate::{
-    compaction::{exec::SingleCompactionArg, meta::CompactionRunInfoBuilder, SubcompactionResult},
+    compaction::{exec::SingleCompactionArg, meta::CompactionRunInfoBuilder, Subcompaction},
     errors::{Result, TraceResultExt},
-    statistic::{CompactStatistic, LoadStatistic},
     util,
 };
 
@@ -61,162 +59,6 @@ pub struct Execution<DB: SstExt = RocksEngine> {
     pub external_storage: StorageBackend,
     pub db: Option<DB>,
     pub out_prefix: String,
-}
-
-pub struct NoHooks;
-
-impl ExecHooks for NoHooks {}
-
-pub mod hooks {
-
-    use tokio::runtime::Handle;
-
-    use super::Execution;
-    use crate::{
-        compaction::{Subcompaction, SubcompactionResult},
-        statistic::{CollectCompactionStatistic, LoadMetaStatistic},
-    };
-
-    #[derive(PartialEq, Eq, Debug, Clone, Copy)]
-    pub struct CId(pub u64);
-
-    impl std::fmt::Display for CId {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "{}", self.0)
-        }
-    }
-
-    #[derive(Clone, Copy)]
-    pub struct BeforeStartCtx<'a> {
-        pub async_rt: &'a Handle,
-        pub est_meta_size: u64,
-        pub this: &'a Execution,
-    }
-
-    #[derive(Clone)]
-    pub struct AfterFinishCtx {
-        pub async_rt: Handle,
-        pub comments: String,
-    }
-
-    pub trait ExecHooks: 'static {
-        fn before_a_compaction_start(&mut self, _c: &Subcompaction, _cid: CId) {}
-        fn after_a_compaction_end(&mut self, _cid: CId, _res: &SubcompactionResult) {}
-
-        fn before_execution_started(&mut self, _cx: BeforeStartCtx<'_>) {}
-        fn after_execution_finished(&mut self, _cx: &mut AfterFinishCtx) {}
-
-        fn update_load_meta_stat(&mut self, _stat: &LoadMetaStatistic) {}
-        fn update_collect_compaction_stat(&mut self, _stat: &CollectCompactionStatistic) {}
-    }
-}
-
-#[derive(Default)]
-pub struct LogToTerm {
-    load_stat: LoadStatistic,
-    compact_stat: CompactStatistic,
-    load_meta_stat: LoadMetaStatistic,
-    collect_stat: CollectCompactionStatistic,
-    begin: Option<DateTime<Local>>,
-    meta_len: u64,
-}
-
-impl ExecHooks for LogToTerm {
-    fn before_a_compaction_start(&mut self, c: &Subcompaction, cid: CId) {
-        println!(
-            "[{}] spawning compaction. cid: {}, cf: {}, input_min_ts: {}, input_max_ts: {}, source: {}, size: {}, region_id: {}",
-            TimeStamp::physical_now(),
-            cid.0,
-            c.cf,
-            c.input_min_ts,
-            c.input_max_ts,
-            c.inputs.len(),
-            c.size,
-            c.region_id
-        );
-    }
-
-    fn after_a_compaction_end(&mut self, cid: CId, res: &SubcompactionResult) {
-        let lst = &res.load_stat;
-        let cst = &res.compact_stat;
-        let logical_input_size = lst.logical_key_bytes_in + lst.logical_value_bytes_in;
-        let total_take =
-            cst.load_duration + cst.sort_duration + cst.save_duration + cst.write_sst_duration;
-        let speed = logical_input_size as f64 / total_take.as_millis() as f64;
-        self.load_stat += lst.clone();
-        self.compact_stat += cst.clone();
-
-        println!(
-            "[{}] finishing compaction. meta: {}/{}, p_bytes: {}, cid: {}, load_stat: {:?}, compact_stat: {:?}, speed: {:.2} KB./s, total_take: {:?}, global_load_meta_stat: {:?}",
-            TimeStamp::physical_now(),
-            self.load_meta_stat.meta_files_in,
-            self.meta_len,
-            self.collect_stat.bytes_in - self.collect_stat.bytes_out,
-            cid.0,
-            lst,
-            cst,
-            speed,
-            total_take,
-            self.load_meta_stat,
-        );
-    }
-
-    fn after_execution_finished(&mut self, cx: &mut AfterFinishCtx) {
-        let now = Local::now();
-        cx.comments += &format!(
-            "start_time: {}\n",
-            self.begin
-                .map(|v| v.to_rfc3339())
-                .as_deref()
-                .unwrap_or("unknown")
-        );
-        cx.comments += &format!("end_time: {}\n", now.to_rfc3339());
-        cx.comments += &format!(
-            "taken: {}\n",
-            self.begin.map(|v| now - v).unwrap_or(Duration::zero())
-        );
-        cx.comments += &format!("exec_by: {:?}\n", tikv_util::sys::hostname());
-        cx.comments += &format!("load_stat: {:?}\n", self.load_stat);
-        cx.comments += &format!("compact_stat: {:?}\n", self.compact_stat);
-        cx.comments += &format!("load_meta_stat: {:?}\n", self.load_meta_stat);
-        cx.comments += &format!("collect_stat: {:?}\n", self.collect_stat);
-
-        println!("[{}] All compcations done", TimeStamp::physical_now(),);
-        println!("{}", cx.comments);
-    }
-
-    fn update_load_meta_stat(&mut self, stat: &LoadMetaStatistic) {
-        self.load_meta_stat += stat.clone();
-    }
-
-    fn before_execution_started(&mut self, cx: BeforeStartCtx<'_>) {
-        tracing_active_tree::init();
-
-        self.begin = Some(Local::now());
-        let sigusr1_handler = async {
-            let mut signal = tokio::signal::unix::signal(SignalKind::user_defined1()).unwrap();
-            while let Some(_) = signal.recv().await {
-                let file_name = "/tmp/compact-sst.dump".to_owned();
-                let res = async {
-                    let mut file = tokio::fs::File::create(&file_name).await?;
-                    file.write_all(&tracing_active_tree::layer::global().fmt_bytes())
-                        .await
-                }
-                .await;
-                match res {
-                    Ok(_) => eprintln!("dumped to {}", file_name),
-                    Err(err) => eprintln!("failed to dump because {}", err),
-                }
-            }
-        };
-
-        cx.async_rt.spawn(sigusr1_handler);
-        self.meta_len = cx.est_meta_size;
-    }
-
-    fn update_collect_compaction_stat(&mut self, stat: &CollectCompactionStatistic) {
-        self.collect_stat += stat.clone()
-    }
 }
 
 impl Execution {
@@ -286,6 +128,22 @@ impl Execution {
             );
             let mut pending = VecDeque::new();
             let mut id = 0;
+            let mut on_finish = |cid, mut cres| {
+                let external_storage = storage.as_ref();
+                let hks = &locked_hooks;
+
+                async move {
+                    let mut cx = CompactionFinishCtx {
+                        external_storage,
+                        result: &mut cres,
+                    };
+                    hks.lock()
+                        .unwrap()
+                        .after_a_compaction_end(cid, &mut cx)
+                        .await?;
+                    Result::Ok(())
+                }
+            };
 
             while let Some(c) = compact_stream
                 .next()
@@ -302,7 +160,7 @@ impl Execution {
                 locked_hooks
                     .lock()
                     .unwrap()
-                    .before_a_compaction_start(&c, cid);
+                    .before_a_compaction_start(cid, &c);
 
                 id += 1;
 
@@ -327,12 +185,9 @@ impl Execution {
 
                 if pending.len() >= self.max_concurrent_compaction as _ {
                     let (join, cid) = pending.pop_front().unwrap();
-                    let cres = frame!("wait"; join).await.unwrap()?;
-                    locked_hooks
-                        .lock()
-                        .unwrap()
-                        .after_a_compaction_end(cid, &cres);
+                    let cres = frame!("wait_for_compaction"; join).await.unwrap()?;
                     run_info.add_compaction(&cres);
+                    on_finish(cid, cres).await?;
                 }
             }
             drop(next_compaction);
@@ -344,21 +199,18 @@ impl Execution {
 
             for (join, cid) in pending {
                 let cres = frame!("final_wait"; join).await.unwrap()?;
-                locked_hooks
-                    .lock()
-                    .unwrap()
-                    .after_a_compaction_end(cid, &cres);
                 run_info.add_compaction(&cres);
+                on_finish(cid, cres).await?;
             }
             let mut cx = AfterFinishCtx {
                 async_rt: Handle::current(),
                 comments: String::new(),
+                external_storage: storage.as_ref(),
             };
-            locked_hooks
-                .lock()
-                .unwrap()
-                .after_execution_finished(&mut cx);
-            run_info.mut_meta().set_comments(cx.comments);
+            {
+                let mut l = locked_hooks.lock().unwrap();
+                l.after_execution_finished(&mut cx).await?;
+            }
 
             run_info
                 .write_migration(storage.as_ref())

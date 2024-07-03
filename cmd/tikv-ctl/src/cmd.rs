@@ -666,7 +666,7 @@ pub enum Cmd {
         storage_base64: String,
         #[structopt(
             long,
-            default_value = "SstCompressionType::Lz4",
+            default_value = "lz4",
             help(
                 "the compression method will use when generating SSTs. (hint: zstd | lz4 | snappy)"
             )

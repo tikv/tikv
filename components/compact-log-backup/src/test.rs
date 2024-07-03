@@ -14,8 +14,8 @@ use crate::{
         SubcompactionResult,
     },
     execute::{
-        hooks::{AfterFinishCtx, CId, ExecHooks},
-        Execution, ExecutionConfig, LogToTerm,
+        hooks::{LogToTerm},
+        Execution, ExecutionConfig,
     },
     statistic::{CompactStatistic, LoadStatistic},
     storage::{LoadFromExt, StreamyMetaStorage},
@@ -133,7 +133,7 @@ async fn playground_no_pref() {
     ext.max_concurrent_fetch = 128;
     // Stream<Output = Result<LogFileMeta>>
     let meta = StreamyMetaStorage::load_from_ext(storage.as_ref(), ext);
-    let mut stream = meta.flat_map(|file| match file {
+    let stream = meta.flat_map(|file| match file {
         Ok(file) => stream::iter(file.into_logs()).map(Ok).left_stream(),
         Err(err) => stream::once(futures::future::err(err)).right_stream(),
     });

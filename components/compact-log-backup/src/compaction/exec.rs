@@ -14,7 +14,6 @@ use futures::{
 };
 use kvproto::brpb::{self, LogFileSubcompactionMeta};
 use tikv_util::{
-    codec::stream_event::Iterator as KvStreamIter,
     retry_expr,
     stream::{JustRetry, RetryExt},
     time::Instant,

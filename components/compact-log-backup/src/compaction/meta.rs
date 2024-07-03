@@ -6,7 +6,7 @@ use std::{
 
 use external_storage::FullFeaturedStorage;
 use futures::stream::TryStreamExt;
-use kvproto::brpb::{self, Migration, SpansOfFile};
+use kvproto::brpb::{self, SpansOfFile};
 
 use super::{Subcompaction, SubcompactionResult};
 use crate::{
