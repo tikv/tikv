@@ -35,7 +35,7 @@ impl Observer {
         coprocessor_host
             .registry
             .register_query_observer(priority, BoxQueryObserver::new(self.clone()));
-        // Evict cache when a peer splits and merges.
+        // Evict cache when a peer applies region merge.
         coprocessor_host
             .registry
             .register_admin_observer(priority, BoxAdminObserver::new(self.clone()));
@@ -62,14 +62,17 @@ impl Observer {
         }
         // Evict caches for successfully executed ingest commands and admin
         // commands that change region range.
+        //
+        // NB: We do not evict the cache for region splits, as the split ranges
+        // still contain the latest data and hot regions are often split.
+        // Evicting the cache for region splits is not worthwhile and may cause
+        // performance regression due to frequent loading and evicting of
+        // hot regions.
         if apply.pending_handle_ssts.is_some()
             || (state.modified_region.is_some()
                 && matches!(
                     cmd.request.get_admin_request().get_cmd_type(),
-                    AdminCmdType::BatchSplit
-                        | AdminCmdType::Split
-                        | AdminCmdType::PrepareMerge
-                        | AdminCmdType::CommitMerge
+                    AdminCmdType::PrepareMerge | AdminCmdType::CommitMerge
                 ))
         {
             let range = CacheRange::from_region(ctx.region());
