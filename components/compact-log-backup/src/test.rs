@@ -8,10 +8,10 @@ use tokio::{io::AsyncWriteExt, signal::unix::SignalKind};
 
 use crate::{
     compaction::{
-        collector::{CollectCompaction, CollectCompactionConfig},
-        exec::{CompactLogExt, SingleCompactionExec},
+        collector::{CollectSubcompaction, CollectSubcompactionConfig},
+        exec::{SubcompactExt, SubcompactionExec},
         meta::CompactionRunInfoBuilder,
-        CompactionResult,
+        SubcompactionResult,
     },
     execute::{
         hooks::{AfterFinishCtx, CId, ExecHooks},
@@ -46,9 +46,9 @@ async fn playground() {
         Ok(file) => stream::iter(file.into_logs()).map(Ok).left_stream(),
         Err(err) => stream::once(futures::future::err(err)).right_stream(),
     });
-    let collect = CollectCompaction::new(
+    let collect = CollectSubcompaction::new(
         stream,
-        CollectCompactionConfig {
+        CollectSubcompactionConfig {
             compact_from_ts: 0,
             compact_to_ts: u64::MAX,
         },
@@ -65,10 +65,11 @@ async fn playground() {
     let compaction = compactions.pop().unwrap();
     println!("{:?}", compaction);
     let arc_store = Arc::from(*storage);
-    let compact_worker = SingleCompactionExec::<RocksEngine>::inplace(Arc::clone(&arc_store) as _);
+    let compact_worker =
+        SubcompactionExec::<RocksEngine>::default_config(Arc::clone(&arc_store) as _);
     let _load_stat = LoadStatistic::default();
     let _compact_stat = CompactStatistic::default();
-    let c_ext = CompactLogExt {
+    let c_ext = SubcompactExt {
         max_load_concurrency: 32,
         ..Default::default()
     };
@@ -136,9 +137,9 @@ async fn playground_no_pref() {
         Ok(file) => stream::iter(file.into_logs()).map(Ok).left_stream(),
         Err(err) => stream::once(futures::future::err(err)).right_stream(),
     });
-    let collect = CollectCompaction::new(
+    let collect = CollectSubcompaction::new(
         stream,
-        CollectCompactionConfig {
+        CollectSubcompactionConfig {
             compact_from_ts: 450751747746168891,
             compact_to_ts: 450756116281266182,
         },
@@ -149,7 +150,7 @@ async fn playground_no_pref() {
     let mut compacted_files = CompactionRunInfoBuilder::new();
     println!("{:?}", compactions[0]);
     for compact in &compactions {
-        compacted_files.add_compaction(&CompactionResult::of(compact.clone()));
+        compacted_files.add_compaction(&SubcompactionResult::of(compact.clone()));
         for source in &compact.inputs {
             if sources.contains_key(source.id.name.as_ref()) {
                 sources
@@ -245,9 +246,9 @@ async fn gcloud() {
         Ok(file) => stream::iter(file.into_logs()).map(Ok).left_stream(),
         Err(err) => stream::once(futures::future::err(err)).right_stream(),
     });
-    let mut coll = CollectCompaction::new(
+    let mut coll = CollectSubcompaction::new(
         stream,
-        CollectCompactionConfig {
+        CollectSubcompactionConfig {
             compact_from_ts: 0,
             compact_to_ts: u64::MAX,
         },
@@ -255,13 +256,14 @@ async fn gcloud() {
     let compaction = coll.try_next().await;
     println!("{:?}", compaction);
     println!("{:?}", now.elapsed());
-    let c_ext = CompactLogExt {
+    let c_ext = SubcompactExt {
         max_load_concurrency: 32,
         ..Default::default()
     };
     drop(coll);
     let arc_store: Arc<dyn FullFeaturedStorage> = Arc::from(storage);
-    let compact_worker = SingleCompactionExec::<RocksEngine>::inplace(Arc::clone(&arc_store) as _);
+    let compact_worker =
+        SubcompactionExec::<RocksEngine>::default_config(Arc::clone(&arc_store) as _);
     let result = compact_worker
         .run(compaction.unwrap().unwrap(), c_ext)
         .await

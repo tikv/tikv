@@ -12,7 +12,7 @@ use futures::{
     future::TryFutureExt,
     io::{AllowStdIo, Cursor},
 };
-use kvproto::brpb::{self, LogFileCompactionMeta};
+use kvproto::brpb::{self, LogFileSubcompactionMeta};
 use tikv_util::{
     codec::stream_event::Iterator as KvStreamIter,
     retry_expr,
@@ -20,7 +20,7 @@ use tikv_util::{
     time::Instant,
 };
 
-use super::{Compaction, CompactionResult};
+use super::{Subcompaction, SubcompactionResult};
 use crate::{
     errors::{OtherErrExt, Result, TraceResultExt},
     source::{Record, Source},
@@ -30,24 +30,25 @@ use crate::{
     util::{Cooperate, ExecuteAllExt},
 };
 
-pub struct SingleCompactionExec<DB> {
+pub struct SubcompactionExec<DB> {
     source: Source,
     output: Arc<dyn ExternalStorage>,
     co: Cooperate,
     out_prefix: PathBuf,
+
     load_stat: LoadStatistic,
     compact_stat: CompactStatistic,
 
     db: Option<DB>,
 }
 
-pub struct CompactLogExt {
+pub struct SubcompactExt {
     pub max_load_concurrency: usize,
     pub compression: SstCompressionType,
     pub compression_level: Option<i32>,
 }
 
-impl<'a> Default for CompactLogExt {
+impl<'a> Default for SubcompactExt {
     fn default() -> Self {
         Self {
             max_load_concurrency: Default::default(),
@@ -63,7 +64,7 @@ pub struct SingleCompactionArg<DB> {
     pub storage: Arc<dyn ExternalStorage>,
 }
 
-impl<DB> From<SingleCompactionArg<DB>> for SingleCompactionExec<DB> {
+impl<DB> From<SingleCompactionArg<DB>> for SubcompactionExec<DB> {
     fn from(value: SingleCompactionArg<DB>) -> Self {
         Self {
             source: Source::new(Arc::clone(&value.storage)),
@@ -79,8 +80,9 @@ impl<DB> From<SingleCompactionArg<DB>> for SingleCompactionExec<DB> {
     }
 }
 
-impl<DB> SingleCompactionExec<DB> {
-    pub fn inplace(storage: Arc<dyn ExternalStorage>) -> Self {
+impl<DB> SubcompactionExec<DB> {
+    #[cfg(test)]
+    pub fn default_config(storage: Arc<dyn ExternalStorage>) -> Self {
         Self::from(SingleCompactionArg {
             storage,
             out_prefix: None,
@@ -102,7 +104,7 @@ struct ChecksumDiff {
     crc64xor_diff: u64,
 }
 
-impl<DB: SstExt> SingleCompactionExec<DB>
+impl<DB: SstExt> SubcompactionExec<DB>
 where
     <<DB as SstExt>::SstWriter as SstWriter>::ExternalSstFileReader: 'static,
 {
@@ -144,8 +146,8 @@ where
     #[tracing::instrument(skip_all)]
     async fn load(
         &mut self,
-        c: &Compaction,
-        ext: &mut CompactLogExt,
+        c: &Subcompaction,
+        ext: &mut SubcompactExt,
     ) -> Result<impl Iterator<Item = Vec<Record>>> {
         let mut eext = ExecuteAllExt::default();
         eext.max_concurrency = ext.max_load_concurrency;
@@ -195,7 +197,7 @@ where
         name: &str,
         cf: CfName,
         sorted_items: &[Record],
-        ext: &mut CompactLogExt,
+        ext: &mut SubcompactExt,
     ) -> Result<WrittenSst<<DB::SstWriter as SstWriter>::ExternalSstFileReader>> {
         let mut wb = <DB as SstExt>::SstWriterBuilder::new()
             .set_cf(cf)
@@ -246,9 +248,9 @@ where
     #[tracing::instrument(skip_all, fields(name=%sst.meta.name))]
     async fn upload_compaction_artifact(
         &mut self,
-        c: &Compaction,
+        c: &Subcompaction,
         sst: &mut WrittenSst<<DB::SstWriter as SstWriter>::ExternalSstFileReader>,
-    ) -> Result<LogFileCompactionMeta> {
+    ) -> Result<LogFileSubcompactionMeta> {
         use engine_traits::ExternalSstFileReader;
         sst.content.reset()?;
         let (rd, hasher) = Sha256Reader::new(&mut sst.content).adapt_err()?;
@@ -260,7 +262,7 @@ where
             )
             .await?;
         sst.meta.sha256 = hasher.lock().unwrap().finish().adapt_err()?.to_vec();
-        let mut meta = brpb::LogFileCompactionMeta::new();
+        let mut meta = brpb::LogFileSubcompactionMeta::new();
         meta.set_compaction(c.brpb_compaction());
         meta.set_output(vec![sst.meta.clone()].into());
         let meta_name = format!(
@@ -288,10 +290,14 @@ where
     }
 
     #[tracing::instrument(skip_all, fields(c=%c))]
-    pub async fn run(mut self, c: Compaction, mut ext: CompactLogExt) -> Result<CompactionResult> {
+    pub async fn run(
+        mut self,
+        c: Subcompaction,
+        mut ext: SubcompactExt,
+    ) -> Result<SubcompactionResult> {
         let mut eext = ExecuteAllExt::default();
         eext.max_concurrency = ext.max_load_concurrency;
-        let mut result = CompactionResult::of(c);
+        let mut result = SubcompactionResult::of(c);
         let c = &result.origin;
         for input in &c.inputs {
             if input.crc64xor == 0 {

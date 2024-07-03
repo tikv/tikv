@@ -19,7 +19,7 @@ pub struct Input {
 
 #[derive(Debug, Display, Clone)]
 #[display(fmt = "compaction(region={},size={},cf={})", region_id, size, cf)]
-pub struct Compaction {
+pub struct Subcompaction {
     pub inputs: Vec<Input>,
     pub size: u64,
     pub region_id: u64,
@@ -34,9 +34,9 @@ pub struct Compaction {
 }
 
 #[derive(Debug)]
-pub struct CompactionResult {
-    pub origin: Compaction,
-    pub meta: brpb::LogFileCompactionMeta,
+pub struct SubcompactionResult {
+    pub origin: Subcompaction,
+    pub meta: brpb::LogFileSubcompactionMeta,
 
     pub expected_crc64: Option<u64>,
     pub expected_keys: u64,
@@ -45,8 +45,8 @@ pub struct CompactionResult {
     pub compact_stat: CompactStatistic,
 }
 
-impl CompactionResult {
-    pub fn of(origin: Compaction) -> Self {
+impl SubcompactionResult {
+    pub fn of(origin: Subcompaction) -> Self {
         Self {
             meta: Default::default(),
             expected_crc64: Some(0),

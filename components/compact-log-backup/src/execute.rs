@@ -20,15 +20,15 @@ use txn_types::TimeStamp;
 
 use super::{
     compaction::{
-        collector::{CollectCompaction, CollectCompactionConfig},
-        exec::{CompactLogExt, SingleCompactionExec},
-        Compaction,
+        collector::{CollectSubcompaction, CollectSubcompactionConfig},
+        exec::{SubcompactExt, SubcompactionExec},
+        Subcompaction,
     },
     statistic::{CollectCompactionStatistic, LoadMetaStatistic},
     storage::{LoadFromExt, StreamyMetaStorage},
 };
 use crate::{
-    compaction::{exec::SingleCompactionArg, meta::CompactionRunInfoBuilder, CompactionResult},
+    compaction::{exec::SingleCompactionArg, meta::CompactionRunInfoBuilder, SubcompactionResult},
     errors::{Result, TraceResultExt},
     statistic::{CompactStatistic, LoadStatistic},
     util,
@@ -73,7 +73,7 @@ pub mod hooks {
 
     use super::Execution;
     use crate::{
-        compaction::{Compaction, CompactionResult},
+        compaction::{Subcompaction, SubcompactionResult},
         statistic::{CollectCompactionStatistic, LoadMetaStatistic},
     };
 
@@ -100,8 +100,8 @@ pub mod hooks {
     }
 
     pub trait ExecHooks: 'static {
-        fn before_a_compaction_start(&mut self, _c: &Compaction, _cid: CId) {}
-        fn after_a_compaction_end(&mut self, _cid: CId, _res: &CompactionResult) {}
+        fn before_a_compaction_start(&mut self, _c: &Subcompaction, _cid: CId) {}
+        fn after_a_compaction_end(&mut self, _cid: CId, _res: &SubcompactionResult) {}
 
         fn before_execution_started(&mut self, _cx: BeforeStartCtx<'_>) {}
         fn after_execution_finished(&mut self, _cx: &mut AfterFinishCtx) {}
@@ -122,7 +122,7 @@ pub struct LogToTerm {
 }
 
 impl ExecHooks for LogToTerm {
-    fn before_a_compaction_start(&mut self, c: &Compaction, cid: CId) {
+    fn before_a_compaction_start(&mut self, c: &Subcompaction, cid: CId) {
         println!(
             "[{}] spawning compaction. cid: {}, cf: {}, input_min_ts: {}, input_max_ts: {}, source: {}, size: {}, region_id: {}",
             TimeStamp::physical_now(),
@@ -136,7 +136,7 @@ impl ExecHooks for LogToTerm {
         );
     }
 
-    fn after_a_compaction_end(&mut self, cid: CId, res: &CompactionResult) {
+    fn after_a_compaction_end(&mut self, cid: CId, res: &SubcompactionResult) {
         let lst = &res.load_stat;
         let cst = &res.compact_stat;
         let logical_input_size = lst.logical_key_bytes_in + lst.logical_value_bytes_in;
@@ -277,9 +277,9 @@ impl Execution {
                 Ok(file) => stream::iter(file.into_logs()).map(Ok).left_stream(),
                 Err(err) => stream::once(futures::future::err(err)).right_stream(),
             });
-            let mut compact_stream = CollectCompaction::new(
+            let mut compact_stream = CollectSubcompaction::new(
                 stream,
-                CollectCompactionConfig {
+                CollectSubcompactionConfig {
                     compact_from_ts: self.cfg.from_ts,
                     compact_to_ts: self.cfg.until_ts,
                 },
@@ -311,9 +311,9 @@ impl Execution {
                     db: self.db.clone(),
                     storage: Arc::clone(&storage) as _,
                 };
-                let compact_worker = SingleCompactionExec::from(compact_args);
+                let compact_worker = SubcompactionExec::from(compact_args);
                 let compact_work = async move {
-                    let mut ext = CompactLogExt::default();
+                    let mut ext = SubcompactExt::default();
                     ext.max_load_concurrency = 32;
                     ext.compression = self.cfg.compression;
                     ext.compression_level = self.cfg.compression_level;

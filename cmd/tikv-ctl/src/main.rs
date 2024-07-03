@@ -25,7 +25,7 @@ use crypto::fips;
 use encryption_export::{
     create_backend, data_key_manager_from_config, DataKeyManager, DecrypterReader, Iv,
 };
-use engine_rocks::get_env;
+use engine_rocks::{get_env, util::new_engine_opt, RocksEngine};
 use engine_traits::Peekable;
 use file_system::calc_crc32;
 use futures::{executor::block_on, future::try_join_all};
@@ -47,6 +47,7 @@ use raftstore::store::util::build_key_range;
 use regex::Regex;
 use security::{SecurityConfig, SecurityManager};
 use structopt::{clap::ErrorKind, StructOpt};
+use tempfile::TempDir;
 use tikv::{
     config::TikvConfig,
     server::{debug::BottommostLevelCompaction, KvEngineFactoryBuilder},
@@ -396,6 +397,8 @@ fn main() {
             compression_level,
             name,
         } => {
+            let tmp_engine =
+                TemporaryRocks::new(&cfg).expect("failed to create temp engine for writing SSTs.");
             let maybe_external_storage = base64::decode(storage_base64)
                 .map_err(|err| format!("cannot parse base64: {}", err))
                 .and_then(|storage_bytes| {
@@ -427,7 +430,7 @@ fn main() {
                 cfg,
                 max_concurrent_compaction: max_compaction_num,
                 external_storage,
-                db: None,
+                db: Some(tmp_engine.rocks),
             };
             exec.run(compact_log::LogToTerm::default())
                 .expect("failed to execute compact-log-backup")
@@ -1125,6 +1128,39 @@ fn read_fail_file(path: &str) -> Vec<(String, String)> {
         ))
     }
     list
+}
+
+struct TemporaryRocks {
+    rocks: RocksEngine,
+    #[allow(dead_code)]
+    tmp: TempDir,
+}
+
+impl TemporaryRocks {
+    fn new(cfg: &TikvConfig) -> Result<Self, String> {
+        let tmp = TempDir::new().map_err(|v| format!("failed to create tmp dir: {}", v))?;
+        let opt = build_rocks_opts(cfg);
+        let cf_opts = cfg.rocksdb.build_cf_opts(
+            &cfg.rocksdb
+                .build_cf_resources(cfg.storage.block_cache.build_shared_cache()),
+            None,
+            cfg.storage.api_version(),
+            None,
+            cfg.storage.engine,
+        );
+        let rocks = new_engine_opt(
+            tmp.path().to_str().ok_or_else(|| {
+                format!(
+                    "temp path isn't valid utf-8 string: {}",
+                    tmp.path().display()
+                )
+            })?,
+            opt,
+            cf_opts,
+        )
+        .map_err(|v| format!("failed to build engine: {}", v))?;
+        Ok(Self { rocks, tmp })
+    }
 }
 
 fn build_rocks_opts(cfg: &TikvConfig) -> engine_rocks::RocksDbOptions {

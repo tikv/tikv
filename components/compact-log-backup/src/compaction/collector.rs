@@ -1,28 +1,19 @@
 use std::{collections::HashMap, sync::Arc, task::ready};
 
-
-use engine_traits::{
-    ExternalSstFileInfo, SstWriterBuilder,
-};
-
-
-
-use kvproto::brpb::{FileType};
-use tikv_util::{
-    codec::stream_event::Iterator as KvStreamIter,
-    config::ReadableSize,
-};
+use engine_traits::{ExternalSstFileInfo, SstWriterBuilder};
+use kvproto::brpb::FileType;
+use tikv_util::{codec::stream_event::Iterator as KvStreamIter, config::ReadableSize};
 use tokio_stream::Stream;
 
 use super::Input;
 use crate::{
-    compaction::Compaction,
+    compaction::Subcompaction,
     errors::{Result, TraceResultExt},
-    statistic::{CollectCompactionStatistic},
-    storage::{LogFile},
+    statistic::CollectCompactionStatistic,
+    storage::LogFile,
 };
 
-struct UnformedCompaction {
+struct UnformedSubcompaction {
     size: u64,
     inputs: Vec<Input>,
     min_ts: u64,
@@ -32,31 +23,31 @@ struct UnformedCompaction {
 }
 
 #[pin_project::pin_project]
-pub struct CollectCompaction<S: Stream<Item = Result<LogFile>>> {
+pub struct CollectSubcompaction<S: Stream<Item = Result<LogFile>>> {
     #[pin]
     inner: S,
-    last_compactions: Option<Vec<Compaction>>,
+    last_compactions: Option<Vec<Subcompaction>>,
 
-    collector: CompactionCollector,
+    collector: SubcompactionCollector,
 }
 
-impl<S: Stream<Item = Result<LogFile>>> CollectCompaction<S> {
+impl<S: Stream<Item = Result<LogFile>>> CollectSubcompaction<S> {
     pub fn take_statistic(&mut self) -> CollectCompactionStatistic {
         std::mem::take(&mut self.collector.stat)
     }
 }
 
-pub struct CollectCompactionConfig {
+pub struct CollectSubcompactionConfig {
     pub compact_from_ts: u64,
     pub compact_to_ts: u64,
 }
 
-impl<S: Stream<Item = Result<LogFile>>> CollectCompaction<S> {
-    pub fn new(s: S, cfg: CollectCompactionConfig) -> Self {
-        CollectCompaction {
+impl<S: Stream<Item = Result<LogFile>>> CollectSubcompaction<S> {
+    pub fn new(s: S, cfg: CollectSubcompactionConfig) -> Self {
+        CollectSubcompaction {
             inner: s,
             last_compactions: None,
-            collector: CompactionCollector {
+            collector: SubcompactionCollector {
                 cfg,
                 items: HashMap::new(),
                 compaction_size_threshold: ReadableSize::mb(128).0,
@@ -67,21 +58,21 @@ impl<S: Stream<Item = Result<LogFile>>> CollectCompaction<S> {
 }
 
 #[derive(Hash, Debug, PartialEq, Eq, Clone, Copy)]
-struct CompactionCollectKey {
+struct SubcompactionCollectKey {
     cf: &'static str,
     region_id: u64,
     ty: FileType,
     is_meta: bool,
 }
 
-struct CompactionCollector {
-    items: HashMap<CompactionCollectKey, UnformedCompaction>,
+struct SubcompactionCollector {
+    items: HashMap<SubcompactionCollectKey, UnformedSubcompaction>,
     compaction_size_threshold: u64,
     stat: CollectCompactionStatistic,
-    cfg: CollectCompactionConfig,
+    cfg: CollectSubcompactionConfig,
 }
 
-impl CompactionCollector {
+impl SubcompactionCollector {
     fn to_input(file: &LogFile) -> Input {
         Input {
             id: file.id.clone(),
@@ -91,9 +82,9 @@ impl CompactionCollector {
         }
     }
 
-    fn add_new_file(&mut self, file: LogFile) -> Option<Compaction> {
+    fn add_new_file(&mut self, file: LogFile) -> Option<Subcompaction> {
         use std::collections::hash_map::Entry;
-        let key = CompactionCollectKey {
+        let key = SubcompactionCollectKey {
             is_meta: file.is_meta,
             region_id: file.region_id,
             cf: file.cf,
@@ -130,7 +121,7 @@ impl CompactionCollector {
                 }
 
                 if u.size > self.compaction_size_threshold {
-                    let c = Compaction {
+                    let c = Subcompaction {
                         inputs: std::mem::take(&mut u.inputs),
                         region_id: key.region_id,
                         cf: key.cf,
@@ -150,7 +141,7 @@ impl CompactionCollector {
                 }
             }
             Entry::Vacant(v) => {
-                let u = UnformedCompaction {
+                let u = UnformedSubcompaction {
                     size: file.file_real_size,
                     inputs: vec![Self::to_input(&file)],
                     min_ts: file.min_ts,
@@ -164,9 +155,9 @@ impl CompactionCollector {
         None
     }
 
-    fn take_pending_compactions(&mut self) -> impl Iterator<Item = Compaction> + '_ {
+    fn take_pending_compactions(&mut self) -> impl Iterator<Item = Subcompaction> + '_ {
         self.items.drain().map(|(key, c)| {
-            let c = Compaction {
+            let c = Subcompaction {
                 inputs: c.inputs,
                 region_id: key.region_id,
                 size: c.size,
@@ -186,8 +177,8 @@ impl CompactionCollector {
     }
 }
 
-impl<S: Stream<Item = Result<LogFile>>> Stream for CollectCompaction<S> {
-    type Item = Result<Compaction>;
+impl<S: Stream<Item = Result<LogFile>>> Stream for CollectSubcompaction<S> {
+    type Item = Result<Subcompaction>;
 
     fn poll_next(
         self: std::pin::Pin<&mut Self>,

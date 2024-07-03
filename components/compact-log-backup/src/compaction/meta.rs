@@ -8,7 +8,7 @@ use external_storage::FullFeaturedStorage;
 use futures::stream::TryStreamExt;
 use kvproto::brpb::{self, Migration, SpansOfFile};
 
-use super::{Compaction, CompactionResult};
+use super::{Subcompaction, SubcompactionResult};
 use crate::{
     errors::Result,
     storage::{
@@ -17,7 +17,7 @@ use crate::{
     },
 };
 
-impl CompactionResult {
+impl SubcompactionResult {
     pub fn verify_checksum(&self) -> Result<()> {
         let mut output_crc64 = 0;
         let mut output_length = 0;
@@ -50,7 +50,7 @@ impl CompactionResult {
     }
 }
 
-impl Compaction {
+impl Subcompaction {
     pub fn crc64(&self) -> u64 {
         let mut crc64_xor = 0;
         for input in &self.inputs {
@@ -76,8 +76,8 @@ impl Compaction {
         crc64_xor
     }
 
-    pub fn brpb_compaction(&self) -> brpb::LogFileCompaction {
-        let mut out = brpb::LogFileCompaction::default();
+    pub fn brpb_compaction(&self) -> brpb::LogFileSubcompaction {
+        let mut out = brpb::LogFileSubcompaction::default();
         let mut source = HashMap::<Arc<str>, brpb::SpansOfFile>::new();
         for input in &self.inputs {
             match source.entry(Arc::clone(&input.id.name)) {
@@ -129,7 +129,7 @@ impl Ord for SortByOffset {
 
 pub struct CompactionRunInfoBuilder {
     files: HashMap<Arc<str>, BTreeSet<SortByOffset>>,
-    compaction: brpb::LogFileCompactionRun,
+    compaction: brpb::LogFileCompaction,
 }
 
 #[derive(Default)]
@@ -154,18 +154,6 @@ impl ExpiringFiles {
             so.set_spans(spans.clone().into());
             so
         })
-    }
-
-    pub fn migration(&self) -> brpb::Migration {
-        let mut migration = Migration::new();
-        migration.set_delete_files(
-            self.to_delete()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-                .into(),
-        );
-        migration.set_delete_logical_files(self.spans().collect::<Vec<_>>().into());
-        migration
     }
 }
 
@@ -198,7 +186,7 @@ impl CompactionRunInfoBuilder {
         }
     }
 
-    pub fn add_compaction(&mut self, c: &CompactionResult) {
+    pub fn add_compaction(&mut self, c: &SubcompactionResult) {
         for file in &c.origin.inputs {
             if !self.files.contains_key(&file.id.name) {
                 self.files
@@ -212,7 +200,7 @@ impl CompactionRunInfoBuilder {
         self.compaction.artifactes_hash ^= c.origin.crc64();
     }
 
-    pub fn mut_meta(&mut self) -> &mut brpb::LogFileCompactionRun {
+    pub fn mut_meta(&mut self) -> &mut brpb::LogFileCompaction {
         &mut self.compaction
     }
 
