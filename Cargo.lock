@@ -3000,11 +3000,14 @@ checksum = "b5e6163cb8c49088c2c36f57875e58ccd8c87c7427f7fbd50ea6710b2f3f2e8f"
 name = "log_wrappers"
 version = "0.0.1"
 dependencies = [
+ "atomic",
  "hex 0.4.2",
  "protobuf",
+ "serde",
  "slog",
  "slog-term",
  "tikv_alloc",
+ "toml",
 ]
 
 [[package]]
@@ -4054,8 +4057,9 @@ dependencies = [
 [[package]]
 name = "protobuf"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaae4352ea01bf00e160480d8da966d3109"
+source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6d445fe5ff4e99621a800be0f2c54dc96f056bac"
 dependencies = [
+ "atomic",
  "bytes",
  "heck 0.3.1",
  "hex 0.3.2",
@@ -4078,7 +4082,7 @@ dependencies = [
 [[package]]
 name = "protobuf-codegen"
 version = "2.8.0"
-source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6642ebaae4352ea01bf00e160480d8da966d3109"
+source = "git+https://github.com/pingcap/rust-protobuf?branch=v2.8#6d445fe5ff4e99621a800be0f2c54dc96f056bac"
 dependencies = [
  "heck 0.3.1",
  "protobuf",
@@ -5079,6 +5083,7 @@ dependencies = [
  "encryption",
  "grpcio",
  "kvproto",
+ "log_wrappers",
  "serde",
  "serde_derive",
  "serde_json",
@@ -6142,6 +6147,7 @@ dependencies = [
  "fail",
  "grpcio",
  "kvproto",
+ "log_wrappers",
  "rand 0.8.5",
  "rand_isaac",
  "security",

@@ -218,8 +218,7 @@ pub fn initial_logger(config: &TikvConfig) {
     }
 
     // Set redact_info_log.
-    let redact_info_log = config.security.redact_info_log.unwrap_or(false);
-    log_wrappers::set_redact_info_log(redact_info_log);
+    log_wrappers::set_redact_info_log(config.security.redact_info_log.clone());
 
     LOG_INITIALIZED.store(true, Ordering::SeqCst);
 }
