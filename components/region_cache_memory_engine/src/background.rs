@@ -989,7 +989,7 @@ impl Runnable for BackgroundRunner {
             BackgroundTask::Audit((ranges_snap, rocksdb_snap)) => {
                 let core = self.core.engine.clone();
                 let f = async move {
-                    for (range_snap, safe_ts) in ranges_snap {
+                    for (range_snap, _) in ranges_snap {
                         info!(
                             "audit range";
                             "range" => ?range_snap.snapshot_meta.range,
@@ -1007,6 +1007,22 @@ impl Runnable for BackgroundRunner {
                             let m_valid = iter.seek_to_first().unwrap();
                             let d_valid = disk_iter.seek_to_first().unwrap();
                             if !m_valid {
+                                // get safe_point of the relevant range, the ts of the disk key should not be larger than it.
+                                let safe_ts = {
+                                    let core = core.read();
+                                    if let Some(meta) = core
+                                        .range_manager
+                                        .range_meta(&range_snap.snapshot_meta.range)
+                                    {
+                                        meta.safe_point()
+                                    } else {
+                                        core.range_manager
+                                            .history_range_meta(&range_snap.snapshot_meta.range)
+                                            .unwrap()
+                                            .safe_point()
+                                    }
+                                };
+
                                 if d_valid {
                                     if *cf == CF_LOCK {
                                         error!(
@@ -1027,6 +1043,8 @@ impl Runnable for BackgroundRunner {
                                             "upper" => log_wrappers::Value(&iter.upper_bound),
                                             "disk_key" => log_wrappers::Value(&disk_iter.key()),
                                             "disk_key_ts" => ts,
+                                            "safe_ts" => safe_ts,
+                                            "snapshot_ts" => range_snap.snapshot_meta.snapshot_ts,
                                             "seqno" => iter.sequence_number,
                                             "cf" => ?cf,
                                         );
@@ -1040,6 +1058,8 @@ impl Runnable for BackgroundRunner {
                                             "upper" => log_wrappers::Value(&iter.upper_bound),
                                             "disk_key" => log_wrappers::Value(&disk_iter.key()),
                                             "disk_key_ts" => ts,
+                                            "safe_ts" => safe_ts,
+                                            "snapshot_ts" => range_snap.snapshot_meta.snapshot_ts,
                                             "seqno" => iter.sequence_number,
                                             "cf" => ?cf,
                                         );
@@ -1073,15 +1093,19 @@ impl Runnable for BackgroundRunner {
                                                 range_snap.get_value(key.as_encoded())
                                             {
                                             } else {
-                                                error!(
-                                                    "default not found";
-                                                    "default_key" => log_wrappers::Value(key.as_encoded()),
-                                                    "write_key" => log_wrappers::Value(&iter.key()),
-                                                    "start_ts" => start_ts,
-                                                    "safe_ts" => safe_ts,
-                                                    "seqno" => iter.sequence_number,
-                                                );
-                                                unreachable!();
+                                                // check again
+                                                if let Ok(Some(_)) =
+                                                    range_snap.get_value_cf(CF_WRITE, iter.key())
+                                                {
+                                                    error!(
+                                                        "default not found";
+                                                        "default_key" => log_wrappers::Value(key.as_encoded()),
+                                                        "write_key" => log_wrappers::Value(&iter.key()),
+                                                        "start_ts" => start_ts,
+                                                        "seqno" => iter.sequence_number,
+                                                    );
+                                                    unreachable!();
+                                                }
                                             }
                                         }
                                     }
@@ -1712,6 +1736,7 @@ impl Drop for Filter {
                 info!(
                     "gc filter write n";
                     "key" => log_wrappers::Value(&cached_delete_key),
+                    "safe_ts" => self.safe_point,
                 );
             }
             self.write_cf_handle
@@ -1724,6 +1749,7 @@ impl Drop for Filter {
                 info!(
                     "gc filter tombstone";
                     "key" => log_wrappers::Value(&cached_delete_key),
+                    "safe_ts" => self.safe_point,
                 );
             }
             self.write_cf_handle
@@ -1811,21 +1837,23 @@ impl Filter {
                     info!(
                         "gc filter write hidden by tombstone";
                         "key" => log_wrappers::Value(key),
+                        "safe_ts" => self.safe_point,
                     );
                 }
                 return Ok(());
             } else {
                 self.metrics.filtered += 1;
-                self.write_cf_handle.remove(
-                    &InternalBytes::from_vec(self.cached_skiplist_delete_key.take().unwrap()),
-                    guard,
-                );
                 if PRINTF_LOG.load(Ordering::Relaxed) {
                     info!(
                         "gc filter write tombstone";
                         "key" => log_wrappers::Value(&self.cached_skiplist_delete_key.as_ref().unwrap()),
+                        "safe_ts" => self.safe_point,
                     );
                 }
+                self.write_cf_handle.remove(
+                    &InternalBytes::from_vec(self.cached_skiplist_delete_key.take().unwrap()),
+                    guard,
+                );
             }
         }
 
@@ -1840,7 +1868,8 @@ impl Filter {
             if PRINTF_LOG.load(Ordering::Relaxed) {
                 info!(
                     "gc filter write user key";
-                    "key" => log_wrappers::Value(&self.cached_skiplist_delete_key.as_ref().unwrap()),
+                    "key" => log_wrappers::Value(&key),
+                    "safe_ts" => self.safe_point,
                 );
             }
             return Ok(());
@@ -1857,7 +1886,8 @@ impl Filter {
                 if PRINTF_LOG.load(Ordering::Relaxed) {
                     info!(
                         "gc filter write n";
-                        "key" => log_wrappers::Value(key),
+                        "key" => log_wrappers::Value(&cached_delete_key),
+                        "safe_ts" => self.safe_point,
                     );
                 }
                 self.write_cf_handle
@@ -1908,6 +1938,7 @@ impl Filter {
                 "seqno" => sequence,
                 "write type" => ?write.write_type,
                 "start_ts" => write.start_ts,
+                "safe_ts" => self.safe_point,
             );
         }
         self.handle_filtered_write(write, guard)?;
@@ -1936,6 +1967,7 @@ impl Filter {
                     info!(
                         "gc filter default";
                         "key" => log_wrappers::Value(iter.key().as_bytes()),
+                        "safe_ts" => self.safe_point,
                     );
                 }
                 iter.next(guard);
