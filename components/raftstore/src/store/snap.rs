@@ -451,7 +451,7 @@ pub struct Snapshot {
     key: SnapKey,
     display_path: String,
     dir_path: PathBuf,
-    cf_files: Vec<CfFile>,
+    pub cf_files: Vec<CfFile>,
     cf_index: usize,
     cf_file_index: usize,
     meta_file: MetaFile,
@@ -777,7 +777,7 @@ impl Snapshot {
         )
     }
 
-    fn validate<F>(&self, post_check: F) -> RaftStoreResult<()>
+    pub fn validate<F>(&self, post_check: F) -> RaftStoreResult<()>
     where
         F: Fn(&CfFile, usize) -> RaftStoreResult<()>,
     {
@@ -1109,12 +1109,12 @@ impl Snapshot {
         Ok(snap_data)
     }
 
-    pub fn apply<EK: KvEngine>(&mut self, options: ApplyOptions<EK>) -> Result<()> {
+    pub fn apply_check(&self, ingest_copy_symlink: bool) -> Result<()> {
         let post_check = |cf_file: &CfFile, offset: usize| {
             if !plain_file_used(cf_file.cf) {
                 let file_paths = cf_file.file_paths();
                 let clone_file_paths = cf_file.clone_file_paths();
-                if options.ingest_copy_symlink && is_symlink(&file_paths[offset])? {
+                if ingest_copy_symlink && is_symlink(&file_paths[offset])? {
                     sst_importer::copy_sst_for_ingestion(
                         &file_paths[offset],
                         &clone_file_paths[offset],
@@ -1132,6 +1132,11 @@ impl Snapshot {
         };
 
         box_try!(self.validate(post_check));
+        Ok(())
+    }
+
+    pub fn apply<EK: KvEngine>(&mut self, options: ApplyOptions<EK>) -> Result<()> {
+        self.apply_check(options.ingest_copy_symlink)?;
 
         let abort_checker = ApplyAbortChecker(options.abort);
         let coprocessor_host = options.coprocessor_host;
@@ -1279,7 +1284,7 @@ impl Snapshot {
 }
 
 // To check whether a procedure about apply snapshot aborts or not.
-struct ApplyAbortChecker(Arc<AtomicUsize>);
+pub struct ApplyAbortChecker(pub Arc<AtomicUsize>);
 impl snap_io::StaleDetector for ApplyAbortChecker {
     fn is_stale(&self) -> bool {
         self.0.load(Ordering::Relaxed) == JOB_STATUS_CANCELLING
@@ -1428,7 +1433,7 @@ pub struct SnapStats {
 }
 
 #[derive(Clone)]
-struct SnapManagerCore {
+pub struct SnapManagerCore {
     // directory to store snapfile.
     base: String,
 
@@ -1436,7 +1441,7 @@ struct SnapManagerCore {
     limiter: Limiter,
     recv_concurrency_limiter: Arc<SnapRecvConcurrencyLimiter>,
     temp_sst_id: Arc<AtomicU64>,
-    encryption_key_manager: Option<Arc<DataKeyManager>>,
+    pub encryption_key_manager: Option<Arc<DataKeyManager>>,
     max_per_file_size: Arc<AtomicU64>,
     enable_multi_snapshot_files: Arc<AtomicBool>,
     stats: Arc<Mutex<Vec<SnapshotStat>>>,
@@ -1445,7 +1450,7 @@ struct SnapManagerCore {
 /// `SnapManagerCore` trace all current processing snapshots.
 #[derive(Clone)]
 pub struct SnapManager {
-    core: SnapManagerCore,
+    pub core: SnapManagerCore,
     max_total_size: Arc<AtomicU64>,
 
     // only used to receive snapshot from v2
