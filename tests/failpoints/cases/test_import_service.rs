@@ -8,12 +8,12 @@ use std::{
 use file_system::calc_crc32;
 use futures::executor::block_on;
 use grpcio::{ChannelBuilder, Environment};
-use kvproto::{import_sstpb::*, tikvpb_grpc::TikvClient};
+use kvproto::{disk_usage::DiskUsage, import_sstpb::*, tikvpb_grpc::TikvClient};
 use tempfile::{Builder, TempDir};
 use test_raftstore::{must_raw_put, Simulator};
 use test_sst_importer::*;
 use tikv::config::TikvConfig;
-use tikv_util::{config::ReadableSize, HandyRwLock};
+use tikv_util::{config::ReadableSize, HandyRwLock, sys::disk};
 
 #[allow(dead_code)]
 #[path = "../../integrations/import/util.rs"]
@@ -66,6 +66,45 @@ fn test_download_sst_blocking_sst_writer() {
     // Do an ingest and verify the result is correct.
     must_ingest_sst(&import, ctx.clone(), meta);
     check_ingested_kvs(&tikv, &ctx, sst_range);
+}
+
+#[test]
+fn test_download_to_full_disk() {
+    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+    let temp_dir = Builder::new()
+        .prefix("test_download_sst_blocking_sst_writer")
+        .tempdir()
+        .unwrap();
+
+    let sst_path = temp_dir.path().join("test.sst");
+    let sst_range = (0, 100);
+    let (mut meta, _) = gen_sst_file(sst_path, sst_range);
+    meta.set_region_id(ctx.get_region_id());
+    meta.set_region_epoch(ctx.get_region_epoch().clone());
+
+    // Sleep 20s, make sure it is large than grpc_keepalive_timeout (3s).
+    let sst_writer_open_fp = "on_open_sst_writer";
+    fail::cfg(sst_writer_open_fp, "sleep(20000)").unwrap();
+
+    // Now perform a proper download.
+    let mut download = DownloadRequest::default();
+    download.set_sst(meta.clone());
+    download.set_storage_backend(external_storage::make_local_backend(temp_dir.path()));
+    download.set_name("test.sst".to_owned());
+    download.mut_sst().mut_range().set_start(vec![sst_range.1]);
+    download
+        .mut_sst()
+        .mut_range()
+        .set_end(vec![sst_range.1 + 1]);
+    download.mut_sst().mut_range().set_start(Vec::new());
+    download.mut_sst().mut_range().set_end(Vec::new());
+    disk::set_disk_status(DiskUsage::AlmostFull);
+    let result = import.download(&download).unwrap();
+    assert!(!result.get_is_empty());
+    assert!(result.has_error());
+    assert_eq!(result.get_error().get_message(), "TiKV disk space is not enough.");
+
+    fail::remove(sst_writer_open_fp);
 }
 
 #[test]
