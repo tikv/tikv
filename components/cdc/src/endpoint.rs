@@ -897,7 +897,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let event_error_handle = downstream.get_event_error_handle();
         let sched = self.scheduler.clone();
 
-        if let Err((err, mut downstream)) = delegate.subscribe(downstream) {
+        if let Err((err, downstream)) = delegate.subscribe(downstream) {
             let error_event = err.into_error_event(region_id);
             let _ = downstream.sink_error_event(region_id, error_event);
             conn.unsubscribe(request_id, region_id);

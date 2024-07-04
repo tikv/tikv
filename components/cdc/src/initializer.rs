@@ -194,9 +194,44 @@ impl<E: KvEngine> Initializer<E> {
         if let Some(region_snapshot) = resp.snapshot {
             let region = region_snapshot.get_region().clone();
             assert_eq!(self.region_id, region.get_id());
-            self.async_incremental_scan(region_snapshot, region)
+
+            let res = self
+                .async_incremental_scan(region_snapshot, region)
                 .await
-                .map(|_| ())
+                .map(|_| ());
+
+            {
+                let conn_id = self.conn_id;
+                let downstream_id = self.downstream_id;
+                let request_id = self.request_id;
+                let mut handle = block_on(self.event_error_handle.lock());
+                if !handle.sent_out && handle.event_error.is_some() {
+                    let error = handle.event_error.take().unwrap();
+                    handle.sent_out = true;
+                    drop(handle);
+
+                    let mut change_data_event = Event::default();
+                    change_data_event.event = Some(Event_oneof_event::Error(error));
+                    change_data_event.region_id = self.region_id;
+                    match self
+                        .sink
+                        .unbounded_send(CdcEvent::Event(change_data_event), true)
+                    {
+                        Ok(_) => {}
+                        Err(SendError::Disconnected) => {
+                            debug!("cdc send event failed, disconnected";
+                                   "conn_id" => ?conn_id, "downstream_id" => ?downstream_id, "req_id" => ?request_id);
+                        }
+                        // TODO: handle errors like Downstream::send_event_error.
+                        Err(SendError::Full) | Err(SendError::Congested) => {
+                            info!("cdc send event failed, full";
+                                  "conn_id" => ?conn_id, "downstream_id" => ?downstream_id, "req_id" => ?request_id);
+                        }
+                    }
+                }
+            }
+
+            res
         } else {
             assert!(
                 resp.response.get_header().has_error(),
@@ -338,41 +373,14 @@ impl<E: KvEngine> Initializer<E> {
             CDC_SCAN_LONG_DURATION_REGIONS.dec();
         });
 
-        let request_id = self.request_id;
-        let sink = self.sink.clone();
-        let event_error_handle = self.event_error_handle.clone();
         {
-            let mut handle = block_on(event_error_handle.lock());
+            let mut handle = self.event_error_handle.lock().await;
             if !handle.sent_out {
                 handle.transferred_to_initializer = true;
             } else {
                 return Err(box_err!("scan canceled by event error"));
             }
         }
-        defer!({
-            let mut handle = block_on(event_error_handle.lock());
-            if !handle.sent_out && handle.event_error.is_some() {
-                let error = handle.event_error.take().unwrap();
-                handle.sent_out = true;
-                drop(handle);
-
-                let mut change_data_event = Event::default();
-                change_data_event.event = Some(Event_oneof_event::Error(error));
-                change_data_event.region_id = region_id;
-                match sink.unbounded_send(CdcEvent::Event(change_data_event), true) {
-                    Ok(_) => {}
-                    Err(SendError::Disconnected) => {
-                        debug!("cdc send event failed, disconnected";
-                               "conn_id" => ?conn_id, "downstream_id" => ?downstream_id, "req_id" => ?request_id);
-                    }
-                    // TODO: handle errors like Downstream::send_event_error.
-                    Err(SendError::Full) | Err(SendError::Congested) => {
-                        info!("cdc send event failed, full";
-                              "conn_id" => ?conn_id, "downstream_id" => ?downstream_id, "req_id" => ?request_id);
-                    }
-                }
-            }
-        });
 
         while !done {
             // Add metrics to observe long time incremental scan region count

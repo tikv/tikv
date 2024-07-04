@@ -225,13 +225,7 @@ impl Downstream {
         }
     }
 
-    pub fn sink_error_event(&mut self, region_id: u64, err_event: EventError) -> Result<()> {
-        let res = self.sink_error_event_inner(region_id, err_event);
-        self.sink = None;
-        res
-    }
-
-    fn sink_error_event_inner(&self, region_id: u64, err_event: EventError) -> Result<()> {
+    pub fn sink_error_event(&self, region_id: u64, err_event: EventError) -> Result<()> {
         let mut event_error_handle = block_on(self.event_error_handle.lock());
         if event_error_handle.sent_out || event_error_handle.event_error.is_some() {
             // Only keep one event error.
@@ -558,7 +552,7 @@ impl Delegate {
     pub fn unsubscribe(&mut self, id: DownstreamId, err: Option<Error>) -> bool {
         let error_event = err.map(|err| err.into_error_event(self.region_id));
         let region_id = self.region_id;
-        if let Some(mut d) = self.remove_downstream(id) {
+        if let Some(d) = self.remove_downstream(id) {
             if let Some(error_event) = error_event {
                 if let Err(err) = d.sink_error_event(region_id, error_event.clone()) {
                     warn!("cdc send unsubscribe failed";
@@ -1473,6 +1467,7 @@ mod tests {
             ObservedRange::default(),
         );
         downstream.set_sink(sink);
+        let event_error_handle = downstream.event_error_handle.clone();
 
         let mut delegate = Delegate::new(region_id, quota, Default::default());
         delegate.subscribe(downstream).unwrap();
@@ -1501,6 +1496,7 @@ mod tests {
             }
         };
 
+        *block_on(event_error_handle.lock()) = Default::default();
         let mut err_header = ErrorHeader::default();
         err_header.set_not_leader(Default::default());
         delegate.stop(Error::request(err_header));
@@ -1509,12 +1505,14 @@ mod tests {
         // Observing is disabled by any error.
         assert!(!delegate.handle.is_observing());
 
+        *block_on(event_error_handle.lock()) = Default::default();
         let mut err_header = ErrorHeader::default();
         err_header.set_region_not_found(Default::default());
         delegate.stop(Error::request(err_header));
         let err = receive_error();
         assert!(err.has_region_not_found());
 
+        *block_on(event_error_handle.lock()) = Default::default();
         let mut err_header = ErrorHeader::default();
         err_header.set_epoch_not_match(Default::default());
         delegate.stop(Error::request(err_header));
@@ -1522,6 +1520,7 @@ mod tests {
         assert!(err.has_epoch_not_match());
 
         // Split
+        *block_on(event_error_handle.lock()) = Default::default();
         let mut region = Region::default();
         region.set_id(1);
         let mut request = AdminRequest::default();
@@ -1538,6 +1537,7 @@ mod tests {
             .find(|r| r.get_id() == 1)
             .unwrap();
 
+        *block_on(event_error_handle.lock()) = Default::default();
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::BatchSplit);
         let mut response = AdminResponse::default();
@@ -1553,6 +1553,7 @@ mod tests {
             .unwrap();
 
         // Merge
+        *block_on(event_error_handle.lock()) = Default::default();
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::PrepareMerge);
         let response = AdminResponse::default();
@@ -1562,6 +1563,7 @@ mod tests {
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
 
+        *block_on(event_error_handle.lock()) = Default::default();
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::CommitMerge);
         let response = AdminResponse::default();
@@ -1571,6 +1573,7 @@ mod tests {
         assert!(err.has_epoch_not_match());
         assert!(err.take_epoch_not_match().current_regions.is_empty());
 
+        *block_on(event_error_handle.lock()) = Default::default();
         let mut request = AdminRequest::default();
         request.set_cmd_type(AdminCmdType::RollbackMerge);
         let response = AdminResponse::default();
