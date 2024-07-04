@@ -837,8 +837,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             );
             // To avoid OOM (e.g., https://github.com/tikv/tikv/issues/16035),
             // TiKV needs to reject and return error immediately.
-            let _ = downstream
-                .sink_server_is_busy(region_id, "too many pending incremental scans".to_owned());
+            let mut err_event = EventError::default();
+            err_event.mut_server_is_busy().reason = "too many pending incremental scans".to_owned();
+            let _ = downstream.sink_error_event(region_id, err_event);
             return;
         }
 
@@ -846,7 +847,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             Some(reader) => reader.txn_extra_op.clone(),
             None => {
                 error!("cdc register for a not found region"; "region_id" => region_id);
-                let _ = downstream.sink_region_not_found(region_id);
+                let mut err_event = EventError::default();
+                err_event.mut_region_not_found().region_id = region_id;
+                let _ = downstream.sink_error_event(region_id, err_event);
                 return;
             }
         };
@@ -894,7 +897,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let event_error_handle = downstream.get_event_error_handle();
         let sched = self.scheduler.clone();
 
-        if let Err((err, downstream)) = delegate.subscribe(downstream) {
+        if let Err((err, mut downstream)) = delegate.subscribe(downstream) {
             let error_event = err.into_error_event(region_id);
             let _ = downstream.sink_error_event(region_id, error_event);
             conn.unsubscribe(request_id, region_id);
@@ -982,7 +985,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     &mut self.old_value_cache,
                     &mut statistics,
                 ) {
-                    delegate.mark_failed();
                     // Delegate has error, deregister the delegate.
                     deregister = Some(Deregister::Delegate {
                         region_id,

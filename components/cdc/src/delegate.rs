@@ -144,6 +144,8 @@ pub struct Downstream {
     sink: Option<Sink>,
     state: Arc<AtomicCell<DownstreamState>>,
 
+    // It's for handling region errors in Downstream and Initializer.
+    // After an EventError is sent, no more entries should be emit again.
     event_error_handle: Arc<Mutex<EventErrorHandle>>,
 
     // Fields to handle ResolvedTs advancing. If `lock_heap` is none it means
@@ -223,7 +225,13 @@ impl Downstream {
         }
     }
 
-    pub fn sink_error_event(&self, region_id: u64, err_event: EventError) -> Result<()> {
+    pub fn sink_error_event(&mut self, region_id: u64, err_event: EventError) -> Result<()> {
+        let res = self.sink_error_event_inner(region_id, err_event);
+        self.sink = None;
+        res
+    }
+
+    fn sink_error_event_inner(&self, region_id: u64, err_event: EventError) -> Result<()> {
         let mut event_error_handle = block_on(self.event_error_handle.lock());
         if event_error_handle.sent_out || event_error_handle.event_error.is_some() {
             // Only keep one event error.
@@ -243,18 +251,6 @@ impl Downstream {
             drop(event_error_handle);
             Ok(())
         }
-    }
-
-    pub fn sink_region_not_found(&self, region_id: u64) -> Result<()> {
-        let mut err_event = EventError::default();
-        err_event.mut_region_not_found().region_id = region_id;
-        self.sink_error_event(region_id, err_event)
-    }
-
-    pub fn sink_server_is_busy(&self, region_id: u64, reason: String) -> Result<()> {
-        let mut err_event = EventError::default();
-        err_event.mut_server_is_busy().reason = reason;
-        self.sink_error_event(region_id, err_event)
     }
 
     pub fn set_sink(&mut self, sink: Sink) {
@@ -351,6 +347,8 @@ pub struct Delegate {
     lock_tracker: LockTracker,
     downstreams: Vec<Downstream>,
     txn_extra_op: Arc<AtomicCell<TxnExtraOp>>,
+
+    // failed means the Delegate is stopped by some region errors.
     failed: bool,
 
     created: Instant,
@@ -560,7 +558,7 @@ impl Delegate {
     pub fn unsubscribe(&mut self, id: DownstreamId, err: Option<Error>) -> bool {
         let error_event = err.map(|err| err.into_error_event(self.region_id));
         let region_id = self.region_id;
-        if let Some(d) = self.remove_downstream(id) {
+        if let Some(mut d) = self.remove_downstream(id) {
             if let Some(error_event) = error_event {
                 if let Err(err) = d.sink_error_event(region_id, error_event.clone()) {
                     warn!("cdc send unsubscribe failed";
@@ -574,10 +572,6 @@ impl Delegate {
         self.downstreams().is_empty()
     }
 
-    pub fn mark_failed(&mut self) {
-        self.failed = true;
-    }
-
     pub fn has_failed(&self) -> bool {
         self.failed
     }
@@ -587,14 +581,14 @@ impl Delegate {
     /// This means the region has met an unrecoverable error for CDC.
     /// It broadcasts errors to all downstream and stops.
     pub fn stop(&mut self, err: Error) {
-        self.mark_failed();
+        self.failed = true;
         self.stop_observing();
 
         info!("cdc met region error";
             "region_id" => self.region_id, "error" => ?err);
         let region_id = self.region_id;
         let error = err.into_error_event(self.region_id);
-        let send = move |downstream: &Downstream| {
+        let send = move |downstream: &mut Downstream| {
             downstream.state.store(DownstreamState::Stopped);
             let error_event = error.clone();
             if let Err(err) = downstream.sink_error_event(region_id, error_event) {
@@ -610,7 +604,7 @@ impl Delegate {
             }
         };
 
-        for downstream in &self.downstreams {
+        for downstream in &mut self.downstreams {
             send(downstream);
         }
     }
@@ -659,11 +653,6 @@ impl Delegate {
                 return None;
             }
             advance.scan_finished += 1;
-
-            if downstream.kv_api == ChangeDataRequestKvApi::RawKv {
-                downstream.advanced_to = min_ts;
-                return Some(downstream.advanced_to);
-            }
 
             if downstream.lock_heap.is_none() {
                 let mut lock_heap = BTreeMap::<TimeStamp, isize>::new();
@@ -1436,6 +1425,7 @@ impl ObservedRange {
     }
 }
 
+/// EventErrorHandle is hold by a `Downstream` and its associated `Initializer`.
 #[derive(Default)]
 pub struct EventErrorHandle {
     pub transferred_to_initializer: bool,

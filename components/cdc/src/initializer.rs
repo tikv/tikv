@@ -338,18 +338,17 @@ impl<E: KvEngine> Initializer<E> {
             CDC_SCAN_LONG_DURATION_REGIONS.dec();
         });
 
-        let mut event_error_handle = self.event_error_handle.lock().await;
-        if !event_error_handle.sent_out {
-            event_error_handle.transferred_to_initializer = true;
-            drop(event_error_handle);
-        } else {
-            drop(event_error_handle);
-            return Err(box_err!("scan canceled by event error"));
-        }
-
         let request_id = self.request_id;
-        let event_error_handle = self.event_error_handle.clone();
         let sink = self.sink.clone();
+        let event_error_handle = self.event_error_handle.clone();
+        {
+            let mut handle = block_on(event_error_handle.lock());
+            if !handle.sent_out {
+                handle.transferred_to_initializer = true;
+            } else {
+                return Err(box_err!("scan canceled by event error"));
+            }
+        }
         defer!({
             let mut handle = block_on(event_error_handle.lock());
             if !handle.sent_out && handle.event_error.is_some() {
@@ -366,7 +365,7 @@ impl<E: KvEngine> Initializer<E> {
                         debug!("cdc send event failed, disconnected";
                                "conn_id" => ?conn_id, "downstream_id" => ?downstream_id, "req_id" => ?request_id);
                     }
-                    // TODO handle errors.
+                    // TODO: handle errors like Downstream::send_event_error.
                     Err(SendError::Full) | Err(SendError::Congested) => {
                         info!("cdc send event failed, full";
                               "conn_id" => ?conn_id, "downstream_id" => ?downstream_id, "req_id" => ?request_id);
