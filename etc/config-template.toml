@@ -1203,7 +1203,13 @@
 #
 ## Avoid outputing data (e.g. user keys) to info log. It currently does not avoid printing
 ## user data altogether, but greatly reduce those logs.
-## Default is false.
+## 
+## Candidates:
+##   true | "on": Avoid outputing raw data to info log, raw data will be replaced with "?".
+##   false | "off": Output raw data to info log.
+##   "marker": Encapsulate the raw data with "‹..›" to info log.
+##
+## Default is false. 
 # redact-info-log = false
 
 ## Configurations for encryption at rest. Experimental.
