@@ -214,7 +214,7 @@ fn test_batch_get_command() {
     assert!(block_on(jh).unwrap());
 }
 
-fn setup_test_suite() -> (TestSuite, Store<RocksEngine>, Endpoint<RocksEngine>) {
+fn setup_test_suite() -> (TestSuite, Store<RocksEngine>, Arc<Endpoint<RocksEngine>>) {
     let test_suite = TestSuite::new(resource_metering::Config {
         report_receiver_interval: ReadableDuration::secs(3),
         precision: ReadableDuration::secs(1),
@@ -235,7 +235,7 @@ fn setup_test_suite() -> (TestSuite, Store<RocksEngine>, Endpoint<RocksEngine>) 
         Arc::new(QuotaLimiter::default()),
         Some(Arc::new(ResourceGroupManager::default())),
     );
-    (test_suite, store, endpoint)
+    (test_suite, store, Arc::new(endpoint))
 }
 
 fn prepare_insert<'a>(

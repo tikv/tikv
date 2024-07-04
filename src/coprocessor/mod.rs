@@ -86,6 +86,18 @@ pub trait RequestHandler: Send {
         // Do nothing by default
     }
 
+    fn index_lookup(&self) -> Option<(Vec<FieldType>, TableScan)> {
+        None
+    }
+
+    fn get_req(&self) -> Option<DagRequest> {
+        None
+    }
+
+    fn get_schema(&self) -> Option<Vec<FieldType>> {
+        None
+    }
+
     fn into_boxed(self) -> Box<dyn RequestHandler>
     where
         Self: 'static + Sized,

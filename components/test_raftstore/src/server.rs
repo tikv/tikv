@@ -552,7 +552,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
                 &server_cfg,
                 &security_mgr,
                 store.clone(),
-                copr.clone(),
+                Arc::new(copr.clone()),
                 copr_v2.clone(),
                 resolver.clone(),
                 tikv_util::Either::Left(snap_mgr.clone()),

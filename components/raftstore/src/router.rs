@@ -128,6 +128,10 @@ where
     ) -> RaftStoreResult<()>;
 
     fn release_snapshot_cache(&mut self);
+
+    fn locate_key(&self, _key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)> {
+        unimplemented!()
+    }
 }
 
 #[derive(Clone)]
@@ -263,6 +267,10 @@ impl<EK: KvEngine, ER: RaftEngine> LocalReadRouter<EK> for ServerRaftStoreRouter
 
     fn release_snapshot_cache(&mut self) {
         self.local_reader.release_snapshot_cache();
+    }
+
+    fn locate_key(&self, key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)> {
+        self.local_reader.locate_key(key)
     }
 }
 

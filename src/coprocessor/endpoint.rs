@@ -1,7 +1,12 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    borrow::Cow, future::Future, iter::FromIterator, marker::PhantomData, mem, sync::Arc,
+    borrow::Cow,
+    future::Future,
+    iter::FromIterator,
+    marker::PhantomData,
+    mem,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -17,23 +22,38 @@ use futures::{
     future::Either,
     prelude::*,
 };
-use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri};
+use kvproto::{coprocessor as coppb, errorpb, kvrpcpb, kvrpcpb::CommandPri, metapb};
 use online_config::ConfigManager;
 use protobuf::{CodedInputStream, Message};
+use raftstore::store::util;
 use resource_control::{ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory, StreamExt};
-use tidb_query_common::execute_stats::ExecSummary;
+use tidb_query_common::{execute_stats::ExecSummary, util::convert_to_prefix_next};
+use tidb_query_datatype::{
+    codec::{
+        chunk::{ChunkColumnEncoder, Column},
+        datum::DatumEncoder,
+        table::{RECORD_PREFIX_SEP, TABLE_PREFIX},
+        Datum,
+    },
+    expr::EvalContext,
+    FieldTypeTp,
+};
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::SnapshotExt;
 use tikv_util::{
+    codec::number::NumberEncoder
     deadline::set_deadline_exceeded_busy_error,
     memory::{MemoryQuota, OwnedAllocated},
     quota_limiter::QuotaLimiter,
     time::Instant,
 };
-use tipb::{AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, DagRequest, ExecType};
+use tipb::{
+    AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, Chunk, DagRequest, EncodeType,
+    ExecType, SelectResponse,FieldType, TableScan,
+};
 use tokio::sync::Semaphore;
-use txn_types::Lock;
+use txn_types::{Key, Lock};
 
 use super::config_manager::CopConfigManager;
 use crate::{
@@ -89,10 +109,19 @@ pub struct Endpoint<E: Engine> {
     quota_limiter: Arc<QuotaLimiter>,
     resource_ctl: Option<Arc<ResourceGroupManager>>,
 
-    _phantom: PhantomData<E>,
+    _phantom: PhantomData<Mutex<E>>,
 }
 
 impl<E: Engine> tikv_util::AssertSend for Endpoint<E> {}
+
+#[derive(Default, Debug)]
+struct ExtraExecutorTask {
+    ranges: Vec<coppb::KeyRange>,
+    region: Arc<metapb::Region>,
+    peer_id: u64,
+    term: u64,
+    index_pointers: Vec<usize>,
+}
 
 impl<E: Engine> Endpoint<E> {
     pub fn new(
@@ -428,7 +457,11 @@ impl<E: Engine> Endpoint<E> {
         semaphore: Option<Arc<Semaphore>>,
         mut tracker: Box<Tracker<E>>,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> Result<MemoryTraceGuard<coppb::Response>> {
+    ) -> Result<(
+        MemoryTraceGuard<coppb::Response>,
+        Option<(Vec<FieldType>, TableScan)>,
+        ReqContext,
+    )> {
         // When this function is being executed, it may be queued for a long time, so
         // that deadline may exceed.
         tracker.on_scheduled();
@@ -469,6 +502,7 @@ impl<E: Engine> Endpoint<E> {
             handler_builder(snapshot, &tracker.req_ctx)?
         };
 
+        let index_lookup = handler.index_lookup();
         tracker.on_begin_all_items();
 
         let deadline = tracker.req_ctx.deadline;
@@ -503,7 +537,7 @@ impl<E: Engine> Endpoint<E> {
         resp.set_exec_details(exec_details);
         resp.set_exec_details_v2(exec_details_v2);
         resp.set_latest_buckets_version(buckets_version);
-        Ok(resp)
+        Ok((resp, index_lookup, tracker.req_ctx.clone()))
     }
 
     /// Handle a unary request and run on the read pool.
@@ -514,7 +548,13 @@ impl<E: Engine> Endpoint<E> {
         &self,
         req_ctx: ReqContext,
         handler_builder: RequestHandlerBuilder<E::Snap>,
-    ) -> impl Future<Output = Result<MemoryTraceGuard<coppb::Response>>> {
+    ) -> impl Future<
+        Output = Result<(
+            MemoryTraceGuard<coppb::Response>,
+            Option<(Vec<FieldType>, TableScan)>,
+            ReqContext,
+        )>,
+    > {
         let priority = req_ctx.context.get_priority();
         let task_id = req_ctx.build_task_id();
         let key_ranges: Vec<_> = req_ctx
@@ -571,7 +611,7 @@ impl<E: Engine> Endpoint<E> {
     /// converted into a `Response` as the success result of the future.
     #[inline]
     pub fn parse_and_handle_unary_request(
-        &self,
+        self: &Arc<Self>,
         mut req: coppb::Request,
         peer: Option<String>,
     ) -> impl Future<Output = MemoryTraceGuard<coppb::Response>> {
@@ -594,36 +634,547 @@ impl<E: Engine> Endpoint<E> {
         )));
         let result_of_batch = self.process_batch_tasks(&mut req, &peer);
         set_tls_tracker_token(tracker);
+        let start_ts = TimeStamp::new(req.start_ts);
+        let extra_req = req.clone();
         let result_of_future = self
-            .parse_request_and_check_memory_locks(req, peer, false)
+            .parse_request_and_check_memory_locks(req, peer.clone(), false)
             .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
         with_tls_tracker(|tracker| {
             tracker.metrics.grpc_process_nanos = now.saturating_elapsed().as_nanos() as u64;
         });
+
+        let this = self.clone();
         let fut = async move {
-            let res = match result_of_future {
+            defer!({
+                GLOBAL_TRACKERS.remove(tracker);
+            });
+
+            let handle_fut = match result_of_future {
                 Err(e) => {
                     let mut res = make_error_response(e);
                     let batch_res = result_of_batch.await;
                     res.set_batch_responses(batch_res.into());
-                    res.into()
+                    return res.into();
                 }
-                Ok(handle_fut) => {
-                    let (handle_res, batch_res) = futures::join!(handle_fut, result_of_batch);
-                    let mut res = handle_res.unwrap_or_else(|e| make_error_response(e).into());
-                    res.set_batch_responses(batch_res.into());
-                    GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
-                        let exec_detail_v2 = res.mut_exec_details_v2();
-                        tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
-                        tracker.write_time_detail(exec_detail_v2.mut_time_detail_v2());
-                    });
-                    res
-                }
+                Ok(handle_fut) => handle_fut,
             };
-            GLOBAL_TRACKERS.remove(tracker);
+
+            let (handle_res, batch_res) = futures::join!(handle_fut, result_of_batch);
+            // let mut res = handle_res.unwrap_or_else(|e| make_error_response(e).into());
+            let (mut res, index_lookup, req_ctx) = match handle_res {
+                Err(e) => return make_error_response(e).into(),
+                Ok(response) => response,
+            };
+            if let Some((schema, table_info)) = index_lookup {
+                match this
+                    .handle_index_lookup(
+                        extra_req,
+                        peer,
+                        res.consume(),
+                        schema,
+                        table_info,
+                        start_ts,
+                    )
+                    .await
+                {
+                    Err(e) => return make_error_response(e).into(),
+                    Ok(resp) => res = resp.into(),
+                }
+            }
+            res.set_batch_responses(batch_res.into());
+            GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+                let exec_detail_v2 = res.mut_exec_details_v2();
+                tracker.write_scan_detail(exec_detail_v2.mut_scan_detail_v2());
+                tracker.write_time_detail(exec_detail_v2.mut_time_detail_v2());
+            });
             res
         };
         Either::Right(fut)
+    }
+
+    fn build_extra_executor_range(
+        &self,
+        mut sel: &SelectResponse,
+        schema: Vec<FieldType>,
+        mut table_scan: TableScan,
+    ) -> Option<(Vec<ExtraExecutorTask>, Vec<Column>)> {
+        if sel.get_encode_type() == EncodeType::TypeChunk {
+            let schema_types: Vec<_> = schema
+                .iter()
+                .map(|ft| {
+                    FieldTypeTp::from_u8(ft.get_tp() as u8).unwrap_or(FieldTypeTp::Unspecified)
+                })
+                .collect();
+            let mut all_data = Vec::new();
+            let mut columns = Vec::with_capacity(schema.len());
+            'outer: for chunk in sel.get_chunks() {
+                let mut data = chunk.get_rows_data();
+                if data.is_empty() {
+                    continue;
+                }
+                for ft in &schema {
+                    if data.is_empty() {
+                        continue;
+                    }
+                    let col = match Column::decode(
+                        &mut data,
+                        FieldTypeTp::from_u8(ft.get_tp() as u8).unwrap_or(FieldTypeTp::Unspecified),
+                    ) {
+                        Ok(col) => col,
+                        Err(e) => {
+                            info!("decode chunk error"; "err" => ?e);
+                            break 'outer;
+                        }
+                    };
+                    columns.push(col);
+                }
+                if columns.is_empty() {
+                    continue;
+                }
+                let len = columns[0].len();
+                for i in 0..len {
+                    let mut dt = Vec::new();
+                    for (j, ft) in schema.iter().enumerate() {
+                        dt.push(columns[j].get_datum(i, ft).expect("fail to get datum"));
+                    }
+                    all_data.push(dt);
+                }
+            }
+
+            let mut table_prefix = vec![];
+            table_prefix.extend(TABLE_PREFIX);
+            table_prefix.encode_i64(table_scan.get_table_id()).unwrap();
+            table_prefix.extend(RECORD_PREFIX_SEP);
+
+            if !all_data.is_empty() {
+                all_data.sort_by(|a, b| {
+                    let mut ctx = EvalContext::default();
+                    let l = min(a.len(), b.len());
+                    for i in 0..l {
+                        if let Ok(ordering) = a[i].cmp(&mut ctx, &b[i]) {
+                            if ordering != Ordering::Equal {
+                                return ordering;
+                            }
+                        }
+                    }
+                    return a.len().cmp(&b.len());
+                });
+                let mut keys = Vec::with_capacity(all_data.len());
+                for row in &all_data {
+                    let mut key;
+                    if schema_types.len() == 1
+                        && matches!(schema_types[0], FieldTypeTp::Long | FieldTypeTp::LongLong)
+                    {
+                        let idx = match row[0] {
+                            Datum::I64(x) => x,
+                            Datum::U64(x) => x as i64,
+                            _ => unreachable!(),
+                        };
+                        key = table_prefix.clone();
+                        key.encode_i64(idx).unwrap();
+                    } else {
+                        key = table_prefix.clone();
+                        key.write_datum(&mut EvalContext::default(), row, true)
+                            .unwrap();
+                    }
+                    keys.push(key);
+                }
+                keys.sort();
+                let mut ranges: Vec<coppb::KeyRange> = Vec::new();
+                let mut keep_indexes = Vec::new();
+                let mut last_region: Option<(Arc<metapb::Region>, u64, u64)> = None;
+                let mut extra_tasks = Vec::new();
+                fn add_point_range(
+                    key: Vec<u8>,
+                    region: Arc<metapb::Region>,
+                    peer_id: u64,
+                    term: u64,
+                    ranges: &mut Vec<coppb::KeyRange>,
+                ) {
+                    info!("index lookup locate key"; "key" => ?key,
+                                                "region" => region.id,
+                                                "peer" => peer_id,
+                                                "term" => term);
+                    let mut r = coppb::KeyRange::new();
+                    r.set_start(key);
+                    r.set_end(r.get_start().to_vec());
+                    convert_to_prefix_next(r.mut_end());
+                    ranges.push(r);
+                }
+                let mut index_not_located_task = ExtraExecutorTask::default();
+                let mut ranges_index_pointers = Vec::new();
+                for (i, raw_key) in keys.into_iter().enumerate() {
+                    let key = Key::from_raw(&raw_key);
+                    if let Some((region, peer_id, term)) = &last_region {
+                        if util::check_key_in_region(key.as_encoded(), &region).is_ok() {
+                            ranges_index_pointers.push(i);
+                            add_point_range(
+                                raw_key.clone(),
+                                region.clone(),
+                                *peer_id,
+                                *term,
+                                &mut ranges,
+                            );
+                            continue;
+                        } else {
+                            extra_tasks.push(ExtraExecutorTask {
+                                ranges: ranges.clone(),
+                                region: region.clone(),
+                                peer_id: *peer_id,
+                                term: *term,
+                                index_pointers: ranges_index_pointers.clone(),
+                            });
+                            ranges.clear();
+                            ranges_index_pointers.clear();
+                        }
+                    }
+
+                    if let Some((region, peer_id, term)) =
+                        unsafe { with_tls_engine(|e: &E| e.locate_key(key.as_encoded())) }
+                    {
+                        last_region = Some((region.clone(), peer_id, term));
+                        add_point_range(raw_key.clone(), region, peer_id, term, &mut ranges);
+                        ranges_index_pointers.push(i);
+                    } else {
+                        info!("index lookup not locate key"; "key" => ?key);
+                        keep_indexes.push(i);
+                        index_not_located_task.index_pointers.push(i);
+                    }
+                }
+                if let Some((region, peer_id, term)) = &last_region {
+                    if ranges.len() > 0 {
+                        extra_tasks.push(ExtraExecutorTask {
+                            ranges: ranges.clone(),
+                            region: region.clone(),
+                            peer_id: *peer_id,
+                            term: *term,
+                            index_pointers: ranges_index_pointers.clone(),
+                        });
+                    }
+                }
+                extra_tasks.push(index_not_located_task);
+                return Some((extra_tasks, columns));
+            }
+        }
+        return None;
+    }
+
+    #[inline]
+    fn handle_extra_requests(
+        &self,
+        req: coppb::Request,
+        peer: Option<String>,
+        mut resp: coppb::Response,
+        schema: Vec<FieldType>,
+        table_scan: TableScan,
+        start_ts: TimeStamp,
+    ) -> impl Future<Output = Result<coppb::Response>> {
+        let mut sel = SelectResponse::default();
+        let mut result_futures = Vec::new();
+        let mut extra_tasks = Vec::new();
+        let mut index_columns = Vec::new();
+        let mut keep_index = Vec::new();
+        if sel.merge_from_bytes(resp.get_data()).is_ok() {
+            let result = self.build_extra_executor_range(&mut sel, schema.clone(), table_scan);
+            if result.is_some() {
+                (extra_tasks, index_columns) = result.unwrap();
+                for (i, task) in extra_tasks.iter().enumerate() {
+                    if task.ranges.len() == 0 {
+                        keep_index.extend_from_slice(&task.index_pointers);
+                        continue;
+                    }
+                    let range_result = self.handle_extra_request(
+                        req.clone(),
+                        task.ranges.clone(),
+                        peer.clone(),
+                        task.region.clone(),
+                        task.peer_id,
+                        task.term,
+                        start_ts,
+                    );
+                    result_futures.push((i, range_result));
+                }
+            }
+        }
+
+        async move {
+            if result_futures.len() == 0 {
+                // this may print many log
+                // info!("no extra task need to do"; "keep_index.len" => keep_index.len());
+                return Ok(resp);
+            }
+            let mut total_chunks = sel.take_extra_chunks();
+            for (i, result) in result_futures {
+                let extra_resp = result.await;
+                // info!("get extra req resp"; "data.len" => extra_resp.data.len());
+                let mut extra_sel = SelectResponse::default();
+                if extra_resp.is_some()
+                    && extra_sel
+                        .merge_from_bytes(extra_resp.unwrap().get_data())
+                        .is_ok()
+                {
+                    let extra_chunks = extra_sel.take_chunks().to_vec();
+                    for chk in extra_chunks {
+                        total_chunks.push(chk);
+                    }
+                } else {
+                    keep_index.extend_from_slice(&extra_tasks[i].index_pointers);
+                }
+            }
+            sel.set_extra_chunks(total_chunks);
+            if keep_index.len() == 0 {
+                info!("no need keep index data since all have extra task");
+                sel.clear_chunks();
+            } else {
+                keep_index.sort();
+                info!("some index data have no extra task, need keep"; "keep_index_idxs" => ?keep_index);
+                let mut new_index_columns = Vec::new();
+                for ft in &schema {
+                    let tp =
+                        FieldTypeTp::from_u8(ft.get_tp() as u8).unwrap_or(FieldTypeTp::Unspecified);
+                    new_index_columns.push(Column::new(tp, keep_index.len()));
+                }
+                let mut idx_strs = Vec::new();
+                for i in keep_index {
+                    for (col_idx, col) in index_columns.iter().enumerate() {
+                        let dt = col
+                            .get_datum(i, &schema[col_idx])
+                            .expect("fail to get datum");
+                        if let Ok(str) = dt.to_string() {
+                            idx_strs.push(str)
+                        } else {
+                            idx_strs.push("".into())
+                        }
+                        new_index_columns[col_idx].append_datum(&dt).unwrap();
+                    }
+                }
+                info!("some index data have no extra task, need keep"; "keep_index_data"=> ?idx_strs);
+                let mut index_chunk = Chunk::default();
+                for col in new_index_columns {
+                    index_chunk
+                        .mut_rows_data()
+                        .write_chunk_column(&col)
+                        .unwrap();
+                }
+                sel.set_chunks(vec![index_chunk].into());
+            }
+            resp.set_data(sel.write_to_bytes().unwrap());
+            Ok(resp)
+        }
+    }
+
+    fn handle_extra_request(
+        &self,
+        req: coppb::Request,
+        ranges: Vec<coppb::KeyRange>,
+        peer: Option<String>,
+        region: Arc<metapb::Region>,
+        peer_id: u64,
+        term: u64,
+        start_ts: TimeStamp,
+    ) -> impl Future<Output = Option<MemoryTraceGuard<coppb::Response>>> {
+        let result_of_future = self
+            .parse_extra_requests(req, ranges, peer, region.clone(), peer_id, term, start_ts)
+            .map(|(handler_builder, req_ctx)| self.handle_unary_request(req_ctx, handler_builder));
+
+        async move {
+            let handle_fut = match result_of_future {
+                Err(e) => return None,
+                Ok(handle_fut) => handle_fut,
+            };
+            let (mut resp, index_lookup, req_ctx) = match handle_fut.await {
+                Err(e) => return None,
+                Ok(response) => response,
+            };
+            // print resp value for debug
+            let mut extra_schema = Vec::new();
+            if let Some((schema, _)) = index_lookup {
+                extra_schema = schema.clone();
+                let mut sel = SelectResponse::default();
+                sel.merge_from_bytes(resp.get_data())
+                    .expect("fail to recover SelectResponse");
+                if sel.get_encode_type() == EncodeType::TypeChunk {
+                    let schema_types: Vec<_> = schema
+                        .iter()
+                        .map(|ft| {
+                            FieldTypeTp::from_u8(ft.get_tp() as u8)
+                                .unwrap_or(FieldTypeTp::Unspecified)
+                        })
+                        .collect();
+                    info!("extra req schema"; "schema" => ?schema_types, "schema.len" => schema_types.len());
+                    let mut all_data = Vec::new();
+                    'outer: for chunk in sel.get_chunks() {
+                        let mut data = chunk.get_rows_data();
+                        if data.is_empty() {
+                            continue;
+                        }
+                        let mut columns = Vec::with_capacity(schema.len());
+                        for ft in &schema {
+                            if data.is_empty() {
+                                continue;
+                            }
+                            let col = match Column::decode(
+                                &mut data,
+                                FieldTypeTp::from_u8(ft.get_tp() as u8)
+                                    .unwrap_or(FieldTypeTp::Unspecified),
+                            ) {
+                                Ok(col) => col,
+                                Err(e) => {
+                                    info!("decode chunk error"; "err" => ?e);
+                                    break 'outer;
+                                }
+                            };
+                            columns.push(col);
+                        }
+                        if columns.is_empty() {
+                            continue;
+                        }
+                        let len = columns[0].len();
+
+                        for i in 0..len {
+                            let mut dt = Vec::new();
+                            let mut row = Vec::new();
+                            for (j, ft) in schema.iter().enumerate() {
+                                let v = columns[j].get_datum(i, ft).expect("fail to get datum");
+                                if let Ok(str) = v.to_string() {
+                                    row.push(str);
+                                } else {
+                                    row.push("".to_string());
+                                }
+                                dt.push(v);
+                            }
+                            info!("extra resp"; "row" => ?row, "row.len" => row.len());
+                            all_data.push(dt);
+                        }
+                    }
+                }
+            }
+            info!("handle extra req finish"; "resp.data.len" => resp.data.len(), "extra_schema.len" => extra_schema.len());
+            Some(resp)
+        }
+    }
+
+    fn parse_extra_requests(
+        &self,
+        req: coppb::Request,
+        ranges: Vec<coppb::KeyRange>,
+        peer: Option<String>,
+        region: Arc<metapb::Region>,
+        peer_id: u64,
+        term: u64,
+        start_ts: TimeStamp,
+    ) -> Result<(RequestHandlerBuilder<E::Snap>, ReqContext)> {
+        // build extra executor and exec.
+        let mut context = req.get_context().clone();
+        context.set_region_id(region.id);
+        context.set_region_epoch(region.region_epoch.clone().unwrap());
+        context.set_term(term);
+        context.set_replica_read(false);
+        context.set_stale_read(false);
+        for p in &region.peers {
+            if p.id == peer_id {
+                context.set_peer(p.clone());
+                break;
+            }
+        }
+
+        let req_ctx = ReqContext::new(
+            ReqTag::select,
+            context,
+            ranges,
+            self.max_handle_duration,
+            peer.clone(),
+            Some(false),
+            start_ts.into(),
+            None,
+            self.perf_level,
+        );
+        self.check_memory_locks(&req_ctx)?;
+        let mut dag = DagRequest::default();
+        let data = req.get_data().clone();
+        let req_is_cache_enabled = req.get_is_cache_enabled();
+        let mut input = CodedInputStream::from_bytes(data);
+        box_try!(dag.merge_from(&mut input));
+        let extra_executor = dag.take_extra_executors();
+        let extra_output_offset = dag.take_extra_output_offsets();
+        dag.set_output_offsets(extra_output_offset);
+        dag.set_executors(extra_executor);
+        let extra_executor = dag.get_executors();
+        // if extra_executor.len() > 0 {
+        //     info!("index lookup build extra executor";
+        //     "ranges" => ?req_ctx.ranges,
+        //     "region" => region.id,
+        //     "peer" => peer_id,
+        //     "term" => term,
+        //     "extra_executor.len" => extra_executor.len(),
+        //     "extra_executor_id" => extra_executor[0].get_executor_id(),
+        //     "extra_executor_tp" => ?extra_executor[0].get_tp(),
+        //     "extra_executor0_cols" =>
+        // extra_executor[0].get_tbl_scan().get_columns().len(),     "dag" =>
+        // ?dag); }
+        let batch_row_limit = self.get_batch_row_limit(false);
+        let quota_limiter = self.quota_limiter.clone();
+        let handler_builder: RequestHandlerBuilder<E::Snap> = Box::new(move |snap, req_ctx| {
+            let data_version = snap.ext().get_data_version();
+            let store = SnapshotStore::new(
+                snap,
+                start_ts.into(),
+                req_ctx.context.get_isolation_level(),
+                !req_ctx.context.get_not_fill_cache(),
+                req_ctx.bypass_locks.clone(),
+                req_ctx.access_locks.clone(),
+                req_is_cache_enabled,
+            );
+            let handler = dag::DagHandlerBuilder::new(
+                dag,
+                req_ctx.ranges.clone(),
+                store,
+                req_ctx.deadline,
+                batch_row_limit,
+                false,
+                req_is_cache_enabled,
+                None,
+                quota_limiter,
+            )
+            .data_version(data_version)
+            .build();
+
+            // if let Ok(e) = &handler {
+            //     info!("index lookup build extra executor 2"; "handler_schema" =>
+            // ?e.get_schema()); }
+            handler
+        });
+        Ok((handler_builder, req_ctx))
+    }
+
+    fn handle_index_lookup(
+        &self,
+        req: coppb::Request,
+        peer: Option<String>,
+        mut resp: coppb::Response,
+        schema: Vec<FieldType>,
+        mut table_scan: TableScan,
+        start_ts: TimeStamp,
+    ) -> impl Future<Output = Result<coppb::Response>> {
+        let result_future = self.handle_extra_requests(
+            req.clone(),
+            peer.clone(),
+            resp.clone(),
+            schema.clone(),
+            table_scan.clone(),
+            start_ts,
+        );
+        let metadata = TaskMetadata::from_ctx(req.context.get_resource_control_context());
+        let resource_limiter = self.resource_ctl.as_ref().and_then(|r| {
+            r.get_resource_limiter(
+                req.context.get_resource_control_context().get_resource_group_name(),
+                req.context.get_request_source(),
+                req.context.get_resource_control_context().get_override_priority(),
+            )
+        });
+        self.read_pool
+            .spawn_handle(async move { result_future.await }, CommandPri::Normal, 0, metadata, resource_limiter)
+            .map(|e| e.unwrap())
     }
 
     // process_batch_tasks process the input batched coprocessor tasks if any,
@@ -1273,12 +1824,12 @@ mod tests {
             .map(|config| {
                 let engine = Arc::new(Mutex::new(engine.clone()));
                 YatpPoolBuilder::new(DefaultTicker::default())
-                    .config(config)
-                    .name_prefix("coprocessor_endpoint_test_full")
-                    .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
-                    // Safety: we call `set_` and `destroy_` with the same engine type.
-                    .before_stop(|| unsafe { destroy_tls_engine::<RocksEngine>() })
-                    .build_future_pool()
+                        .config(config)
+                        .name_prefix("coprocessor_endpoint_test_full")
+                        .after_start(move || set_tls_engine(engine.lock().unwrap().clone()))
+                        // Safety: we call `set_` and `destroy_` with the same engine type.
+                        .before_stop(|| unsafe { destroy_tls_engine::<RocksEngine>() })
+                        .build_future_pool()
             })
             .collect::<Vec<_>>(),
         );

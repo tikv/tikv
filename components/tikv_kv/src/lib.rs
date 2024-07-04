@@ -367,6 +367,10 @@ pub trait Engine: Send + Clone + 'static {
     /// future is polled or not.
     fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes;
 
+    fn locate_key(&self, _key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)> {
+        unimplemented!()
+    }
+
     /// Precheck request which has write with it's context.
     fn precheck_write_with_ctx(&self, _ctx: &Context) -> Result<()> {
         Ok(())

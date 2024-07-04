@@ -276,7 +276,8 @@ where
     router: RaftRouter<EK, ER>,
     system: Option<RaftBatchSystem<EK, ER>>,
     resolver: Option<resolve::PdStoreAddrResolver>,
-    snap_mgr: Option<SnapManager>, // Will be filled in `init_servers`.
+    snap_mgr: Option<SnapManager>,
+    // Will be filled in `init_servers`.
     engines: Option<TikvEngines<EK, ER>>,
     kv_statistics: Option<Arc<RocksStatistics>>,
     range_cache_engine_statistics: Option<Arc<RangeCacheMemoryEngineStatistics>>,
@@ -290,9 +291,11 @@ where
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
-    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+    // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
-    br_snap_recovery_mode: bool, // use for br snapshot recovery
+    br_snap_recovery_mode: bool,
+    // use for br snapshot recovery
     resolved_ts_scheduler: Option<Scheduler<Task>>,
     grpc_service_mgr: GrpcServiceManager,
     snap_br_rejector: Option<Arc<PrepareDiskSnapObserver>>,
@@ -879,7 +882,7 @@ where
             &server_config,
             &self.security_mgr,
             storage.clone(),
-            copr,
+            Arc::new(copr),
             coprocessor_v2::Endpoint::new(&self.core.config.coprocessor_v2),
             self.resolver.clone().unwrap(),
             Either::Left(snap_mgr.clone()),
