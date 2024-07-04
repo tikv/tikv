@@ -155,9 +155,9 @@ pub struct RaftMetrics {
     pub propose: RaftProposalCounterVec,
     pub invalid_proposal: RaftInvalidProposalCounterVec,
     pub raft_log_gc_skipped: RaftLogGcSkippedCounterVec,
-    pub read_indx_coal: LocalIntCounter,
-    pub read_indx_retry: LocalIntCounter,
-    pub read_indx_retry_coal: LocalIntCounter,
+    pub read_index_dedup: LocalIntCounter,
+    pub read_index_retry: LocalIntCounter,
+    pub read_index_retry_dedup: LocalIntCounter,
 
     // local histogram
     pub store_time: LocalHistogram,
@@ -195,9 +195,9 @@ impl RaftMetrics {
         Self {
             ready: RaftReadyCounterVec::from(&STORE_RAFT_READY_COUNTER_VEC),
             send_message: RaftSendMessageMetrics::default(),
-            read_indx_coal: READ_INDX_COAL_COUNTER.local(),
-            read_indx_retry: READ_INDX_RETRY_COUNTER.local(),
-            read_indx_retry_coal: READ_INDX_RETRY_COAL_COUNTER.local(),
+            read_index_dedup: READ_INDEX_DEDUP_COUNTER.local(),
+            read_index_retry: READ_INDEX_RETRY_COUNTER.local(),
+            read_index_retry_dedup: READ_INDEX_RETRY_DEDUP_COUNTER.local(),
             message_dropped: RaftDroppedMessageCounterVec::from(
                 &STORE_RAFT_DROPPED_MESSAGE_COUNTER_VEC,
             ),
@@ -241,9 +241,9 @@ impl RaftMetrics {
 
         self.ready.flush();
         self.send_message.flush();
-        self.read_indx_coal.flush();
-        self.read_indx_retry_coal.flush();
-        self.read_indx_retry.flush();
+        self.read_index_dedup.flush();
+        self.read_index_retry_dedup.flush();
+        self.read_index_retry.flush();
         self.message_dropped.flush();
         self.propose.flush();
         self.invalid_proposal.flush();

@@ -927,7 +927,7 @@ where
     /// this peer has raft log gaps and whether should be marked busy on
     /// apply.
     pub last_leader_committed_idx: Option<u64>,
-    read_indx_resp: HashMap<u64, u64>,
+    read_index_resp: HashMap<u64, u64>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -1079,7 +1079,7 @@ where
             snapshot_recovery_state: None,
             busy_on_apply: Some(false),
             last_leader_committed_idx: None,
-            read_indx_resp: HashMap::default(),
+            read_index_resp: HashMap::default(),
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1908,13 +1908,13 @@ where
                     // If current peer has valid lease, then we could handle the
                     // request directly, rather than send a heartbeat to check quorum.
 
-                    let val = self.read_indx_resp.get(&m.from);
+                    let val = self.read_index_resp.get(&m.from);
                     if val.is_some() && *val.unwrap() == start_ts {
-                        // this message can be coalesced with the last one
-                        ctx.raft_metrics.read_indx_coal.inc();
-                    } else if self.next_proposal_index() > index {
+                        // this message can be dedupd with the last one
+                        ctx.raft_metrics.read_index_dedup.inc();
+                    } else if self.next_proposal_index() > self.get_store().applied_index() {
                         // there are no pending proposals
-                        self.read_indx_resp.insert(m.from, start_ts);
+                        self.read_index_resp.insert(m.from, start_ts);
                     }
                     let mut resp = eraftpb::Message::default();
                     resp.set_msg_type(MessageType::MsgReadIndexResp);
@@ -3517,8 +3517,10 @@ where
             }
         }
         if retry_reqs != 0 {
-            ctx.raft_metrics.read_indx_retry.inc_by(retry_reqs);
-            ctx.raft_metrics.read_indx_retry_coal.inc_by(retry_reqs - 1);
+            ctx.raft_metrics.read_index_retry.inc_by(retry_reqs);
+            ctx.raft_metrics
+                .read_index_retry_dedup
+                .inc_by(retry_reqs - 1);
         }
     }
 
