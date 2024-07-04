@@ -18,8 +18,7 @@ use std::{
 
 use collections::HashMap;
 use engine_traits::{
-    CacheRange, DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, WriteOptions, CF_LOCK,
-    CF_RAFT,
+    DeleteStrategy, KvEngine, Mutable, Range, WriteBatch, WriteOptions, CF_LOCK, CF_RAFT,
 };
 use fail::fail_point;
 use file_system::{IoType, WithIoType};
@@ -47,7 +46,7 @@ use crate::{
         },
         snap::{plain_file_used, Error, Result, SNAPSHOT_CFS},
         transport::CasualRouter,
-        ApplyOptions, CasualMessage, Config, SnapEntry, SnapError, SnapKey, SnapManager,
+        ApplyOptions, CasualMessage, Config, SnapEntry, SnapKey, SnapManager,
     },
 };
 
@@ -660,19 +659,12 @@ where
         info!("begin apply snap data"; "region_id" => region_id, "peer_id" => peer_id);
         fail_point!("region_apply_snap", |_| { Ok(()) });
         fail_point!("region_apply_snap_io_err", |_| {
-            Err(SnapError::Other(box_err!("io error")))
+            Err(crate::store::SnapError::Other(box_err!("io error")))
         });
         check_abort(&abort)?;
 
         let mut region_state = self.region_state(region_id)?;
         let region = region_state.get_region().clone();
-
-        let range = CacheRange::from_region(&region);
-        info!(
-            "evict range due to apply snap";
-            "range" => ?range,
-        );
-        self.engine.evict_range(&range);
 
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
