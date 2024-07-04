@@ -730,7 +730,7 @@ impl<E: Engine> Endpoint<E> {
                     ) {
                         Ok(col) => col,
                         Err(e) => {
-                            // info!("decode chunk error"; "err" => ?e);
+                            info!("decode chunk error"; "err" => ?e);
                             break 'outer;
                         }
                     };
@@ -787,10 +787,10 @@ impl<E: Engine> Endpoint<E> {
                     term: u64,
                     ranges: &mut Vec<coppb::KeyRange>,
                 ) {
-                    // info!("index lookup locate key"; "key" => ?key,
-                    //                             "region" => region.id,
-                    //                             "peer" => peer_id,
-                    //                             "term" => term);
+                    info!("index lookup locate key"; "key" => ?key,
+                                                "region" => region.id,
+                                                "peer" => peer_id,
+                                                "term" => term);
                     let mut r = coppb::KeyRange::new();
                     r.set_start(key);
                     r.set_end(r.get_start().to_vec());
@@ -825,6 +825,11 @@ impl<E: Engine> Endpoint<E> {
                         }
                     }
 
+                    // let snapshot = unsafe {
+                    //     with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx))
+                    // }
+                    // .await?;
+
                     if let Some((region, peer_id, term)) = unsafe {
                         with_tls_engine(|engine| Self::locate_key(engine, key.as_encoded()))
                     } {
@@ -832,7 +837,7 @@ impl<E: Engine> Endpoint<E> {
                         add_point_range(raw_key.clone(), region, peer_id, term, &mut ranges);
                         ranges_index_pointers.push(i);
                     } else {
-                        // info!("index lookup not locate key"; "key" => ?key);
+                        info!("index lookup not locate key"; "key" => ?key);
                         keep_indexes.push(i);
                         index_not_located_task.index_pointers.push(i);
                     }
@@ -919,12 +924,11 @@ impl<E: Engine> Endpoint<E> {
             }
             sel.set_extra_chunks(total_chunks);
             if keep_index.len() == 0 {
-                // info!("no need keep index data since all have extra task");
+                info!("no need keep index data since all have extra task");
                 sel.clear_chunks();
             } else {
                 keep_index.sort();
-                // info!("some index data have no extra task, need keep"; "keep_index_idxs" =>
-                // ?keep_index);
+                info!("some index data have no extra task, need keep"; "keep_index_idxs" => ?keep_index);
                 let mut new_index_columns = Vec::new();
                 for ft in &schema {
                     let tp =
@@ -943,8 +947,7 @@ impl<E: Engine> Endpoint<E> {
                         new_index_columns[col_idx].append_datum(dt).unwrap();
                     }
                 }
-                // info!("some index data have no extra task, need keep"; "keep_index_data"=>
-                // ?idx_strs);
+                info!("some index data have no extra task, need keep"; "keep_index_data"=> ?idx_strs);
                 let mut index_chunk = Chunk::default();
                 for col in new_index_columns {
                     index_chunk
@@ -997,8 +1000,7 @@ impl<E: Engine> Endpoint<E> {
                                 .unwrap_or(FieldTypeTp::Unspecified)
                         })
                         .collect();
-                    // info!("extra req schema"; "schema" => ?schema_types, "schema.len" =>
-                    // schema_types.len());
+                    info!("extra req schema"; "schema" => ?schema_types, "schema.len" => schema_types.len());
                     let mut all_data = Vec::new();
                     'outer: for chunk in sel.get_chunks() {
                         let mut data = chunk.get_rows_data();
@@ -1040,14 +1042,13 @@ impl<E: Engine> Endpoint<E> {
                                 }
                                 dt.push(v);
                             }
-                            // info!("extra resp"; "row" => ?row, "row.len" => row.len());
+                            info!("extra resp"; "row" => ?row, "row.len" => row.len());
                             all_data.push(dt);
                         }
                     }
                 }
             }
-            // info!("handle extra req finish"; "resp.data.len" => resp.data.len(),
-            // "extra_schema.len" => extra_schema.len());
+            info!("handle extra req finish"; "resp.data.len" => resp.data.len(), "extra_schema.len" => extra_schema.len());
             Some(resp)
         }
     }
