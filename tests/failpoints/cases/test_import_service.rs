@@ -82,10 +82,6 @@ fn test_download_to_full_disk() {
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
 
-    // Sleep 20s, make sure it is large than grpc_keepalive_timeout (3s).
-    let sst_writer_open_fp = "on_open_sst_writer";
-    fail::cfg(sst_writer_open_fp, "sleep(20000)").unwrap();
-
     // Now perform a proper download.
     let mut download = DownloadRequest::default();
     download.set_sst(meta.clone());
@@ -104,8 +100,6 @@ fn test_download_to_full_disk() {
     assert!(result.has_error());
     assert_eq!(result.get_error().get_message(), "TiKV disk space is not enough.");
     disk::set_disk_status(DiskUsage::Normal);
-
-    fail::remove(sst_writer_open_fp);
 }
 
 #[test]
