@@ -117,7 +117,7 @@ where
 
     let on_end = move |guard: pprof::ProfilerGuard<'static>| {
         defer! {
-            *CPU_PROFILE_ACTIVE.lock().unwrap() = None;
+            *CPU_PROFILE_ACTIVE.lock().unwrap() = None
         }
         let report = guard
             .report()
