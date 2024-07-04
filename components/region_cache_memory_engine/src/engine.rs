@@ -647,16 +647,15 @@ impl RangeCacheMemoryEngine {
             core.range_manager
                 .ranges()
                 .iter()
-                .map(|(r, meta)| (r.clone(), meta.safe_point()))
+                .map(|(r, _)| r.clone())
                 .collect()
         };
         for range in ranges {
             let read_ts = TimeStamp::physical_now() - Duration::from_secs(40).as_millis() as u64;
             let read_ts = TimeStamp::compose(read_ts, 0).into_inner();
 
-            if let Ok(range_snap) = self.snapshot(range.0.clone(), read_ts, snap.sequence_number())
-            {
-                ranges_to_audit.push((range_snap, range.1));
+            if let Ok(range_snap) = self.snapshot(range.clone(), read_ts, snap.sequence_number()) {
+                ranges_to_audit.push(range_snap);
             } else {
                 warn!(
                     "failed to get snap in audit";

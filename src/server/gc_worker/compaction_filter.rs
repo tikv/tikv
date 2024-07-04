@@ -705,7 +705,6 @@ impl CompactionFilter for WriteCompactionFilter {
         value: &[u8],
         value_type: CompactionFilterValueType,
     ) -> CompactionFilterDecision {
-        return CompactionFilterDecision::Keep;
         if self.encountered_errors {
             // If there are already some errors, do nothing.
             return CompactionFilterDecision::Keep;

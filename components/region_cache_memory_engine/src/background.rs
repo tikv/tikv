@@ -94,7 +94,7 @@ pub enum BackgroundTask {
     TopRegionsLoadEvict,
     CleanLockTombstone(u64),
     SetRocksEngine(RocksEngine),
-    Audit((Vec<(RangeCacheSnapshot, u64)>, RocksSnapshot)),
+    Audit((Vec<RangeCacheSnapshot>, RocksSnapshot)),
     ManualLoad(CacheRange),
 }
 
@@ -989,7 +989,7 @@ impl Runnable for BackgroundRunner {
             BackgroundTask::Audit((ranges_snap, rocksdb_snap)) => {
                 let core = self.core.engine.clone();
                 let f = async move {
-                    for (range_snap, _) in ranges_snap {
+                    for range_snap in ranges_snap {
                         info!(
                             "audit range";
                             "range" => ?range_snap.snapshot_meta.range,
@@ -1007,8 +1007,9 @@ impl Runnable for BackgroundRunner {
                             let m_valid = iter.seek_to_first().unwrap();
                             let d_valid = disk_iter.seek_to_first().unwrap();
                             if !m_valid {
-                                // get safe_point of the relevant range, the ts of the disk key should not be larger than it.
-                                let safe_ts = {
+                                // get safe_point of the relevant range, the ts of the disk key
+                                // should not be larger than it.
+                                let safe_point = {
                                     let core = core.read();
                                     if let Some(meta) = core
                                         .range_manager
@@ -1036,14 +1037,14 @@ impl Runnable for BackgroundRunner {
                                         unreachable!();
                                     }
                                     let (key, ts) = split_ts(disk_iter.key()).unwrap();
-                                    if ts > safe_ts {
+                                    if ts > safe_point {
                                         error!(
                                             "seek_to_first result not equal";
                                             "lower" => log_wrappers::Value(&iter.lower_bound),
                                             "upper" => log_wrappers::Value(&iter.upper_bound),
                                             "disk_key" => log_wrappers::Value(&disk_iter.key()),
                                             "disk_key_ts" => ts,
-                                            "safe_ts" => safe_ts,
+                                            "safe_ts" => safe_point,
                                             "snapshot_ts" => range_snap.snapshot_meta.snapshot_ts,
                                             "seqno" => iter.sequence_number,
                                             "cf" => ?cf,
@@ -1058,7 +1059,7 @@ impl Runnable for BackgroundRunner {
                                             "upper" => log_wrappers::Value(&iter.upper_bound),
                                             "disk_key" => log_wrappers::Value(&disk_iter.key()),
                                             "disk_key_ts" => ts,
-                                            "safe_ts" => safe_ts,
+                                            "safe_ts" => safe_point,
                                             "snapshot_ts" => range_snap.snapshot_meta.snapshot_ts,
                                             "seqno" => iter.sequence_number,
                                             "cf" => ?cf,
