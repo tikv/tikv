@@ -70,7 +70,7 @@ fn test_download_sst_blocking_sst_writer() {
 
 #[test]
 fn test_download_to_full_disk() {
-    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+    let (_cluster, ctx, _tikv, import) = new_cluster_and_tikv_import_client();
     let temp_dir = Builder::new()
         .prefix("test_download_sst_blocking_sst_writer")
         .tempdir()
@@ -103,6 +103,7 @@ fn test_download_to_full_disk() {
     assert!(!result.get_is_empty());
     assert!(result.has_error());
     assert_eq!(result.get_error().get_message(), "TiKV disk space is not enough.");
+    disk::set_disk_status(DiskUsage::Normal);
 
     fail::remove(sst_writer_open_fp);
 }
