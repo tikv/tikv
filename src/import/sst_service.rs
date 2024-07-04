@@ -875,6 +875,11 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
             sst_importer::metrics::IMPORTER_DOWNLOAD_DURATION
                 .with_label_values(&["queue"])
                 .observe(start.saturating_elapsed().as_secs_f64());
+            if get_disk_status(0) != DiskUsage::Normal {
+                let mut resp = DownloadResponse::default();
+                resp.set_error(Error::DiskSpaceNotEnough.into());
+                return crate::send_rpc_response!(Ok(resp), sink, label, timer);
+            }
 
             // FIXME: download() should be an async fn, to allow BR to cancel
             // a download task.
@@ -1246,6 +1251,8 @@ mod test {
         import::sst_service::{check_local_region_stale, RequestCollector},
         server::raftkv,
     };
+
+    use super::ImportSstService;
 
     fn write(key: &[u8], ty: WriteType, commit_ts: u64, start_ts: u64) -> (Vec<u8>, Vec<u8>) {
         let k = Key::from_raw(key).append_ts(TimeStamp::new(commit_ts));
