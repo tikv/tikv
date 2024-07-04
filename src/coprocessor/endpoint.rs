@@ -704,7 +704,7 @@ impl<E: Engine> Endpoint<E> {
         mut sel: &SelectResponse,
         schema: Vec<FieldType>,
         mut table_scan: TableScan,
-    ) -> Option<(Vec<ExtraExecutorTask>, Vec<Column>)> {
+    ) -> Option<(Vec<ExtraExecutorTask>, Vec<Vec<Datum>>)> {
         if sel.get_encode_type() == EncodeType::TypeChunk {
             let schema_types: Vec<_> = schema
                 .iter()
@@ -719,6 +719,7 @@ impl<E: Engine> Endpoint<E> {
                 if data.is_empty() {
                     continue;
                 }
+                columns.clear();
                 for ft in &schema {
                     if data.is_empty() {
                         continue;
@@ -754,20 +755,8 @@ impl<E: Engine> Endpoint<E> {
             table_prefix.extend(RECORD_PREFIX_SEP);
 
             if !all_data.is_empty() {
-                all_data.sort_by(|a, b| {
-                    let mut ctx = EvalContext::default();
-                    let l = min(a.len(), b.len());
-                    for i in 0..l {
-                        if let Ok(ordering) = a[i].cmp(&mut ctx, &b[i]) {
-                            if ordering != Ordering::Equal {
-                                return ordering;
-                            }
-                        }
-                    }
-                    return a.len().cmp(&b.len());
-                });
                 let mut keys = Vec::with_capacity(all_data.len());
-                for row in &all_data {
+                for (row_idx, row) in all_data.iter().enumerate() {
                     let mut key;
                     if schema_types.len() == 1
                         && matches!(schema_types[0], FieldTypeTp::Long | FieldTypeTp::LongLong)
@@ -784,9 +773,9 @@ impl<E: Engine> Endpoint<E> {
                         key.write_datum(&mut EvalContext::default(), row, true)
                             .unwrap();
                     }
-                    keys.push(key);
+                    keys.push((key, row_idx));
                 }
-                keys.sort();
+                keys.sort_by(|a, b| a.0.cmp(&b.0));
                 let mut ranges: Vec<coppb::KeyRange> = Vec::new();
                 let mut keep_indexes = Vec::new();
                 let mut last_region: Option<(Arc<metapb::Region>, u64, u64)> = None;
@@ -810,7 +799,7 @@ impl<E: Engine> Endpoint<E> {
                 }
                 let mut index_not_located_task = ExtraExecutorTask::default();
                 let mut ranges_index_pointers = Vec::new();
-                for (i, raw_key) in keys.into_iter().enumerate() {
+                for (raw_key, i) in keys {
                     let key = Key::from_raw(&raw_key);
                     if let Some((region, peer_id, term)) = &last_region {
                         if util::check_key_in_region(key.as_encoded(), &region).is_ok() {
@@ -860,7 +849,7 @@ impl<E: Engine> Endpoint<E> {
                     }
                 }
                 extra_tasks.push(index_not_located_task);
-                return Some((extra_tasks, columns));
+                return Some((extra_tasks, all_data));
             }
         }
         return None;
@@ -879,12 +868,12 @@ impl<E: Engine> Endpoint<E> {
         let mut sel = SelectResponse::default();
         let mut result_futures = Vec::new();
         let mut extra_tasks = Vec::new();
-        let mut index_columns = Vec::new();
+        let mut index_datas = Vec::new();
         let mut keep_index = Vec::new();
         if sel.merge_from_bytes(resp.get_data()).is_ok() {
             let result = self.build_extra_executor_range(&mut sel, schema.clone(), table_scan);
             if result.is_some() {
-                (extra_tasks, index_columns) = result.unwrap();
+                (extra_tasks, index_datas) = result.unwrap();
                 for (i, task) in extra_tasks.iter().enumerate() {
                     if task.ranges.len() == 0 {
                         keep_index.extend_from_slice(&task.index_pointers);
@@ -944,16 +933,14 @@ impl<E: Engine> Endpoint<E> {
                 }
                 let mut idx_strs = Vec::new();
                 for i in keep_index {
-                    for (col_idx, col) in index_columns.iter().enumerate() {
-                        let dt = col
-                            .get_datum(i, &schema[col_idx])
-                            .expect("fail to get datum");
+                    let index_row = &index_datas[i];
+                    for (col_idx, dt) in index_row.iter().enumerate() {
                         if let Ok(str) = dt.to_string() {
                             idx_strs.push(str)
                         } else {
                             idx_strs.push("".into())
                         }
-                        new_index_columns[col_idx].append_datum(&dt).unwrap();
+                        new_index_columns[col_idx].append_datum(dt).unwrap();
                     }
                 }
                 // info!("some index data have no extra task, need keep"; "keep_index_data"=>
