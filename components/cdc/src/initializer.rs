@@ -763,6 +763,7 @@ mod tests {
             observe_handle: ObserveHandle::new(),
             downstream_id: DownstreamId::new(),
             downstream_state,
+            event_error_handle: Arc::new(Mutex::new(Default::default())),
 
             tablet: engine.or_else(|| {
                 TestEngineBuilder::new()

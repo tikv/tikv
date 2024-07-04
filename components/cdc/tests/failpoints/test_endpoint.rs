@@ -596,6 +596,7 @@ fn test_cdc_notify_pending_regions() {
     fail::remove("cdc_before_initialize");
 }
 
+// The case check whether https://github.com/tikv/tikv/issues/17233 is fixed or not.
 #[test]
 fn test_delegate_fail_during_incremental_scan() {
     let mut cluster = new_server_cluster(0, 1);
@@ -620,7 +621,7 @@ fn test_delegate_fail_during_incremental_scan() {
 
     fail::cfg("before_schedule_incremental_scan", "1*pause").unwrap();
 
-    let (mut req_tx, _, receive_event) = new_event_feed_v2(suite.get_region_cdc_client(rid));
+    let (mut req_tx, recv, receive_event) = new_event_feed_v2(suite.get_region_cdc_client(rid));
     let mut req = suite.new_changedata_request(rid);
     req.request_id = 100;
     req.checkpoint_ts = cf_tso.into_inner();
@@ -631,39 +632,32 @@ fn test_delegate_fail_during_incremental_scan() {
 
     suite.cluster.must_split(&region, b"f");
 
-    let events = receive_event(false).events.to_vec();
-    match events[0].event.as_ref().unwrap() {
-        Event_oneof_event::Error(err) => {
-            assert!(err.has_epoch_not_match(), "{:?}", err);
-        }
-        other => panic!("unexpected event {:?}", other),
-    }
+    // After the region split, no event error should be received because the
+    // incremental scan is blocked.
+    let mut recver = recv.replace(None).unwrap();
+    assert!(recv_timeout(&mut recver, Duration::from_secs(1)).is_err());
+    recv.replace(Some(recver));
 
-    assert_eq!(suite.cluster.get_region(b"k").id, rid);
-    let mut req = suite.new_changedata_request(rid);
-    req.request_id = 100;
-    req.checkpoint_ts = cf_tso.into_inner();
-    req.set_start_key(Key::from_raw(b"f").into_encoded());
-    req.set_end_key(Key::from_raw(b"z").into_encoded());
-    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
-    std::thread::sleep(Duration::from_millis(500));
+    fail::remove("before_schedule_incremental_scan");
 
-    'WaitInit: loop {
-        let cdc_event = receive_event(false);
-        for event in cdc_event.get_events() {
-            for entry in event.get_entries().get_entries() {
-                match entry.get_type() {
-                    EventLogType::Prewrite => {}
-                    EventLogType::Initialized => break 'WaitInit,
-                    _ => unreachable!(),
+    // After the incremental scan is canceled, we can get the epoch_not_match error.
+    // And after the error is retrieved, no more entries can be received.
+    let mut get_epoch_not_match = false;
+    while !get_epoch_not_match {
+        for event in receive_event(false).events.to_vec() {
+            match event.event {
+                Some(Event_oneof_event::Error(err)) => {
+                    assert!(err.has_epoch_not_match(), "{:?}", err);
+                    get_epoch_not_match = true;
                 }
+                Some(Event_oneof_event::Entries(..)) => {
+                    assert!(!get_epoch_not_match);
+                }
+                _ => unreachable!(),
             }
         }
     }
-
-    fail::remove("before_schedule_incremental_scan");
-    let cdc_event = receive_event(false);
-    println!("cdc_event: {:?}", cdc_event);
-
-    std::thread::park();
+    let mut recver = recv.replace(None).unwrap();
+    assert!(recv_timeout(&mut recver, Duration::from_secs(1)).is_err());
+    recv.replace(Some(recver));
 }
