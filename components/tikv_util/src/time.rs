@@ -554,7 +554,7 @@ const SPIN_ROUND_DEFAULT_RATIO: u64 = 40;
 pub fn spin_at_least(elaspsed: Duration) {
     let rounds = elaspsed.as_nanos() as u64 * SPIN_ROUND_DEFAULT_RATIO;
     let now = Instant::now();
-    for i in 1..=rounds as u64 {
+    for i in 1..=rounds {
         if i % 100 == 0 && now.saturating_elapsed() >= elaspsed {
             return;
         }
