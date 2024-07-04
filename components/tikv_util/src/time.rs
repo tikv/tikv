@@ -549,7 +549,7 @@ pub fn yield_at_least(elaspsed: Duration) {
 ///
 /// Spin duration for one round is about 25~28us. So, heuristically, we can
 /// use 4 as the default ratio to make the spin duration about 100us.
-const SPIN_ROUND_DEFAULT_RATIO: u64 = 4;
+const SPIN_ROUND_DEFAULT_RATIO: u64 = 40;
 
 pub fn spin_at_least(elaspsed: Duration) {
     let rounds = elaspsed.as_nanos() as u64 * SPIN_ROUND_DEFAULT_RATIO;
