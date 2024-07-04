@@ -56,6 +56,9 @@ pub struct RangeCacheEngineConfig {
     pub soft_limit_threshold: Option<ReadableSize>,
     pub hard_limit_threshold: Option<ReadableSize>,
     pub expected_region_size: Option<ReadableSize>,
+    // Cross check is only for test usage and should not be turned on in production
+    // environment. Interval 0 means it is turned off, which is the default value.
+    pub cross_check_interval: ReadableDuration,
 }
 
 impl Default for RangeCacheEngineConfig {
@@ -70,6 +73,7 @@ impl Default for RangeCacheEngineConfig {
             soft_limit_threshold: None,
             hard_limit_threshold: None,
             expected_region_size: None,
+            cross_check_interval: ReadableDuration(Duration::from_secs(0)),
         }
     }
 }
@@ -127,10 +131,12 @@ impl RangeCacheEngineConfig {
             soft_limit_threshold: Some(ReadableSize::gb(1)),
             hard_limit_threshold: Some(ReadableSize::gb(2)),
             expected_region_size: Some(ReadableSize::mb(20)),
+            cross_check_interval: ReadableDuration(Duration::from_secs(0)),
         }
     }
 }
 
+#[derive(Clone)]
 pub struct RangeCacheEngineContext {
     config: Arc<VersionTrack<RangeCacheEngineConfig>>,
     statistics: Arc<RangeCacheMemoryEngineStatistics>,
@@ -163,6 +169,14 @@ impl RangeCacheEngineContext {
             statistics: Arc::default(),
             pd_client: Arc::new(MockPdClient),
         }
+    }
+
+    pub fn pd_client(&self) -> Arc<dyn PdClient> {
+        self.pd_client.clone()
+    }
+
+    pub fn config(&self) -> &Arc<VersionTrack<RangeCacheEngineConfig>> {
+        &self.config
     }
 
     pub fn statistics(&self) -> Arc<RangeCacheMemoryEngineStatistics> {

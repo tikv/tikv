@@ -179,6 +179,14 @@ impl RangeManager {
         self.ranges.get_mut(range)
     }
 
+    pub fn range_meta(&self, range: &CacheRange) -> Option<&RangeMeta> {
+        self.ranges.get(range)
+    }
+
+    pub fn history_range_meta(&self, range: &CacheRange) -> Option<&RangeMeta> {
+        self.historical_ranges.get(range)
+    }
+
     pub fn set_safe_point(&mut self, range: &CacheRange, safe_ts: u64) -> bool {
         if let Some(meta) = self.ranges.get_mut(range) {
             if meta.safe_point > safe_ts {

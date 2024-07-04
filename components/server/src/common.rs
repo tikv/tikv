@@ -33,8 +33,8 @@ use pd_client::{PdClient, RpcClient};
 use raft_log_engine::RaftLogEngine;
 use raftstore::coprocessor::RegionInfoProvider;
 use range_cache_memory_engine::{
-    flush_range_cache_engine_statistics, RangeCacheEngineContext, RangeCacheMemoryEngine,
-    RangeCacheMemoryEngineStatistics,
+    flush_range_cache_engine_statistics, BackgroundTask, RangeCacheEngineContext,
+    RangeCacheMemoryEngine, RangeCacheMemoryEngineStatistics,
 };
 use security::SecurityManager;
 use tikv::{
@@ -732,7 +732,7 @@ impl KvEngineBuilder for HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
     ) -> Self {
         // todo(SpadeA): add config for it
         let mut memory_engine = RangeCacheMemoryEngine::with_region_info_provider(
-            range_cache_engine_context,
+            range_cache_engine_context.clone(),
             region_info_provider,
         );
         memory_engine.set_disk_engine(disk_engine.clone());
@@ -743,6 +743,30 @@ impl KvEngineBuilder for HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
                 ),
             )
         }
+
+        let cross_check_interval = range_cache_engine_context
+            .config()
+            .value()
+            .cross_check_interval;
+        if !cross_check_interval.is_zero() {
+            if let Err(e) =
+                memory_engine
+                    .bg_worker_manager()
+                    .schedule_task(BackgroundTask::TurnOnCrossCheck((
+                        memory_engine.clone(),
+                        disk_engine.clone(),
+                        range_cache_engine_context.pd_client(),
+                        cross_check_interval.0,
+                    )))
+            {
+                error!(
+                    "schedule TurnOnCrossCheck failed";
+                    "err" => ?e,
+                );
+                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+            }
+        }
+
         HybridEngine::new(disk_engine, memory_engine)
     }
 }
