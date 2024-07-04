@@ -1252,8 +1252,6 @@ mod test {
         server::raftkv,
     };
 
-    use super::ImportSstService;
-
     fn write(key: &[u8], ty: WriteType, commit_ts: u64, start_ts: u64) -> (Vec<u8>, Vec<u8>) {
         let k = Key::from_raw(key).append_ts(TimeStamp::new(commit_ts));
         let v = Write::new(ty, TimeStamp::new(start_ts), None);
