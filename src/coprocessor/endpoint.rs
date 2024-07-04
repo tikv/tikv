@@ -2,6 +2,7 @@
 
 use std::{
     borrow::Cow,
+    cmp::{min, Ordering},
     future::Future,
     iter::FromIterator,
     marker::PhantomData,
@@ -42,7 +43,7 @@ use tidb_query_datatype::{
 use tikv_alloc::trace::MemoryTraceGuard;
 use tikv_kv::SnapshotExt;
 use tikv_util::{
-    codec::number::NumberEncoder
+    codec::number::NumberEncoder,
     deadline::set_deadline_exceeded_busy_error,
     memory::{MemoryQuota, OwnedAllocated},
     quota_limiter::QuotaLimiter,
@@ -50,7 +51,7 @@ use tikv_util::{
 };
 use tipb::{
     AnalyzeReq, AnalyzeType, ChecksumRequest, ChecksumScanOn, Chunk, DagRequest, EncodeType,
-    ExecType, SelectResponse,FieldType, TableScan,
+    ExecType, FieldType, SelectResponse, TableScan,
 };
 use tokio::sync::Semaphore;
 use txn_types::{Key, Lock};
@@ -447,6 +448,11 @@ impl<E: Engine> Endpoint<E> {
         kv::snapshot(engine, snap_ctx).map_err(Error::from)
     }
 
+    #[inline]
+    fn locate_key(engine: &mut E, key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)> {
+        engine.locate_key(key)
+    }
+
     /// The real implementation of handling a unary request.
     ///
     /// It first retrieves a snapshot, then builds the `RequestHandler` over the
@@ -669,6 +675,7 @@ impl<E: Engine> Endpoint<E> {
                 match this
                     .handle_index_lookup(
                         extra_req,
+                        req_ctx,
                         peer,
                         res.consume(),
                         schema,
@@ -829,9 +836,14 @@ impl<E: Engine> Endpoint<E> {
                         }
                     }
 
-                    if let Some((region, peer_id, term)) =
-                        unsafe { with_tls_engine(|e: &E| e.locate_key(key.as_encoded())) }
-                    {
+                    // let snapshot = unsafe {
+                    //     with_tls_engine(|engine| Self::async_snapshot(engine, &tracker.req_ctx))
+                    // }
+                    // .await?;
+
+                    if let Some((region, peer_id, term)) = unsafe {
+                        with_tls_engine(|engine| Self::locate_key(engine, key.as_encoded()))
+                    } {
                         last_region = Some((region.clone(), peer_id, term));
                         add_point_range(raw_key.clone(), region, peer_id, term, &mut ranges);
                         ranges_index_pointers.push(i);
@@ -1064,6 +1076,23 @@ impl<E: Engine> Endpoint<E> {
         term: u64,
         start_ts: TimeStamp,
     ) -> Result<(RequestHandlerBuilder<E::Snap>, ReqContext)> {
+        dispatch_api_version!(req.get_context().get_api_version(), {
+            self.parse_extra_requests_impl::<API>(
+                req, ranges, peer, region, peer_id, term, start_ts,
+            )
+        })
+    }
+
+    fn parse_extra_requests_impl<F: KvFormat>(
+        &self,
+        req: coppb::Request,
+        ranges: Vec<coppb::KeyRange>,
+        peer: Option<String>,
+        region: Arc<metapb::Region>,
+        peer_id: u64,
+        term: u64,
+        start_ts: TimeStamp,
+    ) -> Result<(RequestHandlerBuilder<E::Snap>, ReqContext)> {
         // build extra executor and exec.
         let mut context = req.get_context().clone();
         context.set_region_id(region.id);
@@ -1125,7 +1154,7 @@ impl<E: Engine> Endpoint<E> {
                 req_ctx.access_locks.clone(),
                 req_is_cache_enabled,
             );
-            let handler = dag::DagHandlerBuilder::new(
+            let handler = dag::DagHandlerBuilder::<_, F>::new(
                 dag,
                 req_ctx.ranges.clone(),
                 store,
@@ -1150,6 +1179,7 @@ impl<E: Engine> Endpoint<E> {
     fn handle_index_lookup(
         &self,
         req: coppb::Request,
+        req_ctx: ReqContext,
         peer: Option<String>,
         mut resp: coppb::Response,
         schema: Vec<FieldType>,
@@ -1164,16 +1194,28 @@ impl<E: Engine> Endpoint<E> {
             table_scan.clone(),
             start_ts,
         );
-        let metadata = TaskMetadata::from_ctx(req.context.get_resource_control_context());
+        let metadata = TaskMetadata::from_ctx(req_ctx.context.get_resource_control_context());
         let resource_limiter = self.resource_ctl.as_ref().and_then(|r| {
             r.get_resource_limiter(
-                req.context.get_resource_control_context().get_resource_group_name(),
-                req.context.get_request_source(),
-                req.context.get_resource_control_context().get_override_priority(),
+                req_ctx
+                    .context
+                    .get_resource_control_context()
+                    .get_resource_group_name(),
+                req_ctx.context.get_request_source(),
+                req_ctx
+                    .context
+                    .get_resource_control_context()
+                    .get_override_priority(),
             )
         });
         self.read_pool
-            .spawn_handle(async move { result_future.await }, CommandPri::Normal, 0, metadata, resource_limiter)
+            .spawn_handle(
+                async move { result_future.await },
+                CommandPri::Normal,
+                0,
+                metadata,
+                resource_limiter,
+            )
             .map(|e| e.unwrap())
     }
 
@@ -1219,7 +1261,7 @@ impl<E: Engine> Endpoint<E> {
                     let fut = async move {
                         let res = fut.await;
                         match res {
-                            Ok(mut resp) => {
+                            Ok((mut resp, ..)) => {
                                 response.set_data(resp.take_data());
                                 if let Some(err) = resp.region_error.take() {
                                     response.set_region_error(err);

@@ -27,6 +27,7 @@ use futures::{future::BoxFuture, task::AtomicWaker, Future, Stream, StreamExt, T
 use kvproto::{
     errorpb,
     kvrpcpb::{Context, IsolationLevel},
+    metapb,
     raft_cmdpb::{
         AdminCmdType, CmdType, RaftCmdRequest, RaftCmdResponse, RaftRequestHeader, Request,
         Response,

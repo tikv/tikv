@@ -47,6 +47,7 @@ use rand::prelude::*;
 use tidb_query_common::execute_stats::ExecSummary;
 use tikv_alloc::{mem_trace, Id, MemoryTrace, MemoryTraceGuard};
 use tikv_util::{deadline::Deadline, memory::HeapSize, time::Duration};
+use tipb::{DagRequest, FieldType, TableScan};
 use txn_types::TsSet;
 
 pub use self::{

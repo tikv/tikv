@@ -230,7 +230,8 @@ struct TikvServer<ER: RaftEngine> {
     router: Option<RaftRouter<RocksEngine, ER>>,
     node: Option<NodeV2<RpcClient, RocksEngine, ER>>,
     resolver: Option<resolve::PdStoreAddrResolver>,
-    snap_mgr: Option<TabletSnapManager>, // Will be filled in `init_servers`.
+    snap_mgr: Option<TabletSnapManager>,
+    // Will be filled in `init_servers`.
     engines: Option<TikvEngines<RocksEngine, ER>>,
     kv_statistics: Option<Arc<RocksStatistics>>,
     range_cache_engine_statistics: Option<Arc<RangeCacheMemoryEngineStatistics>>,
@@ -247,7 +248,8 @@ struct TikvServer<ER: RaftEngine> {
     sst_worker: Option<Box<LazyWorker<String>>>,
     quota_limiter: Arc<QuotaLimiter>,
     resource_manager: Option<Arc<ResourceGroupManager>>,
-    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>, // used for rawkv apiv2
+    causal_ts_provider: Option<Arc<CausalTsProviderImpl>>,
+    // used for rawkv apiv2
     tablet_registry: Option<TabletRegistry<RocksEngine>>,
     resolved_ts_scheduler: Option<Scheduler<Task>>,
     grpc_service_mgr: GrpcServiceManager,
@@ -780,7 +782,7 @@ where
             &server_config,
             &self.security_mgr,
             storage,
-            copr,
+            Arc::new(copr),
             coprocessor_v2::Endpoint::new(&self.core.config.coprocessor_v2),
             self.resolver.clone().unwrap(),
             Either::Right(snap_mgr.clone()),

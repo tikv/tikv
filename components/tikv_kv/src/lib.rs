@@ -47,7 +47,7 @@ use kvproto::{
     errorpb::Error as ErrorHeader,
     import_sstpb::SstMeta,
     kvrpcpb::{Context, DiskFullOpt, ExtraOp as TxnExtraOp, KeyRange},
-    raft_cmdpb,
+    metapb, raft_cmdpb,
 };
 use pd_client::BucketMeta;
 use raftstore::store::{PessimisticLockPair, TxnExt};
