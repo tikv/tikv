@@ -24,12 +24,12 @@ impl ImportExt for RocksEngine {
         // flushed it avoids blocking writers while doing the flush. The
         // return value here just indicates whether the fallback path requiring
         // the manual memtable flush was taken.
-        let did_blocking_memtable_flush = self
+        let did_memtable_flush = self
             .as_inner()
             .ingest_external_file_optimized(cf, &opts.0, files)
             .map_err(r2e)?;
         let time_cost = now.saturating_elapsed_secs();
-        if did_blocking_memtable_flush {
+        if did_memtable_flush {
             INGEST_EXTERNAL_FILE_TIME_HISTOGRAM
                 .get(cf_name.into())
                 .block
