@@ -13,7 +13,7 @@ use tempfile::{Builder, TempDir};
 use test_raftstore::{must_raw_put, Simulator};
 use test_sst_importer::*;
 use tikv::config::TikvConfig;
-use tikv_util::{config::ReadableSize, HandyRwLock, sys::disk};
+use tikv_util::{config::ReadableSize, sys::disk, HandyRwLock};
 
 #[allow(dead_code)]
 #[path = "../../integrations/import/util.rs"]
@@ -98,7 +98,10 @@ fn test_download_to_full_disk() {
     let result = import.download(&download).unwrap();
     assert!(!result.get_is_empty());
     assert!(result.has_error());
-    assert_eq!(result.get_error().get_message(), "TiKV disk space is not enough.");
+    assert_eq!(
+        result.get_error().get_message(),
+        "TiKV disk space is not enough."
+    );
     disk::set_disk_status(DiskUsage::Normal);
 }
 
