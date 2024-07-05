@@ -53,7 +53,10 @@ fn test_apply_full_disk() {
     disk::set_disk_status(DiskUsage::AlmostFull);
     let result = import.apply(&req).unwrap();
     assert!(result.has_error());
-    assert_eq!(result.get_error().get_message(), "TiKV disk space is not enough.");
+    assert_eq!(
+        result.get_error().get_message(),
+        "TiKV disk space is not enough."
+    );
     disk::set_disk_status(DiskUsage::Normal);
 }
 
