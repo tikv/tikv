@@ -557,11 +557,12 @@ where
             .on_flush_applied_cmd_batch(batch_max_level, cmd_batch, &self.engine);
         // Invoke callbacks
         let now = Instant::now();
-        for (cb, resp) in cb_batch.drain(..) {
-            if let Some(times) = cb.get_request_times() {
+        for (mut cb, resp) in cb_batch.drain(..) {
+            if let Some(times) = cb.request_times_mut() {
                 for t in times {
                     self.apply_time
                         .observe(duration_to_sec(now.saturating_duration_since(*t)));
+                    *t = now;
                 }
             }
             cb.invoke_with_response(resp);
