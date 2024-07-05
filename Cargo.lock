@@ -1069,11 +1069,14 @@ dependencies = [
  "futures 0.3.15",
  "futures-io",
  "hex 0.4.2",
+ "keys",
  "kvproto",
  "pin-project",
  "pprof",
  "prometheus",
  "protobuf",
+ "slog",
+ "slog-global",
  "test_util",
  "thiserror",
  "tikv_util",
@@ -2879,7 +2882,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/YuJuncen/kvproto?branch=compact-log-backup#d9acef74207efce14f91913ffdd632e78853119e"
+source = "git+https://github.com/YuJuncen/kvproto?branch=compact-log-backup#b048a29668b5daa23db6538f68d8664f88998892"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

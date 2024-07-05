@@ -1,6 +1,7 @@
 use std::{
     collections::VecDeque,
     future::Future,
+    path::Path,
     pin::Pin,
     sync::Arc,
     task::{ready, Context, Poll},
@@ -101,13 +102,12 @@ impl std::fmt::Debug for LogFileId {
     }
 }
 
-pub struct LoadFromExt<'a> {
+pub struct LoadFromExt {
     pub max_concurrent_fetch: usize,
-    pub on_update_stat: Option<Box<dyn FnMut(LoadMetaStatistic) + 'a>>,
     pub loading_content_span: Option<Span>,
 }
 
-impl<'a> LoadFromExt<'a> {
+impl LoadFromExt {
     fn enter_load_span(&self) -> Option<Entered> {
         if let Some(span) = &self.loading_content_span {
             Some(span.enter())
@@ -117,11 +117,10 @@ impl<'a> LoadFromExt<'a> {
     }
 }
 
-impl<'a> Default for LoadFromExt<'a> {
+impl<'a> Default for LoadFromExt {
     fn default() -> Self {
         Self {
             max_concurrent_fetch: 16,
-            on_update_stat: None,
             loading_content_span: None,
         }
     }
@@ -132,7 +131,7 @@ pub struct StreamyMetaStorage<'a> {
         Prefetch<Pin<Box<dyn Future<Output = Result<(MetaFile, LoadMetaStatistic)>> + 'a>>>,
     >,
     ext_storage: &'a dyn ExternalStorage,
-    ext: LoadFromExt<'a>,
+    ext: LoadFromExt,
     stat: LoadMetaStatistic,
 
     files: Fuse<Pin<Box<dyn Stream<Item = std::io::Result<BlobObject>> + 'a>>>,
@@ -255,7 +254,6 @@ impl<'a> StreamyMetaStorage<'a> {
                     self.stat += stat;
                     self.stat.meta_files_in += 1;
                     self.stat.prefetch_task_finished += 1;
-                    self.flush_stat();
                     Ok(file).into()
                 }
                 Err(err) => Err(err.attach_current_frame()).into(),
@@ -265,14 +263,11 @@ impl<'a> StreamyMetaStorage<'a> {
         }
     }
 
-    fn flush_stat(&mut self) {
-        let stat = std::mem::take(&mut self.stat);
-        if let Some(u) = &mut self.ext.on_update_stat {
-            u(stat)
-        }
+    pub fn take_statistic(&mut self) -> LoadMetaStatistic {
+        std::mem::take(&mut self.stat)
     }
 
-    pub fn load_from_ext(s: &'a dyn FullFeaturedStorage, ext: LoadFromExt<'a>) -> Self {
+    pub fn load_from_ext(s: &'a dyn FullFeaturedStorage, ext: LoadFromExt) -> Self {
         let files = s.walk(&METADATA_PREFIX).fuse();
         Self {
             prefetch: VecDeque::new(),
@@ -432,10 +427,12 @@ pub fn name_of_migration(id: u64, m: &Migration) -> String {
 }
 
 pub fn id_of_migration(name: &str) -> Option<u64> {
-    if name.len() < 8 {
+    let file_name = Path::new(name).file_name()?.to_string_lossy();
+
+    if file_name.len() < 8 {
         return None;
     }
-    name[..8].parse::<u64>().ok()
+    file_name[..8].parse::<u64>().ok()
 }
 
 pub fn hash_migration(m: &Migration) -> u64 {

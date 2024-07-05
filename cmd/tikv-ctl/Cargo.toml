@@ -34,9 +34,11 @@ nortcheck = ["engine_rocks/nortcheck"]
 [dependencies]
 api_version = { workspace = true }
 backup = { workspace = true }
+base64 = "0.13"
 cdc = { workspace = true }
 clap = { workspace = true }
 collections = { workspace = true }
+compact-log-backup = { workspace = true }
 concurrency_manager = { workspace = true }
 crossbeam = "0.8"
 crypto = { workspace = true }
@@ -73,8 +75,6 @@ tempfile = "3.0"
 tikv = { workspace = true }
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
-compact-log-backup = { workspace = true }
-base64 = "0.13"
 tokio = { version = "1.5", features = ["rt-multi-thread", "time"] }
 toml = "0.5"
 txn_types = { workspace = true }

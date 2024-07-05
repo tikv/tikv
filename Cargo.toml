@@ -447,7 +447,7 @@ tracing = { version = "0.1.39", default-features = false, features = [
 ] }
 openssl = "0.10"
 openssl-sys = "0.9"
-compact-log-backup = {path = "components/compact-log-backup"}
+compact-log-backup = { path = "components/compact-log-backup" }
 
 [profile.dev.package.grpcio-sys]
 debug = false

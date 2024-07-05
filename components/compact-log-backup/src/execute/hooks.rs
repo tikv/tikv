@@ -2,15 +2,25 @@ use std::{fmt::Display, future::Future, process::Output};
 
 use chrono::{DateTime, Duration, Local};
 pub use engine_traits::SstCompressionType;
-use external_storage::FullFeaturedStorage;
+use external_storage::{FullFeaturedStorage, UnpinReader};
+use futures::{future::TryFutureExt, io::Cursor};
+use tikv_util::{
+    info,
+    logger::{get_log_level, Level},
+    retry_expr,
+    stream::JustRetry,
+    warn,
+};
 use tokio::{io::AsyncWriteExt, runtime::Handle, signal::unix::SignalKind};
-use txn_types::TimeStamp;
 
 use crate::{
-    compaction::{Subcompaction, SubcompactionResult},
+    compaction::{
+        meta::CompactionRunInfoBuilder, Subcompaction, SubcompactionResult, META_OUT_REL,
+    },
     errors::Result,
     execute::Execution,
     statistic::{CollectCompactionStatistic, CompactStatistic, LoadMetaStatistic, LoadStatistic},
+    util,
 };
 
 pub struct NoHooks;
@@ -41,6 +51,7 @@ pub struct AfterFinishCtx<'a> {
 }
 
 pub struct CompactionFinishCtx<'a> {
+    pub this: &'a Execution,
     pub external_storage: &'a dyn FullFeaturedStorage,
     pub result: &'a SubcompactionResult,
 }
@@ -65,10 +76,6 @@ pub trait ExecHooks: 'static {
 
     fn update_load_meta_stat(&mut self, _stat: &LoadMetaStatistic) {}
     fn update_collect_compaction_stat(&mut self, _stat: &CollectCompactionStatistic) {}
-
-    fn comments(&self) -> impl Display + '_ {
-        ""
-    }
 }
 
 impl<T: ExecHooks, U: ExecHooks> ExecHooks for (T, U) {
@@ -131,10 +138,6 @@ impl<T: ExecHooks, U: ExecHooks> ExecHooks for (T, U) {
         self.0.update_collect_compaction_stat(stat);
         self.1.update_collect_compaction_stat(stat);
     }
-
-    fn comments(&self) -> impl Display + '_ {
-        format!("{} <> {}", self.0.comments(), self.1.comments())
-    }
 }
 
 #[derive(Default)]
@@ -143,23 +146,23 @@ pub struct LogToTerm {
     compact_stat: CompactStatistic,
     load_meta_stat: LoadMetaStatistic,
     collect_stat: CollectCompactionStatistic,
-    begin: Option<DateTime<Local>>,
     meta_len: u64,
 }
 
 impl ExecHooks for LogToTerm {
     fn before_a_compaction_start(&mut self, cid: CId, c: &Subcompaction) {
-        println!(
-            "[{}] spawning compaction. cid: {}, cf: {}, input_min_ts: {}, input_max_ts: {}, source: {}, size: {}, region_id: {}",
-            TimeStamp::physical_now(),
-            cid.0,
-            c.cf,
-            c.input_min_ts,
-            c.input_max_ts,
-            c.inputs.len(),
-            c.size,
-            c.region_id
-        );
+        let level = get_log_level();
+        if level < Some(Level::Info) {
+            warn!("Most of compact-log progress logs are only enabled in the `info` level."; "current_level" => ?level);
+        }
+
+        info!("Spawning compaction."; "cid" => cid.0, 
+            "cf" => c.cf, 
+            "input_min_ts" => c.input_min_ts, 
+            "input_max_ts" => c.input_max_ts, 
+            "source" => c.inputs.len(), 
+            "size" => c.size, 
+            "region_id" => c.region_id);
     }
 
     fn after_a_compaction_end<'a>(
@@ -176,47 +179,23 @@ impl ExecHooks for LogToTerm {
         self.load_stat += lst.clone();
         self.compact_stat += cst.clone();
 
-        println!(
-            "[{}] finishing compaction. meta: {}/{}, p_bytes: {}, cid: {}, load_stat: {:?}, compact_stat: {:?}, speed: {:.2} KB./s, total_take: {:?}, global_load_meta_stat: {:?}",
-            TimeStamp::physical_now(),
-            self.load_meta_stat.meta_files_in,
-            self.meta_len,
-            self.collect_stat.bytes_in - self.collect_stat.bytes_out,
-            cid.0,
-            lst,
-            cst,
-            speed,
-            total_take,
-            self.load_meta_stat,
-        );
+        info!("Finishing compaction."; "meta_completed" => self.load_meta_stat.meta_files_in, 
+            "meta_total" => self.meta_len, 
+            "p_bytes" => self.collect_stat.bytes_in - self.collect_stat.bytes_out, 
+            "cid" => cid.0, 
+            "load_stat" => ?lst, 
+            "compact_stat" => ?cst, 
+            "speed(KiB/s)" => speed, 
+            "total_take" => ?total_take, 
+            "global_load_meta_stat" => ?self.load_meta_stat);
         futures::future::ok(())
     }
 
     fn after_execution_finished<'a>(
         &'a mut self,
-        cx: &'a mut AfterFinishCtx<'a>,
+        _cx: &'a mut AfterFinishCtx<'a>,
     ) -> impl Future<Output = Result<()>> + 'a {
-        let now = Local::now();
-        cx.comments += &format!(
-            "start_time: {}\n",
-            self.begin
-                .map(|v| v.to_rfc3339())
-                .as_deref()
-                .unwrap_or("unknown")
-        );
-        cx.comments += &format!("end_time: {}\n", now.to_rfc3339());
-        cx.comments += &format!(
-            "taken: {}\n",
-            self.begin.map(|v| now - v).unwrap_or(Duration::zero())
-        );
-        cx.comments += &format!("exec_by: {:?}\n", tikv_util::sys::hostname());
-        cx.comments += &format!("load_stat: {:?}\n", self.load_stat);
-        cx.comments += &format!("compact_stat: {:?}\n", self.compact_stat);
-        cx.comments += &format!("load_meta_stat: {:?}\n", self.load_meta_stat);
-        cx.comments += &format!("collect_stat: {:?}\n", self.collect_stat);
-
-        println!("[{}] All compcations done", TimeStamp::physical_now(),);
-        println!("{}", cx.comments);
+        info!("All compactions done.");
         futures::future::ok(())
     }
 
@@ -227,7 +206,6 @@ impl ExecHooks for LogToTerm {
     fn before_execution_started(&mut self, cx: BeforeStartCtx<'_>) {
         tracing_active_tree::init();
 
-        self.begin = Some(Local::now());
         let sigusr1_handler = async {
             let mut signal = tokio::signal::unix::signal(SignalKind::user_defined1()).unwrap();
             while let Some(_) = signal.recv().await {
@@ -239,8 +217,8 @@ impl ExecHooks for LogToTerm {
                 }
                 .await;
                 match res {
-                    Ok(_) => eprintln!("dumped to {}", file_name),
-                    Err(err) => eprintln!("failed to dump because {}", err),
+                    Ok(_) => warn!("dumped async backtrace."; "to" => file_name),
+                    Err(err) => warn!("failed to dump async backtrace."; "err" => %err),
                 }
             }
         };
@@ -251,5 +229,124 @@ impl ExecHooks for LogToTerm {
 
     fn update_collect_compaction_stat(&mut self, stat: &CollectCompactionStatistic) {
         self.collect_stat += stat.clone()
+    }
+}
+
+#[derive(Default)]
+struct CollectStatistic {
+    load_stat: LoadStatistic,
+    compact_stat: CompactStatistic,
+    load_meta_stat: LoadMetaStatistic,
+    collect_stat: CollectCompactionStatistic,
+}
+
+impl CollectStatistic {
+    fn update_subcompaction(&mut self, res: &SubcompactionResult) {
+        self.load_stat += res.load_stat.clone();
+        self.compact_stat += res.compact_stat.clone();
+    }
+
+    fn update_collect_compaction_stat(&mut self, stat: &CollectCompactionStatistic) {
+        self.collect_stat += stat.clone()
+    }
+
+    fn update_load_meta_stat(&mut self, stat: &LoadMetaStatistic) {
+        self.load_meta_stat += stat.clone()
+    }
+}
+
+#[derive(Default)]
+pub struct SaveMeta {
+    collector: CompactionRunInfoBuilder,
+    stats: CollectStatistic,
+    begin: Option<chrono::DateTime<Local>>,
+}
+
+impl SaveMeta {
+    fn comments(&self) -> String {
+        let now = Local::now();
+        let mut comments = String::new();
+        comments += &format!(
+            "start_time: {}\n",
+            self.begin
+                .map(|v| v.to_rfc3339())
+                .as_deref()
+                .unwrap_or("unknown")
+        );
+        comments += &format!("end_time: {}\n", now.to_rfc3339());
+        comments += &format!(
+            "taken: {}\n",
+            self.begin.map(|v| now - v).unwrap_or(Duration::zero())
+        );
+        comments += &format!("exec_by: {:?}\n", tikv_util::sys::hostname());
+        comments += &format!("load_stat: {:?}\n", self.stats.load_stat);
+        comments += &format!("compact_stat: {:?}\n", self.stats.compact_stat);
+        comments += &format!("load_meta_stat: {:?}\n", self.stats.load_meta_stat);
+        comments += &format!("collect_stat: {:?}\n", self.stats.collect_stat);
+        comments
+    }
+}
+
+impl ExecHooks for SaveMeta {
+    fn before_execution_started(&mut self, cx: BeforeStartCtx<'_>) {
+        self.begin = Some(Local::now());
+        let run_info = &mut self.collector;
+        run_info.mut_meta().set_name(cx.this.gen_name());
+        run_info
+            .mut_meta()
+            .set_compaction_from_ts(cx.this.cfg.from_ts);
+        run_info
+            .mut_meta()
+            .set_compaction_until_ts(cx.this.cfg.until_ts);
+        run_info
+            .mut_meta()
+            .set_artifactes(format!("{}/{}", cx.this.out_prefix, META_OUT_REL));
+    }
+
+    fn after_a_compaction_end<'a>(
+        &'a mut self,
+        _cid: CId,
+        cx: &'a mut CompactionFinishCtx<'a>,
+    ) -> impl Future<Output = Result<()>> + 'a {
+        self.collector.add_compaction(&cx.result);
+        self.stats.update_subcompaction(&cx.result);
+
+        async {
+            use protobuf::Message;
+            let meta_name = format!(
+                "{}_{}_{}.cmeta",
+                util::aligned_u64(cx.result.origin.input_min_ts),
+                util::aligned_u64(cx.result.origin.input_max_ts),
+                util::aligned_u64(cx.result.origin.crc64())
+            );
+            let meta_name = format!("{}/{}/{}", cx.this.out_prefix, META_OUT_REL, meta_name);
+            let meta_bytes = cx.result.meta.write_to_bytes()?;
+            retry_expr!({
+                let reader = UnpinReader(Box::new(Cursor::new(&meta_bytes)));
+                cx.external_storage
+                    .write(&meta_name, reader, meta_bytes.len() as _)
+                    .map_err(JustRetry)
+            })
+            .await
+            .map_err(|err| err.0)?;
+            Result::Ok(())
+        }
+    }
+
+    fn after_execution_finished<'a>(
+        &'a mut self,
+        cx: &'a mut AfterFinishCtx<'a>,
+    ) -> impl Future<Output = Result<()>> + 'a {
+        let comments = self.comments();
+        self.collector.mut_meta().set_comments(comments);
+        self.collector.write_migration(cx.external_storage)
+    }
+
+    fn update_collect_compaction_stat(&mut self, stat: &CollectCompactionStatistic) {
+        self.stats.update_collect_compaction_stat(stat)
+    }
+
+    fn update_load_meta_stat(&mut self, stat: &LoadMetaStatistic) {
+        self.stats.update_load_meta_stat(stat)
     }
 }

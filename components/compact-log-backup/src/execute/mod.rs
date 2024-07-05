@@ -15,7 +15,6 @@ use futures::stream::{self, StreamExt};
 use hooks::{AfterFinishCtx, BeforeStartCtx, CId, CompactionFinishCtx, ExecHooks};
 use kvproto::brpb::StorageBackend;
 use tokio::runtime::Handle;
-use tokio_stream::Stream;
 use tracing::{trace_span, Instrument};
 use tracing_active_tree::{frame, root};
 
@@ -27,7 +26,7 @@ use super::{
     storage::{LoadFromExt, StreamyMetaStorage},
 };
 use crate::{
-    compaction::{exec::SingleCompactionArg, meta::CompactionRunInfoBuilder, Subcompaction},
+    compaction::{exec::SingleCompactionArg, SubcompactionResult},
     errors::{Result, TraceResultExt},
     util,
 };
@@ -77,7 +76,7 @@ impl Execution {
         )
     }
 
-    pub fn run(self, hooks: impl ExecHooks) -> Result<()> {
+    pub fn run(self, mut hooks: impl ExecHooks) -> Result<()> {
         let storage = external_storage::create_full_featured_storage(
             &self.external_storage,
             BackendConfig::default(),
@@ -87,33 +86,23 @@ impl Execution {
             .enable_all()
             .build()
             .unwrap();
-        let locked_hooks = Mutex::new(hooks);
 
         let all_works = async move {
             let mut ext = LoadFromExt::default();
             let next_compaction = trace_span!("next_compaction");
             ext.max_concurrent_fetch = 128;
-            ext.on_update_stat = Some(Box::new(|stat| {
-                locked_hooks.lock().unwrap().update_load_meta_stat(&stat)
-            }));
             ext.loading_content_span = Some(trace_span!(
                 parent: next_compaction.clone(),
                 "load_meta_file_names"
             ));
 
             let total = StreamyMetaStorage::count_objects(storage.as_ref()).await?;
-            let mut run_info = CompactionRunInfoBuilder::new();
-            run_info.mut_meta().set_name(self.gen_name());
-            run_info.mut_meta().set_compaction_from_ts(self.cfg.from_ts);
-            run_info
-                .mut_meta()
-                .set_compaction_until_ts(self.cfg.until_ts);
             let cx = BeforeStartCtx {
                 est_meta_size: total,
                 async_rt: &tokio::runtime::Handle::current(),
                 this: &self,
             };
-            locked_hooks.lock().unwrap().before_execution_started(cx);
+            hooks.before_execution_started(cx);
             let meta = StreamyMetaStorage::load_from_ext(storage.as_ref(), ext);
             let stream = meta.flat_map(|file| match file {
                 Ok(file) => stream::iter(file.into_logs()).map(Ok).left_stream(),
@@ -128,39 +117,18 @@ impl Execution {
             );
             let mut pending = VecDeque::new();
             let mut id = 0;
-            let mut on_finish = |cid, mut cres| {
-                let external_storage = storage.as_ref();
-                let hks = &locked_hooks;
-
-                async move {
-                    let mut cx = CompactionFinishCtx {
-                        external_storage,
-                        result: &mut cres,
-                    };
-                    hks.lock()
-                        .unwrap()
-                        .after_a_compaction_end(cid, &mut cx)
-                        .await?;
-                    Result::Ok(())
-                }
-            };
 
             while let Some(c) = compact_stream
                 .next()
                 .instrument(next_compaction.clone())
                 .await
             {
-                locked_hooks
-                    .lock()
-                    .unwrap()
-                    .update_collect_compaction_stat(&compact_stream.take_statistic());
+                hooks.update_collect_compaction_stat(&compact_stream.take_statistic());
+                hooks.update_load_meta_stat(&compact_stream.get_mut().get_mut().take_statistic());
 
                 let c = c?;
                 let cid = CId(id);
-                locked_hooks
-                    .lock()
-                    .unwrap()
-                    .before_a_compaction_start(cid, &c);
+                hooks.before_a_compaction_start(cid, &c);
 
                 id += 1;
 
@@ -186,39 +154,44 @@ impl Execution {
                 if pending.len() >= self.max_concurrent_compaction as _ {
                     let (join, cid) = pending.pop_front().unwrap();
                     let cres = frame!("wait_for_compaction"; join).await.unwrap()?;
-                    run_info.add_compaction(&cres);
-                    on_finish(cid, cres).await?;
+                    self.on_compaction_finish(cid, &cres, storage.as_ref(), &mut hooks)
+                        .await?;
                 }
             }
             drop(next_compaction);
 
-            locked_hooks
-                .lock()
-                .unwrap()
-                .update_collect_compaction_stat(&compact_stream.take_statistic());
+            hooks.update_collect_compaction_stat(&compact_stream.take_statistic());
 
             for (join, cid) in pending {
                 let cres = frame!("final_wait"; join).await.unwrap()?;
-                run_info.add_compaction(&cres);
-                on_finish(cid, cres).await?;
+                self.on_compaction_finish(cid, &cres, storage.as_ref(), &mut hooks)
+                    .await?;
             }
             let mut cx = AfterFinishCtx {
                 async_rt: Handle::current(),
                 comments: String::new(),
                 external_storage: storage.as_ref(),
             };
-            {
-                let mut l = locked_hooks.lock().unwrap();
-                l.after_execution_finished(&mut cx).await?;
-            }
-
-            run_info
-                .write_migration(storage.as_ref())
-                .await
-                .trace_err()?;
+            hooks.after_execution_finished(&mut cx).await?;
 
             Result::Ok(())
         };
         runtime.block_on(frame!(all_works))
+    }
+
+    async fn on_compaction_finish(
+        &self,
+        cid: CId,
+        result: &SubcompactionResult,
+        external_storage: &dyn FullFeaturedStorage,
+        hooks: &mut impl ExecHooks,
+    ) -> Result<()> {
+        let mut cx = CompactionFinishCtx {
+            this: &self,
+            external_storage,
+            result,
+        };
+        hooks.after_a_compaction_end(cid, &mut cx).await?;
+        Result::Ok(())
     }
 }

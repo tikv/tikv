@@ -6,7 +6,7 @@ use std::{
 
 use external_storage::FullFeaturedStorage;
 use futures::stream::TryStreamExt;
-use kvproto::brpb::{self, SpansOfFile};
+use kvproto::brpb::{self, DeleteSpansOfFile, SpansOfFile};
 
 use super::{Subcompaction, SubcompactionResult};
 use crate::{
@@ -23,7 +23,7 @@ impl SubcompactionResult {
         let mut output_length = 0;
         let mut output_count = 0;
 
-        for out in self.meta.get_output() {
+        for out in self.meta.get_sst_outputs() {
             output_crc64 ^= out.get_crc64xor();
             output_length += out.get_total_bytes();
             output_count += out.get_total_kvs();
@@ -76,8 +76,8 @@ impl Subcompaction {
         crc64_xor
     }
 
-    pub fn brpb_compaction(&self) -> brpb::LogFileSubcompaction {
-        let mut out = brpb::LogFileSubcompaction::default();
+    pub fn pb_meta(&self) -> brpb::LogFileSubcompactionMeta {
+        let mut out = brpb::LogFileSubcompactionMeta::default();
         let mut source = HashMap::<Arc<str>, brpb::SpansOfFile>::new();
         for input in &self.inputs {
             match source.entry(Arc::clone(&input.id.name)) {
@@ -127,6 +127,7 @@ impl Ord for SortByOffset {
     }
 }
 
+#[derive(Default)]
 pub struct CompactionRunInfoBuilder {
     files: HashMap<Arc<str>, BTreeSet<SortByOffset>>,
     compaction: brpb::LogFileCompaction,
@@ -136,7 +137,7 @@ pub struct CompactionRunInfoBuilder {
 pub struct ExpiringFiles {
     logs: Vec<Arc<str>>,
     metas: Vec<Arc<str>>,
-    spans_of_file: HashMap<Arc<str>, Vec<brpb::Span>>,
+    spans_of_file: HashMap<Arc<str>, (Vec<brpb::Span>, /* physical file size */ u64)>,
 }
 
 impl ExpiringFiles {
@@ -147,45 +148,18 @@ impl ExpiringFiles {
             .map(|s| s.as_ref())
     }
 
-    pub fn spans(&self) -> impl Iterator<Item = SpansOfFile> + '_ {
-        self.spans_of_file.iter().map(|(file, spans)| {
-            let mut so = SpansOfFile::new();
+    pub fn spans(&self) -> impl Iterator<Item = DeleteSpansOfFile> + '_ {
+        self.spans_of_file.iter().map(|(file, (spans, size))| {
+            let mut so = DeleteSpansOfFile::new();
             so.set_path(file.to_string());
             so.set_spans(spans.clone().into());
+            so.set_whole_file_length(*size);
             so
         })
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct CompactionRunConfig {
-    pub from_ts: u64,
-    pub until_ts: u64,
-    pub name: String,
-}
-
-impl CompactionRunConfig {
-    pub fn hash(&self) -> u64 {
-        let mut d = crc64fast::Digest::new();
-        d.write(&self.from_ts.to_le_bytes());
-        d.write(&self.until_ts.to_le_bytes());
-        d.write(self.name.as_bytes());
-        d.sum64()
-    }
-
-    pub fn id(&self) -> String {
-        format!("{}_{:16x}", self.name, self.hash())
-    }
-}
-
 impl CompactionRunInfoBuilder {
-    pub fn new() -> Self {
-        CompactionRunInfoBuilder {
-            files: HashMap::new(),
-            compaction: Default::default(),
-        }
-    }
-
     pub fn add_compaction(&mut self, c: &SubcompactionResult) {
         for file in &c.origin.inputs {
             if !self.files.contains_key(&file.id.name) {
@@ -266,9 +240,12 @@ impl CompactionRunInfoBuilder {
                 result.logs.push(Arc::clone(&p.name))
             } else {
                 if let Some(vs) = self.files.get(&p.name) {
-                    let segs = result.spans_of_file.entry(Arc::clone(&p.name)).or_default();
+                    let segs = result
+                        .spans_of_file
+                        .entry(Arc::clone(&p.name))
+                        .or_insert_with(|| (vec![], p.size));
                     for f in vs {
-                        segs.push(f.0.span());
+                        segs.0.push(f.0.span());
                     }
                 }
                 all_full_covers = false;

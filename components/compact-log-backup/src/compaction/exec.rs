@@ -5,6 +5,7 @@ use std::{
 
 use engine_traits::{
     CfName, ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,
+    DATA_KEY_PREFIX_LEN,
 };
 use external_storage::{ExternalStorage, UnpinReader};
 use file_system::Sha256Reader;
@@ -12,7 +13,7 @@ use futures::{
     future::TryFutureExt,
     io::{AllowStdIo, Cursor},
 };
-use kvproto::brpb::{self, LogFileSubcompactionMeta};
+use kvproto::brpb::{self, LogFileSubcompaction};
 use tikv_util::{
     retry_expr,
     stream::{JustRetry, RetryExt},
@@ -21,12 +22,12 @@ use tikv_util::{
 
 use super::{Subcompaction, SubcompactionResult};
 use crate::{
+    compaction::SST_OUT_REL,
     errors::{OtherErrExt, Result, TraceResultExt},
     source::{Record, Source},
     statistic::{CompactStatistic, LoadStatistic},
     storage::COMPACTION_OUT_PREFIX,
-    util,
-    util::{Cooperate, ExecuteAllExt},
+    util::{self, Cooperate, ExecuteAllExt},
 };
 
 pub struct SubcompactionExec<DB> {
@@ -216,8 +217,10 @@ where
         meta.name = name.to_owned();
         meta.end_version = u64::MAX;
 
+        let mut data_key = keys::DATA_PREFIX_KEY.to_vec();
         for item in sorted_items {
             self.co.step().await;
+
             let mut d = crc64fast::Digest::new();
             d.write(&item.key);
             d.write(&item.value);
@@ -225,7 +228,13 @@ where
             meta.crc64xor ^= d.sum64();
             meta.start_version = meta.start_version.min(ts);
             meta.end_version = meta.end_version.max(ts);
-            w.put(&item.key, &item.value)?;
+
+            // NOTE: We may need to check whether the key is already a data key here once we
+            // are going to support compact SSTs.
+            data_key.truncate(DATA_KEY_PREFIX_LEN);
+            data_key.extend(&item.key);
+            w.put(&data_key, &item.value)?;
+
             self.compact_stat.logical_key_bytes_out += item.key.len() as u64;
             self.compact_stat.logical_value_bytes_out += item.value.len() as u64;
             meta.total_kvs += 1;
@@ -249,7 +258,7 @@ where
         &mut self,
         c: &Subcompaction,
         sst: &mut WrittenSst<<DB::SstWriter as SstWriter>::ExternalSstFileReader>,
-    ) -> Result<LogFileSubcompactionMeta> {
+    ) -> Result<LogFileSubcompaction> {
         use engine_traits::ExternalSstFileReader;
         sst.content.reset()?;
         let (rd, hasher) = Sha256Reader::new(&mut sst.content).adapt_err()?;
@@ -261,30 +270,9 @@ where
             )
             .await?;
         sst.meta.sha256 = hasher.lock().unwrap().finish().adapt_err()?.to_vec();
-        let mut meta = brpb::LogFileSubcompactionMeta::new();
-        meta.set_compaction(c.brpb_compaction());
-        meta.set_output(vec![sst.meta.clone()].into());
-        let meta_name = format!(
-            "{}_{}_{}.cmeta",
-            util::aligned_u64(c.input_min_ts),
-            util::aligned_u64(c.input_max_ts),
-            util::aligned_u64(c.crc64())
-        );
-        let meta_name = self
-            .out_prefix
-            .join("metas")
-            .join(meta_name)
-            .display()
-            .to_string();
-        let mut meta_bytes = vec![];
-        protobuf::Message::write_to_vec(&meta, &mut meta_bytes)?;
-        self.output
-            .write(
-                &meta_name,
-                UnpinReader(Box::new(Cursor::new(&meta_bytes))),
-                meta_bytes.len() as u64,
-            )
-            .await?;
+        let mut meta = brpb::LogFileSubcompaction::new();
+        meta.set_meta(c.pb_meta());
+        meta.set_sst_outputs(vec![sst.meta.clone()].into());
         Ok(meta)
     }
 
@@ -294,8 +282,6 @@ where
         c: Subcompaction,
         mut ext: SubcompactExt,
     ) -> Result<SubcompactionResult> {
-        let mut eext = ExecuteAllExt::default();
-        eext.max_concurrency = ext.max_load_concurrency;
         let mut result = SubcompactionResult::of(c);
         let c = &result.origin;
         for input in &c.inputs {
@@ -328,7 +314,7 @@ where
 
         let out_name = self
             .out_prefix
-            .join("outputs")
+            .join(SST_OUT_REL)
             .join(format!(
                 "{}_{}_{}_{}.sst",
                 util::aligned_u64(c.input_min_ts),

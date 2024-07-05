@@ -14,7 +14,7 @@ use crate::{
         SubcompactionResult,
     },
     execute::{
-        hooks::{LogToTerm},
+        hooks::{LogToTerm, SaveMeta},
         Execution, ExecutionConfig,
     },
     statistic::{CompactStatistic, LoadStatistic},
@@ -140,14 +140,14 @@ async fn playground_no_pref() {
     let collect = CollectSubcompaction::new(
         stream,
         CollectSubcompactionConfig {
-            compact_from_ts: 450751747746168891,
-            compact_to_ts: 450756116281266182,
+            compact_from_ts: 450903540503413363,
+            compact_to_ts: 450905149123592253,
         },
     );
 
     let compactions = collect.try_collect::<Vec<_>>().await.unwrap();
     let mut sources = HashMap::<String, Vec<brpb::Span>>::new();
-    let mut compacted_files = CompactionRunInfoBuilder::new();
+    let mut compacted_files = CompactionRunInfoBuilder::default();
     println!("{:?}", compactions[0]);
     for compact in &compactions {
         compacted_files.add_compaction(&SubcompactionResult::of(compact.clone()));
@@ -221,7 +221,7 @@ fn cli_playground() {
         db: None,
     };
 
-    exec.run(LogToTerm::default()).unwrap();
+    exec.run(SaveMeta::default()).unwrap();
 }
 
 #[tokio::test]

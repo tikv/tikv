@@ -9,6 +9,9 @@ use crate::{
     util,
 };
 
+pub const SST_OUT_REL: &'static str = "outputs";
+pub const META_OUT_REL: &'static str = "metas";
+
 #[derive(Debug, Clone)]
 pub struct Input {
     pub id: LogFileId,
@@ -36,7 +39,7 @@ pub struct Subcompaction {
 #[derive(Debug)]
 pub struct SubcompactionResult {
     pub origin: Subcompaction,
-    pub meta: brpb::LogFileSubcompactionMeta,
+    pub meta: brpb::LogFileSubcompaction,
 
     pub expected_crc64: Option<u64>,
     pub expected_keys: u64,

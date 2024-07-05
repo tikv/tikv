@@ -35,6 +35,10 @@ impl<S: Stream<Item = Result<LogFile>>> CollectSubcompaction<S> {
     pub fn take_statistic(&mut self) -> CollectCompactionStatistic {
         std::mem::take(&mut self.collector.stat)
     }
+
+    pub fn get_mut(&mut self) -> &mut S {
+        &mut self.inner
+    }
 }
 
 pub struct CollectSubcompactionConfig {

@@ -181,13 +181,13 @@ impl<E> RetryError for JustRetry<E> {
 #[macro_export]
 macro_rules! retry_expr {
     ($action:expr) => {
-        $crate::retry_expr!($action, RetryExt::default())
+        $crate::retry_expr!($action, $crate::stream::RetryExt::default())
     };
     ($action:expr, $ext:expr) => {
         async {
             use $crate::stream::{RetryError, __macro_helper};
 
-            let mut ext: RetryExt<_> = $ext;
+            let mut ext: $crate::stream::RetryExt<_> = $ext;
             let max_retry_times = ext.max_retry_times;
             let mut retry_wait_dur = ::std::time::Duration::from_secs(1);
             let mut retry_time = 0;
