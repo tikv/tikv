@@ -832,6 +832,10 @@ impl<E: Engine> ImportSst for ImportSstService<E> {
                 .observe(start.saturating_elapsed().as_secs_f64());
 
             let mut resp = ApplyResponse::default();
+            if get_disk_status(0) != DiskUsage::Normal {
+                resp.set_error(Error::DiskSpaceNotEnough.into());
+                return crate::send_rpc_response!(Ok(resp), sink, label, start);
+            }
 
             match Self::apply_imp(req, importer, applier, limiter, max_raft_size).await {
                 Ok(Some(r)) => resp.set_range(r),
