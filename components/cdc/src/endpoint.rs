@@ -231,11 +231,7 @@ impl fmt::Debug for Task {
                 .field("type", &"register")
                 .field("register request", request)
                 .field("request", request)
-<<<<<<< HEAD
-                .field("id", &downstream.id)
-=======
                 .field("id", &downstream.get_id())
->>>>>>> 212d2d51de (cdc: revert the enhancemant about region partial subscription (#17228))
                 .field("conn_id", conn_id)
                 .finish(),
             Task::Deregister(deregister) => de
@@ -355,103 +351,6 @@ impl ResolvedRegionHeap {
         self.heap.is_empty()
     }
 
-<<<<<<< HEAD
-#[derive(Default, Debug)]
-pub(crate) struct Advance {
-    // multiplexing means one region can be subscribed multiple times in one `Conn`,
-    // in which case progresses are grouped by (ConnId, request_id).
-    pub(crate) multiplexing: HashMap<(ConnId, u64), ResolvedRegionHeap>,
-
-    // exclusive means one region can only be subscribed one time in one `Conn`,
-    // in which case progresses are grouped by ConnId.
-    pub(crate) exclusive: HashMap<ConnId, ResolvedRegionHeap>,
-
-    // To be compatible with old TiCDC client before v4.0.8.
-    // TODO(qupeng): we can deprecate support for too old TiCDC clients.
-    // map[(ConnId, region_id)]->request_id.
-    pub(crate) dispersed: HashMap<(ConnId, u64), u64>,
-
-    pub(crate) scan_finished: usize,
-
-    pub(crate) blocked_on_scan: usize,
-
-    pub(crate) blocked_on_locks: usize,
-}
-
-impl Advance {
-    fn emit_resolved_ts(&mut self, connections: &HashMap<ConnId, Conn>) -> (u64, TimeStamp) {
-        let handle_send_result = |conn: &Conn, res: std::result::Result<(), SendError>| -> bool {
-            match res {
-                Ok(_) => return true,
-                Err(SendError::Disconnected) => {
-                    debug!("cdc send event failed, disconnected";
-                        "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
-                }
-                Err(SendError::Full) | Err(SendError::Congested) => {
-                    info!("cdc send event failed, full";
-                        "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
-                }
-            }
-            false
-        };
-
-        let send_cdc_events = |ts: u64, conn: &Conn, request_id: u64, regions: Vec<u64>| {
-            let mut resolved_ts = ResolvedTs::default();
-            resolved_ts.ts = ts;
-            resolved_ts.request_id = request_id;
-            *resolved_ts.mut_regions() = regions;
-
-            let res = conn
-                .get_sink()
-                .unbounded_send(CdcEvent::ResolvedTs(resolved_ts), false);
-            handle_send_result(conn, res);
-        };
-
-        let send_cdc_events_compact = |ts: u64, conn: &Conn, regions: HashSet<u64>| {
-            for region_id in regions {
-                let k = (conn.get_id(), region_id);
-                let request_id = self.dispersed.get(&k).unwrap();
-                let event = Event {
-                    region_id,
-                    request_id: *request_id,
-                    event: Some(Event_oneof_event::ResolvedTs(ts)),
-                    ..Default::default()
-                };
-                let res = conn
-                    .get_sink()
-                    .unbounded_send(CdcEvent::Event(event), false);
-                if handle_send_result(conn, res) {
-                    break;
-                }
-            }
-        };
-
-        let multiplexing = std::mem::take(&mut self.multiplexing).into_iter();
-        let exclusive = std::mem::take(&mut self.exclusive).into_iter();
-        let unioned = multiplexing
-            .map(|((a, b), c)| (a, b, c))
-            .chain(exclusive.map(|(a, c)| (a, 0, c)));
-
-        let mut min_resolved: Option<(u64, TimeStamp)> = None;
-        for (conn_id, req_id, mut region_ts_heap) in unioned {
-            let conn = connections.get(&conn_id).unwrap();
-            let mut batch_count = 8;
-            while !region_ts_heap.is_empty() {
-                let (ts, regions) = region_ts_heap.pop(batch_count);
-                if min_resolved.is_none() {
-                    let rid = regions.iter().next().map_or(0, |x| *x);
-                    min_resolved = Some((rid, ts));
-                }
-                if conn.features().contains(FeatureGate::BATCH_RESOLVED_TS) {
-                    send_cdc_events(ts.into_inner(), conn, req_id, Vec::from_iter(regions));
-                } else {
-                    send_cdc_events_compact(ts.into_inner(), conn, regions);
-                }
-                batch_count *= 4;
-            }
-        }
-        min_resolved.unwrap_or_default()
-=======
     fn clear(&mut self) {
         self.heap.clear();
     }
@@ -459,7 +358,6 @@ impl Advance {
     fn reset_and_shrink_to(&mut self, min_capacity: usize) {
         self.clear();
         self.heap.shrink_to(min_capacity);
->>>>>>> 212d2d51de (cdc: revert the enhancemant about region partial subscription (#17228))
     }
 }
 
@@ -799,11 +697,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
         let region_id = request.region_id;
         let request_id = request.request_id;
-<<<<<<< HEAD
-        let downstream_id = downstream.id;
-=======
         let downstream_id = downstream.get_id();
->>>>>>> 212d2d51de (cdc: revert the enhancemant about region partial subscription (#17228))
         let downstream_state = downstream.get_state();
 
         // The connection can be deregistered by some internal errors. Clients will
@@ -1387,11 +1281,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta + Send> Runnable
                 downstream,
                 conn_id,
             } => self.on_register(request, downstream, conn_id),
-<<<<<<< HEAD
-            Task::FinishScanLocks {
-=======
             Task::ResolverReady {
->>>>>>> 212d2d51de (cdc: revert the enhancemant about region partial subscription (#17228))
                 observe_id,
                 resolver,
                 region,

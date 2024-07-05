@@ -42,11 +42,7 @@ use crate::{
     initializer::KvEntry,
     metrics::*,
     old_value::{OldValueCache, OldValueCallback},
-<<<<<<< HEAD
-    service::{Conn, ConnId, FeatureGate},
-=======
     service::ConnId,
->>>>>>> 212d2d51de (cdc: revert the enhancemant about region partial subscription (#17228))
     txn_source::TxnSource,
     Error, Result,
 };
@@ -128,21 +124,6 @@ impl DownstreamState {
 pub struct Downstream {
     // TODO: include cdc request.
     /// A unique identifier of the Downstream.
-<<<<<<< HEAD
-    pub id: DownstreamId,
-    /// The IP address of downstream.
-    pub peer: String,
-    pub region_epoch: RegionEpoch,
-    /// The request ID set by CDC to identify events corresponding different
-    /// requests.
-    pub req_id: u64,
-    pub conn_id: ConnId,
-
-    pub kv_api: ChangeDataRequestKvApi,
-    pub filter_loop: bool,
-    pub observed_range: ObservedRange,
-
-=======
     id: DownstreamId,
     // The request ID set by CDC to identify events corresponding different requests.
     req_id: u64,
@@ -150,7 +131,6 @@ pub struct Downstream {
     // The IP address of downstream.
     peer: String,
     region_epoch: RegionEpoch,
->>>>>>> 212d2d51de (cdc: revert the enhancemant about region partial subscription (#17228))
     sink: Option<Sink>,
     state: Arc<AtomicCell<DownstreamState>>,
     kv_api: ChangeDataRequestKvApi,
@@ -344,11 +324,7 @@ impl HeapSize for PendingLock {
 /// A CDC delegate of a raftstore region peer.
 ///
 /// It converts raft commands into CDC events and broadcast to downstreams.
-<<<<<<< HEAD
-/// It also tracks transaction on the fly in order to compute resolved ts.
-=======
 /// It also track trancation on the fly in order to compute resolved ts.
->>>>>>> 212d2d51de (cdc: revert the enhancemant about region partial subscription (#17228))
 pub struct Delegate {
     pub handle: ObserveHandle,
     pub region_id: u64,
@@ -385,19 +361,10 @@ impl Delegate {
 
     /// Let downstream subscribe the delegate.
     /// Return error if subscribe fails and the `Delegate` won't be changed.
-<<<<<<< HEAD
-    pub fn subscribe(&mut self, downstream: Downstream) -> StdResult<(), (Error, Downstream)> {
-        if let LockTracker::Prepared { ref region, .. } = &self.lock_tracker {
-            // Check if the downstream is out dated.
-            if let Err(e) = Self::check_epoch_on_ready(&downstream, region) {
-                return Err((e, downstream));
-            }
-=======
     pub fn subscribe(&mut self, downstream: Downstream) -> Result<()> {
         if self.region.is_some() {
             // Check if the downstream is out dated.
             self.check_epoch_on_ready(&downstream)?;
->>>>>>> 212d2d51de (cdc: revert the enhancemant about region partial subscription (#17228))
         }
         self.add_downstream(downstream);
         Ok(())
@@ -521,72 +488,9 @@ impl Delegate {
             self.region_id,
         );
 
-<<<<<<< HEAD
-        let mut handle_downstream = |downstream: &mut Downstream| -> Option<TimeStamp> {
-            if !downstream.state.load().ready_for_advancing_ts() {
-                advance.blocked_on_scan += 1;
-                return None;
-            }
-            advance.scan_finished += 1;
-
-            if downstream.lock_heap.is_none() {
-                let mut lock_heap = BTreeMap::<TimeStamp, isize>::new();
-                for (_, lock) in locks.range(downstream.observed_range.to_range()) {
-                    if TxnSource::is_lossy_ddl_reorg_source_set(lock.txn_source)
-                        || downstream.filter_loop
-                            && TxnSource::is_cdc_write_source_set(lock.txn_source)
-                    {
-                        continue;
-                    }
-                    let lock_count = lock_heap.entry(lock.ts).or_default();
-                    *lock_count += 1;
-                }
-                downstream.lock_heap = Some(lock_heap);
-            }
-
-            let lock_heap = downstream.lock_heap.as_ref().unwrap();
-            let min_lock = lock_heap.keys().next().cloned().unwrap_or(min_ts);
-            let advanced_to = std::cmp::min(min_lock, min_ts);
-            if advanced_to > downstream.advanced_to {
-                downstream.advanced_to = advanced_to;
-            } else {
-                advance.blocked_on_locks += 1;
-            }
-            Some(downstream.advanced_to)
-        };
-
-        let mut slow_downstreams = Vec::new();
-        for d in &mut self.downstreams {
-            let advanced_to = match handle_downstream(d) {
-                Some(ts) => ts,
-                None => continue,
-            };
-
-            let features = connections.get(&d.conn_id).unwrap().features();
-            if features.contains(FeatureGate::STREAM_MULTIPLEXING) {
-                let k = (d.conn_id, d.req_id);
-                let v = advance.multiplexing.entry(k).or_default();
-                v.push(self.region_id, advanced_to);
-            } else {
-                let v = advance.exclusive.entry(d.conn_id).or_default();
-                v.push(self.region_id, advanced_to);
-                if !features.contains(FeatureGate::BATCH_RESOLVED_TS) {
-                    let k = (d.conn_id, self.region_id);
-                    advance.dispersed.insert(k, d.req_id);
-                }
-            };
-
-            let lag = current_ts
-                .physical()
-                .saturating_sub(d.advanced_to.physical());
-            if Duration::from_millis(lag) > WARN_LAG_THRESHOLD {
-                slow_downstreams.push(d.id);
-            }
-=======
         // Check observed key range in region.
         for downstream in self.downstreams_mut() {
             downstream.observed_range.update_region_key_range(&region);
->>>>>>> 212d2d51de (cdc: revert the enhancemant about region partial subscription (#17228))
         }
 
         // Mark the delegate as initialized.
@@ -898,10 +802,6 @@ impl Delegate {
                 region_id,
                 request_id: downstream.get_req_id(),
                 index,
-<<<<<<< HEAD
-                request_id: downstream.req_id,
-=======
->>>>>>> 212d2d51de (cdc: revert the enhancemant about region partial subscription (#17228))
                 event: Some(Event_oneof_event::Entries(EventEntries {
                     entries: entries_clone.into(),
                     ..Default::default()
@@ -920,57 +820,6 @@ impl Delegate {
                 Err(e)
             }
         }
-<<<<<<< HEAD
-        if downstreams.is_empty() {
-            return Ok(());
-        }
-
-        // Drop lossy DDL entries.
-        entries.retain(|(x, _)| !TxnSource::is_lossy_ddl_reorg_source_set(x.txn_source));
-
-        for downstream in downstreams {
-            let mut filtered_entries = Vec::with_capacity(entries.len());
-            for (entry, lock_count_modify) in &entries {
-                if !downstream.observed_range.contains_raw_key(&entry.key)
-                    || downstream.filter_loop
-                        && TxnSource::is_cdc_write_source_set(entry.txn_source)
-                {
-                    continue;
-                }
-
-                if *lock_count_modify != 0 && downstream.lock_heap.is_some() {
-                    let lock_heap = downstream.lock_heap.as_mut().unwrap();
-                    match lock_heap.entry(entry.start_ts.into()) {
-                        BTreeMapEntry::Vacant(x) => {
-                            x.insert(*lock_count_modify);
-                        }
-                        BTreeMapEntry::Occupied(mut x) => {
-                            *x.get_mut() += *lock_count_modify;
-                            if *x.get() == 0 {
-                                x.remove();
-                            }
-                        }
-                    }
-                }
-                filtered_entries.push(entry.clone());
-            }
-            if filtered_entries.is_empty() {
-                continue;
-            }
-            let event = Event {
-                region_id: self.region_id,
-                request_id: downstream.req_id,
-                event: Some(Event_oneof_event::Entries(EventEntries {
-                    entries: filtered_entries.into(),
-                    ..Default::default()
-                })),
-                ..Default::default()
-            };
-            downstream.sink_event(event, false)?;
-        }
-        Ok(())
-=======
->>>>>>> 212d2d51de (cdc: revert the enhancemant about region partial subscription (#17228))
     }
 
     fn sink_put(
@@ -1054,13 +903,8 @@ impl Delegate {
                     return Ok(());
                 }
 
-<<<<<<< HEAD
-                row.lock_count_modify =
-                    self.push_lock(key, MiniLock::new(row.v.start_ts, txn_source))?;
-=======
                 let read_old_ts = std::cmp::max(for_update_ts, row.start_ts.into());
                 read_old_value(&mut row, read_old_ts)?;
->>>>>>> 212d2d51de (cdc: revert the enhancemant about region partial subscription (#17228))
 
                 // In order to compute resolved ts, we must track inflight txns.
                 match self.resolver {
@@ -1095,14 +939,6 @@ impl Delegate {
         Ok(())
     }
 
-<<<<<<< HEAD
-    fn sink_delete(&mut self, mut delete: DeleteRequest, rows: &mut RowsBuilder) -> Result<()> {
-        match delete.cf.as_str() {
-            "lock" => {
-                if self.pop_lock(Key::from_encoded_slice(&delete.key))? != 0 {
-                    let key = Key::from_encoded(delete.take_key());
-                    rows.txns_by_key.get_mut(&key).unwrap().lock_count_modify -= 1;
-=======
     fn sink_delete(&mut self, mut delete: DeleteRequest) -> Result<()> {
         match delete.cf.as_str() {
             "lock" => {
@@ -1114,7 +950,6 @@ impl Delegate {
                         let pending = self.pending.as_mut().unwrap();
                         pending.push_pending_lock(PendingLock::Untrack { key: raw_key })?;
                     }
->>>>>>> 212d2d51de (cdc: revert the enhancemant about region partial subscription (#17228))
                 }
             }
             "" | "default" | "write" => {}
@@ -1446,9 +1281,6 @@ mod tests {
         let receive_error = || {
             let (event, rx) = block_on(rx_wrap.replace(None).unwrap().into_future());
             rx_wrap.set(Some(rx));
-<<<<<<< HEAD
-            if let CdcEvent::Event(mut e) = event.unwrap().0 {
-=======
             let event = event.unwrap();
             assert!(
                 matches!(event.0, CdcEvent::Event(_)),
@@ -1456,7 +1288,6 @@ mod tests {
                 event
             );
             if let CdcEvent::Event(mut e) = event.0 {
->>>>>>> 212d2d51de (cdc: revert the enhancemant about region partial subscription (#17228))
                 assert_eq!(e.get_request_id(), request_id);
                 let event = e.event.take().unwrap();
                 match event {
@@ -1722,15 +1553,6 @@ mod tests {
         assert_eq!(map.len(), 5);
 
         let (sink, mut drain) = channel(1, Arc::new(MemoryQuota::new(1024)));
-<<<<<<< HEAD
-        let mut downstream = Downstream::new(
-            "peer".to_owned(),
-            RegionEpoch::default(),
-            1,
-            ConnId::new(),
-            ChangeDataRequestKvApi::TiDb,
-            false,
-=======
         let downstream = Downstream {
             id: DownstreamId::new(),
             req_id: 1,
@@ -1741,7 +1563,6 @@ mod tests {
             state: Arc::new(AtomicCell::new(DownstreamState::Normal)),
             kv_api: ChangeDataRequestKvApi::TiDb,
             filter_loop: false,
->>>>>>> 212d2d51de (cdc: revert the enhancemant about region partial subscription (#17228))
             observed_range,
         };
         delegate.add_downstream(downstream);
@@ -1806,14 +1627,6 @@ mod tests {
         assert_eq!(map.len(), 5);
 
         let (sink, mut drain) = channel(1, Arc::new(MemoryQuota::new(1024)));
-<<<<<<< HEAD
-        let mut downstream = Downstream::new(
-            "peer".to_owned(),
-            RegionEpoch::default(),
-            1,
-            ConnId::new(),
-            ChangeDataRequestKvApi::TiDb,
-=======
         let downstream = Downstream {
             id: DownstreamId::new(),
             req_id: 1,
@@ -1823,7 +1636,6 @@ mod tests {
             sink: Some(sink),
             state: Arc::new(AtomicCell::new(DownstreamState::Normal)),
             kv_api: ChangeDataRequestKvApi::TiDb,
->>>>>>> 212d2d51de (cdc: revert the enhancemant about region partial subscription (#17228))
             filter_loop,
             observed_range,
         };

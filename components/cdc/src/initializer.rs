@@ -82,27 +82,6 @@ pub(crate) enum Scanner<S: Snapshot> {
 }
 
 pub(crate) struct Initializer<E> {
-<<<<<<< HEAD
-    pub(crate) region_id: u64,
-    pub(crate) conn_id: ConnId,
-    pub(crate) request_id: u64,
-    pub(crate) checkpoint_ts: TimeStamp,
-    pub(crate) region_epoch: RegionEpoch,
-
-    // `build_resolver` can only be determined after snapshot is acquired.
-    // If a region is subscribed more than one times, the downstream with the
-    // earliest snapshot will build the lock resolver.
-    //
-    // `build_resolver` won't be changed after set in `InitDownstream`.
-    pub(crate) build_resolver: Arc<AtomicBool>,
-
-    pub(crate) observed_range: ObservedRange,
-    pub(crate) observe_handle: ObserveHandle,
-    pub(crate) downstream_id: DownstreamId,
-    pub(crate) downstream_state: Arc<AtomicCell<DownstreamState>>,
-
-=======
->>>>>>> 212d2d51de (cdc: revert the enhancemant about region partial subscription (#17228))
     pub(crate) tablet: Option<E>,
     pub(crate) sched: Scheduler<Task>,
     pub(crate) sink: crate::channel::Sink,
@@ -157,14 +136,7 @@ impl<E: KvEngine> Initializer<E> {
         if let Err(e) = cdc_handle.capture_change(
             self.region_id,
             region_epoch,
-<<<<<<< HEAD
-            ChangeObserver::from_cdc(self.region_id, self.observe_handle.clone()),
-            // NOTE: raftstore handles requests in serial for every region.
-            // That's why we can determine whehter to build a lock resolver or not
-            // without check and compare snapshot sequence number.
-=======
             change_observer,
->>>>>>> 212d2d51de (cdc: revert the enhancemant about region partial subscription (#17228))
             Callback::read(Box::new(move |resp| {
                 if let Err(e) = sched.schedule(Task::InitDownstream {
                     region_id,
@@ -700,21 +672,6 @@ mod tests {
             .unwrap();
         let downstream_state = Arc::new(AtomicCell::new(DownstreamState::Initializing));
         let initializer = Initializer {
-<<<<<<< HEAD
-            region_id: 1,
-            conn_id: ConnId::new(),
-            request_id: 0,
-            checkpoint_ts: 1.into(),
-            region_epoch: RegionEpoch::default(),
-
-            build_resolver: Arc::new(AtomicBool::new(true)),
-            observed_range: ObservedRange::default(),
-            observe_handle: ObserveHandle::new(),
-            downstream_id: DownstreamId::new(),
-            downstream_state,
-
-=======
->>>>>>> 212d2d51de (cdc: revert the enhancemant about region partial subscription (#17228))
             tablet: engine.or_else(|| {
                 TestEngineBuilder::new()
                     .build_without_cache()
