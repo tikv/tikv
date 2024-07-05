@@ -53,3 +53,4 @@ tempfile = "3.0"
 test_pd = { workspace = true }
 test_pd_client = { workspace = true }
 test_util = { workspace = true }
+proptest = "1.0.0"
