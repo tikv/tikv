@@ -534,25 +534,25 @@ where
             panic!("{} unexpected state: {:?}", self.tag, *snap_state);
         }
 
-        let max_snap_try_cnt = (|| {
-            fail_point!("ignore_snap_try_cnt", |_| usize::MAX);
-            MAX_SNAP_TRY_CNT
-        })();
-
-        if *tried_cnt >= max_snap_try_cnt {
-            let cnt = *tried_cnt;
-            *tried_cnt = 0;
-            return Err(raft::Error::Store(box_err!(
-                "failed to get snapshot after {} times",
-                cnt
-            )));
-        }
-        if !tried || !last_canceled {
-            *tried_cnt += 1;
-        }
-
         match find_peer_by_id(&self.region, to) {
             Some(to_peer) => {
+                let max_snap_try_cnt = (|| {
+                    fail_point!("ignore_snap_try_cnt", |_| usize::MAX);
+                    MAX_SNAP_TRY_CNT
+                })();
+
+                if *tried_cnt >= max_snap_try_cnt {
+                    let cnt = *tried_cnt;
+                    *tried_cnt = 0;
+                    return Err(raft::Error::Store(box_err!(
+                        "failed to get snapshot after {} times",
+                        cnt
+                    )));
+                }
+                if !tried || !last_canceled {
+                    *tried_cnt += 1;
+                }
+
                 info!(
                     "requesting snapshot";
                     "region_id" => self.region.get_id(),
@@ -891,9 +891,6 @@ where
 
     /// Cancel generating snapshot.
     pub fn cancel_generating_snap(&self, compact_to: Option<u64>) {
-        // Cancel snapshot precheck.
-        self.take_gen_snap_task();
-
         let snap_state = self.snap_state.borrow();
         if let SnapState::Generating {
             ref canceled,
@@ -904,11 +901,20 @@ where
             if !canceled.load(Ordering::SeqCst) {
                 if let Some(idx) = compact_to {
                     let snap_index = index.load(Ordering::SeqCst);
+                    // Do not cancel if the snapshot is still valid after the
+                    // compaction.
                     if snap_index == 0 || idx <= snap_index + 1 {
                         return;
                     }
                 }
                 canceled.store(true, Ordering::SeqCst);
+                // Cancel snapshot precheck.
+                self.take_gen_snap_task();
+                info!(
+                    "canceled generating snap";
+                    "region_id" => self.region.get_id(),
+                    "peer_id" => self.peer_id,
+                );
             }
         }
     }
@@ -1697,10 +1703,25 @@ pub mod tests {
         );
         worker.start_with_timer(runner);
         let to_peer_id = s.peer_id;
-        let snap = s.snapshot(0, to_peer_id);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
+
+        // Verify that an unknown peer asking for a snapshot will be ignored and
+        // won't count toward `tried_cnt`.
+        let unknown_peer_id = 0;
+        assert_eq!(s.snapshot(0, unknown_peer_id).unwrap_err(), unavailable);
+        assert_eq!(*s.snap_tried_cnt.borrow(), 0);
+
+        let snap = s.snapshot(0, to_peer_id);
         assert_eq!(snap.unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
+
+        // Verify that a fake cancellation doesn't increment `tried_cnt`. The
+        // `cancel_generating_snap` function should be a no-op if `compact_to`
+        // is so small that it doesn't make the snapshot stale.
+        s.cancel_generating_snap(Some(0));
+        assert_eq!(s.snapshot(0, to_peer_id).unwrap_err(), unavailable);
+        assert_eq!(*s.snap_tried_cnt.borrow(), 1);
+
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap();
         let snap = match *s.snap_state.borrow() {
