@@ -6,9 +6,9 @@ use engine_traits::{CacheRange, KvEngine, RangeCacheEngineExt};
 use kvproto::{metapb::Region, raft_cmdpb::AdminCmdType, raft_serverpb::RaftApplyState};
 use raft::StateRole;
 use raftstore::coprocessor::{
-    AdminObserver, ApplyCtxInfo, ApplySnapshotObserver, BoxAdminObserver, BoxApplySnapshotObserver,
-    BoxCmdObserver, BoxQueryObserver, BoxRoleObserver, Cmd, CmdBatch, CmdObserver, Coprocessor,
-    CoprocessorHost, ObserveLevel, ObserverContext, QueryObserver, RegionState, RoleObserver,
+    AdminObserver, ApplyCtxInfo, BoxAdminObserver, BoxCmdObserver, BoxQueryObserver,
+    BoxRoleObserver, Cmd, CmdBatch, CmdObserver, Coprocessor, CoprocessorHost, ObserveLevel,
+    ObserverContext, QueryObserver, RegionState, RoleObserver,
 };
 
 #[derive(Clone)]
@@ -39,15 +39,14 @@ impl Observer {
         coprocessor_host
             .registry
             .register_admin_observer(priority, BoxAdminObserver::new(self.clone()));
-        // Evict cache when a peer applies snapshot.
-        coprocessor_host.registry.register_apply_snapshot_observer(
-            priority,
-            BoxApplySnapshotObserver::new(self.clone()),
-        );
         // Evict cache when a leader steps down.
         coprocessor_host
             .registry
             .register_role_observer(priority, BoxRoleObserver::new(self.clone()));
+
+        // NB: We do not evict the cache when applying a snapshot because
+        // the peer must be in the follower role during this process.
+        // The cache is already evicted when the leader steps down.
     }
 
     fn post_exec_cmd(
@@ -101,14 +100,14 @@ impl Observer {
         }
     }
 
-    fn evict_region_range(&self, region: &Region) {
+    fn evict_range_on_leader_steps_down(&self, region: &Region) {
         if !self.cache_engine.range_cache_engine_enabled() {
             return;
         }
 
         let range = CacheRange::from_region(region);
         tikv_util::info!(
-            "evict range due to apply snapshot";
+            "evict range due to leader step down";
             "region_id" => region.get_id(),
             "range" => ?range,
         );
@@ -150,20 +149,6 @@ impl AdminObserver for Observer {
     }
 }
 
-impl ApplySnapshotObserver for Observer {
-    fn post_apply_snapshot(
-        &self,
-        ctx: &mut ObserverContext<'_>,
-        _: u64,
-        _: &raftstore::store::SnapKey,
-        _: Option<&raftstore::store::Snapshot>,
-    ) {
-        // TODO: If a region is applying snapshot, it must be a follower.
-        //       Is it necessary to evict again?
-        self.evict_region_range(ctx.region())
-    }
-}
-
 impl RoleObserver for Observer {
     fn on_role_change(
         &self,
@@ -173,7 +158,7 @@ impl RoleObserver for Observer {
         if let StateRole::Follower = change.state
             && change.initialized
         {
-            self.evict_region_range(ctx.region())
+            self.evict_range_on_leader_steps_down(ctx.region())
         }
     }
 }
