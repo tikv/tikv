@@ -31,17 +31,17 @@ impl std::fmt::Debug for Operation {
             Operation::Put(k, v) => write!(
                 f,
                 "Put('{}', '{}')",
-                hex::encode_upper(k),
-                hex::encode_upper(v)
+                log_wrappers::Value::key(k),
+                log_wrappers::Value::key(v)
             ),
-            Operation::Get(k) => write!(f, "Get('{}')", hex::encode_upper(k)),
-            Operation::Delete(k) => write!(f, "Delete('{}')", hex::encode_upper(k)),
-            Operation::Scan(k, l) => write!(f, "Scan('{}', '{}')", hex::encode_upper(k), l),
+            Operation::Get(k) => write!(f, "Get('{}')", log_wrappers::Value::key(k)),
+            Operation::Delete(k) => write!(f, "Delete('{}')", log_wrappers::Value::key(k)),
+            Operation::Scan(k, l) => write!(f, "Scan('{}', '{}')", log_wrappers::Value::key(k), l),
             Operation::DeleteRange(k1, k2) => write!(
                 f,
                 "DeleteRange('{}', '{}')",
-                hex::encode_upper(k1),
-                hex::encode_upper(k2)
+                log_wrappers::Value::key(k1),
+                log_wrappers::Value::key(k2)
             ),
         }
     }
