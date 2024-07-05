@@ -208,6 +208,7 @@ impl<E: KvEngine> Initializer<E> {
                 if !handle.sent_out && handle.event_error.is_some() {
                     let error = handle.event_error.take().unwrap();
                     handle.sent_out = true;
+                    handle.initializer_stopped = true;
                     drop(handle);
 
                     let mut change_data_event = Event::default();
@@ -228,6 +229,9 @@ impl<E: KvEngine> Initializer<E> {
                                   "conn_id" => ?conn_id, "downstream_id" => ?downstream_id, "req_id" => ?request_id);
                         }
                     }
+                } else {
+                    handle.initializer_stopped = true;
+                    drop(handle);
                 }
             }
 
