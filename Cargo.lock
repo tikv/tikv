@@ -4505,6 +4505,7 @@ dependencies = [
  "pd_client",
  "prometheus",
  "prometheus-static-metric",
+ "proptest",
  "raftstore",
  "rand 0.8.5",
  "security",
