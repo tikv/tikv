@@ -16,7 +16,7 @@ use futures::{
     io::{AsyncReadExt, Cursor},
     stream::{Fuse, FusedStream, StreamExt, TryStreamExt},
 };
-use kvproto::brpb::{FileType, Migration};
+use kvproto::brpb::{self, FileType, Migration};
 use prometheus::core::{Atomic, AtomicU64};
 use tikv_util::{
     retry_expr,
@@ -76,6 +76,10 @@ pub struct LogFile {
     pub max_key: Arc<[u8]>,
     pub is_meta: bool,
     pub ty: FileType,
+    pub compression: brpb::CompressionType,
+    pub table_id: i64,
+    pub resolved_ts: u64,
+    pub sha256: Arc<[u8]>,
 }
 
 impl LogFile {
@@ -347,12 +351,16 @@ impl MetaFile {
                     max_ts: log_file.max_ts,
                     min_ts: log_file.min_ts,
                     max_key: Arc::from(log_file.take_end_key().into_boxed_slice()),
-                    min_key: Arc::from(log_file.take_start_key().clone().into_boxed_slice()),
+                    min_key: Arc::from(log_file.take_start_key().into_boxed_slice()),
                     is_meta: log_file.is_meta,
                     min_start_ts: log_file.min_begin_ts_in_default_cf,
                     ty: log_file.r_type,
                     crc64xor: log_file.crc64xor,
                     number_of_entries: log_file.number_of_entries,
+                    sha256: Arc::from(log_file.take_sha256().into_boxed_slice()),
+                    resolved_ts: log_file.resolved_ts,
+                    table_id: log_file.table_id,
+                    compression: log_file.compression_type,
                 })
             }
             log_files.push(g);
@@ -440,12 +448,20 @@ pub fn hash_migration(m: &Migration) -> u64 {
     for compaction in m.compactions.iter() {
         crc64 ^= compaction.artifactes_hash;
     }
-    for df in m.delete_files.iter() {
+    for meta_edit in m.edit_meta.iter() {
+        crc64 ^= hash_meta_edit(meta_edit);
+    }
+    crc64 ^ m.truncated_to
+}
+
+pub fn hash_meta_edit(meta_edit: &brpb::MetaEdit) -> u64 {
+    let mut crc64 = 0;
+    for df in meta_edit.delete_physical_files.iter() {
         let mut digest = crc64fast::Digest::new();
         digest.write(df.as_bytes());
         crc64 ^= digest.sum64();
     }
-    for spans in m.delete_logical_files.iter() {
+    for spans in meta_edit.delete_logical_files.iter() {
         let mut crc = crc64fast::Digest::new();
         crc.write(spans.get_path().as_bytes());
         for span in spans.get_spans() {
@@ -455,5 +471,7 @@ pub fn hash_migration(m: &Migration) -> u64 {
             crc64 ^= crc.sum64();
         }
     }
-    crc64 ^ m.truncated_to
+    let mut crc = crc64fast::Digest::new();
+    crc.write(&[meta_edit.destruct_self as u8]);
+    crc64 ^ crc.sum64()
 }

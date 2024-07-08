@@ -16,6 +16,7 @@ use tokio::{io::AsyncWriteExt, runtime::Handle, signal::unix::SignalKind};
 use crate::{
     compaction::{
         meta::CompactionRunInfoBuilder, Subcompaction, SubcompactionResult, META_OUT_REL,
+        SST_OUT_REL,
     },
     errors::Result,
     execute::Execution,
@@ -301,6 +302,9 @@ impl ExecHooks for SaveMeta {
         run_info
             .mut_meta()
             .set_artifactes(format!("{}/{}", cx.this.out_prefix, META_OUT_REL));
+        run_info
+            .mut_meta()
+            .set_generated_files(format!("{}/{}", cx.this.out_prefix, SST_OUT_REL));
     }
 
     fn after_a_compaction_end<'a>(
@@ -308,7 +312,7 @@ impl ExecHooks for SaveMeta {
         _cid: CId,
         cx: &'a mut CompactionFinishCtx<'a>,
     ) -> impl Future<Output = Result<()>> + 'a {
-        self.collector.add_compaction(&cx.result);
+        self.collector.add_subcompaction(&cx.result);
         self.stats.update_subcompaction(&cx.result);
 
         async {

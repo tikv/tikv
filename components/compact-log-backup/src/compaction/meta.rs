@@ -133,19 +133,29 @@ pub struct CompactionRunInfoBuilder {
     compaction: brpb::LogFileCompaction,
 }
 
-#[derive(Default)]
-pub struct ExpiringFiles {
+pub struct ExpiringFilesOfMeta {
+    meta_path: Arc<str>,
     logs: Vec<Arc<str>>,
-    metas: Vec<Arc<str>>,
+    destruct_self: bool,
     spans_of_file: HashMap<Arc<str>, (Vec<brpb::Span>, /* physical file size */ u64)>,
 }
 
-impl ExpiringFiles {
+impl ExpiringFilesOfMeta {
+    pub fn of(path: &Arc<str>) -> Self {
+        Self {
+            meta_path: Arc::clone(path),
+            logs: vec![],
+            destruct_self: false,
+            spans_of_file: Default::default(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.logs.is_empty() && self.spans_of_file.is_empty() && !self.destruct_self
+    }
+
     pub fn to_delete(&self) -> impl Iterator<Item = &str> + '_ {
-        self.metas
-            .iter()
-            .chain(self.logs.iter())
-            .map(|s| s.as_ref())
+        self.logs.iter().map(|s| s.as_ref())
     }
 
     pub fn spans(&self) -> impl Iterator<Item = DeleteSpansOfFile> + '_ {
@@ -160,7 +170,7 @@ impl ExpiringFiles {
 }
 
 impl CompactionRunInfoBuilder {
-    pub fn add_compaction(&mut self, c: &SubcompactionResult) {
+    pub fn add_subcompaction(&mut self, c: &SubcompactionResult) {
         for file in &c.origin.inputs {
             if !self.files.contains_key(&file.id.name) {
                 self.files
@@ -188,25 +198,39 @@ impl CompactionRunInfoBuilder {
     pub async fn migration(&self, s: &dyn FullFeaturedStorage) -> Result<brpb::Migration> {
         let mut migration = brpb::Migration::new();
         let files = self.find_expiring_files(s).await?;
-        for file in files.to_delete() {
-            migration.delete_files.push(file.to_owned());
+        for files in files {
+            let mut medit = brpb::MetaEdit::new();
+            medit.set_path(files.meta_path.to_string());
+            for file in files.to_delete() {
+                medit.delete_physical_files.push(file.to_owned());
+            }
+            for span in files.spans() {
+                medit.delete_logical_files.push(span)
+            }
+            medit.destruct_self = files.destruct_self;
+            migration.edit_meta.push(medit);
         }
-        for span in files.spans() {
-            migration.delete_logical_files.push(span)
-        }
-        migration.set_compactions(vec![self.compaction.clone()].into());
+        migration
+            .mut_compactions()
+            .push(self.compaction.clone().into());
         Ok(migration)
     }
 
-    async fn find_expiring_files(&self, s: &dyn FullFeaturedStorage) -> Result<ExpiringFiles> {
+    async fn find_expiring_files(
+        &self,
+        s: &dyn FullFeaturedStorage,
+    ) -> Result<Vec<ExpiringFilesOfMeta>> {
         let ext = LoadFromExt::default();
         let mut storage = StreamyMetaStorage::load_from_ext(s, ext);
 
-        let mut exp = ExpiringFiles::default();
+        let mut result = vec![];
         while let Some(item) = storage.try_next().await? {
-            self.expiring(&item, &mut exp);
+            let exp = self.expiring(&item);
+            if !exp.is_empty() {
+                result.push(exp);
+            }
         }
-        Ok(exp)
+        Ok(result)
     }
 
     fn full_covers(&self, file: &PhysicalLogFile) -> bool {
@@ -232,7 +256,8 @@ impl CompactionRunInfoBuilder {
         }
     }
 
-    fn expiring(&self, file: &MetaFile, result: &mut ExpiringFiles) {
+    fn expiring(&self, file: &MetaFile) -> ExpiringFilesOfMeta {
+        let mut result = ExpiringFilesOfMeta::of(&file.name);
         let mut all_full_covers = true;
         for p in &file.physical_files {
             let full_covers = self.full_covers(p);
@@ -252,7 +277,8 @@ impl CompactionRunInfoBuilder {
             }
         }
         if all_full_covers {
-            result.metas.push(Arc::clone(&file.name))
+            result.destruct_self = true;
         }
+        result
     }
 }

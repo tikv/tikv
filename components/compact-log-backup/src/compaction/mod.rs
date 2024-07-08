@@ -15,6 +15,7 @@ pub const META_OUT_REL: &'static str = "metas";
 #[derive(Debug, Clone)]
 pub struct Input {
     pub id: LogFileId,
+    pub compression: brpb::CompressionType,
     crc64xor: u64,
     key_value_size: u64,
     num_of_entries: u64,

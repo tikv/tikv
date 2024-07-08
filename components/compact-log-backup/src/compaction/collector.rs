@@ -80,6 +80,7 @@ impl SubcompactionCollector {
     fn to_input(file: &LogFile) -> Input {
         Input {
             id: file.id.clone(),
+            compression: file.compression,
             crc64xor: file.crc64xor,
             key_value_size: file.hacky_key_value_size(),
             num_of_entries: file.number_of_entries as u64,

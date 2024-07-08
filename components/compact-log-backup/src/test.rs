@@ -140,8 +140,8 @@ async fn playground_no_pref() {
     let collect = CollectSubcompaction::new(
         stream,
         CollectSubcompactionConfig {
-            compact_from_ts: 450903540503413363,
-            compact_to_ts: 450905149123592253,
+            compact_from_ts: 0,
+            compact_to_ts: u64::MAX,
         },
     );
 
@@ -150,7 +150,7 @@ async fn playground_no_pref() {
     let mut compacted_files = CompactionRunInfoBuilder::default();
     println!("{:?}", compactions[0]);
     for compact in &compactions {
-        compacted_files.add_compaction(&SubcompactionResult::of(compact.clone()));
+        compacted_files.add_subcompaction(&SubcompactionResult::of(compact.clone()));
         for source in &compact.inputs {
             if sources.contains_key(source.id.name.as_ref()) {
                 sources
@@ -178,9 +178,11 @@ async fn playground_no_pref() {
     let max_ts = compactions.iter().map(|c| c.input_max_ts).max().unwrap();
 
     let mig = compacted_files.migration(storage.as_ref()).await.unwrap();
-    let to_delete = mig.delete_files.len();
-    let segments = mig.delete_logical_files.len();
-    println!("full = {} / segmented = {}", to_delete, segments);
+    for em in &mig.edit_meta {
+        println!("====={}=====", em.path);
+        println!("{:?}", em.delete_physical_files);
+        println!("{:?}", em.delete_logical_files);
+    }
 
     println!(
         "{} ~ {} total {} files, {} compactions totally {} hash {} {}~{}",

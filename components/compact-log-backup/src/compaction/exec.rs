@@ -162,7 +162,7 @@ where
                         let mut out = vec![];
                         let mut stat = LoadStatistic::default();
                         source
-                            .load(f.id, Some(&mut stat), |k, v| {
+                            .load(f, Some(&mut stat), |k, v| {
                                 out.push(Record {
                                     key: k.to_owned(),
                                     value: v.to_owned(),
