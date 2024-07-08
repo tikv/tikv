@@ -836,7 +836,7 @@ pub trait RegionInfoProvider: Send + Sync {
         &self,
         _start_key: &[u8],
         _end_key: &[u8],
-        leader_only: bool,
+        _leader_only: bool,
     ) -> Result<Vec<Region>> {
         unimplemented!()
     }

@@ -1,7 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fmt::{self, Debug},
     ops::Bound,
     result,
@@ -9,7 +9,6 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    time::Duration,
 };
 
 use crossbeam::epoch::{self, default_collector, Guard};
@@ -25,18 +24,16 @@ use skiplist_rs::{
     SkipList,
 };
 use slog_global::error;
-use tikv_util::{config::VersionTrack, info, warn};
-use txn_types::TimeStamp;
+use tikv_util::{config::VersionTrack, info};
 
 use crate::{
     background::{BackgroundTask, BgWorkManager, PdRangeHintService},
     keys::{
-        encode_key_for_boundary_with_mvcc, encode_key_for_boundary_without_mvcc, encode_seek_key,
-        InternalBytes,
+        encode_key_for_boundary_with_mvcc, encode_key_for_boundary_without_mvcc, InternalBytes,
     },
     memory_controller::MemoryController,
     range_manager::{LoadFailedReason, RangeCacheStatus, RangeManager},
-    read::{RangeCacheIterator, RangeCacheSnapshot, RangeCacheSnapshotMeta},
+    read::{RangeCacheIterator, RangeCacheSnapshot},
     statistics::Statistics,
     write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
     RangeCacheEngineConfig, RangeCacheEngineContext,
@@ -651,11 +648,12 @@ impl RangeCacheMemoryEngine {
     //             .collect()
     //     };
     //     for range in ranges {
-    //         let read_ts = TimeStamp::physical_now() - Duration::from_secs(40).as_millis() as u64;
-    //         let read_ts = TimeStamp::compose(read_ts, 0).into_inner();
+    //         let read_ts = TimeStamp::physical_now() -
+    // Duration::from_secs(40).as_millis() as u64;         let read_ts =
+    // TimeStamp::compose(read_ts, 0).into_inner();
 
-    //         if let Ok(range_snap) = self.snapshot(range.clone(), read_ts, snap.sequence_number()) {
-    //             ranges_to_audit.push(range_snap);
+    //         if let Ok(range_snap) = self.snapshot(range.clone(), read_ts,
+    // snap.sequence_number()) {             ranges_to_audit.push(range_snap);
     //         } else {
     //             warn!(
     //                 "failed to get snap in audit";
@@ -833,6 +831,7 @@ pub mod tests {
                 soft_limit_threshold: Some(ReadableSize(300)),
                 hard_limit_threshold: Some(ReadableSize(500)),
                 expected_region_size: Some(ReadableSize::mb(20)),
+                cross_check_interval: Default::default(),
             }));
             let mem_controller = Arc::new(MemoryController::new(config.clone(), skiplist.clone()));
 
@@ -888,6 +887,7 @@ pub mod tests {
             soft_limit_threshold: Some(ReadableSize(300)),
             hard_limit_threshold: Some(ReadableSize(500)),
             expected_region_size: Some(ReadableSize::mb(20)),
+            cross_check_interval: Default::default(),
         }));
         let mem_controller = Arc::new(MemoryController::new(config.clone(), skiplist.clone()));
 

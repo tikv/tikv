@@ -12,7 +12,6 @@ use std::{
 use collections::HashMap;
 use engine_rocks::RocksSnapshot;
 use engine_traits::{CacheRange, FailedReason};
-use kvproto::metapb;
 use tikv_util::info;
 
 use crate::read::RangeCacheSnapshotMeta;

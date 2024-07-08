@@ -80,7 +80,7 @@ use crate::{
         demote_failed_voters_request,
         entry_storage::MAX_WARMED_UP_CACHE_KEEP_TIME,
         fsm::{
-            apply::{self, PRINTF_LOG, TXN_LOG},
+            apply::{self, TXN_LOG},
             store::{PollContext, StoreMeta},
             ApplyMetrics, ApplyTask, ApplyTaskRes, CatchUpLogs, ChangeObserver, ChangePeer,
             ExecResult, SwitchWitness,

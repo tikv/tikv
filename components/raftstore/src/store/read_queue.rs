@@ -23,7 +23,7 @@ use uuid::Uuid;
 use super::msg::ErrorCallback;
 use crate::{
     store::{
-        fsm::apply::{self, PRINTF_LOG},
+        fsm::apply::{self},
         metrics::*,
         read_queue::apply::TXN_LOG,
         Config,

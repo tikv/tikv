@@ -1,20 +1,18 @@
-use core::slice::SlicePattern;
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     fmt::Debug,
     sync::{atomic::Ordering, Arc},
     time::Duration,
 };
 
 use bytes::Bytes;
-use collections::HashMap;
 use crossbeam::epoch;
 use engine_traits::{
     CacheRange, MiscExt, Mutable, RangeCacheEngine, Result, WriteBatch, WriteBatchExt,
     WriteOptions, CF_DEFAULT,
 };
 use raftstore::store::fsm::apply::PRINTF_LOG;
-use tikv_util::{box_err, config::ReadableSize, debug, error, info, time::Instant, warn};
+use tikv_util::{box_err, config::ReadableSize, error, info, time::Instant, warn};
 
 use crate::{
     background::BackgroundTask,
@@ -645,7 +643,7 @@ impl Mutable for RangeCacheWriteBatch {
         Ok(())
     }
 
-    fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
+    fn delete_range_cf(&mut self, _cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let range = CacheRange::new(begin_key.to_vec(), end_key.to_vec());
         self.engine.evict_range(&range);
         Ok(())

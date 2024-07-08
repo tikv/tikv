@@ -279,9 +279,8 @@ pub fn construct_value(i: u64, j: u64) -> String {
 #[cfg(test)]
 mod tests {
     use bytes::BufMut;
-    use engine_traits::CacheRange;
 
-    use super::{encode_key_for_eviction, *};
+    use super::*;
     use crate::keys::{encode_key, ValueType};
 
     fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {

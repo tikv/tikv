@@ -37,10 +37,7 @@ use crate::{
     errors::RAFTSTORE_IS_BUSY,
     store::{
         cmd_resp,
-        fsm::{
-            apply::{PRINTF_LOG, TXN_LOG},
-            store::StoreMeta,
-        },
+        fsm::{apply::TXN_LOG, store::StoreMeta},
         util::{self, LeaseState, RegionReadProgress, RemoteLease},
         Callback, CasualMessage, CasualRouter, Peer, ProposalRouter, RaftCommand, ReadCallback,
         ReadResponse, RegionSnapshot, RequestInspector, RequestPolicy, TxnExt,

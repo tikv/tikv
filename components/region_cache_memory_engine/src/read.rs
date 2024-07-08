@@ -481,7 +481,7 @@ impl RangeCacheIterator {
     }
 
     #[inline]
-    fn collects_read_flow_stats(&mut self) {
+    fn _collects_read_flow_stats(&mut self) {
         // Updating stats and perf context counters
         let read_bytes = (self.key().len() + self.value().len()) as u64;
         self.local_stats.bytes_read += read_bytes;
@@ -709,7 +709,7 @@ mod tests {
     use tempfile::Builder;
     use tikv_util::config::VersionTrack;
 
-    use super::{RangeCacheIterator, RangeCacheSnapshot, MAX_SEQUENCE_NUMBER};
+    use super::{RangeCacheIterator, RangeCacheSnapshot};
     use crate::{
         engine::{cf_to_id, SkiplistEngine},
         keys::{
@@ -1457,10 +1457,10 @@ mod tests {
         let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
         let mut wb = rocks_engine.write_batch();
-        wb.put(b"aaa", b"val");
-        wb.put(b"aaa", b"val2");
-        wb.put(b"aaa", b"val3");
-        wb.write();
+        wb.put(b"aaa", b"val").unwrap();
+        wb.put(b"aaa", b"val2").unwrap();
+        wb.put(b"aaa", b"val3").unwrap();
+        wb.write().unwrap();
 
         let mut iter = rocks_engine.iterator("default").unwrap();
         iter.seek_for_prev(b"aaa").unwrap();
