@@ -431,7 +431,7 @@ where
     /// with it.
     fn clean_overlap_ranges(&mut self, start_key: Vec<u8>, end_key: Vec<u8>) -> Result<()> {
         let (start_key, end_key) = self.clean_overlap_ranges_roughly(start_key, end_key);
-        self.delete_all_in_range(&[Range::new(&start_key, &end_key)])
+        self.delete_all_in_range(&[Range::new(&start_key, &end_key)], true)
     }
 
     /// Inserts a new pending range, and it will be cleaned up with some delay.
@@ -493,7 +493,7 @@ where
                 error!("failed to delete files in range"; "err" => %e);
             })
             .unwrap();
-        if let Err(e) = self.delete_all_in_range(&ranges) {
+        if let Err(e) = self.delete_all_in_range(&ranges, false) {
             error!("failed to cleanup stale range"; "err" => %e);
             return;
         }
@@ -532,8 +532,9 @@ where
         false
     }
 
-    fn delete_all_in_range(&self, ranges: &[Range<'_>]) -> Result<()> {
+    fn delete_all_in_range(&self, ranges: &[Range<'_>], apply: bool) -> Result<()> {
         let wopts = WriteOptions::default();
+        let mut written = false;
         for cf in self.engine.cf_names() {
             // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
             let strategy = if cf == CF_LOCK {
@@ -545,7 +546,12 @@ where
                     sst_path: self.mgr.get_temp_path_for_ingest(),
                 }
             };
-            box_try!(self.engine.delete_ranges_cf(&wopts, cf, strategy, ranges));
+            written |= box_try!(self.engine.delete_ranges_cf(&wopts, cf, strategy, ranges));
+        }
+        if apply && written {
+            CLEAN_COUNTER_VEC
+                .with_label_values(&["delete-overlap"])
+                .inc();
         }
         Ok(())
     }
