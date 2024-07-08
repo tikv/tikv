@@ -4,7 +4,7 @@ use std::{
     mem,
     string::String,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
 };
@@ -136,6 +136,8 @@ pub struct Downstream {
     kv_api: ChangeDataRequestKvApi,
     filter_loop: bool,
     pub(crate) observed_range: ObservedRange,
+
+    pub(crate) scan_truncated: Arc<AtomicBool>,
 }
 
 impl Downstream {
@@ -163,10 +165,14 @@ impl Downstream {
             kv_api,
             filter_loop,
             observed_range,
+
+            scan_truncated: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    /// Sink events to the downstream.
+    // NOTE: it's not allowed to sink `EventError` directly by this function,
+    // because the sink can be also used by an incremental scan. We must ensure
+    // no more events can be pushed to the sink after an `EventError` is sent.
     pub fn sink_event(&self, mut event: Event, force: bool) -> Result<()> {
         event.set_request_id(self.req_id);
         if self.sink.is_none() {
@@ -191,7 +197,9 @@ impl Downstream {
         }
     }
 
+    /// EventErrors must be sent by this function.
     pub fn sink_error_event(&self, region_id: u64, err_event: EventError) -> Result<()> {
+        self.scan_truncated.store(true, Ordering::Release);
         let mut change_data_event = Event::default();
         change_data_event.event = Some(Event_oneof_event::Error(err_event));
         change_data_event.region_id = region_id;

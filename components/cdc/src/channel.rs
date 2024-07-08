@@ -1,6 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt, sync::Arc, time::Duration};
+use std::{
+    fmt,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use futures::{
     channel::mpsc::{
@@ -235,7 +242,8 @@ macro_rules! impl_from_future_send_error {
 
 impl_from_future_send_error! {
     FuturesSendError,
-    TrySendError<(Instant, CdcEvent, usize)>,
+    TrySendError<ObservedEvent>,
+    TrySendError<ScanedEvent>,
 }
 
 impl From<MemoryQuotaExceeded> for SendError {
@@ -244,22 +252,57 @@ impl From<MemoryQuotaExceeded> for SendError {
     }
 }
 
+pub struct ObservedEvent {
+    pub created: Instant,
+    pub event: CdcEvent,
+    pub size: usize,
+}
+
+pub struct ScanedEvent {
+    pub created: Instant,
+    pub event: CdcEvent,
+    pub size: usize,
+    pub truncated: Arc<AtomicBool>,
+}
+
+impl ObservedEvent {
+    fn new(created: Instant, event: CdcEvent, size: usize) -> Self {
+        ObservedEvent {
+            created,
+            event,
+            size,
+        }
+    }
+}
+
+impl ScanedEvent {
+    fn new(created: Instant, event: CdcEvent, size: usize, truncated: Arc<AtomicBool>) -> Self {
+        ScanedEvent {
+            created,
+            event,
+            size,
+            truncated,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Sink {
-    unbounded_sender: UnboundedSender<(Instant, CdcEvent, usize)>,
-    bounded_sender: Sender<(Instant, CdcEvent, usize)>,
+    unbounded_sender: UnboundedSender<ObservedEvent>,
+    bounded_sender: Sender<ScanedEvent>,
     memory_quota: Arc<MemoryQuota>,
 }
 
 impl Sink {
+    /// Only observed events can be sent by `unbounded_send`.
     pub fn unbounded_send(&self, event: CdcEvent, force: bool) -> Result<(), SendError> {
         // Try it's best to send error events.
         let bytes = if !force { event.size() as usize } else { 0 };
         if bytes != 0 {
             self.memory_quota.alloc(bytes)?;
         }
-        let now = Instant::now_coarse();
-        match self.unbounded_sender.unbounded_send((now, event, bytes)) {
+        let ob_event = ObservedEvent::new(Instant::now_coarse(), event, bytes);
+        match self.unbounded_sender.unbounded_send(ob_event) {
             Ok(_) => Ok(()),
             Err(e) => {
                 // Free quota if send fails.
@@ -269,7 +312,12 @@ impl Sink {
         }
     }
 
-    pub async fn send_all(&mut self, events: Vec<CdcEvent>) -> Result<(), SendError> {
+    /// Only scaned events can be sent by `send_all`.
+    pub async fn send_all(
+        &mut self,
+        events: Vec<CdcEvent>,
+        truncated: Arc<AtomicBool>,
+    ) -> Result<(), SendError> {
         // Allocate quota in advance.
         let mut total_bytes = 0;
         for event in &events {
@@ -281,7 +329,8 @@ impl Sink {
         let now = Instant::now_coarse();
         for event in events {
             let bytes = event.size() as usize;
-            if let Err(e) = self.bounded_sender.feed((now, event, bytes)).await {
+            let sc_event = ScanedEvent::new(now, event, bytes, truncated.clone());
+            if let Err(e) = self.bounded_sender.feed(sc_event).await {
                 // Free quota if send fails.
                 self.memory_quota.free(total_bytes as _);
                 return Err(SendError::from(e));
@@ -297,25 +346,31 @@ impl Sink {
 }
 
 pub struct Drain {
-    unbounded_receiver: UnboundedReceiver<(Instant, CdcEvent, usize)>,
-    bounded_receiver: Receiver<(Instant, CdcEvent, usize)>,
+    unbounded_receiver: UnboundedReceiver<ObservedEvent>,
+    bounded_receiver: Receiver<ScanedEvent>,
     memory_quota: Arc<MemoryQuota>,
 }
 
 impl<'a> Drain {
     pub fn drain(&'a mut self) -> impl Stream<Item = (CdcEvent, usize)> + 'a {
-        stream::select(&mut self.bounded_receiver, &mut self.unbounded_receiver).map(
-            |(start, mut event, size)| {
-                CDC_EVENTS_PENDING_DURATION.observe(start.saturating_elapsed_secs() * 1000.0);
-                if let CdcEvent::Barrier(ref mut barrier) = event {
-                    if let Some(barrier) = barrier.take() {
-                        // Unset barrier when it is received.
-                        barrier(());
-                    }
+        let observed = (&mut self.unbounded_receiver).map(|x| (x.created, x.event, x.size));
+        let scaned = (&mut self.bounded_receiver).filter_map(|x| {
+            if x.truncated.load(Ordering::Acquire) {
+                return futures::future::ready(None);
+            }
+            futures::future::ready(Some((x.created, x.event, x.size)))
+        });
+
+        stream::select(scaned, observed).map(|(start, mut event, size)| {
+            CDC_EVENTS_PENDING_DURATION.observe(start.saturating_elapsed_secs() * 1000.0);
+            if let CdcEvent::Barrier(ref mut barrier) = event {
+                if let Some(barrier) = barrier.take() {
+                    // Unset barrier when it is received.
+                    barrier(());
                 }
-                (event, size)
-            },
-        )
+            }
+            (event, size)
+        })
     }
 
     // Forwards contents to the sink, simulates StreamExt::forward.
