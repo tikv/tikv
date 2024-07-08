@@ -22,8 +22,8 @@ use crossbeam::{
 };
 use engine_rocks::{RocksEngine, RocksEngineIterator, RocksSnapshot};
 use engine_traits::{
-    iter_option, CacheRange, IterOptions, Iterable, Iterator, MiscExt, Peekable, RangeHintService,
-    SnapshotMiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    iter_option, CacheRange, IterOptions, Iterable, Iterator, KvEngine, MiscExt, Peekable,
+    RangeCacheEngine, RangeHintService, SnapshotMiscExt, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use kvproto::metapb::Region;
 use parking_lot::{Mutex, RwLock};
@@ -60,6 +60,7 @@ use crate::{
     },
     write_batch::RangeCacheWriteBatchEntry,
     BackgroundTask::ManualLoad,
+    RangeCacheMemoryEngine,
 };
 
 /// Try to extract the key and `u64` timestamp from `encoded_key`.
@@ -85,7 +86,6 @@ fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
     }
 }
 
-#[derive(Debug)]
 pub enum BackgroundTask {
     Gc(GcTask),
     LoadRange,
@@ -94,7 +94,14 @@ pub enum BackgroundTask {
     TopRegionsLoadEvict,
     CleanLockTombstone(u64),
     SetRocksEngine(RocksEngine),
-    Audit((Vec<RangeCacheSnapshot>, RocksSnapshot)),
+    TurnOnCrossCheck(
+        (
+            RangeCacheMemoryEngine,
+            RocksEngine,
+            Arc<dyn PdClient>,
+            Duration,
+        ),
+    ),
     ManualLoad(CacheRange),
 }
 
@@ -112,8 +119,8 @@ impl Display for BackgroundTask {
                 .debug_struct("CleanLockTombstone")
                 .field("seqno", r)
                 .finish(),
-            BackgroundTask::Audit(_) => f.debug_struct("audit").finish(),
             BackgroundTask::SetRocksEngine(_) => f.debug_struct("SetDiskEngine").finish(),
+            BackgroundTask::TurnOnCrossCheck(_) => f.debug_struct("TurnOnCrossCheck").finish(),
             BackgroundTask::ManualLoad(ref r) => {
                 f.debug_struct("ManualLoad").field("range", r).finish()
             }
@@ -759,8 +766,7 @@ pub struct BackgroundRunner {
     lock_cleanup_remote: Remote<yatp::task::future::TaskCell>,
     lock_cleanup_worker: Worker,
 
-    audit_remote: Remote<yatp::task::future::TaskCell>,
-    audit_worker: Worker,
+    cross_check_worker: Option<Worker>,
 
     last_seqno: u64,
     // RocksEngine is used to get the oldest snapshot sequence number.
@@ -775,6 +781,9 @@ impl Drop for BackgroundRunner {
         self.gc_range_worker.stop();
         self.load_evict_worker.stop();
         self.lock_cleanup_worker.stop();
+        if let Some(cross_check_worker) = self.cross_check_worker.take() {
+            cross_check_worker.stop()
+        };
     }
 }
 
@@ -852,8 +861,7 @@ impl BackgroundRunner {
                 load_evict_remote,
                 lock_cleanup_remote,
                 lock_cleanup_worker,
-                audit_remote,
-                audit_worker,
+                cross_check_worker: None,
                 last_seqno: 0,
                 rocks_engine: None,
             },
@@ -871,7 +879,7 @@ fn next_to_match(
     last_user_key: &Vec<u8>,
     last_ts: u64,
 ) {
-    let read_ts = iter.read_ts;
+    let read_ts = iter.snapshot_read_ts;
     let key = iter.key();
     let val = iter.value();
     if next_fisrt {
@@ -986,179 +994,179 @@ impl Runnable for BackgroundRunner {
                 self.rocks_engine = Some(rocks_engine);
                 fail::fail_point!("in_memory_engine_set_rocks_engine");
             }
-            BackgroundTask::Audit((ranges_snap, rocksdb_snap)) => {
-                let core = self.core.engine.clone();
-                let f = async move {
-                    for range_snap in ranges_snap {
-                        info!(
-                            "audit range";
-                            "range" => ?range_snap.snapshot_meta.range,
-                        );
-                        let opts = iter_option(
-                            &range_snap.snapshot_meta.range.start,
-                            &range_snap.snapshot_meta.range.end,
-                            false,
-                        );
-                        for cf in &[CF_LOCK, CF_WRITE] {
-                            let mut iter = range_snap.iterator_opt(cf, opts.clone()).unwrap();
-                            let read_ts = iter.read_ts;
-                            let mut disk_iter =
-                                rocksdb_snap.iterator_opt(cf, opts.clone()).unwrap();
-                            let m_valid = iter.seek_to_first().unwrap();
-                            let d_valid = disk_iter.seek_to_first().unwrap();
-                            if !m_valid {
-                                // get safe_point of the relevant range, the ts of the disk key
-                                // should not be larger than it.
-                                let safe_point = {
-                                    let core = core.read();
-                                    if let Some(meta) = core
-                                        .range_manager
-                                        .range_meta(&range_snap.snapshot_meta.range)
-                                    {
-                                        meta.safe_point()
-                                    } else {
-                                        core.range_manager
-                                            .history_range_meta(&range_snap.snapshot_meta.range)
-                                            .unwrap()
-                                            .safe_point()
-                                    }
-                                };
+            // BackgroundTask::Audit((ranges_snap, rocksdb_snap)) => {
+            //     let core = self.core.engine.clone();
+            //     let f = async move {
+            //         for range_snap in ranges_snap {
+            //             info!(
+            //                 "audit range";
+            //                 "range" => ?range_snap.snapshot_meta.range,
+            //             );
+            //             let opts = iter_option(
+            //                 &range_snap.snapshot_meta.range.start,
+            //                 &range_snap.snapshot_meta.range.end,
+            //                 false,
+            //             );
+            //             for cf in &[CF_LOCK, CF_WRITE] {
+            //                 let mut iter = range_snap.iterator_opt(cf, opts.clone()).unwrap();
+            //                 let read_ts = iter.read_ts;
+            //                 let mut disk_iter =
+            //                     rocksdb_snap.iterator_opt(cf, opts.clone()).unwrap();
+            //                 let m_valid = iter.seek_to_first().unwrap();
+            //                 let d_valid = disk_iter.seek_to_first().unwrap();
+            //                 if !m_valid {
+            //                     // get safe_point of the relevant range, the ts of the disk key
+            //                     // should not be larger than it.
+            //                     let safe_point = {
+            //                         let core = core.read();
+            //                         if let Some(meta) = core
+            //                             .range_manager
+            //                             .range_meta(&range_snap.snapshot_meta.range)
+            //                         {
+            //                             meta.safe_point()
+            //                         } else {
+            //                             core.range_manager
+            //                                 .history_range_meta(&range_snap.snapshot_meta.range)
+            //                                 .unwrap()
+            //                                 .safe_point()
+            //                         }
+            //                     };
 
-                                if d_valid {
-                                    if *cf == CF_LOCK {
-                                        error!(
-                                            "seek_to_first result not equal";
-                                            "lower" => log_wrappers::Value(&iter.lower_bound),
-                                            "upper" => log_wrappers::Value(&iter.upper_bound),
-                                            "cache_key" => log_wrappers::Value(&iter.key()),
-                                            "seqno" => iter.sequence_number,
-                                            "cf" => ?cf,
-                                        );
-                                        unreachable!();
-                                    }
-                                    let (key, ts) = split_ts(disk_iter.key()).unwrap();
-                                    if ts > safe_point {
-                                        error!(
-                                            "seek_to_first result not equal";
-                                            "lower" => log_wrappers::Value(&iter.lower_bound),
-                                            "upper" => log_wrappers::Value(&iter.upper_bound),
-                                            "disk_key" => log_wrappers::Value(&disk_iter.key()),
-                                            "disk_key_ts" => ts,
-                                            "safe_ts" => safe_point,
-                                            "snapshot_ts" => range_snap.snapshot_meta.snapshot_ts,
-                                            "seqno" => iter.sequence_number,
-                                            "cf" => ?cf,
-                                        );
-                                        unreachable!();
-                                    }
-                                    let write = parse_write(disk_iter.value()).unwrap();
-                                    if write.write_type == WriteType::Put {
-                                        error!(
-                                            "seek_to_first result not equal";
-                                            "lower" => log_wrappers::Value(&iter.lower_bound),
-                                            "upper" => log_wrappers::Value(&iter.upper_bound),
-                                            "disk_key" => log_wrappers::Value(&disk_iter.key()),
-                                            "disk_key_ts" => ts,
-                                            "safe_ts" => safe_point,
-                                            "snapshot_ts" => range_snap.snapshot_meta.snapshot_ts,
-                                            "seqno" => iter.sequence_number,
-                                            "cf" => ?cf,
-                                        );
-                                        unreachable!();
-                                    }
-                                }
-                                continue;
-                            }
-                            if !d_valid {
-                                error!(
-                                    "seek_to_first result not equal";
-                                    "lower" => log_wrappers::Value(&iter.lower_bound),
-                                    "upper" => log_wrappers::Value(&iter.upper_bound),
-                                    "cache_key" => log_wrappers::Value(&iter.key()),
-                                    "seqno" => iter.sequence_number,
-                                    "cf" => ?cf,
-                                );
-                                unreachable!();
-                            }
+            //                     if d_valid {
+            //                         if *cf == CF_LOCK {
+            //                             error!(
+            //                                 "seek_to_first result not equal";
+            //                                 "lower" => log_wrappers::Value(&iter.lower_bound),
+            //                                 "upper" => log_wrappers::Value(&iter.upper_bound),
+            //                                 "cache_key" => log_wrappers::Value(&iter.key()),
+            //                                 "seqno" => iter.sequence_number,
+            //                                 "cf" => ?cf,
+            //                             );
+            //                             unreachable!();
+            //                         }
+            //                         let (key, ts) = split_ts(disk_iter.key()).unwrap();
+            //                         if ts > safe_point {
+            //                             error!(
+            //                                 "seek_to_first result not equal";
+            //                                 "lower" => log_wrappers::Value(&iter.lower_bound),
+            //                                 "upper" => log_wrappers::Value(&iter.upper_bound),
+            //                                 "disk_key" => log_wrappers::Value(&disk_iter.key()),
+            //                                 "disk_key_ts" => ts,
+            //                                 "safe_ts" => safe_point,
+            //                                 "snapshot_ts" =>
+            // range_snap.snapshot_meta.snapshot_ts,
+            // "seqno" => iter.sequence_number,                                 "cf" =>
+            // ?cf,                             );
+            //                             unreachable!();
+            //                         }
+            //                         let write = parse_write(disk_iter.value()).unwrap();
+            //                         if write.write_type == WriteType::Put {
+            //                             error!(
+            //                                 "seek_to_first result not equal";
+            //                                 "lower" => log_wrappers::Value(&iter.lower_bound),
+            //                                 "upper" => log_wrappers::Value(&iter.upper_bound),
+            //                                 "disk_key" => log_wrappers::Value(&disk_iter.key()),
+            //                                 "disk_key_ts" => ts,
+            //                                 "safe_ts" => safe_point,
+            //                                 "snapshot_ts" =>
+            // range_snap.snapshot_meta.snapshot_ts,
+            // "seqno" => iter.sequence_number,                                 "cf" =>
+            // ?cf,                             );
+            //                             unreachable!();
+            //                         }
+            //                     }
+            //                     continue;
+            //                 }
+            //                 if !d_valid {
+            //                     error!(
+            //                         "seek_to_first result not equal";
+            //                         "lower" => log_wrappers::Value(&iter.lower_bound),
+            //                         "upper" => log_wrappers::Value(&iter.upper_bound),
+            //                         "cache_key" => log_wrappers::Value(&iter.key()),
+            //                         "seqno" => iter.sequence_number,
+            //                         "cf" => ?cf,
+            //                     );
+            //                     unreachable!();
+            //                 }
 
-                            let check_default = |iter: &RangeCacheIterator| {
-                                let write = WriteRef::parse(iter.value()).unwrap();
-                                match write.write_type {
-                                    WriteType::Put => {
-                                        if write.short_value.is_none() {
-                                            let start_ts = write.start_ts;
-                                            let (user_key, _) = split_ts(iter.key()).unwrap();
-                                            let key = Key::from_encoded(user_key.to_vec())
-                                                .append_ts(start_ts.clone());
-                                            if let Ok(Some(_)) =
-                                                range_snap.get_value(key.as_encoded())
-                                            {
-                                            } else {
-                                                // check again
-                                                if let Ok(Some(_)) =
-                                                    range_snap.get_value_cf(CF_WRITE, iter.key())
-                                                {
-                                                    error!(
-                                                        "default not found";
-                                                        "default_key" => log_wrappers::Value(key.as_encoded()),
-                                                        "write_key" => log_wrappers::Value(&iter.key()),
-                                                        "start_ts" => start_ts,
-                                                        "seqno" => iter.sequence_number,
-                                                    );
-                                                    unreachable!();
-                                                }
-                                            }
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            };
-                            next_to_match(cf, &mut iter, &mut disk_iter, false, &vec![], 0);
-                            if *cf == CF_WRITE {
-                                check_default(&iter);
-                            }
+            //                 let check_default = |iter: &RangeCacheIterator| {
+            //                     let write = WriteRef::parse(iter.value()).unwrap();
+            //                     match write.write_type {
+            //                         WriteType::Put => {
+            //                             if write.short_value.is_none() {
+            //                                 let start_ts = write.start_ts;
+            //                                 let (user_key, _) = split_ts(iter.key()).unwrap();
+            //                                 let key = Key::from_encoded(user_key.to_vec())
+            //                                     .append_ts(start_ts.clone());
+            //                                 if let Ok(Some(_)) =
+            //                                     range_snap.get_value(key.as_encoded())
+            //                                 {
+            //                                 } else {
+            //                                     // check again
+            //                                     if let Ok(Some(_)) =
+            //                                         range_snap.get_value_cf(CF_WRITE, iter.key())
+            //                                     {
+            //                                         error!(
+            //                                             "default not found";
+            //                                             "default_key" =>
+            // log_wrappers::Value(key.as_encoded()),
+            // "write_key" => log_wrappers::Value(&iter.key()),
+            // "start_ts" => start_ts,
+            // "seqno" => iter.sequence_number,
+            // );                                         unreachable!();
+            //                                     }
+            //                                 }
+            //                             }
+            //                         }
+            //                         _ => {}
+            //                     }
+            //                 };
+            //                 next_to_match(cf, &mut iter, &mut disk_iter, false, &vec![], 0);
+            //                 if *cf == CF_WRITE {
+            //                     check_default(&iter);
+            //                 }
 
-                            let (mut last_user_key, mut last_ts) = if *cf == CF_WRITE {
-                                let r = split_ts(iter.key()).unwrap();
-                                (r.0.to_vec(), r.1)
-                            } else {
-                                (vec![], 0)
-                            };
+            //                 let (mut last_user_key, mut last_ts) = if *cf == CF_WRITE {
+            //                     let r = split_ts(iter.key()).unwrap();
+            //                     (r.0.to_vec(), r.1)
+            //                 } else {
+            //                     (vec![], 0)
+            //                 };
 
-                            while iter.next().unwrap() {
-                                next_to_match(
-                                    cf,
-                                    &mut iter,
-                                    &mut disk_iter,
-                                    true,
-                                    &last_user_key,
-                                    last_ts,
-                                );
-                                if *cf == CF_WRITE {
-                                    check_default(&iter);
-                                }
+            //                 while iter.next().unwrap() {
+            //                     next_to_match(
+            //                         cf,
+            //                         &mut iter,
+            //                         &mut disk_iter,
+            //                         true,
+            //                         &last_user_key,
+            //                         last_ts,
+            //                     );
+            //                     if *cf == CF_WRITE {
+            //                         check_default(&iter);
+            //                     }
 
-                                if *cf == CF_WRITE {
-                                    let (cur_user_key, ts) = split_ts(iter.key()).unwrap();
-                                    if last_user_key != cur_user_key {
-                                        last_user_key = cur_user_key.to_vec();
-                                        last_ts = 0;
-                                    }
-                                    if last_ts == 0 && last_ts < read_ts {
-                                        last_ts = read_ts;
-                                    }
-                                }
-                            }
-                        }
-                        info!(
-                            "audit range done";
-                            "range" => ?range_snap.snapshot_meta.range,
-                        );
-                    }
-                };
+            //                     if *cf == CF_WRITE {
+            //                         let (cur_user_key, ts) = split_ts(iter.key()).unwrap();
+            //                         if last_user_key != cur_user_key {
+            //                             last_user_key = cur_user_key.to_vec();
+            //                             last_ts = 0;
+            //                         }
+            //                         if last_ts == 0 && last_ts < read_ts {
+            //                             last_ts = read_ts;
+            //                         }
+            //                     }
+            //                 }
+            //             }
+            //             info!(
+            //                 "audit range done";
+            //                 "range" => ?range_snap.snapshot_meta.range,
+            //             );
+            //         }
+            //     };
 
-                self.audit_remote.spawn(f);
-            }
+            //     self.audit_remote.spawn(f);
+            // }
             BackgroundTask::Gc(t) => {
                 let seqno = (|| {
                     fail::fail_point!("in_memory_engine_gc_oldest_seqno", |t| {
@@ -1478,6 +1486,14 @@ impl Runnable for BackgroundRunner {
                 self.lock_cleanup_remote.spawn(f);
             }
             BackgroundTask::ManualLoad(_) => unreachable!(),
+            BackgroundTask::TurnOnCrossCheck((engine, rocks_engine, pd_client, check_interval)) => {
+                let cross_check_worker = Worker::new("cross-check-worker");
+                let cross_check_runner =
+                    CrossChecker::new(pd_client, engine, rocks_engine, check_interval);
+                let _ =
+                    cross_check_worker.start_with_timer("cross-check-runner", cross_check_runner);
+                self.cross_check_worker = Some(cross_check_worker);
+            }
         }
     }
 }
@@ -1975,6 +1991,584 @@ impl Filter {
             }
         }
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+enum CrossCheckTask {
+    CrossCheck,
+}
+
+impl Display for CrossCheckTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CrossCheckTask::CrossCheck => f.debug_struct("CrossCheck").finish(),
+        }
+    }
+}
+
+struct CrossChecker {
+    pd_client: Arc<dyn PdClient>,
+    memory_engine: RangeCacheMemoryEngine,
+    rocks_engine: RocksEngine,
+    interval: Duration,
+}
+
+impl CrossChecker {
+    fn new(
+        pd_client: Arc<dyn PdClient>,
+        memory_engine: RangeCacheMemoryEngine,
+        rocks_engine: RocksEngine,
+        interval: Duration,
+    ) -> CrossChecker {
+        CrossChecker {
+            pd_client,
+            memory_engine,
+            rocks_engine,
+            interval,
+        }
+    }
+
+    fn cross_check_range(&self, range_snap: &RangeCacheSnapshot, rocks_snap: &RocksSnapshot) {
+        info!(
+            "audit range";
+            "range" => ?range_snap.snapshot_meta().range,
+        );
+        let opts = iter_option(
+            &range_snap.snapshot_meta().range.start,
+            &range_snap.snapshot_meta().range.end,
+            false,
+        );
+        let mut safe_point = {
+            let core = self.memory_engine.core().read();
+            if let Some(meta) = core
+                .range_manager
+                .range_meta(&range_snap.snapshot_meta().range)
+            {
+                meta.safe_point()
+            } else {
+                core.range_manager
+                    .history_range_meta(&range_snap.snapshot_meta().range)
+                    .unwrap()
+                    .safe_point()
+            }
+        };
+        for cf in &[CF_LOCK, CF_WRITE] {
+            let mut mem_iter = range_snap.iterator_opt(cf, opts.clone()).unwrap();
+            let mut disk_iter = rocks_snap.iterator_opt(cf, opts.clone()).unwrap();
+
+            let mem_valid = mem_iter.seek_to_first().unwrap();
+            let disk_valid = disk_iter.seek_to_first().unwrap();
+            if !mem_valid {
+                if disk_valid {
+                    if *cf == CF_LOCK {
+                        panic!(
+                            "cross check fail(miss key): lock cf not match when seek_to_first; 
+                            lower={:?}, upper={:?}; disk_key={:?}; sequence_numer={};",
+                            log_wrappers::Value(&mem_iter.lower_bound),
+                            log_wrappers::Value(&mem_iter.upper_bound),
+                            log_wrappers::Value(disk_iter.key()),
+                            mem_iter.sequence_number,
+                        );
+                    }
+
+                    let (_, mvcc) = split_ts(disk_iter.key()).unwrap();
+                    // We cannot miss any types of write if the mvcc version is larger than
+                    // safe_point of the relevant range
+                    if mvcc > safe_point {
+                        panic!(
+                            "cross check fail(miss key): write cf not match when seek_to_first; 
+                            lower={:?}, upper={:?}; disk_key={:?}, disk_mvcc={}; sequence_numer={};",
+                            log_wrappers::Value(&mem_iter.lower_bound),
+                            log_wrappers::Value(&mem_iter.upper_bound),
+                            log_wrappers::Value(disk_iter.key()),
+                            mvcc,
+                            mem_iter.sequence_number,
+                        );
+                    }
+                    let write = parse_write(disk_iter.value()).unwrap();
+                    // we should not miss a seek_to_first key with a Put type,
+                    if write.write_type == WriteType::Put {
+                        panic!(
+                            "cross check fail(miss key): write cf not match when seek_to_first; 
+                            lower={:?}, upper={:?}; disk_key={:?}, disk_mvcc={}; sequence_numer={};",
+                            log_wrappers::Value(&mem_iter.lower_bound),
+                            log_wrappers::Value(&mem_iter.upper_bound),
+                            log_wrappers::Value(disk_iter.key()),
+                            mvcc,
+                            mem_iter.sequence_number,
+                        );
+                    }
+                }
+                continue;
+            }
+            if !disk_valid {
+                panic!(
+                    "cross check fail(redundant key): {:?} cf not match when seek_to_first; 
+                    lower={:?}, upper={:?}; cache_key={:?}; sequence_numer={};",
+                    cf,
+                    log_wrappers::Value(&mem_iter.lower_bound),
+                    log_wrappers::Value(&mem_iter.upper_bound),
+                    log_wrappers::Value(mem_iter.key()),
+                    mem_iter.sequence_number,
+                );
+            }
+
+            let check_default = |iter: &RangeCacheIterator| {
+                let write = WriteRef::parse(iter.value()).unwrap();
+                if write.write_type == WriteType::Put && write.short_value.is_none() {
+                    let start_ts = write.start_ts;
+                    let (user_key, _) = split_ts(iter.key()).unwrap();
+                    let default_key = Key::from_encoded(user_key.to_vec()).append_ts(start_ts);
+                    if let Ok(Some(_)) = range_snap.get_value(default_key.as_encoded()) {
+                    } else {
+                        // check again
+                        if let Ok(Some(_)) = range_snap.get_value_cf(CF_WRITE, iter.key()) {
+                            panic!(
+                                        "cross check fail(miss key): default not found; 
+                                        lower={:?}, upper={:?}; default_key={:?}, write_key={:?}, start_ts={}; sequence_numer={};",
+                                        log_wrappers::Value(&iter.lower_bound),
+                                        log_wrappers::Value(&iter.upper_bound),
+                                        log_wrappers::Value(default_key.as_encoded()),
+                                        log_wrappers::Value(iter.key()),
+                                        start_ts,
+                                        iter.sequence_number,
+                                    );
+                        }
+                    }
+                }
+            };
+
+            let (
+                mut last_user_key,
+                mut cur_user_key,
+                mut last_mvcc_before_safe_point_of_cur_user_key,
+            ) = if *cf == CF_WRITE {
+                let r = split_ts(mem_iter.key()).unwrap();
+                (r.0.to_vec(), r.0.to_vec(), r.1)
+            } else {
+                (vec![], vec![], 0)
+            };
+            let mut last_user_key_delete = false;
+            let mut last_mvcc_before_safe_point_of_last_user_key = 0;
+
+            CrossChecker::next_to_match(
+                cf,
+                &mem_iter,
+                &mut disk_iter,
+                false,
+                &mut safe_point,
+                &self.memory_engine,
+                &range_snap.snapshot_meta().range,
+                last_mvcc_before_safe_point_of_cur_user_key,
+                &last_user_key,
+                &mut last_user_key_delete,
+                last_mvcc_before_safe_point_of_last_user_key,
+            );
+            if *cf == CF_WRITE {
+                check_default(&mem_iter);
+            }
+
+            while mem_iter.next().unwrap() {
+                let (user_key, ts) = split_ts(mem_iter.key()).unwrap();
+                if *cf == CF_WRITE {
+                    let write = parse_write(mem_iter.value()).unwrap();
+                    if cur_user_key != user_key {
+                        cur_user_key = user_key.to_vec();
+                        last_mvcc_before_safe_point_of_cur_user_key = 0;
+                    }
+                    if last_mvcc_before_safe_point_of_cur_user_key == 0
+                        && ts < safe_point
+                        && (write.write_type != WriteType::Lock
+                            || write.write_type != WriteType::Rollback)
+                    {
+                        last_mvcc_before_safe_point_of_cur_user_key = ts;
+                    }
+                }
+
+                CrossChecker::next_to_match(
+                    cf,
+                    &mem_iter,
+                    &mut disk_iter,
+                    true,
+                    &mut safe_point,
+                    &self.memory_engine,
+                    &range_snap.snapshot_meta().range,
+                    last_mvcc_before_safe_point_of_cur_user_key,
+                    &last_user_key,
+                    &mut last_user_key_delete,
+                    last_mvcc_before_safe_point_of_last_user_key,
+                );
+
+                if *cf == CF_WRITE {
+                    check_default(&mem_iter);
+
+                    if cur_user_key != user_key {
+                        last_user_key = user_key.to_vec();
+                        last_user_key_delete = false;
+                    }
+                    if last_mvcc_before_safe_point_of_last_user_key == 0
+                        && ts < safe_point
+                        && (write.write_type != WriteType::Lock
+                            || write.write_type != WriteType::Rollback)
+                    {
+                        last_mvcc_before_safe_point_of_last_user_key = ts;
+                    }
+                }
+            }
+        }
+        info!(
+            "audit range done";
+            "range" => ?range_snap.snapshot_meta().range,
+        );
+    }
+
+    // In-memory engine may have gced some versions, so we should call next of
+    // disk_iter for some times to get aligned with mem_iter.
+    // After each call of disk_iter, we will check whether the key missed in the
+    // in-memory engine will not make it compromise data consistency.
+    // `next_fisrt` denotes whether disk_iter should call next before comparison
+    fn next_to_match(
+        cf: &str,
+        mem_iter: &RangeCacheIterator,
+        disk_iter: &mut RocksEngineIterator,
+        next_fisrt: bool,
+        safe_point: &mut u64,
+        engine: &RangeCacheMemoryEngine,
+        range: &CacheRange,
+        last_mvcc_before_safe_point_of_cur_user_key: u64,
+        last_user_key: &[u8],
+        last_user_key_delete: &mut bool,
+        last_mvcc_before_safe_point_of_last_user_key: u64,
+    ) {
+        let read_ts = mem_iter.snapshot_read_ts;
+        let mem_key = mem_iter.key();
+        if next_fisrt && !disk_iter.next().unwrap() {
+            panic!(
+                "cross check fail(redundant key): disk iterator next failed; 
+                    lower={:?}, upper={:?}; cache_key={:?}; sequence_numer={}; cf={:?}",
+                log_wrappers::Value(&mem_iter.lower_bound),
+                log_wrappers::Value(&mem_iter.upper_bound),
+                log_wrappers::Value(mem_key),
+                mem_iter.sequence_number,
+                cf,
+            );
+        }
+
+        loop {
+            let disk_key = disk_iter.key();
+            if cf == "lock" {
+                // lock cf should always have the same view
+                if disk_key != mem_key {
+                    panic!(
+                        "cross check fail(key not equal): lock cf not match; 
+                        lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={};",
+                        log_wrappers::Value(&mem_iter.lower_bound),
+                        log_wrappers::Value(&mem_iter.upper_bound),
+                        log_wrappers::Value(mem_key),
+                        log_wrappers::Value(disk_key),
+                        mem_iter.sequence_number,
+                    );
+                }
+                if mem_iter.value() != disk_iter.value() {
+                    panic!(
+                        "cross check fail(value not equal): lock cf not match; 
+                        lower={:?}, upper={:?}; key={:?}, mem_value={:?} disk_key={:?};",
+                        log_wrappers::Value(&mem_iter.lower_bound),
+                        log_wrappers::Value(&mem_iter.upper_bound),
+                        log_wrappers::Value(mem_key),
+                        log_wrappers::Value(mem_iter.value()),
+                        log_wrappers::Value(disk_iter.value()),
+                    );
+                }
+                break;
+            }
+
+            if disk_key == mem_key {
+                if mem_iter.value() != disk_iter.value() {
+                    panic!(
+                        "cross check fail(value not equal): write cf not match; 
+                        lower={:?}, upper={:?}; key={:?}, mem_value={:?} disk_key={:?};",
+                        log_wrappers::Value(&mem_iter.lower_bound),
+                        log_wrappers::Value(&mem_iter.upper_bound),
+                        log_wrappers::Value(mem_key),
+                        log_wrappers::Value(mem_iter.value()),
+                        log_wrappers::Value(disk_iter.value()),
+                    );
+                }
+                break;
+            }
+
+            let (mem_user_key, mem_mvcc) = split_ts(mem_key).unwrap();
+            // Some versions that are in rocksdb but have gced by in-memory engine
+            let (disk_user_key, disk_mvcc) = split_ts(disk_key).unwrap();
+
+            let write = parse_write(disk_iter.value()).unwrap();
+            if write.write_type == WriteType::Delete {
+                *last_user_key_delete = true;
+            }
+            if mem_user_key == disk_user_key {
+                if disk_mvcc > mem_mvcc {
+                    if write.write_type == WriteType::Rollback
+                        || write.write_type == WriteType::Lock
+                    {
+                        // todo(SpadeA): figure out this before review(merge)
+                        info!(
+                            "meet gced rollback or lock";
+                            "cache_key" => log_wrappers::Value(mem_key),
+                            "disk_key" => log_wrappers::Value(disk_key),
+                            "lower" => log_wrappers::Value(&mem_iter.lower_bound),
+                            "upper" => log_wrappers::Value(&mem_iter.upper_bound),
+                            "seqno" => mem_iter.sequence_number,
+                            "cf" => ?cf,
+                        );
+                    } else {
+                        // [k1-10, k1-8, k1-5(mvcc delete), k1-4, k1-3]
+                        // safe_point: 6
+                        // If we gc this range, we will filter k-5, k1-4, and k1-3 but with k1-5
+                        // deleted at last, so we may see an intermediate
+                        // state [k1-10, k1-8, k1-5(mvcc delete),
+                        // k1-3] where k1-4 is filtered so we have a lower mvcc key k1-3 and a
+                        // higher mvcc key k1-5. So we should user the
+                        // safe_point to compare the mvcc version.
+                        if disk_mvcc >= *safe_point {
+                            if disk_mvcc < read_ts {
+                                // get safe point again as it may be updated
+                                *safe_point = {
+                                    let core = engine.core().read();
+                                    if let Some(meta) = core.range_manager.range_meta(&range) {
+                                        meta.safe_point()
+                                    } else {
+                                        core.range_manager
+                                            .history_range_meta(&range)
+                                            .unwrap()
+                                            .safe_point()
+                                    }
+                                };
+                            }
+                            // check again
+                            if disk_mvcc >= *safe_point {
+                                panic!(
+                                    "cross check fail(miss key): miss valid mvcc version; 
+                                    lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
+                                    log_wrappers::Value(&mem_iter.lower_bound),
+                                    log_wrappers::Value(&mem_iter.upper_bound),
+                                    log_wrappers::Value(mem_key),
+                                    log_wrappers::Value(disk_key),
+                                    mem_iter.sequence_number,
+                                    read_ts,
+                                    *safe_point,
+                                );
+                            }
+                        }
+                        // We record the largest mvcc version below safe_point for each user_key --
+                        // last_mvcc_before_safe_point, and there should not be any version between
+                        // it and safe_point
+                        // So,   for [k1-10, k1-8, k1-5, k1-4, k1-3]
+                        // safe_point: 6
+                        // If we see [k1-10, k1-8, k1-4, k1-3] in the in-memory engine, and iterator
+                        // points to
+                        if disk_mvcc < *safe_point
+                            && (last_mvcc_before_safe_point_of_cur_user_key != 0
+                                && disk_mvcc > last_mvcc_before_safe_point_of_cur_user_key)
+                            && (write.write_type != WriteType::Rollback
+                                && write.write_type != WriteType::Lock)
+                        {
+                            panic!(
+                                "cross check fail(miss key): miss valid mvcc version; 
+                                lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
+                                log_wrappers::Value(&mem_iter.lower_bound),
+                                log_wrappers::Value(&mem_iter.upper_bound),
+                                log_wrappers::Value(mem_key),
+                                log_wrappers::Value(disk_key),
+                                mem_iter.sequence_number,
+                                read_ts,
+                                *safe_point,
+                            );
+                        }
+                    }
+                }
+            } else {
+                if disk_mvcc > *safe_point {
+                    *safe_point = {
+                        let core = engine.core().read();
+                        if let Some(meta) = core.range_manager.range_meta(&range) {
+                            meta.safe_point()
+                        } else {
+                            core.range_manager
+                                .history_range_meta(&range)
+                                .unwrap()
+                                .safe_point()
+                        }
+                    };
+                    if disk_mvcc > *safe_point {
+                        panic!(
+                            "cross check fail(miss key): keys newer than safe_point have been gced; 
+                            lower={:?}, upper={:?}; disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
+                            log_wrappers::Value(&mem_iter.lower_bound),
+                            log_wrappers::Value(&mem_iter.upper_bound),
+                            log_wrappers::Value(disk_key),
+                            mem_iter.sequence_number,
+                            read_ts,
+                            *safe_point,
+                        );
+                    } else {
+                        // In this case, we only allow the write type to be Rollback/Lock/Delete for
+                        // the first version. The sebsequent version should only exist if the first
+                        // version is delete.
+                        if disk_mvcc > last_mvcc_before_safe_point_of_last_user_key {
+                            if write.write_type == WriteType::Rollback
+                                || write.write_type == WriteType::Lock
+                            {
+                                info!(
+                                    "meet gced rollback or lock";
+                                    "cache_key" => log_wrappers::Value(mem_key),
+                                    "disk_key" => log_wrappers::Value(disk_key),
+                                    "lower" => log_wrappers::Value(&mem_iter.lower_bound),
+                                    "upper" => log_wrappers::Value(&mem_iter.upper_bound),
+                                    "seqno" => mem_iter.sequence_number,
+                                    "cf" => ?cf,
+                                );
+                            } else {
+                            }
+                        } else {
+                        }
+
+                        if let Ok(write) = parse_write(disk_iter.value())
+                            && cf == "write"
+                            && (write.write_type == WriteType::Rollback
+                                || write.write_type == WriteType::Lock
+                                || write.write_type == WriteType::Delete)
+                        {
+                            if write.write_type == WriteType::Delete {
+                                *last_user_key_delete = true;
+                            }
+                            // todo(SpadeA): figure out this before review(merge)
+                            info!(
+                                "meet gced rollback or lock";
+                                "cache_key" => log_wrappers::Value(mem_key),
+                                "disk_key" => log_wrappers::Value(disk_key),
+                                "lower" => log_wrappers::Value(&mem_iter.lower_bound),
+                                "upper" => log_wrappers::Value(&mem_iter.upper_bound),
+                                "seqno" => mem_iter.sequence_number,
+                                "cf" => ?cf,
+                            );
+                        } else {
+                            if last_user_key == disk_user_key {
+                                if !*last_user_key_delete {
+                                    panic!(
+                                        "cross check fail(miss key): miss valid mvcc version; 
+                                        lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
+                                        log_wrappers::Value(&mem_iter.lower_bound),
+                                        log_wrappers::Value(&mem_iter.upper_bound),
+                                        log_wrappers::Value(mem_key),
+                                        log_wrappers::Value(disk_key),
+                                        mem_iter.sequence_number,
+                                        read_ts,
+                                        *safe_point,
+                                    );
+                                }
+                            } else {
+                                panic!(
+                                    "cross check fail(miss key): miss valid mvcc version; 
+                                    lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
+                                    log_wrappers::Value(&mem_iter.lower_bound),
+                                    log_wrappers::Value(&mem_iter.upper_bound),
+                                    log_wrappers::Value(mem_key),
+                                    log_wrappers::Value(disk_key),
+                                    mem_iter.sequence_number,
+                                    read_ts,
+                                    *safe_point,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            if disk_key > mem_key {
+                panic!(
+                    "cross check fail(redundant key): write cf not match; 
+                    lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
+                    log_wrappers::Value(&mem_iter.lower_bound),
+                    log_wrappers::Value(&mem_iter.upper_bound),
+                    log_wrappers::Value(mem_key),
+                    log_wrappers::Value(disk_key),
+                    mem_iter.sequence_number,
+                    read_ts,
+                    *safe_point,
+                );
+            }
+
+            assert!(disk_iter.next().unwrap());
+        }
+    }
+}
+
+impl Runnable for CrossChecker {
+    type Task = CrossCheckTask;
+
+    fn run(&mut self, _: Self::Task) {
+        let ranges: Vec<_> = {
+            let core = self.memory_engine.core().read();
+            core.range_manager
+                .ranges()
+                .iter()
+                .map(|(r, _)| r.clone())
+                .collect()
+        };
+
+        let snap = self.rocks_engine.snapshot(None);
+
+        let tso_timeout = Duration::from_secs(5);
+        let now = match block_on_timeout(self.pd_client.get_tso(), tso_timeout) {
+            Ok(Ok(ts)) => ts,
+            err => {
+                error!(
+                    "schedule range cache engine gc failed ";
+                    "timeout_duration" => ?tso_timeout,
+                    "error" => ?err,
+                );
+                return;
+            }
+        };
+
+        // Check the snapshot with read_ts one minute ago
+        let read_ts = now.physical() - Duration::from_secs(60).as_millis() as u64;
+        let read_ts = TimeStamp::compose(read_ts, 0).into_inner();
+
+        let ranges_to_audit: Vec<_> = ranges
+            .iter()
+            .filter_map(|range| {
+                match self
+                    .memory_engine
+                    .snapshot(range.clone(), read_ts, snap.sequence_number())
+                {
+                    Ok(range_snap) => Some(range_snap),
+                    Err(_) => {
+                        warn!(
+                            "failed to get snap in cross check";
+                            "range" => ?range,
+                        );
+                        None
+                    }
+                }
+            })
+            .collect();
+
+        ranges_to_audit
+            .into_iter()
+            .for_each(|r| self.cross_check_range(&r, &snap));
+    }
+}
+
+impl RunnableWithTimer for CrossChecker {
+    fn get_interval(&self) -> Duration {
+        self.interval
+    }
+
+    fn on_timeout(&mut self) {
+        self.run(CrossCheckTask::CrossCheck);
     }
 }
 

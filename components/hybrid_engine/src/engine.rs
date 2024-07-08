@@ -28,7 +28,6 @@ where
 {
     disk_engine: EK,
     region_cache_engine: EC,
-    handler: Arc<JoinHandle<()>>,
 }
 
 impl<EK, EC> HybridEngine<EK, EC>
@@ -58,11 +57,10 @@ where
     EK: KvEngine,
     EC: RangeCacheEngine,
 {
-    pub fn new(disk_engine: EK, region_cache_engine: EC, handler: JoinHandle<()>) -> Self {
+    pub fn new(disk_engine: EK, region_cache_engine: EC) -> Self {
         Self {
             disk_engine,
             region_cache_engine,
-            handler: Arc::new(handler),
         }
     }
 }

@@ -88,6 +88,10 @@ impl RangeCacheSnapshot {
             engine: engine.clone(),
         })
     }
+
+    pub(crate) fn snapshot_meta(&self) -> &RangeCacheSnapshotMeta {
+        &self.snapshot_meta
+    }
 }
 
 impl Drop for RangeCacheSnapshot {
@@ -157,7 +161,7 @@ impl Iterable for RangeCacheSnapshot {
             sequence_number: self.sequence_number(),
             saved_user_key: vec![],
             saved_value: None,
-            read_ts: self.snapshot_meta.snapshot_ts,
+            snapshot_read_ts: self.snapshot_meta.snapshot_ts,
             direction: Direction::Uninit,
             statistics: self.engine.statistics(),
             prefix_extractor,
@@ -255,11 +259,11 @@ pub struct RangeCacheIterator {
 
     direction: Direction,
 
-    pub read_ts: u64,
-
     statistics: Arc<Statistics>,
     local_stats: LocalStatistics,
     seek_duration: LocalHistogram,
+
+    pub snapshot_read_ts: u64,
 }
 
 impl Drop for RangeCacheIterator {

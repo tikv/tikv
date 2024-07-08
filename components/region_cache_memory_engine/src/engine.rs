@@ -639,36 +639,36 @@ impl RangeCacheMemoryEngine {
         buffer
     }
 
-    pub fn schedule_audit(&self) {
-        let snap = self.rocks_engine.as_ref().unwrap().snapshot(None);
-        let mut ranges_to_audit = vec![];
-        let ranges: Vec<_> = {
-            let mut core = self.core().write();
-            core.range_manager
-                .ranges()
-                .iter()
-                .map(|(r, _)| r.clone())
-                .collect()
-        };
-        for range in ranges {
-            let read_ts = TimeStamp::physical_now() - Duration::from_secs(40).as_millis() as u64;
-            let read_ts = TimeStamp::compose(read_ts, 0).into_inner();
+    // pub fn schedule_audit(&self) {
+    //     let snap = self.rocks_engine.as_ref().unwrap().snapshot(None);
+    //     let mut ranges_to_audit = vec![];
+    //     let ranges: Vec<_> = {
+    //         let mut core = self.core().read();
+    //         core.range_manager
+    //             .ranges()
+    //             .iter()
+    //             .map(|(r, _)| r.clone())
+    //             .collect()
+    //     };
+    //     for range in ranges {
+    //         let read_ts = TimeStamp::physical_now() - Duration::from_secs(40).as_millis() as u64;
+    //         let read_ts = TimeStamp::compose(read_ts, 0).into_inner();
 
-            if let Ok(range_snap) = self.snapshot(range.clone(), read_ts, snap.sequence_number()) {
-                ranges_to_audit.push(range_snap);
-            } else {
-                warn!(
-                    "failed to get snap in audit";
-                    "range" => ?range,
-                );
-            }
-        }
-        if !ranges_to_audit.is_empty() {
-            self.bg_worker_manager()
-                .schedule_task(BackgroundTask::Audit((ranges_to_audit, snap)))
-                .unwrap();
-        }
-    }
+    //         if let Ok(range_snap) = self.snapshot(range.clone(), read_ts, snap.sequence_number()) {
+    //             ranges_to_audit.push(range_snap);
+    //         } else {
+    //             warn!(
+    //                 "failed to get snap in audit";
+    //                 "range" => ?range,
+    //             );
+    //         }
+    //     }
+    //     if !ranges_to_audit.is_empty() {
+    //         self.bg_worker_manager()
+    //             .schedule_task(BackgroundTask::Audit((ranges_to_audit, snap)))
+    //             .unwrap();
+    //     }
+    // }
 
     pub fn alloc_write_batch_id(&self) -> u64 {
         self.write_batch_id_allocator

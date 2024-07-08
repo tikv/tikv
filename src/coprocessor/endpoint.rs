@@ -141,6 +141,9 @@ impl<E: Engine> Endpoint<E> {
     }
 
     fn check_memory_locks(&self, req_ctx: &ReqContext) -> Result<()> {
+        if TXN_LOG.load(Ordering::Relaxed) {
+            info!("cop check memory locks"; "req_ctx" => ?req_ctx);
+        }
         let start_ts = req_ctx.txn_start_ts;
         if !req_ctx.context.get_stale_read() {
             self.concurrency_manager.update_max_ts(start_ts);
