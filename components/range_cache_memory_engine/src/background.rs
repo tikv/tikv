@@ -3686,8 +3686,7 @@ pub mod tests {
             disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
         });
 
-        // case mem_user_key == disk_user_key and last_mem_user_key == disk_user_key
-        // temporary state in GC: k1-4 is filtered
+        // Temporary state in GC: k1-4 is filtered
         // Safe point: 6
         // IME:  k1-9, k1-5-d,       k1-2  k2-7
         // Disk: k1-9, k1-5-d, k1-4, k1-2, k2-7,
@@ -3712,7 +3711,6 @@ pub mod tests {
             disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
         });
 
-        // case mem_user_key == disk_user_key and last_mem_user_key == disk_user_key
         // Safe point: 6
         // IME:  k1-9,                     k2-7
         // Disk: k1-9, k1-5-d, k1-4, k1-2, k2-7,
@@ -3735,7 +3733,6 @@ pub mod tests {
             disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
         });
 
-        // case mem_user_key == disk_user_key and last_mem_user_key != disk_user_key
         // Safe point: 6
         // IME:  k1-9, k1-5,                           k3-7
         // Disk: k1-9, k1-5, k1-4, k1-2, k2-4-d, k2-3, k3-7
@@ -3765,7 +3762,6 @@ pub mod tests {
             disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
         });
 
-        // case mem_user_key == disk_user_key and last_mem_user_key != disk_user_key
         // Safe point: 6
         // IME:  k1-9,                     k2-4-d        k2-1 k3-7
         // Disk: k1-9, k1-5-d, k1-4, k1-2, k2-4-d, k2-3, k2-1 k3-7
@@ -3799,7 +3795,6 @@ pub mod tests {
             disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
         });
 
-        // case mem_user_key == disk_user_key and last_mem_user_key != disk_user_key
         // Safe point: 6
         // IME:  k1-9,                                   k3-7
         // Disk: k1-9, k1-5-d, k1-4, k1-2, k2-4-d, k2-3, k3-7
@@ -3833,7 +3828,6 @@ pub mod tests {
     #[test]
     #[should_panic]
     fn test_cross_check_panic1() {
-        // case mem_user_key == disk_user_key and last_mem_user_key == disk_user_key
         // Safe point: 6
         // IME:  k1-9, k1-5-r,             k2-7
         // Disk: k1-9, k1-5-r, k1-4, k1-2, k2-7,
@@ -3992,7 +3986,6 @@ pub mod tests {
     #[test]
     #[should_panic]
     fn test_cross_check_panic5() {
-        // case mem_user_key == disk_user_key and last_mem_user_key == disk_user_key
         // Safe point: 6
         // IME:        k2-7
         // Disk: k1-9, k2-7,
