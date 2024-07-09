@@ -1469,7 +1469,7 @@ impl CrossChecker {
 
     fn cross_check_range(&self, range_snap: &RangeCacheSnapshot, rocks_snap: &RocksSnapshot) {
         info!(
-            "audit range";
+            "cross check range";
             "range" => ?range_snap.snapshot_meta().range,
         );
         let opts = iter_option(
@@ -1477,7 +1477,7 @@ impl CrossChecker {
             &range_snap.snapshot_meta().range.end,
             false,
         );
-        let safe_point = {
+        let mut safe_point = {
             let core = self.memory_engine.core().read();
             if let Some(meta) = core
                 .range_manager
@@ -1491,6 +1491,7 @@ impl CrossChecker {
                     .safe_point()
             }
         };
+
         for cf in &[CF_LOCK, CF_WRITE] {
             let mut mem_iter = range_snap.iterator_opt(cf, opts.clone()).unwrap();
             let mut disk_iter = rocks_snap.iterator_opt(cf, opts.clone()).unwrap();
@@ -1498,46 +1499,22 @@ impl CrossChecker {
             let mem_valid = mem_iter.seek_to_first().unwrap();
             let disk_valid = disk_iter.seek_to_first().unwrap();
             if !mem_valid {
-                if disk_valid {
-                    if *cf == CF_LOCK {
-                        panic!(
-                            "cross check fail(miss key): lock cf not match when seek_to_first; 
-                            lower={:?}, upper={:?}; disk_key={:?}; sequence_numer={};",
-                            log_wrappers::Value(&mem_iter.lower_bound),
-                            log_wrappers::Value(&mem_iter.upper_bound),
-                            log_wrappers::Value(disk_iter.key()),
-                            mem_iter.sequence_number,
-                        );
-                    }
-
-                    let (_, mvcc) = split_ts(disk_iter.key()).unwrap();
-                    // We cannot miss any types of write if the mvcc version is larger than
-                    // safe_point of the relevant range
-                    if mvcc > safe_point {
-                        panic!(
-                            "cross check fail(miss key): write cf not match when seek_to_first; 
-                            lower={:?}, upper={:?}; disk_key={:?}, disk_mvcc={}; sequence_numer={};",
-                            log_wrappers::Value(&mem_iter.lower_bound),
-                            log_wrappers::Value(&mem_iter.upper_bound),
-                            log_wrappers::Value(disk_iter.key()),
-                            mvcc,
-                            mem_iter.sequence_number,
-                        );
-                    }
-                    let write = parse_write(disk_iter.value()).unwrap();
-                    // we should not miss a seek_to_first key with a Put type,
-                    if write.write_type == WriteType::Put {
-                        panic!(
-                            "cross check fail(miss key): write cf not match when seek_to_first; 
-                            lower={:?}, upper={:?}; disk_key={:?}, disk_mvcc={}; sequence_numer={};",
-                            log_wrappers::Value(&mem_iter.lower_bound),
-                            log_wrappers::Value(&mem_iter.upper_bound),
-                            log_wrappers::Value(disk_iter.key()),
-                            mvcc,
-                            mem_iter.sequence_number,
-                        );
-                    }
-                }
+                let mut last_disk_user_key = vec![];
+                let mut last_disk_user_key_delete = false;
+                let mut last_mvcc_before_safe_point_of_last_user_key = 0;
+                CrossChecker::check_remain_disk_key(
+                    cf,
+                    &range_snap.snapshot_meta().range,
+                    &mut safe_point,
+                    &mem_iter,
+                    &mut disk_iter,
+                    b"",
+                    &mut last_disk_user_key,
+                    &mut last_disk_user_key_delete,
+                    &mut last_mvcc_before_safe_point_of_last_user_key,
+                    &[],
+                    &self.memory_engine,
+                );
                 continue;
             }
             if !disk_valid {
@@ -1563,47 +1540,258 @@ impl CrossChecker {
                         // check again
                         if let Ok(Some(_)) = range_snap.get_value_cf(CF_WRITE, iter.key()) {
                             panic!(
-                                        "cross check fail(miss key): default not found; 
-                                        lower={:?}, upper={:?}; default_key={:?}, write_key={:?}, start_ts={}; sequence_numer={};",
-                                        log_wrappers::Value(&iter.lower_bound),
-                                        log_wrappers::Value(&iter.upper_bound),
-                                        log_wrappers::Value(default_key.as_encoded()),
-                                        log_wrappers::Value(iter.key()),
-                                        start_ts,
-                                        iter.sequence_number,
-                                    );
+                                "cross check fail(miss key): default not found; 
+                                lower={:?}, upper={:?}; default_key={:?}, write_key={:?}, start_ts={}; sequence_numer={};",
+                                log_wrappers::Value(&iter.lower_bound),
+                                log_wrappers::Value(&iter.upper_bound),
+                                log_wrappers::Value(default_key.as_encoded()),
+                                log_wrappers::Value(iter.key()),
+                                start_ts,
+                                iter.sequence_number,
+                            );
                         }
                     }
                 }
             };
 
-            CrossChecker::next_to_match(cf, &mem_iter, &mut disk_iter, false, safe_point);
+            let mut last_disk_user_key = vec![];
+            // We can have intermediate state:
+            // Safe point: 6
+            // IME:   k1-7, k1-5,       k1-2
+            // Rocks: k1-7, k1-5, k1-3, k1-2
+            // where k1-3 is gced but k1-2 is not. It's safe becase safe point is 6 and we
+            // have k1-5 so both k1-3 and k1-2 are not visible.
+            // So we record last_mvcc_before_safe_point_of_cur_user_key = 5 and we reject
+            // any version of this user key with mvcc between 5 and safe point 6.
+            let mut last_mvcc_before_safe_point_of_cur_user_key = 0;
+            let mut cur_user_key = vec![];
+            // We can have this state:
+            // Safe point: 6
+            // IME:                        [k2-7]
+            // Rocks: k1-5-delete, [k1-3], k2-7
+            // where k1-5-delete and k1-3 are filtered which is legal as k1-5 is a delete
+            // type. At some time, rocksdb iterator points to k1-3 while IME iterator points
+            // to k2-7 and we need last_disk_user_key_delete being true to verify the
+            // legality.
+            let mut last_disk_user_key_delete = false;
+            // We can have this sate:
+            // Safe point: 6
+            // IME:   k1-7, k1-5,               [k2-7]
+            // Rocks: k1-7, k1-5, [k1-3], k1-2, k2-7
+            // where k1-3 and k1-2 are filtered which is valid. At some time, rocksdb
+            // iterator points to k1-3 and IME iterator points to k2-7. We need
+            // to record last_mvcc_before_safe_point_of_last_user_key = 5 and
+            // reject any version of user key k1 (which is the last user key of
+            // IME) with mvcc between 5 and 6.
+            let mut last_mvcc_before_safe_point_of_last_user_key = 0;
+            let mut last_user_key = vec![];
+            // Used to record mvcc versions of same user keys. So if safe point changed, we
+            // can found the last_mvcc_before_safe_point_of_cur_user_key and
+            // last_mvcc_before_safe_point_of_last_user_key
+            let mut cur_mvcc_recordings = vec![];
+            let mut prev_mvcc_recordings = vec![];
+
+            CrossChecker::check_next_in_disk_iter(
+                cf,
+                &mem_iter,
+                &mut disk_iter,
+                false,
+                &mut safe_point,
+                &self.memory_engine,
+                &range_snap.snapshot_meta().range,
+                &mut last_mvcc_before_safe_point_of_cur_user_key,
+                &last_user_key,
+                &mut last_disk_user_key_delete,
+                &mut last_disk_user_key,
+                &mut last_mvcc_before_safe_point_of_last_user_key,
+                &cur_mvcc_recordings,
+                &prev_mvcc_recordings,
+            );
             if *cf == CF_WRITE {
                 check_default(&mem_iter);
+                let write = parse_write(mem_iter.value()).unwrap();
+                let (user_key, ts) = split_ts(mem_iter.key()).unwrap();
+
+                if write.write_type != WriteType::Lock && write.write_type != WriteType::Rollback {
+                    cur_mvcc_recordings.push(ts);
+                }
+
+                cur_user_key = user_key.to_vec();
+                if last_mvcc_before_safe_point_of_cur_user_key == 0
+                    && ts < safe_point
+                    && (write.write_type != WriteType::Lock
+                        && write.write_type != WriteType::Rollback)
+                {
+                    last_mvcc_before_safe_point_of_cur_user_key = ts;
+                }
             }
 
             while mem_iter.next().unwrap() {
-                CrossChecker::next_to_match(cf, &mem_iter, &mut disk_iter, true, safe_point);
+                let write = parse_write(mem_iter.value()).unwrap();
+                let (user_key, ts) = split_ts(mem_iter.key()).unwrap();
+                if *cf == CF_WRITE {
+                    if cur_user_key != user_key {
+                        prev_mvcc_recordings = cur_mvcc_recordings;
+                        cur_mvcc_recordings = vec![ts];
+                        last_user_key = cur_user_key;
+                        cur_user_key = user_key.to_vec();
+                        last_mvcc_before_safe_point_of_last_user_key =
+                            last_mvcc_before_safe_point_of_cur_user_key;
+                        last_mvcc_before_safe_point_of_cur_user_key = 0;
+                    }
+                    if last_mvcc_before_safe_point_of_cur_user_key == 0
+                        && ts < safe_point
+                        && (write.write_type != WriteType::Lock
+                            && write.write_type != WriteType::Rollback)
+                    {
+                        last_mvcc_before_safe_point_of_cur_user_key = ts;
+                    }
+                }
+
+                CrossChecker::check_next_in_disk_iter(
+                    cf,
+                    &mem_iter,
+                    &mut disk_iter,
+                    true,
+                    &mut safe_point,
+                    &self.memory_engine,
+                    &range_snap.snapshot_meta().range,
+                    &mut last_mvcc_before_safe_point_of_cur_user_key,
+                    &last_user_key,
+                    &mut last_disk_user_key_delete,
+                    &mut last_disk_user_key,
+                    &mut last_mvcc_before_safe_point_of_last_user_key,
+                    &cur_mvcc_recordings,
+                    &prev_mvcc_recordings,
+                );
+
                 if *cf == CF_WRITE {
                     check_default(&mem_iter);
                 }
             }
+            last_user_key = cur_user_key;
+            last_mvcc_before_safe_point_of_last_user_key =
+                last_mvcc_before_safe_point_of_cur_user_key;
+            prev_mvcc_recordings = cur_mvcc_recordings;
+
+            disk_iter.next().unwrap();
+            CrossChecker::check_remain_disk_key(
+                cf,
+                &range_snap.snapshot_meta().range,
+                &mut safe_point,
+                &mem_iter,
+                &mut disk_iter,
+                &last_user_key,
+                &mut last_disk_user_key,
+                &mut last_disk_user_key_delete,
+                &mut last_mvcc_before_safe_point_of_last_user_key,
+                &prev_mvcc_recordings,
+                &self.memory_engine,
+            );
         }
         info!(
-            "audit range done";
+            "cross check range done";
             "range" => ?range_snap.snapshot_meta().range,
         );
     }
 
+    // IME iterator has reached to end, now check the validity of the remaining keys
+    // in rocksdb iterator.
+    fn check_remain_disk_key(
+        cf: &&str,
+        range: &CacheRange,
+        safe_point: &mut u64,
+        mem_iter: &RangeCacheIterator,
+        disk_iter: &mut RocksEngineIterator,
+        last_user_key: &[u8],
+        last_disk_user_key: &mut Vec<u8>,
+        last_disk_user_key_delete: &mut bool,
+        last_mvcc_before_safe_point_of_last_user_key: &mut u64,
+        prev_mvcc_recordings: &[u64],
+        engine: &RangeCacheMemoryEngine,
+    ) {
+        while disk_iter.valid().unwrap() {
+            if *cf == CF_LOCK {
+                panic!(
+                    "cross check fail(miss key): lock cf not match when seek_to_first; 
+                    lower={:?}, upper={:?}; disk_key={:?}; sequence_numer={};",
+                    log_wrappers::Value(&mem_iter.lower_bound),
+                    log_wrappers::Value(&mem_iter.upper_bound),
+                    log_wrappers::Value(disk_iter.key()),
+                    mem_iter.sequence_number,
+                );
+            }
+
+            let (disk_user_key, disk_mvcc) = split_ts(disk_iter.key()).unwrap();
+            // We cannot miss any types of write if the mvcc version is larger than
+            // safe_point of the relevant range
+            if disk_mvcc > *safe_point {
+                *safe_point = {
+                    let core = engine.core().read();
+                    if let Some(meta) = core.range_manager.range_meta(range) {
+                        meta.safe_point()
+                    } else {
+                        core.range_manager
+                            .history_range_meta(range)
+                            .unwrap()
+                            .safe_point()
+                    }
+                };
+                if disk_mvcc > *safe_point {
+                    panic!(
+                        "cross check fail(miss key): write cf not match when seek_to_first; 
+                        lower={:?}, upper={:?}; disk_key={:?}, disk_mvcc={}; sequence_numer={};",
+                        log_wrappers::Value(&mem_iter.lower_bound),
+                        log_wrappers::Value(&mem_iter.upper_bound),
+                        log_wrappers::Value(disk_iter.key()),
+                        disk_mvcc,
+                        mem_iter.sequence_number,
+                    );
+                }
+            }
+            let write = parse_write(disk_iter.value()).unwrap();
+
+            CrossChecker::check_with_last_user_key(
+                cf,
+                range,
+                mem_iter,
+                &write,
+                safe_point,
+                disk_iter.key(),
+                disk_mvcc,
+                disk_user_key,
+                last_disk_user_key,
+                last_disk_user_key_delete,
+                last_user_key,
+                last_mvcc_before_safe_point_of_last_user_key,
+                prev_mvcc_recordings,
+                engine,
+            );
+
+            disk_iter.next().unwrap();
+        }
+    }
+
     // In-memory engine may have gced some versions, so we should call next of
-    // disk_iter for some times to get aligned with mem_iter
+    // disk_iter for some times to get aligned with mem_iter.
+    // After each call of disk_iter, we will check whether the key missed in the
+    // in-memory engine will not make it compromise data consistency.
     // `next_fisrt` denotes whether disk_iter should call next before comparison
-    fn next_to_match(
+    fn check_next_in_disk_iter(
         cf: &str,
         mem_iter: &RangeCacheIterator,
         disk_iter: &mut RocksEngineIterator,
         next_fisrt: bool,
-        safe_point: u64,
+        safe_point: &mut u64,
+        engine: &RangeCacheMemoryEngine,
+        range: &CacheRange,
+        last_mvcc_before_safe_point_of_cur_user_key: &mut u64,
+        last_user_key: &[u8],
+        last_disk_user_key_delete: &mut bool,
+        last_disk_user_key: &mut Vec<u8>,
+        last_mvcc_before_safe_point_of_last_user_key: &mut u64,
+        cur_mvcc_recordings: &[u64],
+        prev_mvcc_recordings: &[u64],
     ) {
         let read_ts = mem_iter.snapshot_read_ts;
         let mem_key = mem_iter.key();
@@ -1664,39 +1852,155 @@ impl CrossChecker {
             }
 
             let (mem_user_key, mem_mvcc) = split_ts(mem_key).unwrap();
-
             // Some versions that are in rocksdb but have gced by in-memory engine
             let (disk_user_key, disk_mvcc) = split_ts(disk_key).unwrap();
-            // We may already gc this version
-            if disk_user_key == mem_user_key && disk_mvcc > mem_mvcc {
-                if let Ok(write) = parse_write(disk_iter.value())
-                    && cf == "write"
-                    && (write.write_type == WriteType::Rollback
-                        || write.write_type == WriteType::Lock)
-                {
-                    // todo(SpadeA): figure out this before review(merge)
-                    unreachable!()
-                } else {
-                    // [k1-10, k1-8, k1-5(mvcc delete), k1-4, k1-3]
-                    // safe_point: 6
-                    // If we gc this range, we will filter k-5, k1-4, and k1-3 but with k1-5 deleted
-                    // at last, so we may see an intermediate state [k1-10, k1-8, k1-5(mvcc delete),
-                    // k1-3] where k1-4 is filtered so we have a lower mvcc key k1-3 and a higher
-                    // mvcc key k1-5. So we should user the safe_point to compare the mvcc version.
-                    if disk_mvcc >= safe_point {
+
+            let write = parse_write(disk_iter.value()).unwrap();
+            if mem_user_key == disk_user_key {
+                if disk_mvcc > mem_mvcc {
+                    if write.write_type == WriteType::Rollback
+                        || write.write_type == WriteType::Lock
+                    {
+                        // todo(SpadeA): figure out this before review(merge)
+                        info!(
+                            "meet gced rollback or lock";
+                            "cache_key" => log_wrappers::Value(mem_key),
+                            "disk_key" => log_wrappers::Value(disk_key),
+                            "lower" => log_wrappers::Value(&mem_iter.lower_bound),
+                            "upper" => log_wrappers::Value(&mem_iter.upper_bound),
+                            "seqno" => mem_iter.sequence_number,
+                            "cf" => ?cf,
+                        );
+                    } else {
+                        // [k1-10, k1-8, k1-5(mvcc delete), k1-4, k1-3]
+                        // safe_point: 6
+                        // If we gc this range, we will filter k-5, k1-4, and k1-3 but with k1-5
+                        // deleted at last, so we may see an intermediate
+                        // state [k1-10, k1-8, k1-5(mvcc delete), k1-3] where k1-4 is filtered so we
+                        // have a lower mvcc key k1-3 and a higher mvcc key
+                        // k1-5. So we should user the safe_point to compare
+                        // the mvcc version.
+                        if disk_mvcc >= *safe_point {
+                            if disk_mvcc < read_ts {
+                                // get safe point again as it may be updated
+                                *safe_point = {
+                                    let core = engine.core().read();
+                                    let s =
+                                        if let Some(meta) = core.range_manager.range_meta(&range) {
+                                            meta.safe_point()
+                                        } else {
+                                            core.range_manager
+                                                .history_range_meta(&range)
+                                                .unwrap()
+                                                .safe_point()
+                                        };
+                                    if *safe_point != s {
+                                        assert!(s > *safe_point);
+                                        if let Some(mvcc) = cur_mvcc_recordings
+                                            .iter()
+                                            .find(|&mvcc| mvcc <= safe_point)
+                                        {
+                                            *last_mvcc_before_safe_point_of_cur_user_key = *mvcc;
+                                        }
+                                    }
+                                    s
+                                };
+                            }
+                            // check again
+                            if disk_mvcc >= *safe_point {
+                                panic!(
+                                    "cross check fail(miss key): miss valid mvcc version; 
+                                    lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
+                                    log_wrappers::Value(&mem_iter.lower_bound),
+                                    log_wrappers::Value(&mem_iter.upper_bound),
+                                    log_wrappers::Value(mem_key),
+                                    log_wrappers::Value(disk_key),
+                                    mem_iter.sequence_number,
+                                    read_ts,
+                                    *safe_point,
+                                );
+                            }
+                        }
+
+                        // We record the largest mvcc version below safe_point for each user_key --
+                        // last_mvcc_before_safe_point, and there should not be any version between
+                        // it and safe_point
+                        // So,   for [k1-10, k1-8, k1-5, k1-4, k1-3]
+                        // safe_point: 6
+                        // If we see [k1-10, k1-8, k1-4, k1-3] in the in-memory engine, and iterator
+                        // points to
+                        if disk_mvcc < *safe_point
+                            && disk_mvcc > *last_mvcc_before_safe_point_of_cur_user_key
+                            && (write.write_type != WriteType::Rollback
+                                && write.write_type != WriteType::Lock)
+                        {
+                            assert!(*last_mvcc_before_safe_point_of_cur_user_key != 0);
+                            panic!(
+                                "cross check fail(miss key): miss valid mvcc version; 
+                                lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
+                                log_wrappers::Value(&mem_iter.lower_bound),
+                                log_wrappers::Value(&mem_iter.upper_bound),
+                                log_wrappers::Value(mem_key),
+                                log_wrappers::Value(disk_key),
+                                mem_iter.sequence_number,
+                                read_ts,
+                                *safe_point,
+                            );
+                        }
+                    }
+                }
+            } else {
+                if disk_mvcc > *safe_point {
+                    *safe_point = {
+                        let core = engine.core().read();
+                        let s = if let Some(meta) = core.range_manager.range_meta(&range) {
+                            meta.safe_point()
+                        } else {
+                            core.range_manager
+                                .history_range_meta(&range)
+                                .unwrap()
+                                .safe_point()
+                        };
+                        if *safe_point != s {
+                            assert!(s > *safe_point);
+                            if let Some(mvcc) =
+                                prev_mvcc_recordings.iter().find(|&mvcc| mvcc <= safe_point)
+                            {
+                                *last_mvcc_before_safe_point_of_last_user_key = *mvcc;
+                            }
+                        }
+                        s
+                    };
+                    if disk_mvcc > *safe_point {
                         panic!(
-                            "cross check fail(miss key): miss valid mvcc version; 
-                            lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
+                            "cross check fail(miss key): keys newer than safe_point have been gced; 
+                            lower={:?}, upper={:?}; disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
                             log_wrappers::Value(&mem_iter.lower_bound),
                             log_wrappers::Value(&mem_iter.upper_bound),
-                            log_wrappers::Value(mem_key),
                             log_wrappers::Value(disk_key),
                             mem_iter.sequence_number,
                             read_ts,
-                            safe_point,
+                            *safe_point,
                         );
                     }
                 }
+
+                CrossChecker::check_with_last_user_key(
+                    cf,
+                    &range,
+                    mem_iter,
+                    &write,
+                    safe_point,
+                    disk_key,
+                    disk_mvcc,
+                    disk_user_key,
+                    last_disk_user_key,
+                    last_disk_user_key_delete,
+                    last_user_key,
+                    last_mvcc_before_safe_point_of_last_user_key,
+                    prev_mvcc_recordings,
+                    &engine,
+                );
             }
 
             if disk_key > mem_key {
@@ -1709,11 +2013,151 @@ impl CrossChecker {
                     log_wrappers::Value(disk_key),
                     mem_iter.sequence_number,
                     read_ts,
-                    safe_point,
+                    *safe_point,
                 );
             }
 
             assert!(disk_iter.next().unwrap());
+        }
+    }
+
+    fn check_with_last_user_key(
+        cf: &str,
+        range: &CacheRange,
+        mem_iter: &RangeCacheIterator,
+        write: &WriteRef,
+        safe_point: &mut u64,
+        disk_key: &[u8],
+        disk_mvcc: u64,
+        disk_user_key: &[u8],
+        last_disk_user_key: &mut Vec<u8>,
+        last_disk_user_key_delete: &mut bool,
+        last_user_key: &[u8],
+        last_mvcc_before_safe_point_of_last_user_key: &mut u64,
+        prev_mvcc_recordings: &[u64],
+        engine: &RangeCacheMemoryEngine,
+    ) {
+        if write.write_type == WriteType::Rollback || write.write_type == WriteType::Lock {
+            info!(
+                "meet gced rollback or lock";
+                "disk_key" => log_wrappers::Value(disk_key),
+                "lower" => log_wrappers::Value(&mem_iter.lower_bound),
+                "upper" => log_wrappers::Value(&mem_iter.upper_bound),
+                "seqno" => mem_iter.sequence_number,
+                "cf" => ?cf,
+            );
+            return;
+        }
+
+        if disk_user_key == last_user_key {
+            // It means all versions below safe point are GCed which means the
+            // latest write below safe point is mvcc delete.
+            // IME:  [k1-9, k2-9]
+            // Rocks:[k1-9, k1-5, k1-3, k2-9]
+            // Safe point: 6
+            // In thias case, k1-5 must be MVCC delete.
+            // So when disk points to k1-5 we set last_disk_user_key_delete be
+            // true so that when we check k1-3 we can know it is deleted
+            // legally.
+            if *last_mvcc_before_safe_point_of_last_user_key == 0 {
+                *safe_point = {
+                    let core = engine.core().read();
+                    let s = if let Some(meta) = core.range_manager.range_meta(&range) {
+                        meta.safe_point()
+                    } else {
+                        core.range_manager
+                            .history_range_meta(&range)
+                            .unwrap()
+                            .safe_point()
+                    };
+                    if *safe_point != s {
+                        assert!(s > *safe_point);
+                        if let Some(mvcc) =
+                            prev_mvcc_recordings.iter().find(|&mvcc| mvcc <= safe_point)
+                        {
+                            *last_mvcc_before_safe_point_of_last_user_key = *mvcc;
+                        }
+                    }
+                    s
+                };
+            }
+            if *last_mvcc_before_safe_point_of_last_user_key == 0 {
+                if disk_user_key != last_disk_user_key {
+                    *last_disk_user_key = disk_user_key.to_vec();
+                    *last_disk_user_key_delete = false;
+                }
+                if !*last_disk_user_key_delete {
+                    if write.write_type == WriteType::Delete {
+                        *last_disk_user_key_delete = true;
+                    } else {
+                        panic!(
+                            "cross check fail(miss key): miss valid mvcc version; 
+                            lower={:?}, upper={:?}; disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
+                            log_wrappers::Value(&mem_iter.lower_bound),
+                            log_wrappers::Value(&mem_iter.upper_bound),
+                            log_wrappers::Value(disk_key),
+                            mem_iter.sequence_number,
+                            mem_iter.snapshot_read_ts,
+                            safe_point,
+                        );
+                    }
+                }
+            } else {
+                if disk_mvcc > *last_mvcc_before_safe_point_of_last_user_key {
+                    if write.write_type == WriteType::Rollback
+                        || write.write_type == WriteType::Lock
+                    {
+                        info!(
+                            "meet gced rollback or lock";
+                            "disk_key" => log_wrappers::Value(disk_key),
+                            "lower" => log_wrappers::Value(&mem_iter.lower_bound),
+                            "upper" => log_wrappers::Value(&mem_iter.upper_bound),
+                            "seqno" => mem_iter.sequence_number,
+                            "cf" => ?cf,
+                        );
+                    } else {
+                        panic!(
+                            "cross check fail(miss key): miss valid mvcc version; 
+                            lower={:?}, upper={:?}; disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
+                            log_wrappers::Value(&mem_iter.lower_bound),
+                            log_wrappers::Value(&mem_iter.upper_bound),
+                            log_wrappers::Value(disk_key),
+                            mem_iter.sequence_number,
+                            mem_iter.snapshot_read_ts,
+                            safe_point,
+                        );
+                    }
+                } else {
+                    // It's ok
+                }
+            }
+        } else {
+            // IME:               k2-9
+            // Rocks: k1-5, k1-3, k2-9
+            // Safe point: 6
+            // In this case, k1-5 must be MVCC delete.
+            // So when disk points to k1-5 we set last_disk_user_key_delete be true so that
+            // when we check k1-3 we can know it is deleted legally.
+            if disk_user_key != last_disk_user_key {
+                *last_disk_user_key = disk_user_key.to_vec();
+                *last_disk_user_key_delete = false;
+            }
+            if !*last_disk_user_key_delete {
+                if write.write_type == WriteType::Delete {
+                    *last_disk_user_key_delete = true;
+                } else {
+                    panic!(
+                        "cross check fail(miss key): miss valid mvcc version; 
+                        lower={:?}, upper={:?}; disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
+                        log_wrappers::Value(&mem_iter.lower_bound),
+                        log_wrappers::Value(&mem_iter.upper_bound),
+                        log_wrappers::Value(disk_key),
+                        mem_iter.sequence_number,
+                        mem_iter.snapshot_read_ts,
+                        safe_point,
+                    );
+                }
+            }
         }
     }
 }
@@ -1769,9 +2213,19 @@ impl Runnable for CrossChecker {
             })
             .collect();
 
+        if ranges_to_audit.is_empty() {
+            return;
+        }
+
+        let now = Instant::now();
+
         ranges_to_audit
             .into_iter()
             .for_each(|r| self.cross_check_range(&r, &snap));
+        info!(
+            "cross check finished";
+            "duration" => ?now.saturating_elapsed(),
+        );
     }
 }
 
@@ -1784,7 +2238,6 @@ impl RunnableWithTimer for CrossChecker {
         self.run(CrossCheckTask::CrossCheck);
     }
 }
-
 #[cfg(test)]
 pub mod tests {
     use std::{
@@ -3003,5 +3456,553 @@ pub mod tests {
 
         stop.send(true).unwrap();
         handle.join().unwrap();
+    }
+
+    #[derive(Clone)]
+    struct MockRegionInfoProvider;
+    impl RegionInfoProvider for MockRegionInfoProvider {
+        fn seek_region(
+            &self,
+            _: &[u8],
+            _: SeekRegionCallback,
+        ) -> raftstore::coprocessor::Result<()> {
+            Ok(())
+        }
+        fn find_region_by_id(
+            &self,
+            _: u64,
+            _: RegionInfoCallback<Option<RegionInfo>>,
+        ) -> raftstore::coprocessor::Result<()> {
+            Ok(())
+        }
+        fn get_regions_in_range(
+            &self,
+            _start_key: &[u8],
+            _end_key: &[u8],
+            _: bool,
+        ) -> raftstore::coprocessor::Result<Vec<Region>> {
+            Ok(vec![])
+        }
+    }
+
+    fn cross_check<F>(prepare_data: F)
+    where
+        F: FnOnce(&mut RangeCacheWriteBatch, &mut RocksWriteBatchVec),
+    {
+        let mut engine = RangeCacheMemoryEngine::with_region_info_provider(
+            RangeCacheEngineContext::new_for_tests(Arc::new(VersionTrack::new(
+                RangeCacheEngineConfig::config_for_test(),
+            ))),
+            Some(Arc::new(MockRegionInfoProvider {})),
+        );
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(range.clone());
+
+        let path = Builder::new().prefix("temp").tempdir().unwrap();
+        let db_opts = RocksDbOptions::default();
+        let cf_opts = [CF_DEFAULT, CF_LOCK, CF_WRITE]
+            .iter()
+            .map(|name| (*name, Default::default()))
+            .collect();
+        let rocks_engine = new_engine_opt(path.path().to_str().unwrap(), db_opts, cf_opts).unwrap();
+
+        engine.set_disk_engine(rocks_engine.clone());
+        engine
+            .core()
+            .write()
+            .mut_range_manager()
+            .mut_range_meta(&range)
+            .unwrap()
+            .set_safe_point(6);
+
+        struct MockPdClient {}
+        impl PdClient for MockPdClient {
+            fn get_tso(&self) -> pd_client::PdFuture<txn_types::TimeStamp> {
+                Box::pin(ready(Ok(TimeStamp::compose(TimeStamp::physical_now(), 0))))
+            }
+        }
+
+        let cross_checker = CrossChecker::new(
+            Arc::new(MockPdClient {}),
+            engine.clone(),
+            rocks_engine.clone(),
+            Duration::from_secs(100000),
+        );
+
+        {
+            let mut wb = engine.write_batch();
+            wb.prepare_for_range(range.clone());
+            let mut disk_wb = rocks_engine.write_batch();
+
+            prepare_data(&mut wb, &mut disk_wb);
+
+            wb.set_sequence_number(1000).unwrap();
+            wb.write().unwrap();
+            disk_wb.write().unwrap();
+
+            let snap = engine.snapshot(range.clone(), 10, 10000).unwrap();
+            let disk_snap = rocks_engine.snapshot(None);
+
+            cross_checker.cross_check_range(&snap, &disk_snap);
+        }
+    }
+
+    fn write_key(k: &[u8], ts: u64, ty: WriteType) -> (Vec<u8>, Vec<u8>) {
+        let raw_write_k = Key::from_raw(k).append_ts(ts.into());
+        let val = Write::new(ty, ts.into(), Some(vec![])).as_ref().to_bytes();
+        (raw_write_k.into_encoded(), val)
+    }
+
+    #[test]
+    fn test_cross_check() {
+        // Safe point: 6
+        // IME:
+        // Disk: k1-4-r,
+        cross_check(|_wb, disk_wb| {
+            let (k, v) = write_key(b"k-1", 4, WriteType::Rollback);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+
+        // Safe point: 6
+        // IME:
+        // Disk: k1-4-d,
+        cross_check(|_wb, disk_wb| {
+            let (k, v) = write_key(b"k-1", 4, WriteType::Delete);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+
+        // Safe point: 6
+        // IME:
+        // Disk: k1-4-d, k1-3
+        cross_check(|_wb, disk_wb| {
+            let (k, v) = write_key(b"k-1", 4, WriteType::Delete);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 3, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+
+        // Safe point: 6
+        // IME:
+        // Disk: k1-5-r, k1-4-d, k1-3
+        cross_check(|_wb, disk_wb| {
+            let (k, v) = write_key(b"k-1", 5, WriteType::Rollback);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 4, WriteType::Delete);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 3, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+
+        // Safe point: 6
+        // IME:  k1-9, k1-5,
+        // Disk: k1-9, k1-5, k1-4, k1-2
+        cross_check(|wb, disk_wb| {
+            let (k, v) = write_key(b"k-1", 9, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 5, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 4, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 2, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+
+        // Safe point: 6
+        // IME:  k2-5,
+        // Disk: k2-5, k2-4, k2-2
+        cross_check(|wb, disk_wb| {
+            let (k, v) = write_key(b"k-2", 5, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-2", 4, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-2", 2, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+
+        // Safe point: 6
+        // IME:  k1-5,       k2-4,       k3-4,       k4-4
+        // Disk: k1-5, k1-3, k2-4, k2-2, k3-4, k3-2, k4-4, k4-2
+        cross_check(|wb, disk_wb| {
+            let (k, v) = write_key(b"k-1", 5, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 3, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-2", 4, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-2", 2, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-3", 4, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-3", 2, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-4", 4, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-4", 2, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+
+        // Safe point: 6
+        // IME:  k1-9, k1-5,             k2-7
+        // Disk: k1-9, k1-5, k1-4, k1-2, k2-7,
+        cross_check(|wb, disk_wb| {
+            let (k, v) = write_key(b"k-1", 9, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 5, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 4, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 2, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-2", 7, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+
+        // case mem_user_key == disk_user_key and last_mem_user_key == disk_user_key
+        // temporary state in GC: k1-4 is filtered
+        // Safe point: 6
+        // IME:  k1-9, k1-5-d,       k1-2  k2-7
+        // Disk: k1-9, k1-5-d, k1-4, k1-2, k2-7,
+        cross_check(|wb, disk_wb| {
+            let (k, v) = write_key(b"k-1", 9, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 5, WriteType::Delete);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 4, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 2, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-2", 7, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+
+        // case mem_user_key == disk_user_key and last_mem_user_key == disk_user_key
+        // Safe point: 6
+        // IME:  k1-9,                     k2-7
+        // Disk: k1-9, k1-5-d, k1-4, k1-2, k2-7,
+        cross_check(|wb, disk_wb| {
+            let (k, v) = write_key(b"k-1", 9, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 5, WriteType::Delete);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 4, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 2, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-2", 7, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+
+        // case mem_user_key == disk_user_key and last_mem_user_key != disk_user_key
+        // Safe point: 6
+        // IME:  k1-9, k1-5,                           k3-7
+        // Disk: k1-9, k1-5, k1-4, k1-2, k2-4-d, k2-3, k3-7
+        cross_check(|wb, disk_wb| {
+            let (k, v) = write_key(b"k-1", 9, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 5, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 4, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 2, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-2", 4, WriteType::Delete);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-2", 3, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-3", 7, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+
+        // case mem_user_key == disk_user_key and last_mem_user_key != disk_user_key
+        // Safe point: 6
+        // IME:  k1-9,                     k2-4-d        k2-1 k3-7
+        // Disk: k1-9, k1-5-d, k1-4, k1-2, k2-4-d, k2-3, k2-1 k3-7
+        cross_check(|wb, disk_wb| {
+            let (k, v) = write_key(b"k-1", 9, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 5, WriteType::Delete);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 4, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 2, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-2", 4, WriteType::Delete);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-2", 3, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-2", 2, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-3", 7, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+
+        // case mem_user_key == disk_user_key and last_mem_user_key != disk_user_key
+        // Safe point: 6
+        // IME:  k1-9,                                   k3-7
+        // Disk: k1-9, k1-5-d, k1-4, k1-2, k2-4-d, k2-3, k3-7
+        cross_check(|wb, disk_wb| {
+            let (k, v) = write_key(b"k-1", 9, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 5, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 4, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 2, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-2", 4, WriteType::Delete);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-2", 3, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-3", 7, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_cross_check_panic1() {
+        // case mem_user_key == disk_user_key and last_mem_user_key == disk_user_key
+        // Safe point: 6
+        // IME:  k1-9, k1-5-r,             k2-7
+        // Disk: k1-9, k1-5-r, k1-4, k1-2, k2-7,
+        cross_check(|wb, disk_wb| {
+            let (k, v) = write_key(b"k-1", 9, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 5, WriteType::Rollback);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 4, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 2, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-2", 7, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_cross_check_panic2() {
+        // Safe point: 6
+        // IME:  k1-9,       k1-4,       k2-7
+        // Disk: k1-9, k1-5, k1-4, k1-2, k2-7,
+        cross_check(|wb, disk_wb| {
+            let (k, v) = write_key(b"k-1", 9, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 5, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 4, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 2, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-2", 7, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_cross_check_panic2_2() {
+        // Safe point: 6
+        // IME:  k1-9,
+        // Disk: k1-9, k1-5, k1-4, k1-2, k-2-7
+        cross_check(|wb, disk_wb| {
+            let (k, v) = write_key(b"k-1", 9, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 5, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 4, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 2, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-2", 7, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_cross_check_panic3_1() {
+        // Safe point: 6
+        // IME:        k2-7
+        // Disk: k1-9, k2-7,
+        cross_check(|wb, disk_wb| {
+            let (k, v) = write_key(b"k-1", 9, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-2", 7, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_cross_check_panic3_2() {
+        // Safe point: 6
+        // IME:
+        // Disk: k1-9,
+        cross_check(|_wb, disk_wb| {
+            let (k, v) = write_key(b"k-1", 9, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_cross_check_panic3_3() {
+        // Safe point: 6
+        // IME:
+        // Disk: k1-4,
+        cross_check(|_wb, disk_wb| {
+            let (k, v) = write_key(b"k-1", 4, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_cross_check_panic3_4() {
+        // Safe point: 6
+        // IME:
+        // Disk: k1-4-r, k1-3
+        cross_check(|_wb, disk_wb| {
+            let (k, v) = write_key(b"k-1", 4, WriteType::Rollback);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-1", 3, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_cross_check_panic4_1() {
+        // Safe point: 6
+        // IME:  k1-4
+        // Disk:
+        cross_check(|wb, _disk_wb| {
+            let (k, v) = write_key(b"k-1", 4, WriteType::Rollback);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_cross_check_panic4_2() {
+        // Safe point: 6
+        // IME:  k1-7, k2-4
+        // Disk: k1-7
+        cross_check(|wb, _disk_wb| {
+            let (k, v) = write_key(b"k-1", 4, WriteType::Rollback);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_cross_check_panic5() {
+        // case mem_user_key == disk_user_key and last_mem_user_key == disk_user_key
+        // Safe point: 6
+        // IME:        k2-7
+        // Disk: k1-9, k2-7,
+        cross_check(|wb, disk_wb| {
+            let (k, v) = write_key(b"k-1", 9, WriteType::Put);
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+
+            let (k, v) = write_key(b"k-2", 7, WriteType::Put);
+            wb.put_cf(CF_WRITE, &k, &v).unwrap();
+            disk_wb.put_cf(CF_WRITE, &k, &v).unwrap();
+        });
     }
 }
