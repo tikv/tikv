@@ -626,13 +626,13 @@ impl Mutable for RangeCacheWriteBatch {
 mod tests {
     use std::{sync::Arc, time::Duration};
 
+    use crossbeam_skiplist::SkipList;
     use engine_rocks::util::new_engine;
     use engine_traits::{
         CacheRange, FailedReason, KvEngine, Peekable, RangeCacheEngine, WriteBatch, CF_WRITE,
         DATA_CFS,
     };
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
-    use skiplist_rs::SkipList;
     use tempfile::Builder;
     use tikv_util::config::VersionTrack;
 
