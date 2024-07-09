@@ -1912,7 +1912,7 @@ where
                     if val.is_some() && *val.unwrap() == start_ts {
                         // this message can be dedupd with the last one
                         ctx.raft_metrics.read_index_dedup.inc();
-                    } else if self.next_proposal_index() > self.get_store().applied_index() {
+                    } else if self.next_proposal_index() - self.get_store().applied_index() == 1 {
                         // there are no pending proposals
                         self.read_index_resp.insert(m.from, start_ts);
                     }
