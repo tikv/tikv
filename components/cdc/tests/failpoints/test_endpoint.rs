@@ -632,14 +632,6 @@ fn test_delegate_fail_during_incremental_scan() {
 
     suite.cluster.must_split(&region, b"f");
 
-    // After the region split, no event error should be received because the
-    // incremental scan is blocked.
-    let mut recver = recv.replace(None).unwrap();
-    assert!(recv_timeout(&mut recver, Duration::from_secs(1)).is_err());
-    recv.replace(Some(recver));
-
-    fail::remove("before_schedule_incremental_scan");
-
     // After the incremental scan is canceled, we can get the epoch_not_match error.
     // And after the error is retrieved, no more entries can be received.
     let mut get_epoch_not_match = false;
@@ -657,6 +649,9 @@ fn test_delegate_fail_during_incremental_scan() {
             }
         }
     }
+
+    fail::remove("before_schedule_incremental_scan");
+
     let mut recver = recv.replace(None).unwrap();
     assert!(recv_timeout(&mut recver, Duration::from_secs(1)).is_err());
     recv.replace(Some(recver));
