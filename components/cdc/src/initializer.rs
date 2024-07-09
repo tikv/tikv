@@ -691,6 +691,7 @@ mod tests {
             observe_id: ObserveId::new(),
             downstream_id: DownstreamId::new(),
             downstream_state,
+            scan_truncated: Arc::new(Default::default()),
             conn_id: ConnId::new(),
             request_id: 0,
             checkpoint_ts: 1.into(),
