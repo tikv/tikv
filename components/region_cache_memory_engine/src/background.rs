@@ -72,9 +72,10 @@ fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
 fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
     match WriteRef::parse(value) {
         Ok(write) => Ok(write),
-        Err(_) => Err(format!(
-            "invalid write cf value: {}",
-            log_wrappers::Value(value)
+        Err(e) => Err(format!(
+            "invalid write cf value: {}, error {:?}",
+            log_wrappers::Value(value),
+            e
         )),
     }
 }
@@ -2159,7 +2160,21 @@ impl CrossChecker {
             );
             if *cf == CF_WRITE {
                 check_default(&mem_iter);
-                let write = parse_write(mem_iter.value()).unwrap();
+                let write = match parse_write(mem_iter.value()) {
+                    Ok(write) => write,
+                    Err(e) => {
+                        panic!(
+                            "cross check fail(parse error); 
+                            lower={:?}, upper={:?}; cache_key={:?}, cache_val={:?}; sequence_numer={}; Error={:?}",
+                            log_wrappers::Value(&mem_iter.lower_bound),
+                            log_wrappers::Value(&mem_iter.upper_bound),
+                            log_wrappers::Value(mem_iter.key()),
+                            log_wrappers::Value(mem_iter.value()),
+                            mem_iter.sequence_number,
+                            e,
+                        );
+                    }
+                };
                 let (user_key, ts) = split_ts(mem_iter.key()).unwrap();
 
                 if write.write_type != WriteType::Lock && write.write_type != WriteType::Rollback {
@@ -2177,9 +2192,24 @@ impl CrossChecker {
             }
 
             while mem_iter.next().unwrap() {
-                let write = parse_write(mem_iter.value()).unwrap();
-                let (user_key, ts) = split_ts(mem_iter.key()).unwrap();
                 if *cf == CF_WRITE {
+                    let (user_key, ts) = split_ts(mem_iter.key()).unwrap();
+                    let write = match parse_write(mem_iter.value()) {
+                        Ok(write) => write,
+                        Err(e) => {
+                            panic!(
+                                "cross check fail(parse error); 
+                                lower={:?}, upper={:?}; cache_key={:?}, cache_val={:?}; sequence_numer={}; Error={:?}",
+                                log_wrappers::Value(&mem_iter.lower_bound),
+                                log_wrappers::Value(&mem_iter.upper_bound),
+                                log_wrappers::Value(mem_iter.key()),
+                                log_wrappers::Value(mem_iter.value()),
+                                mem_iter.sequence_number,
+                                e,
+                            );
+                        }
+                    };
+
                     if cur_user_key != user_key {
                         prev_mvcc_recordings = cur_mvcc_recordings;
                         cur_mvcc_recordings = vec![ts];
@@ -2299,7 +2329,21 @@ impl CrossChecker {
                     );
                 }
             }
-            let write = parse_write(disk_iter.value()).unwrap();
+            let write = match parse_write(disk_iter.value()) {
+                Ok(write) => write,
+                Err(e) => {
+                    panic!(
+                        "cross check fail(parse error); 
+                        lower={:?}, upper={:?}; cache_key={:?}, cache_val={:?}; sequence_numer={}; Error={:?}",
+                        log_wrappers::Value(&mem_iter.lower_bound),
+                        log_wrappers::Value(&mem_iter.upper_bound),
+                        log_wrappers::Value(mem_iter.key()),
+                        log_wrappers::Value(mem_iter.value()),
+                        mem_iter.sequence_number,
+                        e,
+                    );
+                }
+            };
 
             CrossChecker::check_with_last_user_key(
                 cf,
@@ -2405,7 +2449,21 @@ impl CrossChecker {
             // Some versions that are in rocksdb but have gced by in-memory engine
             let (disk_user_key, disk_mvcc) = split_ts(disk_key).unwrap();
 
-            let write = parse_write(disk_iter.value()).unwrap();
+            let write = match parse_write(disk_iter.value()) {
+                Ok(write) => write,
+                Err(e) => {
+                    panic!(
+                        "cross check fail(parse error); 
+                        lower={:?}, upper={:?}; cache_key={:?}, cache_val={:?}; sequence_numer={}; Error={:?}",
+                        log_wrappers::Value(&mem_iter.lower_bound),
+                        log_wrappers::Value(&mem_iter.upper_bound),
+                        log_wrappers::Value(mem_iter.key()),
+                        log_wrappers::Value(mem_iter.value()),
+                        mem_iter.sequence_number,
+                        e,
+                    );
+                }
+            };
             if mem_user_key == disk_user_key {
                 if disk_mvcc > mem_mvcc {
                     if write.write_type == WriteType::Rollback
