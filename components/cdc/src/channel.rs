@@ -441,7 +441,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{assert_matches::assert_matches, sync::mpsc, time::Duration};
+    use std::{
+        assert_matches::assert_matches,
+        sync::{mpsc, Arc},
+        time::Duration,
+    };
 
     use futures::executor::block_on;
     use kvproto::cdcpb::{
@@ -460,7 +464,7 @@ mod tests {
             if flag {
                 tx.unbounded_send(event, force_send)
             } else {
-                block_on(tx.send_all(vec![event]))
+                block_on(tx.send_all(vec![event], Arc::new(Default::default())))
             }
         };
         (Box::new(send), rx)

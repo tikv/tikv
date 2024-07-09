@@ -197,8 +197,13 @@ impl Downstream {
         }
     }
 
-    /// EventErrors must be sent by this function.
+    /// EventErrors must be sent by this function. And we must ensure no more
+    /// events or ResolvedTs will be sent to the downstream after
+    /// `sink_error_event` is called.
     pub fn sink_error_event(&self, region_id: u64, err_event: EventError) -> Result<()> {
+        info!("cdc downstream meets region error";
+            "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => self.req_id);
+
         self.scan_truncated.store(true, Ordering::Release);
         let mut change_data_event = Event::default();
         change_data_event.event = Some(Event_oneof_event::Error(err_event));
@@ -206,18 +211,6 @@ impl Downstream {
         // Try it's best to send error events.
         let force_send = true;
         self.sink_event(change_data_event, force_send)
-    }
-
-    pub fn sink_region_not_found(&self, region_id: u64) -> Result<()> {
-        let mut err_event = EventError::default();
-        err_event.mut_region_not_found().region_id = region_id;
-        self.sink_error_event(region_id, err_event)
-    }
-
-    pub fn sink_server_is_busy(&self, region_id: u64, reason: String) -> Result<()> {
-        let mut err_event = EventError::default();
-        err_event.mut_server_is_busy().reason = reason;
-        self.sink_error_event(region_id, err_event)
     }
 
     pub fn set_sink(&mut self, sink: Sink) {
@@ -1569,6 +1562,7 @@ mod tests {
             region_epoch: RegionEpoch::default(),
             sink: Some(sink),
             state: Arc::new(AtomicCell::new(DownstreamState::Normal)),
+            scan_truncated: Arc::new(Default::default()),
             kv_api: ChangeDataRequestKvApi::TiDb,
             filter_loop: false,
             observed_range,
@@ -1643,6 +1637,7 @@ mod tests {
             region_epoch: RegionEpoch::default(),
             sink: Some(sink),
             state: Arc::new(AtomicCell::new(DownstreamState::Normal)),
+            scan_truncated: Arc::new(Default::default()),
             kv_api: ChangeDataRequestKvApi::TiDb,
             filter_loop,
             observed_range,
