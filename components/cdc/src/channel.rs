@@ -262,6 +262,8 @@ pub struct ScanedEvent {
     pub created: Instant,
     pub event: CdcEvent,
     pub size: usize,
+    // Incremental scan can be canceled by region errors. We must check it when draing
+    // an event instead of emit it to `Sink`.
     pub truncated: Arc<AtomicBool>,
 }
 
@@ -295,13 +297,17 @@ pub struct Sink {
 
 impl Sink {
     /// Only observed events can be sent by `unbounded_send`.
-    pub fn unbounded_send(&self, event: CdcEvent, force: bool) -> Result<(), SendError> {
+    pub fn unbounded_send(&self, observed_event: CdcEvent, force: bool) -> Result<(), SendError> {
         // Try it's best to send error events.
-        let bytes = if !force { event.size() as usize } else { 0 };
+        let bytes = if !force {
+            observed_event.size() as usize
+        } else {
+            0
+        };
         if bytes != 0 {
             self.memory_quota.alloc(bytes)?;
         }
-        let ob_event = ObservedEvent::new(Instant::now_coarse(), event, bytes);
+        let ob_event = ObservedEvent::new(Instant::now_coarse(), observed_event, bytes);
         match self.unbounded_sender.unbounded_send(ob_event) {
             Ok(_) => Ok(()),
             Err(e) => {
@@ -315,19 +321,19 @@ impl Sink {
     /// Only scaned events can be sent by `send_all`.
     pub async fn send_all(
         &mut self,
-        events: Vec<CdcEvent>,
+        scaned_events: Vec<CdcEvent>,
         truncated: Arc<AtomicBool>,
     ) -> Result<(), SendError> {
         // Allocate quota in advance.
         let mut total_bytes = 0;
-        for event in &events {
+        for event in &scaned_events {
             let bytes = event.size();
             total_bytes += bytes;
         }
         self.memory_quota.alloc(total_bytes as _)?;
 
         let now = Instant::now_coarse();
-        for event in events {
+        for event in scaned_events {
             let bytes = event.size() as usize;
             let sc_event = ScanedEvent::new(now, event, bytes, truncated.clone());
             if let Err(e) = self.bounded_sender.feed(sc_event).await {

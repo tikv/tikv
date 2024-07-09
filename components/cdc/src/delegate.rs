@@ -137,6 +137,8 @@ pub struct Downstream {
     filter_loop: bool,
     pub(crate) observed_range: ObservedRange,
 
+    // When meet region errors like split or merge, we can cancel incremental scan draining
+    // by `scan_truncated`.
     pub(crate) scan_truncated: Arc<AtomicBool>,
 }
 
