@@ -653,6 +653,6 @@ fn test_delegate_fail_during_incremental_scan() {
     fail::remove("before_schedule_incremental_scan");
 
     let mut recver = recv.replace(None).unwrap();
-    assert!(recv_timeout(&mut recver, Duration::from_secs(1)).is_err());
+    recv_timeout(&mut recver, Duration::from_secs(1)).unwrap_err();
     recv.replace(Some(recver));
 }
