@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crossbeam_epoch as epoch;
-use skiplist_rs::{base, SkipList};
+use crossbeam_skiplist::{base, SkipList};
 
 fn ref_entry<'a, K, V>(e: impl Into<Option<base::RefEntry<'a, K, V>>>) -> Entry<'a, K, V> {
     Entry(e.into())

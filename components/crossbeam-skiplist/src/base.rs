@@ -523,6 +523,7 @@ where
             cursor: None,
         }
     }
+
     /// Returns an iterator over a subset of entries in the skip list.
     pub fn range<'a: 'g, 'g, Q, R>(
         &'a self,
@@ -945,33 +946,17 @@ where
             // the lifetime of the guard.
             let guard = &*(guard as *const _);
 
-            let mut search;
-            loop {
-                // First try searching for the key.
-                // Note that the `Ord` implementation for `K` may panic during the search.
-                search = self.search_position(&key, guard);
-
-                let r = match search.found {
-                    Some(r) => r,
-                    None => break,
-                };
+            // First try searching for the key.
+            // Note that the `Ord` implementation for `K` may panic during the search.
+            let mut search = self.search_position(&key, guard);
+            if let Some(r) = search.found {
                 let replace = replace(&r.value);
-                if replace {
-                    // If a node with the key was found and we should replace it, mark its tower
-                    // and then repeat the search.
-                    if r.mark_tower() {
-                        self.hot_data.len.fetch_sub(1, Ordering::Relaxed);
-                    }
-                } else {
+                if !replace {
                     // If a node with the key was found and we're not going to replace it, let's
                     // try returning it as an entry.
                     if let Some(e) = RefEntry::try_acquire(self, r) {
                         return e;
                     }
-
-                    // If we couldn't increment the reference count, that means someone has just
-                    // now removed the node.
-                    break;
                 }
             }
 
@@ -1011,6 +996,12 @@ where
                     )
                     .is_ok()
                 {
+                    // This node has been abandoned
+                    if let Some(r) = search.found {
+                        if r.mark_tower() {
+                            self.hot_data.len.fetch_sub(1, Ordering::Relaxed);
+                        }
+                    }
                     break;
                 }
 
@@ -1030,13 +1021,7 @@ where
 
                 if let Some(r) = search.found {
                     let replace = replace(&r.value);
-                    if replace {
-                        // If a node with the key was found and we should replace it, mark its
-                        // tower and then repeat the search.
-                        if r.mark_tower() {
-                            self.hot_data.len.fetch_sub(1, Ordering::Relaxed);
-                        }
-                    } else {
+                    if !replace {
                         // If a node with the key was found and we're not going to replace it,
                         // let's try returning it as an entry.
                         if let Some(e) = RefEntry::try_acquire(self, r) {
@@ -2045,7 +2030,7 @@ where
                 None => self.range.end_bound(),
             };
             if below_upper_bound(&bound, h.key().borrow()) {
-                self.head = next_head.clone();
+                self.head.clone_from(&next_head);
                 next_head
             } else {
                 unsafe {
@@ -2072,7 +2057,7 @@ where
                 None => self.range.start_bound(),
             };
             if above_lower_bound(&bound, t.key().borrow()) {
-                self.tail = next_tail.clone();
+                self.tail.clone_from(&next_tail);
                 next_tail
             } else {
                 unsafe {

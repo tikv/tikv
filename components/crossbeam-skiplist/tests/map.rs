@@ -1,4 +1,6 @@
-use std::{iter, ops::Bound, sync::Barrier};
+use std::iter;
+use std::ops::Bound;
+use std::sync::{Arc, Barrier};
 
 use crossbeam_skiplist::SkipMap;
 use crossbeam_utils::thread;
@@ -919,4 +921,24 @@ fn clear() {
     s.clear();
     assert!(s.is_empty());
     assert_eq!(s.len(), 0);
+}
+
+// https://github.com/crossbeam-rs/crossbeam/issues/1023
+#[test]
+fn concurrent_insert_get_same_key() {
+    let map: Arc<SkipMap<u32, ()>> = Arc::new(SkipMap::new());
+    let len = if cfg!(miri) { 100 } else { 10_000 };
+    let key = 0;
+    map.insert(0, ());
+
+    let getter = map.clone();
+    let handle = std::thread::spawn(move || {
+        for _ in 0..len {
+            map.insert(0, ());
+        }
+    });
+    for _ in 0..len {
+        assert!(getter.get(&key).is_some());
+    }
+    handle.join().unwrap()
 }
