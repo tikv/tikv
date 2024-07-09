@@ -2,9 +2,10 @@
 
 use std::ops::Bound;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use crossbeam_epoch as epoch;
-use crossbeam_skiplist::{base, SkipList};
+use skiplist_rs::{base, SkipList};
 
 fn ref_entry<'a, K, V>(e: impl Into<Option<base::RefEntry<'a, K, V>>>) -> Entry<'a, K, V> {
     Entry(e.into())
@@ -102,6 +103,41 @@ fn remove() {
         ref_entry(s.remove(x, guard));
     }
     assert!(s.is_empty());
+}
+
+#[test]
+fn remove2() {
+    let guard = &epoch::pin();
+    let insert = [0, 4, 2, 12, 8, 7, 11, 5];
+    let not_present = [1, 3, 6, 9, 10];
+    let remove = [2, 12, 8];
+    let remaining = [0, 4, 5, 7, 11];
+
+    let s = Arc::new(SkipList::new(epoch::default_collector().clone()));
+
+    for &x in &insert {
+        s.insert(x, x * 10, guard).release(guard);
+    }
+    for x in &not_present {
+        assert!(s.remove(x, guard).is_none());
+    }
+    for x in &remove {
+        s.remove(x, guard).unwrap().release(guard);
+    }
+
+    let mut iter = s.owned_iter();
+    let h = std::thread::spawn(move || {
+        let mut v = vec![];
+        let guard = &epoch::pin();
+        iter.seek_to_first(guard);
+        while iter.valid() {
+            v.push(*iter.key());
+            iter.next(guard);
+        }
+        assert_eq!(v, remaining);
+    });
+
+    h.join().unwrap();
 }
 
 #[test]

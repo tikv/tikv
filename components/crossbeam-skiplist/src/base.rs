@@ -1,6 +1,7 @@
 //! A lock-free skip list. See [`SkipList`].
 
 use alloc::alloc::{alloc, dealloc, handle_alloc_error, Layout};
+use alloc::sync::Arc;
 use core::borrow::Borrow;
 use core::cmp;
 use core::fmt;
@@ -515,6 +516,13 @@ where
         }
     }
 
+    /// Returns an iterator over all entries in the skip list who owns a reference to the skiplist.
+    pub fn owned_iter(self: &Arc<Self>) -> OwnedIter<Arc<Self>, K, V> {
+        OwnedIter {
+            list: self.clone(),
+            cursor: None,
+        }
+    }
     /// Returns an iterator over a subset of entries in the skip list.
     pub fn range<'a: 'g, 'g, Q, R>(
         &'a self,
@@ -667,6 +675,72 @@ where
             }
 
             None
+        }
+    }
+
+    /// Returns the successor of a node.
+    ///
+    /// This will keep searching until a non-deleted node is found. If a deleted
+    /// node is reached then a search is performed using the given key.
+    fn next_node_acquire(
+        &self,
+        pred: &Tower<K, V>,
+        lower_bound: Bound<&K>,
+        guard: &Guard,
+    ) -> Option<OwnedEntry<K, V>> {
+        unsafe {
+            // Load the level 0 successor of the current node.
+            let mut curr = pred[0].load_consume(guard);
+
+            // If `curr` is marked, that means `pred` is removed and we have to use
+            // a key search.
+            if curr.tag() == 1 {
+                return self.search_bound_for_node_acquire(lower_bound, false, guard);
+            }
+
+            while let Some(c) = curr.as_ref() {
+                let succ = c.tower[0].load_consume(guard);
+
+                if succ.tag() == 1 {
+                    if let Some(c) = self.help_unlink(&pred[0], c, succ, guard) {
+                        // On success, continue searching through the current level.
+                        curr = c;
+                        continue;
+                    } else {
+                        // On failure, we cannot do anything reasonable to continue
+                        // searching from the current position. Restart the search.
+                        return self.search_bound_for_node_acquire(lower_bound, false, guard);
+                    }
+                }
+
+                if let Some(e) = OwnedEntry::try_acquire(c) {
+                    return Some(e);
+                }
+
+                // acquire failed which means the node has been deleted
+                curr = succ;
+            }
+
+            None
+        }
+    }
+
+    /// Search the first node that we acquire successfully.
+    fn search_bound_for_node_acquire<Q>(
+        &self,
+        bound: Bound<&Q>,
+        upper_bound: bool,
+        guard: &Guard,
+    ) -> Option<OwnedEntry<K, V>>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        loop {
+            let node = self.search_bound(bound, upper_bound, guard)?;
+            if let Some(e) = OwnedEntry::try_acquire(node) {
+                return Some(e);
+            }
         }
     }
 
@@ -871,17 +945,33 @@ where
             // the lifetime of the guard.
             let guard = &*(guard as *const _);
 
-            // First try searching for the key.
-            // Note that the `Ord` implementation for `K` may panic during the search.
-            let mut search = self.search_position(&key, guard);
-            if let Some(r) = search.found {
+            let mut search;
+            loop {
+                // First try searching for the key.
+                // Note that the `Ord` implementation for `K` may panic during the search.
+                search = self.search_position(&key, guard);
+
+                let r = match search.found {
+                    Some(r) => r,
+                    None => break,
+                };
                 let replace = replace(&r.value);
-                if !replace {
+                if replace {
+                    // If a node with the key was found and we should replace it, mark its tower
+                    // and then repeat the search.
+                    if r.mark_tower() {
+                        self.hot_data.len.fetch_sub(1, Ordering::Relaxed);
+                    }
+                } else {
                     // If a node with the key was found and we're not going to replace it, let's
                     // try returning it as an entry.
                     if let Some(e) = RefEntry::try_acquire(self, r) {
                         return e;
                     }
+
+                    // If we couldn't increment the reference count, that means someone has just
+                    // now removed the node.
+                    break;
                 }
             }
 
@@ -921,12 +1011,6 @@ where
                     )
                     .is_ok()
                 {
-                    // This node has been abandoned
-                    if let Some(r) = search.found {
-                        if r.mark_tower() {
-                            self.hot_data.len.fetch_sub(1, Ordering::Relaxed);
-                        }
-                    }
                     break;
                 }
 
@@ -946,7 +1030,13 @@ where
 
                 if let Some(r) = search.found {
                     let replace = replace(&r.value);
-                    if !replace {
+                    if replace {
+                        // If a node with the key was found and we should replace it, mark its
+                        // tower and then repeat the search.
+                        if r.mark_tower() {
+                            self.hot_data.len.fetch_sub(1, Ordering::Relaxed);
+                        }
+                    } else {
                         // If a node with the key was found and we're not going to replace it,
                         // let's try returning it as an entry.
                         if let Some(e) = RefEntry::try_acquire(self, r) {
@@ -1955,7 +2045,7 @@ where
                 None => self.range.end_bound(),
             };
             if below_upper_bound(&bound, h.key().borrow()) {
-                self.head.clone_from(&next_head);
+                self.head = next_head.clone();
                 next_head
             } else {
                 unsafe {
@@ -1982,7 +2072,7 @@ where
                 None => self.range.start_bound(),
             };
             if above_lower_bound(&bound, t.key().borrow()) {
-                self.tail.clone_from(&next_tail);
+                self.tail = next_tail.clone();
                 next_tail
             } else {
                 unsafe {
@@ -2103,5 +2193,206 @@ fn below_upper_bound<T: Ord + ?Sized>(bound: &Bound<&T>, other: &T) -> bool {
         Bound::Unbounded => true,
         Bound::Included(key) => other <= key,
         Bound::Excluded(key) => other < key,
+    }
+}
+
+/// An entry where the node is ref counted in a skip list.
+///
+/// You *must* call `release` to free this type, otherwise the node will be
+/// leaked. This is because releasing the entry requires a `Guard`.
+struct OwnedEntry<K, V> {
+    node: *const Node<K, V>,
+    released: bool,
+}
+
+impl<K, V> OwnedEntry<K, V> {
+    /// Tries to create a new `RefCountedEntry` by incrementing the reference count of
+    /// a node.
+    fn try_acquire(node: &Node<K, V>) -> Option<OwnedEntry<K, V>> {
+        if unsafe { node.try_increment() } {
+            Some(OwnedEntry {
+                node: node as *const _,
+                released: false,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Returns a reference to the key.
+    fn key(&self) -> &K {
+        unsafe { &(*self.node).key }
+    }
+
+    /// Returns a reference to the value.
+    fn value(&self) -> &V {
+        unsafe { &(*self.node).value }
+    }
+
+    /// Releases the reference on the entry.
+    fn release(mut self, guard: &Guard) {
+        self.released = true;
+        unsafe { (*self.node).decrement(guard) }
+    }
+}
+
+impl<K, V> fmt::Debug for OwnedEntry<K, V>
+where
+    K: fmt::Debug,
+    V: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("OwnedEntry")
+            .field(self.key())
+            .field(self.value())
+            .finish()
+    }
+}
+
+unsafe impl<K, V> Send for OwnedEntry<K, V> {}
+
+impl<K, V> Drop for OwnedEntry<K, V> {
+    fn drop(&mut self) {
+        assert!(self.released);
+    }
+}
+
+/// A iterator with a clone of the concurrent skip list
+pub struct OwnedIter<T, K, V>
+where
+    T: AsRef<SkipList<K, V>>,
+{
+    list: T,
+    cursor: Option<OwnedEntry<K, V>>,
+}
+
+impl<T, K, V> Drop for OwnedIter<T, K, V>
+where
+    T: AsRef<SkipList<K, V>>,
+{
+    fn drop(&mut self) {
+        if let Some(cursor) = self.cursor.take() {
+            let guard = &epoch::pin();
+            cursor.release(guard);
+        }
+    }
+}
+
+impl<T, K, V> fmt::Debug for OwnedIter<T, K, V>
+where
+    T: AsRef<SkipList<K, V>>,
+    K: fmt::Debug,
+    V: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut d = f.debug_struct("OwnedIter");
+        match &self.cursor {
+            None => d.field("cursor", &None::<(&K, &V)>),
+            Some(e) => d.field("cursor", &(e.key(), e.value())),
+        };
+        d.finish()
+    }
+}
+
+impl<K, V, T: AsRef<SkipList<K, V>>> OwnedIter<T, K, V>
+where
+    K: Ord,
+{
+    /// Return whether the iterator is valid
+    pub fn valid(&self) -> bool {
+        self.cursor.is_some()
+    }
+
+    /// Returns a reference to the key.
+    pub fn key(&self) -> &K {
+        assert!(self.valid());
+        self.cursor.as_ref().unwrap().key()
+    }
+
+    /// Returns a reference to the value.
+    pub fn value(&self) -> &V {
+        assert!(self.valid());
+        self.cursor.as_ref().unwrap().value()
+    }
+
+    /// Move iterator to point to the next element
+    pub fn next(&mut self, guard: &Guard) {
+        assert!(self.valid());
+        self.list.as_ref().check_guard(guard);
+        self.cursor = match self.cursor.take() {
+            Some(n) => {
+                let next_node = self.list.as_ref().next_node_acquire(
+                    unsafe { &(*n.node).tower },
+                    Bound::Excluded(n.key()),
+                    guard,
+                );
+                n.release(guard);
+                next_node
+            }
+            None => unreachable!(),
+        }
+    }
+
+    /// Move iterator to point to the previous element
+    pub fn prev(&mut self, guard: &Guard) {
+        assert!(self.valid());
+        self.list.as_ref().check_guard(guard);
+        self.cursor = match self.cursor.take() {
+            Some(n) => {
+                let next_node = self.list.as_ref().search_bound_for_node_acquire(
+                    Bound::Excluded(n.key()),
+                    true,
+                    guard,
+                );
+                n.release(guard);
+                next_node
+            }
+            None => None,
+        };
+    }
+
+    /// Make iterator point to the element whose key is larger or equal to the target
+    pub fn seek<Q>(&mut self, target: &Q, guard: &Guard)
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.list.as_ref().check_guard(guard);
+        if let Some(n) = self.cursor.take() {
+            n.release(guard);
+        }
+        self.cursor =
+            self.list
+                .as_ref()
+                .search_bound_for_node_acquire(Bound::Included(target), false, guard);
+    }
+
+    /// Make iterator point to the element whose key is less than the target
+    pub fn seek_for_prev<Q>(&mut self, target: &Q, guard: &Guard)
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.list.as_ref().check_guard(guard);
+        if let Some(n) = self.cursor.take() {
+            n.release(guard);
+        }
+        self.cursor =
+            self.list
+                .as_ref()
+                .search_bound_for_node_acquire(Bound::Included(target), true, guard);
+    }
+
+    /// Make iterator point to the first element
+    pub fn seek_to_first(&mut self, guard: &Guard) {
+        self.list.as_ref().check_guard(guard);
+        if let Some(n) = self.cursor.take() {
+            n.release(guard);
+        }
+        let pred = &self.list.as_ref().head;
+        self.cursor = self
+            .list
+            .as_ref()
+            .next_node_acquire(pred, Bound::Unbounded, guard);
     }
 }
