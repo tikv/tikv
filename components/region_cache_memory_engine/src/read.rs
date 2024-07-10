@@ -102,10 +102,13 @@ impl Drop for RangeCacheSnapshot {
             .remove_range_snapshot(&self.snapshot_meta);
         if !ranges_removable.is_empty() {
             drop(core);
-            if let Err(e) = self
-                .engine
-                .bg_worker_manager()
-                .schedule_task(BackgroundTask::DeleteRange(ranges_removable))
+            if let Err(e) =
+                self.engine
+                    .bg_worker_manager()
+                    .schedule_task(BackgroundTask::DeleteRange((
+                        ranges_removable,
+                        format!("snapshot drop; meta={:?}", self.snapshot_meta),
+                    )))
             {
                 error!(
                     "schedule delete range failed";

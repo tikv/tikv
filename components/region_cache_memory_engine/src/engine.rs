@@ -408,7 +408,10 @@ impl RangeCacheMemoryEngine {
             // The range can be deleted directly.
             if let Err(e) = self
                 .bg_worker_manager()
-                .schedule_task(BackgroundTask::DeleteRange(ranges_to_delete))
+                .schedule_task(BackgroundTask::DeleteRange((
+                    ranges_to_delete,
+                    "no snapshot when evict".to_string(),
+                )))
             {
                 error!(
                     "schedule delete range failed";

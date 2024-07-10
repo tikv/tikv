@@ -12,6 +12,7 @@ use std::{
 use collections::HashMap;
 use engine_rocks::RocksSnapshot;
 use engine_traits::{CacheRange, FailedReason};
+use raftstore::store::fsm::apply::PRINTF_LOG;
 use tikv_util::info;
 
 use crate::read::RangeCacheSnapshotMeta;
@@ -293,10 +294,17 @@ impl RangeManager {
             meta.range_snapshot_list
                 .remove_snapshot(snapshot_meta.snapshot_ts);
             if meta.range_snapshot_list.is_empty() {
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    info!(
+                        "last snapshot to remove, remove history range";
+                        "historical_range" => ?range_key,
+                        "range_id" => snapshot_meta.range_id,
+                    );
+                }
                 self.historical_ranges.remove(&range_key);
             }
 
-            return self
+            let ranges_to_delete = self
                 .ranges_being_deleted
                 .iter()
                 .filter(|evicted_range| {
@@ -307,6 +315,17 @@ impl RangeManager {
                 })
                 .cloned()
                 .collect::<Vec<_>>();
+            if !ranges_to_delete.is_empty() {
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    info!(
+                        "last snapshot to remove, remove history range";
+                        "historical_range" => ?range_key,
+                        "ranges_to_delete" => ?ranges_to_delete,
+                        "range_id" => snapshot_meta.range_id,
+                    );
+                }
+            }
+            return ranges_to_delete;
         }
 
         // It must belong to the `self.ranges` if not found in `self.historical_ranges`
@@ -429,7 +448,7 @@ impl RangeManager {
 
     pub fn on_delete_ranges(&mut self, ranges: &[CacheRange]) {
         for r in ranges {
-            self.ranges_being_deleted.remove(&r);
+            assert!(self.ranges_being_deleted.remove(&r));
             info!(
                 "range eviction done";
                 "range" => ?r,

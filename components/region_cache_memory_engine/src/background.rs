@@ -84,7 +84,7 @@ pub enum BackgroundTask {
     Gc(GcTask),
     LoadRange,
     MemoryCheckAndEvict,
-    DeleteRange(Vec<CacheRange>),
+    DeleteRange((Vec<CacheRange>, String)),
     TopRegionsLoadEvict,
     CleanLockTombstone(u64),
     SetRocksEngine(RocksEngine),
@@ -105,7 +105,7 @@ impl Display for BackgroundTask {
             BackgroundTask::Gc(ref t) => t.fmt(f),
             BackgroundTask::LoadRange => f.debug_struct("LoadTask").finish(),
             BackgroundTask::MemoryCheckAndEvict => f.debug_struct("MemoryCheckAndEvict").finish(),
-            BackgroundTask::DeleteRange(ref r) => {
+            BackgroundTask::DeleteRange((ref r, _)) => {
                 f.debug_struct("DeleteRange").field("range", r).finish()
             }
             BackgroundTask::TopRegionsLoadEvict => f.debug_struct("CheckTopRegions").finish(),
@@ -516,9 +516,9 @@ impl BackgroundRunnerCore {
                 drop(core);
                 fail::fail_point!("in_memory_engine_snapshot_load_canceled");
 
-                if let Err(e) =
-                    delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(vec![r]))
-                {
+                if let Err(e) = delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(
+                    (vec![r], "snap load canceled".to_string()),
+                )) {
                     error!(
                         "schedule delete range failed";
                         "err" => ?e,
@@ -578,8 +578,10 @@ impl BackgroundRunnerCore {
             .ranges_being_deleted
             .insert(r.clone());
 
-        if let Err(e) = delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(vec![r]))
-        {
+        if let Err(e) = delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange((
+            vec![r],
+            "snap load canceled 2".to_string(),
+        ))) {
             error!(
                 "schedule delete range failed";
                 "err" => ?e,
@@ -649,9 +651,10 @@ impl BackgroundRunnerCore {
         }
 
         if !ranges_to_delete.is_empty() {
-            if let Err(e) =
-                delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(ranges_to_delete))
-            {
+            if let Err(e) = delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange((
+                ranges_to_delete,
+                "evict on soft limit reached".to_string(),
+            ))) {
                 error!(
                     "schedule deletet range failed";
                     "err" => ?e,
@@ -700,9 +703,10 @@ impl BackgroundRunnerCore {
             }
         }
         if !ranges_to_delete.is_empty() {
-            if let Err(e) =
-                delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(ranges_to_delete))
-            {
+            if let Err(e) = delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange((
+                ranges_to_delete,
+                "load evict".to_string(),
+            ))) {
                 error!(
                     "schedule deletet range failed";
                     "err" => ?e,
@@ -1567,12 +1571,28 @@ impl Runnable for DeleteRangeRunner {
     type Task = BackgroundTask;
     fn run(&mut self, task: Self::Task) {
         match task {
-            BackgroundTask::DeleteRange(ranges) => {
+            BackgroundTask::DeleteRange((ranges, reason)) => {
+                if PRINTF_LOG.load(Ordering::Relaxed) {
+                    info!(
+                        "try to delete ranges";
+                        "ranges" => ?ranges,
+                        "reason" => reason,
+                    );
+                }
                 let (mut ranges_to_delay, ranges_to_delete) = {
                     let core = self.engine.read();
                     let mut ranges_to_delay = vec![];
                     let mut ranges_to_delete = vec![];
                     for r in ranges {
+                        if core
+                            .range_manager
+                            .ranges_being_deleted
+                            .iter()
+                            .find(|&range_being_delete| range_being_delete == &r)
+                            .is_none()
+                        {
+                            panic!("range to delete not in ranges_being_deleted; range={:?}", r,);
+                        }
                         // If the range is overlapped with ranges in `ranges_being_written`, the
                         // range has to be delayed to delete. See comment on `delay_ranges`.
                         if core
@@ -1586,7 +1606,15 @@ impl Runnable for DeleteRangeRunner {
                     }
                     (ranges_to_delay, ranges_to_delete)
                 };
-                self.delay_ranges.append(&mut ranges_to_delay);
+                if !ranges_to_delay.is_empty() {
+                    if PRINTF_LOG.load(Ordering::Relaxed) {
+                        info!(
+                            "delay range delete";
+                            "ranges_to_delay" => ?ranges_to_delay,
+                        );
+                    }
+                    self.delay_ranges.append(&mut ranges_to_delay);
+                }
                 if !ranges_to_delete.is_empty() {
                     self.delete_ranges(&ranges_to_delete);
                 }
@@ -1602,7 +1630,7 @@ impl RunnableWithTimer for DeleteRangeRunner {
             return;
         }
         let ranges = std::mem::take(&mut self.delay_ranges);
-        self.run(BackgroundTask::DeleteRange(ranges));
+        self.run(BackgroundTask::DeleteRange((ranges, "delay".to_string())));
     }
 
     fn get_interval(&self) -> Duration {

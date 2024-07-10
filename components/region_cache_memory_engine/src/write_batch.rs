@@ -218,10 +218,13 @@ impl RangeCacheWriteBatch {
             .fetch_add(lock_modification, Ordering::Relaxed);
 
         if !ranges_to_delete.is_empty() {
-            if let Err(e) = self
-                .engine
-                .bg_worker_manager()
-                .schedule_task(BackgroundTask::DeleteRange(ranges_to_delete))
+            if let Err(e) =
+                self.engine
+                    .bg_worker_manager()
+                    .schedule_task(BackgroundTask::DeleteRange((
+                        ranges_to_delete,
+                        "hard limit".to_string(),
+                    )))
             {
                 error!(
                     "schedule delete range failed";
