@@ -2308,24 +2308,34 @@ impl CrossChecker {
             if disk_mvcc > *safe_point {
                 *safe_point = {
                     let core = engine.core().read();
-                    if let Some(meta) = core.range_manager.range_meta(range) {
+                    let s = if let Some(meta) = core.range_manager.range_meta(range) {
                         meta.safe_point()
                     } else {
                         core.range_manager
                             .history_range_meta(range)
                             .unwrap()
                             .safe_point()
+                    };
+                    if *safe_point != s {
+                        assert!(s > *safe_point);
+                        if let Some(mvcc) =
+                            prev_mvcc_recordings.iter().find(|&mvcc| mvcc <= safe_point)
+                        {
+                            *last_mvcc_before_safe_point_of_last_user_key = *mvcc;
+                        }
                     }
+                    s
                 };
                 if disk_mvcc > *safe_point {
                     panic!(
                         "cross check fail(miss key): write cf not match when seek_to_first; 
-                        lower={:?}, upper={:?}; disk_key={:?}, disk_mvcc={}; sequence_numer={};",
+                        lower={:?}, upper={:?}; disk_key={:?}, disk_mvcc={}; sequence_numer={}; prev_mvcc_recordings={:?}",
                         log_wrappers::Value(&mem_iter.lower_bound),
                         log_wrappers::Value(&mem_iter.upper_bound),
                         log_wrappers::Value(disk_iter.key()),
                         disk_mvcc,
                         mem_iter.sequence_number,
+                        prev_mvcc_recordings,
                     );
                 }
             }
@@ -2518,7 +2528,7 @@ impl CrossChecker {
                             if disk_mvcc >= *safe_point {
                                 panic!(
                                     "cross check fail(miss key): miss valid mvcc version; 
-                                    lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
+                                    lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={};",
                                     log_wrappers::Value(&mem_iter.lower_bound),
                                     log_wrappers::Value(&mem_iter.upper_bound),
                                     log_wrappers::Value(mem_key),
@@ -2700,13 +2710,14 @@ impl CrossChecker {
                     } else {
                         panic!(
                             "cross check fail(miss key): miss valid mvcc version; 
-                            lower={:?}, upper={:?}; disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
+                            lower={:?}, upper={:?}; disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}; prev_mvcc_recordings={:?}",
                             log_wrappers::Value(&mem_iter.lower_bound),
                             log_wrappers::Value(&mem_iter.upper_bound),
                             log_wrappers::Value(disk_key),
                             mem_iter.sequence_number,
                             mem_iter.snapshot_read_ts,
                             safe_point,
+                            prev_mvcc_recordings,
                         );
                     }
                 }
