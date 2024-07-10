@@ -176,6 +176,43 @@ impl CacheRange {
 
         (left, right)
     }
+
+    pub fn union(&self, other: &CacheRange) -> Option<CacheRange> {
+        if self.overlaps(other) {
+            Some(CacheRange {
+                start: cmp::min(&self.start, &other.start).clone(),
+                end: cmp::max(&self.end, &other.end).clone(),
+                tag: "".to_owned(),
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn difference(&self, other: &CacheRange) -> (Option<CacheRange>, Option<CacheRange>) {
+        if !self.overlaps(other) {
+            return (None, None);
+        }
+        let left = if self.start < other.start {
+            Some(CacheRange {
+                start: self.start.clone(),
+                end: other.start.clone(),
+                tag: "".to_owned(),
+            })
+        } else {
+            None
+        };
+        let right = if self.end > other.end {
+            Some(CacheRange {
+                start: other.end.clone(),
+                end: self.end.clone(),
+                tag: "".to_owned(),
+            })
+        } else {
+            None
+        };
+        (left, right)
+    }
 }
 
 #[cfg(test)]

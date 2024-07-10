@@ -162,6 +162,8 @@ pub struct RangeManager {
     // all ranges of it are cleared from `ranges_being_written`.
     ranges_being_written: HashMap<u64, Vec<CacheRange>>,
     range_evictions: AtomicU64,
+
+    preferred_range: BTreeSet<CacheRange>,
 }
 
 impl RangeManager {
@@ -479,6 +481,64 @@ impl RangeManager {
     pub fn get_and_reset_range_evictions(&self) -> u64 {
         self.range_evictions.swap(0, Ordering::Relaxed)
     }
+
+    pub fn overlap_with_preferred_range(&self, range: &CacheRange) -> bool {
+        self.preferred_range.iter().any(|r| r.overlaps(range))
+    }
+
+    pub fn add_preferred_range(&mut self, range: CacheRange) {
+        let mut union = range;
+        self.preferred_range.retain(|r| {
+            let Some(u) = r.union(&union) else {
+                return true;
+            };
+            info!(
+                "remove preferred range that is overlapped with range";
+                "union" => ?union,
+                "preferred_range" => ?r,
+            );
+            union = u;
+            // The intersected range need to be removed before updating
+            // the union range.
+            false
+        });
+        info!("add preferred range"; "range" => ?union);
+        self.preferred_range.insert(union);
+    }
+
+    pub fn remove_preferred_range(&mut self, range: CacheRange) {
+        let mut diffs = Vec::new();
+        self.preferred_range.retain(|r| {
+            match r.difference(&range) {
+                (None, None) => {
+                    // Remove the range if it is overlapped with the range.
+                    if !r.overlaps(&range) {
+                        return true;
+                    }
+                }
+                others => diffs.push(others),
+            };
+            info!(
+                "remove preferred range that is overlapped with range";
+                "range" => ?range,
+                "preferred_range" => ?r,
+            );
+            // The intersected range need to be removed before updating
+            // the union range.
+            false
+        });
+        assert!(diffs.len() <= 2, "{:?}", diffs);
+        for (left, right) in diffs.into_iter() {
+            if let Some(left) = left {
+                info!("update preferred range"; "range" => ?left);
+                self.preferred_range.insert(left);
+            }
+            if let Some(right) = right {
+                info!("update preferred range"; "range" => ?right);
+                self.preferred_range.insert(right);
+            }
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -699,6 +759,200 @@ mod tests {
             let r4 = CacheRange::new(b"k25".to_vec(), b"k75".to_vec());
             assert_eq!(range_mgr.evict_range(&r4), vec![r2, r3]);
             assert_eq!(range_mgr.ranges().len(), 1);
+        }
+    }
+
+    #[test]
+    fn test_overlap_with_preferred_range() {
+        let mut range_mgr = RangeManager::default();
+        range_mgr.add_preferred_range(CacheRange::new(b"k00".to_vec(), b"k10".to_vec()));
+        range_mgr.add_preferred_range(CacheRange::new(b"k20".to_vec(), b"k30".to_vec()));
+        range_mgr.add_preferred_range(CacheRange::new(b"k30".to_vec(), b"k50".to_vec()));
+
+        struct Case {
+            name: &'static str,
+            range: (&'static [u8], &'static [u8]),
+            expected: bool,
+        }
+        let cases = [
+            Case {
+                name: "left intersect 1",
+                range: (b"k00", b"k05"),
+                expected: true,
+            },
+            Case {
+                name: "left intersect 2",
+                range: (b"k15", b"k25"),
+                expected: true,
+            },
+            Case {
+                name: "cover all",
+                range: (b"k00", b"k60"),
+                expected: true,
+            },
+            Case {
+                name: "right intersect",
+                range: (b"k05", b"k15"),
+                expected: true,
+            },
+            Case {
+                name: "left and right intersect",
+                range: (b"k25", b"k45"),
+                expected: true,
+            },
+            Case {
+                name: "not overlap 1",
+                range: (b"k15", b"k20"),
+                expected: false,
+            },
+            Case {
+                name: "not overlap 2",
+                range: (b"k", b"k0"),
+                expected: false,
+            },
+            Case {
+                name: "not overlap 3",
+                range: (b"k60", b"k70"),
+                expected: false,
+            },
+        ];
+
+        for case in cases {
+            let range = CacheRange::new(case.range.0.to_vec(), case.range.1.to_vec());
+            assert_eq!(
+                range_mgr.overlap_with_preferred_range(&range),
+                case.expected,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_preferred_range_add_remove() {
+        struct Case {
+            name: &'static str,
+            build: Vec<(&'static [u8], &'static [u8])>,
+            remove: Vec<(&'static [u8], &'static [u8])>,
+            add: Vec<(&'static [u8], &'static [u8])>,
+            result: Vec<(&'static [u8], &'static [u8])>,
+        }
+        let cases = [
+            Case {
+                name: "remove empty",
+                build: vec![],
+                remove: vec![(b"k00", b"k10")],
+                add: vec![],
+                result: vec![],
+            },
+            Case {
+                name: "add empty",
+                build: vec![],
+                remove: vec![],
+                add: vec![(b"k00", b"k10")],
+                result: vec![(b"k00", b"k10")],
+            },
+            // Test remove
+            Case {
+                name: "remove one range",
+                build: vec![(b"k00", b"k10"), (b"k20", b"k30"), (b"k40", b"k50")],
+                remove: vec![(b"k20", b"k30")],
+                add: vec![],
+                result: vec![(b"k00", b"k10"), (b"k40", b"k50")],
+            },
+            Case {
+                name: "remove left intersected ranges",
+                build: vec![(b"k00", b"k10"), (b"k20", b"k30"), (b"k40", b"k50")],
+                remove: vec![(b"k", b"k05")],
+                add: vec![],
+                result: vec![(b"k05", b"k10"), (b"k20", b"k30"), (b"k40", b"k50")],
+            },
+            Case {
+                name: "remove left and right intersected ranges",
+                build: vec![(b"k00", b"k10"), (b"k20", b"k30"), (b"k40", b"k50")],
+                remove: vec![(b"k05", b"k45")],
+                add: vec![],
+                result: vec![(b"k00", b"k05"), (b"k45", b"k50")],
+            },
+            Case {
+                name: "remove right intersected ranges",
+                build: vec![(b"k00", b"k10"), (b"k20", b"k30"), (b"k40", b"k50")],
+                remove: vec![(b"k45", b"k60")],
+                add: vec![],
+                result: vec![(b"k00", b"k10"), (b"k20", b"k30"), (b"k40", b"k45")],
+            },
+            // Test add
+            Case {
+                name: "add left intersected ranges 1",
+                build: vec![(b"k00", b"k10"), (b"k20", b"k30")],
+                add: vec![(b"k", b"k05")],
+                remove: vec![],
+                result: vec![(b"k", b"k10"), (b"k20", b"k30")],
+            },
+            Case {
+                name: "add left intersected ranges 2",
+                build: vec![(b"k00", b"k10"), (b"k20", b"k30")],
+                add: vec![(b"k", b"k25")],
+                remove: vec![],
+                result: vec![(b"k", b"k30")],
+            },
+            Case {
+                name: "add right intersected ranges 1",
+                build: vec![(b"k20", b"k30"), (b"k40", b"k50")],
+                add: vec![(b"k45", b"k55")],
+                remove: vec![],
+                result: vec![(b"k20", b"k30"), (b"k40", b"k55")],
+            },
+            Case {
+                name: "add right intersected ranges 2",
+                build: vec![(b"k20", b"k30"), (b"k40", b"k50")],
+                add: vec![(b"k25", b"k55")],
+                remove: vec![],
+                result: vec![(b"k20", b"k55")],
+            },
+            Case {
+                name: "add left and right intersected ranges 1",
+                build: vec![(b"k20", b"k30")],
+                add: vec![(b"k10", b"k50")],
+                remove: vec![],
+                result: vec![(b"k10", b"k50")],
+            },
+            Case {
+                name: "add left and right intersected ranges 2",
+                build: vec![(b"k10", b"k20"), (b"k20", b"k30")],
+                add: vec![(b"k10", b"k50")],
+                remove: vec![],
+                result: vec![(b"k10", b"k50")],
+            },
+        ];
+
+        for case in cases {
+            // Build
+            let mut range_mgr = RangeManager::default();
+            for (start, end) in case.build {
+                let r = CacheRange::new(start.to_vec(), end.to_vec());
+                range_mgr.add_preferred_range(r);
+            }
+
+            // Remove
+            for (start, end) in case.remove {
+                let r = CacheRange::new(start.to_vec(), end.to_vec());
+                range_mgr.remove_preferred_range(r);
+            }
+
+            // Add
+            for (start, end) in case.add {
+                let r = CacheRange::new(start.to_vec(), end.to_vec());
+                range_mgr.add_preferred_range(r);
+            }
+
+            // Check
+            let result = range_mgr
+                .preferred_range
+                .iter()
+                .map(|r| (r.start.as_slice(), r.end.as_slice()))
+                .collect::<Vec<_>>();
+            assert_eq!(result, case.result, "case: {}", case.name);
         }
     }
 }
