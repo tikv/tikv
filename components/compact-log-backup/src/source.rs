@@ -153,14 +153,14 @@ impl Source {
             let id = input.id.clone();
             let compression = input.compression;
             async move {
-                let mut content = vec![];
+                let mut content = Vec::with_capacity(id.length as _);
                 let item = pin!(Cursor::new(&mut content));
                 let mut decompress = decompress(compression, item)?;
                 let source = storage.read_part(&id.name, id.offset, id.length);
                 let n = futures::io::copy(source, &mut decompress).await?;
                 decompress.flush().await?;
                 drop(decompress);
-                std::result::Result::<_, std::io::Error>::Ok((content, n))
+                std::io::Result::Ok((content, n))
             }
         };
         let (content, size) = retry_all_ext(fetch, ext).await?;

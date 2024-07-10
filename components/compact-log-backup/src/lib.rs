@@ -57,8 +57,14 @@ mod util {
         }
     }
 
+    /// Select any future completes from a vector.
+    /// The resolved future will be removed from the vector by `swap_remove`,
+    /// hence the order of execution may vary. Prefer using this for joining
+    /// unordered background tasks.
     pub fn select_vec<'a, T, F>(v: &'a mut Vec<F>) -> impl Future<Output = T> + 'a
     where
+        // Note: this `Unpin` might be removed, as the returned future have
+        // a mutable reference to the vector, the vector itself cannot be moved.
         F: Future<Output = T> + Unpin + 'a,
     {
         use futures::FutureExt;

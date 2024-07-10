@@ -115,7 +115,7 @@ impl Execution {
                     compact_to_ts: self.cfg.until_ts,
                 },
             );
-            let mut pending = VecDeque::new();
+            let mut pending = Vec::new();
             let mut id = 0;
 
             while let Some(c) = compact_stream
@@ -146,14 +146,16 @@ impl Execution {
                     let res = compact_worker.run(c, ext).await.trace_err()?;
                     res.verify_checksum()
                         .annotate(format_args!("the compaction is {:?}", res.origin))?;
-                    Result::Ok(res)
+                    Result::Ok((res, cid))
                 };
                 let join_handle = tokio::spawn(root!(compact_work));
-                pending.push_back((join_handle, cid));
+                pending.push(join_handle);
 
                 if pending.len() >= self.max_concurrent_compaction as _ {
-                    let (join, cid) = pending.pop_front().unwrap();
-                    let cres = frame!("wait_for_compaction"; join).await.unwrap()?;
+                    let join = util::select_vec(&mut pending);
+                    // TODO: sometimes the first compaction will be pretty slow, in which case CPU
+                    // will be idle for a long time due to blocking here.
+                    let (cres, cid) = frame!("wait_for_compaction"; join).await.unwrap()?;
                     self.on_compaction_finish(cid, &cres, storage.as_ref(), &mut hooks)
                         .await?;
                 }
@@ -162,8 +164,8 @@ impl Execution {
 
             hooks.update_collect_compaction_stat(&compact_stream.take_statistic());
 
-            for (join, cid) in pending {
-                let cres = frame!("final_wait"; join).await.unwrap()?;
+            for join in pending {
+                let (cres, cid) = frame!("final_wait"; join).await.unwrap()?;
                 self.on_compaction_finish(cid, &cres, storage.as_ref(), &mut hooks)
                     .await?;
             }
