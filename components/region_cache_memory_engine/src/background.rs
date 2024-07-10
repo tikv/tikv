@@ -1824,6 +1824,7 @@ impl Filter {
                         "delete in memory due to gc";
                         "key" => log_wrappers::Value(key.as_bytes()),
                         "cf" => "write",
+                        "commit_ts" => commit_ts,
                     );
                 }
             }
@@ -1844,6 +1845,7 @@ impl Filter {
                         "gc filter write hidden by tombstone";
                         "key" => log_wrappers::Value(key),
                         "safe_ts" => self.safe_point,
+                        "commit_ts" => commit_ts,
                     );
                 }
                 return Ok(());
@@ -1854,6 +1856,7 @@ impl Filter {
                         "gc filter write tombstone";
                         "key" => log_wrappers::Value(&self.cached_skiplist_delete_key.as_ref().unwrap()),
                         "safe_ts" => self.safe_point,
+                        "commit_ts" => commit_ts,
                     );
                 }
                 self.write_cf_handle.remove(
@@ -1876,6 +1879,7 @@ impl Filter {
                     "gc filter write user key";
                     "key" => log_wrappers::Value(&key),
                     "safe_ts" => self.safe_point,
+                    "commit_ts" => commit_ts,
                 );
             }
             return Ok(());
@@ -1894,6 +1898,7 @@ impl Filter {
                         "gc filter write n";
                         "key" => log_wrappers::Value(&cached_delete_key),
                         "safe_ts" => self.safe_point,
+                        "commit_ts" => commit_ts,
                     );
                 }
                 self.write_cf_handle
@@ -1930,6 +1935,7 @@ impl Filter {
                     "seqno" => sequence,
                     "write type" => ?write.write_type,
                     "start_ts" => write.start_ts,
+                    "commit_ts" => commit_ts,
                 );
             }
             return Ok(());
@@ -1945,6 +1951,7 @@ impl Filter {
                 "write type" => ?write.write_type,
                 "start_ts" => write.start_ts,
                 "safe_ts" => self.safe_point,
+                "commit_ts" => commit_ts,
             );
         }
         self.handle_filtered_write(write, guard)?;
@@ -2525,7 +2532,7 @@ impl CrossChecker {
                             if disk_mvcc >= *safe_point {
                                 panic!(
                                     "cross check fail(miss key): miss valid mvcc version; 
-                                    lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={};",
+                                    lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}; cur_mvcc_recordings={:?}",
                                     log_wrappers::Value(&mem_iter.lower_bound),
                                     log_wrappers::Value(&mem_iter.upper_bound),
                                     log_wrappers::Value(mem_key),
@@ -2533,6 +2540,7 @@ impl CrossChecker {
                                     mem_iter.sequence_number,
                                     read_ts,
                                     *safe_point,
+                                    cur_mvcc_recordings,
                                 );
                             }
                         }
