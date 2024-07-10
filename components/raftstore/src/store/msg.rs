@@ -641,7 +641,11 @@ pub enum CasualMessage<EK: KvEngine> {
     RenewLease,
 
     // Snapshot is applied
-    SnapshotApplied,
+    SnapshotApplied {
+        peer_id: u64,
+        /// Whether the peer is destroyed after applying the snapshot
+        tombstone: bool,
+    },
 
     // Trigger raft to campaign which is used after exiting force leader
     Campaign,
@@ -710,7 +714,11 @@ impl<EK: KvEngine> fmt::Debug for CasualMessage<EK> {
             }
             CasualMessage::RefreshRegionBuckets { .. } => write!(fmt, "RefreshRegionBuckets"),
             CasualMessage::RenewLease => write!(fmt, "RenewLease"),
-            CasualMessage::SnapshotApplied => write!(fmt, "SnapshotApplied"),
+            CasualMessage::SnapshotApplied { peer_id, tombstone } => write!(
+                fmt,
+                "SnapshotApplied, peer_id={}, tombstone={}",
+                peer_id, tombstone
+            ),
             CasualMessage::Campaign => write!(fmt, "Campaign"),
         }
     }
@@ -766,6 +774,26 @@ pub struct InspectedRaftMessage {
     pub msg: RaftMessage,
 }
 
+impl fmt::Debug for InspectedRaftMessage {
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.msg.has_extra_msg() {
+            write!(
+                fmt,
+                "[{}] Raft Message with extra message {:?}",
+                self.msg.get_region_id(),
+                self.msg.get_extra_msg().get_type()
+            )
+        } else {
+            write!(
+                fmt,
+                "[{}] Raft Message {:?}",
+                self.msg.get_region_id(),
+                self.msg.get_message().get_msg_type()
+            )
+        }
+    }
+}
+
 /// Message that can be sent to a peer.
 #[allow(clippy::large_enum_variant)]
 #[derive(EnumCount, EnumVariantNames)]
@@ -811,7 +839,9 @@ impl<EK: KvEngine> ResourceMetered for PeerMsg<EK> {}
 impl<EK: KvEngine> fmt::Debug for PeerMsg<EK> {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PeerMsg::RaftMessage(..) => write!(fmt, "Raft Message"),
+            PeerMsg::RaftMessage(m, _) => {
+                write!(fmt, "{:?}", m)
+            }
             PeerMsg::RaftCommand(_) => write!(fmt, "Raft Command"),
             PeerMsg::Tick(tick) => write! {
                 fmt,
@@ -924,22 +954,21 @@ where
     EK: KvEngine,
 {
     fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {
-            StoreMsg::RaftMessage(_) => write!(fmt, "Raft Message"),
+        match self {
+            StoreMsg::RaftMessage(m) => {
+                write!(fmt, "{:?}", m)
+            }
             StoreMsg::StoreUnreachable { store_id } => {
                 write!(fmt, "Store {}  is unreachable", store_id)
             }
-            StoreMsg::CompactedEvent(ref event) => write!(fmt, "CompactedEvent cf {}", event.cf()),
-            StoreMsg::ClearRegionSizeInRange {
-                ref start_key,
-                ref end_key,
-            } => write!(
+            StoreMsg::CompactedEvent(event) => write!(fmt, "CompactedEvent cf {}", event.cf()),
+            StoreMsg::ClearRegionSizeInRange { start_key, end_key } => write!(
                 fmt,
                 "Clear Region size in range {:?} to {:?}",
                 start_key, end_key
             ),
             StoreMsg::Tick(tick) => write!(fmt, "StoreTick {:?}", tick),
-            StoreMsg::Start { ref store } => write!(fmt, "Start store {:?}", store),
+            StoreMsg::Start { store } => write!(fmt, "Start store {:?}", store),
             StoreMsg::UpdateReplicationMode(_) => write!(fmt, "UpdateReplicationMode"),
             StoreMsg::LatencyInspect { .. } => write!(fmt, "LatencyInspect"),
             StoreMsg::UnsafeRecoveryReport(..) => write!(fmt, "UnsafeRecoveryReport"),

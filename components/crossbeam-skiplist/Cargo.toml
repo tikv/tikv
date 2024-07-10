@@ -1,0 +1,51 @@
+[package]
+name = "crossbeam-skiplist"
+# When publishing a new version:
+# - Update CHANGELOG.md
+# - Update README.md (when increasing major or minor version)
+# - Run './tools/publish.sh crossbeam-skiplist <version>'
+version = "0.1.3"
+edition = "2021"
+rust-version = "1.61"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/crossbeam-rs/crossbeam"
+homepage = "https://github.com/crossbeam-rs/crossbeam/tree/master/crossbeam-skiplist"
+description = "A concurrent skip list"
+keywords = ["map", "set", "skiplist", "lock-free"]
+categories = ["algorithms", "concurrency", "data-structures", "no-std"]
+publish = false
+
+[features]
+default = ["std"]
+
+# Enable to use APIs that require `std`.
+# This is enabled by default.
+std = ["alloc", "crossbeam-epoch/std", "crossbeam-utils/std"]
+
+# Enable to use APIs that require `alloc`.
+# This is enabled by default and also enabled if the `std` feature is enabled.
+#
+# NOTE: Disabling both `std` *and* `alloc` features is not supported yet.
+alloc = ["crossbeam-epoch/alloc"]
+
+[dependencies]
+crossbeam-epoch = { workspace = true }
+crossbeam-utils = { workspace = true }
+
+[dev-dependencies]
+rand = "0.8"
+
+# Rename test and example binary names to pass TiKV jemalloc check.
+[[test]]
+name = "crossbeam_skiplist_base"
+path = "tests/base.rs"
+[[test]]
+name = "crossbeam_skiplist_map"
+path = "tests/map.rs"
+[[test]]
+name = "crossbeam_skiplist_set"
+path = "tests/set.rs"
+
+[[example]]
+name = "crossbeam_skiplist_simple"
+path = "examples/simple.rs"

@@ -40,7 +40,7 @@ clap = { workspace = true }
 collections = { workspace = true }
 compact-log-backup = { workspace = true }
 concurrency_manager = { workspace = true }
-crossbeam = "0.8"
+crossbeam = { workspace = true }
 crypto = { workspace = true }
 encryption_export = { workspace = true }
 engine_rocks = { workspace = true }
