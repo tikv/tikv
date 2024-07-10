@@ -1,3 +1,4 @@
+// Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::time::Duration;
 
 use derive_more::{Add, AddAssign};

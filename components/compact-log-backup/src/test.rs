@@ -1,3 +1,4 @@
+// Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{any::Any, collections::HashMap, sync::Arc, time::Instant};
 
 use engine_rocks::RocksEngine;

@@ -1,3 +1,4 @@
+// Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{fmt::Display, future::Future, process::Output};
 
 use chrono::{DateTime, Duration, Local};
