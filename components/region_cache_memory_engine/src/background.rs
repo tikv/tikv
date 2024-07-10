@@ -2318,9 +2318,7 @@ impl CrossChecker {
                     };
                     if *safe_point != s {
                         assert!(s > *safe_point);
-                        if let Some(mvcc) =
-                            prev_mvcc_recordings.iter().find(|&mvcc| mvcc <= safe_point)
-                        {
+                        if let Some(mvcc) = prev_mvcc_recordings.iter().find(|&&mvcc| mvcc <= s) {
                             *last_mvcc_before_safe_point_of_last_user_key = *mvcc;
                         }
                     }
@@ -2514,9 +2512,8 @@ impl CrossChecker {
                                         };
                                     if *safe_point != s {
                                         assert!(s > *safe_point);
-                                        if let Some(mvcc) = cur_mvcc_recordings
-                                            .iter()
-                                            .find(|&mvcc| mvcc <= safe_point)
+                                        if let Some(mvcc) =
+                                            cur_mvcc_recordings.iter().find(|&&mvcc| mvcc <= s)
                                         {
                                             *last_mvcc_before_safe_point_of_cur_user_key = *mvcc;
                                         }
@@ -2581,8 +2578,7 @@ impl CrossChecker {
                         };
                         if *safe_point != s {
                             assert!(s > *safe_point);
-                            if let Some(mvcc) =
-                                prev_mvcc_recordings.iter().find(|&mvcc| mvcc <= safe_point)
+                            if let Some(mvcc) = prev_mvcc_recordings.iter().find(|&&mvcc| mvcc <= s)
                             {
                                 *last_mvcc_before_safe_point_of_last_user_key = *mvcc;
                             }
@@ -2690,9 +2686,7 @@ impl CrossChecker {
                     };
                     if *safe_point != s {
                         assert!(s > *safe_point);
-                        if let Some(mvcc) =
-                            prev_mvcc_recordings.iter().find(|&mvcc| mvcc <= safe_point)
-                        {
+                        if let Some(mvcc) = prev_mvcc_recordings.iter().find(|&&mvcc| mvcc <= s) {
                             *last_mvcc_before_safe_point_of_last_user_key = *mvcc;
                         }
                     }
