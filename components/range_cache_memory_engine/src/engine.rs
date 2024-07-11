@@ -369,7 +369,20 @@ impl RangeCacheMemoryEngine {
     /// immediately due to some ongoing snapshots.
     pub fn evict_range(&self, range: &CacheRange) {
         let mut core = self.core.write();
-        let ranges_to_delete = core.range_manager.evict_range(range);
+        let mut ranges_to_delete = core.range_manager.evict_range(range);
+        ranges_to_delete.retain(|r| {
+            let scheduled = core
+                .mut_range_manager()
+                .ranges_being_deleted
+                .get_mut(r)
+                .unwrap();
+            if !*scheduled {
+                *scheduled = true;
+                true
+            } else {
+                false
+            }
+        });
         if !ranges_to_delete.is_empty() {
             drop(core);
             // The range can be deleted directly.

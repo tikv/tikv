@@ -477,7 +477,7 @@ impl BackgroundRunnerCore {
                 assert_eq!(r, range);
                 core.mut_range_manager()
                     .ranges_being_deleted
-                    .insert(r.clone());
+                    .insert(r.clone(), true);
                 core.remove_cached_write_batch(&range);
                 drop(core);
                 fail::fail_point!("in_memory_engine_snapshot_load_canceled");
@@ -542,7 +542,7 @@ impl BackgroundRunnerCore {
         core.remove_cached_write_batch(&range);
         core.mut_range_manager()
             .ranges_being_deleted
-            .insert(r.clone());
+            .insert(r.clone(), true);
 
         if let Err(e) = delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(vec![r]))
         {
@@ -1146,6 +1146,25 @@ impl Runnable for DeleteRangeRunner {
                     let mut ranges_to_delay = vec![];
                     let mut ranges_to_delete = vec![];
                     for r in ranges {
+                        // Check whether range exists in `ranges_being_deleted` and it's scheduled
+                        if !core.range_manager.ranges_being_deleted.iter().any(
+                            |(range_being_delete, scheduled)| {
+                                if range_being_delete == &r {
+                                    if !scheduled {
+                                        panic!(
+                                            "range to delete with scheduled false; range={:?}",
+                                            r,
+                                        );
+                                    }
+                                    true
+                                } else {
+                                    false
+                                }
+                            },
+                        ) {
+                            panic!("range to delete not in ranges_being_deleted; range={:?}", r,);
+                        }
+
                         // If the range is overlapped with ranges in `ranges_being_written`, the
                         // range has to be delayed to delete. See comment on `delay_ranges`.
                         if core

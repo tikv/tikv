@@ -89,9 +89,22 @@ impl RangeCacheSnapshot {
 impl Drop for RangeCacheSnapshot {
     fn drop(&mut self) {
         let mut core = self.engine.core.write();
-        let ranges_removable = core
+        let mut ranges_removable = core
             .range_manager
             .remove_range_snapshot(&self.snapshot_meta);
+        ranges_removable.retain(|r| {
+            let scheduled = core
+                .mut_range_manager()
+                .ranges_being_deleted
+                .get_mut(r)
+                .unwrap();
+            if !*scheduled {
+                *scheduled = true;
+                true
+            } else {
+                false
+            }
+        });
         if !ranges_removable.is_empty() {
             drop(core);
             if let Err(e) = self
@@ -1880,7 +1893,8 @@ mod tests {
                     .read()
                     .range_manager()
                     .ranges_being_deleted
-                    .contains(&evict_range)
+                    .get(&evict_range)
+                    .is_some()
             );
         }
 
@@ -1893,7 +1907,8 @@ mod tests {
                     .read()
                     .range_manager()
                     .ranges_being_deleted
-                    .contains(&evict_range)
+                    .get(&evict_range)
+                    .is_some()
             );
         }
         drop(s2);
