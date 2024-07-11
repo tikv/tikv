@@ -943,6 +943,20 @@ lazy_static! {
         &["type"]
     ).unwrap();
 
+    pub static ref RAFT_APPLY_SST_YIELD_BY_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_raft_apply_sst_yield_by",
+        "Total number of sst yield.",
+        &["reason"]
+    )
+    .unwrap();
+
+    pub static ref RAFT_APPLY_COMMIT_BY_VEC: IntCounterVec = register_int_counter_vec!(
+        "tikv_raftstore_raft_apply_commit_by",
+        "Total number of sst commit.",
+        &["reason"]
+    )
+    .unwrap();
+
     pub static ref SNAPSHOT_LIMIT_GENERATE_BYTES: IntCounter = register_int_counter!(
         "tikv_snapshot_limit_generate_bytes",
         "Total snapshot generate limit used",

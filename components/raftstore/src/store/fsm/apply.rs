@@ -1240,12 +1240,18 @@ where
                         simple_write_decoder.to_raft_cmd_request()
                     }
                 };
-                if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
+                let high_latency_operation = has_high_latency_operation(&cmd);
+                if apply_ctx.yield_high_latency_operation && high_latency_operation {
                     self.priority = Priority::Low;
                 }
                 if self.has_pending_ssts {
                     // we are in low priority handler and to avoid overlapped ssts with same region
                     // just return Yield
+                    if high_latency_operation {
+                        RAFT_APPLY_SST_YIELD_BY_VEC
+                            .with_label_values(&["pending_sst"])
+                            .inc();
+                    }
                     return ApplyResult::Yield;
                 }
                 let mut has_unflushed_data =
@@ -1255,6 +1261,11 @@ where
                     || apply_ctx.kv_wb().should_write_to_engine())
                     && apply_ctx.host.pre_persist(&self.region, false, Some(&cmd))
                 {
+                    if !apply_ctx.pending_ssts.is_empty() {
+                        RAFT_APPLY_COMMIT_BY_VEC
+                            .with_label_values(&["unflush"])
+                            .inc();
+                    }
                     apply_ctx.commit(self);
                     if self.metrics.written_bytes >= apply_ctx.yield_msg_size
                         || self
@@ -1269,7 +1280,17 @@ where
                 }
                 if self.priority != apply_ctx.priority {
                     if has_unflushed_data {
+                        if !apply_ctx.pending_ssts.is_empty() {
+                            RAFT_APPLY_COMMIT_BY_VEC
+                                .with_label_values(&["notpoller"])
+                                .inc();
+                        }
                         apply_ctx.commit(self);
+                    }
+                    if high_latency_operation {
+                        RAFT_APPLY_SST_YIELD_BY_VEC
+                            .with_label_values(&["notpoller"])
+                            .inc();
                     }
                     return ApplyResult::Yield;
                 }
@@ -1420,6 +1441,9 @@ where
             // when `post_exec`.
             self.write_apply_state(apply_ctx.kv_wb_mut());
             apply_ctx.commit(self);
+            RAFT_APPLY_COMMIT_BY_VEC
+                .with_label_values(&["should_write"])
+                .inc();
         }
         exec_result
     }
