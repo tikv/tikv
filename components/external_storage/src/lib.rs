@@ -56,6 +56,12 @@ pub fn record_storage_create(start: Instant, storage: &dyn ExternalStorage) {
 /// signature of write.) see https://github.com/rust-lang/rust/issues/63033
 pub struct UnpinReader<'a>(pub Box<dyn AsyncRead + Unpin + Send + 'a>);
 
+impl<'a, R: AsyncRead + Unpin + Send + 'a> From<R> for UnpinReader<'a> {
+    fn from(r: R) -> Self {
+        UnpinReader(Box::new(r))
+    }
+}
+
 pub type ExternalData<'a> = Box<dyn AsyncRead + Unpin + Send + 'a>;
 
 #[derive(Debug, Default)]

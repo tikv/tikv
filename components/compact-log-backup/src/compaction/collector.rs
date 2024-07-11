@@ -222,7 +222,7 @@ impl<S: Stream<Item = Result<LogFile>>> Stream for CollectSubcompaction<S> {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
+    use std::{pin, sync::Arc};
 
     use futures::stream::{self, StreamExt, TryStreamExt};
     use kvproto::brpb;
@@ -233,7 +233,7 @@ mod test {
         SubcompactionCollector,
     };
     use crate::{
-        errors::Result,
+        errors::{Error, ErrorKind, Result},
         storage::{LogFile, LogFileId},
     };
 
@@ -327,7 +327,7 @@ mod test {
             log_file("006", 98, r(3)),
             log_file("008", 1, r(4)),
         ];
-        let collector = CollectSubcompaction::new(
+        let mut collector = CollectSubcompaction::new(
             stream::iter(items.into_iter()).map(Result::Ok),
             CollectSubcompactionConfig {
                 compact_from_ts: 0,
@@ -336,12 +336,43 @@ mod test {
             },
         );
 
-        let mut res = collector
+        let mut res = (&mut collector)
             .map_ok(|v| (v.size, v.region_id))
             .try_collect::<Vec<_>>()
             .await
             .unwrap();
+
+        res[2..].sort();
         assert_eq!(res.len(), 4);
-        assert_eq!(res, &[(137, 2), (140, 3), (1, 4), (64, 1)])
+        assert_eq!(res, &[(137, 2), (140, 3), (1, 4), (64, 1)]);
+        let stat = collector.take_statistic();
+        assert_eq!(stat.files_in, 7);
+        assert_eq!(stat.bytes_in, 342);
+        assert_eq!(stat.bytes_out, 342);
+        assert_eq!(stat.compactions_out, 4);
+        assert_eq!(stat.files_filtered_out, 0);
+    }
+
+    #[tokio::test]
+    async fn test_error() {
+        let r = SubcompactionCollectKey::of_region;
+        let items = vec![
+            Ok(log_file("001", 64, r(1))),
+            Ok(log_file("006", 65, r(1))),
+            Err(Error::from(ErrorKind::Other("error".to_owned()))),
+            Ok(log_file("008", 20, r(1))),
+        ];
+
+        let collector = CollectSubcompaction::new(
+            stream::iter(items.into_iter()),
+            CollectSubcompactionConfig {
+                compact_from_ts: 0,
+                compact_to_ts: u64::MAX,
+                compaction_size_threshold: 128,
+            },
+        );
+        let mut st = collector.map_ok(|v| v.size);
+        assert_eq!(st.next().await.unwrap().unwrap(), 129);
+        st.next().await.unwrap().unwrap_err();
     }
 }

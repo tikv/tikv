@@ -34,7 +34,11 @@ tokio-util = { version = "0.7", features = ["compat"] }
 tracing = { workspace = true }
 tracing-active-tree = { workspace = true }
 txn_types = { workspace = true }
+
+# Below are used by `test_utils` only.
 zstd = "0.11"
+tidb_query_datatype = { workspace = true }
+codec = {workspace = true}
 
 [dev-dependencies]
 pprof = { version = "0.13", default-features = false, features = [
@@ -42,3 +46,4 @@ pprof = { version = "0.13", default-features = false, features = [
   "protobuf-codec",
 ] } 
 test_util = { workspace = true }
+tempdir = "0.3"

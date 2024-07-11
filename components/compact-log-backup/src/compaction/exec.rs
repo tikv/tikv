@@ -346,3 +346,57 @@ where
         return Ok(result);
     }
 }
+
+#[cfg(test)]
+mod test {
+    use tempdir::TempDir;
+
+    use crate::{
+        compaction::{Input, Subcompaction},
+        test_util::{gen_step, KvGen},
+    };
+
+    struct TempStorage {
+        path: TempDir,
+        storage: external_storage::LocalStorage,
+    }
+
+    fn create_local_storage() -> TempStorage {
+        let path = TempDir::new("test").unwrap();
+        let storage = external_storage::LocalStorage::new(path.path()).unwrap();
+        TempStorage { path, storage }
+    }
+
+    #[tokio::test]
+    async fn test_compact_one() {
+        let st = create_local_storage();
+
+        let const_val = |_| vec![42u8];
+        let s1 = KvGen::new(gen_step(1, 0, 2), const_val);
+        let s2 = KvGen::new(gen_step(1, 1, 2), const_val);
+
+        let gen_from = |s: KvGen<_>| async {
+            let mut fb = crate::test_util::LogFileBuilder::new(1, |_| {});
+            for (k, v) in s {
+                fb.add_encoded(&k, &v)
+            }
+            fb.must_save(&st.storage).await
+        };
+
+        let i1 = gen_from(s1).await;
+        let i2 = gen_from(s2).await;
+        let c = Subcompaction {
+            inputs: vec![i1, i2],
+            size: todo!(),
+            region_id: todo!(),
+            cf: todo!(),
+            input_max_ts: todo!(),
+            input_min_ts: todo!(),
+            compact_from_ts: todo!(),
+            compact_to_ts: todo!(),
+            min_key: todo!(),
+            max_key: todo!(),
+            ty: todo!(),
+        };
+    }
+}
