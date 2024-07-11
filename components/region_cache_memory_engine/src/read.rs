@@ -101,6 +101,17 @@ impl Drop for RangeCacheSnapshot {
             .range_manager
             .remove_range_snapshot(&self.snapshot_meta);
         if !ranges_removable.is_empty() {
+            ranges_removable.iter().for_each(|r| {
+                let mut scheduled = core
+                    .mut_range_manager()
+                    .ranges_being_deleted
+                    .get_mut(r)
+                    .unwrap();
+                if *scheduled {
+                    panic!("double schedule for delete range; range={:?}", r);
+                }
+                *scheduled = true
+            });
             drop(core);
             if let Err(e) =
                 self.engine

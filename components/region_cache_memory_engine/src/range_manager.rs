@@ -119,7 +119,8 @@ pub struct RangeManager {
     historical_ranges: BTreeMap<CacheRange, RangeMeta>,
     // `ranges_being_deleted` contains ranges that are evicted but not finished the delete (or even
     // not start to delete due to ongoing snapshot)
-    pub(crate) ranges_being_deleted: BTreeSet<CacheRange>,
+    // bool means whether the range has been scheduled to delelte
+    pub(crate) ranges_being_deleted: BTreeMap<CacheRange, bool>,
     // ranges that are cached now
     ranges: BTreeMap<CacheRange, RangeMeta>,
 
@@ -233,7 +234,9 @@ impl RangeManager {
     }
 
     fn overlap_with_evicting_range(&self, range: &CacheRange) -> bool {
-        self.ranges_being_deleted.iter().any(|r| r.overlaps(range))
+        self.ranges_being_deleted
+            .iter()
+            .any(|(r, _)| r.overlaps(range))
     }
 
     fn overlap_with_range_in_gc(&self, range: &CacheRange) -> bool {
@@ -307,6 +310,7 @@ impl RangeManager {
             let ranges_to_delete = self
                 .ranges_being_deleted
                 .iter()
+                .map(|(range, _)| range)
                 .filter(|evicted_range| {
                     !self
                         .historical_ranges
@@ -428,7 +432,7 @@ impl RangeManager {
             self.ranges.insert(right_range, right_meta);
         }
 
-        self.ranges_being_deleted.insert(evict_range.clone());
+        self.ranges_being_deleted.insert(evict_range.clone(), false);
 
         if !meta.range_snapshot_list.is_empty() {
             self.historical_ranges.insert(cached_range.clone(), meta);
@@ -448,7 +452,7 @@ impl RangeManager {
 
     pub fn on_delete_ranges(&mut self, ranges: &[CacheRange]) {
         for r in ranges {
-            assert!(self.ranges_being_deleted.remove(&r));
+            self.ranges_being_deleted.remove(&r).unwrap();
             info!(
                 "range eviction done";
                 "range" => ?r,
@@ -546,7 +550,7 @@ impl RangeManager {
         for range in self
             .ranges_being_deleted
             .iter()
-            .filter(|range| tag == range.tag)
+            .filter(|(range, _)| tag == range.tag)
         {
             buffer.push_str(&format!("  range: {:?}\n", range));
         }

@@ -511,7 +511,7 @@ impl BackgroundRunnerCore {
                 assert_eq!(r, range);
                 core.mut_range_manager()
                     .ranges_being_deleted
-                    .insert(r.clone());
+                    .insert(r.clone(), true);
                 core.remove_cached_write_batch(&range);
                 drop(core);
                 fail::fail_point!("in_memory_engine_snapshot_load_canceled");
@@ -576,7 +576,7 @@ impl BackgroundRunnerCore {
         core.remove_cached_write_batch(&range);
         core.mut_range_manager()
             .ranges_being_deleted
-            .insert(r.clone());
+            .insert(r.clone(), true);
 
         if let Err(e) = delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange((
             vec![r],
@@ -1588,7 +1588,19 @@ impl Runnable for DeleteRangeRunner {
                             .range_manager
                             .ranges_being_deleted
                             .iter()
-                            .find(|&range_being_delete| range_being_delete == &r)
+                            .find(|&(range_being_delete, scheduled)| {
+                                if range_being_delete == &r {
+                                    if !scheduled {
+                                        panic!(
+                                            "range to delete with scheduled false; range={:?}",
+                                            r,
+                                        );
+                                    }
+                                    true
+                                } else {
+                                    false
+                                }
+                            })
                             .is_none()
                         {
                             panic!("range to delete not in ranges_being_deleted; range={:?}", r,);
@@ -2566,7 +2578,7 @@ impl CrossChecker {
                             if disk_mvcc >= *safe_point {
                                 panic!(
                                     "cross check fail(miss key): miss valid mvcc version; 
-                                    lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}; cur_mvcc_recordings={:?}",
+                                    lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}; cur_key_info={:?}",
                                     log_wrappers::Value(&mem_iter.lower_bound),
                                     log_wrappers::Value(&mem_iter.upper_bound),
                                     log_wrappers::Value(mem_key),
@@ -2574,7 +2586,7 @@ impl CrossChecker {
                                     mem_iter.sequence_number,
                                     read_ts,
                                     *safe_point,
-                                    cur_key_info.mvcc_recordings,
+                                    cur_key_info,
                                 );
                             }
                         }
@@ -2594,7 +2606,7 @@ impl CrossChecker {
                             assert!(cur_key_info.last_mvcc_version_before_safe_point != 0);
                             panic!(
                                 "cross check fail(miss key): miss valid mvcc version; 
-                                lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}",
+                                lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}; cur_key_info={:?}",
                                 log_wrappers::Value(&mem_iter.lower_bound),
                                 log_wrappers::Value(&mem_iter.upper_bound),
                                 log_wrappers::Value(mem_key),
@@ -2602,6 +2614,7 @@ impl CrossChecker {
                                 mem_iter.sequence_number,
                                 read_ts,
                                 *safe_point,
+                                cur_key_info,
                             );
                         }
                     }
