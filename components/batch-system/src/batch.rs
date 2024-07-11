@@ -423,6 +423,9 @@ impl<N: Fsm, C: Fsm, Handler: PollHandler<N, C>> Poller<N, C, Handler> {
                 if p.is_stopped() {
                     p.policy = Some(ReschedulePolicy::Remove);
                     reschedule_fsms.push(fsm_cnt);
+                } if p.get_priority() != self.handler.get_priority() {
+                    p.policy = Some(ReschedulePolicy::Schedule);
+                    reschedule_fsms.push(fsm_cnt);
                 } else if let HandleResult::StopAt { progress, skip_end } = res {
                     p.policy = Some(ReschedulePolicy::Release(progress));
                     reschedule_fsms.push(fsm_cnt);
