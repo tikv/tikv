@@ -15,6 +15,7 @@ use external_storage::{BackendConfig, FullFeaturedStorage};
 use futures::stream::{self, StreamExt};
 use hooks::{AfterFinishCtx, BeforeStartCtx, CId, CompactionFinishCtx, ExecHooks};
 use kvproto::brpb::StorageBackend;
+use tikv_util::config::ReadableSize;
 use tokio::runtime::Handle;
 use tracing::{trace_span, Instrument};
 use tracing_active_tree::{frame, root};
@@ -114,6 +115,7 @@ impl Execution {
                 CollectSubcompactionConfig {
                     compact_from_ts: self.cfg.from_ts,
                     compact_to_ts: self.cfg.until_ts,
+                    compaction_size_threshold: ReadableSize::mb(128).0,
                 },
             );
             let mut pending = Vec::new();

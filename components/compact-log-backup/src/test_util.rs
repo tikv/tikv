@@ -1,49 +1,9 @@
-// Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
+use std::io::{Cursor, Write as _};
 
-use std::{
-    io::{Cursor, Write},
-    sync::Arc,
-};
-
-use external_storage::ExternalStorage;
 use kvproto::brpb;
 use tikv_util::codec::stream_event::EventEncoder;
 
-pub struct Border {
-    start: Vec<u8>,
-    id: u64,
-}
-
-pub struct Terra {
-    borders: Vec<Border>,
-}
-
-pub struct Narrator {
-    terra: Terra,
-    land: Arc<dyn ExternalStorage>,
-}
-
-pub struct Leaf {
-    kvs: Vec<(Vec<u8>, Vec<u8>)>,
-    start_ts: u64,
-    commit_ts: u64,
-}
-
-pub struct Page {
-    k: Vec<u8>,
-    v: Vec<u8>,
-    cf: &'static str,
-}
-
-pub struct Promise {
-    pages: Vec<Page>,
-}
-
-impl Narrator {
-    pub fn weave_tales(&self, of: impl Iterator<Item = Leaf>) -> Promise {
-        todo!()
-    }
-}
+use crate::storage::LogFile;
 
 struct LogFileBuilder {
     pub name: String,
@@ -108,5 +68,27 @@ impl LogFileBuilder {
         self.crc64xor ^= d.sum64();
     }
 
-    pub fn build(&mut self) {}
+    pub fn build(&mut self) -> LogFile {
+        LogFile {
+            region_id: self.region_id,
+            cf: self.cf,
+            ty: self.ty,
+            is_meta: self.is_meta,
+
+            min_ts: self.min_ts,
+            max_ts: self.max_ts,
+            min_key: self.min_key.clone(),
+            max_key: self.max_key.clone(),
+            number_of_entries: self.number_of_entries,
+            crc64xor: self.crc64xor,
+            compression: self.compression,
+            file_real_size: self.file_real_size,
+
+            id: todo!(),
+            min_start_ts: 0,
+            table_id: 0,
+            resolved_ts: todo!(),
+            sha256: todo!(),
+        }
+    }
 }

@@ -45,6 +45,7 @@ impl<S: Stream<Item = Result<LogFile>>> CollectSubcompaction<S> {
 pub struct CollectSubcompactionConfig {
     pub compact_from_ts: u64,
     pub compact_to_ts: u64,
+    pub compaction_size_threshold: u64,
 }
 
 impl<S: Stream<Item = Result<LogFile>>> CollectSubcompaction<S> {
@@ -55,7 +56,6 @@ impl<S: Stream<Item = Result<LogFile>>> CollectSubcompaction<S> {
             collector: SubcompactionCollector {
                 cfg,
                 items: HashMap::new(),
-                compaction_size_threshold: ReadableSize::mb(128).0,
                 stat: CollectCompactionStatistic::default(),
             },
         }
@@ -72,7 +72,6 @@ struct SubcompactionCollectKey {
 
 struct SubcompactionCollector {
     items: HashMap<SubcompactionCollectKey, UnformedSubcompaction>,
-    compaction_size_threshold: u64,
     stat: CollectCompactionStatistic,
     cfg: CollectSubcompactionConfig,
 }
@@ -126,7 +125,7 @@ impl SubcompactionCollector {
                     u.min_key = file.min_key;
                 }
 
-                if u.size > self.compaction_size_threshold {
+                if u.size > self.cfg.compaction_size_threshold {
                     let c = Subcompaction {
                         inputs: std::mem::take(&mut u.inputs),
                         region_id: key.region_id,
@@ -218,5 +217,131 @@ impl<S: Stream<Item = Result<LogFile>>> Stream for CollectSubcompaction<S> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::Arc;
+
+    use futures::stream::{self, StreamExt, TryStreamExt};
+    use kvproto::brpb;
+    use tikv_util::log;
+
+    use super::{
+        CollectSubcompaction, CollectSubcompactionConfig, SubcompactionCollectKey,
+        SubcompactionCollector,
+    };
+    use crate::{
+        errors::Result,
+        storage::{LogFile, LogFileId},
+    };
+
+    struct LogFileBuilder {
+        pub name: String,
+        pub region_id: u64,
+        pub cf: &'static str,
+        pub ty: brpb::FileType,
+        pub is_meta: bool,
+
+        content: Vec<u8>,
+        min_ts: u64,
+        max_ts: u64,
+        min_key: Vec<u8>,
+        max_key: Vec<u8>,
+        number_of_entries: u64,
+        crc64xor: u64,
+        compression: brpb::CompressionType,
+        file_real_size: u64,
+    }
+
+    impl LogFileBuilder {
+        pub fn new(name: &str, region_id: u64) -> Self {
+            Self {
+                name: name.to_owned(),
+                region_id,
+                cf: "default",
+                ty: brpb::FileType::Put,
+                is_meta: false,
+
+                content: vec![],
+                min_ts: 0,
+                max_ts: 0,
+
+                min_key: vec![],
+                max_key: vec![],
+                number_of_entries: 0,
+                crc64xor: 0,
+                compression: brpb::CompressionType::Zstd,
+                file_real_size: 0,
+            }
+        }
+    }
+
+    fn log_file(name: &str, len: u64, key: SubcompactionCollectKey) -> LogFile {
+        LogFile {
+            id: LogFileId {
+                name: Arc::from(name.to_owned().into_boxed_str()),
+                offset: 0,
+                length: len,
+            },
+            compression: kvproto::brpb::CompressionType::Zstd,
+            crc64xor: 0,
+            number_of_entries: 0,
+            file_real_size: len,
+            min_ts: 0,
+            max_ts: 0,
+            min_key: Arc::from([]),
+            max_key: Arc::from([]),
+            is_meta: false,
+            region_id: key.region_id,
+            cf: key.cf,
+            ty: key.ty,
+            min_start_ts: 0,
+            table_id: 0,
+            resolved_ts: 0,
+            sha256: Arc::from([]),
+        }
+    }
+
+    impl SubcompactionCollectKey {
+        fn of_region(r: u64) -> Self {
+            SubcompactionCollectKey {
+                cf: "default",
+                region_id: r,
+                ty: kvproto::brpb::FileType::Put,
+                is_meta: false,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_collect_subcompaction() {
+        let r = SubcompactionCollectKey::of_region;
+        let items = vec![
+            log_file("001", 64, r(1)),
+            log_file("002", 65, r(2)),
+            log_file("003", 8, r(2)),
+            log_file("004", 64, r(2)),
+            log_file("005", 42, r(3)),
+            log_file("006", 98, r(3)),
+            log_file("008", 1, r(4)),
+        ];
+        let collector = CollectSubcompaction::new(
+            stream::iter(items.into_iter()).map(Result::Ok),
+            CollectSubcompactionConfig {
+                compact_from_ts: 0,
+                compact_to_ts: u64::MAX,
+                compaction_size_threshold: 128,
+            },
+        );
+
+        let mut res = collector
+            .map_ok(|v| (v.size, v.region_id))
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert_eq!(res.len(), 4);
+        assert_eq!(res, &[(137, 2), (140, 3), (1, 4), (64, 1)])
     }
 }

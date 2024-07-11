@@ -5,6 +5,7 @@ use engine_rocks::RocksEngine;
 use external_storage::{BackendConfig, BlobStore, FullFeaturedStorage, S3Storage};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use kvproto::brpb::{self, Gcs, StorageBackend, S3};
+use tikv_util::config::ReadableSize;
 use tokio::{io::AsyncWriteExt, signal::unix::SignalKind};
 
 use crate::{
@@ -52,6 +53,7 @@ async fn playground() {
         CollectSubcompactionConfig {
             compact_from_ts: 0,
             compact_to_ts: u64::MAX,
+            compaction_size_threshold: ReadableSize::mb(128).0,
         },
     );
     println!("{:?}", now.elapsed());
@@ -92,7 +94,7 @@ fn start_async_backtrace() {
 
     let sigusr1_handler = async {
         let mut signal = tokio::signal::unix::signal(SignalKind::user_defined1()).unwrap();
-        while let Some(_) = signal.recv().await {
+        while signal.recv().await.is_some() {
             let file_name = "/tmp/compact-sst.dump".to_owned();
             let res = async {
                 let mut file = tokio::fs::File::create(&file_name).await?;
@@ -143,6 +145,7 @@ async fn playground_no_pref() {
         CollectSubcompactionConfig {
             compact_from_ts: 0,
             compact_to_ts: u64::MAX,
+            compaction_size_threshold: ReadableSize::mb(128).0,
         },
     );
 
@@ -254,6 +257,7 @@ async fn gcloud() {
         CollectSubcompactionConfig {
             compact_from_ts: 0,
             compact_to_ts: u64::MAX,
+            compaction_size_threshold: ReadableSize::mb(128).0,
         },
     );
     let compaction = coll.try_next().await;

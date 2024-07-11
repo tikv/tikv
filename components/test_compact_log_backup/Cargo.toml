@@ -6,3 +6,9 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+external_storage = { workspace = true }
+zstd = "0.11"
+kvproto = { workspace = true }
+tikv_util = { workspace = true }
+txn_types = { workspace = true }
+crc64fast = "0.1"

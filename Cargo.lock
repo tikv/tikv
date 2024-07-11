@@ -1082,6 +1082,7 @@ dependencies = [
  "tracing",
  "tracing-active-tree",
  "txn_types",
+ "zstd",
 ]
 
 [[package]]
@@ -5968,7 +5969,12 @@ dependencies = [
 name = "test_compact_log_backup"
 version = "0.1.0"
 dependencies = [
+ "crc64fast",
  "external_storage",
+ "kvproto",
+ "tikv_util",
+ "txn_types",
+ "zstd",
 ]
 
 [[package]]

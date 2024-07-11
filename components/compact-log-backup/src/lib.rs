@@ -5,6 +5,8 @@ mod source;
 mod statistic;
 mod storage;
 
+pub mod test_util;
+
 pub mod execute;
 
 #[cfg(test)]
