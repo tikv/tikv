@@ -6,6 +6,7 @@ use collections::HashSet;
 use encryption_export::EncryptionConfig;
 use grpcio::{ChannelCredentials, ChannelCredentialsBuilder};
 use security::SecurityConfig;
+use tonic::transport::{Certificate, ClientTlsConfig, Identity};
 
 pub fn new_security_cfg(cn: Option<HashSet<String>>) -> SecurityConfig {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -20,12 +21,11 @@ pub fn new_security_cfg(cn: Option<HashSet<String>>) -> SecurityConfig {
     }
 }
 
-pub fn new_channel_cred() -> ChannelCredentials {
+pub fn new_channel_cred() -> ClientTlsConfig {
     let (ca, cert, key) = load_certs();
-    ChannelCredentialsBuilder::new()
-        .root_cert(ca.into())
-        .cert(cert.into(), key.into())
-        .build()
+    ClientTlsConfig::new()
+        .ca_certificate(Certificate::from_pem(ca))
+        .identity(Identity::from_pem(cert, key))
 }
 
 fn load_certs() -> (String, String, String) {

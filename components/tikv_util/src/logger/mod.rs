@@ -129,7 +129,7 @@ pub fn set_global_logger(
     slog_global::set_global(logger);
     if init_stdlog {
         slog_global::redirect_std_log(Some(level))?;
-        grpcio::redirect_log();
+        // grpcio::redirect_log();
     }
     *ASYNC_LOGGER_GUARD.lock().unwrap() = guard;
 

@@ -536,7 +536,7 @@ async fn get_tikv_client(
     // the check leader requests may be large but not frequent, compress it to
     // reduce the traffic.
     let channel: Channel = {
-        let addr = tikv_util::format_url(&store.peer_address);
+        let addr = tikv_util::format_url(&store.peer_address, security_mgr.is_ssl_enabled());
         let endpoint = tonic::transport::Channel::from_shared(addr)
             .unwrap()
             .http2_keep_alive_interval(Duration::from_secs(10))
@@ -592,8 +592,13 @@ mod tests {
         time::Duration,
     };
 
-    use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder};
-    use kvproto::{metapb::Region, tikvpb::Tikv, tikvpb_grpc::create_tikv};
+    use kvproto::{
+        metapb::Region,
+        tikvpb_grpc::{
+            create_tikv,
+            tikv_server::{Tikv, TikvServer},
+        },
+    };
     use pd_client::PdClient;
     use raftstore::store::util::RegionReadProgress;
     use tikv_util::store::new_peer;
@@ -606,39 +611,39 @@ mod tests {
     }
 
     impl Tikv for MockTikv {
-        fn check_leader(
-            &mut self,
-            ctx: grpcio::RpcContext<'_>,
-            req: CheckLeaderRequest,
-            sink: ::grpcio::UnarySink<CheckLeaderResponse>,
-        ) {
-            self.req_tx.send(req).unwrap();
-            ctx.spawn(async {
-                sink.success(CheckLeaderResponse::default()).await.unwrap();
-            })
+        async fn check_leader(
+            &self,
+            request: tonic::Request<CheckLeaderRequest>,
+        ) -> tonic::Result<tonic::Response<CheckLeaderResponse>> {
+            self.req_tx.send(request.into_inner()).unwrap();
+            Ok(tonic::Response::new(CheckLeaderResponse::default()))
         }
     }
 
     struct MockPdClient {}
     impl PdClient for MockPdClient {}
 
-    fn new_rpc_suite(env: Arc<Environment>) -> (Server, TikvClient, Receiver<CheckLeaderRequest>) {
+    fn new_rpc_suite() -> (Runtime, TikvClient<Channel>, Receiver<CheckLeaderRequest>) {
         let (tx, rx) = channel();
         let tikv_service = MockTikv { req_tx: tx };
-        let builder = ServerBuilder::new(env.clone()).register_service(create_tikv(tikv_service));
-        let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
-        server.start();
-        let (_, port) = server.bind_addrs().next().unwrap();
-        let addr = format!("127.0.0.1:{}", port);
-        let channel = ChannelBuilder::new(env).connect(&addr);
+
+        let builder =
+            tonic::transport::Server::builder().add_service(TikvServer::new(tikv_service));
+        let listener = runtime.block_on(TcpListener::bind("127.0.0.1:0")).unwrap();
+        let sock_addr = listener.local_addr().unwrap();
+        // start service
+        runtime.spawn(builder.serve_with_incoming(listener));
+
+        let addr = format!("http://127.0.0.1:{}", sock_addr.port());
+        let channel_builder = tonic::transport::Channel::from_shared(addr).unwrap();
+        let channel = runtime.block_on(channel_builder.connect()).unwrap();
         let client = TikvClient::new(channel);
-        (server, client, rx)
+        (runime, client, rx)
     }
 
     #[tokio::test]
     async fn test_resolve_leader_request_size() {
-        let env = Arc::new(EnvBuilder::new().build());
-        let (mut server, tikv_client, rx) = new_rpc_suite(env.clone());
+        let (runtime, tikv_client, rx) = new_rpc_suite();
 
         let mut region1 = Region::default();
         region1.id = 1;
@@ -660,6 +665,7 @@ mod tests {
             Arc::new(SecurityManager::default()),
             RegionReadProgressRegistry::new(),
             Duration::from_secs(1),
+            runtime.handle().clone(),
         );
         leader_resolver
             .tikv_clients
@@ -691,8 +697,6 @@ mod tests {
             .resolve(vec![], TimeStamp::new(1), None)
             .await;
         rx.recv_timeout(Duration::from_secs(1)).unwrap_err();
-
-        let _ = server.shutdown().await;
     }
 
     #[test]

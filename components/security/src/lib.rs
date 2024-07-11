@@ -13,11 +13,6 @@ use std::{
 
 use collections::HashSet;
 use encryption::EncryptionConfig;
-use grpcio::{
-    CertificateRequestType, ChannelBuilder, ChannelCredentialsBuilder, CheckResult, RpcContext,
-    RpcStatus, RpcStatusCode, ServerBuilder, ServerChecker, ServerCredentialsBuilder,
-    ServerCredentialsFetcher,
-};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
@@ -139,6 +134,10 @@ impl SecurityManager {
         })
     }
 
+    pub fn is_ssl_enabled(&self) -> bool {
+        !self.cfg.ca_path.is_empty()
+    }
+
     pub fn client_suite(&self) -> Result<ClientSuite, Box<dyn Error>> {
         let (ca, cert, key) = self.cfg.load_certs()?;
         Ok(ClientSuite {
@@ -171,60 +170,27 @@ impl SecurityManager {
         Ok(cb)
     }
 
+    pub fn server_tls_config(
+        &self,
+        builder: tonic::transport::Server,
+    ) -> Result<tonic::transport::Server, tonic::transport::Error> {
+        if !self.cfg.ca_path.is_empty() {
+            let fetcher = Arc::new(Fetcher {
+                cfg: self.cfg.clone(),
+                last_modified_time: Arc::new(Mutex::new(None)),
+            });
+            return builder.with_tls_provider(fetcher);
+        }
+        Ok(builder)
+    }
+
     pub async fn connect(&self, cb: Endpoint) -> Result<Channel, tonic::transport::Error> {
         let cb = self.set_tls_config(cb)?;
         cb.connect().await
     }
 
-    pub fn bind(&self, mut sb: ServerBuilder, addr: &str, port: u16) -> ServerBuilder {
-        if self.cfg.ca_path.is_empty() {
-            sb.bind(addr, port)
-        } else {
-            if !self.cfg.cert_allowed_cn.is_empty() {
-                let cn_checker = CnChecker {
-                    allowed_cn: Arc::new(self.cfg.cert_allowed_cn.clone()),
-                };
-                sb = sb.add_checker(cn_checker);
-            }
-            let fetcher = Box::new(Fetcher {
-                cfg: self.cfg.clone(),
-                last_modified_time: Arc::new(Mutex::new(None)),
-            });
-            sb.bind_with_fetcher(
-                addr,
-                port,
-                fetcher,
-                CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
-            )
-        }
-    }
-
     pub fn get_config(&self) -> &SecurityConfig {
         &self.cfg
-    }
-}
-
-#[derive(Clone)]
-struct CnChecker {
-    allowed_cn: Arc<HashSet<String>>,
-}
-
-impl ServerChecker for CnChecker {
-    fn check(&mut self, ctx: &RpcContext<'_>) -> CheckResult {
-        match check_common_name(&self.allowed_cn, ctx) {
-            Ok(()) => CheckResult::Continue,
-            Err(reason) => CheckResult::Abort(RpcStatus::with_message(
-                RpcStatusCode::UNAUTHENTICATED,
-                format!(
-                    "Common name check fail, reason: {}, cert_allowed_cn: {:?}",
-                    reason, self.allowed_cn
-                ),
-            )),
-        }
-    }
-
-    fn box_clone(&self) -> Box<dyn ServerChecker> {
-        Box::new(self.clone())
     }
 }
 
@@ -233,54 +199,19 @@ struct Fetcher {
     last_modified_time: Arc<Mutex<Option<SystemTime>>>,
 }
 
-impl ServerCredentialsFetcher for Fetcher {
-    // Retrieves updated credentials. When returning `None` or
-    // error, gRPC will continue to use the previous certificates
-    // returned by the method.
-    fn fetch(&self) -> Result<Option<ServerCredentialsBuilder>, Box<dyn Error>> {
+impl tonic::transport::server::TlsConfigProvider for Fetcher {
+    fn fetch(&self) -> Option<tonic::transport::ServerTlsConfig> {
         if let Ok(mut last) = self.last_modified_time.try_lock() {
             // Reload only when cert is modified.
-            if self.cfg.is_modified(&mut last)? {
-                let (ca, cert, key) = self.cfg.load_certs()?;
-                let new_cred = ServerCredentialsBuilder::new()
-                    .add_cert(cert, key)
-                    .root_cert(
-                        ca,
-                        CertificateRequestType::RequestAndRequireClientCertificateAndVerify,
-                    );
-                Ok(Some(new_cred))
-            } else {
-                Ok(None)
+            if self.cfg.is_modified(&mut last).unwrap_or(false) {
+                let (ca, cert, key) = self.cfg.load_certs().ok()?;
+                let tls_config = tonic::transport::ServerTlsConfig::new()
+                    .client_ca_root(Certificate::from_pem(ca))
+                    .identity(Identity::from_pem(cert, key));
+                return Some(tls_config);
             }
-        } else {
-            Ok(None)
         }
-    }
-}
-
-/// Check peer CN with cert-allowed-cn field.
-/// Return true when the match is successful (support wildcard pattern).
-/// Skip the check when the secure channel is not used.
-fn check_common_name(
-    cert_allowed_cn: &HashSet<String>,
-    ctx: &RpcContext<'_>,
-) -> Result<(), String> {
-    if let Some(auth_ctx) = ctx.auth_context() {
-        if let Some(auth_property) = auth_ctx
-            .into_iter()
-            .find(|x| x.name() == "x509_common_name")
-        {
-            let peer_cn = auth_property.value_str().unwrap();
-            if match_peer_names(cert_allowed_cn, peer_cn) {
-                Ok(())
-            } else {
-                Err(format!("x509_common_name from peer is {}", peer_cn))
-            }
-        } else {
-            Err("x509_common_name doesn't exist".to_owned())
-        }
-    } else {
-        Ok(())
+        None
     }
 }
 

@@ -31,6 +31,9 @@ pub enum Error {
     Grpc(#[from] tonic::Status),
 
     #[error("{0:?}")]
+    Ssl(#[from] tonic::transport::Error),
+
+    #[error("{0:?}")]
     Codec(#[from] CodecError),
 
     #[error("{0:?}")]

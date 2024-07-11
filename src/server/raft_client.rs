@@ -677,7 +677,7 @@ where
 
         let cfg = self.builder.cfg.value();
 
-        let addr = tikv_util::format_url(addr);
+        let addr = tikv_util::format_url(addr, self.builder.security_mgr.is_ssl_enabled());
         Channel::from_shared(addr)
             .unwrap()
             .initial_stream_window_size(cfg.grpc_stream_initial_window_size.0 as u32)
@@ -836,8 +836,8 @@ async fn start<S, R>(
                 addr.clone(),
             ));
         }
-        let endpoint =  addr_channel.as_ref().unwrap().0.clone();
-        let security_mgr =  back_end.builder.security_mgr.clone();
+        let endpoint = addr_channel.as_ref().unwrap().0.clone();
+        let security_mgr = back_end.builder.security_mgr.clone();
 
         debug!("connecting to store"; "store_id" => back_end.store_id, "addr" => %addr);
         let channel = match back_end

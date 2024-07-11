@@ -10,7 +10,6 @@ use std::{
 
 use api_version::{test_kv_format_impl, KvFormat};
 use futures::{executor::block_on, sink::SinkExt};
-use grpcio::WriteFlags;
 use kvproto::{cdcpb::*, kvrpcpb::*, raft_serverpb::RaftMessage};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
@@ -32,9 +31,11 @@ fn test_observe_duplicate_cmd_impl<F: KvFormat>() {
     let mut req = suite.new_changedata_request(region.get_id());
 
     req.request_id = 1;
-    let (mut req_tx_1, event_feed_wrap_1, receive_event_1) =
-        new_event_feed(suite.get_region_cdc_client(region.get_id()));
-    block_on(req_tx_1.send((req.clone(), WriteFlags::default()))).unwrap();
+    let (mut req_tx_1, event_feed_wrap_1, receive_event_1) = new_event_feed(
+        suite.get_region_cdc_client(region.get_id()),
+        suite.runtime.handle(),
+    );
+    block_on(req_tx_1.send((req.clone()))).unwrap();
 
     let mut events = receive_event_1(false).events.to_vec();
     assert_eq!(events.len(), 1);
@@ -81,15 +82,19 @@ fn test_observe_duplicate_cmd_impl<F: KvFormat>() {
     sleep_ms(200);
 
     // Open two new connections and close the old one.
-    let (mut req_tx_2, event_feed_wrap_2, _) =
-        new_event_feed(suite.get_region_cdc_client(region.get_id()));
+    let (mut req_tx_2, event_feed_wrap_2, _) = new_event_feed(
+        suite.get_region_cdc_client(region.get_id()),
+        suite.runtime.handle(),
+    );
     req.request_id = 2;
-    block_on(req_tx_2.send((req.clone(), WriteFlags::default()))).unwrap();
+    block_on(req_tx_2.send((req.clone()))).unwrap();
 
-    let (mut req_tx_3, event_feed_wrap_3, receive_event_3) =
-        new_event_feed(suite.get_region_cdc_client(region.get_id()));
+    let (mut req_tx_3, event_feed_wrap_3, receive_event_3) = new_event_feed(
+        suite.get_region_cdc_client(region.get_id()),
+        suite.runtime.handle(),
+    );
     req.request_id = 3;
-    block_on(req_tx_3.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx_3.send(req)).unwrap();
 
     sleep_ms(200);
     drop(req_tx_1);
@@ -100,7 +105,7 @@ fn test_observe_duplicate_cmd_impl<F: KvFormat>() {
     fail::remove("before_cdc_flush_apply");
 
     // Receive Commit response
-    block_on(commit_resp).unwrap();
+    block_on(commit_resp).unwrap().unwrap();
     let mut events = receive_event_3(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
@@ -172,9 +177,11 @@ fn test_delayed_change_cmd() {
         .add_send_filter(CloneFilterFactory(send_read_index_filter));
 
     let req = suite.new_changedata_request(region.get_id());
-    let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(region.get_id()));
-    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+    let (mut req_tx, event_feed_wrap, receive_event) = new_event_feed(
+        suite.get_region_cdc_client(region.get_id()),
+        suite.runtime.handle(),
+    );
+    block_on(req_tx.send((req.clone()))).unwrap();
 
     suite.cluster.must_put(b"k2", b"v2");
 
@@ -183,7 +190,7 @@ fn test_delayed_change_cmd() {
         .event_feed()
         .unwrap();
     event_feed_wrap.replace(Some(resp_rx));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send(req)).unwrap();
     sleep_ms(200);
 
     suite

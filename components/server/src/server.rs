@@ -343,7 +343,17 @@ where
             .worker_threads(config.server.grpc_concurrency)
             .thread_name(thd_name!(GRPC_THREAD_PREFIX))
             .enable_all()
-            .with_sys_hooks()
+            .with_sys_and_custom_hooks(
+                move || {
+                    tikv_util::thread_group::set_properties(props.clone());
+
+                    // SAFETY: we will call `remove_thread_memory_accessor` at before_stop.
+                    unsafe { add_thread_memory_accessor() };
+                },
+                move || {
+                    remove_thread_memory_accessor();
+                },
+            )
             .build()
             .unwrap();
         let pd_client = TikvServerCore::connect_to_pd_cluster(

@@ -11,7 +11,7 @@ use tikv_util::config::ReadableDuration;
 #[test_case(test_raftstore::must_new_cluster_with_cfg_and_kv_client_mul)]
 #[test_case(test_raftstore_v2::must_new_cluster_with_cfg_and_kv_client_mul)]
 fn test_read_execution_tracking() {
-    let (_cluster, client, ctx) = new_cluster(1, |c| {
+    let (cluster, mut client, ctx) = new_cluster(1, |c| {
         // set a small renew duration to avoid trigger pre-renew that can affact the
         // metrics.
         c.cfg.tikv.raft_store.renew_leader_lease_advance_duration = ReadableDuration::millis(1);
@@ -32,14 +32,16 @@ fn test_read_execution_tracking() {
     mutation2.set_value(v2);
 
     must_kv_prewrite(
-        &client,
+        cluster.runtime.handle(),
+        &mut client,
         ctx.clone(),
         vec![mutation1, mutation2],
         k1.clone(),
         10,
     );
     must_kv_commit(
-        &client,
+        cluster.runtime.handle(),
+        &mut client,
         ctx.clone(),
         vec![k1.clone(), k2.clone()],
         10,
@@ -70,12 +72,24 @@ fn test_read_execution_tracking() {
     fail::cfg("perform_read_local", "return()").unwrap();
 
     // should perform lease read
-    let resp = kv_read(&client, ctx.clone(), k1.clone(), 100);
+    let resp = kv_read(
+        cluster.runtime.handle(),
+        &mut client,
+        ctx.clone(),
+        k1.clone(),
+        100,
+    );
 
     lease_read_checker(resp.get_exec_details_v2().get_scan_detail_v2());
 
     // should perform lease read
-    let resp = kv_batch_read(&client, ctx.clone(), vec![k1.clone(), k2.clone()], 100);
+    let resp = kv_batch_read(
+        cluster.runtime.handle(),
+        &mut client,
+        ctx.clone(),
+        vec![k1.clone(), k2.clone()],
+        100,
+    );
 
     lease_read_checker(resp.get_exec_details_v2().get_scan_detail_v2());
 
@@ -86,7 +100,10 @@ fn test_read_execution_tracking() {
     coprocessor_request.set_start_ts(100);
 
     // should perform lease read
-    let resp = client.coprocessor(&coprocessor_request).unwrap();
+    let resp = runtime
+        .block_on(client.coprocessor(coprocessor_request))
+        .unwrap()
+        .into_inner();
 
     lease_read_checker(resp.get_exec_details_v2().get_scan_detail_v2());
 
@@ -116,19 +133,35 @@ fn test_read_execution_tracking() {
     fail::cfg("perform_read_index", "2*return()").unwrap();
 
     // should perform read index
-    let resp = kv_read(&client, ctx.clone(), k1.clone(), 100);
+    let resp = kv_read(
+        cluster.runtime.handle(),
+        &mut client,
+        ctx.clone(),
+        k1.clone(),
+        100,
+    );
 
     read_index_checker(resp.get_exec_details_v2().get_scan_detail_v2());
 
     fail::cfg("perform_read_index", "2*return()").unwrap();
     // should perform read index
-    let resp = kv_batch_read(&client, ctx, vec![k1, k2], 100);
+    let resp = kv_batch_read(
+        cluster.runtime.handle(),
+        &mut client,
+        ctx,
+        vec![k1, k2],
+        100,
+    );
 
     read_index_checker(resp.get_exec_details_v2().get_scan_detail_v2());
 
     fail::cfg("perform_read_index", "2*return()").unwrap();
     // should perform read index
-    let resp = client.coprocessor(&coprocessor_request).unwrap();
+    let resp = cluster
+        .runtime
+        .block_on(client.coprocessor(coprocessor_request))
+        .unwrap()
+        .into_inner();
 
     read_index_checker(resp.get_exec_details_v2().get_scan_detail_v2());
 

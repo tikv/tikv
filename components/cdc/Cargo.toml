@@ -41,7 +41,6 @@ fail = "0.5"
 futures = "0.3"
 futures-timer = "3.0"
 getset = "0.1"
-grpcio = { workspace = true }
 keys = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.3"

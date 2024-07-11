@@ -9,16 +9,18 @@ use std::{
 
 use engine_traits::CF_DEFAULT;
 use external_storage::{ExternalStorage, UnpinReader};
-use futures::{executor::block_on, io::Cursor as AsyncCursor, stream, SinkExt};
-use grpcio::{Result, WriteFlags};
+use futures::{io::Cursor as AsyncCursor, stream};
 use kvproto::{
-    backup::{Local, StorageBackend},
+    brpb::{Local, StorageBackend},
     import_sstpb::{KvMeta, *},
+    import_sstpb_grpc::import_s_s_t_client::ImportSSTClient,
     kvrpcpb::*,
-    tikvpb::*,
+    tikvpb_grpc::tikv_client::TikvClient,
 };
 use tempfile::TempDir;
 use tikv_util::{codec::stream_event::EventEncoder, stream::block_on_external_io};
+use tokio::runtime::Handle;
+use tonic::transport::Channel;
 use txn_types::Key;
 use uuid::Uuid;
 
@@ -33,51 +35,39 @@ pub fn new_sst_meta(crc32: u32, length: u64) -> SstMeta {
 }
 
 pub fn send_upload_sst(
-    client: &ImportSstClient,
+    handle: &Handle,
+    &mut client: ImportSSTClient<Channel>,
     meta: &SstMeta,
     data: &[u8],
-) -> Result<UploadResponse> {
+) -> tonic::Result<UploadResponse> {
     let r1 = UploadRequest {
-        chunk: Some(upload_request::Chunk::Meta(meta.clone())),
+        chunk: Some(UploadRequest_oneof_chunk::Meta(meta.clone())),
+        ..Default::default()
     };
     let r2 = UploadRequest {
-        chunk: Some(upload_request::Chunk::Data(data.to_vec())),
+        chunk: Some(UploadRequest_oneof_chunk::Data(data.to_vec())),
+        ..Default::default()
     };
-    let reqs: Vec<_> = vec![r1, r2]
-        .into_iter()
-        .map(|r| Result::Ok((r, WriteFlags::default())))
-        .collect();
-    let (mut tx, rx) = client.upload().unwrap();
-    let mut stream = stream::iter(reqs);
-    block_on(async move {
-        let send_res = tx.send_all(&mut stream).await;
-        let close_res = tx.close().await;
-        match rx.await {
-            Ok(resp) => Ok(resp),
-            Err(e) => {
-                send_res?;
-                close_res?;
-                Err(e)
-            }
-        }
-    })
+    let reqs: Vec<_> = vec![r1, r2];
+    let (mut tx, req_rx) = futures::channel::mpsc::unbounded();
+    handle
+        .block_on(client.upload(stream::iter(reqs)))
+        .map(|r| r.into_inner())
 }
 
 pub fn send_write_sst(
-    client: &ImportSstClient,
+    handle: &Handle,
+    client: &mut ImportSSTClient<Channel>,
     meta: &SstMeta,
     keys: Vec<Vec<u8>>,
     values: Vec<Vec<u8>>,
     commit_ts: u64,
-) -> Result<WriteResponse> {
-    let r1 = WriteRequest {
-        context: None,
-        chunk: Some(write_request::Chunk::Meta(meta.clone())),
-    };
+) -> tonic::Result<WriteResponse> {
+    let mut r1 = WriteRequest::default();
+    r1.set_meta(meta.clone());
 
     let mut batch = WriteBatch::default();
     let mut pairs = vec![];
-
     for (i, key) in keys.iter().enumerate() {
         let mut pair = Pair::default();
         pair.set_key(key.to_vec());
@@ -86,63 +76,73 @@ pub fn send_write_sst(
     }
     batch.set_commit_ts(commit_ts);
     batch.set_pairs(pairs.into());
-    let r2 = WriteRequest {
-        context: None,
-        chunk: Some(write_request::Chunk::Batch(batch)),
-    };
+    let mut r2 = WriteRequest::default();
+    r2.set_batch(batch);
 
-    let reqs: Vec<_> = vec![r1, r2]
-        .into_iter()
-        .map(|r| Result::Ok((r, WriteFlags::default())))
-        .collect();
-
-    let (mut tx, rx) = client.write().unwrap();
-    let mut stream = stream::iter(reqs);
-    block_on(async move {
-        let send_res = tx.send_all(&mut stream).await;
-        let close_res = tx.close().await;
-        match rx.await {
-            Ok(resp) => Ok(resp),
-            Err(e) => {
-                send_res?;
-                close_res?;
-                Err(e)
-            }
-        }
-    })
+    let reqs: Vec<_> = vec![r1, r2];
+    handle
+        .block_on(client.write(stream::iter(reqs)))
+        .map(|r| r.into_inner())
 }
 
-pub fn must_ingest_sst(client: &ImportSstClient, context: Context, meta: SstMeta) {
+pub fn must_ingest_sst(
+    handle: &Handle,
+    client: &mut ImportSSTClient<Channel>,
+    context: Context,
+    meta: SstMeta,
+) {
     let mut ingest_request = IngestRequest::default();
     ingest_request.set_context(context);
     ingest_request.set_sst(meta);
 
-    let resp = client.ingest(&ingest_request).unwrap();
+    let resp = handle
+        .block_on(client.ingest(ingest_request))
+        .unwrap()
+        .into_inner();
 
     assert!(!resp.has_error(), "{:?}", resp);
 }
 
-pub fn must_ingest_sst_error(client: &ImportSstClient, context: Context, meta: SstMeta) {
+pub fn must_ingest_sst_error(
+    handle: &Handle,
+    client: &mut ImportSSTClient<Channel>,
+    context: Context,
+    meta: SstMeta,
+) {
     let mut ingest_request = IngestRequest::default();
     ingest_request.set_context(context);
     ingest_request.set_sst(meta);
 
-    let resp = client.ingest(&ingest_request).unwrap();
+    let resp = handle
+        .block_on(client.ingest(ingest_request))
+        .unwrap()
+        .into_inner();
 
     assert!(resp.has_error(), "{:?}", resp);
 }
 
-pub fn check_ingested_kvs(tikv: &TikvClient, ctx: &Context, sst_range: (u8, u8)) {
-    check_ingested_kvs_cf(tikv, ctx, "", sst_range);
+pub fn check_ingested_kvs(
+    handle: &Handle,
+    tikv: &mut TikvClient<Channel>,
+    ctx: &Context,
+    sst_range: (u8, u8),
+) {
+    check_ingested_kvs_cf(handle, tikv, ctx, "", sst_range);
 }
 
-pub fn check_ingested_kvs_cf(tikv: &TikvClient, ctx: &Context, cf: &str, sst_range: (u8, u8)) {
+pub fn check_ingested_kvs_cf(
+    handle: &Handle,
+    tikv: &mut TikvClient<Channel>,
+    ctx: &Context,
+    cf: &str,
+    sst_range: (u8, u8),
+) {
     for i in sst_range.0..sst_range.1 {
         let mut m = RawGetRequest::default();
         m.set_context(ctx.clone());
         m.set_key(vec![i]);
         m.set_cf(cf.to_owned());
-        let resp = tikv.raw_get(&m).unwrap();
+        let resp = handle.block_on(tikv.raw_get(m)).unwrap().into_inner();
         assert!(resp.get_error().is_empty());
         assert!(!resp.has_region_error());
         assert_eq!(resp.get_value(), &[i]);
@@ -151,7 +151,8 @@ pub fn check_ingested_kvs_cf(tikv: &TikvClient, ctx: &Context, cf: &str, sst_ran
 
 #[track_caller]
 pub fn check_applied_kvs_cf<K: AsRef<[u8]>, V: AsRef<[u8]> + std::fmt::Debug>(
-    tikv: &TikvClient,
+    handle: &Handle,
+    tikv: &mut TikvClient<Channel>,
     ctx: &Context,
     cf: &str,
     entries: impl Iterator<Item = (K, V, u64)>,
@@ -167,7 +168,11 @@ pub fn check_applied_kvs_cf<K: AsRef<[u8]>, V: AsRef<[u8]> + std::fmt::Debug>(
         keymap.insert(the_key.clone(), value);
         get.mut_keys().push(the_key);
     }
-    for pair in tikv.raw_batch_get(&get).unwrap().get_pairs() {
+    let resp = handle
+        .block_on(tikv.raw_batch_get(get))
+        .unwrap()
+        .into_inner();
+    for pair in resp.get_pairs() {
         let entry = keymap.remove(pair.get_key()).expect("unexpected key");
         assert_eq!(
             entry.as_ref(),
@@ -184,7 +189,8 @@ pub fn check_applied_kvs_cf<K: AsRef<[u8]>, V: AsRef<[u8]> + std::fmt::Debug>(
 }
 
 pub fn check_ingested_txn_kvs(
-    tikv: &TikvClient,
+    handle: &Handle,
+    tikv: &mut TikvClient<Channel>,
     ctx: &Context,
     sst_range: (u8, u8),
     start_ts: u64,
@@ -194,21 +200,26 @@ pub fn check_ingested_txn_kvs(
         m.set_context(ctx.clone());
         m.set_key(vec![i]);
         m.set_version(start_ts);
-        let resp = tikv.kv_get(&m).unwrap();
+        let resp = handle.block_on(tikv.kv_get(m)).unwrap().into_inner();
         assert!(!resp.has_region_error());
         assert_eq!(resp.get_value(), &[i]);
     }
 }
 
-pub fn check_sst_deleted(client: &ImportSstClient, meta: &SstMeta, data: &[u8]) {
+pub fn check_sst_deleted(
+    handle: &Handle,
+    client: &mut ImportSSTClient<Channel>,
+    meta: &SstMeta,
+    data: &[u8],
+) {
     for _ in 0..10 {
-        if send_upload_sst(client, meta, data).is_ok() {
+        if send_upload_sst(handle, client.clone(), meta, data).is_ok() {
             // If we can upload the file, it means the previous file has been deleted.
             return;
         }
         thread::sleep(Duration::from_millis(CLEANUP_SST_MILLIS));
     }
-    send_upload_sst(client, meta, data).unwrap();
+    send_upload_sst(handle, client, meta, data).unwrap();
 }
 
 pub fn make_plain_file<I, K, V>(storage: &dyn ExternalStorage, name: &str, kvs: I) -> KvMeta
@@ -269,6 +280,7 @@ pub fn local_storage(tmp: &TempDir) -> StorageBackend {
     let mut local = Local::default();
     local.set_path(tmp.path().to_str().unwrap().to_owned());
     StorageBackend {
-        backend: Some(kvproto::brpb::storage_backend::Backend::Local(local)),
+        backend: Some(kvproto::brpb::StorageBackend_oneof_backend::Local(local)),
+        ..Default::default()
     }
 }

@@ -31,7 +31,7 @@ use grpcio::{ChannelBuilder, Environment};
 use hybrid_engine::HybridEngine;
 use kvproto::{
     encryptionpb::EncryptionMethod,
-    kvrpcpb::{prewrite_request::PessimisticAction::*, *},
+    kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
     metapb::{self, RegionEpoch},
     raft_cmdpb::{
         AdminCmdType, AdminRequest, ChangePeerRequest, ChangePeerV2Request, CmdType,
@@ -40,7 +40,7 @@ use kvproto::{
     raft_serverpb::{
         PeerState, RaftApplyState, RaftLocalState, RaftTruncatedState, RegionLocalState,
     },
-    tikvpb::TikvClient,
+    tikvpb_grpc::tikv_client::TikvClient,
 };
 use pd_client::PdClient;
 use protobuf::RepeatedField;
@@ -72,6 +72,8 @@ use tikv_util::{
     worker::LazyWorker,
     HandyRwLock,
 };
+use tokio::runtime::Handle;
+use tonic::transport::Channel;
 use txn_types::Key;
 
 use crate::{Cluster, Config, KvEngineWithRocks, RawEngine, ServerCluster, Simulator};
@@ -929,17 +931,19 @@ pub fn new_mutation(op: Op, k: &[u8], v: &[u8]) -> Mutation {
 }
 
 pub fn must_kv_write(
+    handle: &Handle,
     pd_client: &TestPdClient,
-    client: &TikvClient,
+    client: &mut TikvClient<Channel>,
     ctx: Context,
     kvs: Vec<Mutation>,
     pk: Vec<u8>,
 ) -> u64 {
     let keys: Vec<_> = kvs.iter().map(|m| m.get_key().to_vec()).collect();
     let start_ts = block_on(pd_client.get_tso()).unwrap();
-    must_kv_prewrite(client, ctx.clone(), kvs, pk, start_ts.into_inner());
-    let commit_ts = block_on(pd_client.get_tso()).unwrap();
+    must_kv_prewrite(handle, client, ctx.clone(), kvs, pk, start_ts.into_inner());
+    let commit_ts = handle.block_on(pd_client.get_tso()).unwrap();
     must_kv_commit(
+        handle,
         client,
         ctx,
         keys,
@@ -950,14 +954,24 @@ pub fn must_kv_write(
     commit_ts.into_inner()
 }
 
-pub fn must_kv_read_equal(client: &TikvClient, ctx: Context, key: Vec<u8>, val: Vec<u8>, ts: u64) {
+pub fn must_kv_read_equal(
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
+    ctx: Context,
+    key: Vec<u8>,
+    val: Vec<u8>,
+    ts: u64,
+) {
     let mut get_req = GetRequest::default();
     get_req.set_context(ctx);
     get_req.set_key(key);
     get_req.set_version(ts);
 
     for _ in 1..250 {
-        let mut get_resp = client.kv_get(&get_req).unwrap();
+        let mut get_resp = handle
+            .block_on(client.kv_get(get_req))
+            .unwrap()
+            .into_inner();
         if get_resp.has_region_error() || get_resp.has_error() || get_resp.get_not_found() {
             thread::sleep(Duration::from_millis(20));
         } else if get_resp.take_value() == val {
@@ -966,7 +980,10 @@ pub fn must_kv_read_equal(client: &TikvClient, ctx: Context, key: Vec<u8>, val: 
     }
 
     // Last try
-    let mut get_resp = client.kv_get(&get_req).unwrap();
+    let mut get_resp = handle
+        .block_on(client.kv_get(get_req))
+        .unwrap()
+        .into_inner();
     assert!(
         !get_resp.has_region_error(),
         "{:?}",
@@ -977,14 +994,23 @@ pub fn must_kv_read_equal(client: &TikvClient, ctx: Context, key: Vec<u8>, val: 
     assert_eq!(get_resp.take_value(), val);
 }
 
-pub fn must_kv_read_not_found(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {
+pub fn must_kv_read_not_found(
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
+    ctx: Context,
+    key: Vec<u8>,
+    ts: u64,
+) {
     let mut get_req = GetRequest::default();
     get_req.set_context(ctx);
     get_req.set_key(key);
     get_req.set_version(ts);
 
     for _ in 1..250 {
-        let get_resp = client.kv_get(&get_req).unwrap();
+        let get_resp = handle
+            .block_on(client.kv_get(get_req))
+            .unwrap()
+            .into_inner();
         if get_resp.has_region_error() || get_resp.has_error() {
             thread::sleep(Duration::from_millis(20));
         } else if get_resp.get_not_found() {
@@ -993,7 +1019,10 @@ pub fn must_kv_read_not_found(client: &TikvClient, ctx: Context, key: Vec<u8>, t
     }
 
     // Last try
-    let get_resp = client.kv_get(&get_req).unwrap();
+    let get_resp = handle
+        .block_on(client.kv_get(get_req))
+        .unwrap()
+        .into_inner();
     assert!(
         !get_resp.has_region_error(),
         "{:?}",
@@ -1004,7 +1033,8 @@ pub fn must_kv_read_not_found(client: &TikvClient, ctx: Context, key: Vec<u8>, t
 }
 
 pub fn write_and_read_key(
-    client: &TikvClient,
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
     ctx: &Context,
     ts: &mut u64,
     k: Vec<u8>,
@@ -1017,6 +1047,7 @@ pub fn write_and_read_key(
     mutation.set_key(k.clone());
     mutation.set_value(v.clone());
     must_kv_prewrite(
+        handle,
         client,
         ctx.clone(),
         vec![mutation],
@@ -1026,6 +1057,7 @@ pub fn write_and_read_key(
     // Commit
     let commit_version = *ts + 2;
     must_kv_commit(
+        handle,
         client,
         ctx.clone(),
         vec![k.clone()],
@@ -1035,19 +1067,29 @@ pub fn write_and_read_key(
     );
     // Get
     *ts += 3;
-    must_kv_read_equal(client, ctx.clone(), k, v, *ts);
+    must_kv_read_equal(handle, client, ctx.clone(), k, v, *ts);
 }
 
-pub fn kv_read(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) -> GetResponse {
+pub fn kv_read(
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
+    ctx: Context,
+    key: Vec<u8>,
+    ts: u64,
+) -> GetResponse {
     let mut get_req = GetRequest::default();
     get_req.set_context(ctx);
     get_req.set_key(key);
     get_req.set_version(ts);
-    client.kv_get(&get_req).unwrap()
+    handle
+        .block_on(client.kv_get(get_req))
+        .unwrap()
+        .into_inner()
 }
 
 pub fn kv_batch_read(
-    client: &TikvClient,
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
     ctx: Context,
     keys: Vec<Vec<u8>>,
     ts: u64,
@@ -1056,14 +1098,18 @@ pub fn kv_batch_read(
     batch_get_req.set_context(ctx);
     batch_get_req.set_keys(keys);
     batch_get_req.set_version(ts);
-    client.kv_batch_get(&batch_get_req).unwrap()
+    handle
+        .block_on(client.kv_batch_get(batch_get_req))
+        .unwrap()
+        .into_inner()
 }
 
-pub fn must_kv_prewrite_with(
-    client: &TikvClient,
+pub async fn must_kv_prewrite_with(
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
     ctx: Context,
     muts: Vec<Mutation>,
-    pessimistic_actions: Vec<prewrite_request::PessimisticAction>,
+    pessimistic_actions: Vec<PrewriteRequestPessimisticAction>,
     pk: Vec<u8>,
     ts: u64,
     for_update_ts: u64,
@@ -1083,7 +1129,10 @@ pub fn must_kv_prewrite_with(
     prewrite_req.min_commit_ts = prewrite_req.start_version + 1;
     prewrite_req.use_async_commit = use_async_commit;
     prewrite_req.try_one_pc = try_one_pc;
-    let prewrite_resp = client.kv_prewrite(&prewrite_req).unwrap();
+    let prewrite_resp = handle
+        .block_on(client.kv_prewrite(prewrite_req))
+        .unwrap()
+        .into_inner();
     assert!(
         !prewrite_resp.has_region_error(),
         "{:?}",
@@ -1097,10 +1146,11 @@ pub fn must_kv_prewrite_with(
 }
 
 pub fn try_kv_prewrite_with(
-    client: &TikvClient,
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
     ctx: Context,
     muts: Vec<Mutation>,
-    pessimistic_actions: Vec<prewrite_request::PessimisticAction>,
+    pessimistic_actions: Vec<PrewriteRequestPessimisticAction>,
     pk: Vec<u8>,
     ts: u64,
     for_update_ts: u64,
@@ -1108,6 +1158,7 @@ pub fn try_kv_prewrite_with(
     try_one_pc: bool,
 ) -> PrewriteResponse {
     try_kv_prewrite_with_impl(
+        handle,
         client,
         ctx,
         muts,
@@ -1122,16 +1173,17 @@ pub fn try_kv_prewrite_with(
 }
 
 pub fn try_kv_prewrite_with_impl(
-    client: &TikvClient,
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
     ctx: Context,
     muts: Vec<Mutation>,
-    pessimistic_actions: Vec<prewrite_request::PessimisticAction>,
+    pessimistic_actions: Vec<PrewriteRequestPessimisticAction>,
     pk: Vec<u8>,
     ts: u64,
     for_update_ts: u64,
     use_async_commit: bool,
     try_one_pc: bool,
-) -> grpcio::Result<PrewriteResponse> {
+) -> tonic::Result<PrewriteResponse> {
     let mut prewrite_req = PrewriteRequest::default();
     prewrite_req.set_context(ctx);
     if for_update_ts != 0 {
@@ -1145,21 +1197,23 @@ pub fn try_kv_prewrite_with_impl(
     prewrite_req.min_commit_ts = prewrite_req.start_version + 1;
     prewrite_req.use_async_commit = use_async_commit;
     prewrite_req.try_one_pc = try_one_pc;
-    client.kv_prewrite(&prewrite_req)
+    handle.block_on(client.kv_prewrite(prewrite_req))
 }
 
 pub fn try_kv_prewrite(
-    client: &TikvClient,
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
     ctx: Context,
     muts: Vec<Mutation>,
     pk: Vec<u8>,
     ts: u64,
 ) -> PrewriteResponse {
-    try_kv_prewrite_with(client, ctx, muts, vec![], pk, ts, 0, false, false)
+    try_kv_prewrite_with(handle, client, ctx, muts, vec![], pk, ts, 0, false, false)
 }
 
 pub fn try_kv_prewrite_pessimistic(
-    client: &TikvClient,
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
     ctx: Context,
     muts: Vec<Mutation>,
     pk: Vec<u8>,
@@ -1167,6 +1221,7 @@ pub fn try_kv_prewrite_pessimistic(
 ) -> PrewriteResponse {
     let len = muts.len();
     try_kv_prewrite_with(
+        handle,
         client,
         ctx,
         muts,
@@ -1180,17 +1235,19 @@ pub fn try_kv_prewrite_pessimistic(
 }
 
 pub fn must_kv_prewrite(
-    client: &TikvClient,
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
     ctx: Context,
     muts: Vec<Mutation>,
     pk: Vec<u8>,
     ts: u64,
 ) {
-    must_kv_prewrite_with(client, ctx, muts, vec![], pk, ts, 0, false, false)
+    must_kv_prewrite_with(handle, client, ctx, muts, vec![], pk, ts, 0, false, false)
 }
 
 pub fn must_kv_prewrite_pessimistic(
-    client: &TikvClient,
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
     ctx: Context,
     muts: Vec<Mutation>,
     pk: Vec<u8>,
@@ -1198,6 +1255,7 @@ pub fn must_kv_prewrite_pessimistic(
 ) {
     let len = muts.len();
     must_kv_prewrite_with(
+        handle,
         client,
         ctx,
         muts,
@@ -1211,7 +1269,8 @@ pub fn must_kv_prewrite_pessimistic(
 }
 
 pub fn must_kv_commit(
-    client: &TikvClient,
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
     ctx: Context,
     keys: Vec<Vec<u8>>,
     start_ts: u64,
@@ -1223,7 +1282,10 @@ pub fn must_kv_commit(
     commit_req.start_version = start_ts;
     commit_req.set_keys(keys.into_iter().collect());
     commit_req.commit_version = commit_ts;
-    let commit_resp = client.kv_commit(&commit_req).unwrap();
+    let commit_resp = handle
+        .block_on(client.kv_commit(commit_req))
+        .unwrap()
+        .into_inner();
     assert!(
         !commit_resp.has_region_error(),
         "{:?}",
@@ -1233,32 +1295,52 @@ pub fn must_kv_commit(
     assert_eq!(commit_resp.get_commit_version(), expect_commit_ts);
 }
 
-pub fn must_kv_rollback(client: &TikvClient, ctx: Context, keys: Vec<Vec<u8>>, start_ts: u64) {
+pub fn must_kv_rollback(
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
+    ctx: Context,
+    keys: Vec<Vec<u8>>,
+    start_ts: u64,
+) {
     let mut rollback_req = BatchRollbackRequest::default();
     rollback_req.set_context(ctx);
     rollback_req.start_version = start_ts;
     rollback_req.set_keys(keys.into_iter().collect());
-    let rollback_req = client.kv_batch_rollback(&rollback_req).unwrap();
+    let rollback_resp = handle
+        .block_on(client.kv_batch_rollback(rollback_req))
+        .unwrap()
+        .into_inner();
     assert!(
-        !rollback_req.has_region_error(),
+        !rollback_resp.has_region_error(),
         "{:?}",
-        rollback_req.get_region_error()
+        rollback_resp.get_region_error()
     );
 }
 
 pub fn kv_pessimistic_lock(
-    client: &TikvClient,
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
     ctx: Context,
     keys: Vec<Vec<u8>>,
     ts: u64,
     for_update_ts: u64,
     return_values: bool,
 ) -> PessimisticLockResponse {
-    kv_pessimistic_lock_with_ttl(client, ctx, keys, ts, for_update_ts, return_values, 20)
+    kv_pessimistic_lock_with_ttl(
+        handle,
+        client,
+        ctx,
+        keys,
+        ts,
+        for_update_ts,
+        return_values,
+        20,
+    )
 }
 
 pub fn kv_pessimistic_lock_resumable(
-    client: &TikvClient,
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
     ctx: Context,
     keys: Vec<Vec<u8>>,
     ts: u64,
@@ -1287,11 +1369,15 @@ pub fn kv_pessimistic_lock_resumable(
     req.set_wake_up_mode(PessimisticLockWakeUpMode::WakeUpModeForceLock);
     req.return_values = return_values;
     req.check_existence = check_existence;
-    client.kv_pessimistic_lock(&req).unwrap()
+    handle
+        .block_on(client.kv_pessimistic_lock(req))
+        .unwrap()
+        .into_inner()
 }
 
 pub fn kv_pessimistic_lock_with_ttl(
-    client: &TikvClient,
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
     ctx: Context,
     keys: Vec<Vec<u8>>,
     ts: u64,
@@ -1316,17 +1402,27 @@ pub fn kv_pessimistic_lock_with_ttl(
     req.lock_ttl = ttl;
     req.is_first_lock = false;
     req.return_values = return_values;
-    client.kv_pessimistic_lock(&req).unwrap()
+    handle
+        .block_on(client.kv_pessimistic_lock(req))
+        .unwrap()
+        .into_inner()
 }
 
-pub fn must_kv_pessimistic_lock(client: &TikvClient, ctx: Context, key: Vec<u8>, ts: u64) {
-    let resp = kv_pessimistic_lock(client, ctx, vec![key], ts, ts, false);
+pub fn must_kv_pessimistic_lock(
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
+    ctx: Context,
+    key: Vec<u8>,
+    ts: u64,
+) {
+    let resp = kv_pessimistic_lock(handle, client, ctx, vec![key], ts, ts, false);
     assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
     assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
 }
 
 pub fn must_kv_pessimistic_rollback(
-    client: &TikvClient,
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
     ctx: Context,
     key: Vec<u8>,
     ts: u64,
@@ -1337,13 +1433,17 @@ pub fn must_kv_pessimistic_rollback(
     req.set_keys(vec![key].into_iter().collect());
     req.start_version = ts;
     req.for_update_ts = for_update_ts;
-    let resp = client.kv_pessimistic_rollback(&req).unwrap();
+    let resp = handle
+        .block_on(client.kv_pessimistic_rollback(req))
+        .unwrap()
+        .into_inner();
     assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
     assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
 }
 
 pub fn must_kv_pessimistic_rollback_with_scan_first(
-    client: &TikvClient,
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
     ctx: Context,
     ts: u64,
     for_update_ts: u64,
@@ -1352,13 +1452,17 @@ pub fn must_kv_pessimistic_rollback_with_scan_first(
     req.set_context(ctx);
     req.start_version = ts;
     req.for_update_ts = for_update_ts;
-    let resp = client.kv_pessimistic_rollback(&req).unwrap();
+    let resp = handle
+        .block_on(client.kv_pessimistic_rollback(req))
+        .unwrap()
+        .into_inner();
     assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
     assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
 }
 
 pub fn must_check_txn_status(
-    client: &TikvClient,
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
     ctx: Context,
     key: &[u8],
     lock_ts: u64,
@@ -1372,14 +1476,18 @@ pub fn must_check_txn_status(
     req.set_caller_start_ts(caller_start_ts);
     req.set_current_ts(current_ts);
 
-    let resp = client.kv_check_txn_status(&req).unwrap();
+    let resp = handle
+        .block_on(client.kv_check_txn_status(req))
+        .unwrap()
+        .into_inner();
     assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
     assert!(resp.error.is_none(), "{:?}", resp.get_error());
     resp
 }
 
 pub fn must_kv_have_locks(
-    client: &TikvClient,
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
     ctx: Context,
     ts: u64,
     start_key: &[u8],
@@ -1400,7 +1508,10 @@ pub fn must_kv_have_locks(
     req.set_start_key(start_key.to_vec());
     req.set_end_key(end_key.to_vec());
     req.set_max_version(ts);
-    let resp = client.kv_scan_lock(&req).unwrap();
+    let resp = handle
+        .block_on(client.kv_scan_lock(req))
+        .unwrap()
+        .into_inner();
     assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
     assert!(resp.error.is_none(), "{:?}", resp.get_error());
 
@@ -1425,7 +1536,8 @@ pub fn must_kv_have_locks(
 /// Scan scan_limit number of locks within [start_key, end_key), the returned
 /// lock number should equal the input expected_cnt.
 pub fn must_lock_cnt(
-    client: &TikvClient,
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
     ctx: Context,
     ts: u64,
     start_key: &[u8],
@@ -1440,7 +1552,10 @@ pub fn must_lock_cnt(
     req.set_start_key(start_key.to_vec());
     req.set_end_key(end_key.to_vec());
     req.set_max_version(ts);
-    let resp = client.kv_scan_lock(&req).unwrap();
+    let resp = handle
+        .block_on(client.kv_scan_lock(req))
+        .unwrap()
+        .into_inner();
     assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
     assert!(resp.error.is_none(), "{:?}", resp.get_error());
 
@@ -1531,7 +1646,13 @@ pub fn check_compacted(
     true
 }
 
-pub fn must_raw_put(client: &TikvClient, ctx: Context, key: Vec<u8>, value: Vec<u8>) {
+pub fn must_raw_put(
+    handle: &Handle,
+    client: &mut TikvClient<Channel>,
+    ctx: Context,
+    key: Vec<u8>,
+    value: Vec<u8>,
+) {
     let mut put_req = RawPutRequest::default();
     put_req.set_context(ctx);
     put_req.key = key;
@@ -1540,7 +1661,10 @@ pub fn must_raw_put(client: &TikvClient, ctx: Context, key: Vec<u8>, value: Vec<
     let retryable = |err: &kvproto::errorpb::Error| -> bool { err.has_max_timestamp_not_synced() };
     let start = Instant::now_coarse();
     loop {
-        let put_resp = client.raw_put(&put_req).unwrap();
+        let put_resp = handle
+            .block_on(client.raw_put(put_req))
+            .unwrap()
+            .into_inner();
         if put_resp.has_region_error() {
             let err = put_resp.get_region_error();
             if retryable(err) && start.saturating_elapsed() < Duration::from_secs(5) {
@@ -1565,7 +1689,11 @@ pub fn must_raw_put(client: &TikvClient, ctx: Context, key: Vec<u8>, value: Vec<
     }
 }
 
-pub fn must_raw_get(client: &TikvClient, ctx: Context, key: Vec<u8>) -> Option<Vec<u8>> {
+pub fn must_raw_get(
+    client: &mut TikvClient<Channel>,
+    ctx: Context,
+    key: Vec<u8>,
+) -> Option<Vec<u8>> {
     let mut get_req = RawGetRequest::default();
     get_req.set_context(ctx);
     get_req.key = key;
@@ -1587,7 +1715,12 @@ pub fn must_raw_get(client: &TikvClient, ctx: Context, key: Vec<u8>) -> Option<V
     }
 }
 
-pub fn must_prepare_flashback(client: &TikvClient, ctx: Context, version: u64, start_ts: u64) {
+pub fn must_prepare_flashback(
+    client: &mut TikvClient<Channel>,
+    ctx: Context,
+    version: u64,
+    start_ts: u64,
+) {
     let mut prepare_req = PrepareFlashbackToVersionRequest::default();
     prepare_req.set_context(ctx);
     prepare_req.set_start_ts(start_ts);
@@ -1600,7 +1733,7 @@ pub fn must_prepare_flashback(client: &TikvClient, ctx: Context, version: u64, s
 }
 
 pub fn must_finish_flashback(
-    client: &TikvClient,
+    client: &mut TikvClient<Channel>,
     ctx: Context,
     version: u64,
     start_ts: u64,
@@ -1619,7 +1752,7 @@ pub fn must_finish_flashback(
 }
 
 pub fn must_flashback_to_version(
-    client: &TikvClient,
+    client: &mut TikvClient<Channel>,
     ctx: Context,
     version: u64,
     start_ts: u64,
@@ -1631,8 +1764,9 @@ pub fn must_flashback_to_version(
 
 // A helpful wrapper to make the test logic clear
 pub struct PeerClient {
-    pub cli: TikvClient,
+    pub cli: TikvClient<Channel>,
     pub ctx: Context,
+    pub handle: Handle,
 }
 
 impl PeerClient {
@@ -1640,6 +1774,7 @@ impl PeerClient {
         cluster: &Cluster<EK, ServerCluster<EK>>,
         region_id: u64,
         peer: metapb::Peer,
+        handle: Handle,
     ) -> PeerClient {
         let cli = {
             let env = Arc::new(Environment::new(1));
@@ -1655,27 +1790,32 @@ impl PeerClient {
             ctx.set_region_epoch(epoch);
             ctx
         };
-        PeerClient { cli, ctx }
+        PeerClient { cli, ctx, handle }
     }
 
-    pub fn kv_read(&self, key: Vec<u8>, ts: u64) -> GetResponse {
-        kv_read(&self.cli, self.ctx.clone(), key, ts)
+    pub fn kv_read(&mut self, key: Vec<u8>, ts: u64) -> GetResponse {
+        kv_read(&self.handle, &mut self.cli, self.ctx.clone(), key, ts)
     }
 
-    pub fn must_kv_read_equal(&self, key: Vec<u8>, val: Vec<u8>, ts: u64) {
-        must_kv_read_equal(&self.cli, self.ctx.clone(), key, val, ts)
+    pub fn must_kv_read_equal(&mut self, key: Vec<u8>, val: Vec<u8>, ts: u64) {
+        must_kv_read_equal(&mut self.cli, self.ctx.clone(), key, val, ts)
     }
 
-    pub fn must_kv_write(&self, pd_client: &TestPdClient, kvs: Vec<Mutation>, pk: Vec<u8>) -> u64 {
-        must_kv_write(pd_client, &self.cli, self.ctx.clone(), kvs, pk)
+    pub fn must_kv_write(
+        &mut self,
+        pd_client: &TestPdClient,
+        kvs: Vec<Mutation>,
+        pk: Vec<u8>,
+    ) -> u64 {
+        must_kv_write(pd_client, &mut self.cli, self.ctx.clone(), kvs, pk)
     }
 
-    pub fn must_kv_prewrite(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
-        must_kv_prewrite(&self.cli, self.ctx.clone(), muts, pk, ts)
+    pub fn must_kv_prewrite(&mut self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
+        must_kv_prewrite(&mut self.cli, self.ctx.clone(), muts, pk, ts)
     }
 
     pub fn try_kv_prewrite(
-        &self,
+        &mut self,
         muts: Vec<Mutation>,
         pk: Vec<u8>,
         ts: u64,
@@ -1683,12 +1823,13 @@ impl PeerClient {
     ) -> PrewriteResponse {
         let mut ctx = self.ctx.clone();
         ctx.disk_full_opt = opt;
-        try_kv_prewrite(&self.cli, ctx, muts, pk, ts)
+        try_kv_prewrite(&mut self.handle, &mut self.cli, ctx, muts, pk, ts)
     }
 
-    pub fn must_kv_prewrite_async_commit(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
+    pub fn must_kv_prewrite_async_commit(&mut self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
         must_kv_prewrite_with(
-            &self.cli,
+            &self.handle,
+            &mut self.cli,
             self.ctx.clone(),
             muts,
             vec![],
@@ -1700,9 +1841,10 @@ impl PeerClient {
         )
     }
 
-    pub fn must_kv_prewrite_one_pc(&self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
+    pub fn must_kv_prewrite_one_pc(&mut self, muts: Vec<Mutation>, pk: Vec<u8>, ts: u64) {
         must_kv_prewrite_with(
-            &self.cli,
+            &self.handle,
+            &mut self.cli,
             self.ctx.clone(),
             muts,
             vec![],
@@ -1714,9 +1856,10 @@ impl PeerClient {
         )
     }
 
-    pub fn must_kv_commit(&self, keys: Vec<Vec<u8>>, start_ts: u64, commit_ts: u64) {
+    pub fn must_kv_commit(&mut self, keys: Vec<Vec<u8>>, start_ts: u64, commit_ts: u64) {
         must_kv_commit(
-            &self.cli,
+            &self.handle,
+            &mut self.cli,
             self.ctx.clone(),
             keys,
             start_ts,
@@ -1725,16 +1868,22 @@ impl PeerClient {
         )
     }
 
-    pub fn must_kv_rollback(&self, keys: Vec<Vec<u8>>, start_ts: u64) {
-        must_kv_rollback(&self.cli, self.ctx.clone(), keys, start_ts)
+    pub fn must_kv_rollback(&mut self, keys: Vec<Vec<u8>>, start_ts: u64) {
+        must_kv_rollback(
+            &self.handle,
+            &mut self.cli,
+            self.ctx.clone(),
+            keys,
+            start_ts,
+        )
     }
 
-    pub fn must_kv_pessimistic_lock(&self, key: Vec<u8>, ts: u64) {
-        must_kv_pessimistic_lock(&self.cli, self.ctx.clone(), key, ts)
+    pub fn must_kv_pessimistic_lock(&mut self, key: Vec<u8>, ts: u64) {
+        must_kv_pessimistic_lock(&self.handle, &mut self.cli, self.ctx.clone(), key, ts)
     }
 
-    pub fn must_kv_pessimistic_rollback(&self, key: Vec<u8>, ts: u64) {
-        must_kv_pessimistic_rollback(&self.cli, self.ctx.clone(), key, ts, ts)
+    pub fn must_kv_pessimistic_rollback(&mut self, key: Vec<u8>, ts: u64) {
+        must_kv_pessimistic_rollback(&self.handle, &mut self.cli, self.ctx.clone(), key, ts, ts)
     }
 }
 

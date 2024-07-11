@@ -48,7 +48,7 @@ use crate::{
     coprocessor::Endpoint,
     coprocessor_v2,
     read_pool::ReadPool,
-    server::{gc_worker::GcWorker, /* tablet_snap::TabletRunner, */ Proxy},
+    server::{gc_worker::GcWorker, proxy::ProxyService, tablet_snap::TabletRunner},
     storage::{lock_manager::LockManager, Engine, Storage},
     tikv_util::sys::thread::ThreadBuildWrapper,
 };
@@ -124,13 +124,19 @@ where
         let ip: String = format!("{}", addr.ip());
         // let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
         //     .resize_memory(self.cfg.value().grpc_memory_pool_quota.0 as usize);
+        let tikv_service = GrpcTikvServer::new(self.kv_service.clone());
+        let cfg = Arc::new(self.cfg.value().clone());
+        let tikv_with_proxy = ProxyService::new(self.security_mgr.clone(), cfg, tikv_service);
 
-        let builder = GrpcServer::builder()
+        let mut server = GrpcServer::builder()
             .initial_stream_window_size(self.cfg.value().grpc_stream_initial_window_size.0 as u32)
             .max_concurrent_streams(self.cfg.value().grpc_concurrent_stream as u32)
             .http2_keepalive_interval(self.cfg.value().grpc_keepalive_time.0.into())
-            .http2_keepalive_timeout(self.cfg.value().grpc_keepalive_timeout.0.into())
-            .add_service(GrpcTikvServer::new(self.kv_service.clone()))
+            .http2_keepalive_timeout(self.cfg.value().grpc_keepalive_timeout.0.into());
+        server = self.security_mgr.server_tls_config(server)?;
+        //.tls_config(tls_config)
+        let builder = server
+            .add_service(tikv_with_proxy)
             .add_service(HealthServer::new(self.health_service.clone()));
 
         Ok(ServerBuilderWithAddr { builder, addr })
@@ -196,6 +202,7 @@ where
                 RuntimeBuilder::new_multi_thread()
                     .thread_name(STATS_THREAD_PREFIX)
                     .worker_threads(cfg.value().stats_concurrency)
+                    .enable_all()
                     .with_sys_hooks()
                     .build()
                     .unwrap(),
@@ -217,7 +224,6 @@ where
             Some(cfg.value().health_feedback_interval.0)
         };
 
-        let proxy = Proxy::new(security_mgr.clone(), Arc::new(cfg.value().clone()));
         let kv_service = KvService::new(
             cfg.value().cluster_id,
             store_id,
@@ -229,7 +235,6 @@ where
             check_leader_scheduler,
             Arc::clone(&grpc_thread_load),
             cfg.value().enable_request_batch,
-            proxy,
             grpc_handle.clone(),
             cfg.value().reject_messages_on_memory_ratio,
             resource_manager,
@@ -346,7 +351,7 @@ where
 
     fn start_grpc(&mut self) {
         info!("listening on addr"; "addr" => &self.local_addr);
-        let mut server_builder = self.builder_or_server.take().unwrap().left().unwrap();
+        let server_builder = self.builder_or_server.take().unwrap().left().unwrap();
         let addr = self.local_addr.clone();
         let (tx, rx) = futures::channel::oneshot::channel::<()>();
         let grpc_task = server_builder
@@ -377,16 +382,14 @@ where
                 self.snap_worker.start(snap_runner);
             }
             Either::Right(mgr) => {
-                unimplemented!();
-                // let snap_runner = TabletRunner::new(
-                //     self.env.clone(),
-                //     mgr,
-                //     snap_cache_builder,
-                //     self.raft_router.clone(),
-                //     security_mgr,
-                //     cfg,
-                // );
-                // self.snap_worker.start(snap_runner);
+                let snap_runner = TabletRunner::new(
+                    mgr,
+                    snap_cache_builder,
+                    self.raft_router.clone(),
+                    security_mgr,
+                    cfg,
+                );
+                self.snap_worker.start(snap_runner);
             }
         }
 

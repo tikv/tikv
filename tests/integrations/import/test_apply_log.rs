@@ -10,7 +10,7 @@ use super::util::*;
 
 #[test]
 fn test_basic_apply() {
-    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+    let (cluster, ctx, tikv, mut import) = new_cluster_and_tikv_import_client();
     let tmp = TempDir::new().unwrap();
     let storage = LocalStorage::new(tmp.path()).unwrap();
     let default = [
@@ -27,13 +27,13 @@ fn test_basic_apply() {
     req.set_rewrite_rules(vec![rewrite_for(&mut sst_meta, b"k", b"r")].into());
     req.set_metas(vec![sst_meta].into());
     req.set_storage_backend(local_storage(&tmp));
-    import.apply(&req).unwrap();
+    cluster.block_on(import.apply(req)).unwrap();
     check_applied_kvs_cf(&tikv, &ctx, CF_DEFAULT, default_rewritten.into_iter());
 }
 
 #[test]
 fn test_apply_twice() {
-    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+    let (cluster, ctx, tikv, mut import) = new_cluster_and_tikv_import_client();
     let tmp = TempDir::new().unwrap();
     let storage = LocalStorage::new(tmp.path()).unwrap();
     let default = [(
@@ -59,13 +59,13 @@ fn test_apply_twice() {
     req.set_rewrite_rules(vec![rewrite_for(&mut sst_meta, b"k", b"r")].into());
     req.set_metas(vec![sst_meta.clone()].into());
     req.set_storage_backend(local_storage(&tmp));
-    import.apply(&req).unwrap();
+    cluster.block_on(import.apply(req)).unwrap();
     check_applied_kvs_cf(&tikv, &ctx, CF_DEFAULT, default_fst.into_iter());
 
     register_range_for(&mut sst_meta, b"k1", b"k1a");
     req.set_rewrite_rules(vec![rewrite_for(&mut sst_meta, b"k", b"z")].into());
     req.set_metas(vec![sst_meta].into());
-    import.apply(&req).unwrap();
+    cluster.block_on(import.apply(req)).unwrap();
     check_applied_kvs_cf(
         &tikv,
         &ctx,

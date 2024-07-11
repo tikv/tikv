@@ -10,15 +10,12 @@ use cdc::{recv_timeout, CdcObserver, Delegate, FeatureGate, Task, Validate};
 use collections::HashMap;
 use concurrency_manager::ConcurrencyManager;
 use engine_rocks::RocksEngine;
-use futures::executor::block_on;
-use grpcio::{
-    CallOption, ChannelBuilder, ClientDuplexReceiver, ClientDuplexSender, ClientUnaryReceiver,
-    Environment, MetadataBuilder,
-};
+use futures::{channel::mpsc, executor::block_on};
 use kvproto::{
-    cdcpb::{create_change_data, ChangeDataClient, ChangeDataEvent, ChangeDataRequest},
+    cdcpb::{create_change_data, ChangeDataEvent, ChangeDataRequest},
+    cdcpb_grpc::{change_data_client::ChangeDataClient, change_data_server::ChangeDataServer},
     kvrpcpb::{PrewriteRequestPessimisticAction::*, *},
-    tikvpb::TikvClient,
+    tikvpb_grpc::tikv_client::TikvClient,
 };
 use online_config::OnlineConfig;
 use raftstore::{coprocessor::CoprocessorHost, router::CdcRaftRouter};
@@ -30,6 +27,8 @@ use tikv_util::{
     worker::{LazyWorker, Runnable},
     HandyRwLock,
 };
+use tokio::{runtime::Runtime, task::JoinHandle};
+use tonic::transport::Channel;
 use txn_types::TimeStamp;
 static INIT: Once = Once::new();
 
@@ -39,55 +38,65 @@ pub fn init() {
 
 #[derive(Clone)]
 pub struct ClientReceiver {
-    receiver: Arc<Mutex<Option<ClientDuplexReceiver<ChangeDataEvent>>>>,
+    receiver: Arc<Mutex<Option<tonic::Streaming<ChangeDataEvent>>>>,
 }
 
 impl ClientReceiver {
     pub fn replace(
         &self,
-        rx: Option<ClientDuplexReceiver<ChangeDataEvent>>,
-    ) -> Option<ClientDuplexReceiver<ChangeDataEvent>> {
+        rx: Option<tonic::Streaming<ChangeDataEvent>>,
+    ) -> Option<tonic::Streaming<ChangeDataEvent>> {
         std::mem::replace(&mut *self.receiver.lock().unwrap(), rx)
     }
 }
 #[allow(clippy::type_complexity)]
 pub fn new_event_feed(
-    client: &ChangeDataClient,
+    client: ChangeDataClient<Channel>,
+    handle: &tokio::runtime::Handle,
 ) -> (
-    ClientDuplexSender<ChangeDataRequest>,
+    mpsc::UnboundedSender<ChangeDataRequest>,
     ClientReceiver,
     Box<dyn Fn(bool) -> ChangeDataEvent + Send>,
 ) {
-    create_event_feed(client, false)
+    create_event_feed(client, false, handle)
 }
 
 #[allow(clippy::type_complexity)]
 pub fn new_event_feed_v2(
-    client: &ChangeDataClient,
+    client: ChangeDataClient<Channel>,
+    handle: &tokio::runtime::Handle,
 ) -> (
-    ClientDuplexSender<ChangeDataRequest>,
+    mpsc::UnboundedSender<ChangeDataRequest>,
     ClientReceiver,
     Box<dyn Fn(bool) -> ChangeDataEvent + Send>,
 ) {
-    create_event_feed(client, true)
+    create_event_feed(client, true, handle)
 }
 
 #[allow(clippy::type_complexity)]
 fn create_event_feed(
-    client: &ChangeDataClient,
+    client: ChangeDataClient<Channel>,
     stream_multiplexing: bool,
+    handle: &tokio::runtime::Handle,
 ) -> (
-    ClientDuplexSender<ChangeDataRequest>,
+    mpsc::UnboundedSender<ChangeDataRequest>,
     ClientReceiver,
     Box<dyn Fn(bool) -> ChangeDataEvent + Send>,
 ) {
-    let (req_tx, resp_rx) = if stream_multiplexing {
-        let mut metadata = MetadataBuilder::with_capacity(1);
-        metadata.add_str("features", "stream-multiplexing").unwrap();
-        let opt = CallOption::default().headers(metadata.build());
-        client.event_feed_v2_opt(opt).unwrap()
+    let (req_tx, req_rx) = mpsc::unbounded();
+    let resp_rx = if stream_multiplexing {
+        let req = tonic::Request::new(req_rx);
+        req.metadata_mut()
+            .insert("features", "stream-multiplexing".parse().unwarp());
+        handle
+            .block_on(client.event_feed_v2(req))
+            .unwrap()
+            .into_inner()
     } else {
-        client.event_feed().unwrap()
+        handle
+            .block_on(client.event_feed(req_rx))
+            .unwrap()
+            .into_inner()
     };
     let event_feed_wrap = Arc::new(Mutex::new(Some(resp_rx)));
     let event_feed_wrap_clone = event_feed_wrap.clone();
@@ -166,6 +175,13 @@ impl TestSuiteBuilder {
         F: FnMut(&mut Cluster<RocksEngine, ServerCluster<RocksEngine>>),
     {
         init();
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+
         let memory_quota = self.memory_quota.unwrap_or(usize::MAX);
         let mut cluster = self.cluster.unwrap();
         let count = cluster.count;
@@ -188,7 +204,11 @@ impl TestSuiteBuilder {
                 .entry(id)
                 .or_default()
                 .push(Box::new(move || {
-                    create_change_data(cdc::Service::new(scheduler.clone(), memory_quota_.clone()))
+                    ChangeDataServer::new(cdc::Service::new(
+                        scheduler.clone(),
+                        memory_quota_.clone(),
+                        runtime.handle().clone(),
+                    ))
                 }));
             sim.txn_extra_schedulers.insert(
                 id,
@@ -212,7 +232,6 @@ impl TestSuiteBuilder {
             let raft_router = sim.get_server_router(*id);
             let cdc_ob = obs.get(id).unwrap().clone();
             let cm = sim.get_concurrency_manager(*id);
-            let env = Arc::new(Environment::new(1));
             let cfg = CdcConfig::default();
             let mut cdc_endpoint = cdc::Endpoint::new(
                 DEFAULT_CLUSTER_ID,
@@ -226,10 +245,10 @@ impl TestSuiteBuilder {
                 cdc_ob,
                 cluster.store_metas[id].clone(),
                 cm.clone(),
-                env,
                 sim.security_mgr.clone(),
                 quotas[id].clone(),
                 sim.get_causal_ts_provider(*id),
+                runtime.handle().clone(),
             );
             let mut updated_cfg = cfg.clone();
             updated_cfg.min_ts_interval = ReadableDuration::millis(100);
@@ -244,7 +263,7 @@ impl TestSuiteBuilder {
             endpoints,
             obs,
             concurrency_managers,
-            env: Arc::new(Environment::new(1)),
+            runtime,
             tikv_cli: HashMap::default(),
             cdc_cli: HashMap::default(),
         }
@@ -258,8 +277,7 @@ pub struct TestSuite {
     tikv_cli: HashMap<u64, TikvClient>,
     cdc_cli: HashMap<u64, ChangeDataClient>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
-
-    env: Arc<Environment>,
+    pub runtime: Runtime,
 }
 
 impl Default for TestSuiteBuilder {
@@ -325,10 +343,12 @@ impl TestSuite {
         prewrite_req.primary_lock = pk;
         prewrite_req.start_version = ts.into_inner();
         prewrite_req.lock_ttl = prewrite_req.start_version + 1;
+        let mut client = self.get_tikv_client(region_id);
         let prewrite_resp = self
-            .get_tikv_client(region_id)
-            .kv_prewrite(&prewrite_req)
-            .unwrap();
+            .runtime
+            .block_on(client.kv_prewrite(prewrite_req))
+            .unwrap()
+            .into_inner();
         assert!(
             !prewrite_resp.has_region_error(),
             "{:?}",
@@ -348,7 +368,12 @@ impl TestSuite {
         rawkv_req.set_value(value);
         rawkv_req.set_ttl(u64::MAX);
 
-        let rawkv_resp = self.get_tikv_client(region_id).raw_put(&rawkv_req).unwrap();
+        let mut client = self.get_tikv_client(region_id);
+        let rawkv_resp = self
+            .runtime
+            .block_on(client.raw_put(rawkv_req))
+            .unwrap()
+            .into_inner();
         assert!(
             !rawkv_resp.has_region_error(),
             "{:?}",
@@ -382,10 +407,12 @@ impl TestSuite {
         commit_req.start_version = start_ts.into_inner();
         commit_req.set_keys(keys.into_iter().collect());
         commit_req.commit_version = commit_ts.into_inner();
+        let mut client = self.get_tikv_client(region_id);
         let commit_resp = self
-            .get_tikv_client(region_id)
-            .kv_commit(&commit_req)
-            .unwrap();
+            .runtime
+            .block_on(client.kv_commit(commit_req))
+            .unwrap()
+            .into_inner();
         assert!(
             !commit_resp.has_region_error(),
             "{:?}",
@@ -399,10 +426,12 @@ impl TestSuite {
         rollback_req.set_context(self.get_context(region_id));
         rollback_req.start_version = start_ts.into_inner();
         rollback_req.set_keys(keys.into_iter().collect());
+        let mut client = self.get_tikv_client(region_id);
         let rollback_resp = self
-            .get_tikv_client(region_id)
-            .kv_batch_rollback(&rollback_req)
-            .unwrap();
+            .runtime
+            .block_on(client.kv_batch_rollback(rollback_req))
+            .unwrap()
+            .into_inner();
         assert!(
             !rollback_resp.has_region_error(),
             "{:?}",
@@ -431,10 +460,12 @@ impl TestSuite {
         req.set_caller_start_ts(caller_start_ts.into_inner());
         req.set_current_ts(current_ts.into_inner());
         req.set_rollback_if_not_exist(rollback_if_not_exist);
+        let mut client = self.get_tikv_client(region_id);
         let resp = self
-            .get_tikv_client(region_id)
-            .kv_check_txn_status(&req)
-            .unwrap();
+            .runtime
+            .block_on(client.kv_check_txn_status(req))
+            .unwrap()
+            .into_inner();
         assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
         assert!(!resp.has_error(), "{:?}", resp.get_error());
         resp.get_action()
@@ -454,10 +485,12 @@ impl TestSuite {
         lock_req.start_version = start_ts.into_inner();
         lock_req.for_update_ts = for_update_ts.into_inner();
         lock_req.primary_lock = pk;
+        let mut client = self.get_tikv_client(region_id);
         let lock_resp = self
-            .get_tikv_client(region_id)
-            .kv_pessimistic_lock(&lock_req)
-            .unwrap();
+            .runtime
+            .block_on(client.kv_pessimistic_lock(lock_req))
+            .unwrap()
+            .into_inner();
         assert!(
             !lock_resp.has_region_error(),
             "{:?}",
@@ -488,10 +521,12 @@ impl TestSuite {
         prewrite_req
             .mut_pessimistic_actions()
             .push(DoPessimisticCheck);
+        let mut client = self.get_tikv_client(region_id);
         let prewrite_resp = self
-            .get_tikv_client(region_id)
-            .kv_prewrite(&prewrite_req)
-            .unwrap();
+            .runtime
+            .block_on(client.kv_prewrite(prewrite_req))
+            .unwrap()
+            .into_inner();
         assert!(
             !prewrite_resp.has_region_error(),
             "{:?}",
@@ -510,15 +545,15 @@ impl TestSuite {
         keys: Vec<Vec<u8>>,
         start_ts: TimeStamp,
         commit_ts: TimeStamp,
-    ) -> ClientUnaryReceiver<CommitResponse> {
+    ) -> JoinHandle<tonic::Result<tonic::Response<CommitResponse>>> {
         let mut commit_req = CommitRequest::default();
         commit_req.set_context(self.get_context(region_id));
         commit_req.start_version = start_ts.into_inner();
         commit_req.set_keys(keys.into_iter().collect());
         commit_req.commit_version = commit_ts.into_inner();
-        self.get_tikv_client(region_id)
-            .kv_commit_async(&commit_req)
-            .unwrap()
+        let mut client = self.get_tikv_client(region_id);
+        self.runtime
+            .spawn(async move { client.kv_commit(commit_req).await })
     }
 
     pub fn get_context(&mut self, region_id: u64) -> Context {
@@ -533,39 +568,45 @@ impl TestSuite {
         context
     }
 
-    pub fn get_tikv_client(&mut self, region_id: u64) -> &TikvClient {
+    pub fn get_tikv_client(&mut self, region_id: u64) -> TikvClient<Channel> {
         let leader = self.cluster.leader_of_region(region_id).unwrap();
         let store_id = leader.get_store_id();
         let addr = self.cluster.sim.rl().get_addr(store_id);
-        let env = self.env.clone();
         self.tikv_cli
             .entry(leader.get_store_id())
             .or_insert_with(|| {
-                let channel = ChannelBuilder::new(env).connect(&addr);
+                let uri = tikv_util::format_url(&addr, false);
+                let builder = Channel::from_shared(uri).unwrap();
+                let channel = self.runtime.block_on(builder.connect()).unwrap();
                 TikvClient::new(channel)
             })
+            .clone()
     }
 
-    pub fn get_region_cdc_client(&mut self, region_id: u64) -> &ChangeDataClient {
+    pub fn get_region_cdc_client(&mut self, region_id: u64) -> ChangeDataClient<Channel> {
         let leader = self.cluster.leader_of_region(region_id).unwrap();
         let store_id = leader.get_store_id();
         let addr = self.cluster.sim.rl().get_addr(store_id);
-        let env = self.env.clone();
-        self.cdc_cli.entry(store_id).or_insert_with(|| {
-            let channel = ChannelBuilder::new(env)
-                .max_receive_message_len(i32::MAX)
-                .connect(&addr);
-            ChangeDataClient::new(channel)
-        })
+        self.cdc_cli
+            .entry(store_id)
+            .or_insert_with(|| {
+                let builder = Channel::from_shared(tikv_util::format_url(&addr, false)).unwrap();
+                let channel = self.runtime.block_on(builder.connect()).unwrap();
+                ChangeDataClient::new(channel)
+            })
+            .clone()
     }
 
-    pub fn get_store_cdc_client(&mut self, store_id: u64) -> &ChangeDataClient {
+    pub fn get_store_cdc_client(&mut self, store_id: u64) -> ChangeDataClient<Channel> {
         let addr = self.cluster.sim.rl().get_addr(store_id);
-        let env = self.env.clone();
-        self.cdc_cli.entry(store_id).or_insert_with(|| {
-            let channel = ChannelBuilder::new(env).connect(&addr);
-            ChangeDataClient::new(channel)
-        })
+        self.cdc_cli
+            .entry(store_id)
+            .or_insert_with(|| {
+                let builder = Channel::from_shared(tikv_util::format_url(&addr, false)).unwrap();
+                let channel = self.runtime.block_on(builder.connect()).unwrap();
+                ChangeDataClient::new(channel)
+            })
+            .clone()
     }
 
     pub fn get_txn_concurrency_manager(&self, store_id: u64) -> Option<ConcurrencyManager> {
@@ -630,10 +671,12 @@ impl TestSuite {
         prepare_flashback_req.set_start_key(start_key.to_vec());
         prepare_flashback_req.set_end_key(end_key.to_vec());
         prepare_flashback_req.set_start_ts(start_ts.into_inner());
+        let mut client = self.get_tikv_client(region_id);
         let prepare_flashback_resp = self
-            .get_tikv_client(region_id)
-            .kv_prepare_flashback_to_version(&prepare_flashback_req)
-            .unwrap();
+            .runtime
+            .block_on(client.kv_prepare_flashback_to_version(prepare_flashback_req))
+            .unwrap()
+            .into_inner();
         assert!(
             !prepare_flashback_resp.has_region_error(),
             "{:?}",
@@ -657,10 +700,12 @@ impl TestSuite {
         flashback_req.set_start_ts(start_ts.into_inner());
         flashback_req.set_commit_ts(commit_ts.into_inner());
         flashback_req.set_version(version.into_inner());
+        let mut client = self.get_tikv_client(region_id);
         let flashback_resp = self
-            .get_tikv_client(region_id)
-            .kv_flashback_to_version(&flashback_req)
-            .unwrap();
+            .runtime
+            .block_on(client.kv_flashback_to_version(flashback_req))
+            .unwrap()
+            .into_inner();
         assert!(
             !flashback_resp.has_region_error(),
             "{:?}",

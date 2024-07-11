@@ -17,17 +17,17 @@ use engine_rocks::RocksEngine;
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, KvEngine, SnapshotContext};
 use futures::executor::block_on;
-use grpcio::{ChannelBuilder, EnvBuilder, Environment, Error as GrpcError, Service};
+use grpcio::{Error as GrpcError, Service};
 use health_controller::HealthController;
 use kvproto::{
-    deadlock::create_deadlock,
-    debugpb::{create_debug, DebugClient},
-    import_sstpb::create_import_sst,
+    deadlock_grpc::deadlock_server::DeadlockServer,
+    debugpb_grpc::{debug_client::DebugClient, debug_server::DebugServer},
+    import_sstpb_grpc::import_s_s_t_server::ImportSSTServer,
     kvrpcpb::{ApiVersion, Context},
     metapb,
     raft_cmdpb::*,
     raft_serverpb,
-    tikvpb::TikvClient,
+    tikvpb_grpc::tikv_client::TikvClient,
 };
 use pd_client::PdClient;
 use raftstore::{
@@ -82,6 +82,7 @@ use tikv_util::{
     HandyRwLock,
 };
 use tokio::runtime::Builder as TokioBuilder;
+use tonic::transport::Channel;
 use txn_types::TxnExtraScheduler;
 
 use super::*;
@@ -160,25 +161,18 @@ pub struct ServerCluster<EK: KvEngine> {
     raft_clients: HashMap<u64, RaftClient<AddressMap, FakeExtension>>,
     conn_builder: ConnectionBuilder<AddressMap, FakeExtension>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
-    env: Arc<Environment>,
     pub causal_ts_providers: HashMap<u64, Arc<CausalTsProviderImpl>>,
+    pub runtime: tokio::runtime::Runtime,
 }
 
 impl<EK: KvEngineWithRocks> ServerCluster<EK> {
     pub fn new(pd_client: Arc<TestPdClient>) -> ServerCluster<EK> {
-        let env = Arc::new(
-            EnvBuilder::new()
-                .cq_count(2)
-                .name_prefix(thd_name!("server-cluster"))
-                .build(),
-        );
         let security_mgr = Arc::new(SecurityManager::new(&Default::default()).unwrap());
         let map = AddressMap::default();
         // We don't actually need to handle snapshot message, just create a dead worker
         // to make it compile.
         let worker = LazyWorker::new("snap-worker");
         let conn_builder = ConnectionBuilder::new(
-            env.clone(),
             Arc::default(),
             security_mgr.clone(),
             map.clone(),
@@ -186,6 +180,11 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
             worker.scheduler(),
             Arc::new(ThreadLoadPool::with_threshold(usize::MAX)),
         );
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
         ServerCluster {
             metas: HashMap::default(),
             addrs: map,
@@ -202,9 +201,9 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
             raft_clients: HashMap::default(),
             conn_builder,
             concurrency_managers: HashMap::default(),
-            env,
             txn_extra_schedulers: HashMap::default(),
             causal_ts_providers: HashMap::default(),
+            runtime,
         }
     }
 
@@ -243,7 +242,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
             resource_metering::init_reporter(cfg.clone(), collector_reg_handle.clone());
         let (_, single_target_worker) = resource_metering::init_single_target(
             cfg.receiver_address.clone(),
-            Arc::new(Environment::new(2)),
+            self.runtime.handle().clone(),
             data_sink_reg_handle,
         );
 
@@ -367,8 +366,8 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
                 store_meta.clone(),
                 self.pd_client.clone(),
                 concurrency_manager.clone(),
-                self.env.clone(),
                 self.security_mgr.clone(),
+                self.runtime.handle().clone(),
             );
             // Start the worker
             rts_worker.start(rts_endpoint);
@@ -553,16 +552,16 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
                 tikv_util::Either::Left(snap_mgr.clone()),
                 gc_worker.clone(),
                 check_leader_scheduler.clone(),
-                self.env.clone(),
+                self.runtime.handle().clone(),
                 None,
                 debug_thread_pool.clone(),
                 health_controller.clone(),
                 resource_manager.clone(),
             )
             .unwrap();
-            svr.register_service(create_import_sst(import_service.clone()));
-            svr.register_service(create_debug(debug_service.clone()));
-            svr.register_service(create_deadlock(deadlock_service.clone()));
+            svr.register_service(ImportSSTServer::new(import_service.clone()));
+            svr.register_service(DebugServer::new(debug_service.clone()));
+            svr.register_service(DeadlockServer::new(deadlock_service.clone()));
             if let Some(svcs) = self.pending_services.get(&node_id) {
                 for fact in svcs {
                     svr.register_service(fact());
@@ -958,7 +957,7 @@ fn must_new_and_configure_cluster_mul(
 
 pub fn must_new_cluster_and_kv_client() -> (
     Cluster<RocksEngine, ServerCluster<RocksEngine>>,
-    TikvClient,
+    TikvClient<Channel>,
     Context,
 ) {
     must_new_cluster_and_kv_client_mul(1)
@@ -968,7 +967,7 @@ pub fn must_new_cluster_and_kv_client_mul(
     count: usize,
 ) -> (
     Cluster<RocksEngine, ServerCluster<RocksEngine>>,
-    TikvClient,
+    TikvClient<Channel>,
     Context,
 ) {
     must_new_cluster_with_cfg_and_kv_client_mul(count, |_| {})
@@ -979,13 +978,21 @@ pub fn must_new_cluster_with_cfg_and_kv_client_mul(
     configure: impl FnMut(&mut Cluster<RocksEngine, ServerCluster<RocksEngine>>),
 ) -> (
     Cluster<RocksEngine, ServerCluster<RocksEngine>>,
-    TikvClient,
+    TikvClient<Channel>,
     Context,
 ) {
     let (cluster, leader, ctx) = must_new_and_configure_cluster_mul(count, configure);
-    let env = Arc::new(Environment::new(1));
-    let channel =
-        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let channel = cluster
+        .runtime
+        .block_on(
+            Channel::from_shared(tikv_util::format_url(
+                &cluster.sim.rl().get_addr(leader.get_store_id()),
+                false,
+            ))
+            .unwrap()
+            .connect(),
+        )
+        .unwrap();
     let client = TikvClient::new(channel);
 
     (cluster, client, ctx)
@@ -997,10 +1004,11 @@ pub fn must_new_cluster_and_debug_client() -> (
     u64,
 ) {
     let (cluster, leader, _) = must_new_cluster_mul(1);
-
-    let env = Arc::new(Environment::new(1));
-    let channel =
-        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let addr = tikv_util::format_url(&cluster.sim.rl().get_addr(leader.get_store_id()), false);
+    let channel = cluster
+        .runtime
+        .block_on(Channel::from_shared(addr).unwrap().connect())
+        .unwrap();
     let client = DebugClient::new(channel);
 
     (cluster, client, leader.get_store_id())
@@ -1008,15 +1016,17 @@ pub fn must_new_cluster_and_debug_client() -> (
 
 pub fn must_new_cluster_kv_client_and_debug_client() -> (
     Cluster<RocksEngine, ServerCluster<RocksEngine>>,
-    TikvClient,
+    TikvClient<Channel>,
     DebugClient,
     Context,
 ) {
     let (cluster, leader, ctx) = must_new_cluster_mul(1);
 
-    let env = Arc::new(Environment::new(1));
-    let channel =
-        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let addr = tikv_util::format_url(&cluster.sim.rl().get_addr(leader.get_store_id()), false);
+    let channel = cluster
+        .runtime
+        .block_on(Channel::from_shared(addr).unwrap().connect())
+        .unwrap();
 
     let kv_client = TikvClient::new(channel.clone());
     let debug_client = DebugClient::new(channel);
@@ -1028,14 +1038,17 @@ pub fn must_new_and_configure_cluster_and_kv_client(
     configure: impl FnMut(&mut Cluster<RocksEngine, ServerCluster<RocksEngine>>),
 ) -> (
     Cluster<RocksEngine, ServerCluster<RocksEngine>>,
-    TikvClient,
+    TikvClient<Channel>,
     Context,
 ) {
     let (cluster, leader, ctx) = must_new_and_configure_cluster(configure);
 
-    let env = Arc::new(Environment::new(1));
-    let channel =
-        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
+    let addr = tikv_util::format_url(&cluster.sim.rl().get_addr(leader.get_store_id()), false);
+    let channel = cluster
+        .runtime
+        .block_on(Channel::from_shared(addr).unwrap().connect())
+        .unwrap();
+
     let client = TikvClient::new(channel);
 
     (cluster, client, ctx)
@@ -1043,7 +1056,7 @@ pub fn must_new_and_configure_cluster_and_kv_client(
 
 pub fn setup_cluster() -> (
     Cluster<RocksEngine, ServerCluster<RocksEngine>>,
-    TikvClient,
+    TikvClient<Channel>,
     String,
     Context,
 ) {
@@ -1067,8 +1080,12 @@ pub fn setup_cluster() -> (
     ctx.set_peer(leader);
     ctx.set_region_epoch(epoch);
 
-    let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env).connect(&follower_addr);
+    let addr = tikv_util::format_url(&follower_addr, false);
+    let channel = cluster
+        .runtime
+        .block_on(Channel::from_shared(addr).unwrap().connect())
+        .unwrap();
+
     let client = TikvClient::new(channel);
 
     // Verify not setting forwarding header will result in store not match.

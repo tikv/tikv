@@ -3,7 +3,10 @@
 use std::time::Duration;
 
 use futures::{executor::block_on, stream::StreamExt};
-use kvproto::{import_sstpb::*, kvrpcpb::Context, tikvpb::*};
+use kvproto::{
+    import_sstpb::*, import_sstpb_grpc::import_s_s_t_client::ImportSSTClient, kvrpcpb::Context,
+    tikvpb::*,
+};
 use pd_client::PdClient;
 use tempfile::Builder;
 use test_sst_importer::*;
@@ -12,6 +15,8 @@ use tikv_util::{
     config::ReadableSize,
     sys::disk::{set_disk_status, DiskUsage},
 };
+use tokio::runtime::Handle;
+use tonic::transport::Channel;
 
 use super::util::*;
 
@@ -29,7 +34,7 @@ macro_rules! assert_to_string_contains {
 
 #[test]
 fn test_upload_sst() {
-    let (_cluster, ctx, _, import) = new_cluster_and_tikv_import_client();
+    let (cluster, ctx, _, import) = new_cluster_and_tikv_import_client();
 
     let data = vec![1; 1024];
     let crc32 = calc_data_crc32(&data);
@@ -37,12 +42,15 @@ fn test_upload_sst() {
 
     // Mismatch crc32
     let meta = new_sst_meta(0, length);
-    assert_to_string_contains!(send_upload_sst(&import, &meta, &data).unwrap_err(), "crc32");
+    assert_to_string_contains!(
+        send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap_err(),
+        "crc32"
+    );
 
     // diskfull
     set_disk_status(DiskUsage::AlmostFull);
     assert_to_string_contains!(
-        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap_err(),
         "DiskSpaceNotEnough"
     );
     set_disk_status(DiskUsage::Normal);
@@ -50,19 +58,20 @@ fn test_upload_sst() {
     let mut meta = new_sst_meta(crc32, length);
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
-    send_upload_sst(&import, &meta, &data).unwrap();
+    send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
 
     // Can't upload the same uuid file again.
     assert_to_string_contains!(
-        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap_err(),
         "FileExists"
     );
 }
 
 fn run_test_write_sst(
+    handle: &tokio::runtime::Handle,
     ctx: Context,
     tikv: TikvClient,
-    import: ImportSstClient,
+    import: ImportSSTClient<Channel>,
     expected_error: &str,
 ) {
     let mut meta = new_sst_meta(0, 0);
@@ -84,7 +93,7 @@ fn run_test_write_sst(
 
     let resp = resp.unwrap();
     for m in resp.metas.into_iter() {
-        must_ingest_sst(&import, ctx.clone(), m.clone());
+        must_ingest_sst(handle, &mut import, ctx.clone(), m.clone());
     }
     check_ingested_txn_kvs(&tikv, &ctx, sst_range, 2);
 }
@@ -122,7 +131,7 @@ fn test_ingest_sst() {
     cfg.raft_store.region_split_check_diff = Some(ReadableSize(200));
     cfg.server.addr = "127.0.0.1:0".to_owned();
     cfg.server.grpc_concurrency = 1;
-    let (cluster, ctx, _tikv, import) = open_cluster_and_tikv_import_client(Some(cfg));
+    let (cluster, ctx, _tikv, mut import) = open_cluster_and_tikv_import_client(Some(cfg));
 
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
 
@@ -131,20 +140,30 @@ fn test_ingest_sst() {
     let (mut meta, data) = gen_sst_file(sst_path, sst_range);
 
     // No region id and epoch.
-    send_upload_sst(&import, &meta, &data).unwrap();
+    send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
 
-    must_ingest_sst_error(&import, ctx.clone(), meta.clone());
+    must_ingest_sst_error(
+        cluster.runtime.handle(),
+        &mut import,
+        ctx.clone(),
+        meta.clone(),
+    );
 
     // Set region id and epoch.
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
-    send_upload_sst(&import, &meta, &data).unwrap();
+    send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
     // Can't upload the same file again.
     assert_to_string_contains!(
-        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap_err(),
         "FileExists"
     );
-    must_ingest_sst(&import, ctx.clone(), meta.clone());
+    must_ingest_sst(
+        cluster.runtime.handle(),
+        &mut import,
+        ctx.clone(),
+        meta.clone(),
+    );
 
     for _ in 0..10 {
         let region_keys = cluster
@@ -168,11 +187,11 @@ fn test_ingest_sst() {
     panic!("region keys is not 255 or buckets keys len less than 2")
 }
 
-fn switch_mode(import: &ImportSstClient, range: Range, mode: SwitchMode) {
+fn switch_mode(handle: &Handle, import: &ImportSSTClient<Channel>, range: Range, mode: SwitchMode) {
     let mut switch_req = SwitchModeRequest::default();
     switch_req.set_mode(mode);
     switch_req.set_ranges(vec![range].into());
-    let _ = import.switch_mode(&switch_req).unwrap();
+    let _ = handle.block_on(import.switch_mode(switch_req)).unwrap();
 }
 
 #[test]
@@ -250,7 +269,7 @@ fn test_switch_mode_v2() {
 
 #[test]
 fn test_upload_and_ingest_with_tde() {
-    let (_tmp_dir, _cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client_tde();
+    let (_tmp_dir, cluster, ctx, mut tikv, mut import) = new_cluster_and_tikv_import_client_tde();
 
     let temp_dir = Builder::new().prefix("test_ingest_sst").tempdir().unwrap();
     let sst_path = temp_dir.path().join("test.sst");
@@ -259,16 +278,16 @@ fn test_upload_and_ingest_with_tde() {
 
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
-    send_upload_sst(&import, &meta, &data).unwrap();
+    send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
 
-    must_ingest_sst(&import, ctx.clone(), meta);
+    must_ingest_sst(cluster.runtime.handle(), &mut import, ctx.clone(), meta);
 
-    check_ingested_kvs(&tikv, &ctx, sst_range);
+    check_ingested_kvs(cluster.runtime.handle(), &mut tikv, &ctx, sst_range);
 }
 
 #[test]
 fn test_ingest_sst_without_crc32() {
-    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+    let (cluster, ctx, mut tikv, mut import) = new_cluster_and_tikv_import_client();
 
     let temp_dir = Builder::new()
         .prefix("test_ingest_sst_without_crc32")
@@ -285,15 +304,15 @@ fn test_ingest_sst_without_crc32() {
     send_upload_sst(&import, &meta, &data).unwrap();
     meta.set_crc32(0);
 
-    must_ingest_sst(&import, ctx.clone(), meta);
+    must_ingest_sst(cluster.runtime.handle(), &mut import, ctx.clone(), meta);
 
     // Check ingested kvs
-    check_ingested_kvs(&tikv, &ctx, sst_range);
+    check_ingested_kvs(cluster.runtime.handle(), &mut tikv, &ctx, sst_range);
 }
 
 #[test]
 fn test_download_sst() {
-    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+    let (cluster, ctx, mut tikv, mut import) = new_cluster_and_tikv_import_client();
     let temp_dir = Builder::new()
         .prefix("test_download_sst")
         .tempdir()
@@ -338,9 +357,9 @@ fn test_download_sst() {
 
     // Do an ingest and verify the result is correct.
 
-    must_ingest_sst(&import, ctx.clone(), meta);
+    must_ingest_sst(cluster.runtime.handle(), &mut import, ctx.clone(), meta);
 
-    check_ingested_kvs(&tikv, &ctx, sst_range);
+    check_ingested_kvs(cluster.runtime.handle(), &mut tikv, &ctx, sst_range);
 }
 
 #[test]
@@ -355,11 +374,11 @@ fn test_cleanup_sst() {
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
 
-    send_upload_sst(&import, &meta, &data).unwrap();
+    send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
 
     // Can not upload the same file when it exists.
     assert_to_string_contains!(
-        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap_err(),
         "FileExists"
     );
 
@@ -367,7 +386,7 @@ fn test_cleanup_sst() {
     let region = cluster.get_region(&[]);
     cluster.must_split(&region, &[100]);
 
-    check_sst_deleted(&import, &meta, &data);
+    check_sst_deleted(cluster.runtime.handle(), &mut import, &meta, &data);
 
     let left = cluster.get_region(&[]);
     let right = cluster.get_region(&[100]);
@@ -378,14 +397,14 @@ fn test_cleanup_sst() {
     meta.set_region_id(left.get_id());
     meta.set_region_epoch(left.get_region_epoch().clone());
 
-    send_upload_sst(&import, &meta, &data).unwrap();
+    send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
 
     // The uploaded SST should be deleted if the region merged.
     cluster.pd_client.must_merge(left.get_id(), right.get_id());
     let res = block_on(cluster.pd_client.get_region_by_id(left.get_id()));
     assert_eq!(res.unwrap(), None);
 
-    check_sst_deleted(&import, &meta, &data);
+    check_sst_deleted(cluster.runtime.handle(), &mut import, &meta, &data);
 }
 
 #[test]
@@ -400,11 +419,11 @@ fn test_cleanup_sst_v2() {
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
 
-    send_upload_sst(&import, &meta, &data).unwrap();
+    send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
 
     // Can not upload the same file when it exists.
     assert_to_string_contains!(
-        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap_err(),
         "FileExists"
     );
 
@@ -412,41 +431,51 @@ fn test_cleanup_sst_v2() {
     let region = cluster.get_region(&[]);
     cluster.must_split(&region, &[100]);
 
-    check_sst_deleted(&import, &meta, &data);
+    check_sst_deleted(cluster.runtime.handle(), &mut import, &meta, &data);
 
     // upload an SST of an unexisted region
     let sst_path = temp_dir.path().join("test_non_exist.sst");
     let sst_range = (0, 100);
     let (mut meta, data) = gen_sst_file(sst_path, sst_range);
     meta.set_region_id(9999);
-    send_upload_sst(&import, &meta, &data).unwrap();
+    send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
     // This should be cleanuped
-    check_sst_deleted(&import, &meta, &data);
+    check_sst_deleted(cluster.runtime.handle(), &mut import, &meta, &data);
 
     let mut key_range = Range::default();
     key_range.set_start([50].to_vec());
     key_range.set_start([70].to_vec());
     // switch to import so that the overlapped sst will not be cleanuped
-    switch_mode(&import, key_range.clone(), SwitchMode::Import);
+    switch_mode(
+        cluster.runtime.handle(),
+        &mut import,
+        key_range.clone(),
+        SwitchMode::Import,
+    );
     let sst_path = temp_dir.path().join("test_non_exist1.sst");
     let sst_range = (60, 80);
     let (mut meta, data) = gen_sst_file(sst_path, sst_range);
     meta.set_region_id(9999);
-    send_upload_sst(&import, &meta, &data).unwrap();
+    send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
     std::thread::sleep(Duration::from_millis(500));
     assert_to_string_contains!(
-        send_upload_sst(&import, &meta, &data).unwrap_err(),
+        send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap_err(),
         "FileExists"
     );
 
     // switch back to normal mode
-    switch_mode(&import, key_range, SwitchMode::Normal);
-    check_sst_deleted(&import, &meta, &data);
+    switch_mode(
+        cluster.runtime.handle(),
+        &mut import,
+        key_range,
+        SwitchMode::Normal,
+    );
+    check_sst_deleted(cluster.runtime.handle(), &mut import, &meta, &data);
 }
 
 #[test]
 fn test_ingest_sst_region_not_found() {
-    let (_cluster, mut ctx_not_found, _, import) = new_cluster_and_tikv_import_client();
+    let (cluster, mut ctx_not_found, _, mut import) = new_cluster_and_tikv_import_client();
 
     let temp_dir = Builder::new()
         .prefix("test_ingest_sst_errors")
@@ -463,13 +492,22 @@ fn test_ingest_sst_region_not_found() {
     let mut ingest = IngestRequest::default();
     ingest.set_context(ctx_not_found);
     ingest.set_sst(meta);
-    let resp = import.ingest(&ingest).unwrap();
+    let resp = cluster
+        .runtime
+        .block_on(import.ingest(ingest))
+        .unwrap()
+        .into_inner();
     assert!(resp.get_error().has_region_not_found());
 }
 
 #[test]
 fn test_ingest_multiple_sst() {
-    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+    let (cluster, ctx, mut tikv, mut import) = new_cluster_and_tikv_import_client();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
 
     let temp_dir = Builder::new()
         .prefix("test_ingest_multiple_sst")
@@ -489,27 +527,38 @@ fn test_ingest_multiple_sst() {
     meta2.set_region_epoch(ctx.get_region_epoch().clone());
     meta2.set_cf_name("write".to_owned());
 
-    send_upload_sst(&import, &meta1, &data1).unwrap();
-    send_upload_sst(&import, &meta2, &data2).unwrap();
+    send_upload_sst(cluster.runtime.handle(), &mut import, &meta1, &data1).unwrap();
+    send_upload_sst(cluster.runtime.handle(), &mut import, &meta2, &data2).unwrap();
 
     let mut ingest = MultiIngestRequest::default();
     ingest.set_context(ctx.clone());
     ingest.mut_ssts().push(meta1);
     ingest.mut_ssts().push(meta2);
-    let resp = import.multi_ingest(&ingest).unwrap();
+    let resp = cluster
+        .runtime
+        .block_on(import.multi_ingest(ingest))
+        .unwrap()
+        .into_inner();
     assert!(!resp.has_error(), "{:?}", resp.get_error());
 
     // Check ingested kvs
-    check_ingested_kvs(&tikv, &ctx, sst_range1);
-    check_ingested_kvs_cf(&tikv, &ctx, "write", sst_range2);
+    check_ingested_kvs(cluster.runtime.handle(), &mut tikv, &ctx, sst_range1);
+    check_ingested_kvs_cf(
+        cluster.runtime.handle(),
+        &mut tikv,
+        &ctx,
+        "write",
+        sst_range2,
+    );
 }
 
 #[test]
 fn test_duplicate_and_close() {
-    let (_cluster, ctx, _, import) = new_cluster_and_tikv_import_client();
+    let (cluster, ctx, _, import) = new_cluster_and_tikv_import_client();
+
     let mut req = SwitchModeRequest::default();
     req.set_mode(SwitchMode::Import);
-    import.switch_mode(&req).unwrap();
+    cluster.runtime.block_on(import.switch_mode(req)).unwrap();
 
     let data_count: u64 = 4096;
     for commit_ts in 0..4 {
@@ -524,16 +573,33 @@ fn test_duplicate_and_close() {
             keys.push(key.as_bytes().to_vec());
             values.push(key.as_bytes().to_vec());
         }
-        let resp = send_write_sst(&import, &meta, keys, values, commit_ts).unwrap();
+        let resp = send_write_sst(
+            cluster.runtime.handle(),
+            &mut import,
+            &meta,
+            keys,
+            values,
+            commit_ts,
+        )
+        .unwrap();
         for m in resp.metas.into_iter() {
-            must_ingest_sst(&import, ctx.clone(), m.clone());
+            must_ingest_sst(
+                cluster.runtime.handle(),
+                &mut import,
+                ctx.clone(),
+                m.clone(),
+            );
         }
     }
 
     let mut duplicate = DuplicateDetectRequest::default();
     duplicate.set_context(ctx);
     duplicate.set_start_key((0_u64).to_string().as_bytes().to_vec());
-    let mut stream = import.duplicate_detect(&duplicate).unwrap();
+    let mut stream = cluster
+        .runtime
+        .block_on(import.duplicate_detect(duplicate))
+        .unwrap()
+        .into_inner();
     let ret = block_on(async move {
         let mut ret: Vec<KvPair> = vec![];
         while let Some(resp) = stream.next().await {
@@ -560,7 +626,7 @@ fn test_duplicate_and_close() {
 
 #[test]
 fn test_suspend_import() {
-    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+    let (cluster, ctx, tikv, mut import) = new_cluster_and_tikv_import_client();
     let sst_range = (0, 10);
     let write = |sst_range: (u8, u8)| {
         let mut meta = new_sst_meta(0, 0);
@@ -573,19 +639,26 @@ fn test_suspend_import() {
             keys.push(vec![i]);
             values.push(vec![i]);
         }
-        send_write_sst(&import, &meta, keys, values, 1)
+        send_write_sst(
+            cluster.runtime.handle(),
+            &mut import,
+            &meta,
+            keys,
+            values,
+            1,
+        )
     };
     let ingest = |sst_meta: &SstMeta| {
         let mut ingest = IngestRequest::default();
         ingest.set_context(ctx.clone());
         ingest.set_sst(sst_meta.clone());
-        import.ingest(&ingest)
+        cluster.runtime.block_on(import.ingest(ingest))
     };
     let multi_ingest = |sst_metas: &[SstMeta]| {
         let mut multi_ingest = MultiIngestRequest::default();
         multi_ingest.set_context(ctx.clone());
         multi_ingest.set_ssts(sst_metas.to_vec().into());
-        import.multi_ingest(&multi_ingest)
+        cluster.runtime.block_on(import.multi_ingest(multi_ingest))
     };
     let suspendctl = |for_time| {
         let mut req = SuspendImportRpcRequest::default();
@@ -611,13 +684,13 @@ fn test_suspend_import() {
     );
     let write_res = write(sst_range);
     write_res.unwrap();
-    let ingest_res = ingest(&sst).unwrap();
+    let ingest_res = ingest(&sst).unwrap().into_inner();
     assert!(
         ingest_res.get_error().has_server_is_busy(),
         "{:?}",
         ingest_res
     );
-    let multi_ingest_res = multi_ingest(&[sst.clone()]).unwrap();
+    let multi_ingest_res = multi_ingest(&[sst.clone()]).unwrap().into_inner();
     assert!(
         multi_ingest_res.get_error().has_server_is_busy(),
         "{:?}",
@@ -646,12 +719,8 @@ fn test_suspend_import() {
     let sst_range = (10, 20);
     let write_res = write(sst_range);
     let sst = write_res.unwrap().metas;
-    let res = multi_ingest(&sst);
-    assert!(
-        res.as_ref().unwrap().get_error().has_server_is_busy(),
-        "{:?}",
-        res
-    );
+    let res = multi_ingest(&sst).unwrap().into_inner();
+    assert!(res.get_error().has_server_is_busy(), "{:?}", res);
     std::thread::sleep(Duration::from_secs(1));
     multi_ingest(&sst).unwrap();
 

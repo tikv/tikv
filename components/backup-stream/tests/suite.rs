@@ -23,13 +23,13 @@ use backup_stream::{
 };
 use engine_rocks::RocksEngine;
 use futures::{executor::block_on, AsyncWriteExt, Future, Stream, StreamExt};
-use grpcio::{ChannelBuilder, Server, ServerBuilder};
 use kvproto::{
     backup::{CompressionType, Local, Metadata, StorageBackend},
     kvrpcpb::*,
     logbackup::{SubscribeFlushEventRequest, SubscribeFlushEventResponse},
-    logbackup_grpc::{create_log_backup, LogBackupClient},
+    logbackup_grpc::{log_backup_client::LogBackupClient, log_backup_server::LogBackupServer},
     tikvpb::*,
+    tikvpb_grpc::tikv_client::TikvClient,
 };
 use pd_client::PdClient;
 use raftstore::{router::CdcRaftRouter, RegionInfoAccessor};
@@ -48,6 +48,11 @@ use tikv_util::{
     worker::LazyWorker,
     HandyRwLock,
 };
+use tokio::{
+    net::TcpListener,
+    runtime::{Builder, Runtime},
+};
+use tonic::transport::Channel;
 use txn_types::{Key, TimeStamp, WriteRef};
 use walkdir::WalkDir;
 
@@ -173,6 +178,11 @@ impl SuiteBuilder {
 
         info!("start test"; "case" => %case, "nodes" => %n);
         let cluster = new_server_cluster(42, n);
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
         let mut suite = Suite {
             endpoints: Default::default(),
             meta_store: ErrorStore {
@@ -183,9 +193,8 @@ impl SuiteBuilder {
             obs: Default::default(),
             tikv_cli: Default::default(),
             log_backup_cli: Default::default(),
-            servers: Default::default(),
-            env: Arc::new(grpcio::Environment::new(1)),
             cluster,
+            runtime,
 
             temp_files: TempDir::new().unwrap(),
             flushed_files: TempDir::new().unwrap(),
@@ -251,12 +260,11 @@ pub struct Suite {
     pub endpoints: HashMap<u64, LazyWorker<Task>>,
     pub meta_store: ErrorStore<SlashEtcStore>,
     pub cluster: Cluster<RocksEngine, ServerCluster<RocksEngine>>,
-    tikv_cli: HashMap<u64, TikvClient>,
-    log_backup_cli: HashMap<u64, LogBackupClient>,
+    tikv_cli: HashMap<u64, TikvClient<Channel>>,
+    log_backup_cli: HashMap<u64, LogBackupClient<Channel>>,
     obs: HashMap<u64, BackupStreamObserver>,
-    env: Arc<grpcio::Environment>,
-    // The place to make services live as long as suite.
-    servers: Vec<Server>,
+
+    runtime: Runtime,
 
     temp_files: TempDir,
     pub flushed_files: TempDir,
@@ -337,22 +345,29 @@ impl Suite {
         futures::stream::select_all(streams)
     }
 
-    fn start_log_backup_client_on(&mut self, id: u64) -> LogBackupClient {
+    fn start_log_backup_client_on(&mut self, id: u64) -> LogBackupClient<Channel> {
         let endpoint = self
             .endpoints
             .get(&id)
             .expect("must register endpoint first");
 
         let serv = Service::new(endpoint.scheduler());
-        let builder =
-            ServerBuilder::new(self.env.clone()).register_service(create_log_backup(serv));
-        let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
-        server.start();
-        let (_, port) = server.bind_addrs().next().unwrap();
-        let addr = format!("127.0.0.1:{}", port);
-        let channel = ChannelBuilder::new(self.env.clone()).connect(&addr);
+        let builder = tonic::transport::Server::builder().add_service(LogBackupServer::new(serv));
+
+        let listener = self
+            .runtime
+            .block_on(TcpListener::bind("127.0.0.1:0"))
+            .unwrap();
+        let sock_addr = listener.local_addr().unwrap();
+
+        self.runtime.spawn(builder.serve_with_incoming(listener));
+
+        let addr = format!("http://127.0.0.1:{}", sock_addr.port());
+        let channel = self
+            .runtime
+            .block_on(Channel::from_shared(addr).unwrap().connect())
+            .unwrap();
         let client = LogBackupClient::new(channel);
-        self.servers.push(server);
         client
     }
 
@@ -370,7 +385,6 @@ impl Suite {
         let resolver = LeadershipResolver::new(
             id,
             cluster.pd_client.clone(),
-            Arc::clone(&self.env),
             Arc::clone(&sim.security_mgr),
             cluster.store_metas[&id]
                 .lock()
@@ -378,6 +392,7 @@ impl Suite {
                 .region_read_progress
                 .clone(),
             Duration::from_secs(60),
+            self.runtime.handle().clone(),
         );
         let endpoint = Endpoint::new(
             id,
@@ -703,10 +718,12 @@ impl Suite {
         lock_req.primary_lock = pk;
         lock_req.start_version = ts.into_inner();
         lock_req.lock_ttl = ts.into_inner() + 1;
+        let mut client = self.get_tikv_client(region_id);
         let resp = self
-            .get_tikv_client(region_id)
-            .kv_pessimistic_lock(&lock_req)
-            .unwrap();
+            .runtime
+            .block_on(client.kv_pessimistic_lock(lock_req))
+            .unwrap()
+            .into_inner();
 
         assert!(!resp.has_region_error(), "{:?}", resp.get_region_error());
         assert!(resp.errors.is_empty(), "{:?}", resp.get_errors());
@@ -725,10 +742,12 @@ impl Suite {
         prewrite_req.primary_lock = pk;
         prewrite_req.start_version = ts.into_inner();
         prewrite_req.lock_ttl = prewrite_req.start_version + 1;
+        let mut client = self.get_tikv_client(region_id);
         let prewrite_resp = self
-            .get_tikv_client(region_id)
-            .kv_prewrite(&prewrite_req)
-            .unwrap();
+            .runtime
+            .block_on(client.kv_prewrite(prewrite_req))
+            .unwrap()
+            .into_inner();
         assert!(
             !prewrite_resp.has_region_error(),
             "{:?}",
@@ -765,10 +784,12 @@ impl Suite {
         prewrite_req.primary_lock = pk;
         prewrite_req.start_version = ts.into_inner();
         prewrite_req.lock_ttl = prewrite_req.start_version + 1;
+        let mut client = self.get_tikv_client(region_id);
         let prewrite_resp = self
-            .get_tikv_client(region_id)
-            .kv_prewrite(&prewrite_req)
-            .unwrap();
+            .runtime
+            .block_on(client.kv_prewrite(prewrite_req))
+            .unwrap()
+            .into_inner();
         assert!(
             !prewrite_resp.has_region_error(),
             "{:?}",
@@ -795,10 +816,12 @@ impl Suite {
         commit_req.start_version = start_ts.into_inner();
         commit_req.set_keys(keys.into_iter().collect());
         commit_req.commit_version = commit_ts.into_inner();
+        let mut client = self.get_tikv_client(region_id);
         let commit_resp = self
-            .get_tikv_client(region_id)
-            .kv_commit(&commit_req)
-            .unwrap();
+            .runtime
+            .block_on(client.kv_commit(commit_req))
+            .unwrap()
+            .into_inner();
         assert!(
             !commit_resp.has_region_error(),
             "{:?}",
@@ -817,17 +840,24 @@ impl Suite {
         context
     }
 
-    pub fn get_tikv_client(&mut self, region_id: u64) -> &TikvClient {
+    pub fn get_tikv_client(&mut self, region_id: u64) -> TikvClient<Channel> {
         let leader = self.cluster.leader_of_region(region_id).unwrap();
         let store_id = leader.get_store_id();
         let addr = self.cluster.sim.rl().get_addr(store_id);
-        let env = self.env.clone();
         self.tikv_cli
             .entry(leader.get_store_id())
             .or_insert_with(|| {
-                let channel = ChannelBuilder::new(env).connect(&addr);
+                let channel = self
+                    .runtime
+                    .block_on(
+                        Channel::from_shared(tikv_util::format_url(&addr, false))
+                            .unwrap()
+                            .connect(),
+                    )
+                    .unwrap();
                 TikvClient::new(channel)
             })
+            .clone()
     }
 
     pub fn sync(&self) {

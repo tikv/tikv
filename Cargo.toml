@@ -103,6 +103,7 @@ grpcio-health = { workspace = true }
 health_controller = { workspace = true }
 hex = "0.4"
 http = "0"
+http-body = "0.4.5"
 hybrid_engine = { workspace = true }
 hyper = { version = "=0.14.26", features = ["full"] }
 hyper-tls = "0.5"

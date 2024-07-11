@@ -3,17 +3,13 @@
 use std::{
     fmt,
     pin::Pin,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
+    sync::{atomic::Ordering, Arc},
     task::{Context, Poll},
     time::Duration,
     u64,
 };
 
 use futures::{
-    channel::mpsc,
     compat::{Compat, Future01CompatExt},
     executor::block_on,
     future::{self, BoxFuture, FutureExt, TryFlattenStream, TryFutureExt},
@@ -32,7 +28,7 @@ use kvproto::{
 };
 use security::SecurityManager;
 use tikv_util::{
-    box_err, debug, error, info, thd_name, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn, Either,
+    box_err, error, info, thd_name, time::Instant, timer::GLOBAL_TIMER_HANDLE, warn, Either,
     HandyRwLock,
 };
 use txn_types::TimeStamp;

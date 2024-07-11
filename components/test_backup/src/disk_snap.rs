@@ -13,11 +13,8 @@ use futures_util::{
     sink::SinkExt,
     stream::{Fuse, StreamExt},
 };
-use grpcio::{
-    ChannelBuilder, ClientDuplexReceiver, Environment, Server, ServerBuilder, StreamingCallSink,
-    WriteFlags,
-};
 use kvproto::{
+    backup_grpc::{backup_client::BackupClient, backup_server::BackupServer},
     brpb::{
         self, PrepareSnapshotBackupEventType, PrepareSnapshotBackupRequest,
         PrepareSnapshotBackupRequestType, PrepareSnapshotBackupResponse,
@@ -32,17 +29,17 @@ use tikv_util::{
     worker::dummy_scheduler,
     HandyRwLock,
 };
+use tonic::transport::Channel;
 
 pub struct Node {
-    service: Option<Server>,
     pub rejector: Arc<PrepareDiskSnapObserver>,
-    pub backup_client: Option<brpb::BackupClient>,
+    pub backup_client: Option<BackupClient<Channel>>,
 }
 
 pub struct Suite {
     pub cluster: Cluster<KTE, ServerCluster<KTE>>,
     pub nodes: HashMap<u64, Node>,
-    grpc_env: Arc<Environment>,
+    runtime: tokio::runtime::Runtime,
 }
 
 impl Suite {
@@ -59,7 +56,6 @@ impl Suite {
         self.nodes.insert(
             id,
             Node {
-                service: None,
                 rejector: rej,
                 backup_client: None,
             },
@@ -72,17 +68,24 @@ impl Suite {
         let router = Arc::new(Mutex::new(w.get_router(id).unwrap()));
         let env = BEnv::new(router, self.nodes[&id].rejector.clone(), None);
         let service = backup::Service::new(sched, env);
-        let builder = ServerBuilder::new(Arc::clone(&self.grpc_env))
-            .register_service(backup::create_backup(service));
-        let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
-        server.start();
-        let (_, port) = server.bind_addrs().next().unwrap();
-        let addr = format!("127.0.0.1:{}", port);
-        let channel = ChannelBuilder::new(self.grpc_env.clone()).connect(&addr);
+
+        let builder = tonic::transport::Server::builder().add_service(BackupServer::new(service));
+        let listener = self
+            .runtime
+            .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+            .unwrap();
+        let sock_addr = listener.local_addr().unwrap();
+        // start service
+        self.runtime.spawn(builder.serve_with_incoming(listener));
+
+        let addr = format!("http://127.0.0.1:{}", sock_addr.port());
+        let channel = self
+            .runtime
+            .block_on(Channel::from_shared(addr).unwrap().connect())
+            .unwrap();
         println!("connecting channel to {} for store {}", addr, id);
-        let client = backup::BackupClient::new(channel);
+        let client = BackupClient::new(channel);
         let node = self.nodes.get_mut(&id).unwrap();
-        node.service = Some(server);
         node.backup_client = Some(client);
     }
 
@@ -100,17 +103,21 @@ impl Suite {
         self.cluster.wait_region_split(&region);
     }
 
-    fn backup(&self, id: u64) -> &backup::BackupClient {
-        self.nodes[&id].backup_client.as_ref().unwrap()
+    fn backup(&self, id: u64) -> BackupClient<Channel> {
+        self.nodes[&id].backup_client.clone().unwrap()
     }
 
     pub fn prepare_backup(&self, node: u64) -> PrepareBackup {
-        let cli = self.backup(node);
-        let (tx, rx) = cli.prepare_snapshot_backup().unwrap();
+        let mut cli = self.backup(node);
+        let (tx, req_rx) = futures::channel::mpsc::unbounded();
+        let rx = self
+            .runtime
+            .block_on(cli.prepare_snapshot_backup(req_rx))
+            .unwrap();
         PrepareBackup {
             store_id: node,
             tx,
-            rx: rx.fuse(),
+            rx: rx.into_inner().fuse(),
         }
     }
 
@@ -120,11 +127,15 @@ impl Suite {
 
     pub fn new_with_cfg(node_count: u64, cfg: impl FnOnce(&mut Config)) -> Self {
         let cluster = new_server_cluster(42, node_count as usize);
-        let grpc_env = Arc::new(Environment::new(1));
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
         let mut suite = Suite {
             cluster,
             nodes: HashMap::default(),
-            grpc_env,
+            runtime,
         };
         for id in 1..=node_count {
             suite.crate_node(id);
@@ -139,8 +150,8 @@ impl Suite {
 }
 
 pub struct PrepareBackup {
-    tx: StreamingCallSink<PrepareSnapshotBackupRequest>,
-    rx: Fuse<ClientDuplexReceiver<PrepareSnapshotBackupResponse>>,
+    tx: futures::channel::mpsc::UnboundedSender<PrepareSnapshotBackupRequest>,
+    rx: Fuse<tonic::Streaming<PrepareSnapshotBackupResponse>>,
 
     pub store_id: u64,
 }
@@ -151,7 +162,7 @@ impl PrepareBackup {
         req.set_ty(PrepareSnapshotBackupRequestType::UpdateLease);
         req.set_lease_in_seconds(lease_sec);
         block_on(async {
-            self.tx.send((req, WriteFlags::default())).await.unwrap();
+            self.tx.send(req).await.unwrap();
             self.rx.next().await.unwrap().unwrap();
         });
     }
@@ -166,7 +177,7 @@ impl PrepareBackup {
             .map(|x| x.id)
             .collect::<HashSet<_>>();
         block_on(async {
-            self.tx.send((req, WriteFlags::default())).await.unwrap();
+            self.tx.send(req).await.unwrap();
             while !regions.is_empty() {
                 let resp = self.rx.next().await.unwrap().unwrap();
                 assert_eq!(resp.ty, PrepareSnapshotBackupEventType::WaitApplyDone);
@@ -181,7 +192,7 @@ impl PrepareBackup {
         req.set_ty(PrepareSnapshotBackupRequestType::WaitApply);
         req.set_regions(r.into_iter().collect());
         block_on(async {
-            self.tx.send((req, WriteFlags::default())).await.unwrap();
+            self.tx.send(req).await.unwrap();
         })
     }
 
@@ -190,7 +201,7 @@ impl PrepareBackup {
             block_on(self.tx.send({
                 let mut req = PrepareSnapshotBackupRequest::new();
                 req.set_ty(PrepareSnapshotBackupRequestType::Finish);
-                (req, WriteFlags::default())
+                req
             })),
             Ok(_) | Err(grpcio::Error::RpcFinished(_))
         ) {
@@ -216,7 +227,7 @@ impl PrepareBackup {
         self.try_next().unwrap()
     }
 
-    pub fn try_next(&mut self) -> grpcio::Result<PrepareSnapshotBackupResponse> {
+    pub fn try_next(&mut self) -> tonic::Result<PrepareSnapshotBackupResponse> {
         block_on(self.rx.next()).unwrap()
     }
 }

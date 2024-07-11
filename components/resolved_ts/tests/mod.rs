@@ -4,12 +4,15 @@ use std::{sync::*, time::Duration};
 
 use collections::HashMap;
 use engine_rocks::RocksEngine;
-use grpcio::{ChannelBuilder, Environment};
-use kvproto::{import_sstpb::ImportSstClient, kvrpcpb::*, tikvpb::TikvClient};
+use kvproto::{
+    import_sstpb_grpc::import_s_s_t_client::ImportSSTClient, kvrpcpb::*,
+    tikvpb_grpc::tikv_client::TikvClient,
+};
 use online_config::ConfigValue;
 use resolved_ts::Task;
 use test_raftstore::*;
 use tikv_util::{config::ReadableDuration, HandyRwLock};
+use tonic::transport::Channel;
 use txn_types::TimeStamp;
 
 static INIT: Once = Once::new();
@@ -21,9 +24,9 @@ pub fn init() {
 pub struct TestSuite {
     pub cluster: Cluster<RocksEngine, ServerCluster<RocksEngine>>,
     tikv_cli: HashMap<u64, TikvClient>,
-    import_cli: HashMap<u64, ImportSstClient>,
+    import_cli: HashMap<u64, ImportSSTClient>,
 
-    env: Arc<Environment>,
+    runtime: tokio::runtime::Runtime,
 }
 
 impl TestSuite {
@@ -37,11 +40,17 @@ impl TestSuite {
         cluster.cfg.resolved_ts.advance_ts_interval = ReadableDuration::millis(10);
         cluster.run();
 
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+
         TestSuite {
             cluster,
-            env: Arc::new(Environment::new(1)),
             tikv_cli: HashMap::default(),
             import_cli: HashMap::default(),
+            runtime,
         }
     }
 
@@ -170,30 +179,32 @@ impl TestSuite {
         context
     }
 
-    pub fn get_tikv_client(&mut self, region_id: u64) -> &TikvClient {
+    pub fn get_tikv_client(&mut self, region_id: u64) -> TikvClient<Channel> {
         let leader = self.cluster.leader_of_region(region_id).unwrap();
         let store_id = leader.get_store_id();
         let addr = self.cluster.sim.rl().get_addr(store_id);
-        let env = self.env.clone();
         self.tikv_cli
             .entry(leader.get_store_id())
             .or_insert_with(|| {
-                let channel = ChannelBuilder::new(env).connect(&addr);
+                let builder = Channel::from_shared(tikv_util::format_url(&addr, false)).unwrap();
+                let channel = self.runtime.block_on(builder.connect()).unwrap();
                 TikvClient::new(channel)
             })
+            .clone()
     }
 
-    pub fn get_import_client(&mut self, region_id: u64) -> &ImportSstClient {
+    pub fn get_import_client(&mut self, region_id: u64) -> ImportSSTClient<Channel> {
         let leader = self.cluster.leader_of_region(region_id).unwrap();
         let store_id = leader.get_store_id();
         let addr = self.cluster.sim.rl().get_addr(store_id);
-        let env = self.env.clone();
         self.import_cli
             .entry(leader.get_store_id())
             .or_insert_with(|| {
-                let channel = ChannelBuilder::new(env).connect(&addr);
-                ImportSstClient::new(channel)
+                let builder = Channel::from_shared(tikv_util::format_url(&addr, false)).unwrap();
+                let channel = self.runtime.block_on(builder.connect()).unwrap();
+                ImportSSTClient::new(channel)
             })
+            .clone()
     }
 
     pub fn region_resolved_ts(&mut self, region_id: u64) -> Option<TimeStamp> {

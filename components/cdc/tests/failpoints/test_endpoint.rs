@@ -10,11 +10,11 @@ use api_version::{test_kv_format_impl, KvFormat};
 use causal_ts::CausalTsProvider;
 use cdc::{recv_timeout, Delegate, OldValueCache, Task, Validate};
 use futures::{executor::block_on, sink::SinkExt};
-use grpcio::{ChannelBuilder, Environment, WriteFlags};
-use kvproto::{cdcpb::*, kvrpcpb::*, tikvpb_grpc::TikvClient};
+use kvproto::{cdcpb::*, kvrpcpb::*, tikvpb_grpc::tikv_client::TikvClient};
 use pd_client::PdClient;
 use test_raftstore::*;
 use tikv_util::{debug, worker::Scheduler, HandyRwLock};
+use tonic::transport::Channel;
 use txn_types::TimeStamp;
 
 use crate::{new_event_feed, new_event_feed_v2, ClientReceiver, TestSuite, TestSuiteBuilder};
@@ -46,8 +46,8 @@ fn test_cdc_double_scan_deregister_impl<F: KvFormat>() {
     let mut req = suite.new_changedata_request(1);
     req.mut_header().set_ticdc_version("5.0.0".into());
     let (mut req_tx, event_feed_wrap, _receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
 
     // wait for the first connection to start incremental scan
     sleep_ms(1000);
@@ -55,8 +55,8 @@ fn test_cdc_double_scan_deregister_impl<F: KvFormat>() {
     let mut req = suite.new_changedata_request(1);
     req.mut_header().set_ticdc_version("5.0.0".into());
     let (mut req_tx_1, event_feed_wrap_1, receive_event_1) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx_1.send((req, WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx_1.send(req)).unwrap();
 
     // wait for the second connection register to the delegate.
     suite.must_wait_delegate_condition(
@@ -114,8 +114,8 @@ fn test_cdc_double_scan_io_error_impl<F: KvFormat>() {
     let mut req = suite.new_changedata_request(1);
     req.mut_header().set_ticdc_version("5.0.0".into());
     let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
 
     // wait for the first connection to start incremental scan
     sleep_ms(1000);
@@ -123,8 +123,8 @@ fn test_cdc_double_scan_io_error_impl<F: KvFormat>() {
     let mut req = suite.new_changedata_request(1);
     req.mut_header().set_ticdc_version("5.0.0".into());
     let (mut req_tx_1, event_feed_wrap_1, receive_event_1) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx_1.send((req, WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx_1.send(req)).unwrap();
 
     // wait for the second connection to start incremental scan
     sleep_ms(1000);
@@ -207,8 +207,8 @@ fn test_cdc_scan_continues_after_region_split_impl<F: KvFormat>() {
     let mut req = suite.new_changedata_request(1);
     req.mut_header().set_ticdc_version("5.0.0".into());
     let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
 
     // wait for the first connection to start incremental scan
     sleep_ms(1000);
@@ -309,10 +309,13 @@ fn do_test_no_resolved_ts_before_downstream_initialized(version: &str) {
             recv_resolved_ts(&event_feeds[0]);
             fail::cfg("cdc_incremental_scan_start", "pause").unwrap();
         }
-        let (mut req_tx, event_feed, _) = new_event_feed(suite.get_region_cdc_client(region.id));
+        let (mut req_tx, event_feed, _) = new_event_feed(
+            suite.get_region_cdc_client(region.id),
+            suite.runtime.handle(),
+        );
         let mut req = suite.new_changedata_request(region.id);
         req.mut_header().set_ticdc_version(version.to_owned());
-        block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+        block_on(req_tx.send(req)).unwrap();
         req_txs.push(req_tx);
         event_feeds.push(event_feed);
     }
@@ -346,16 +349,21 @@ fn test_cdc_observed_before_incremental_scan_snapshot() {
 
     // So that the second changefeed can get some delta changes elder than its
     // snapshot.
-    let (mut req_tx_0, event_feed_0, _) = new_event_feed(suite.get_region_cdc_client(region.id));
+    let (mut req_tx_0, event_feed_0, _) = new_event_feed(
+        suite.get_region_cdc_client(region.id),
+        suite.runtime.handle(),
+    );
     let req_0 = suite.new_changedata_request(region.id);
-    block_on(req_tx_0.send((req_0, WriteFlags::default()))).unwrap();
+    block_on(req_tx_0.send(req_0)).unwrap();
 
     fail::cfg("cdc_before_handle_multi_batch", "pause").unwrap();
     fail::cfg("cdc_sleep_before_drain_change_event", "return").unwrap();
-    let (mut req_tx, event_feed, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(region.id));
+    let (mut req_tx, event_feed, receive_event) = new_event_feed(
+        suite.get_region_cdc_client(region.id),
+        suite.runtime.handle(),
+    );
     let req = suite.new_changedata_request(region.id);
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send(req)).unwrap();
     thread::sleep(Duration::from_secs(1));
 
     for version in 0..10 {
@@ -427,9 +435,10 @@ fn test_old_value_cache_without_downstreams() {
     let scheduler = suite.endpoints[&1].scheduler();
 
     // Add a subscription and then check old value cache.
-    let (mut req_tx, event_feed, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
+    let (mut req_tx, event_feed, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
     let req = suite.new_changedata_request(1);
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send(req)).unwrap();
     receive_event(false); // Wait until the initialization finishes.
 
     // Old value cache will be updated because there is 1 capture.
@@ -461,16 +470,26 @@ fn test_cdc_rawkv_resolved_ts() {
     let node_id = leader.get_id();
     let ts_provider = cluster.sim.rl().get_causal_ts_provider(node_id).unwrap();
 
-    let env = Arc::new(Environment::new(1));
-    let channel =
-        ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader.get_store_id()));
-    let client = TikvClient::new(channel);
+    let channel = suite
+        .runtime
+        .block_on(
+            Channel::from_shared(tikv_util::format_url(
+                &cluster.sim.rl().get_addr(leader.get_store_id()),
+                false,
+            ))
+            .unwrap()
+            .connect(),
+        )
+        .unwrap();
+    let mut client = TikvClient::new(channel);
 
     let mut req = suite.new_changedata_request(region_id);
     req.set_kv_api(ChangeDataRequestKvApi::RawKv);
-    let (mut req_tx, _event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(region_id));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let (mut req_tx, _event_feed_wrap, receive_event) = new_event_feed(
+        suite.get_region_cdc_client(region_id),
+        suite.runtime.handle(),
+    );
+    block_on(req_tx.send(req)).unwrap();
 
     let event = receive_event(false);
     event
@@ -500,8 +519,8 @@ fn test_cdc_rawkv_resolved_ts() {
     let pause_write_fp = "raftkv_async_write";
     fail::cfg(pause_write_fp, "pause").unwrap();
     let ts = block_on(ts_provider.async_get_ts()).unwrap();
-    let handle = thread::spawn(move || {
-        let _ = client.raw_put(&put_req).unwrap();
+    let handle = suite.runtime.spawn(async move {
+        let _ = client.raw_put(put_req).await.unwrap();
     });
 
     sleep_ms(100);
@@ -523,7 +542,7 @@ fn test_cdc_rawkv_resolved_ts() {
     );
 
     fail::remove(pause_write_fp);
-    handle.join().unwrap();
+    block_on(handle).unwrap();
 }
 
 // Test one region can be subscribed multiple times in one stream with different
@@ -534,19 +553,20 @@ fn test_cdc_stream_multiplexing() {
     cluster.pd_client.disable_default_operator();
     let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
     let rid = suite.cluster.get_region(&[]).id;
-    let (mut req_tx, _, receive_event) = new_event_feed_v2(suite.get_region_cdc_client(rid));
+    let (mut req_tx, _, receive_event) =
+        new_event_feed_v2(suite.get_region_cdc_client(rid), suite.runtime.handle());
 
     // Subscribe the region with request_id 1.
     let mut req = suite.new_changedata_request(rid);
     req.request_id = 1;
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send(req)).unwrap();
     receive_event(false);
 
     // Subscribe the region with request_id 2.
     fail::cfg("before_post_incremental_scan", "pause").unwrap();
     let mut req = suite.new_changedata_request(rid);
     req.request_id = 2;
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send(req)).unwrap();
     receive_event(false);
 
     // Request 2 can't receive a ResolvedTs, because it's not ready.
@@ -579,12 +599,13 @@ fn test_cdc_notify_pending_regions() {
     let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
     let region = suite.cluster.get_region(&[]);
     let rid = region.id;
-    let (mut req_tx, _, receive_event) = new_event_feed_v2(suite.get_region_cdc_client(rid));
+    let (mut req_tx, _, receive_event) =
+        new_event_feed_v2(suite.get_region_cdc_client(rid), suite.runtime.handle());
 
     fail::cfg("cdc_before_initialize", "pause").unwrap();
     let mut req = suite.new_changedata_request(rid);
     req.request_id = 1;
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send(req)).unwrap();
 
     thread::sleep(Duration::from_millis(100));
     suite.cluster.must_split(&region, b"x");

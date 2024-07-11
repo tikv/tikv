@@ -60,10 +60,18 @@ pub fn test_read_keys() {
     get_req.set_context(ctx.clone());
     get_req.set_key(b"0".to_vec());
     get_req.set_version(ts);
-    let _ = client.kv_get(&get_req).unwrap(); // trigger thread register
+    let _ = cluster
+        .runtime
+        .block_on(client.kv_get(get_req))
+        .unwrap()
+        .into_inner(); // trigger thread register
     std::thread::sleep(Duration::from_secs(2));
     recv_read_keys(&rx);
-    let get_resp = client.kv_get(&get_req).unwrap();
+    let get_resp = cluster
+        .runtime
+        .block_on(client.kv_get(get_req))
+        .unwrap()
+        .into_inner();
     assert!(!get_resp.has_region_error());
     assert!(!get_resp.has_error());
     let scan_detail_v2 = get_resp.get_exec_details_v2().get_scan_detail_v2();

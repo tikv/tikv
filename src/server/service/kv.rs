@@ -49,10 +49,10 @@ use txn_types::{self, Key};
 use super::batch::{BatcherBuilder, ReqBatcher};
 use crate::{
     coprocessor::Endpoint,
-    coprocessor_v2, forward_duplex, forward_unary, log_net_error,
+    coprocessor_v2, log_net_error,
     server::{
         gc_worker::GcWorker, load_statistics::ThreadLoadPool, metrics::*, snap::Task as SnapTask,
-        Error, MetadataSourceStoreId, Proxy, Result as ServerResult,
+        Error, MetadataSourceStoreId, Result as ServerResult,
     },
     storage::{
         self,
@@ -91,7 +91,6 @@ pub struct Service<E: Engine, L: LockManager, F: KvFormat> {
 
     grpc_thread_load: Arc<ThreadLoadPool>,
 
-    proxy: Proxy,
     handle: tokio::runtime::Handle,
 
     // Go `server::Config` to get more details.
@@ -123,7 +122,6 @@ impl<E: Engine + Clone, L: LockManager + Clone, F: KvFormat> Clone for Service<E
             check_leader_scheduler: self.check_leader_scheduler.clone(),
             enable_req_batch: self.enable_req_batch,
             grpc_thread_load: self.grpc_thread_load.clone(),
-            proxy: self.proxy.clone(),
             handle: self.handle.clone(),
             reject_messages_on_memory_ratio: self.reject_messages_on_memory_ratio,
             resource_manager: self.resource_manager.clone(),
@@ -147,7 +145,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
         check_leader_scheduler: Scheduler<CheckLeaderTask>,
         grpc_thread_load: Arc<ThreadLoadPool>,
         enable_req_batch: bool,
-        proxy: Proxy,
         handle: tokio::runtime::Handle,
         reject_messages_on_memory_ratio: f64,
         resource_manager: Option<Arc<ResourceGroupManager>>,
@@ -169,7 +166,6 @@ impl<E: Engine, L: LockManager, F: KvFormat> Service<E, L, F> {
             check_leader_scheduler,
             enable_req_batch,
             grpc_thread_load,
-            proxy,
             handle,
             reject_messages_on_memory_ratio,
             resource_manager,

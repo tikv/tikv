@@ -20,7 +20,7 @@ use kvproto::{
 use test_raftstore::*;
 use tikv_util::{config::ReadableDuration, HandyRwLock};
 
-fn deadlock(client: &TikvClient, ctx: Context, key1: &[u8], ts: u64) -> bool {
+fn deadlock(client: &mut TikvClient<Channel>, ctx: Context, key1: &[u8], ts: u64) -> bool {
     let key1 = key1.to_vec();
     let mut key2 = key1.clone();
     key2.push(0);

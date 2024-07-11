@@ -1792,7 +1792,11 @@ fn test_mvcc_concurrent_commit_and_rollback_at_shutdown() {
     get_req.set_context(ctx);
     get_req.key = k;
     get_req.version = get_version;
-    let get_resp = client.kv_get(&get_req).unwrap();
+    let get_resp = cluster
+        .runtime
+        .block_on(client.kv_get(get_req))
+        .unwrap()
+        .into_inner();
     assert!(
         !get_resp.has_region_error() && !get_resp.has_error(),
         "{:?}",

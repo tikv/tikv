@@ -67,6 +67,7 @@ use tikv_util::{
     worker::LazyWorker,
     HandyRwLock,
 };
+use tokio::runtime::{Builder, Runtime};
 use txn_types::WriteBatchFlags;
 
 // MAX duration waiting for releasing store metas, default: 10s.
@@ -361,6 +362,7 @@ pub struct Cluster<T: Simulator<EK>, EK: KvEngine> {
     pub raft_statistics: Vec<Option<Arc<RocksStatistics>>>,
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
+    pub runtime: Runtime,
     resource_manager: Option<Arc<ResourceGroupManager>>,
     pub engine_creator: Box<
         dyn Fn(
@@ -404,6 +406,11 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
     ) -> Cluster<T, EK> {
         let mut tikv_cfg = new_tikv_config_with_api_ver(id, api_version);
         tikv_cfg.storage.engine = EngineType::RaftKv2;
+        let runtime = Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
         Cluster {
             cfg: Config::new(tikv_cfg, true),
             count,
@@ -424,6 +431,7 @@ impl<T: Simulator<EK>, EK: KvEngine> Cluster<T, EK> {
             resource_manager: Some(Arc::new(ResourceGroupManager::default())),
             sim,
             pd_client,
+            runtime,
             engine_creator,
         }
     }

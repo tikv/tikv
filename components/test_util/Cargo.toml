@@ -21,3 +21,4 @@ slog-global = { workspace = true }
 tempfile = "3.0"
 tikv_util = { workspace = true }
 time = { workspace = true }
+tonic = { workspace = true }

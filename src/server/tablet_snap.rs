@@ -38,11 +38,11 @@ use encryption_export::{DataKeyImporter, DataKeyManager};
 use engine_traits::{Checkpointer, KvEngine, TabletRegistry};
 use file_system::{IoType, OpenOptions, WithIoType};
 use futures::{
+    channel::mpsc::{self, SendError, UnboundedSender},
     future::FutureExt,
     sink::{Sink, SinkExt},
     stream::{Stream, StreamExt, TryStreamExt},
 };
-use grpcio::{self, Environment, WriteFlags};
 use kvproto::{
     raft_serverpb::{
         RaftMessage, RaftSnapshotData, TabletSnapshotFileChunk, TabletSnapshotFileMeta,
@@ -288,8 +288,8 @@ async fn is_sst_match_preview(
 
 async fn cleanup_cache(
     path: &Path,
-    stream: &mut (impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin),
-    sink: &mut (impl Sink<(TabletSnapshotResponse, WriteFlags), Error = grpcio::Error> + Unpin),
+    stream: &mut (impl Stream<Item = tonic::Result<TabletSnapshotRequest>> + Unpin),
+    sink: &mut (impl Sink<tonic::Result<TabletSnapshotResponse>, Error = SendError> + Unpin),
     limiter: &Limiter,
     key_manager: &Option<Arc<DataKeyManager>>,
 ) -> Result<(u64, Vec<String>)> {
@@ -355,15 +355,15 @@ async fn cleanup_cache(
     }
     let mut resp = TabletSnapshotResponse::default();
     resp.mut_files().set_file_name(missing.clone().into());
-    // sink.send((resp, WriteFlags::default())).await?;
-    let _ = sink.send((resp, WriteFlags::default())).await;
+    // sink.send((resp)).await?;
+    let _ = sink.send(Ok(resp)).await;
     Ok((reused, missing))
 }
 
 async fn accept_one_file(
     path: &Path,
     mut chunk: TabletSnapshotFileChunk,
-    stream: &mut (impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin),
+    stream: &mut (impl Stream<Item = tonic::Result<TabletSnapshotRequest>> + Unpin),
     limiter: &Limiter,
     key_importer: &mut Option<DataKeyImporter<'_>>,
     digest: &mut Digest,
@@ -424,7 +424,7 @@ async fn accept_one_file(
 async fn accept_missing(
     path: &Path,
     missing_ssts: Vec<String>,
-    stream: &mut (impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin),
+    stream: &mut (impl Stream<Item = tonic::Result<TabletSnapshotRequest>> + Unpin),
     limiter: &Limiter,
     key_manager: &Option<Arc<DataKeyManager>>,
 ) -> Result<u64> {
@@ -480,8 +480,8 @@ async fn accept_missing(
 async fn recv_snap_imp<'a>(
     snap_mgr: &'a TabletSnapManager,
     cache_builder: impl SnapCacheBuilder,
-    mut stream: impl Stream<Item = Result<TabletSnapshotRequest>> + Unpin,
-    sink: &mut (impl Sink<(TabletSnapshotResponse, WriteFlags), Error = grpcio::Error> + Unpin),
+    mut stream: impl Stream<Item = tonic::Result<TabletSnapshotRequest>> + Unpin,
+    sink: &mut UnboundedSender<tonic::Result<TabletSnapshotResponse>>,
     limiter: Limiter,
 ) -> Result<RecvTabletSnapContext<'a>> {
     let head = stream
@@ -556,41 +556,37 @@ async fn recv_snap_imp<'a>(
     Ok(context)
 }
 
-// pub(crate) async fn recv_snap<R: RaftExtension + 'static>(
-//     stream: tonic::Streaming<TabletSnapshotRequest>,
-//     tx: futures::channel::oneshot::Sender<tonic::Result<()>>,
-//     snap_mgr: TabletSnapManager,
-//     raft_router: R,
-//     cache_builder: impl SnapCacheBuilder,
-//     limiter: Limiter,
-//     snap_mgr_v1: Option<SnapManager>,
-// ) -> Result<()> {
-//     let stream = stream.map_err(Error::from);
-//     let res = recv_snap_imp(&snap_mgr, cache_builder, stream, &mut sink,
-// limiter)         .await
-//         .and_then(|context| {
-//             // some means we are in raftstore-v1 config and received a tablet
-// snapshot from             // raftstore-v2. Now, it can only happen in tiflash
-// node within a raftstore-v2             // cluster.
-//             if let Some(snap_mgr_v1) = snap_mgr_v1 {
-//                 snap_mgr_v1.gen_empty_snapshot_for_tablet_snapshot(
-//                     &context.key,
-//                     context.io_type == IoType::LoadBalance,
-//                 )?;
-//             }
-//             fail_point!("finish_receiving_snapshot");
-//             context.finish(raft_router)
-//         });
-//     match res {
-//         Ok(()) => sink.close().await?,
-//         Err(e) => {
-//             info!("receive tablet snapshot aborted"; "err" => ?e);
-//             let status = RpcStatus::with_message(RpcStatusCode::UNKNOWN,
-// format!("{:?}", e));             sink.fail(status).await?;
-//         }
-//     }
-//     Ok(())
-// }
+pub(crate) async fn recv_snap<R: RaftExtension + 'static>(
+    stream: tonic::Streaming<TabletSnapshotRequest>,
+    mut tx: UnboundedSender<tonic::Result<TabletSnapshotResponse>>,
+    snap_mgr: TabletSnapManager,
+    raft_router: R,
+    cache_builder: impl SnapCacheBuilder,
+    limiter: Limiter,
+    snap_mgr_v1: Option<SnapManager>,
+) -> Result<()> {
+    // let stream = stream.map_err(Error::from);
+    let res = recv_snap_imp(&snap_mgr, cache_builder, stream, &mut tx, limiter)
+        .await
+        .and_then(|context| {
+            // some means we are in raftstore-v1 config and received a tablet snapshot from
+            // raftstore-v2. Now, it can only happen in tiflash node within a raftstore-v2
+            // cluster.
+            if let Some(snap_mgr_v1) = snap_mgr_v1 {
+                snap_mgr_v1.gen_empty_snapshot_for_tablet_snapshot(
+                    &context.key,
+                    context.io_type == IoType::LoadBalance,
+                )?;
+            }
+            fail_point!("finish_receiving_snapshot");
+            context.finish(raft_router)
+        });
+    if let Err(e) = res {
+        let status = tonic::Status::unknown(format!("{:?}", e));
+        tx.send(Err(status)).await?;
+    }
+    Ok(())
+}
 
 async fn build_one_preview(
     path: &Path,
@@ -624,8 +620,8 @@ async fn build_one_preview(
 async fn find_missing(
     path: &Path,
     mut head: TabletSnapshotRequest,
-    sender: &mut (impl Sink<(TabletSnapshotRequest, WriteFlags), Error = Error> + Unpin),
-    receiver: &mut (impl Stream<Item = grpcio::Result<TabletSnapshotResponse>> + Unpin),
+    sender: &mut (impl Sink<TabletSnapshotRequest, Error = SendError> + Unpin),
+    receiver: &mut (impl Stream<Item = tonic::Result<TabletSnapshotResponse>> + Unpin),
     limiter: &Limiter,
     key_manager: &Option<Arc<DataKeyManager>>,
 ) -> Result<Vec<(String, u64)>> {
@@ -650,24 +646,20 @@ async fn find_missing(
         }
     }
     if sst_sizes < USE_CACHE_THRESHOLD {
-        sender
-            .send((head, WriteFlags::default().buffer_hint(true)))
-            .await?;
+        sender.send(head).await?;
         other_files.extend(ssts);
         return Ok(other_files);
     }
 
     head.mut_head().set_use_cache(true);
     // Send immediately to make receiver collect cache earlier.
-    sender.send((head, WriteFlags::default())).await?;
+    sender.send(head).await?;
     let mut ssts_iter = ssts.iter().peekable();
     while ssts_iter.peek().is_some() {
         let mut req = build_one_preview(path, &mut ssts_iter, limiter, key_manager).await?;
         let is_end = ssts_iter.peek().is_none();
         req.mut_preview().end = is_end;
-        sender
-            .send((req, WriteFlags::default().buffer_hint(!is_end)))
-            .await?;
+        sender.send(req).await?;
     }
 
     let accepted = match receiver.next().await {
@@ -689,7 +681,7 @@ async fn find_missing(
 async fn send_missing(
     path: &Path,
     missing: Vec<(String, u64)>,
-    sender: &mut (impl Sink<(TabletSnapshotRequest, WriteFlags), Error = Error> + Unpin),
+    sender: &mut (impl Sink<TabletSnapshotRequest, Error = SendError> + Unpin),
     limiter: &Limiter,
     key_manager: &Option<Arc<DataKeyManager>>,
 ) -> Result<(u64, u64)> {
@@ -711,9 +703,7 @@ async fn send_missing(
         if file_size == 0 {
             let mut req = TabletSnapshotRequest::default();
             req.set_chunk(chunk);
-            sender
-                .send((req, WriteFlags::default().buffer_hint(true)))
-                .await?;
+            sender.send(req).await?;
             continue;
         }
 
@@ -725,9 +715,7 @@ async fn send_missing(
             digest.write(&chunk.data);
             let mut req = TabletSnapshotRequest::default();
             req.set_chunk(chunk);
-            sender
-                .send((req, WriteFlags::default().buffer_hint(true)))
-                .await?;
+            sender.send(req).await?;
             if file_size == to_read as u64 {
                 break;
             }
@@ -742,76 +730,73 @@ async fn send_missing(
 ///
 /// It will first send the normal raft snapshot message and then send the
 /// snapshot file.
-// pub async fn send_snap(
-//     client: TikvClient<Channel>,
-//     snap_mgr: TabletSnapManager,
-//     msg: RaftMessage,
-//     limiter: Limiter,
-// ) -> Result<SendStat> {
-//     assert!(msg.get_message().has_snapshot());
-//     let timer = Instant::now();
-//     let send_timer = SEND_SNAP_HISTOGRAM.start_coarse_timer();
-//     let key = TabletSnapKey::from_region_snap(
-//         msg.get_region_id(),
-//         msg.get_to_peer().get_id(),
-//         msg.get_message().get_snapshot(),
-//     );
-//     let deregister = {
-//         let (snap_mgr, key) = (snap_mgr.clone(), key.clone());
-//         DeferContext::new(move || {
-//             snap_mgr.finish_snapshot(key.clone(), timer);
-//         })
-//     };
-//     let (sink, mut receiver) = client.tablet_snapshot()?;
-//     let mut sink = sink.sink_map_err(Error::from);
-//     let path = snap_mgr.tablet_gen_path(&key);
-//     info!("begin to send snapshot file"; "snap_key" => %key);
-//     let io_type = io_type_from_raft_message(&msg)?;
-//     let _with_io_type = WithIoType::new(io_type);
-//     let head = TabletSnapshotHead {
-//         message: Some(msg),
-//         use_cache: false,
-//     };
-//     let missing = find_missing(
-//         &path,
-//         head,
-//         &mut sink,
-//         &mut receiver,
-//         &limiter,
-//         snap_mgr.key_manager(),
-//     )
-//     .await?;
-//     let (total_size, checksum) =
-//         send_missing(&path, missing, &mut sink, &limiter,
-// snap_mgr.key_manager()).await?;     // In gRPC, stream in serverside can
-// finish without error (when the connection     // is closed). So we need to
-// use an explicit `Done` to indicate all messages     // are sent. In V1, we
-// have checksum and meta list, so this is not a     // problem.
-//     let req = TabletSnapshotRequest {
-//         payload: Some(Payload::End(TabletSnapshotEnd { checksum })),
-//     };
-//     sink.send((req, WriteFlags::default())).await?;
-//     info!("sent all snap file finish"; "snap_key" => %key);
-//     sink.close().await?;
-//     let recv_result = receiver.next().await;
-//     send_timer.observe_duration();
-//     drop(client);
-//     drop(deregister);
-//     match recv_result {
-//         None => Ok(SendStat {
-//             key,
-//             total_size,
-//             elapsed: timer.saturating_elapsed(),
-//         }),
-//         Some(Err(e)) => Err(e.into()),
-//         Some(Ok(resp)) => Err(Error::Other(
-//             format!("receive unexpected response {:?}", resp).into(),
-//         )),
-//     }
-// }
+pub async fn send_snap(
+    mut client: TikvClient<Channel>,
+    snap_mgr: TabletSnapManager,
+    msg: RaftMessage,
+    limiter: Limiter,
+) -> Result<SendStat> {
+    assert!(msg.get_message().has_snapshot());
+    let timer = Instant::now();
+    let send_timer = SEND_SNAP_HISTOGRAM.start_coarse_timer();
+    let key = TabletSnapKey::from_region_snap(
+        msg.get_region_id(),
+        msg.get_to_peer().get_id(),
+        msg.get_message().get_snapshot(),
+    );
+    let deregister = {
+        let (snap_mgr, key) = (snap_mgr.clone(), key.clone());
+        DeferContext::new(move || {
+            snap_mgr.finish_snapshot(key.clone(), timer);
+        })
+    };
+    let (mut tx, rx) = mpsc::unbounded();
+    let resp_stream = client.tablet_snapshot(rx).await?;
+    let mut receiver = resp_stream.into_inner();
+    let path = snap_mgr.tablet_gen_path(&key);
+    info!("begin to send snapshot file"; "snap_key" => %key);
+    let io_type = io_type_from_raft_message(&msg)?;
+    let _with_io_type = WithIoType::new(io_type);
+    let mut head = TabletSnapshotRequest::default();
+    head.mut_head().set_message(msg);
+    let missing = find_missing(
+        &path,
+        head,
+        &mut tx,
+        &mut receiver,
+        &limiter,
+        snap_mgr.key_manager(),
+    )
+    .await?;
+    let (total_size, checksum) =
+        send_missing(&path, missing, &mut tx, &limiter, snap_mgr.key_manager()).await?;
+    // In gRPC, stream in serverside can finish without error (when the connection
+    // is closed). So we need to use an explicit `Done` to indicate all messages
+    // are sent. In V1, we have checksum and meta list, so this is not a
+    // problem.
+    let mut req = TabletSnapshotRequest::default();
+    req.mut_end().set_checksum(checksum);
+    tx.send(req).await?;
+    info!("sent all snap file finish"; "snap_key" => %key);
+    drop(tx);
+    let recv_result = receiver.next().await;
+    send_timer.observe_duration();
+    drop(client);
+    drop(deregister);
+    match recv_result {
+        None => Ok(SendStat {
+            key,
+            total_size,
+            elapsed: timer.saturating_elapsed(),
+        }),
+        Some(Err(e)) => Err(e.into()),
+        Some(Ok(resp)) => Err(Error::Other(
+            format!("receive unexpected response {:?}", resp).into(),
+        )),
+    }
+}
 
 pub struct TabletRunner<B, R: RaftExtension + 'static> {
-    env: Arc<Environment>,
     snap_mgr: TabletSnapManager,
     security_mgr: Arc<SecurityManager>,
     pool: Runtime,
@@ -824,7 +809,6 @@ pub struct TabletRunner<B, R: RaftExtension + 'static> {
 
 impl<B, R: RaftExtension> TabletRunner<B, R> {
     pub fn new(
-        env: Arc<Environment>,
         snap_mgr: TabletSnapManager,
         cache_builder: B,
         r: R,
@@ -842,10 +826,10 @@ impl<B, R: RaftExtension> TabletRunner<B, R> {
         });
 
         let snap_worker = TabletRunner {
-            env,
             snap_mgr,
             pool: RuntimeBuilder::new_multi_thread()
                 .thread_name(thd_name!("tablet-snap-sender"))
+                .enable_all()
                 .with_sys_hooks()
                 .worker_threads(DEFAULT_POOL_SIZE)
                 .build()
@@ -889,118 +873,111 @@ where
     type Task = Task;
 
     fn run(&mut self, task: Task) {
-        // match task {
-        // Task::Recv { tx, .. } => {
-        // let status = tonic::Status::unimplemented("tablet snap is not
-        // supported"); let _ = tx.send(Err(status));
-        // }
-        // Task::RecvTablet { stream, tx } => {
-        // todo!()
-        // let recving_count = self.snap_mgr.recving_count().clone();
-        // let task_num = recving_count.load(Ordering::SeqCst);
-        // if task_num >= self.cfg.concurrent_recv_snap_limit {
-        // warn!("too many recving snapshot tasks, ignore");
-        // let status = RpcStatus::with_message(
-        // RpcStatusCode::RESOURCE_EXHAUSTED,
-        // format!(
-        // "the number of received snapshot tasks {} exceeded the limitation
-        // {}", task_num, self.cfg.concurrent_recv_snap_limit
-        // ),
-        // );
-        // self.pool.spawn(sink.fail(status));
-        // return;
-        // }
-        // SNAP_TASK_COUNTER_STATIC.recv.inc();
-        //
-        // recving_count.fetch_add(1, Ordering::SeqCst);
-        //
-        // let snap_mgr = self.snap_mgr.clone();
-        // let raft_router = self.raft_router.clone();
-        // let limiter = self.limiter.clone();
-        // let cache_builder = self.cache_builder.clone();
-        //
-        // self.pool.spawn(async move {
-        // let result = recv_snap(
-        // stream,
-        // sink,
-        // snap_mgr,
-        // raft_router,
-        // cache_builder,
-        // limiter,
-        // None,
-        // )
-        // .await;
-        // recving_count.fetch_sub(1, Ordering::SeqCst);
-        // if let Err(e) = result {
-        // error!("failed to recv snapshot"; "err" => %e);
-        // }
-        // });
-        // }
-        // Task::Send { addr, msg, cb } => {
-        // let region_id = msg.get_region_id();
-        // let sending_count = self.snap_mgr.sending_count().clone();
-        // if sending_count.load(Ordering::SeqCst) >=
-        // self.cfg.concurrent_send_snap_limit { warn!(
-        // "Too many sending snapshot tasks, drop Send Snap[to: {}, snap:
-        // {:?}]", addr, msg
-        // );
-        // cb(Err(Error::Other("Too many sending snapshot tasks".into())));
-        // return;
-        // }
-        // SNAP_TASK_COUNTER_STATIC.send.inc();
-        //
-        // sending_count.fetch_add(1, Ordering::SeqCst);
-        //
-        // let snap_mgr = self.snap_mgr.clone();
-        // let security_mgr = Arc::clone(&self.security_mgr);
-        // let limiter = self.limiter.clone();
-        //
-        // let channel_builder = ChannelBuilder::new(self.env.clone())
-        // .stream_initial_window_size(self.cfg.grpc_stream_initial_window_size.
-        // 0 as i32) .keepalive_time(self.cfg.grpc_keepalive_time.0)
-        // .keepalive_timeout(self.cfg.grpc_keepalive_timeout.0)
-        // .default_compression_algorithm(self.cfg.grpc_compression_algorithm())
-        // .default_gzip_compression_level(self.cfg.grpc_gzip_compression_level)
-        // .default_grpc_min_message_size_to_compress(
-        // self.cfg.grpc_min_message_size_to_compress,
-        // );
-        // let channel = security_mgr.connect(channel_builder, &addr);
-        // let client = TikvClient::new(channel);
-        //
-        // self.pool.spawn(async move {
-        // let res = send_snap(
-        // client,
-        // snap_mgr.clone(),
-        // msg,
-        // limiter,
-        // ).await;
-        // match res {
-        // Ok(stat) => {
-        // snap_mgr.delete_snapshot(&stat.key);
-        // info!(
-        // "sent snapshot";
-        // "region_id" => region_id,
-        // "snap_key" => %stat.key,
-        // "size" => stat.total_size,
-        // "duration" => ?stat.elapsed
-        // );
-        // cb(Ok(()));
-        // }
-        // Err(e) => {
-        // error!("failed to send snap"; "to_addr" => addr, "region_id" =>
-        // region_id, "err" => ?e); cb(Err(e));
-        // }
-        // };
-        // sending_count.fetch_sub(1, Ordering::SeqCst);
-        // });
-        // }
-        // Task::RefreshConfigEvent => {
-        // self.refresh_cfg();
-        // }
-        // Task::Validate(f) => {
-        // f(&self.cfg);
-        // }
-        // }
+        match task {
+            Task::Recv { tx, .. } => {
+                let status = tonic::Status::unimplemented("tablet snap is not supported");
+                let _ = tx.send(Err(status));
+            }
+            Task::RecvTablet { stream, mut tx } => {
+                let recving_count = self.snap_mgr.recving_count().clone();
+                let task_num = recving_count.load(Ordering::SeqCst);
+                if task_num >= self.cfg.concurrent_recv_snap_limit {
+                    warn!("too many recving snapshot tasks, ignore");
+                    let status = tonic::Status::resource_exhausted(format!(
+                        "the number of received snapshot tasks {} exceeded the limitation {}",
+                        task_num, self.cfg.concurrent_recv_snap_limit
+                    ));
+
+                    self.pool.spawn(async move { tx.send(Err(status)).await });
+                    return;
+                }
+                SNAP_TASK_COUNTER_STATIC.recv.inc();
+
+                recving_count.fetch_add(1, Ordering::SeqCst);
+
+                let snap_mgr = self.snap_mgr.clone();
+                let raft_router = self.raft_router.clone();
+                let limiter = self.limiter.clone();
+                let cache_builder = self.cache_builder.clone();
+
+                self.pool.spawn(async move {
+                    let result = recv_snap(
+                        stream,
+                        tx,
+                        snap_mgr,
+                        raft_router,
+                        cache_builder,
+                        limiter,
+                        None,
+                    )
+                    .await;
+                    recving_count.fetch_sub(1, Ordering::SeqCst);
+                    if let Err(e) = result {
+                        error!("failed to recv snapshot"; "err" => %e);
+                    }
+                });
+            }
+            Task::Send { addr, msg, cb } => {
+                let region_id = msg.get_region_id();
+                let sending_count = self.snap_mgr.sending_count().clone();
+                if sending_count.load(Ordering::SeqCst) >= self.cfg.concurrent_send_snap_limit {
+                    warn!(
+                        "Too many sending snapshot tasks, drop Send Snap[to: {}, snap: {:?}]",
+                        addr, msg
+                    );
+                    cb(Err(Error::Other("Too many sending snapshot tasks".into())));
+                    return;
+                }
+                SNAP_TASK_COUNTER_STATIC.send.inc();
+
+                sending_count.fetch_add(1, Ordering::SeqCst);
+
+                let snap_mgr = self.snap_mgr.clone();
+                let limiter = self.limiter.clone();
+
+                let mut endpoint = Channel::from_shared(addr.clone())
+                    .unwrap()
+                    .initial_stream_window_size(self.cfg.grpc_stream_initial_window_size.0 as u32)
+                    .http2_keep_alive_interval(self.cfg.grpc_keepalive_time.into())
+                    .keep_alive_timeout(self.cfg.grpc_keepalive_timeout.into());
+                endpoint = self.security_mgr.set_tls_config(endpoint).unwrap();
+
+                self.pool.spawn(async move {
+                    let channel = endpoint.connect_lazy();
+                    let client = TikvClient::new(channel);
+                    let res = send_snap(
+                        client,
+                        snap_mgr.clone(),
+                        msg,
+                        limiter,
+                    ).await;
+                    match res {
+                        Ok(stat) => {
+                            snap_mgr.delete_snapshot(&stat.key);
+                            info!(
+                                "sent snapshot";
+                                "region_id" => region_id,
+                                "snap_key" => %stat.key,
+                                "size" => stat.total_size,
+                                "duration" => ?stat.elapsed
+                            );
+                            cb(Ok(()));
+                        }
+                        Err(e) => {
+                            error!("failed to send snap"; "to_addr" => addr, "region_id" => region_id, "err" => ?e);
+                            cb(Err(e));
+                        }
+                    };
+                    sending_count.fetch_sub(1, Ordering::SeqCst);
+                });
+            }
+            Task::RefreshConfigEvent => {
+                self.refresh_cfg();
+            }
+            Task::Validate(f) => {
+                f(&self.cfg);
+            }
+        }
     }
 }
 

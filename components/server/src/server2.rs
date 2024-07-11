@@ -11,7 +11,6 @@
 //! Components are often used to initialize other components, and/or must be
 //! explicitly stopped. We keep these components in the `TikvServer` struct.
 
-/*
 use std::{
     cmp,
     collections::HashMap,
@@ -40,13 +39,14 @@ use engine_rocks::{from_rocks_compression_type, RocksEngine, RocksStatistics};
 use engine_traits::{Engines, KvEngine, MiscExt, RaftEngine, TabletRegistry, CF_DEFAULT, CF_WRITE};
 use file_system::{get_io_rate_limiter, BytesFetcher, MetricsManager as IoMetricsManager};
 use futures::executor::block_on;
-use grpcio::{EnvBuilder, Environment};
 use health_controller::HealthController;
 use kvproto::{
-    backup::create_backup, cdcpb::create_change_data, deadlock::create_deadlock,
-    debugpb::create_debug, diagnosticspb::create_diagnostics, import_sstpb::create_import_sst,
-    kvrpcpb::ApiVersion, logbackup::create_log_backup,
-    resource_usage_agent::create_resource_metering_pub_sub,
+    backup_grpc::backup_server::BackupServer, cdcpb_grpc::change_data_server::ChangeDataServer,
+    deadlock_grpc::deadlock_server::DeadlockServer, debugpb_grpc::debug_server::DebugServer,
+    diagnosticspb_grpc::diagnostics_server::DiagnosticsServer,
+    import_sstpb_grpc::import_s_s_t_server::ImportSSTServer, kvrpcpb::ApiVersion,
+    logbackup_grpc::log_backup_server::LogBackupServer,
+    resource_usage_agent_grpc::resource_metering_pub_sub_server::ResourceMeteringPubSubServer,
 };
 use pd_client::{
     meta_storage::{Checked, Sourced},
@@ -240,7 +240,7 @@ struct TikvServer<ER: RaftEngine> {
     region_info_accessor: Option<RegionInfoAccessor>,
     coprocessor_host: Option<CoprocessorHost<RocksEngine>>,
     concurrency_manager: ConcurrencyManager,
-    env: Arc<Environment>,
+    grpc_tonic_runtime: tokio::runtime::Runtime,
     cdc_worker: Option<Box<LazyWorker<cdc::Task>>>,
     cdc_scheduler: Option<Scheduler<cdc::Task>>,
     cdc_memory_quota: Option<Arc<MemoryQuota>>,
@@ -285,25 +285,27 @@ where
                 .unwrap_or_else(|e| fatal!("failed to create security manager: {}", e)),
         );
         let props = tikv_util::thread_group::current_properties();
-        let env = Arc::new(
-            EnvBuilder::new()
-                .cq_count(config.server.grpc_concurrency)
-                .name_prefix(thd_name!(GRPC_THREAD_PREFIX))
-                .after_start(move || {
+        let grpc_tonic_runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(config.server.grpc_concurrency)
+            .thread_name(thd_name!(GRPC_THREAD_PREFIX))
+            .enable_all()
+            .with_sys_and_custom_hooks(
+                move || {
                     tikv_util::thread_group::set_properties(props.clone());
 
                     // SAFETY: we will call `remove_thread_memory_accessor` at before_stop.
                     unsafe { add_thread_memory_accessor() };
-                })
-                .before_stop(|| {
+                },
+                move || {
                     remove_thread_memory_accessor();
-                })
-                .build(),
-        );
+                },
+            )
+            .build()
+            .unwrap();
         let pd_client = TikvServerCore::connect_to_pd_cluster(
             &mut config,
-            env.clone(),
             Arc::clone(&security_mgr),
+            grpc_tonic_runtime.handle().clone(),
         );
 
         // Initialize and check config
@@ -389,7 +391,7 @@ where
             region_info_accessor: None,
             coprocessor_host: None,
             concurrency_manager,
-            env,
+            grpc_tonic_runtime,
             cdc_worker: None,
             cdc_scheduler: None,
             cdc_memory_quota: None,
@@ -445,7 +447,10 @@ where
         cfg_controller.register(tikv::config::Module::Log, Box::new(LogConfigManager));
         cfg_controller.register(tikv::config::Module::Memory, Box::new(MemoryConfigManager));
 
-        let lock_mgr = LockManager::new(&self.core.config.pessimistic_txn);
+        let lock_mgr = LockManager::new(
+            &self.core.config.pessimistic_txn,
+            self.grpc_tonic_runtime.handle().clone(),
+        );
         cfg_controller.register(
             tikv::config::Module::PessimisticTxn,
             Box::new(lock_mgr.config_manager()),
@@ -492,6 +497,7 @@ where
             Builder::new_multi_thread()
                 .thread_name(thd_name!("debugger"))
                 .worker_threads(1)
+                .enable_all()
                 .with_sys_and_custom_hooks(
                     move || {
                         tikv_util::thread_group::set_properties(props.clone());
@@ -516,7 +522,7 @@ where
         self.core.to_stop.push(reporter_worker);
         let (address_change_notifier, single_target_worker) = resource_metering::init_single_target(
             self.core.config.resource_metering.receiver_address.clone(),
-            self.env.clone(),
+            self.grpc_tonic_runtime.handle().clone(),
             data_sink_reg_handle.clone(),
         );
         self.core.to_stop.push(single_target_worker);
@@ -665,10 +671,10 @@ where
             cdc_ob,
             self.router.as_ref().unwrap().store_meta().clone(),
             self.concurrency_manager.clone(),
-            self.env.clone(),
             self.security_mgr.clone(),
             cdc_memory_quota.clone(),
             self.causal_ts_provider.clone(),
+            self.grpc_tonic_runtime.handle().clone(),
         );
         cdc_worker.start_with_timer(cdc_endpoint);
         self.core.to_stop.push(cdc_worker);
@@ -694,8 +700,8 @@ where
                 self.router.as_ref().unwrap().store_meta().clone(),
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
-                self.env.clone(),
                 self.security_mgr.clone(),
+                self.grpc_tonic_runtime.handle().clone(),
             );
             self.resolved_ts_scheduler = Some(rts_worker.scheduler());
             rts_worker.start_with_timer(rts_endpoint);
@@ -784,7 +790,7 @@ where
             Either::Right(snap_mgr.clone()),
             gc_worker.clone(),
             check_leader_scheduler,
-            self.env.clone(),
+            self.grpc_tonic_runtime.handle().clone(),
             unified_read_pool,
             debug_thread_pool,
             health_controller,
@@ -936,7 +942,7 @@ where
         );
         if servers
             .server
-            .register_service(create_backup(backup_service))
+            .register_service(BackupServer::new(backup_service))
             .is_some()
         {
             fatal!("failed to register backup service");
@@ -975,7 +981,7 @@ where
 
         if servers
             .server
-            .register_service(create_import_sst(import_service))
+            .register_service(ImportSSTServer::new(import_service))
             .is_some()
         {
             fatal!("failed to register import service");
@@ -985,7 +991,7 @@ where
             let pitr_service = backup_stream::Service::new(sched);
             if servers
                 .server
-                .register_service(create_log_backup(pitr_service))
+                .register_service(LogBackupServer::new(pitr_service))
                 .is_some()
             {
                 fatal!("failed to register log backup service");
@@ -1030,7 +1036,7 @@ where
         );
         if servers
             .server
-            .register_service(create_debug(debug_service))
+            .register_service(DebugServer::new(debug_service))
             .is_some()
         {
             fatal!("failed to register debug service");
@@ -1039,10 +1045,11 @@ where
         let cdc_service = cdc::Service::new(
             self.cdc_scheduler.as_ref().unwrap().clone(),
             self.cdc_memory_quota.as_ref().unwrap().clone(),
+            self.grpc_tonic_runtime.handle().clone(),
         );
         if servers
             .server
-            .register_service(create_change_data(cdc_service))
+            .register_service(ChangeDataServer::new(cdc_service))
             .is_some()
         {
             fatal!("failed to register cdc service");
@@ -1056,7 +1063,7 @@ where
         );
         if servers
             .server
-            .register_service(create_diagnostics(diag_service))
+            .register_service(DiagnosticsServer::new(diag_service))
             .is_some()
         {
             fatal!("failed to register diagnostics service");
@@ -1065,7 +1072,7 @@ where
         // Lock manager.
         if servers
             .server
-            .register_service(create_deadlock(servers.lock_mgr.deadlock_service()))
+            .register_service(DeadlockServer::new(servers.lock_mgr.deadlock_service()))
             .is_some()
         {
             fatal!("failed to register deadlock service");
@@ -1084,7 +1091,7 @@ where
 
         if servers
             .server
-            .register_service(create_resource_metering_pub_sub(
+            .register_service(ResourceMeteringPubSubServer::new(
                 servers.rsmeter_pubsub_service.clone(),
             ))
             .is_some()
@@ -1691,4 +1698,3 @@ mod test {
         );
     }
 }
- */

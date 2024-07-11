@@ -43,7 +43,6 @@ fail = "0.5"
 file_system = { workspace = true }
 futures = "0.3"
 futures-io = "0.3"
-grpcio = { workspace = true }
 hex = "0.4"
 # Fixing ahash cyclic dep: https://github.com/tkaitchuck/ahash/issues/95
 indexmap = "=1.6.2"

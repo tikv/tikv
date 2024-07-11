@@ -10,8 +10,7 @@ use api_version::{test_kv_format_impl, KvFormat};
 use engine_rocks::RocksEngine;
 use engine_traits::MiscExt;
 use futures::{executor::block_on, SinkExt, StreamExt};
-use grpcio::*;
-use kvproto::{kvrpcpb::*, pdpb::QueryKind, tikvpb::*, tikvpb_grpc::TikvClient};
+use kvproto::{kvrpcpb::*, pdpb::QueryKind, tikvpb::*, tikvpb_grpc::tikv_client::TikvClient};
 use pd_client::PdClient;
 use test_coprocessor::{DagSelect, ProductTable};
 use test_raftstore::*;
@@ -97,7 +96,7 @@ fn test_node_simple_store_stats() {
 fn test_store_heartbeat_report_hotspots() {
     fail::cfg("mock_hotspot_threshold", "return(0)").unwrap();
     fail::cfg("mock_tick_interval", "return(0)").unwrap();
-    let (mut cluster, client, _) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+    let (mut cluster, mut client, _) = must_new_and_configure_cluster_and_kv_client(|cluster| {
         cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(10);
     });
     let (k1, v1) = (b"k1".to_vec(), b"v1".to_vec());
@@ -122,7 +121,11 @@ fn test_store_heartbeat_report_hotspots() {
         let mut get_req = RawGetRequest::default();
         get_req.set_context(left_ctx.clone());
         get_req.key = k1.clone();
-        let get_resp = client.raw_get(&get_req).unwrap();
+        let get_resp = cluster
+            .runtime
+            .block_on(client.raw_get(get_req))
+            .unwrap()
+            .into_inner();
         assert_eq!(get_resp.value, v1);
     }
     // raw get k3 10 times
@@ -130,7 +133,11 @@ fn test_store_heartbeat_report_hotspots() {
         let mut get_req = RawGetRequest::default();
         get_req.set_context(right_ctx.clone());
         get_req.key = k3.clone();
-        let get_resp = client.raw_get(&get_req).unwrap();
+        let get_resp = cluster
+            .runtime
+            .block_on(client.raw_get(get_req))
+            .unwrap()
+            .into_inner();
         assert_eq!(get_resp.value, v3);
     }
     sleep_ms(50);
@@ -260,7 +267,7 @@ fn test_raw_query_stats_tmpl<F: KvFormat>() {
             ));
         });
     let raw_batch_get_command: Box<Query> =
-        Box::new(|ctx, cluster, client, store_id, region_id, start_key| {
+        Box::new(|ctx, cluster, mut client, store_id, region_id, start_key| {
             let mut flag = false;
             for i in 0..3 {
                 let get_command: Box<GenRequest> = Box::new(|ctx, start_key| {
@@ -272,7 +279,13 @@ fn test_raw_query_stats_tmpl<F: KvFormat>() {
                     req
                 });
                 if i == 0 {
-                    batch_commands(&ctx, &client, get_command, &start_key);
+                    batch_commands(
+                        &ctx,
+                        &cluster.runtime.handle(),
+                        &mut client,
+                        get_command,
+                        &start_key,
+                    );
                 }
                 if check_query_num_read(cluster, store_id, region_id, QueryKind::Get, 1000) {
                     flag = true;
@@ -388,7 +401,13 @@ fn test_txn_query_stats_tmpl<F: KvFormat>() {
                     req
                 });
                 if i == 0 {
-                    batch_commands(&ctx, &client, get_command, &start_key);
+                    batch_commands(
+                        &ctx,
+                        &cluster.runtime.handle(),
+                        &mut client,
+                        get_command,
+                        &start_key,
+                    );
                 }
                 if check_query_num_read(cluster, store_id, region_id, QueryKind::Get, 1000) {
                     flag = true;
@@ -410,7 +429,13 @@ fn test_txn_query_stats_tmpl<F: KvFormat>() {
                     req
                 });
                 if i == 0 {
-                    batch_commands(&ctx, &client, coprocessor, &start_key);
+                    batch_commands(
+                        &ctx,
+                        &cluster.runtime.handle(),
+                        &mut client,
+                        coprocessor,
+                        &start_key,
+                    );
                 }
                 // here cannot read any data, so expect is 0. may need fix. here mainly used to
                 // verify the request source is as expect.
@@ -443,8 +468,8 @@ fn test_txn_query_stats_tmpl<F: KvFormat>() {
 }
 
 fn raw_put(
-    _cluster: &Cluster<RocksEngine, ServerCluster<RocksEngine>>,
-    client: &TikvClient,
+    cluster: &Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    client: &mut TikvClient<Channel>,
     ctx: &Context,
     _store_id: u64,
     key: Vec<u8>,
@@ -453,7 +478,11 @@ fn raw_put(
     put_req.set_context(ctx.clone());
     put_req.key = key;
     put_req.value = b"v2".to_vec();
-    let put_resp = client.raw_put(&put_req).unwrap();
+    let put_resp = cluster
+        .runtime
+        .block_on(client.raw_put(put_req))
+        .unwrap()
+        .into_inner();
     assert!(!put_resp.has_region_error());
     assert!(put_resp.error.is_empty());
     // todo support raw kv write query statistic
@@ -462,7 +491,7 @@ fn raw_put(
 
 fn put(
     cluster: &Cluster<RocksEngine, ServerCluster<RocksEngine>>,
-    client: &TikvClient,
+    client: &mut TikvClient<Channel>,
     ctx: &Context,
     store_id: u64,
     key: Vec<u8>,
@@ -480,7 +509,11 @@ fn put(
         prewrite_req.primary_lock = key.clone();
         prewrite_req.start_version = start_ts.into_inner();
         prewrite_req.lock_ttl = prewrite_req.start_version + 1;
-        let prewrite_resp = client.kv_prewrite(&prewrite_req).unwrap();
+        let prewrite_resp = cluster
+            .runtime
+            .block_on(client.kv_prewrite(prewrite_req))
+            .unwrap()
+            .into_inner();
         assert!(
             !prewrite_resp.has_region_error(),
             "{:?}",
@@ -506,7 +539,11 @@ fn put(
         commit_req.start_version = start_ts.into_inner();
         commit_req.set_keys(vec![key].into_iter().collect());
         commit_req.commit_version = commit_ts.into_inner();
-        let commit_resp = client.kv_commit(&commit_req).unwrap();
+        let commit_resp = cluster
+            .runtime
+            .block_on(client.kv_commit(commit_req))
+            .unwrap()
+            .into_inner();
         assert!(
             !commit_resp.has_region_error(),
             "{:?}",
@@ -523,14 +560,14 @@ fn put(
 }
 
 fn test_pessimistic_lock() {
-    let (cluster, client, mut ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+    let (cluster, mut client, mut ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
         cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
     });
 
     ctx.set_request_source("test_stats".to_owned());
     let key = b"key2".to_vec();
     let store_id = 1;
-    put(&cluster, &client, &ctx, store_id, key.clone());
+    put(&cluster, &mut client, &ctx, store_id, key.clone());
 
     let start_ts = block_on(cluster.pd_client.get_tso()).unwrap();
     let mut mutation = Mutation::default();
@@ -544,7 +581,11 @@ fn test_pessimistic_lock() {
     lock_req.start_version = start_ts.into_inner();
     lock_req.for_update_ts = start_ts.into_inner();
     lock_req.primary_lock = key;
-    let lock_resp = client.kv_pessimistic_lock(&lock_req).unwrap();
+    let lock_resp = cluster
+        .runtime
+        .block_on(client.kv_pessimistic_lock(lock_req))
+        .unwrap()
+        .into_inner();
     assert!(
         !lock_resp.has_region_error(),
         "{:?}",
@@ -564,7 +605,7 @@ fn test_pessimistic_lock() {
 }
 
 pub fn test_rollback() {
-    let (cluster, client, mut ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
+    let (cluster, mut client, mut ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
         cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
     });
     ctx.set_request_source("test_stats".to_owned());
@@ -577,7 +618,11 @@ pub fn test_rollback() {
     rollback_req.set_context(ctx);
     rollback_req.start_version = start_ts.into_inner();
     rollback_req.set_keys(vec![key].into_iter().collect());
-    let rollback_resp = client.kv_batch_rollback(&rollback_req).unwrap();
+    let rollback_resp = cluster
+        .runtime
+        .block_on(client.kv_batch_rollback(rollback_req))
+        .unwrap()
+        .into_inner();
     assert!(
         !rollback_resp.has_region_error(),
         "{:?}",
@@ -597,20 +642,21 @@ pub fn test_rollback() {
 }
 
 fn test_query_num<F: KvFormat>(query: Box<Query>, is_raw_kv: bool, auto_split: bool) {
-    let (mut cluster, client, mut ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
-        cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
-        if auto_split {
-            cluster.cfg.split.qps_threshold = Some(0);
-        } else {
-            cluster.cfg.split.qps_threshold = Some(1000000);
-        }
-        cluster.cfg.split.split_balance_score = 2.0;
-        cluster.cfg.split.split_contained_score = 2.0;
-        cluster.cfg.split.detect_times = 1;
-        cluster.cfg.split.sample_threshold = 0;
-        cluster.cfg.storage.set_api_version(F::TAG);
-        cluster.cfg.server.enable_request_batch = false;
-    });
+    let (mut cluster, mut client, mut ctx) =
+        must_new_and_configure_cluster_and_kv_client(|cluster| {
+            cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
+            if auto_split {
+                cluster.cfg.split.qps_threshold = Some(0);
+            } else {
+                cluster.cfg.split.qps_threshold = Some(1000000);
+            }
+            cluster.cfg.split.split_balance_score = 2.0;
+            cluster.cfg.split.split_contained_score = 2.0;
+            cluster.cfg.split.detect_times = 1;
+            cluster.cfg.split.sample_threshold = 0;
+            cluster.cfg.storage.set_api_version(F::TAG);
+            cluster.cfg.server.enable_request_batch = false;
+        });
     ctx.set_api_version(F::CLIENT_TAG);
     ctx.set_request_source("test_stats".to_owned());
 
@@ -635,10 +681,12 @@ fn test_raw_delete_query<F: KvFormat>() {
     let store_id = 1;
 
     {
-        let (cluster, client, mut ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
-            cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
-            cluster.cfg.storage.set_api_version(F::TAG);
-        });
+        let (cluster, mut client, mut ctx) =
+            must_new_and_configure_cluster_and_kv_client(|cluster| {
+                cluster.cfg.raft_store.pd_store_heartbeat_tick_interval =
+                    ReadableDuration::millis(50);
+                cluster.cfg.storage.set_api_version(F::TAG);
+            });
         ctx.set_api_version(F::CLIENT_TAG);
         ctx.set_request_source("test_stats".to_owned());
 
@@ -666,9 +714,11 @@ fn test_txn_delete_query() {
     let store_id = 1;
 
     {
-        let (cluster, client, mut ctx) = must_new_and_configure_cluster_and_kv_client(|cluster| {
-            cluster.cfg.raft_store.pd_store_heartbeat_tick_interval = ReadableDuration::millis(50);
-        });
+        let (cluster, mut client, mut ctx) =
+            must_new_and_configure_cluster_and_kv_client(|cluster| {
+                cluster.cfg.raft_store.pd_store_heartbeat_tick_interval =
+                    ReadableDuration::millis(50);
+            });
         ctx.set_request_source("test_stats".to_owned());
         put(&cluster, &client, &ctx, store_id, k.clone());
         // DeleteRange
@@ -760,11 +810,12 @@ type GenRequest = dyn Fn(&Context, Vec<u8>) -> BatchCommandsRequestRequest;
 
 fn batch_commands(
     ctx: &Context,
-    client: &TikvClient,
+    handle: &tokio::runtime::Handle,
+    client: &mut TikvClient<Channel>,
     gen_request: Box<GenRequest>,
     start_key: &[u8],
 ) {
-    let (mut sender, receiver) = client.batch_commands().unwrap();
+    let mut batch_reqs = vec![];
     for _ in 0..100 {
         let mut batch_req = BatchCommandsRequest::default();
         for i in 0..10 {
@@ -772,19 +823,16 @@ fn batch_commands(
             batch_req.mut_requests().push(req);
             batch_req.mut_request_ids().push(i);
         }
-        block_on(sender.send((batch_req, WriteFlags::default()))).unwrap();
+        batch_reqs.push(batch_req);
     }
-    block_on(sender.close()).unwrap();
+    let stream = futures::stream::iter(batch_reqs);
+    let receiver = handle.block_on(client.batch_commands(stream)).unwrap();
 
     let (tx, rx) = mpsc::sync_channel(1);
-    thread::spawn(move || {
+    handle::spawn(async move {
         // We have send 10k requests to the server, so we should get 10k responses.
         let mut count = 0;
-        for x in block_on(
-            receiver
-                .map(move |b| b.unwrap().get_responses().len())
-                .collect::<Vec<usize>>(),
-        ) {
+        while let Some(x) = receiver.next().await {
             count += x;
             if count == 1000 {
                 tx.send(1).unwrap();
@@ -800,6 +848,6 @@ fn batch_commands(
         req.set_context(ctx.to_owned());
         req.start_key = start_key.to_owned();
         req.end_key = vec![];
-        client.kv_scan(&req).unwrap();
+        handle.block_on(client.kv_scan(req)).unwrap();
     }
 }

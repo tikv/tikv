@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use api_version::{test_kv_format_impl, KvFormat};
 use futures::{executor::block_on, sink::SinkExt};
-use grpcio::WriteFlags;
 use kvproto::{cdcpb::*, kvrpcpb::*};
 use pd_client::PdClient;
 use raft::eraftpb::ConfChangeType;
@@ -26,9 +25,11 @@ fn test_stale_resolver_impl<F: KvFormat>() {
     // Close previous connection and open a new one twice time
     let region = suite.cluster.get_region(&[]);
     let req = suite.new_changedata_request(region.get_id());
-    let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(region.get_id()));
-    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+    let (mut req_tx, event_feed_wrap, receive_event) = new_event_feed(
+        suite.get_region_cdc_client(region.get_id()),
+        suite.runtime.handle(),
+    );
+    block_on(req_tx.send((req.clone()))).unwrap();
     // Sleep for a while to wait the scan is done
     sleep_ms(200);
 
@@ -51,17 +52,24 @@ fn test_stale_resolver_impl<F: KvFormat>() {
     let fp1 = "cdc_incremental_scan_start";
     fail::cfg(fp1, "pause").unwrap();
     // Close previous connection and open two new connections
-    let (mut req_tx, resp_rx) = suite
-        .get_region_cdc_client(region.get_id())
-        .event_feed()
-        .unwrap();
+    let (req_tx, req_rx) = futures::channel::mpsc::unbounded();
+    let mut client = suite.get_region_cdc_client(region.get_id());
+    let resp_rx = suite
+        .runtime
+        .block_on(client.event_feed(req_rx))
+        .unwrap()
+        .into_inner();
     event_feed_wrap.replace(Some(resp_rx));
-    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
-    let (mut req_tx1, resp_rx1) = suite
-        .get_region_cdc_client(region.get_id())
-        .event_feed()
-        .unwrap();
-    block_on(req_tx1.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send((req.clone()))).unwrap();
+
+    let (req_tx1, req_rx) = futures::channel::mpsc::unbounded();
+    let mut client = suite.get_region_cdc_client(region.get_id());
+    let resp_rx1 = suite
+        .runtime
+        .block_on(client.event_feed(req_rx))
+        .unwrap()
+        .into_inner();
+    block_on(req_tx1.send(req)).unwrap();
     // Unblock the first scan
     fail::remove(fp);
     // Sleep for a while to wait the wrong resolver init
@@ -71,7 +79,7 @@ fn test_stale_resolver_impl<F: KvFormat>() {
     let commit_resp =
         suite.async_kv_commit(region.get_id(), vec![k.into_bytes()], start_ts, commit_ts);
     // Receive Commit response
-    block_on(commit_resp).unwrap();
+    block_on(commit_resp).unwrap().unwrap();
     // Unblock all scans
     fail::remove(fp1);
     // Receive events
@@ -149,16 +157,20 @@ fn test_region_error() {
     let mut req = suite.new_changedata_request(region.get_id());
     req.region_id = source.get_id();
     req.set_region_epoch(source.get_region_epoch().clone());
-    let (mut source_tx, source_wrap, _source_event) =
-        new_event_feed(suite.get_region_cdc_client(source.get_id()));
-    block_on(source_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+    let (mut source_tx, source_wrap, _source_event) = new_event_feed(
+        suite.get_region_cdc_client(source.get_id()),
+        suite.runtime.handle(),
+    );
+    block_on(source_tx.send((req.clone()))).unwrap();
     // Subscribe target region
     let target = suite.cluster.get_region(b"k2");
     req.region_id = target.get_id();
     req.set_region_epoch(target.get_region_epoch().clone());
-    let (mut target_tx, target_wrap, target_event) =
-        new_event_feed(suite.get_region_cdc_client(target.get_id()));
-    block_on(target_tx.send((req, WriteFlags::default()))).unwrap();
+    let (mut target_tx, target_wrap, target_event) = new_event_feed(
+        suite.get_region_cdc_client(target.get_id()),
+        suite.runtime.handle(),
+    );
+    block_on(target_tx.send(req)).unwrap();
     sleep_ms(200);
 
     suite
@@ -221,9 +233,11 @@ fn test_joint_confchange() {
         .must_transfer_leader(region.get_id(), peers[0].clone());
 
     let req = suite.new_changedata_request(region.get_id());
-    let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(region.get_id()));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let (mut req_tx, event_feed_wrap, receive_event) = new_event_feed(
+        suite.get_region_cdc_client(region.get_id()),
+        suite.runtime.handle(),
+    );
+    block_on(req_tx.send(req)).unwrap();
     receive_resolved_ts(&receive_event);
 
     suite.cluster.stop_node(peers[1].get_store_id());

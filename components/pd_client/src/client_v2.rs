@@ -33,16 +33,16 @@ use futures::{
     task::{Context, Poll},
 };
 use grpcio::{
-    CallOption, Channel, ClientDuplexReceiver, ConnectivityState, EnvBuilder, Environment,
-    Error as GrpcError, Result as GrpcResult, WriteFlags,
+    CallOption, ClientDuplexReceiver, ConnectivityState,
+    Error as GrpcError, WriteFlags,
 };
 use kvproto::{
     metapb,
     pdpb::{
-        pd_client::PdClient as PdClientStub,
         self, GetMembersResponse, RegionHeartbeatRequest,
         RegionHeartbeatResponse, ReportBucketsRequest, TsoRequest, TsoResponse,
     },
+    pdpb_grpc::p_d_client::PDClient as PdClientStub,
     replication_modepb::{ReplicationStatus, StoreDrAutoSyncStatus},
 };
 use security::SecurityManager;
@@ -51,10 +51,11 @@ use tikv_util::{
     timer::GLOBAL_TIMER_HANDLE, warn,
 };
 use tokio::sync::{broadcast, mpsc as tokio_mpsc};
+use tonic::{transport::Channel, Result as GrpcResult};
 use txn_types::TimeStamp;
 
 use super::{
-    client::{CLIENT_PREFIX, CQ_COUNT},
+    client::{CLIENT_PREFIX},
     metrics::*,
     util::{check_resp_header, PdConnector, TargetInfo},
     Config, Error, FeatureGate, RegionInfo, Result, UnixSecs,
@@ -192,20 +193,15 @@ impl Clone for CachedRawClient {
 impl CachedRawClient {
     fn new(
         cfg: Config,
-        env: Arc<Environment>,
         security_mgr: Arc<SecurityManager>,
         should_reconnect_tx: broadcast::Sender<u64>,
-    ) -> Self {
-        let lame_stub = PdClientStub::new(Channel::lame(env.clone(), "0.0.0.0:0"));
-        let client = RawClient {
-            stub: lame_stub,
-            target_info: TargetInfo::new("0.0.0.0:0".to_string(), ""),
-            members: GetMembersResponse::default(),
-        };
+        spawn_handle: tokio::runtime::Handle,
+    ) -> Result<Self> {
         let context = ConnectContext {
             cfg,
-            connector: PdConnector::new(env, security_mgr),
+            connector: PdConnector::new(security_mgr, spawn_handle),
         };
+        let client = block_on(RawClient::connect(&context))?;
         let (tx, rx) = broadcast::channel(1);
         let core = CachedRawClientCore {
             context,
@@ -213,13 +209,13 @@ impl CachedRawClient {
             version: AtomicU64::new(0),
             on_reconnect_tx: tx,
         };
-        Self {
+        Ok(Self {
             core: Arc::new(core),
             should_reconnect_tx,
             on_reconnect_rx: rx,
             cache: client,
             cache_version: 0,
-        }
+        })
     }
 
     #[inline]
@@ -339,7 +335,7 @@ impl CachedRawClient {
     fn check_resp<T>(&mut self, resp: GrpcResult<T>) -> GrpcResult<T> {
         if matches!(
             resp,
-            Err(GrpcError::RpcFailure(_) | GrpcError::RemoteStopped | GrpcError::RpcFinished(_))
+            Err(tonic::Status::RpcFailure(_) | GrpcError::RemoteStopped | GrpcError::RpcFinished(_))
         ) {
             let _ = self.should_reconnect_tx.send(self.cache_version);
         }
@@ -348,13 +344,14 @@ impl CachedRawClient {
 
     /// Might panic if `wait_for_ready` isn't called up-front.
     #[inline]
-    fn stub(&self) -> &PdClientStub {
+    fn stub(&self) -> &PdClientStub<Channel> {
         &self.cache.stub
     }
 
     /// Might panic if `wait_for_ready` isn't called up-front.
     #[inline]
     fn channel(&self) -> &Channel {
+        
         self.cache.stub.client.channel()
     }
 
@@ -449,21 +446,12 @@ pub struct RpcClient {
 impl RpcClient {
     pub fn new(
         cfg: &Config,
-        shared_env: Option<Arc<Environment>>,
         security_mgr: Arc<SecurityManager>,
+        spawn_handle: tokio::runtime::Handle,
     ) -> Result<RpcClient> {
-        let env = shared_env.unwrap_or_else(|| {
-            Arc::new(
-                EnvBuilder::new()
-                    .cq_count(CQ_COUNT)
-                    .name_prefix(thd_name!(CLIENT_PREFIX))
-                    .build(),
-            )
-        });
-
         // Use broadcast channel for the lagging feature.
         let (tx, rx) = broadcast::channel(1);
-        let raw_client = CachedRawClient::new(cfg.clone(), env, security_mgr, tx);
+        let raw_client = CachedRawClient::new(cfg.clone(), security_mgr, tx, spawn_handle);
         raw_client
             .stub()
             .spawn(reconnect_loop(raw_client.clone(), cfg.clone(), rx));
@@ -521,10 +509,7 @@ async fn get_region_resp_by_id(
     req.set_header(raw_client.header());
     let resp = raw_client
         .stub()
-        .get_region_by_id_async_opt(&req, raw_client.call_option().timeout(request_timeout()))
-        .unwrap_or_else(|e| {
-            panic!("fail to request PD {} err {:?}", "get_region_by_id", e);
-        })
+        .get_region_by_id(&req, raw_client.call_option().timeout(request_timeout()))
         .await;
     PD_REQUEST_HISTOGRAM_VEC
         .get_region_by_id

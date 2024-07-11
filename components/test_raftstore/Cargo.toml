@@ -65,4 +65,5 @@ tikv = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 tokio-timer = { workspace = true }
+tonic = { workspace = true }
 txn_types = { workspace = true }

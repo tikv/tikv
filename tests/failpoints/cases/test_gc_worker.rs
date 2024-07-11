@@ -7,9 +7,8 @@ use std::{
 };
 
 use engine_traits::Peekable;
-use grpcio::{ChannelBuilder, Environment};
 use keys::data_key;
-use kvproto::{kvrpcpb::*, metapb::Region, tikvpb::TikvClient};
+use kvproto::{kvrpcpb::*, metapb::Region, tikvpb_grpc::tikv_client::TikvClient};
 use raftstore::coprocessor::{
     RegionInfo, RegionInfoCallback, RegionInfoProvider, Result as CopResult, SeekRegionCallback,
 };
@@ -26,6 +25,7 @@ use tikv::{
     },
 };
 use tikv_util::HandyRwLock;
+use tonic::transport::Channel;
 use txn_types::{Key, TimeStamp};
 
 // Test write CF's compaction filter can call `orphan_versions_handler`
@@ -99,10 +99,13 @@ fn test_orphan_versions_from_compaction_filter() {
         cluster.pd_client.disable_default_operator();
     });
 
-    let env = Arc::new(Environment::new(1));
     let leader_store = leader.get_store_id();
-    let channel = ChannelBuilder::new(env).connect(&cluster.sim.rl().get_addr(leader_store));
-    let client = TikvClient::new(channel);
+    let addr = tikv_util::format_url(&cluster.sim.rl().get_addr(leader_store), false);
+    let channel = cluster
+        .runtime
+        .block_on(Channel::from_shared(addr).unwrap().connect())
+        .unwrap();
+    let mut client = TikvClient::new(channel);
 
     // Call `start_auto_gc` like `cmd/src/server.rs` does. It will combine
     // compaction filter and GC worker so that GC worker can help to process orphan
@@ -125,9 +128,24 @@ fn test_orphan_versions_from_compaction_filter() {
         let commit_ts = start_ts + 5;
         let op = if start_ts < 40 { Op::Put } else { Op::Del };
         let muts = vec![new_mutation(op, b"k1", &large_value)];
-        must_kv_prewrite(&client, ctx.clone(), muts, pk.clone(), start_ts);
+        must_kv_prewrite(
+            cluster.runtime.handle(),
+            &mut client,
+            ctx.clone(),
+            muts,
+            pk.clone(),
+            start_ts,
+        );
         let keys = vec![pk.clone()];
-        must_kv_commit(&client, ctx.clone(), keys, start_ts, commit_ts, commit_ts);
+        must_kv_commit(
+            cluster.runtime.handle(),
+            &mut client,
+            ctx.clone(),
+            keys,
+            start_ts,
+            commit_ts,
+            commit_ts,
+        );
         if start_ts < 40 {
             let key = Key::from_raw(b"k1").append_ts(start_ts.into());
             let key = data_key(key.as_encoded());

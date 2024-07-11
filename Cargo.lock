@@ -516,7 +516,6 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "futures-util",
- "grpcio",
  "hex 0.4.2",
  "keys",
  "kvproto",
@@ -935,7 +934,6 @@ dependencies = [
  "futures 0.3.15",
  "futures-timer",
  "getset",
- "grpcio",
  "keys",
  "kvproto",
  "lazy_static",
@@ -5303,7 +5301,6 @@ version = "0.0.1"
 dependencies = [
  "collections",
  "encryption",
- "grpcio",
  "kvproto",
  "serde",
  "serde_derive",
@@ -6198,6 +6195,8 @@ dependencies = [
  "tidb_query_common",
  "tikv",
  "tikv_util",
+ "tokio",
+ "tonic",
  "txn_types",
 ]
 
@@ -6310,6 +6309,7 @@ dependencies = [
  "tikv_util",
  "tokio",
  "tokio-timer",
+ "tonic",
  "txn_types",
 ]
 
@@ -6360,6 +6360,7 @@ dependencies = [
  "tikv_util",
  "tokio",
  "tokio-timer",
+ "tonic",
  "txn_types",
 ]
 
@@ -6386,6 +6387,8 @@ dependencies = [
  "kvproto",
  "tempfile",
  "tikv_util",
+ "tokio",
+ "tonic",
  "txn_types",
  "uuid 0.8.2",
 ]
@@ -6427,6 +6430,7 @@ dependencies = [
  "tempfile",
  "tikv_util",
  "time 0.1.43",
+ "tonic",
 ]
 
 [[package]]
@@ -6512,6 +6516,7 @@ dependencies = [
  "tipb_helper",
  "tokio",
  "toml",
+ "tonic",
  "tracker",
  "txn_types",
  "uuid 0.8.2",
@@ -6764,6 +6769,7 @@ dependencies = [
  "health_controller",
  "hex 0.4.2",
  "http",
+ "http-body",
  "hybrid_engine",
  "hyper",
  "hyper-openssl",
@@ -6876,7 +6882,6 @@ dependencies = [
  "file_system",
  "futures 0.3.15",
  "gag",
- "grpcio",
  "hex 0.4.2",
  "keys",
  "kvproto",
@@ -7285,7 +7290,7 @@ dependencies = [
 [[package]]
 name = "tonic"
 version = "0.11.0"
-source = "git+https://github.com/glorv/tonic?branch=patch-health#4a348c0b25f54a365a6151226e16959fb65a5840"
+source = "git+https://github.com/glorv/tonic?branch=patch-health#25f2fec31fefffdac44f77a652139b569236587e"
 dependencies = [
  "async-stream 0.3.5",
  "async-trait",
@@ -7352,7 +7357,7 @@ dependencies = [
 [[package]]
 name = "tonic-health"
 version = "0.11.0"
-source = "git+https://github.com/glorv/tonic?branch=patch-health#4a348c0b25f54a365a6151226e16959fb65a5840"
+source = "git+https://github.com/glorv/tonic?branch=patch-health#25f2fec31fefffdac44f77a652139b569236587e"
 dependencies = [
  "async-stream 0.3.5",
  "prost",

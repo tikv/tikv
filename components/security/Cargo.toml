@@ -8,7 +8,6 @@ license = "Apache-2.0"
 [dependencies]
 collections = { workspace = true }
 encryption = { workspace = true }
-grpcio = { workspace = true }
 kvproto = { workspace = true }
 serde = "1.0"
 serde_derive = "1.0"

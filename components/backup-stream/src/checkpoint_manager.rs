@@ -609,7 +609,6 @@ pub mod tests {
     };
 
     use futures::{future::ok, Sink};
-    use grpcio::{RpcStatus, RpcStatusCode};
     use kvproto::{logbackuppb::SubscribeFlushEventResponse, metapb::*};
     use pd_client::{PdClient, PdFuture};
     use txn_types::TimeStamp;
@@ -634,14 +633,14 @@ pub mod tests {
     pub struct MockSink(Arc<Mutex<MockSinkInner>>);
 
     impl MockSink {
-        fn with_fail_once(code: RpcStatusCode) -> Self {
+        fn with_fail_once(code: tonic::Code) -> Self {
             let mut failed = false;
             let inner = MockSinkInner {
                 items: Vec::default(),
                 closed: false,
                 on_error: Box::new(move || {
                     if failed {
-                        RpcStatusCode::OK
+                        tonic::Code::Ok
                     } else {
                         failed = true;
                         code
@@ -655,13 +654,13 @@ pub mod tests {
             let inner = MockSinkInner {
                 items: Vec::default(),
                 closed: false,
-                on_error: Box::new(|| RpcStatusCode::OK),
+                on_error: Box::new(|| tonic::Code::Ok),
             };
             Self(Arc::new(Mutex::new(inner)))
         }
 
         #[allow(clippy::unused_async)]
-        pub async fn fail(&self, status: RpcStatus) -> crate::errors::Result<()> {
+        pub async fn fail(&self, status: tonic::Status) -> crate::errors::Result<()> {
             panic!("failed in a case should never fail: {}", status);
         }
     }
@@ -669,11 +668,11 @@ pub mod tests {
     struct MockSinkInner {
         items: Vec<SubscribeFlushEventResponse>,
         closed: bool,
-        on_error: Box<dyn FnMut() -> grpcio::RpcStatusCode + Send>,
+        on_error: Box<dyn FnMut() -> tonic::Status + Send>,
     }
 
-    impl Sink<(SubscribeFlushEventResponse, grpcio::WriteFlags)> for MockSink {
-        type Error = grpcio::Error;
+    impl Sink<SubscribeFlushEventResponse> for MockSink {
+        type Error = tonic::Status;
 
         fn poll_ready(
             self: std::pin::Pin<&mut Self>,
@@ -684,12 +683,12 @@ pub mod tests {
 
         fn start_send(
             self: std::pin::Pin<&mut Self>,
-            item: (SubscribeFlushEventResponse, grpcio::WriteFlags),
+            item: SubscribeFlushEventResponse,
         ) -> Result<(), Self::Error> {
             let mut guard = self.0.lock().unwrap();
             let code = (guard.on_error)();
-            if code != RpcStatusCode::OK {
-                return Err(grpcio::Error::RpcFailure(RpcStatus::new(code)));
+            if code != tonic::Code::OK {
+                return Err(tonic::Status::new(code, ""));
             }
             guard.items.push(item.0);
             Ok(())
@@ -750,7 +749,7 @@ pub mod tests {
         let mut mgr = super::CheckpointManager::default();
         rt.spawn(mgr.spawn_subscription_mgr());
 
-        let error_sink = MockSink::with_fail_once(RpcStatusCode::INTERNAL);
+        let error_sink = MockSink::with_fail_once(tonic::Code::Internal);
         rt.block_on(mgr.add_subscriber(error_sink.clone())).unwrap();
 
         mgr.resolve_regions(vec![simple_resolve_result()]);

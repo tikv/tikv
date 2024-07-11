@@ -44,7 +44,6 @@ external_storage = { workspace = true }
 file_system = { workspace = true }
 futures = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["io"] }
-grpcio = { workspace = true }
 hex = "0.4"
 keys = { workspace = true }
 kvproto = { workspace = true }

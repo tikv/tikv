@@ -47,7 +47,6 @@ error_code = { workspace = true }
 file_system = { workspace = true }
 futures = "0.3"
 gag = "1.0"
-grpcio = { workspace = true }
 hex = "0.4"
 keys = { workspace = true }
 kvproto = { workspace = true }

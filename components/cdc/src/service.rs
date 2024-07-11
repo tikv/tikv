@@ -428,8 +428,8 @@ impl Service {
             let headers = match Self::parse_headers(&request) {
                 Ok(headers) => headers,
                 Err(e) => {
-                    // let peer = ctx.peer();
-                    error!("cdc connection with bad headers"; "downstream" => ?peer_str, "headers" => &e);
+                    let peer = tikv_util::get_grpc_peer_addr(&request);
+                    error!("cdc connection with bad headers"; "downstream" => ?peer, "headers" => &e);
                     return Err(tonic::Status::unimplemented(e));
                 }
             };
@@ -534,42 +534,66 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     use futures::{executor::block_on, SinkExt};
-    use grpcio::{self, ChannelBuilder, EnvBuilder, Server, ServerBuilder, WriteFlags};
-    use kvproto::cdcpb::{create_change_data, ChangeDataClient, ResolvedTs};
+    use kvproto::{
+        cdcpb::ResolvedTs,
+        cdcpb_grpc::{change_data_client::ChangeDataClient, change_data_server::ChangeDataServer},
+    };
     use tikv_util::future::block_on_timeout;
+    use tokio::{
+        net::TcpListener,
+        runtime::{Builder, Runtime},
+    };
+    use tonic::transport::Channel;
 
     use super::*;
     use crate::channel::{recv_timeout, CdcEvent};
 
-    fn new_rpc_suite(capacity: usize) -> (Server, ChangeDataClient, ReceiverWrapper<Task>) {
+    fn new_rpc_suite(
+        capacity: usize,
+    ) -> (Runtime, ChangeDataClient<Channel>, ReceiverWrapper<Task>) {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
         let memory_quota = Arc::new(MemoryQuota::new(capacity));
         let (scheduler, rx) = dummy_scheduler();
-        let cdc_service = Service::new(scheduler, memory_quota);
-        let env = Arc::new(EnvBuilder::new().build());
+        let cdc_service = Service::new(scheduler, memory_quota, runtime.handle().clone());
+
         let builder =
-            ServerBuilder::new(env.clone()).register_service(create_change_data(cdc_service));
-        let mut server = builder.bind("127.0.0.1", 0).build().unwrap();
-        server.start();
-        let (_, port) = server.bind_addrs().next().unwrap();
-        let addr = format!("127.0.0.1:{}", port);
-        let channel = ChannelBuilder::new(env).connect(&addr);
+            tonic::transport::Server::builder().add_service(ChangeDataServer::new(cdc_service));
+        let listener = runtime.block_on(TcpListener::bind("127.0.0.1:0")).unwrap();
+        let sock_addr = listener.local_addr().unwrap();
+        // start service
+        runtime.spawn(builder.serve_with_incoming(listener));
+
+        let addr = format!("http://127.0.0.1:{}", sock_addr.port());
+        let channel_builder = tonic::transport::Channel::from_shared(addr).unwrap();
+        let channel = runtime.block_on(channel_builder.connect()).unwrap();
         let client = ChangeDataClient::new(channel);
-        (server, client, rx)
+
+        (runtime, client, rx)
     }
 
     #[test]
     fn test_flow_control() {
         // Disable CDC sink memory quota.
         let capacity = usize::MAX;
-        let (_server, client, mut task_rx) = new_rpc_suite(capacity);
-        // Create a event feed stream.
+        let (runtime, mut client, mut task_rx) = new_rpc_suite(capacity);
+
         let (mut tx, mut rx) = client.event_feed().unwrap();
         let mut req = ChangeDataRequest {
             region_id: 1,
             ..Default::default()
         };
         req.mut_header().set_ticdc_version("4.0.7".into());
-        block_on(tx.send((req, WriteFlags::default()))).unwrap();
+
+        // Create a event feed stream.
+        let rx = runtime
+            .block_on(client.event_feed(req))
+            .unwrap()
+            .into_inner();
+
         let task = task_rx.recv_timeout(Duration::from_millis(100)).unwrap();
         let conn = if let Some(Task::OpenConn { conn }) = task {
             conn

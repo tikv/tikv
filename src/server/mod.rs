@@ -35,7 +35,6 @@ pub use self::{
     metrics::{
         CONFIG_ROCKSDB_GAUGE, CPU_CORES_QUOTA_GAUGE, MEMORY_LIMIT_GAUGE, MEM_TRACE_SUM_GAUGE,
     },
-    proxy::{build_forward_option, get_target_address, Proxy},
     raft_client::{ConnectionBuilder, MetadataSourceStoreId, RaftClient},
     raft_server::MultiRaftServer,
     raftkv::RaftKv,

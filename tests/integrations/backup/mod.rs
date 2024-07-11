@@ -573,7 +573,12 @@ fn calculated_commit_ts_after_commit() {
         prewrite_req.set_start_version(start_ts.into_inner());
         prewrite_req.set_lock_ttl(2000);
         prewrite_req.set_use_async_commit(true);
-        let prewrite_resp = suite.tikv_cli.kv_prewrite(&prewrite_req).unwrap();
+        let prewrite_resp = suite
+            .cluster
+            .runtime
+            .block_on(suite.tikv_cli.kv_prewrite(prewrite_req))
+            .unwrap()
+            .into_inner();
         let min_commit_ts: TimeStamp = prewrite_resp.get_min_commit_ts().into();
         assert!(!min_commit_ts.is_zero());
         suite.must_kv_commit(vec![k.to_vec()], start_ts, min_commit_ts);
@@ -595,7 +600,12 @@ fn calculated_commit_ts_after_commit() {
         prewrite_req.set_start_version(start_ts.into_inner());
         prewrite_req.set_lock_ttl(2000);
         prewrite_req.set_try_one_pc(true);
-        let prewrite_resp = suite.tikv_cli.kv_prewrite(&prewrite_req).unwrap();
+        let prewrite_resp = suite
+            .cluster
+            .runtime
+            .block_on(suite.tikv_cli.kv_prewrite(prewrite_req))
+            .unwrap()
+            .into_inner();
         let commit_ts: TimeStamp = prewrite_resp.get_one_pc_commit_ts().into();
         assert!(!commit_ts.is_zero());
         commit_ts

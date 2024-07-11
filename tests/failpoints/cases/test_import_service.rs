@@ -28,7 +28,7 @@ use self::util::{
 // Test if download sst works when opening sst writer is blocked.
 #[test]
 fn test_download_sst_blocking_sst_writer() {
-    let (_cluster, ctx, tikv, import) = new_cluster_and_tikv_import_client();
+    let (cluster, ctx, mut tikv, mut import) = new_cluster_and_tikv_import_client();
     let temp_dir = Builder::new()
         .prefix("test_download_sst_blocking_sst_writer")
         .tempdir()
@@ -64,8 +64,8 @@ fn test_download_sst_blocking_sst_writer() {
     fail::remove(sst_writer_open_fp);
 
     // Do an ingest and verify the result is correct.
-    must_ingest_sst(&import, ctx.clone(), meta);
-    check_ingested_kvs(&tikv, &ctx, sst_range);
+    must_ingest_sst(cluster.runtime.handle(), &mut import, ctx.clone(), meta);
+    check_ingested_kvs(cluster.runtime.handle(), &mut tikv, &ctx, sst_range);
 }
 
 #[test]
@@ -82,7 +82,7 @@ fn test_ingest_reentrant() {
     let (mut meta, data) = gen_sst_file(sst_path, sst_range);
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
-    send_upload_sst(&import, &meta, &data).unwrap();
+    send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
 
     // Don't delete ingested sst file or we cannot find sst file in next ingest.
     fail::cfg("dont_delete_ingested_sst", "1*return").unwrap();
@@ -99,7 +99,12 @@ fn test_ingest_reentrant() {
 
     let checksum1 = calc_crc32(save_path.clone()).unwrap();
     // Do ingest and it will ingest success.
-    must_ingest_sst(&import, ctx.clone(), meta.clone());
+    must_ingest_sst(
+        cluster.runtime.handle(),
+        &mut import,
+        ctx.clone(),
+        meta.clone(),
+    );
 
     let checksum2 = calc_crc32(save_path).unwrap();
     // TODO: Remove this once write_global_seqno is deprecated.
@@ -107,7 +112,7 @@ fn test_ingest_reentrant() {
     // updated with the default setting, which is write_global_seqno=false.
     assert_eq!(checksum1, checksum2);
     // Do ingest again and it can be reentrant
-    must_ingest_sst(&import, ctx.clone(), meta);
+    must_ingest_sst(cluster.runtime.handle(), &mut import, ctx.clone(), meta);
 }
 
 #[test]
@@ -125,7 +130,7 @@ fn test_ingest_key_manager_delete_file_failed() {
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
 
-    send_upload_sst(&import, &meta, &data).unwrap();
+    send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
 
     let deregister_fp = "key_manager_fails_before_delete_file";
     // the first delete is in check before ingest, the second is in ingest cleanup
@@ -136,7 +141,12 @@ fn test_ingest_key_manager_delete_file_failed() {
     // Do an ingest and verify the result is correct. Though the ingest succeeded,
     // the clone file is still in the key manager
     // TODO: how to check the key manager contains the clone key
-    must_ingest_sst(&import, ctx.clone(), meta.clone());
+    must_ingest_sst(
+        cluster.runtime.handle(),
+        &mut import,
+        ctx.clone(),
+        meta.clone(),
+    );
 
     fail::remove(deregister_fp);
 
@@ -160,8 +170,8 @@ fn test_ingest_key_manager_delete_file_failed() {
 
     // Do upload and ingest again, though key manager contains this file, the ingest
     // action should success.
-    send_upload_sst(&import, &meta, &data).unwrap();
-    must_ingest_sst(&import, ctx, meta);
+    send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
+    must_ingest_sst(cluster.runtime.handle(), &mut import, ctx, meta);
 }
 
 #[test]
@@ -178,7 +188,7 @@ fn test_ingest_file_twice_and_conflict() {
     let (mut meta, data) = gen_sst_file(sst_path, sst_range);
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
-    send_upload_sst(&import, &meta, &data).unwrap();
+    send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
     let mut ingest = IngestRequest::default();
     ingest.set_context(ctx);
     ingest.set_sst(meta);
@@ -229,11 +239,16 @@ fn test_delete_sst_v2_after_epoch_stale() {
     let (mut meta, data) = gen_sst_file(sst_path, sst_range);
     // disable data flushed
     fail::cfg("on_flush_completed", "return()").unwrap();
-    send_upload_sst(&import, &meta, &data).unwrap();
+    send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
-    send_upload_sst(&import, &meta, &data).unwrap();
-    must_ingest_sst(&import, ctx.clone(), meta.clone());
+    send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
+    must_ingest_sst(
+        cluster.runtime.handle(),
+        &mut import,
+        ctx.clone(),
+        meta.clone(),
+    );
 
     let (tx, rx) = channel::<()>();
     let tx = Arc::new(Mutex::new(tx));
@@ -290,11 +305,11 @@ fn test_delete_sst_after_applied_sst() {
     let sst_range = (0, 100);
     let (mut meta, data) = gen_sst_file(sst_path, sst_range);
     // No region id and epoch.
-    send_upload_sst(&import, &meta, &data).unwrap();
+    send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
-    send_upload_sst(&import, &meta, &data).unwrap();
-    must_ingest_sst(&import, ctx.clone(), meta);
+    send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
+    must_ingest_sst(cluster.runtime.handle(), &mut import, ctx.clone(), meta);
 
     // restart node
     cluster.stop_node(1);
@@ -343,11 +358,11 @@ fn test_split_buckets_after_ingest_sst_v2() {
     let sst_path = temp_dir.path().join("test.sst");
     let sst_range = (0, 255);
     let (mut meta, data) = gen_sst_file(sst_path, sst_range);
-    send_upload_sst(&import, &meta, &data).unwrap();
+    send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
     meta.set_region_id(ctx.get_region_id());
     meta.set_region_epoch(ctx.get_region_epoch().clone());
-    send_upload_sst(&import, &meta, &data).unwrap();
-    must_ingest_sst(&import, ctx.clone(), meta);
+    send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
+    must_ingest_sst(cluster.runtime.handle(), &mut import, ctx.clone(), meta);
 
     let (tx, rx) = channel::<()>();
     let tx = Arc::new(Mutex::new(tx));
@@ -421,11 +436,11 @@ fn test_flushed_applied_index_after_ingset() {
         let sst_range = (i * 20, (i + 1) * 20);
         let (mut meta, data) = gen_sst_file(sst_path.clone(), sst_range);
         // No region id and epoch.
-        send_upload_sst(&import, &meta, &data).unwrap();
+        send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
         meta.set_region_id(ctx.get_region_id());
         meta.set_region_epoch(ctx.get_region_epoch().clone());
-        send_upload_sst(&import, &meta, &data).unwrap();
-        must_ingest_sst(&import, ctx.clone(), meta);
+        send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
+        must_ingest_sst(cluster.runtime.handle(), &mut import, ctx.clone(), meta);
     }
 
     // only 1 sst left because there is no more event to trigger a raft ready flush.
@@ -436,11 +451,11 @@ fn test_flushed_applied_index_after_ingset() {
         let sst_range = (i * 20, (i + 1) * 20);
         let (mut meta, data) = gen_sst_file(sst_path.clone(), sst_range);
         // No region id and epoch.
-        send_upload_sst(&import, &meta, &data).unwrap();
+        send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
         meta.set_region_id(ctx.get_region_id());
         meta.set_region_epoch(ctx.get_region_epoch().clone());
-        send_upload_sst(&import, &meta, &data).unwrap();
-        must_ingest_sst(&import, ctx.clone(), meta);
+        send_upload_sst(cluster.runtime.handle(), &mut import, &meta, &data).unwrap();
+        must_ingest_sst(cluster.runtime.handle(), &mut import, ctx.clone(), meta);
     }
 
     // ingest more sst files, unflushed index still be 1.

@@ -3,7 +3,6 @@ use std::{thread, time::Duration};
 
 use api_version::{test_kv_format_impl, KvFormat};
 use futures::{executor::block_on, sink::SinkExt};
-use grpcio::WriteFlags;
 use kvproto::{cdcpb::*, kvrpcpb::*, metapb::RegionEpoch};
 use pd_client::PdClient;
 use raft::StateRole;
@@ -27,8 +26,8 @@ fn test_failed_pending_batch_impl<F: KvFormat>() {
     let region = suite.cluster.get_region(&[]);
     let mut req = suite.new_changedata_request(region.get_id());
     let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send((req.clone()))).unwrap();
     // Split region.
     suite.cluster.must_split(&region, b"xk0");
     // Wait for receiving split cmd.
@@ -55,7 +54,7 @@ fn test_failed_pending_batch_impl<F: KvFormat>() {
     // Ensure it is the previous region.
     assert_eq!(req.get_region_id(), region.get_id());
     req.set_region_epoch(region.get_region_epoch().clone());
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send(req)).unwrap();
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
@@ -84,8 +83,8 @@ fn test_region_ready_after_deregister_impl<F: KvFormat>() {
 
     let req = suite.new_changedata_request(1);
     let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
     // Sleep for a while to make sure the region has been subscribed
     sleep_ms(200);
 
@@ -133,8 +132,8 @@ fn test_connections_register_impl<F: KvFormat>() {
     req.set_region_epoch(RegionEpoch::default());
 
     let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send((req.clone()))).unwrap();
     let mut events = receive_event(false).events.to_vec();
     match events.pop().unwrap().event.unwrap() {
         Event_oneof_event::Error(err) => {
@@ -145,16 +144,20 @@ fn test_connections_register_impl<F: KvFormat>() {
 
     // Conn 1
     req.set_region_epoch(region.get_region_epoch().clone());
-    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+    block_on(req_tx.send((req.clone()))).unwrap();
     thread::sleep(Duration::from_secs(1));
     // Close conn 1
     event_feed_wrap.replace(None);
     // Conn 2
-    let (mut req_tx, resp_rx) = suite
-        .get_region_cdc_client(region.get_id())
-        .event_feed()
-        .unwrap();
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let mut client = suite.get_region_cdc_client(region.get_id());
+    let (req_tx, req_rx) = futures::channel::mpsc::unbounded();
+    let resp_rx = suite
+        .runtime
+        .block_on(client.event_feed(req_rx))
+        .unwrap()
+        .into_inner();
+
+    block_on(req_tx.send(req)).unwrap();
     event_feed_wrap.replace(Some(resp_rx));
     // Split region.
     suite.cluster.must_split(&region, b"xk0");
@@ -193,16 +196,20 @@ fn test_merge_impl<F: KvFormat>() {
     let mut req = suite.new_changedata_request(region.get_id());
     req.region_id = source.get_id();
     req.set_region_epoch(source.get_region_epoch().clone());
-    let (mut source_tx, source_wrap, source_event) =
-        new_event_feed(suite.get_region_cdc_client(source.get_id()));
-    block_on(source_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+    let (mut source_tx, source_wrap, source_event) = new_event_feed(
+        suite.get_region_cdc_client(source.get_id()),
+        suite.runtime.handle(),
+    );
+    block_on(source_tx.send((req.clone()))).unwrap();
     // Subscribe target region
     let target = suite.cluster.get_region(b"xk2");
     req.region_id = target.get_id();
     req.set_region_epoch(target.get_region_epoch().clone());
-    let (mut target_tx, target_wrap, target_event) =
-        new_event_feed(suite.get_region_cdc_client(target.get_id()));
-    block_on(target_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+    let (mut target_tx, target_wrap, target_event) = new_event_feed(
+        suite.get_region_cdc_client(target.get_id()),
+        suite.runtime.handle(),
+    );
+    block_on(target_tx.send((req.clone()))).unwrap();
     sleep_ms(200);
     // Pause before completing commit merge
     let commit_merge_fp = "before_handle_catch_up_logs_for_merge";
@@ -251,7 +258,7 @@ fn test_merge_impl<F: KvFormat>() {
     source_epoch.set_conf_ver(source_epoch.get_conf_ver() + 1);
     req.region_id = source.get_id();
     req.set_region_epoch(source_epoch);
-    block_on(source_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(source_tx.send(req)).unwrap();
     // Wait until raftstore receives ChangeCmd
     sleep_ms(100);
     fail::remove(destroy_peer_fp);
@@ -297,8 +304,8 @@ fn test_deregister_pending_downstream_impl<F: KvFormat>() {
     fail::cfg(build_resolver_fp, "pause").unwrap();
     let mut req = suite.new_changedata_request(1);
     let (mut req_tx1, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx1.send((req.clone(), WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx1.send((req.clone()))).unwrap();
     // Sleep for a while to make sure the region has been subscribed
     sleep_ms(200);
 
@@ -308,7 +315,7 @@ fn test_deregister_pending_downstream_impl<F: KvFormat>() {
     // Conn 2
     let (mut req_tx2, resp_rx2) = suite.get_region_cdc_client(1).event_feed().unwrap();
     req.set_region_epoch(RegionEpoch::default());
-    block_on(req_tx2.send((req.clone(), WriteFlags::default()))).unwrap();
+    block_on(req_tx2.send((req.clone()))).unwrap();
     let _resp_rx1 = event_feed_wrap.replace(Some(resp_rx2));
     // Sleep for a while to make sure the region has been subscribed
     sleep_ms(200);
@@ -322,7 +329,7 @@ fn test_deregister_pending_downstream_impl<F: KvFormat>() {
         other => panic!("unknown event {:?}", other),
     }
 
-    block_on(req_tx2.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx2.send(req)).unwrap();
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {

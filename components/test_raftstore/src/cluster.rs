@@ -190,6 +190,7 @@ pub struct Cluster<EK: KvEngineWithRocks, T: Simulator<EK>> {
     pub raft_statistics: Vec<Option<Arc<RocksStatistics>>>,
     pub sim: Arc<RwLock<T>>,
     pub pd_client: Arc<TestPdClient>,
+    pub runtime: tokio::runtime::Runtime,
     resource_manager: Option<Arc<ResourceGroupManager>>,
 
     // When this is set, the `HybridEngineImpl` will be used as the underlying KvEngine. In
@@ -211,6 +212,11 @@ where
         pd_client: Arc<TestPdClient>,
         api_version: ApiVersion,
     ) -> Cluster<EK, T> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
         // TODO: In the future, maybe it's better to test both case where
         // `use_delete_range` is true and false
         Cluster {
@@ -228,6 +234,7 @@ where
             group_props: HashMap::default(),
             sim,
             pd_client,
+            runtime,
             sst_workers: vec![],
             sst_workers_map: HashMap::default(),
             resource_manager: Some(Arc::new(ResourceGroupManager::default())),

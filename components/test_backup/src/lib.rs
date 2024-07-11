@@ -17,8 +17,7 @@ use engine_rocks::RocksEngine as KTE;
 use engine_traits::{CfName, IterOptions, CF_DEFAULT, CF_WRITE, DATA_KEY_PREFIX_LEN};
 use external_storage::make_local_backend;
 use futures::{channel::mpsc as future_mpsc, executor::block_on};
-use grpcio::{ChannelBuilder, Environment};
-use kvproto::{backup::*, kvrpcpb::*, tikvpb::TikvClient};
+use kvproto::{backup::*, kvrpcpb::*, tikvpb_grpc::tikv_client::TikvClient};
 use rand::Rng;
 use test_raftstore::*;
 use tidb_query_common::storage::{
@@ -39,6 +38,7 @@ use tikv_util::{
     worker::{LazyWorker, Worker},
     HandyRwLock,
 };
+use tonic::transport::Channel;
 use txn_types::TimeStamp;
 
 pub mod disk_snap;
@@ -46,13 +46,11 @@ pub mod disk_snap;
 pub struct TestSuite {
     pub cluster: Cluster<KTE, ServerCluster<KTE>>,
     pub endpoints: HashMap<u64, LazyWorker<Task>>,
-    pub tikv_cli: TikvClient,
+    pub tikv_cli: TikvClient<Channel>,
     pub context: Context,
     pub ts: TimeStamp,
     pub bg_worker: Worker,
     pub api_version: ApiVersion,
-
-    _env: Arc<Environment>,
 }
 
 // Retry if encounter error
@@ -129,8 +127,15 @@ impl TestSuite {
         context.set_region_epoch(epoch);
         context.set_api_version(api_version);
 
-        let env = Arc::new(Environment::new(1));
-        let channel = ChannelBuilder::new(env.clone()).connect(&leader_addr);
+        let addr = format!("http://127.0.0.1:{}", sock_addr.port());
+        let channel = self
+            .runtime
+            .block_on(
+                Channel::from_shared(tikv_util::format_url(&leader_addr, false))
+                    .unwrap()
+                    .connect(),
+            )
+            .unwrap();
         let tikv_cli = TikvClient::new(channel);
 
         TestSuite {
@@ -139,7 +144,6 @@ impl TestSuite {
             tikv_cli,
             context,
             ts: TimeStamp::zero(),
-            _env: env,
             bg_worker,
             api_version,
         }
@@ -157,7 +161,7 @@ impl TestSuite {
         self.cluster.shutdown();
     }
 
-    pub fn must_raw_put(&self, k: Vec<u8>, v: Vec<u8>, cf: String) {
+    pub fn must_raw_put(&mut self, k: Vec<u8>, v: Vec<u8>, cf: String) {
         let mut request = RawPutRequest::default();
         let mut context = self.context.clone();
         if context.api_version == ApiVersion::V1ttl {
@@ -172,9 +176,18 @@ impl TestSuite {
             _ => u64::MAX,
         };
         request.set_ttl(ttl);
-        let mut response = self.tikv_cli.raw_put(&request).unwrap();
+        let mut response = self
+            .cluster
+            .runtime
+            .block_on(self.tikv_cli.raw_put(request))
+            .unwrap()
+            .into_inner();
         retry_req!(
-            self.tikv_cli.raw_put(&request).unwrap(),
+            self.cluster
+                .runtime
+                .block_on(self.tikv_cli.raw_put(request))
+                .unwrap()
+                .into_inner(),
             !response.has_region_error() && response.error.is_empty(),
             response,
             10,   // retry 10 times
@@ -197,9 +210,18 @@ impl TestSuite {
         request.set_context(context);
         request.set_key(k);
         request.set_cf(cf);
-        let mut response = self.tikv_cli.raw_get(&request).unwrap();
+        let mut response = self
+            .cluster
+            .runtime
+            .block_on(self.tikv_cli.raw_get(request))
+            .unwrap()
+            .into_inner();
         retry_req!(
-            self.tikv_cli.raw_get(&request).unwrap(),
+            self.cluster
+                .runtime
+                .block_on(self.tikv_cli.raw_get(request))
+                .unwrap()
+                .into_inner(),
             !response.has_region_error() && response.error.is_empty(),
             response,
             10,   // retry 10 times
@@ -216,9 +238,18 @@ impl TestSuite {
         prewrite_req.primary_lock = pk;
         prewrite_req.start_version = ts.into_inner();
         prewrite_req.lock_ttl = prewrite_req.start_version + 1;
-        let mut prewrite_resp = self.tikv_cli.kv_prewrite(&prewrite_req).unwrap();
+        let mut prewrite_resp = self
+            .cluster
+            .runtime
+            .block_on(self.tikv_cli.kv_prewrite(prewrite_req))
+            .unwrap()
+            .into_inner();
         retry_req!(
-            self.tikv_cli.kv_prewrite(&prewrite_req).unwrap(),
+            self.cluster
+                .runtime
+                .block_on(self.tikv_cli.kv_prewrite(prewrite_req))
+                .unwrap()
+                .into_inner(),
             !prewrite_resp.has_region_error() && prewrite_resp.errors.is_empty(),
             prewrite_resp,
             10,   // retry 10 times
@@ -236,15 +267,29 @@ impl TestSuite {
         );
     }
 
-    pub fn must_kv_commit(&self, keys: Vec<Vec<u8>>, start_ts: TimeStamp, commit_ts: TimeStamp) {
+    pub fn must_kv_commit(
+        &mut self,
+        keys: Vec<Vec<u8>>,
+        start_ts: TimeStamp,
+        commit_ts: TimeStamp,
+    ) {
         let mut commit_req = CommitRequest::default();
         commit_req.set_context(self.context.clone());
         commit_req.start_version = start_ts.into_inner();
         commit_req.set_keys(keys.into_iter().collect());
         commit_req.commit_version = commit_ts.into_inner();
-        let mut commit_resp = self.tikv_cli.kv_commit(&commit_req).unwrap();
+        let mut commit_resp = self
+            .cluster
+            .runtime
+            .block_on(self.tikv_cli.kv_commit(commit_req))
+            .unwrap()
+            .into_inner();
         retry_req!(
-            self.tikv_cli.kv_commit(&commit_req).unwrap(),
+            self.cluster
+                .runtime
+                .block_on(self.tikv_cli.kv_commit(commit_req))
+                .unwrap()
+                .into_inner(),
             !commit_resp.has_region_error() && !commit_resp.has_error(),
             commit_resp,
             10,   // retry 10 times
@@ -417,7 +462,7 @@ impl TestSuite {
         (checksum, total_kvs, total_bytes)
     }
 
-    pub fn storage_raw_checksum(&self, start: String, end: String) -> (u64, u64, u64) {
+    pub fn storage_raw_checksum(&mut self, start: String, end: String) -> (u64, u64, u64) {
         let mut req = RawChecksumRequest::default();
         let mut context = self.context.clone();
         if context.api_version == ApiVersion::V1ttl {
@@ -428,7 +473,12 @@ impl TestSuite {
         range.set_start_key(start.into_bytes());
         range.set_end_key(end.into_bytes());
         req.set_ranges(vec![range]);
-        let response = self.tikv_cli.raw_checksum(&req).unwrap();
+        let response = self
+            .cluster
+            .runtime
+            .block_on(self.tikv_cli.raw_checksum(req))
+            .unwrap()
+            .into_inner();
         (response.checksum, response.total_kvs, response.total_bytes)
     }
 }

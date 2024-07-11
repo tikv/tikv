@@ -13,35 +13,20 @@ use std::{
     future::Future,
     str,
     sync::{Arc, Weak},
+    task::{Context, Poll},
     time::Duration,
 };
 
 use collections::HashMap;
-use grpcio::{CallOption, ChannelBuilder, Environment, MetadataBuilder, RpcContext};
+use grpcio::{CallOption, MetadataBuilder};
+use http_body::Body;
 use kvproto::tikvpb_grpc::tikv_client::TikvClient;
 use security::SecurityManager;
-use tonic::transport::Channel;
+use tonic::{server::NamedService, transport::Channel};
 
 use crate::server::Config;
 
 const FORWARD_METADATA_KEY: &str = "tikv-forwarded-host";
-
-/// Checks if the message is supposed to send to another address.
-pub fn get_target_address<'a>(ctx: &'a RpcContext<'_>) -> &'a str {
-    let metadata = ctx.request_headers();
-    // In most case, forwarding is unnecessary.
-    if metadata.is_empty() {
-        return "";
-    }
-    for (key, value) in metadata {
-        if key == FORWARD_METADATA_KEY {
-            if let Ok(addr) = str::from_utf8(value) {
-                return addr;
-            }
-        }
-    }
-    ""
-}
 
 /// Build a call option that will make receiver to forward the rpc
 /// to `target_address`.
@@ -83,13 +68,13 @@ impl ClientPool {
     ) -> Option<Client> {
         if self.last_pos == self.pool.len() {
             if self.last_pos < cfg.forward_max_connections_per_address {
-                let addr = tikv_util::format_url(addr);
+                let addr = tikv_util::format_url(addr, mgr.is_ssl_enabled());
                 let ch = Channel::from_shared(addr)
                     .unwrap()
                     .initial_stream_window_size(cfg.grpc_stream_initial_window_size.0 as u32)
                     .http2_keep_alive_interval(cfg.grpc_keepalive_time.into())
-                    .keep_alive_timeout(cfg.grpc_keepalive_timeout.into())
-                    .connect_lazy();
+                    .keep_alive_timeout(cfg.grpc_keepalive_timeout.into());
+                let ch = mgr.set_tls_config(ch).unwrap().connect_lazy();
 
                 let client = Client {
                     client: TikvClient::new(ch.clone()),
@@ -116,7 +101,7 @@ pub struct Proxy {
     // env: Weak<Environment>,
     cfg: Arc<Config>,
     // todo: Release client if it's not used anymore. For example, become tombstone.
-    pool: HashMap<String, ClientPool>,
+    pool: HashMap<String, Channel>,
 }
 
 impl Proxy {
@@ -126,39 +111,6 @@ impl Proxy {
             cfg,
             pool: HashMap::default(),
         }
-    }
-
-    /// Get a client and do work on the client.
-    pub fn call_on<C>(&mut self, addr: &str, callback: C) -> impl Future<Output = ()>
-    where
-        C: FnOnce(&TikvClient<Channel>) + Send + 'static,
-    {
-        futures::future::ready(())
-        // let client = match self.pool.get_mut(addr) {
-        //     Some(p) => p.get_connection(&self.env, &self.mgr, &self.cfg,
-        // addr),     None => {
-        //         let p =
-        // ClientPool::with_capacity(self.cfg.
-        // forward_max_connections_per_address);         self.pool.
-        // insert(addr.to_string(), p);         self.pool
-        //             .get_mut(addr)
-        //             .unwrap()
-        //             .get_connection(&self.env, &self.mgr, &self.cfg, addr)
-        //     }
-        // };
-
-        // async move {
-        //     let c = match client {
-        //         Some(c) => c,
-        //         None => return,
-        //     };
-
-        //     // To make it simplied, we rely on gRPC to handle the lifecycle
-        // of a     // Connection.
-        //     if c.channel.wait_for_connected(Duration::from_secs(3)).await {
-        //         callback(&c.client)
-        //     }
-        // }
     }
 }
 
@@ -237,4 +189,116 @@ macro_rules! forward_duplex {
             return;
         }
     }};
+}
+
+pub struct ProxyService<S> {
+    mgr: Arc<SecurityManager>,
+    // env: Weak<Environment>,
+    cfg: Arc<Config>,
+    // todo: Release client if it's not used anymore. For example, become tombstone.
+    pool: HashMap<String, Channel>,
+    // the wrapped grpc service
+    svc: S,
+}
+
+impl<S> ProxyService<S> {
+    pub fn new(mgr: Arc<SecurityManager>, cfg: Arc<Config>, svc: S) -> Self {
+        ProxyService {
+            mgr,
+            cfg,
+            pool: HashMap::default(),
+            svc,
+        }
+    }
+
+    pub fn get_channel(&mut self, addr: &str) -> Option<Channel> {
+        if let Some(c) = self.pool.get(addr) {
+            return Some(c.clone());
+        }
+
+        let addr = tikv_util::format_url(addr, self.mgr.is_ssl_enabled());
+        let mut endpoint = Channel::from_shared(addr.to_string()).ok()?;
+        let ch = endpoint
+            .initial_stream_window_size(self.cfg.grpc_stream_initial_window_size.0 as u32)
+            .http2_keep_alive_interval(self.cfg.grpc_keepalive_time.into())
+            .keep_alive_timeout(self.cfg.grpc_keepalive_timeout.into());
+        // TODO: does lasy connect ok here?
+        let ch = self.mgr.set_tls_config(ch).unwrap().connect_lazy();
+        self.pool.insert(addr.to_string(), ch.clone());
+        Some(ch)
+    }
+}
+
+impl<S: Clone> Clone for ProxyService<S> {
+    fn clone(&self) -> Self {
+        Self {
+            mgr: self.mgr.clone(),
+            cfg: self.cfg.clone(),
+            pool: HashMap::default(),
+            svc: self.svc.clone(),
+        }
+    }
+}
+
+impl<S> tonic::codegen::Service<http::Request<hyper::body::Body>> for ProxyService<S>
+where
+    S: tonic::codegen::Service<
+            http::Request<hyper::body::Body>,
+            Response = http::Response<tonic::body::BoxBody>,
+            Error = std::convert::Infallible,
+            Future = tonic::codegen::BoxFuture<
+                http::Response<tonic::body::BoxBody>,
+                std::convert::Infallible,
+            >,
+        >,
+{
+    type Response = http::Response<tonic::body::BoxBody>;
+    type Error = std::convert::Infallible;
+    type Future = tonic::codegen::BoxFuture<Self::Response, Self::Error>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, request: http::Request<hyper::body::Body>) -> Self::Future {
+        if let Some(addr) = get_target_address(&request) {
+            if let Some(mut ch) = self.get_channel(addr) {
+                let (head, body) = request.into_parts();
+                let boxed_body = to_boxed_body(body);
+                let request = http::Request::from_parts(head, boxed_body);
+                let fut = ch.call(request);
+                return Box::pin(async move {
+                    match fut.await {
+                        Ok(r) => {
+                            let (mut parts, body) = r.into_parts();
+                            // Set the content type
+                            parts.headers.insert(
+                                http::header::CONTENT_TYPE,
+                                http::header::HeaderValue::from_static("application/grpc"),
+                            );
+                            Ok(http::Response::from_parts(parts, to_boxed_body(body)))
+                        }
+                        Err(e) => Ok(tonic::Status::from_error(e.into()).to_http()),
+                    }
+                });
+            }
+        }
+
+        self.svc.call(request)
+    }
+}
+
+impl<S: NamedService> NamedService for ProxyService<S> {
+    const NAME: &'static str = <S as NamedService>::NAME;
+}
+
+pub fn get_target_address<T>(req: &http::Request<T>) -> Option<&str> {
+    req.headers()
+        .get(FORWARD_METADATA_KEY)
+        .and_then(|v| v.to_str().ok())
+}
+
+fn to_boxed_body(body: hyper::Body) -> tonic::body::BoxBody {
+    body.map_err(|e| tonic::Status::from_error(e.into()))
+        .boxed_unsync()
 }

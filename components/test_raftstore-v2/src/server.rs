@@ -28,7 +28,7 @@ use kvproto::{
     metapb,
     raft_cmdpb::RaftCmdResponse,
     raft_serverpb::RaftMessage,
-    tikvpb_grpc::TikvClient,
+    tikvpb_grpc::tikv_client::TikvClient,
 };
 use pd_client::PdClient;
 use raftstore::{
@@ -82,6 +82,7 @@ use tikv_util::{
     Either, HandyRwLock,
 };
 use tokio::runtime::{Builder as TokioBuilder, Handle};
+use tonic::transport::Channel;
 use txn_types::TxnExtraScheduler;
 
 use crate::{Cluster, RaftStoreRouter, SimulateTransport, Simulator, SnapshotRouter};
@@ -1004,7 +1005,7 @@ pub fn new_server_cluster_with_api_ver(
 
 pub fn must_new_cluster_and_kv_client() -> (
     Cluster<ServerCluster<RocksEngine>, RocksEngine>,
-    TikvClient,
+    TikvClient<Channel>,
     Context,
 ) {
     must_new_cluster_and_kv_client_mul(1)
@@ -1014,7 +1015,7 @@ pub fn must_new_cluster_and_kv_client_mul(
     count: usize,
 ) -> (
     Cluster<ServerCluster<RocksEngine>, RocksEngine>,
-    TikvClient,
+    TikvClient<Channel>,
     Context,
 ) {
     must_new_cluster_with_cfg_and_kv_client_mul(count, |_| {})
@@ -1025,7 +1026,7 @@ pub fn must_new_cluster_with_cfg_and_kv_client_mul(
     configure: impl FnMut(&mut Cluster<ServerCluster<RocksEngine>, RocksEngine>),
 ) -> (
     Cluster<ServerCluster<RocksEngine>, RocksEngine>,
-    TikvClient,
+    TikvClient<Channel>,
     Context,
 ) {
     let (cluster, leader, ctx) = must_new_and_configure_cluster_mul(count, configure);
@@ -1074,7 +1075,7 @@ pub fn must_new_and_configure_cluster_and_kv_client(
     configure: impl FnMut(&mut Cluster<ServerCluster<RocksEngine>, RocksEngine>),
 ) -> (
     Cluster<ServerCluster<RocksEngine>, RocksEngine>,
-    TikvClient,
+    TikvClient<Channel>,
     Context,
 ) {
     let (cluster, leader, ctx) = must_new_and_configure_cluster(configure);
@@ -1140,7 +1141,7 @@ pub fn must_new_cluster_and_debug_client() -> (
 
 pub fn setup_cluster() -> (
     Cluster<ServerCluster<RocksEngine>, RocksEngine>,
-    TikvClient,
+    TikvClient<Channel>,
     String,
     Context,
 ) {

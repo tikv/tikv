@@ -6,7 +6,6 @@ use api_version::{test_kv_format_impl, KvFormat};
 use cdc::{metrics::CDC_RESOLVED_TS_ADVANCE_METHOD, Task, Validate};
 use concurrency_manager::ConcurrencyManager;
 use futures::{executor::block_on, SinkExt};
-use grpcio::WriteFlags;
 use kvproto::{cdcpb::*, kvrpcpb::*};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
@@ -27,8 +26,8 @@ fn test_cdc_basic_impl<F: KvFormat>() {
 
     let req = suite.new_changedata_request(1);
     let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
     let event = receive_event(false);
     event.events.into_iter().for_each(|e| {
         match e.event.unwrap() {
@@ -128,7 +127,7 @@ fn test_cdc_basic_impl<F: KvFormat>() {
     let req = suite.new_changedata_request(1);
     let (mut req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
     event_feed_wrap.replace(Some(resp_rx));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send(req)).unwrap();
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
@@ -168,7 +167,7 @@ fn test_cdc_basic_impl<F: KvFormat>() {
     let mut req = suite.new_changedata_request(1);
     req.set_region_epoch(Default::default()); // Zero region epoch.
     let (mut req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send(req)).unwrap();
     event_feed_wrap.replace(Some(resp_rx));
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
@@ -190,8 +189,8 @@ fn test_cdc_rawkv_basic() {
     let mut req = suite.new_changedata_request(1);
     req.set_kv_api(ChangeDataRequestKvApi::RawKv);
     let (mut req_tx, _event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
 
     let event = receive_event(false);
     event.events.into_iter().for_each(|e| {
@@ -260,8 +259,8 @@ fn test_cdc_not_leader_impl<F: KvFormat>() {
     let leader = suite.cluster.leader_of_region(1).unwrap();
     let req = suite.new_changedata_request(1);
     let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send((req.clone()))).unwrap();
     // Make sure region 1 is registered.
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
@@ -346,7 +345,7 @@ fn test_cdc_not_leader_impl<F: KvFormat>() {
     rx.recv_timeout(Duration::from_millis(200)).unwrap();
 
     // Try to subscribe again.
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send(req)).unwrap();
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     // Should failed with not leader error.
@@ -382,8 +381,9 @@ fn test_cdc_cluster_id_mismatch_impl<F: KvFormat>() {
     let mut req = suite.new_changedata_request(1);
     req.mut_header().set_ticdc_version("5.3.0".into());
     req.mut_header().set_cluster_id(DEFAULT_CLUSTER_ID + 1);
-    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+    let (mut req_tx, _, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send((req.clone()))).unwrap();
 
     // Assert mismatch.
     let mut events = receive_event(false).events.to_vec();
@@ -399,8 +399,8 @@ fn test_cdc_cluster_id_mismatch_impl<F: KvFormat>() {
     req.mut_header().set_ticdc_version("4.0.8".into());
     req.mut_header().set_cluster_id(DEFAULT_CLUSTER_ID + 1);
     let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
 
@@ -430,8 +430,8 @@ fn test_cdc_stale_epoch_after_region_ready_impl<F: KvFormat>() {
 
     let req = suite.new_changedata_request(1);
     let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
     // Make sure region 1 is registered.
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
@@ -450,7 +450,7 @@ fn test_cdc_stale_epoch_after_region_ready_impl<F: KvFormat>() {
     req.set_region_epoch(Default::default()); // zero epoch is always stale.
     let (mut req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
     let _resp_rx = event_feed_wrap.replace(Some(resp_rx));
-    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+    block_on(req_tx.send((req.clone()))).unwrap();
     // Must receive epoch not match error.
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
@@ -462,7 +462,7 @@ fn test_cdc_stale_epoch_after_region_ready_impl<F: KvFormat>() {
     }
 
     req.set_region_epoch(suite.get_context(1).take_region_epoch());
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send(req)).unwrap();
     // Must receive epoch not match error.
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
@@ -515,8 +515,8 @@ fn test_cdc_scan_impl<F: KvFormat>() {
 
     let req = suite.new_changedata_request(1);
     let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
     let mut events = receive_event(false).events.to_vec();
     if events.len() == 1 {
         events.extend(receive_event(false).events.into_iter());
@@ -566,9 +566,15 @@ fn test_cdc_scan_impl<F: KvFormat>() {
 
     let mut req = suite.new_changedata_request(1);
     req.checkpoint_ts = checkpoint_ts.into_inner();
-    let (mut req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
+    let (req_tx, req_rx) = futures::channel::mpsc::unbounded();
+    let mut client = suite.get_region_cdc_client(1);
+    let resp_rx = suite
+        .runtime
+        .block_on(client.event_feed(req_rx))
+        .unwrap()
+        .into_inner();
     event_feed_wrap.replace(Some(resp_rx));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send(req)).unwrap();
     let mut events = receive_event(false).events.to_vec();
     if events.len() == 1 {
         events.extend(receive_event(false).events.to_vec());
@@ -633,8 +639,8 @@ fn test_cdc_rawkv_scan() {
     req.set_kv_api(ChangeDataRequestKvApi::RawKv);
     req.set_checkpoint_ts(ts.into_inner());
     let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
     let mut events = receive_event(false).events.to_vec();
     if events.len() == 1 {
         events.extend(receive_event(false).events.into_iter());
@@ -682,8 +688,8 @@ fn test_cdc_tso_failure_impl<F: KvFormat>() {
 
     let req = suite.new_changedata_request(1);
     let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
     // Make sure region 1 is registered.
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
@@ -730,9 +736,11 @@ fn test_region_split() {
 
     let region = suite.cluster.get_region(&[]);
     let mut req = suite.new_changedata_request(region.get_id());
-    let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(region.get_id()));
-    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+    let (mut req_tx, event_feed_wrap, receive_event) = new_event_feed(
+        suite.get_region_cdc_client(region.get_id()),
+        suite.runtime.handle(),
+    );
+    block_on(req_tx.send((req.clone()))).unwrap();
     // Make sure region 1 is registered.
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
@@ -761,7 +769,7 @@ fn test_region_split() {
     // Ensure it is the previous region.
     assert_eq!(req.get_region_id(), region.get_id());
     req.set_region_epoch(region.get_region_epoch().clone());
-    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+    block_on(req_tx.send((req.clone()))).unwrap();
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
@@ -777,7 +785,7 @@ fn test_region_split() {
     let region1 = suite.cluster.get_region(&[]);
     req.region_id = region1.get_id();
     req.set_region_epoch(region1.get_region_epoch().clone());
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send(req)).unwrap();
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     match events.pop().unwrap().event.unwrap() {
@@ -824,8 +832,8 @@ fn test_duplicate_subscribe_impl<F: KvFormat>() {
 
     let req = suite.new_changedata_request(1);
     let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send((req.clone()))).unwrap();
     // Make sure region 1 is registered.
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
@@ -840,7 +848,7 @@ fn test_duplicate_subscribe_impl<F: KvFormat>() {
         other => panic!("unknown event {:?}", other),
     }
     // Try to subscribe again.
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send(req)).unwrap();
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1);
     // Should receive duplicate request error.
@@ -882,8 +890,8 @@ fn test_cdc_batch_size_limit_impl<F: KvFormat>() {
 
     let req = suite.new_changedata_request(1);
     let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events.len());
     match events.remove(0).event.unwrap() {
@@ -960,8 +968,8 @@ fn test_old_value_basic_impl<F: KvFormat>() {
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send((req.clone()))).unwrap();
     sleep_ms(1000);
 
     // Insert value
@@ -1071,9 +1079,15 @@ fn test_old_value_basic_impl<F: KvFormat>() {
         }
     }
 
-    let (mut req_tx, resp_rx) = suite.get_region_cdc_client(1).event_feed().unwrap();
+    let (req_tx, req_rx) = futures::channel::mpsc::unbounded();
+    let mut client = suite.get_region_cdc_client(1);
+    let resp_rx = suite
+        .runtime
+        .block_on(client.event_feed(req_rx))
+        .unwrap()
+        .into_inner();
     event_feed_wrap.replace(Some(resp_rx));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    block_on(req_tx.send(req)).unwrap();
     let mut event_count = 0;
     loop {
         let event = receive_event(false);
@@ -1121,13 +1135,13 @@ fn test_old_value_multi_changefeeds_impl<F: KvFormat>() {
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx_1, event_feed_wrap_1, receive_event_1) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx_1.send((req.clone(), WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx_1.send((req.clone()))).unwrap();
 
     req.set_extra_op(ExtraOp::Noop);
     let (mut req_tx_2, event_feed_wrap_2, receive_event_2) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx_2.send((req, WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx_2.send(req)).unwrap();
 
     sleep_ms(1000);
     // Insert value
@@ -1243,8 +1257,8 @@ fn test_cdc_resolve_ts_checking_concurrency_manager_impl<F: KvFormat>() {
     let mut req = suite.new_changedata_request(1);
     req.set_checkpoint_ts(100);
     let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
     // Make sure region 1 is registered.
     let mut events = receive_event(false).events;
     assert_eq!(events.len(), 1);
@@ -1319,8 +1333,9 @@ fn test_cdc_1pc() {
 fn test_cdc_1pc_impl<F: KvFormat>() {
     let mut suite = TestSuite::new(1, F::TAG);
     let req = suite.new_changedata_request(1);
-    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let (mut req_tx, _, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
     let event = receive_event(false);
     event.events.into_iter().for_each(|e| {
         match e.event.unwrap() {
@@ -1407,8 +1422,9 @@ fn test_old_value_1pc_impl<F: KvFormat>() {
     let mut suite = TestSuite::new(1, F::TAG);
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
-    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let (mut req_tx, _, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
 
     // Insert value
     let mut m1 = Mutation::default();
@@ -1472,8 +1488,8 @@ fn test_old_value_cache_hit_impl<F: KvFormat>() {
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
     let mut events = receive_event(false).events.to_vec();
     match events.remove(0).event.unwrap() {
         Event_oneof_event::Entries(mut es) => {
@@ -1625,8 +1641,8 @@ fn test_old_value_cache_hit_pessimistic_impl<F: KvFormat>() {
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
     let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
     let mut events = receive_event(false).events.to_vec();
     match events.remove(0).event.unwrap() {
         Event_oneof_event::Entries(mut es) => {
@@ -1785,9 +1801,11 @@ fn test_region_created_replicate() {
         .must_add_peer(region.id, new_peer(1, 1));
     let region = suite.cluster.get_region(&[]);
     let req = suite.new_changedata_request(region.id);
-    let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(region.id));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let (mut req_tx, event_feed_wrap, receive_event) = new_event_feed(
+        suite.get_region_cdc_client(region.id),
+        suite.runtime.handle(),
+    );
+    block_on(req_tx.send(req)).unwrap();
     sleep_ms(1000);
     suite.cluster.sim.wl().clear_recv_filters(1);
 
@@ -1858,8 +1876,9 @@ fn test_cdc_scan_ignore_gc_fence_impl<F: KvFormat>() {
     assert_eq!(action, Action::LockNotExistRollback);
 
     let req = suite.new_changedata_request(1);
-    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let (mut req_tx, _, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
     let mut events = receive_event(false).events.to_vec();
     if events.len() == 1 {
         events.extend(receive_event(false).events.into_iter());
@@ -1904,8 +1923,9 @@ fn test_cdc_extract_rollback_if_gc_fence_set_impl<F: KvFormat>() {
     let mut suite = TestSuite::new(1, F::TAG);
 
     let req = suite.new_changedata_request(1);
-    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let (mut req_tx, _, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
     let event = receive_event(false);
     event
         .events
@@ -2121,9 +2141,11 @@ fn test_term_change() {
         .must_remove_peer(region.id, new_peer(3, 3));
     let region = suite.cluster.get_region(&[]);
     let req = suite.new_changedata_request(region.id);
-    let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(region.id));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let (mut req_tx, event_feed_wrap, receive_event) = new_event_feed(
+        suite.get_region_cdc_client(region.id),
+        suite.runtime.handle(),
+    );
+    block_on(req_tx.send(req)).unwrap();
     let mut counter = 0;
     let mut previous_ts = 0;
     loop {
@@ -2151,8 +2173,9 @@ fn test_cdc_no_write_corresponding_to_lock_impl<F: KvFormat>() {
     let mut suite = TestSuite::new(1, F::TAG);
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
-    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let (mut req_tx, _, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
 
     // Txn1 commit_ts = 15
     let mut m1 = Mutation::default();
@@ -2200,8 +2223,9 @@ fn test_cdc_write_rollback_when_no_lock_impl<F: KvFormat>() {
     let mut suite = TestSuite::new(1, F::TAG);
     let mut req = suite.new_changedata_request(1);
     req.set_extra_op(ExtraOp::ReadOldValue);
-    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let (mut req_tx, _, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
 
     // Txn1 commit_ts = 15
     let mut m1 = Mutation::default();
@@ -2268,9 +2292,11 @@ fn test_resolved_ts_cluster_upgrading() {
 
     let region = suite.cluster.get_region(&[]);
     let req = suite.new_changedata_request(region.id);
-    let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(region.id));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let (mut req_tx, event_feed_wrap, receive_event) = new_event_feed(
+        suite.get_region_cdc_client(region.id),
+        suite.runtime.handle(),
+    );
+    block_on(req_tx.send(req)).unwrap();
     let event = receive_event(true);
     if let Some(resolved_ts) = event.resolved_ts.as_ref() {
         assert!(resolved_ts.regions == vec![region.id]);
@@ -2310,8 +2336,9 @@ fn test_resolved_ts_with_learners() {
 
     let rid = suite.cluster.get_region(&[]).id;
     let req = suite.new_changedata_request(rid);
-    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(rid));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let (mut req_tx, _, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(rid), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
 
     for _ in 0..10 {
         let event = receive_event(true);
@@ -2343,8 +2370,9 @@ fn test_prewrite_without_value() {
     try_kv_prewrite_pessimistic(&client, ctx.clone(), muts, b"key".to_vec(), 10);
 
     let req = suite.new_changedata_request(rid);
-    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(rid));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let (mut req_tx, _, receive_event) =
+        new_event_feed(suite.get_region_cdc_client(rid), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
 
     // The prewrite can be retrieved from incremental scan.
     let event = receive_event(false);
@@ -2372,8 +2400,8 @@ fn test_filter_loop_impl<F: KvFormat>() {
     req.set_extra_op(ExtraOp::ReadOldValue);
     req.set_filter_loop(true);
     let (mut req_tx, event_feed_wrap, receive_event) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx.send(req)).unwrap();
     let mut events = receive_event(false).events.to_vec();
     match events.remove(0).event.unwrap() {
         Event_oneof_event::Entries(mut es) => {
@@ -2497,8 +2525,11 @@ fn test_flashback() {
     let region = suite.cluster.get_region(key.as_encoded());
     let region_id = region.get_id();
     let req = suite.new_changedata_request(region_id);
-    let (mut req_tx, _, receive_event) = new_event_feed(suite.get_region_cdc_client(region_id));
-    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+    let (mut req_tx, _, receive_event) = new_event_feed(
+        suite.get_region_cdc_client(region_id),
+        suite.runtime.handle(),
+    );
+    block_on(req_tx.send(req)).unwrap();
     let event = receive_event(false);
     event.events.into_iter().for_each(|e| {
         match e.event.unwrap() {
@@ -2612,8 +2643,8 @@ fn test_cdc_filter_key_range() {
     req_1_3.start_key = Key::from_raw(b"key1").into_encoded();
     req_1_3.end_key = Key::from_raw(b"key3").into_encoded();
     let (mut req_tx13, _event_feed_wrap13, receive_event13) =
-        new_event_feed(suite.get_region_cdc_client(1));
-    block_on(req_tx13.send((req_1_3, WriteFlags::default()))).unwrap();
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
+    block_on(req_tx13.send((req_1_3))).unwrap();
     let event = receive_event13(false);
     event
         .events
@@ -2628,12 +2659,12 @@ fn test_cdc_filter_key_range() {
         });
 
     let (mut req_tx24, _event_feed_wrap24, receive_event24) =
-        new_event_feed(suite.get_region_cdc_client(1));
+        new_event_feed(suite.get_region_cdc_client(1), suite.runtime.handle());
     let mut req_2_4 = req;
     req_2_4.request_id = 24;
     req_2_4.start_key = Key::from_raw(b"key2").into_encoded();
     req_2_4.end_key = Key::from_raw(b"key4").into_encoded();
-    block_on(req_tx24.send((req_2_4, WriteFlags::default()))).unwrap();
+    block_on(req_tx24.send((req_2_4))).unwrap();
     let event = receive_event24(false);
     event
         .events

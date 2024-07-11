@@ -20,5 +20,7 @@ keys = { workspace = true }
 kvproto = { workspace = true }
 tempfile = "3.0"
 tikv_util = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
 txn_types = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }

@@ -14,7 +14,7 @@ use std::{
 
 use file_system::{IoType, WithIoType};
 use futures::{
-    channel::oneshot::Sender,
+    channel::{mpsc::UnboundedSender, oneshot::Sender},
     compat::Future01CompatExt,
     future::{select, Either, Future, TryFutureExt},
     pin_mut,
@@ -79,7 +79,7 @@ pub enum Task {
     },
     RecvTablet {
         stream: tonic::Streaming<TabletSnapshotRequest>,
-        tx: futures::channel::mpsc::UnboundedSender<tonic::Result<TabletSnapshotResponse>>,
+        tx: UnboundedSender<tonic::Result<TabletSnapshotResponse>>,
     },
     Send {
         addr: String,
@@ -219,17 +219,20 @@ pub fn send_snap(
         }
     };
 
-    let addr = tikv_util::format_url(addr);
+    let addr = tikv_util::format_url(addr, security_mgr.is_ssl_enabled());
     let cb = Channel::from_shared(addr)
         .unwrap()
         //.tls_config()
         .initial_stream_window_size(cfg.grpc_stream_initial_window_size.0 as u32)
         .http2_keep_alive_interval(cfg.grpc_keepalive_time.0)
         .keep_alive_timeout(cfg.grpc_keepalive_timeout.0)
-        .executor(tikv_util::RuntimeExec::new(handle));    
+        .executor(tikv_util::RuntimeExec::new(handle));
 
     let send_task = async move {
-        let channel = security_mgr.connect(cb).await.map_err(|e| Error::Grpc(tonic::Status::unknown(format!("{:?}", e))))?;
+        let channel = security_mgr
+            .connect(cb)
+            .await
+            .map_err(|e| Error::Grpc(tonic::Status::unknown(format!("{:?}", e))))?;
         let mut client = TikvClient::new(channel);
         let chunks = Arc::new(Mutex::new(chunks));
         let task = client
@@ -436,6 +439,7 @@ impl<R: RaftExtension + 'static> Runner<R> {
             snap_mgr,
             pool: RuntimeBuilder::new_multi_thread()
                 .thread_name(thd_name!("snap-sender"))
+                .enable_all()
                 .with_sys_hooks()
                 .worker_threads(DEFAULT_POOL_SIZE)
                 .build()
@@ -489,7 +493,7 @@ impl<R: RaftExtension + 'static> Runner<R> {
 impl<R: RaftExtension + 'static> Runnable for Runner<R> {
     type Task = Task;
 
-    fn run(&mut self, mut task: Task) {
+    fn run(&mut self, task: Task) {
         match task {
             Task::Recv { stream, tx } => {
                 if let Some(status) = self.receiving_busy() {

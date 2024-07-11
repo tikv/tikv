@@ -14,6 +14,7 @@ use test_raftstore::{
 };
 use test_raftstore_macro::test_case;
 use tikv_util::{config::ReadableDuration, HandyRwLock};
+use tonic::transport::Channel;
 
 #[test_case(test_raftstore::must_new_cluster_and_kv_client)]
 #[test_case(test_raftstore_v2::must_new_cluster_and_kv_client)]
@@ -57,19 +58,29 @@ fn test_kv_scan_memory_lock() {
 #[test_case(test_raftstore_v2::must_new_cluster_mul)]
 fn test_snapshot_not_block_grpc() {
     let (cluster, leader, ctx) = new_cluster(1);
-    let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env)
-        .keepalive_time(Duration::from_millis(500))
-        .keepalive_timeout(Duration::from_millis(500))
-        .connect(&cluster.sim.read().unwrap().get_addr(leader.get_store_id()));
-    let client = TikvClient::new(channel);
+    let addr = tikv_util::format_url(
+        &cluster.sim.read().unwrap().get_addr(leader.get_store_id()),
+        false,
+    );
+    let channel = cluster
+        .runtime
+        .block_on(async move {
+            Channel::from_shared(addr)
+                .unwrap()
+                .http2_keep_alive_interval(Duration::from_millis(500))
+                .keep_alive_timeout(Duration::from_millis(500))
+                .connect()
+        })
+        .unwrap();
+    let mut client = TikvClient::new(channel);
 
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
     mutation.set_key(b"k".to_vec());
     mutation.set_value(b"v".to_vec());
     must_kv_prewrite(
-        &client,
+        cluster.runtime.handle(),
+        &mut client,
         ctx.clone(),
         vec![mutation.clone()],
         b"k".to_vec(),
@@ -77,7 +88,14 @@ fn test_snapshot_not_block_grpc() {
     );
     // Block getting snapshot. It shouldn't trigger keepalive watchdog timeout.
     fail::cfg("after-snapshot", "sleep(2000)").unwrap();
-    must_kv_prewrite(&client, ctx, vec![mutation], b"k".to_vec(), 10);
+    must_kv_prewrite(
+        cluster.runtime.handle(),
+        &mut client,
+        ctx,
+        vec![mutation],
+        b"k".to_vec(),
+        10,
+    );
     fail::remove("after-snapshot");
 }
 
@@ -86,12 +104,21 @@ fn test_snapshot_not_block_grpc() {
 #[test]
 fn test_undetermined_write_err() {
     let (cluster, leader, ctx) = must_new_cluster_mul(1);
-    let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env)
-        .keepalive_time(Duration::from_millis(500))
-        .keepalive_timeout(Duration::from_millis(500))
-        .connect(&cluster.sim.read().unwrap().get_addr(leader.get_store_id()));
-    let client = TikvClient::new(channel);
+    let addr = tikv_util::format_url(
+        &cluster.sim.read().unwrap().get_addr(leader.get_store_id()),
+        false,
+    );
+    let channel = cluster
+        .runtime
+        .block_on(async move {
+            Channel::from_shared(addr)
+                .unwrap()
+                .http2_keep_alive_interval(Duration::from_millis(500))
+                .keep_alive_timeout(Duration::from_millis(500))
+                .connect()
+        })
+        .unwrap();
+    let mut client = TikvClient::new(channel);
 
     let mut mutation = Mutation::default();
     mutation.set_op(Op::Put);
@@ -99,7 +126,8 @@ fn test_undetermined_write_err() {
     mutation.set_value(b"v".to_vec());
     fail::cfg("applied_cb_return_undetermined_err", "return()").unwrap();
     let err = try_kv_prewrite_with_impl(
-        &client,
+        cluster.runtime.handle(),
+        &mut client,
         ctx,
         vec![mutation],
         vec![],
@@ -163,7 +191,11 @@ fn test_stale_read_on_local_leader() {
     req.mut_context().set_stale_read(true);
 
     // The stale read should fallback and succeed on the leader peer.
-    let resp = client.kv_get(&req).unwrap();
+    let resp = cluster
+        .runtime
+        .block_on(client.kv_get(req))
+        .unwrap()
+        .into_inner();
     assert!(resp.error.is_none());
     assert!(resp.region_error.is_none());
     assert_eq!(v, resp.get_value());

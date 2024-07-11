@@ -601,14 +601,20 @@ where
     }
 }
 
-pub fn format_url(addr: &str) -> String {
+pub fn format_url(addr: &str, ssl: bool) -> String {
+    let protocal = if ssl { "https" } else { "http" };
     if !addr.starts_with("http") {
-        format!("http://{}", addr)
+        format!("{}://{}", protocal, addr)
     } else {
         addr.to_owned()
     }
 }
 
+pub fn get_grpc_peer_addr<T>(req: &tonic::Request<T>) -> Option<std::net::SocketAddr> {
+    req.extensions()
+        .get::<tonic::transport::server::TcpConnectInfo>()
+        .and_then(|i| i.remote_addr())
+}
 #[cfg(test)]
 mod tests {
     use std::{

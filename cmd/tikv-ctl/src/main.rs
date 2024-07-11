@@ -29,7 +29,6 @@ use engine_traits::Peekable;
 use file_system::calc_crc32;
 use futures::{executor::block_on, future::try_join_all};
 use gag::BufferRedirect;
-use grpcio::{CallOption, ChannelBuilder, Environment};
 use kvproto::{
     debugpb::{Db as DbType, *},
     encryptionpb::EncryptionMethod,
@@ -51,6 +50,7 @@ use tikv::{
     storage::config::EngineType,
 };
 use tikv_util::{escape, run_and_wait_child_process, sys::thread::StdThreadBuildWrapper, unescape};
+use tokio::runtime::Handle;
 use tonic::transport::Channel;
 use txn_types::Key;
 
@@ -92,6 +92,7 @@ fn main() {
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .thread_name("tikv-ctl")
+        .worker_threads(1)
         .enable_all()
         .build()
         .unwrap();
@@ -257,7 +258,16 @@ fn main() {
             let to_key = to.map(|k| unescape(&k));
             let bottommost = BottommostLevelCompaction::from(Some(bottommost.as_ref()));
             compact_whole_cluster(
-                &pd_client, &cfg, mgr, db_type, cfs, from_key, to_key, threads, bottommost,
+                &pd_client,
+                &cfg,
+                mgr,
+                runtime.handle().clone(),
+                db_type,
+                cfs,
+                from_key,
+                to_key,
+                threads,
+                bottommost,
             );
         }
         Cmd::SplitRegion {
@@ -407,7 +417,13 @@ fn main() {
             }
 
             cfg.rocksdb.paranoid_checks = Some(!opt.skip_paranoid_checks);
-            let debug_executor = new_debug_executor(&cfg, data_dir, host, Arc::clone(&mgr));
+            let mut debug_executor = new_debug_executor(
+                &cfg,
+                data_dir,
+                host,
+                Arc::clone(&mgr),
+                runtime.handle().clone(),
+            );
 
             match cmd {
                 Cmd::Print { cf, key } => {
@@ -508,7 +524,14 @@ fn main() {
                         let s = fs::read_to_string(path).unwrap();
                         toml::from_str(&s).unwrap()
                     });
-                    debug_executor.diff_region(region, to_host, to_data_dir, &to_config, mgr);
+                    debug_executor.diff_region(
+                        region,
+                        to_host,
+                        to_data_dir,
+                        &to_config,
+                        mgr,
+                        runtime.handle().clone(),
+                    );
                 }
                 Cmd::Compact {
                     region,
@@ -626,7 +649,7 @@ fn main() {
                         println!("command fail requires host");
                         tikv_util::logger::exit_process_gracefully(-1);
                     }
-                    let mut client = new_debug_client(host.unwrap(), mgr);
+                    let mut client = new_debug_client(host.unwrap(), mgr, runtime.handle());
                     match subcmd {
                         FailCmd::Inject { args, file } => {
                             let mut list = file.as_deref().map_or_else(Vec::new, read_fail_file);
@@ -637,35 +660,46 @@ fn main() {
                                     parts.next().unwrap_or("").to_owned(),
                                 ))
                             }
-                            for (name, actions) in list {
-                                if actions.is_empty() {
-                                    println!("No action for fail point {}", name);
-                                    continue;
-                                }
-                                let mut inject_req = InjectFailPointRequest::default();
-                                inject_req.set_name(name);
-                                inject_req.set_actions(actions);
+                            runtime.block_on(async move {
+                                for (name, actions) in list {
+                                    if actions.is_empty() {
+                                        println!("No action for fail point {}", name);
+                                        continue;
+                                    }
+                                    let mut inject_req = InjectFailPointRequest::default();
+                                    inject_req.set_name(name);
+                                    inject_req.set_actions(actions);
 
-                                client.inject_fail_point(inject_req);
-                            }
+                                    client.inject_fail_point(inject_req).await.unwrap();
+                                }
+                            });
                         }
                         FailCmd::Recover { args, file } => {
                             let mut list = file.as_deref().map_or_else(Vec::new, read_fail_file);
                             for fp in args {
                                 list.push((fp.to_owned(), "".to_owned()))
                             }
-                            for (name, _) in list {
-                                let mut recover_req = RecoverFailPointRequest::default();
-                                recover_req.set_name(name);
-                                let option = CallOption::default().timeout(Duration::from_secs(10));
-                                client.recover_fail_point(recover_req);
-                            }
+                            runtime.block_on(async move {
+                                for (name, _) in list {
+                                    let mut recover_req = RecoverFailPointRequest::default();
+                                    recover_req.set_name(name);
+                                    // let option =
+                                    // CallOption::default().timeout(Duration::from_secs(10));
+                                    client.recover_fail_point(recover_req).await.unwrap();
+                                }
+                            });
                         }
                         FailCmd::List {} => {
                             let list_req = ListFailPointsRequest::default();
-                            let option = CallOption::default().timeout(Duration::from_secs(10));
-                            let resp = client.list_fail_points(list_req);
-                            // println!("{:?}", resp.get_entries());
+                            // let option = CallOption::default().timeout(Duration::from_secs(10));
+                            match runtime.block_on(client.list_fail_points(list_req)) {
+                                Ok(resp) => {
+                                    println!("{:?}", resp.get_ref().get_entries());
+                                }
+                                Err(e) => {
+                                    println!("send grpc request failed: {:?}", e);
+                                }
+                            };
                         }
                     }
                 }
@@ -775,10 +809,9 @@ fn split_region(
             .unwrap()
             .executor(tikv_util::RuntimeExec::new(handle.clone()));
 
-        let channel =
-            futures::executor::block_on(handle.spawn(async move { endpoint.connect().await }))
-                .expect("join failed, tokio runtime exited")
-                .expect("build tikv client failed");
+        let channel = handle
+            .block_on(async move { mgr.connect(endpoint).await })
+            .expect("build tikv client failed");
 
         TikvClient::new(channel)
     };
@@ -789,7 +822,8 @@ fn split_region(
         .set_region_epoch(region.get_region_epoch().clone());
     req.set_split_key(key);
 
-    let resp = block_on(tikv_client.split_region(req))
+    let resp = handle
+        .block_on(tikv_client.split_region(req))
         .expect("split_region should success")
         .into_inner();
     if resp.has_region_error() {
@@ -809,6 +843,7 @@ fn compact_whole_cluster(
     pd_client: &RpcClient,
     cfg: &TikvConfig,
     mgr: Arc<SecurityManager>,
+    handle: Handle,
     db_type: DbType,
     cfs: Vec<&str>,
     from: Option<Vec<u8>>,
@@ -833,10 +868,11 @@ fn compact_whole_cluster(
         let addr = s.address.clone();
         let (from, to) = (from.clone(), to.clone());
         let cfs: Vec<String> = cfs.iter().map(|cf| cf.to_string()).collect();
+        let handle = handle.clone();
         let h = thread::Builder::new()
             .name(format!("compact-{}", addr))
             .spawn_wrapper(move || {
-                let debug_executor = new_debug_executor(&cfg, None, Some(&addr), mgr);
+                let mut debug_executor = new_debug_executor(&cfg, None, Some(&addr), mgr, handle);
                 for cf in cfs {
                     debug_executor.compact(
                         Some(&addr),
@@ -880,7 +916,8 @@ fn flashback_whole_cluster(
         .build()
         .unwrap();
 
-    block_on(runtime.spawn(async move {
+    let handle = runtime.handle().clone();
+    runtime.block_on(async move {
         // Pre-create the debug executors for all stores.
         let stores = match pd_client.get_all_stores(false) {
             Ok(stores) => stores,
@@ -895,7 +932,7 @@ fn flashback_whole_cluster(
                 let addr = pd_client.get_store(s.get_id()).unwrap().address;
                 let cfg_inner = cfg.clone();
                 let mgr = Arc::clone(&mgr);
-                let debug_executor = new_debug_executor(&cfg_inner, None, Some(&addr), mgr);
+                let debug_executor = new_debug_executor(&cfg_inner, None, Some(&addr), mgr, handle.clone());
                 (s.get_id(), debug_executor)
             } )
             .collect::<HashMap<_, _>>());
@@ -917,8 +954,8 @@ fn flashback_whole_cluster(
                 let key_range_to_prepare = &key_range_to_prepare;
                 let key_range = build_key_range(&start_key, &end_key, false);
                 let f = async move {
-                    let debuggers = debuggers.lock().unwrap();
-                    match debuggers.get(&store_id).unwrap().flashback_to_version(
+                    let mut debuggers = debuggers.lock().unwrap();
+                    match debuggers.get_mut(&store_id).unwrap().flashback_to_version(
                         version,
                         region_id,
                         key_range,
@@ -996,8 +1033,8 @@ fn flashback_whole_cluster(
                 let key_range_to_finish = &key_range_to_finish;
                 let key_range = build_key_range(&start_key, &end_key, false);
                 let f = async move {
-                    let debuggers = debuggers.lock().unwrap();
-                    match debuggers.get(&store_id).unwrap().flashback_to_version(
+                    let mut debuggers = debuggers.lock().unwrap();
+                    match debuggers.get_mut(&store_id).unwrap().flashback_to_version(
                         version,
                         region_id,
                         key_range,
@@ -1060,8 +1097,7 @@ fn flashback_whole_cluster(
                 }
             }
         }
-    }))
-    .unwrap();
+    });
 
     println!("flashback all stores success!");
 }
