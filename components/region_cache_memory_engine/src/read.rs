@@ -97,21 +97,23 @@ impl RangeCacheSnapshot {
 impl Drop for RangeCacheSnapshot {
     fn drop(&mut self) {
         let mut core = self.engine.core.write();
-        let ranges_removable = core
+        let mut ranges_removable = core
             .range_manager
             .remove_range_snapshot(&self.snapshot_meta);
+        ranges_removable.retain(|r| {
+            let mut scheduled = core
+                .mut_range_manager()
+                .ranges_being_deleted
+                .get_mut(r)
+                .unwrap();
+            if !*scheduled {
+                *scheduled = true;
+                true
+            } else {
+                false
+            }
+        });
         if !ranges_removable.is_empty() {
-            ranges_removable.iter().for_each(|r| {
-                let mut scheduled = core
-                    .mut_range_manager()
-                    .ranges_being_deleted
-                    .get_mut(r)
-                    .unwrap();
-                if *scheduled {
-                    panic!("double schedule for delete range; range={:?}", r);
-                }
-                *scheduled = true
-            });
             drop(core);
             if let Err(e) =
                 self.engine
