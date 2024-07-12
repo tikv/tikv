@@ -9,11 +9,11 @@ use external_storage::FullFeaturedStorage;
 use futures::stream::TryStreamExt;
 use kvproto::brpb::{self, DeleteSpansOfFile, SpansOfFile};
 
-use super::{Subcompaction, SubcompactionResult};
+use super::{Input, Subcompaction, SubcompactionResult};
 use crate::{
     errors::Result,
     storage::{
-        LoadFromExt, LogFileId, MetaFile, MigartionStorageWrapper, PhysicalLogFile,
+        LoadFromExt, LogFile, LogFileId, MetaFile, MigartionStorageWrapper, PhysicalLogFile,
         StreamyMetaStorage,
     },
 };
@@ -101,6 +101,60 @@ impl Subcompaction {
         out.set_min_key(self.min_key.to_vec());
         out.set_max_key(self.max_key.to_vec());
         out
+    }
+
+    pub fn singleton(c: LogFile) -> Self {
+        Self {
+            inputs: vec![Input {
+                key_value_size: c.hacky_key_value_size(),
+                id: c.id,
+                compression: c.compression,
+                crc64xor: c.crc64xor,
+                num_of_entries: c.number_of_entries as u64,
+            }],
+            size: c.file_real_size,
+            region_id: c.region_id,
+            cf: c.cf,
+            input_max_ts: c.min_ts,
+            input_min_ts: c.max_ts,
+            compact_from_ts: 0,
+            compact_to_ts: u64::MAX,
+            min_key: c.min_key,
+            max_key: c.max_key,
+            ty: c.ty,
+        }
+    }
+
+    pub fn of_many(items: impl IntoIterator<Item = LogFile>) -> Self {
+        let mut it = items.into_iter();
+        let mut c = Self::singleton(it.next().expect("of_many: empty iterator"));
+        for item in it {
+            c.add_file(item);
+        }
+        c
+    }
+
+    pub fn add_file(&mut self, c: LogFile) {
+        self.inputs.push(Input {
+            key_value_size: c.hacky_key_value_size(),
+            id: c.id,
+            compression: c.compression,
+            crc64xor: c.crc64xor,
+            num_of_entries: c.number_of_entries as u64,
+        });
+        self.size += c.file_real_size;
+        self.input_max_ts = self.input_max_ts.max(c.min_ts);
+        self.input_min_ts = self.input_min_ts.min(c.max_ts);
+        if self.min_key > c.min_key {
+            self.min_key = c.min_key;
+        }
+        if self.max_key < c.max_key {
+            self.max_key = c.max_key;
+        }
+
+        assert_eq!(c.ty, self.ty);
+        assert_eq!(c.region_id, self.region_id);
+        assert_eq!(c.cf, self.cf);
     }
 }
 

@@ -28,7 +28,7 @@ use super::{
     storage::{LoadFromExt, StreamyMetaStorage},
 };
 use crate::{
-    compaction::{exec::SingleCompactionArg, SubcompactionResult},
+    compaction::{exec::SubcompactionExecArg, SubcompactionResult},
     errors::{Result, TraceResultExt},
     util,
 };
@@ -135,7 +135,7 @@ impl Execution {
 
                 id += 1;
 
-                let compact_args = SingleCompactionArg {
+                let compact_args = SubcompactionExecArg {
                     out_prefix: Some(Path::new(&self.out_prefix).to_owned()),
                     db: self.db.clone(),
                     storage: Arc::clone(&storage) as _,

@@ -59,14 +59,14 @@ impl<'a> Default for SubcompactExt {
     }
 }
 
-pub struct SingleCompactionArg<DB> {
+pub struct SubcompactionExecArg<DB> {
     pub out_prefix: Option<PathBuf>,
     pub db: Option<DB>,
     pub storage: Arc<dyn ExternalStorage>,
 }
 
-impl<DB> From<SingleCompactionArg<DB>> for SubcompactionExec<DB> {
-    fn from(value: SingleCompactionArg<DB>) -> Self {
+impl<DB> From<SubcompactionExecArg<DB>> for SubcompactionExec<DB> {
+    fn from(value: SubcompactionExecArg<DB>) -> Self {
         Self {
             source: Source::new(Arc::clone(&value.storage)),
             output: value.storage,
@@ -84,7 +84,7 @@ impl<DB> From<SingleCompactionArg<DB>> for SubcompactionExec<DB> {
 impl<DB> SubcompactionExec<DB> {
     #[cfg(test)]
     pub fn default_config(storage: Arc<dyn ExternalStorage>) -> Self {
-        Self::from(SingleCompactionArg {
+        Self::from(SubcompactionExecArg {
             storage,
             out_prefix: None,
             db: None,
@@ -349,22 +349,53 @@ where
 
 #[cfg(test)]
 mod test {
+    use std::{path::PathBuf, sync::Arc};
+
+    use engine_rocks::RocksEngine;
     use tempdir::TempDir;
 
+    use super::SubcompactionExec;
     use crate::{
-        compaction::{Input, Subcompaction},
-        test_util::{gen_step, KvGen},
+        compaction::{exec::SubcompactExt, Subcompaction, SubcompactionResult},
+        storage::LogFile,
+        test_util::{gen_step, verify_the_same, CompactInMem, Kv, KvGen, LogFileBuilder},
     };
 
     struct TempStorage {
         path: TempDir,
-        storage: external_storage::LocalStorage,
+        storage: Arc<external_storage::LocalStorage>,
     }
 
     fn create_local_storage() -> TempStorage {
         let path = TempDir::new("test").unwrap();
         let storage = external_storage::LocalStorage::new(path.path()).unwrap();
-        TempStorage { path, storage }
+        TempStorage {
+            path,
+            storage: Arc::new(storage),
+        }
+    }
+
+    impl TempStorage {
+        async fn run_subcompaction(&self, c: Subcompaction) -> SubcompactionResult {
+            let cw = SubcompactionExec::<RocksEngine>::default_config(self.storage.clone());
+            let ext = SubcompactExt::default();
+            let res = cw.run(c, ext).await.unwrap();
+            res
+        }
+
+        #[track_caller]
+        fn verify_result(&self, res: SubcompactionResult, mut cm: CompactInMem) {
+            let sst_path = self.path.path().join(&res.meta.sst_outputs[0].name);
+            verify_the_same::<RocksEngine>(sst_path, cm.must_iter()).unwrap();
+        }
+
+        async fn build_log_file(&self, name: &str, kvs: impl Iterator<Item = Kv>) -> LogFile {
+            let mut b = LogFileBuilder::new(1, |v| v.name = name.to_owned());
+            for kv in kvs {
+                b.add_encoded(&kv.key, &kv.value);
+            }
+            b.must_save(self.storage.as_ref()).await
+        }
     }
 
     #[tokio::test]
@@ -372,22 +403,34 @@ mod test {
         let st = create_local_storage();
 
         let const_val = |_| vec![42u8];
+        let mut cm = CompactInMem::default();
+
         let s1 = KvGen::new(gen_step(1, 0, 2).take(100), const_val);
+        let i1 = st.build_log_file("a.log", cm.tap_on(s1)).await;
+
         let s2 = KvGen::new(gen_step(1, 1, 2).take(100), const_val);
+        let i2 = st.build_log_file("b.log", cm.tap_on(s2)).await;
 
-        let gen_from = |s: KvGen<_>, name: &str| {
-            let name = name.to_owned();
-            async move {
-                let mut fb = crate::test_util::LogFileBuilder::new(1, |v| v.name = name);
-                for (k, v) in s {
-                    fb.add_encoded(&k, &v)
-                }
-                fb.must_save(&st.storage).await
-            }
-        };
+        let mut c = Subcompaction::of_many([i1, i2]);
 
-        let i1 = gen_from(s1, "a.log").await;
-        let i2 = gen_from(s2, "b.log").await;
-        println!("{:?} {:?}", i1, i2);
+        st.verify_result(st.run_subcompaction(c).await, cm);
+    }
+
+    #[tokio::test]
+    async fn test_compact_dup() {
+        let st = create_local_storage();
+        let mut cm = CompactInMem::default();
+
+        let s1 = KvGen::new(gen_step(1, 0, 3).take(100), |_| b"value".to_vec());
+        let i1 = st.build_log_file("three.log", cm.tap_on(s1)).await;
+
+        let s2 = KvGen::new(gen_step(1, 0, 2).take(100), |_| b"value".to_vec());
+        let i2 = st.build_log_file("two.log", cm.tap_on(s2)).await;
+
+        let c = Subcompaction::of_many([i1, i2]);
+        let res = st.run_subcompaction(c).await;
+        assert_eq!(res.load_stat.keys_in, 200);
+        assert_eq!(res.compact_stat.keys_out, 166);
+        st.verify_result(res, cm);
     }
 }

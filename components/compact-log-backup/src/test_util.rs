@@ -1,32 +1,30 @@
 use std::{
+    collections::BTreeMap,
     io::{Cursor, Write as _},
-    path::Iter,
-    sync::Arc,
+    path::{Iter, Path},
+    sync::{Arc, Mutex},
 };
 
 use codec::number::NumberEncoder;
-use engine_traits::{CF_DEFAULT, CF_WRITE};
+use engine_traits::{IterOptions, Iterator as _, RefIterable, SstExt, CF_DEFAULT, CF_WRITE};
 use external_storage::ExternalStorage;
 use file_system::sha256;
 use futures::io::Cursor as ACursor;
+use keys::{data_key, origin_key};
 use kvproto::brpb::{self};
 use tidb_query_datatype::codec::table::encode_row_key;
 use tikv_util::codec::stream_event::EventEncoder;
 use txn_types::Key;
 
 use crate::{
-    compaction::Input,
+    errors::{OtherErrExt, Result},
     storage::{LogFile, LogFileId},
 };
 
-pub const TABLE_PREFIX: &[u8] = b"t";
-pub const RECORD_PREFIX_SEP: &[u8] = b"_r";
-
-/// `TableEncoder` encodes the table record/index prefix.
-fn append_table_record_prefix(buf: &mut impl NumberEncoder, table_id: i64) -> codec::Result<()> {
-    buf.write_bytes(TABLE_PREFIX)?;
-    buf.write_i64(table_id)?;
-    buf.write_bytes(RECORD_PREFIX_SEP)
+#[derive(Debug, PartialEq, Eq)]
+pub struct Kv {
+    pub key: Vec<u8>,
+    pub value: Vec<u8>,
 }
 
 struct TxnLogFileBuilder {
@@ -75,6 +73,101 @@ pub struct LogFileBuilder {
     file_real_size: u64,
 }
 
+#[derive(Default, Clone)]
+pub struct CompactInMem {
+    collect: Arc<Mutex<BTreeMap<Vec<u8>, Vec<u8>>>>,
+}
+
+impl CompactInMem {
+    pub fn tap_on(&self, it: impl Iterator<Item = Kv>) -> impl Iterator<Item = Kv> {
+        RecordSorted {
+            target: self.clone(),
+            inner: it,
+        }
+    }
+
+    // Note: will panic if there are other references to `self`.
+    pub fn must_iter(&mut self) -> impl Iterator<Item = Kv> + '_ {
+        Arc::get_mut(&mut self.collect)
+            .unwrap()
+            .get_mut()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| Kv {
+                key: k.clone(),
+                value: v.clone(),
+            })
+    }
+}
+
+// Note: `it` yields keys without 'z' prefix.
+#[track_caller]
+pub fn verify_the_same<DB: SstExt>(
+    sst: impl AsRef<Path>,
+    mut input: impl Iterator<Item = Kv>,
+) -> Result<()> {
+    use engine_traits::SstReader;
+
+    let rd = DB::SstReader::open(
+        sst.as_ref().to_str().ok_or("non utf-8 path").adapt_err()?,
+        None,
+    )?;
+
+    let mut it = rd.iter(IterOptions::default())?;
+
+    it.seek_to_first()?;
+    let mut n = 0;
+    while it.valid()? {
+        n += 1;
+        let key = it.key();
+        let value = it.value();
+        let kv = Kv {
+            key: origin_key(key).to_vec(),
+            value: value.to_vec(),
+        };
+        match input.next() {
+            None => return Err("the input iterator has been exhausted").adapt_err(),
+            Some(ikv) => {
+                if kv != ikv {
+                    return Err(format!(
+                        "the #{} key isn't equal: input is {:?} while compaction result is {:?}",
+                        n, ikv, kv
+                    ))
+                    .adapt_err();
+                }
+            }
+        }
+        it.next()?;
+    }
+    if let Some(v) = input.next() {
+        return Err(format!(
+            "The input iterator not exhausted, there is one: {:?}",
+            v
+        ))
+        .adapt_err();
+    }
+    Ok(())
+}
+
+pub struct RecordSorted<S> {
+    target: CompactInMem,
+    inner: S,
+}
+
+impl<S: Iterator<Item = Kv>> Iterator for RecordSorted<S> {
+    type Item = Kv;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = self.inner.next()?;
+        self.target
+            .collect
+            .lock()
+            .unwrap()
+            .insert(item.key.clone(), item.value.clone());
+        Some(item)
+    }
+}
+
 pub type KeySeed = (i64 /* table_id */, i64 /* handle_id */);
 
 pub struct KvGen<S> {
@@ -92,13 +185,13 @@ impl<S> KvGen<S> {
 }
 
 impl<S: Iterator<Item = KeySeed>> Iterator for KvGen<S> {
-    type Item = (Vec<u8>, Vec<u8>);
+    type Item = Kv;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.sources.next().map(|(table_id, handle_id)| {
             let key = Key::from_raw(&encode_row_key(table_id, handle_id)).into_encoded();
             let value = (self.value)((table_id, handle_id));
-            (key, value)
+            Kv { key, value }
         })
     }
 }
@@ -154,20 +247,14 @@ impl LogFileBuilder {
         self.crc64xor ^= d.sum64();
     }
 
-    pub async fn must_save(self, st: &dyn ExternalStorage) -> Input {
+    pub async fn must_save(self, st: &dyn ExternalStorage) -> LogFile {
         let (info, content) = self.build();
         let cl = content.len() as u64;
         st.write(&info.id.name, ACursor::new(content).into(), cl)
             .await
             .unwrap();
-        let input = Input {
-            key_value_size: info.hacky_key_value_size(),
-            id: info.id,
-            compression: info.compression,
-            crc64xor: info.crc64xor,
-            num_of_entries: info.number_of_entries as _,
-        };
-        input
+
+        info
     }
 
     pub fn build(self) -> (LogFile, Vec<u8>) {

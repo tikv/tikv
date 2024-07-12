@@ -330,6 +330,7 @@ impl MetaFile {
         let min_ts = meta_file.min_ts;
         let max_ts = meta_file.max_ts;
 
+        // NOTE: perhaps we also need consider non-grouped backup meta here?
         for mut group in meta_file.take_file_groups().into_iter() {
             stat.physical_data_files_in += 1;
             let name = Arc::from(group.path.clone().into_boxed_str());
@@ -338,31 +339,9 @@ impl MetaFile {
                 name: Arc::clone(&name),
                 files: vec![],
             };
-            for mut log_file in group.take_data_files_info().into_iter() {
+            for log_file in group.take_data_files_info().into_iter() {
                 stat.logical_data_files_in += 1;
-                g.files.push(LogFile {
-                    id: LogFileId {
-                        name: Arc::clone(&name),
-                        offset: log_file.range_offset,
-                        length: log_file.range_length,
-                    },
-                    file_real_size: log_file.length,
-                    region_id: log_file.region_id as _,
-                    cf: util::cf_name(&log_file.cf),
-                    max_ts: log_file.max_ts,
-                    min_ts: log_file.min_ts,
-                    max_key: Arc::from(log_file.take_end_key().into_boxed_slice()),
-                    min_key: Arc::from(log_file.take_start_key().into_boxed_slice()),
-                    is_meta: log_file.is_meta,
-                    min_start_ts: log_file.min_begin_ts_in_default_cf,
-                    ty: log_file.r_type,
-                    crc64xor: log_file.crc64xor,
-                    number_of_entries: log_file.number_of_entries,
-                    sha256: Arc::from(log_file.take_sha256().into_boxed_slice()),
-                    resolved_ts: log_file.resolved_ts,
-                    table_id: log_file.table_id,
-                    compression: log_file.compression_type,
-                })
+                g.files.push(LogFile::from_pb(Arc::clone(&name), log_file))
             }
             log_files.push(g);
         }
@@ -376,6 +355,34 @@ impl MetaFile {
         };
         stat.load_file_duration += begin.saturating_elapsed();
         Ok((result, stat))
+    }
+}
+
+impl LogFile {
+    fn from_pb(host_file: Arc<str>, mut pb_info: brpb::DataFileInfo) -> Self {
+        Self {
+            id: LogFileId {
+                name: host_file,
+                offset: pb_info.range_offset,
+                length: pb_info.range_length,
+            },
+            file_real_size: pb_info.length,
+            region_id: pb_info.region_id as _,
+            cf: util::cf_name(&pb_info.cf),
+            max_ts: pb_info.max_ts,
+            min_ts: pb_info.min_ts,
+            max_key: Arc::from(pb_info.take_end_key().into_boxed_slice()),
+            min_key: Arc::from(pb_info.take_start_key().into_boxed_slice()),
+            is_meta: pb_info.is_meta,
+            min_start_ts: pb_info.min_begin_ts_in_default_cf,
+            ty: pb_info.r_type,
+            crc64xor: pb_info.crc64xor,
+            number_of_entries: pb_info.number_of_entries,
+            sha256: Arc::from(pb_info.take_sha256().into_boxed_slice()),
+            resolved_ts: pb_info.resolved_ts,
+            table_id: pb_info.table_id,
+            compression: pb_info.compression_type,
+        }
     }
 }
 
