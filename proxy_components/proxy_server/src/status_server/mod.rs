@@ -1,6 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
 mod profile;
+mod vendored_utils;
 
 use std::{
     error::Error as StdError,
@@ -690,9 +691,9 @@ where
                             (Method::GET, "/debug/pprof/heap_deactivate") => {
                                 Self::deactivate_heap_prof(req)
                             }
-                            // (Method::GET, "/debug/pprof/heap") => {
-                            //     Self::dump_heap_prof_to_resp(req).await
-                            // }
+                            (Method::GET, "/debug/pprof/heap") => {
+                                Self::dump_heap_prof_to_resp(req).await
+                            }
                             (Method::GET, "/config") => {
                                 Self::get_config(req, &cfg_controller, engine_store_server_helper)
                                     .await

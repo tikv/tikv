@@ -4695,6 +4695,7 @@ dependencies = [
  "pprof",
  "prometheus",
  "protobuf",
+ "proxy_ffi",
  "raft",
  "raft_log_engine",
  "raftstore",
