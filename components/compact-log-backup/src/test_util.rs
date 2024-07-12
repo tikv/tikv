@@ -4,10 +4,9 @@ use std::{
     sync::Arc,
 };
 
-use chrono::format::Item;
 use codec::number::NumberEncoder;
 use engine_traits::{CF_DEFAULT, CF_WRITE};
-use external_storage::{ExternalStorage, UnpinReader};
+use external_storage::ExternalStorage;
 use file_system::sha256;
 use futures::io::Cursor as ACursor;
 use kvproto::brpb::{self};
