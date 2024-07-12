@@ -278,6 +278,7 @@ pub struct ServerMeta<EK: KvEngine> {
 
 type PendingServices = Vec<Box<dyn Fn() -> Service>>;
 type PendingDebugService<EK> = Box<dyn Fn(&ServerCluster<EK>, Handle) -> Service>;
+type PendingServiceBuilder<EK> = Vec<Box<dyn Fn(&mut Server<PdStoreAddrResolver, TestRaftKv2<EK>>)>>;
 
 pub struct ServerCluster<EK: KvEngine> {
     metas: HashMap<u64, ServerMeta<EK>>,
@@ -291,7 +292,7 @@ pub struct ServerCluster<EK: KvEngine> {
     conn_builder: ConnectionBuilder<AddressMap, FakeExtension>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     env: Arc<Environment>,
-    pub pending_services: HashMap<u64, PendingServices>,
+    pub pending_services: HashMap<u64, PendingServiceBuilder>,
     // This is used to work around that server cluster is generic over KvEngine while the debug
     // service implementation is specific overal RocksDB.
     pub pending_debug_service: Option<PendingDebugService<EK>>,
@@ -636,7 +637,7 @@ impl<EK: KvEngine> ServerCluster<EK> {
             svr.register_service(create_import_sst(import_service.clone()));
             if let Some(svcs) = self.pending_services.get(&node_id) {
                 for fact in svcs {
-                    svr.register_service(fact());
+                    (**fact)(&mut svr);
                 }
             }
             if let Some(debug_service) = &self.pending_debug_service {

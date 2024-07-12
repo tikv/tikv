@@ -180,8 +180,9 @@ tikv_kv = { workspace = true }
 tikv_util = { workspace = true }
 time = { workspace = true }
 tipb = { workspace = true }
-tokio = { version = "1.17", features = ["full"] }
+tokio = { workspace = true }
 tokio-openssl = "0.6"
+tokio-stream = { workspace = true }
 tokio-timer = { workspace = true }
 toml = "0.5"
 tonic = { workspace = true }
@@ -205,7 +206,7 @@ raftstore = { workspace = true, features = ["testexport"] }
 reqwest = { version = "0.11", features = ["blocking"] }
 test_sst_importer = { workspace = true }
 test_util = { workspace = true }
-tokio = { version = "1.17", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1.17", features = ["full"] }
 zipf = "6.1.0"
 
 [patch.crates-io]
@@ -433,6 +434,8 @@ grpcio-health = { git = "https://github.com/glorv/grpc-rs", branch = "prost", de
 tipb = { git = "https://github.com/glorv/tipb", branch = "tonic-protobuf", default-features = false, features = ["protobuf-codec"] }
 kvproto = { git = "https://github.com/glorv/kvproto", branch = "tonic-protobuf", default-features = false, features = ["tonic-protobuf"] }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
+tokio = { version = "1.17", features = ["full"] }
+tokio-stream = {version = "0.1", features = ["net"]}
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 tokio-executor = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
 slog = { version = "2.3", features = [
@@ -452,9 +455,6 @@ openssl = "0.10"
 openssl-sys = "0.9"
 tonic = { git = "https://github.com/glorv/tonic", branch = "patch-health", features = ["tls", "transport", "codegen"] }
 tonic-health = { git = "https://github.com/glorv/tonic", branch = "patch-health" }
-
-tokio = { version = "1.5", features = ["rt-multi-thread"] }
-tokio-stream = "0.1"
 
 [profile.dev.package.grpcio-sys]
 debug = false

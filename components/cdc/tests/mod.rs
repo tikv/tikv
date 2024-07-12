@@ -203,12 +203,13 @@ impl TestSuiteBuilder {
             sim.pending_services
                 .entry(id)
                 .or_default()
-                .push(Box::new(move || {
-                    ChangeDataServer::new(cdc::Service::new(
+                .push(Box::new(move |svc| {
+                    let cdc_service = ChangeDataServer::new(cdc::Service::new(
                         scheduler.clone(),
                         memory_quota_.clone(),
                         runtime.handle().clone(),
-                    ))
+                    ));
+                    svc.register_service(cdc_service);
                 }));
             sim.txn_extra_schedulers.insert(
                 id,

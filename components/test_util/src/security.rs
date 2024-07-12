@@ -4,7 +4,6 @@ use std::{fs, io::Read, path::PathBuf};
 
 use collections::HashSet;
 use encryption_export::EncryptionConfig;
-use grpcio::{ChannelCredentials, ChannelCredentialsBuilder};
 use security::SecurityConfig;
 use tonic::transport::{Certificate, ClientTlsConfig, Identity};
 

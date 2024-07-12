@@ -141,8 +141,9 @@ struct ServerMeta<EK: KvEngine> {
     rsmeter_cleanup: Box<dyn FnOnce()>,
 }
 
-type PendingServices = Vec<Box<dyn Fn() -> Service>>;
 type CopHooks<EK> = Vec<Box<dyn Fn(&mut CoprocessorHost<EK>)>>;
+
+type PendingServiceBuilder<EK> = Vec<Box<dyn Fn(&mut Server<PdStoreAddrResolver, SimulateEngine<EK>>)>>;
 
 pub struct ServerCluster<EK: KvEngine> {
     metas: HashMap<u64, ServerMeta<EK>>,
@@ -150,7 +151,7 @@ pub struct ServerCluster<EK: KvEngine> {
     pub storages: HashMap<u64, SimulateEngine<EK>>,
     pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
     pub importers: HashMap<u64, Arc<SstImporter<EK>>>,
-    pub pending_services: HashMap<u64, PendingServices>,
+    pub pending_services: HashMap<u64, PendingServiceBuilder<EK>>,
     pub coprocessor_hooks: HashMap<u64, CopHooks<EK>>,
     pub health_controllers: HashMap<u64, HealthController>,
     pub security_mgr: Arc<SecurityManager>,
@@ -564,9 +565,10 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
             svr.register_service(DeadlockServer::new(deadlock_service.clone()));
             if let Some(svcs) = self.pending_services.get(&node_id) {
                 for fact in svcs {
-                    svr.register_service(fact());
+                    (**fact)(&mut svr);
                 }
             }
+            
             match svr.build_and_bind() {
                 Ok(_) => {
                     server = Some(svr);

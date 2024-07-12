@@ -27,10 +27,10 @@ use tikv_util::{
     worker::{LazyWorker, Scheduler, Worker},
     Either,
 };
-use tokio::runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime};
+use tokio::{net::TcpListener, runtime::{Builder as RuntimeBuilder, Handle as RuntimeHandle, Runtime}};
+use tokio_stream::wrappers::TcpListenerStream;
 use tokio_timer::timer::Handle;
 use tonic::transport::{server::Router, Server as GrpcServer};
-// use grpcio_health::{create_health, HealthService};
 use tonic_health::{pb::health_server::HealthServer, server::HealthService};
 
 use super::{
@@ -65,6 +65,7 @@ pub trait GrpcBuilderFactory {
 }
 pub struct ServerBuilderWithAddr {
     pub builder: Router,
+    pub incoming: Option<TcpListener>,
     pub addr: SocketAddr,
 }
 
@@ -82,7 +83,7 @@ impl ServerBuilderWithAddr {
         V::Future: Send + 'static,
     {
         unsafe {
-            let mut builder = std::ptr::read(&mut self.builder);
+            let builder = std::ptr::read(&mut self.builder);
             let builder = builder.add_service(svc);
             std::ptr::write(&mut self.builder, builder);
         }
@@ -139,7 +140,7 @@ where
             .add_service(tikv_with_proxy)
             .add_service(HealthServer::new(self.health_service.clone()));
 
-        Ok(ServerBuilderWithAddr { builder, addr })
+        Ok(ServerBuilderWithAddr { builder, addr, incoming: None, })
     }
 }
 
@@ -331,6 +332,12 @@ where
         //     self.builder_or_server.take().unwrap().left().unwrap();
         //     builder.serve()
         // let mut server = sb.build()?;
+        // for (addr, creds) in addrs {
+        //     server.add_listening_port(addr, creds)?;
+        // }
+        // self.local_addr = addr;
+        // self.builder_or_server = Some(Either::Right(server));
+
         let addr = self
             .builder_or_server
             .as_ref()
@@ -340,26 +347,34 @@ where
             .unwrap()
             .addr
             .clone();
+
+        let ServerBuilderWithAddr { builder, addr, incoming } =
+            self.builder_or_server.take().unwrap().left().unwrap();
+        assert!(incoming.is_none());
+
+        let incoming = self.grpc_handle.block_on(tokio::net::TcpListener::bind(addr))?;
+        let addr = incoming.local_addr()?;
         self.local_addr = addr;
-        // for (addr, creds) in addrs {
-        //     server.add_listening_port(addr, creds)?;
-        // }
-        // self.local_addr = addr;
-        // self.builder_or_server = Some(Either::Right(server));
+
+        self.builder_or_server = Some(Either::Left(ServerBuilderWithAddr {
+            builder, addr, incoming: Some(incoming),
+        }));
+ 
         Ok(addr)
     }
 
     fn start_grpc(&mut self) {
         info!("listening on addr"; "addr" => &self.local_addr);
-        let server_builder = self.builder_or_server.take().unwrap().left().unwrap();
+        let ServerBuilderWithAddr { builder, incoming, .. } = self.builder_or_server.take().unwrap().left().unwrap();
         let addr = self.local_addr.clone();
         let (tx, rx) = futures::channel::oneshot::channel::<()>();
-        let grpc_task = server_builder
-            .builder
-            .serve_with_shutdown(addr, rx.map(|_| ()));
+        let grpc_task = builder
+            .serve_with_incoming_shutdown(TcpListenerStream::new(incoming.unwrap()), rx.map(|_| ()));
         let _ = self.grpc_handle.spawn(grpc_task);
+
         self.builder_or_server = Some(Either::Right(tx));
         self.health_controller.set_is_serving(true);
+
     }
 
     /// Starts the TiKV server.
