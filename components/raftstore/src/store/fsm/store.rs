@@ -175,18 +175,6 @@ pub struct StoreMeta {
     /// be safely removed from the store, such as applying snapshot or
     /// compacting raft logs.
     pub damaged_regions: HashSet<u64>,
-    /// Record peers are busy with applying logs
-    /// (applied_index <= last_idx - leader_transfer_max_log_lag).
-    /// `busy_apply_peers` and `completed_apply_peers_count` are used
-    /// to record the accurate count of busy apply peers and peers complete
-    /// applying logs
-    pub busy_apply_peers: HashSet<u64>,
-    /// Record the number of peers done for applying logs.
-    /// Without `completed_apply_peers_count`, it's hard to know whether all
-    /// peers are ready for applying logs.
-    /// If None, it means the store is start from empty, no need to check and
-    /// update it anymore.
-    pub completed_apply_peers_count: Option<u64>,
 }
 
 impl StoreRegionMeta for StoreMeta {
@@ -238,8 +226,6 @@ impl StoreMeta {
             region_read_progress: RegionReadProgressRegistry::new(),
             damaged_ranges: HashMap::default(),
             damaged_regions: HashSet::default(),
-            busy_apply_peers: HashSet::default(),
-            completed_apply_peers_count: Some(0),
         }
     }
 
