@@ -943,6 +943,36 @@ lazy_static! {
         &["type"]
     ).unwrap();
 
+    pub static ref IMPORTER_INGEST_COUNT: Histogram = register_histogram!(
+        "tikv_import_ingest_flush_count",
+        "Bucketed histogram of importer ingest count",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    ).unwrap();
+
+    pub static ref IMPORTER_INGEST_COUNT_END: Histogram = register_histogram!(
+        "tikv_import_ingest_flush_end_count",
+        "Bucketed histogram of importer ingest count",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    ).unwrap();
+
+    pub static ref IMPORTER_INGEST_COUNT_UNFLUSH: Histogram = register_histogram!(
+        "tikv_import_ingest_flush_unflush_count",
+        "Bucketed histogram of importer ingest count",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    ).unwrap();
+
+    pub static ref IMPORTER_INGEST_COUNT_NOPOLLER: Histogram = register_histogram!(
+        "tikv_import_ingest_flush_nopoller_count",
+        "Bucketed histogram of importer ingest count",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    ).unwrap();
+
+    pub static ref IMPORTER_INGEST_COUNT_YIELD: Histogram = register_histogram!(
+        "tikv_import_ingest_flush_yield_count",
+        "Bucketed histogram of importer ingest count",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    ).unwrap();
+
     pub static ref RAFT_APPLY_SST_YIELD_BY_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_raftstore_raft_apply_sst_yield_by",
         "Total number of sst yield.",
@@ -953,7 +983,7 @@ lazy_static! {
     pub static ref RAFT_APPLY_COMMIT_BY_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_raftstore_raft_apply_commit_by",
         "Total number of sst commit.",
-        &["reason"]
+        &["reason", "type"]
     )
     .unwrap();
 

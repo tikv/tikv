@@ -731,6 +731,9 @@ where
         // take raft log gc for example, we write kv WAL first, then write raft WAL,
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
+        if self.pending_ssts.is_empty() {
+            IMPORTER_INGEST_COUNT.observe(self.pending_ssts.len() as _);
+        }
         let (is_synced, _) = self.write_to_db();
 
         if !self.apply_res.is_empty() {
@@ -841,6 +844,30 @@ fn has_high_latency_operation(cmd: &RaftCmdRequest) -> bool {
         }
     }
     false
+}
+
+fn check_operation(cmd: &RaftCmdRequest) -> (bool, bool, i32) {
+    let mut delete_range = false;
+    let mut ingest_sst = false;
+    let mut other_type: CmdType = CmdType::Invalid;
+    for req in cmd.get_requests() {
+        if req.has_delete_range() {
+            delete_range = true;
+            if other_type == CmdType::Invalid {
+                other_type = CmdType::DeleteRange;
+            }
+            continue;
+        }
+        if req.has_ingest_sst() {
+            ingest_sst = true;
+            continue;
+        }
+
+        if other_type == CmdType::Invalid {
+            other_type = CmdType::DeleteRange;
+        }
+    }
+    (delete_range, ingest_sst, other_type as i32)
 }
 
 /// Checks if a write is needed to be issued after handling the command.
@@ -1058,7 +1085,21 @@ where
     unfinished_write_seqno: Vec<SequenceNumber>,
 
     has_pending_ssts: bool,
+
+    dealing_with_ssts: bool,
 }
+
+const CMD_TYPE_NAME: [&str; 9] = [
+    "invalid",
+    "get",
+    "put",
+    "delete",
+    "snap",
+    "prewrite",
+    "deleterange",
+    "ingestsst",
+    "readindex",
+];
 
 impl<EK> ApplyDelegate<EK>
 where
@@ -1093,6 +1134,7 @@ where
             buckets: None,
             unfinished_write_seqno: vec![],
             has_pending_ssts: false,
+            dealing_with_ssts: false,
         }
     }
 
@@ -1137,6 +1179,7 @@ where
                 );
             }
 
+            self.dealing_with_ssts = false;
             // NOTE: before v5.0, `EntryType::EntryConfChangeV2` entry is handled by
             // `unimplemented!()`, which can break compatibility (i.e. old version tikv
             // running on data written by new version tikv), but PD will reject old version
@@ -1165,6 +1208,9 @@ where
                     // Note that current entry is skipped when yield.
                     pending_entries.push(entry);
                     pending_entries.extend(committed_entries_drainer);
+                    if self.dealing_with_ssts {
+                        IMPORTER_INGEST_COUNT_YIELD.observe(pending_entries.len() as _);
+                    }
                     apply_ctx.finish_for(self, results);
                     self.yield_state = Some(YieldState {
                         pending_entries,
@@ -1240,18 +1286,21 @@ where
                         simple_write_decoder.to_raft_cmd_request()
                     }
                 };
-                let high_latency_operation = has_high_latency_operation(&cmd);
+                let (delete_range, ingest_sst, cmdtp) = check_operation(&cmd);
+                let high_latency_operation = delete_range || ingest_sst;
+                self.dealing_with_ssts = ingest_sst;
                 if apply_ctx.yield_high_latency_operation && high_latency_operation {
                     self.priority = Priority::Low;
                 }
                 if self.has_pending_ssts {
                     // we are in low priority handler and to avoid overlapped ssts with same region
                     // just return Yield
-                    if high_latency_operation {
+                    if ingest_sst {
                         RAFT_APPLY_SST_YIELD_BY_VEC
-                            .with_label_values(&["pending_sst"])
+                            .with_label_values(&[CMD_TYPE_NAME[cmdtp as usize]])
                             .inc();
                     }
+
                     return ApplyResult::Yield;
                 }
                 let mut has_unflushed_data =
@@ -1263,8 +1312,9 @@ where
                 {
                     if !apply_ctx.pending_ssts.is_empty() {
                         RAFT_APPLY_COMMIT_BY_VEC
-                            .with_label_values(&["unflush"])
+                            .with_label_values(&["unflush", CMD_TYPE_NAME[cmdtp as usize]])
                             .inc();
+                        IMPORTER_INGEST_COUNT_UNFLUSH.observe(apply_ctx.pending_ssts.len() as _);
                     }
                     apply_ctx.commit(self);
                     if self.metrics.written_bytes >= apply_ctx.yield_msg_size
@@ -1282,12 +1332,14 @@ where
                     if has_unflushed_data {
                         if !apply_ctx.pending_ssts.is_empty() {
                             RAFT_APPLY_COMMIT_BY_VEC
-                                .with_label_values(&["notpoller"])
+                                .with_label_values(&["nopoller", CMD_TYPE_NAME[cmdtp as usize]])
                                 .inc();
+                            IMPORTER_INGEST_COUNT_NOPOLLER
+                                .observe(apply_ctx.pending_ssts.len() as _);
                         }
                         apply_ctx.commit(self);
                     }
-                    if high_latency_operation {
+                    if ingest_sst {
                         RAFT_APPLY_SST_YIELD_BY_VEC
                             .with_label_values(&["notpoller"])
                             .inc();
@@ -4179,6 +4231,7 @@ where
             ctx.timer = Some(Instant::now_coarse());
         }
         if !state.pending_entries.is_empty() {
+            // self.delegate.priority = Priority::Normal;
             self.delegate
                 .handle_raft_committed_entries(ctx, state.pending_entries.drain(..));
             if let Some(ref mut s) = self.delegate.yield_state {
@@ -4743,6 +4796,9 @@ where
     }
 
     fn end(&mut self, fsms: &mut [Option<impl DerefMut<Target = ApplyFsm<EK>>>]) {
+        if self.apply_ctx.pending_ssts.is_empty() {
+            IMPORTER_INGEST_COUNT_END.observe(self.apply_ctx.pending_ssts.len() as _);
+        }
         self.apply_ctx.flush();
         for fsm in fsms.iter_mut().flatten() {
             fsm.delegate.last_flush_applied_index = fsm.delegate.apply_state.get_applied_index();
