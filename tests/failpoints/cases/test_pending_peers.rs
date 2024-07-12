@@ -1,7 +1,10 @@
 // Copyright 2017 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
+use crossbeam::channel;
+use kvproto::raft_serverpb::RaftMessage;
+use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv_util::{config::*, time::Instant};
 
@@ -109,8 +112,6 @@ fn test_pending_snapshot() {
         state2
     );
 }
-<<<<<<< HEAD
-=======
 
 // Tests if store is marked with busy when there exists peers on
 // busy on applying raft logs.
@@ -266,4 +267,3 @@ fn test_on_apply_snap_failed() {
     assert!(stats.damaged_regions_id.contains(&region_id));
     fail::remove("region_apply_snap_io_err");
 }
->>>>>>> dd37a4703d (raftstore: gc abnormal snapshots and destroy peer if failed to apply snapshots. (#16992))
