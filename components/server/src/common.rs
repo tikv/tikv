@@ -15,7 +15,6 @@ use std::{
     u64,
 };
 
-use crossbeam::{channel::tick, select};
 use encryption_export::{data_key_manager_from_config, DataKeyManager};
 use engine_rocks::{
     flush_engine_statistics,

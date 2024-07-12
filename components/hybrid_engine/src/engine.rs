@@ -1,7 +1,5 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{sync::Arc, thread::JoinHandle};
-
 use engine_traits::{
     FailedReason, KvEngine, Mutable, Peekable, RangeCacheEngine, ReadOptions, Result,
     SnapshotContext, SnapshotMiscExt, SyncMutable, WriteBatch, WriteBatchExt,

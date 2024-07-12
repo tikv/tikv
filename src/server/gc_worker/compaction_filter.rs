@@ -25,7 +25,6 @@ use hybrid_engine::HybridEngine;
 use pd_client::{Feature, FeatureGate};
 use prometheus::{local::*, *};
 use raftstore::coprocessor::RegionInfoProvider;
-use region_cache_memory_engine::RangeCacheMemoryEngine;
 use tikv_util::{
     time::Instant,
     worker::{ScheduleError, Scheduler},

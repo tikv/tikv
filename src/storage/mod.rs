@@ -88,11 +88,7 @@ use kvproto::{
     pdpb::QueryKind,
 };
 use pd_client::FeatureGate;
-use raftstore::store::{
-    fsm::apply::{PRINTF_LOG, TXN_LOG},
-    util::build_key_range,
-    ReadStats, TxnExt, WriteStats,
-};
+use raftstore::store::{fsm::apply::TXN_LOG, util::build_key_range, ReadStats, TxnExt, WriteStats};
 use rand::prelude::*;
 use resource_control::{ResourceController, ResourceGroupManager, ResourceLimiter, TaskMetadata};
 use resource_metering::{FutureExt, ResourceTagFactory};

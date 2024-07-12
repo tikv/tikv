@@ -585,6 +585,18 @@ impl RangeManager {
 
         buffer
     }
+
+    pub fn schedule_ranges(&mut self, ranges: &mut Vec<CacheRange>) {
+        ranges.retain(|r| {
+            let mut scheduled = self.ranges_being_deleted.get_mut(r).unwrap();
+            if !*scheduled {
+                *scheduled = true;
+                true
+            } else {
+                false
+            }
+        });
+    }
 }
 
 #[derive(Debug, PartialEq)]
