@@ -731,7 +731,7 @@ where
         // take raft log gc for example, we write kv WAL first, then write raft WAL,
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
-        if self.pending_ssts.is_empty() {
+        if !self.pending_ssts.is_empty() {
             IMPORTER_INGEST_COUNT.observe(self.pending_ssts.len() as _);
         }
         let (is_synced, _) = self.write_to_db();
@@ -4796,7 +4796,7 @@ where
     }
 
     fn end(&mut self, fsms: &mut [Option<impl DerefMut<Target = ApplyFsm<EK>>>]) {
-        if self.apply_ctx.pending_ssts.is_empty() {
+        if !self.apply_ctx.pending_ssts.is_empty() {
             IMPORTER_INGEST_COUNT_END.observe(self.apply_ctx.pending_ssts.len() as _);
         }
         self.apply_ctx.flush();
