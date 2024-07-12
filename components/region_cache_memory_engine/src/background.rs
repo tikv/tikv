@@ -2613,7 +2613,6 @@ impl CrossChecker {
                             && (write.write_type != WriteType::Rollback
                                 && write.write_type != WriteType::Lock)
                         {
-                            assert!(cur_key_info.last_mvcc_version_before_safe_point != 0);
                             panic!(
                                 "cross check fail(miss key): miss valid mvcc version; 
                                 lower={:?}, upper={:?}; cache_key={:?}, disk_key={:?}; sequence_numer={}; read_ts={}, safe_point={}; cur_key_info={:?}",
