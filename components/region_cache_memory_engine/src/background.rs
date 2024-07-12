@@ -2285,12 +2285,14 @@ impl CrossChecker {
                             mvcc_recordings: vec![],
                             last_mvcc_version_before_safe_point: 0,
                         };
-                        if write.write_type != WriteType::Lock
-                            && write.write_type != WriteType::Rollback
-                        {
-                            cur_key_info.mvcc_recordings.push(ts);
-                        }
                     }
+
+                    if write.write_type != WriteType::Lock
+                        && write.write_type != WriteType::Rollback
+                    {
+                        cur_key_info.mvcc_recordings.push(ts);
+                    }
+
                     if cur_key_info.last_mvcc_version_before_safe_point == 0
                         && ts < safe_point
                         && (write.write_type != WriteType::Lock
@@ -2368,25 +2370,8 @@ impl CrossChecker {
             // safe_point of the relevant range
             if disk_mvcc > *safe_point {
                 *safe_point = {
-                    let core = engine.core().read();
-                    let s = if let Some(meta) = core.range_manager.range_meta(range) {
-                        meta.safe_point()
-                    } else {
-                        core.range_manager
-                            .history_range_meta(range)
-                            .unwrap()
-                            .safe_point()
-                    };
-                    if *safe_point != s {
-                        assert!(s > *safe_point);
-                        if let Some(mvcc) = prev_key_info
-                            .mvcc_recordings
-                            .iter()
-                            .find(|&&mvcc| mvcc <= s)
-                        {
-                            prev_key_info.last_mvcc_version_before_safe_point = *mvcc;
-                        }
-                    }
+                    let s = engine.core().read().range_manager().get_safe_point(&range);
+                    assert!(s >= *safe_point);
                     s
                 };
                 if disk_mvcc > *safe_point {
@@ -2560,27 +2545,9 @@ impl CrossChecker {
                             if disk_mvcc < read_ts {
                                 // get safe point again as it may be updated
                                 *safe_point = {
-                                    let core = engine.core().read();
                                     let s =
-                                        if let Some(meta) = core.range_manager.range_meta(&range) {
-                                            meta.safe_point()
-                                        } else {
-                                            core.range_manager
-                                                .history_range_meta(&range)
-                                                .unwrap()
-                                                .safe_point()
-                                        };
-                                    if *safe_point != s {
-                                        assert!(s > *safe_point);
-                                        if let Some(mvcc) = cur_key_info
-                                            .mvcc_recordings
-                                            .iter()
-                                            .find(|&&mvcc| mvcc <= s)
-                                        {
-                                            cur_key_info.last_mvcc_version_before_safe_point =
-                                                *mvcc;
-                                        }
-                                    }
+                                        engine.core().read().range_manager().get_safe_point(&range);
+                                    assert!(s >= *safe_point);
                                     s
                                 };
                             }
@@ -2601,6 +2568,7 @@ impl CrossChecker {
                             }
                         }
 
+                        cur_key_info.update_last_mvcc_version_before_safe_point(*safe_point);
                         // We record the largest mvcc version below safe_point for each user_key --
                         // last_mvcc_before_safe_point, and there should not be any version between
                         // it and safe_point
@@ -2631,25 +2599,8 @@ impl CrossChecker {
             } else {
                 if disk_mvcc > *safe_point {
                     *safe_point = {
-                        let core = engine.core().read();
-                        let s = if let Some(meta) = core.range_manager.range_meta(&range) {
-                            meta.safe_point()
-                        } else {
-                            core.range_manager
-                                .history_range_meta(&range)
-                                .unwrap()
-                                .safe_point()
-                        };
-                        if *safe_point != s {
-                            assert!(s > *safe_point);
-                            if let Some(mvcc) = prev_key_info
-                                .mvcc_recordings
-                                .iter()
-                                .find(|&&mvcc| mvcc <= s)
-                            {
-                                prev_key_info.last_mvcc_version_before_safe_point = *mvcc;
-                            }
-                        }
+                        let s = engine.core().read().range_manager().get_safe_point(&range);
+                        assert!(s >= *safe_point);
                         s
                     };
                     if disk_mvcc > *safe_point {
@@ -2727,6 +2678,7 @@ impl CrossChecker {
         }
 
         if disk_user_key == prev_key_info.user_key {
+            prev_key_info.update_last_mvcc_version_before_safe_point(*safe_point);
             // It means all versions below safe point are GCed which means the
             // latest write below safe point is mvcc delete.
             // IME:  [k1-9, k2-9]
@@ -2738,28 +2690,12 @@ impl CrossChecker {
             // legally.
             if prev_key_info.last_mvcc_version_before_safe_point == 0 {
                 *safe_point = {
-                    let core = engine.core().read();
-                    let s = if let Some(meta) = core.range_manager.range_meta(&range) {
-                        meta.safe_point()
-                    } else {
-                        core.range_manager
-                            .history_range_meta(&range)
-                            .unwrap()
-                            .safe_point()
-                    };
-                    if *safe_point != s {
-                        assert!(s > *safe_point);
-                        if let Some(mvcc) = prev_key_info
-                            .mvcc_recordings
-                            .iter()
-                            .find(|&&mvcc| mvcc <= s)
-                        {
-                            prev_key_info.last_mvcc_version_before_safe_point = *mvcc;
-                        }
-                    }
+                    let s = engine.core().read().range_manager().get_safe_point(&range);
+                    assert!(s >= *safe_point);
                     s
                 };
             }
+            prev_key_info.update_last_mvcc_version_before_safe_point(*safe_point);
             if prev_key_info.last_mvcc_version_before_safe_point == 0 {
                 if disk_user_key != last_disk_user_key {
                     *last_disk_user_key = disk_user_key.to_vec();
@@ -2919,11 +2855,34 @@ impl RunnableWithTimer for CrossChecker {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct KeyCheckingInfo {
     user_key: Vec<u8>,
     mvcc_recordings: Vec<u64>,
     last_mvcc_version_before_safe_point: u64,
+}
+
+impl KeyCheckingInfo {
+    fn update_last_mvcc_version_before_safe_point(&mut self, safe_point: u64) {
+        self.last_mvcc_version_before_safe_point = *self
+            .mvcc_recordings
+            .iter()
+            .find(|&mvcc| mvcc <= &safe_point)
+            .unwrap_or(&0);
+    }
+}
+
+impl std::fmt::Debug for KeyCheckingInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeyCheckingInfo")
+            .field("user_key", &log_wrappers::Value(&self.user_key))
+            .field("mvcc_recordings", &self.mvcc_recordings)
+            .field(
+                "last_mvcc_version_before_safe_point",
+                &self.last_mvcc_version_before_safe_point,
+            )
+            .finish()
+    }
 }
 
 #[cfg(test)]

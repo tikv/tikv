@@ -201,6 +201,14 @@ impl RangeManager {
         }
     }
 
+    pub fn get_safe_point(&self, range: &CacheRange) -> u64 {
+        if let Some(meta) = self.range_meta(&range) {
+            meta.safe_point()
+        } else {
+            self.history_range_meta(&range).unwrap().safe_point()
+        }
+    }
+
     pub fn contains(&self, key: &[u8]) -> bool {
         self.ranges.keys().any(|r| r.contains_key(key))
     }
