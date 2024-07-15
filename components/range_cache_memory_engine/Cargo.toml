@@ -1,5 +1,5 @@
 [package]
-name = "region_cache_memory_engine"
+name = "range_cache_memory_engine"
 version = "0.0.1"
 edition = "2021"
 publish = false
@@ -15,40 +15,42 @@ path = "tests/failpoints/mod.rs"
 required-features = ["failpoints"]
 
 [dependencies]
-bytes = "1.0"
-collections = { workspace = true }
-crossbeam = "0.8"
-dashmap = "5.1"
-engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
-fail = "0.5"
+collections = { workspace = true }
+crossbeam-skiplist = { workspace = true }
+bytes = "1.0"
+crossbeam = { workspace = true }
 futures = { version = "0.3", features = ["compat"] }
-hex = "0.4"
-keys = { workspace = true }
+tikv_util = { workspace = true }
+txn_types = { workspace = true }
 kvproto = { workspace = true }
-lazy_static = "1.4.0"
-libc = "0.2"
 log_wrappers = { workspace = true }
-online_config = { workspace = true }
-parking_lot = "0.12"
 pd_client = { workspace = true }
-prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
-prometheus-static-metric = "0.5"
-rand = "0.8"
+raftstore = { workspace = true }
+dashmap = "5.1"
 security = { workspace = true }
 serde = "1.0"
 serde_derive = "1.0"
 serde_json = "1.0"
-skiplist-rs = { git = "https://github.com/tikv/skiplist-rs.git", branch = "main" }
-slog = { workspace = true }
 slog-global = { workspace = true }
-thiserror = "1.0"
-tikv_util = { workspace = true }
-txn_types = { workspace = true }
+slog = { workspace = true }
+engine_rocks = { workspace = true }
+fail = "0.5"
 yatp = { workspace = true }
+parking_lot = "0.12"
+keys = { workspace = true }
+prometheus = { version = "0.13", default-features = false, features = ["nightly"] }
+prometheus-static-metric = "0.5"
+lazy_static = "1.4.0"
+hex = "0.4"
+thiserror = "1.0"
+online_config = { workspace = true }
+libc = "0.2"
+rand = "0.8"
 
 [dev-dependencies]
 tempfile = "3.0"
 test_pd = { workspace = true }
 test_pd_client = { workspace = true }
 test_util = { workspace = true }
+proptest = "1.0.0"

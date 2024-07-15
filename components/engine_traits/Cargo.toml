@@ -10,9 +10,7 @@ failpoints = ["fail/failpoints"]
 testexport = []
 
 [dependencies]
-case_macros = { workspace = true }
 collections = { workspace = true }
-encryption = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
@@ -22,6 +20,7 @@ lazy_static = "1.0"
 log_wrappers = { workspace = true }
 protobuf = "2"
 raft = { workspace = true }
+encryption = { workspace = true }
 serde = "1.0"
 slog = { workspace = true }
 slog-global = { workspace = true }

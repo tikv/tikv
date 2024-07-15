@@ -24,7 +24,7 @@ pub struct InternalBytes {
 
 impl Drop for InternalBytes {
     fn drop(&mut self) {
-        let size = self.bytes.len() + MEM_CONTROLLER_OVERHEAD;
+        let size = InternalBytes::memory_size_required(self.bytes.len());
         let controller = self.memory_controller.take();
         if let Some(controller) = controller {
             // Reclaim the memory though the bytes have not been drop. This time
@@ -76,6 +76,14 @@ impl InternalBytes {
             ..
         } = decode_key(other.as_slice());
         user_key == other_user_key
+    }
+
+    // The IntervalBytes that has been written in the in-memory engine have set the
+    // `memory_controller`, so the memory usage of it is the memory usage of bytes +
+    // 8 bytes (the size of Arc).
+    #[inline]
+    pub fn memory_size_required(bytes_size: usize) -> usize {
+        bytes_size + MEM_CONTROLLER_OVERHEAD
     }
 }
 
@@ -153,6 +161,7 @@ pub struct InternalKey<'a> {
     pub sequence: u64,
 }
 
+// The size of sequence number suffix
 pub const ENC_KEY_SEQ_LENGTH: usize = std::mem::size_of::<u64>();
 
 impl<'a> From<&'a [u8]> for InternalKey<'a> {
@@ -216,12 +225,12 @@ pub fn encode_seek_for_prev_key(key: &[u8], seq: u64) -> InternalBytes {
 
 // range keys deos not contain mvcc version and sequence number
 #[inline]
-pub fn encode_key_for_eviction(range: &CacheRange) -> (InternalBytes, InternalBytes) {
+pub fn encode_key_for_boundary_with_mvcc(range: &CacheRange) -> (InternalBytes, InternalBytes) {
     // Both encoded_start and encoded_end should be the smallest key in the
-    // respective of user key, so that the eviction covers all versions of the range
-    // start and covers nothing of range end.
+    // respective of user key (with mvcc version), so that the iterations cover all
+    // versions of the range start and covers nothing of range end.
 
-    // we could avoid one clone, but this code is clearer.
+    // TODO: can we avoid one clone
     let start_mvcc_key = Key::from_encoded(range.start.to_vec())
         .append_ts(TimeStamp::max())
         .into_encoded();
@@ -231,6 +240,19 @@ pub fn encode_key_for_eviction(range: &CacheRange) -> (InternalBytes, InternalBy
         .append_ts(TimeStamp::max())
         .into_encoded();
     let encoded_end = encode_key(&end_mvcc_key, u64::MAX, VALUE_TYPE_FOR_SEEK);
+
+    (encoded_start, encoded_end)
+}
+
+#[inline]
+pub fn encode_key_for_boundary_without_mvcc(range: &CacheRange) -> (InternalBytes, InternalBytes) {
+    // Both encoded_start and encoded_end should be the smallest key in the
+    // respective of user key (without mvcc version), so that the iterations cover
+    // all versions of the range start and covers nothing of range end.
+
+    // TODO: can we avoid one clone
+    let encoded_start = encode_key(&range.start, u64::MAX, VALUE_TYPE_FOR_SEEK);
+    let encoded_end = encode_key(&range.end, u64::MAX, VALUE_TYPE_FOR_SEEK);
 
     (encoded_start, encoded_end)
 }
@@ -251,12 +273,11 @@ pub fn construct_user_key(i: u64) -> Vec<u8> {
 }
 
 #[cfg(test)]
-pub fn construct_key(i: u64, mvcc: u64) -> Vec<u8> {
+pub fn construct_key(i: u64, ts: u64) -> Vec<u8> {
     let k = format!("k{:08}", i);
-    let mut key = k.as_bytes().to_vec();
-    // mvcc version should be make bit-wise reverse so that k-100 is less than k-99
-    key.put_u64(!mvcc);
-    key
+    Key::from_encoded(k.as_bytes().to_vec())
+        .append_ts(TimeStamp::new(ts))
+        .into_encoded()
 }
 
 #[cfg(test)]

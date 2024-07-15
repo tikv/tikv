@@ -9,9 +9,9 @@ license = "Apache-2.0"
 failpoints = ["raft-engine/failpoints"]
 
 [dependencies]
-codec = { workspace = true }
 encryption = { workspace = true }
 engine_traits = { workspace = true }
+codec = { workspace = true }
 file_system = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.4.0"

@@ -7,5 +7,5 @@ publish = false
 
 [dependencies]
 atomic = "0.5"
-crossbeam = "0.8"
+crossbeam = { workspace = true }
 tikv_util = { workspace = true }
