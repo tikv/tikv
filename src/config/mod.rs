@@ -5816,7 +5816,7 @@ mod tests {
             Module::Server,
             Box::new(ServerConfigManager::new(
                 scheduler,
-                version_tracker.clone(),
+                version_tracker,
                 ResourceQuota::new(None),
                 Box::new(cop_manager),
             )),
