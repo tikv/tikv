@@ -973,6 +973,12 @@ lazy_static! {
         exponential_buckets(1.0, 2.0, 20).unwrap()
     ).unwrap();
 
+    pub static ref IMPORTER_INGEST_COUNT_ONE_BATCH: Histogram = register_histogram!(
+        "tikv_import_ingest_count_one_batch",
+        "Bucketed histogram of importer ingest count",
+        exponential_buckets(1.0, 2.0, 20).unwrap()
+    ).unwrap();
+
     pub static ref RAFT_APPLY_SST_YIELD_BY_VEC: IntCounterVec = register_int_counter_vec!(
         "tikv_raftstore_raft_apply_sst_yield_by",
         "Total number of sst yield.",
