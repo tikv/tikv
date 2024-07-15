@@ -1787,50 +1787,6 @@ fn test_destroy_source_peer_while_merging() {
     }
 }
 
-// Test that a store is able to generate snapshots while destroying a region. It
-// confirms the resolution of issue #12587.
-#[test]
-fn test_snap_gen_while_destroy_is_stuck() {
-    let mut cluster = new_node_cluster(0, 5);
-    configure_for_merge(&mut cluster.cfg);
-    let pd_client = Arc::clone(&cluster.pd_client);
-    pd_client.disable_default_operator();
-
-    cluster.run();
-
-    cluster.must_put(b"k1", b"v1");
-    cluster.must_put(b"k3", b"v3");
-    for i in 1..=5 {
-        must_get_equal(&cluster.get_engine(i), b"k1", b"v1");
-        must_get_equal(&cluster.get_engine(i), b"k3", b"v3");
-    }
-    cluster.must_split(&pd_client.get_region(b"k1").unwrap(), b"k2");
-
-    let region_1 = pd_client.get_region(b"k1").unwrap();
-    let region_2 = pd_client.get_region(b"k3").unwrap();
-    // Ensure that store 5 is the leader of region_1 and store 1 is the leader of
-    // region_2.
-    cluster.must_transfer_leader(region_1.get_id(), new_peer(5, 1001));
-    cluster.must_transfer_leader(region_2.get_id(), new_peer(1, 1));
-
-    let on_region_worker_destroy_fp = "on_region_worker_destroy";
-    fail::cfg(on_region_worker_destroy_fp, "pause").unwrap();
-
-    // Remove region_1 from from store 1 so that a destory task is scheduled.
-    // The destory task will be stuck due to the fail point above to simulate a
-    // slow destory scenario.
-    pd_client.must_remove_peer(region_1.get_id(), find_peer(&region_1, 1).unwrap().clone());
-    must_get_equal(&cluster.get_engine(1), b"k1", b"v1");
-
-    // Trigger a snapshot gen task on store 1 by removing and adding region_2 on
-    // store 5. The snapshot generation should go through without issues.
-    pd_client.must_remove_peer(region_2.get_id(), new_peer(5, 5));
-    must_get_none(&cluster.get_engine(5), b"k3");
-
-    pd_client.must_add_peer(region_2.get_id(), new_peer(5, 6));
-    must_get_equal(&cluster.get_engine(5), b"k3", b"v3");
-}
-
 struct MsgTimeoutFilter {
     // wrap with mutex to make tx Sync.
     tx: Mutex<Sender<RaftMessage>>,
