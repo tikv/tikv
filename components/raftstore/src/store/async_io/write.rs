@@ -40,7 +40,7 @@ use tikv_util::{
     debug, info, slow_log,
     sys::thread::StdThreadBuildWrapper,
     thd_name,
-    time::{duration_to_sec, spin_at_least, Duration, Instant},
+    time::{duration_to_sec, setup_for_spin_interval, spin_at_least, Duration, Instant},
     warn,
 };
 
@@ -401,6 +401,8 @@ struct WriteTaskBatchRecorder {
 
 impl WriteTaskBatchRecorder {
     fn new(batch_size_hint: usize, wait_duration: Duration) -> Self {
+        // Initialize the spin duration in advance.
+        setup_for_spin_interval();
         Self {
             batch_size_hint,
             history: VecDeque::new(),

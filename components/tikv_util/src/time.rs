@@ -6,7 +6,10 @@ use std::{
     cell::RefCell,
     cmp::Ordering,
     ops::{Add, AddAssign, Sub, SubAssign},
-    sync::mpsc::{self, Sender},
+    sync::{
+        mpsc::{self, Sender},
+        Once,
+    },
     thread::{self, Builder, JoinHandle},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -545,14 +548,44 @@ pub fn yield_at_least(elaspsed: Duration) {
     }
 }
 
-/// Default ratio for spin duration.
+/// Default duration cost for spinning one round.
 ///
-/// Spin duration for one round is about 25~28us. So, heuristically, we can
-/// use 4 as the default ratio to make the spin duration about 100us.
-const SPIN_ROUND_DEFAULT_RATIO: u64 = 40;
+/// Heuristically, spin duration for one round is about 3～4ns.
+static mut DEFAULT_DURATION_SPIN_ONE_ROUND: u64 = 1;
+
+/// Setup the default ratio for spin duration.
+pub fn setup_for_spin_interval() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let inspect_duration = Duration::from_millis(10);
+        let start = Instant::now();
+        let mut count = 1;
+        // Spin for a while to get the duration for one round.
+        for _ in 0..2_000_000 {
+            if count % 1000 == 0 {
+                count += 1000;
+                if start.saturating_elapsed() >= inspect_duration {
+                    break;
+                }
+            }
+        }
+        let elapsed_one_round = start.saturating_elapsed().as_nanos() as u64 / count;
+        if elapsed_one_round > 0 {
+            unsafe {
+                DEFAULT_DURATION_SPIN_ONE_ROUND = elapsed_one_round;
+            }
+        }
+        debug!("setup duration for spinning one round: {}ns", unsafe {
+            DEFAULT_DURATION_SPIN_ONE_ROUND
+        });
+    });
+}
 
 pub fn spin_at_least(elaspsed: Duration) {
-    let rounds = elaspsed.as_nanos() as u64 * SPIN_ROUND_DEFAULT_RATIO;
+    // Initialize default spin loop interval.
+    setup_for_spin_interval();
+
+    let rounds = unsafe { elaspsed.as_nanos() as u64 / DEFAULT_DURATION_SPIN_ONE_ROUND };
     let now = Instant::now();
     for i in 1..=rounds {
         if i % 100 == 0 && now.saturating_elapsed() >= elaspsed {
@@ -718,7 +751,9 @@ mod tests {
 
     #[test]
     fn test_yield_at_least() {
-        let start = Instant::now_coarse();
+        setup_for_spin_interval();
+
+        let start = Instant::now();
         yield_at_least(Duration::from_micros(100));
         assert!(start.saturating_elapsed() >= Duration::from_micros(100));
     }
