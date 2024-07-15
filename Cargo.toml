@@ -1,6 +1,6 @@
 [package]
 name = "tikv"
-version = "7.5.2"
+version = "7.5.3"
 authors = ["The TiKV Authors"]
 description = "A distributed transactional key-value database powered by Rust and Raft"
 license = "Apache-2.0"
