@@ -971,6 +971,10 @@ where
             } => {
                 let mut range = CacheRange::new(start_key.to_vec(), end_key.to_vec());
                 range.tag = CacheRange::new_tag(region_id);
+                info!(
+                    "evict range due to destroy";
+                    "range" => ?range,
+                );
                 self.engine.evict_range(range);
                 let region_cleaner = self.region_cleaner.clone();
                 self.region_cleanup_pool

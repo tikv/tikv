@@ -627,6 +627,10 @@ impl BackgroundRunnerCore {
             }
             let evicted_range = {
                 let mut engine_wr = self.engine.write();
+                info!(
+                    "evict range due to soft limit reached";
+                    "range" => ?range,
+                );
                 let mut ranges = engine_wr.mut_range_manager().evict_range(range);
                 if !ranges.is_empty() {
                     info!(
@@ -697,6 +701,10 @@ impl BackgroundRunnerCore {
         for evict_range in ranges_to_remove {
             if self.memory_controller.reached_soft_limit() {
                 let mut core = self.engine.write();
+                info!(
+                    "evict range due to load_evict";
+                    "range" => ?evict_range,
+                );
                 let mut ranges = core.mut_range_manager().evict_range(&evict_range);
                 info!(
                     "load_evict: soft limit reached";

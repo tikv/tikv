@@ -251,6 +251,10 @@ impl RangeCacheWriteBatch {
         let mut ranges = vec![];
         let range_manager = core.mut_range_manager();
         for r in std::mem::take(&mut self.ranges_to_evict) {
+            info!(
+                "handle range range to evict";
+                "range" => ?r,
+            );
             let mut ranges_to_delete = range_manager.evict_range(&r);
             if !ranges_to_delete.is_empty() {
                 ranges.append(&mut ranges_to_delete);
@@ -644,12 +648,24 @@ impl Mutable for RangeCacheWriteBatch {
     // them directly
     fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let range = CacheRange::new(begin_key.to_vec(), end_key.to_vec());
+        if PRINTF_LOG.load(Ordering::Relaxed) {
+            info!(
+                "evict range due to delete range";
+                "range" => ?range,
+            );
+        }
         self.engine.evict_range(&range);
         Ok(())
     }
 
     fn delete_range_cf(&mut self, _cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let range = CacheRange::new(begin_key.to_vec(), end_key.to_vec());
+        if PRINTF_LOG.load(Ordering::Relaxed) {
+            info!(
+                "evict range due to delete range cf";
+                "range" => ?range,
+            );
+        }
         self.engine.evict_range(&range);
         Ok(())
     }
