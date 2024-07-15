@@ -1062,6 +1062,7 @@ dependencies = [
  "engine_rocks",
  "engine_traits",
  "external_storage",
+ "fail",
  "file_system",
  "futures 0.3.15",
  "futures-io",
@@ -5966,18 +5967,6 @@ dependencies = [
  "tikv",
  "tikv_util",
  "txn_types",
-]
-
-[[package]]
-name = "test_compact_log_backup"
-version = "0.1.0"
-dependencies = [
- "crc64fast",
- "external_storage",
- "kvproto",
- "tikv_util",
- "txn_types",
- "zstd",
 ]
 
 [[package]]

@@ -295,7 +295,7 @@ members = [
   "components/service",
   "components/snap_recovery",
   "components/sst_importer",
-  "components/test_backup", "components/test_compact_log_backup",
+  "components/test_backup", 
   "components/test_coprocessor",
   "components/test_coprocessor_plugin/example_plugin",
   "components/test_pd",

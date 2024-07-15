@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeMap,
-    io::{Cursor, Write as _},
+    io::{Cursor, Write},
     path::{Iter, Path},
     sync::{Arc, Mutex},
 };
@@ -11,7 +11,7 @@ use external_storage::ExternalStorage;
 use file_system::sha256;
 use futures::io::Cursor as ACursor;
 use keys::{data_key, origin_key};
-use kvproto::brpb::{self};
+use kvproto::brpb::{self, Metadata};
 use tidb_query_datatype::codec::table::encode_row_key;
 use tikv_util::codec::stream_event::EventEncoder;
 use txn_types::Key;
@@ -35,10 +35,10 @@ struct TxnLogFileBuilder {
 impl TxnLogFileBuilder {
     fn new(region_id: u64, configure: impl FnOnce(&mut Self)) -> Self {
         let mut this = Self {
-            default: LogFileBuilder::new(region_id, |v| {
+            default: LogFileBuilder::new(|v| {
                 v.cf = CF_DEFAULT;
             }),
-            write: LogFileBuilder::new(region_id, |v| {
+            write: LogFileBuilder::new(|v| {
                 v.cf = CF_WRITE;
             }),
         };
@@ -201,10 +201,10 @@ pub fn gen_step(table_id: i64, start: i64, step: i64) -> impl Iterator<Item = Ke
 }
 
 impl LogFileBuilder {
-    pub fn new(region_id: u64, configure: impl FnOnce(&mut Self)) -> Self {
+    pub fn new(configure: impl FnOnce(&mut Self)) -> Self {
         let mut res = Self {
             name: "unamed.log".to_owned(),
-            region_id,
+            region_id: 0,
             cf: "default",
             ty: brpb::FileType::Put,
             is_meta: false,
@@ -293,4 +293,52 @@ impl LogFileBuilder {
         };
         (file, cnt.into_inner())
     }
+}
+
+pub fn build_many_log_files(
+    log_files: impl IntoIterator<Item = LogFileBuilder>,
+    mut w: impl Write,
+) -> std::io::Result<brpb::Metadata> {
+    let mut md = brpb::Metadata::new();
+    md.mut_file_groups().push_default();
+    md.set_meta_version(brpb::MetaVersion::V2);
+    let mut offset = 0;
+    for log in log_files {
+        let (mut log_info, content) = log.build();
+        w.write_all(&content)?;
+        log_info.id.offset = offset;
+        log_info.id.length = content.len() as _;
+        md.min_ts = md.min_ts.min(log_info.min_ts);
+        md.max_ts = md.max_ts.max(log_info.max_ts);
+
+        let pb = log_info.into_pb();
+        unsafe {
+            // SAFETY: we just pushed the first one.
+            md.mut_file_groups()
+                .get_unchecked_mut(0)
+                .data_files_info
+                .push(pb);
+        }
+
+        offset += content.len() as u64;
+    }
+    Ok(md)
+}
+
+pub async fn save_many_log_files(
+    name: &str,
+    log_files: impl IntoIterator<Item = LogFileBuilder>,
+    st: &dyn ExternalStorage,
+) -> std::io::Result<Metadata> {
+    let mut w = vec![];
+    let mut md = build_many_log_files(log_files, &mut w)?;
+    let cl = w.len() as u64;
+    unsafe {
+        // SAFETY: we just pushed the first one.
+        md.file_groups
+            .get_unchecked_mut(0)
+            .set_path(name.to_string());
+    }
+    st.write(name, ACursor::new(w).into(), cl).await?;
+    Ok(md)
 }

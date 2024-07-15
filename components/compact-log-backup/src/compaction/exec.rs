@@ -164,6 +164,7 @@ where
                         let mut stat = LoadStatistic::default();
                         source
                             .load(f, Some(&mut stat), |k, v| {
+                                fail::fail_point!("compact_log_backup_omit_key", |_| {});
                                 out.push(Record {
                                     key: k.to_owned(),
                                     value: v.to_owned(),
@@ -352,13 +353,19 @@ mod test {
     use std::{path::PathBuf, sync::Arc};
 
     use engine_rocks::RocksEngine;
+    use external_storage::{BlobObject, ExternalStorage};
+    use futures::future::FutureExt;
     use tempdir::TempDir;
 
     use super::SubcompactionExec;
     use crate::{
         compaction::{exec::SubcompactExt, Subcompaction, SubcompactionResult},
-        storage::LogFile,
-        test_util::{gen_step, verify_the_same, CompactInMem, Kv, KvGen, LogFileBuilder},
+        errors::Result,
+        storage::{LogFile, MetaFile},
+        test_util::{
+            build_many_log_files, gen_step, save_many_log_files, verify_the_same, CompactInMem, Kv,
+            KvGen, LogFileBuilder,
+        },
     };
 
     struct TempStorage {
@@ -377,20 +384,24 @@ mod test {
 
     impl TempStorage {
         async fn run_subcompaction(&self, c: Subcompaction) -> SubcompactionResult {
+            self.try_run_subcompaction(c).await.unwrap()
+        }
+
+        async fn try_run_subcompaction(&self, c: Subcompaction) -> Result<SubcompactionResult> {
             let cw = SubcompactionExec::<RocksEngine>::default_config(self.storage.clone());
             let ext = SubcompactExt::default();
-            let res = cw.run(c, ext).await.unwrap();
-            res
+            Ok(cw.run(c, ext).await?)
         }
 
         #[track_caller]
         fn verify_result(&self, res: SubcompactionResult, mut cm: CompactInMem) {
             let sst_path = self.path.path().join(&res.meta.sst_outputs[0].name);
+            res.verify_checksum().unwrap();
             verify_the_same::<RocksEngine>(sst_path, cm.must_iter()).unwrap();
         }
 
         async fn build_log_file(&self, name: &str, kvs: impl Iterator<Item = Kv>) -> LogFile {
-            let mut b = LogFileBuilder::new(1, |v| v.name = name.to_owned());
+            let mut b = LogFileBuilder::new(|v| v.name = name.to_owned());
             for kv in kvs {
                 b.add_encoded(&kv.key, &kv.value);
             }
@@ -432,5 +443,43 @@ mod test {
         assert_eq!(res.load_stat.keys_in, 200);
         assert_eq!(res.compact_stat.keys_out, 166);
         st.verify_result(res, cm);
+    }
+
+    #[tokio::test]
+    async fn test_compact_from_one_file() {
+        let st = create_local_storage();
+        let cm = CompactInMem::default();
+
+        let s1 = KvGen::new(gen_step(1, 0, 2).take(100), |_| b"value".to_vec());
+        let mut i1 = LogFileBuilder::new(|v| v.name = "a.log".to_owned());
+        cm.tap_on(s1)
+            .for_each(|kv| i1.add_encoded(&kv.key, &kv.value));
+
+        let s2 = KvGen::new(gen_step(1, 1, 2).take(128), |_| b"value".to_vec());
+        let mut i2 = LogFileBuilder::new(|v| v.name = "b.log".to_owned());
+        cm.tap_on(s2)
+            .for_each(|kv| i2.add_encoded(&kv.key, &kv.value));
+
+        let meta = save_many_log_files("data.log", [i1, i2], st.storage.as_ref())
+            .await
+            .unwrap();
+        let ml = MetaFile::from(meta);
+        let c = Subcompaction::of_many(ml.into_logs());
+        let res = st.run_subcompaction(c).await;
+        st.verify_result(res, cm);
+    }
+
+    #[tokio::test]
+    async fn test_failed_checksumming() {
+        fail::cfg(name, actions);
+        let st = create_local_storage();
+
+        let mut cm = CompactInMem::default();
+
+        let s1 = KvGen::new(gen_step(1, 0, 3).take(100), |_| b"value".to_vec());
+        let i1 = st.build_log_file("three.log", cm.tap_on(s1)).await;
+
+        let c = Subcompaction::of_many([i1, i2]);
+        let res = st.try_run_subcompaction(c).await.unwrap_err();
     }
 }

@@ -9,6 +9,8 @@ pub mod test_util;
 
 pub mod execute;
 
+pub use errors::{Error, ErrorKind, Result};
+
 #[cfg(test)]
 mod test;
 

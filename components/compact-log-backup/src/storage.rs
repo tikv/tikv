@@ -46,6 +46,43 @@ pub struct MetaFile {
     pub max_ts: u64,
 }
 
+impl From<brpb::Metadata> for MetaFile {
+    fn from(value: brpb::Metadata) -> Self {
+        Self::from_file(Arc::from(":memory:"), value)
+    }
+}
+
+impl MetaFile {
+    pub fn from_file(name: Arc<str>, mut meta_file: brpb::Metadata) -> Self {
+        let mut log_files = vec![];
+        let min_ts = meta_file.min_ts;
+        let max_ts = meta_file.max_ts;
+
+        // NOTE: perhaps we also need consider non-grouped backup meta here?
+        for mut group in meta_file.take_file_groups().into_iter() {
+            let name = Arc::from(group.path.clone().into_boxed_str());
+            let mut g = PhysicalLogFile {
+                size: group.length,
+                name: Arc::clone(&name),
+                files: vec![],
+            };
+            for log_file in group.take_data_files_info().into_iter() {
+                g.files.push(LogFile::from_pb(Arc::clone(&name), log_file))
+            }
+            log_files.push(g);
+        }
+        drop(meta_file);
+
+        let result = Self {
+            name,
+            physical_files: log_files,
+            min_ts,
+            max_ts,
+        };
+        result
+    }
+}
+
 impl MetaFile {
     pub fn into_logs(self) -> impl Iterator<Item = LogFile> {
         self.physical_files
@@ -326,34 +363,17 @@ impl MetaFile {
 
         let mut meta_file = kvproto::brpb::Metadata::new();
         meta_file.merge_from_bytes(&content)?;
-        let mut log_files = vec![];
-        let min_ts = meta_file.min_ts;
-        let max_ts = meta_file.max_ts;
+        let name = Arc::from(blob.key.into_boxed_str());
+        let result = Self::from_file(name, meta_file);
 
-        // NOTE: perhaps we also need consider non-grouped backup meta here?
-        for mut group in meta_file.take_file_groups().into_iter() {
-            stat.physical_data_files_in += 1;
-            let name = Arc::from(group.path.clone().into_boxed_str());
-            let mut g = PhysicalLogFile {
-                size: group.length,
-                name: Arc::clone(&name),
-                files: vec![],
-            };
-            for log_file in group.take_data_files_info().into_iter() {
-                stat.logical_data_files_in += 1;
-                g.files.push(LogFile::from_pb(Arc::clone(&name), log_file))
-            }
-            log_files.push(g);
-        }
-        drop(meta_file);
-
-        let result = Self {
-            name: Arc::from(blob.key.to_owned().into_boxed_str()),
-            physical_files: log_files,
-            min_ts,
-            max_ts,
-        };
+        stat.physical_data_files_in += result.physical_files.len() as u64;
+        stat.logical_data_files_in += result
+            .physical_files
+            .iter()
+            .map(|v| v.files.len() as u64)
+            .sum::<u64>();
         stat.load_file_duration += begin.saturating_elapsed();
+
         Ok((result, stat))
     }
 }
@@ -383,6 +403,29 @@ impl LogFile {
             table_id: pb_info.table_id,
             compression: pb_info.compression_type,
         }
+    }
+
+    pub fn into_pb(self) -> brpb::DataFileInfo {
+        let mut pb = brpb::DataFileInfo::new();
+        pb.range_offset = self.id.offset;
+        pb.range_length = self.id.length;
+        pb.length = self.file_real_size;
+        pb.region_id = self.region_id as _;
+        pb.cf = self.cf.to_owned();
+        pb.max_ts = self.max_ts;
+        pb.min_ts = self.min_ts;
+        pb.set_end_key(self.max_key.to_vec());
+        pb.set_start_key(self.min_key.to_vec());
+        pb.is_meta = self.is_meta;
+        pb.min_begin_ts_in_default_cf = self.min_start_ts;
+        pb.r_type = self.ty;
+        pb.crc64xor = self.crc64xor;
+        pb.number_of_entries = self.number_of_entries;
+        pb.set_sha256(self.sha256.to_vec());
+        pb.resolved_ts = self.resolved_ts;
+        pb.table_id = self.table_id;
+        pb.compression_type = self.compression;
+        pb
     }
 }
 
