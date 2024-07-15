@@ -4646,9 +4646,9 @@ where
             .coprocessor_host
             .pre_transfer_leader(self.region(), transfer_leader)
         {
-            warn!("Coprocessor rejected transfer leader."; "err" => ?err, 
-                "region_id" => self.region_id, 
-                "peer_id" => self.peer.get_id(), 
+            warn!("Coprocessor rejected transfer leader."; "err" => ?err,
+                "region_id" => self.region_id,
+                "peer_id" => self.peer.get_id(),
                 "transferee" => transfer_leader.get_peer().get_id());
             let mut resp = RaftCmdResponse::new();
             *resp.mut_header().mut_error() = Error::from(err).into();
@@ -5888,9 +5888,9 @@ mod memtrace {
         ER: RaftEngine,
     {
         pub fn proposal_size(&self) -> usize {
-            let mut heap_size = self.pending_reads.heap_size();
+            let mut heap_size = self.pending_reads.approximate_heap_size();
             for prop in &self.proposals.queue {
-                heap_size += prop.heap_size();
+                heap_size += prop.approximate_heap_size();
             }
             heap_size
         }

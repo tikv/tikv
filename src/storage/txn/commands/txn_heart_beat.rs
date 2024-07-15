@@ -25,7 +25,10 @@ command! {
     /// [`Prewrite`](Command::Prewrite).
     TxnHeartBeat:
         cmd_ty => TxnStatus,
-        display => "kv::command::txn_heart_beat {} @ {} ttl {} | {:?}", (primary_key, start_ts, advise_ttl, ctx),
+        display => {
+            "kv::command::txn_heart_beat {} @ {} ttl {} | {:?}",
+            (primary_key, start_ts, advise_ttl, ctx),
+        }
         content => {
             /// The primary key of the transaction.
             primary_key: Key,
@@ -34,6 +37,9 @@ command! {
             /// The new TTL that will be used to update the lock's TTL. If the lock's TTL is already
             /// greater than `advise_ttl`, nothing will happen.
             advise_ttl: u64,
+        }
+        in_heap => {
+            primary_key,
         }
 }
 

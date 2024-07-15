@@ -29,12 +29,15 @@ command! {
     /// status being changed, a rollback may be written.
     CheckSecondaryLocks:
         cmd_ty => SecondaryLocksStatus,
-        display => "kv::command::CheckSecondaryLocks {:?} keys@{} | {:?}", (keys, start_ts, ctx),
+        display => { "kv::command::CheckSecondaryLocks {:?} keys@{} | {:?}", (keys, start_ts, ctx), }
         content => {
             /// The keys of secondary locks.
             keys: Vec<Key>,
             /// The start timestamp of the transaction.
             start_ts: txn_types::TimeStamp,
+        }
+        in_heap => {
+            keys,
         }
 }
 
