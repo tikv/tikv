@@ -2673,7 +2673,7 @@ mod tests {
     use tikv_util::worker::LazyWorker;
 
     use super::*;
-    use crate::store::util::build_key_range;
+    use crate::store::{fsm::StoreMeta, util::build_key_range};
 
     const DEFAULT_TEST_STORE_ID: u64 = 1;
 
@@ -3005,13 +3005,18 @@ mod tests {
         let interval = 600_u64;
         let mut stats_monitor = StatsMonitor::new(
             Duration::from_secs(interval),
+            Duration::from_secs(0),
             Duration::from_secs(interval),
             WrappedScheduler(pd_worker.scheduler()),
         );
+        let store_meta = Arc::new(Mutex::new(StoreMeta::new(0)));
+        let region_read_progress = store_meta.lock().unwrap().region_read_progress.clone();
         stats_monitor
             .start(
                 AutoSplitController::default(),
+                region_read_progress,
                 CollectorRegHandle::new_for_test(),
+                0,
             )
             .unwrap();
         // Add some read stats and cpu stats to the stats monitor.
