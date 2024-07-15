@@ -154,7 +154,6 @@ pub struct Server<S: StoreAddrResolver + 'static, E: Engine> {
     ///
     /// If the listening port is configured, the server will be started lazily.
     builder_or_server: Option<Either<ServerBuilderWithAddr, futures::channel::oneshot::Sender<()>>>,
-    grpc_mem_quota: ResourceQuota,
     local_addr: SocketAddr,
     // Transport.
     trans: ServerTransport<E::RaftExtension, S>,
@@ -250,8 +249,8 @@ where
         ));
 
         let addr = SocketAddr::from_str(&cfg.value().addr)?;
-        let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
-            .resize_memory(cfg.value().grpc_memory_pool_quota.0 as usize);
+        // let mem_quota = ResourceQuota::new(Some("ServerMemQuota"))
+        //     .resize_memory(cfg.value().grpc_memory_pool_quota.0 as usize);
         let builder = Either::Left(builder_factory.create_builder()?);
 
         let conn_builder = ConnectionBuilder::new(
@@ -269,7 +268,6 @@ where
         let svr = Server {
             grpc_handle,
             builder_or_server: Some(builder),
-            grpc_mem_quota: mem_quota,
             local_addr: addr,
             trans,
             raft_router: raft_ext,
@@ -297,10 +295,6 @@ where
 
     pub fn transport(&self) -> ServerTransport<E::RaftExtension, S> {
         self.trans.clone()
-    }
-
-    pub fn get_grpc_mem_quota(&self) -> &ResourceQuota {
-        &self.grpc_mem_quota
     }
 
     /// Register a gRPC service.

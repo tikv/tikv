@@ -203,7 +203,7 @@ impl PrepareBackup {
                 req.set_ty(PrepareSnapshotBackupRequestType::Finish);
                 req
             })),
-            Ok(_) | Err(grpcio::Error::RpcFinished(_))
+            Ok(_)
         ) {
             block_on_timeout(
                 async {

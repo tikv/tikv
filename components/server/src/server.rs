@@ -898,7 +898,6 @@ where
             Box::new(ServerConfigManager::new(
                 server.get_snap_worker_scheduler(),
                 server_config.clone(),
-                server.get_grpc_mem_quota().clone(),
                 copr_config_manager,
             )),
         );
