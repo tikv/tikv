@@ -1386,7 +1386,7 @@ where
                             IMPORTER_INGEST_COUNT_NOPOLLER
                                 .observe(apply_ctx.pending_ssts.len() as _);
                         }
-                        //apply_ctx.commit(self);
+                        // apply_ctx.commit(self);
                     }
                     if ingest_sst {
                         RAFT_APPLY_SST_YIELD_BY_VEC
