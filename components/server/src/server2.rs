@@ -67,7 +67,7 @@ use raftstore_v2::{
     router::{DiskSnapBackupHandle, PeerMsg, RaftRouter},
     StateStorage,
 };
-use region_cache_memory_engine::RangeCacheMemoryEngineStatistics;
+use range_cache_memory_engine::RangeCacheMemoryEngineStatistics;
 use resolved_ts::Task;
 use resource_control::ResourceGroupManager;
 use security::SecurityManager;
@@ -735,6 +735,7 @@ where
                 self.pd_client.clone(),
                 self.concurrency_manager.clone(),
                 BackupStreamResolver::V2(self.router.clone().unwrap(), PhantomData),
+                self.core.encryption_key_manager.clone(),
             );
             backup_stream_worker.start(backup_stream_endpoint);
             self.core.to_stop.push(backup_stream_worker);

@@ -12,6 +12,10 @@ use std::{
 };
 
 use crossbeam::epoch::{self, default_collector, Guard};
+use crossbeam_skiplist::{
+    base::{Entry, OwnedIter},
+    SkipList,
+};
 use engine_rocks::RocksEngine;
 use engine_traits::{
     CacheRange, FailedReason, IterOptions, Iterable, KvEngine, RangeCacheEngine, Result,
@@ -19,10 +23,6 @@ use engine_traits::{
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
 use raftstore::coprocessor::RegionInfoProvider;
-use skiplist_rs::{
-    base::{Entry, OwnedIter},
-    SkipList,
-};
 use slog_global::error;
 use tikv_util::{config::VersionTrack, info};
 
@@ -152,24 +152,28 @@ impl SkiplistEngine {
         count
     }
 
+    pub(crate) fn delete_range_cf(&self, cf: &str, range: &CacheRange) {
+        let (start, end) = if cf == CF_LOCK {
+            encode_key_for_boundary_without_mvcc(range)
+        } else {
+            encode_key_for_boundary_with_mvcc(range)
+        };
+
+        let handle = self.cf_handle(cf);
+        let mut iter = handle.iterator();
+        let guard = &epoch::pin();
+        iter.seek(&start, guard);
+        while iter.valid() && iter.key() < &end {
+            handle.remove(iter.key(), guard);
+            iter.next(guard);
+        }
+        // guard will buffer 8 drop methods, flush here to clear the buffer.
+        guard.flush();
+    }
+
     pub(crate) fn delete_range(&self, range: &CacheRange) {
         DATA_CFS.iter().for_each(|&cf| {
-            let (start, end) = if cf == CF_LOCK {
-                encode_key_for_boundary_without_mvcc(range)
-            } else {
-                encode_key_for_boundary_with_mvcc(range)
-            };
-
-            let handle = self.cf_handle(cf);
-            let mut iter = handle.iterator();
-            let guard = &epoch::pin();
-            iter.seek(&start, guard);
-            while iter.valid() && iter.key() < &end {
-                handle.remove(iter.key(), guard);
-                iter.next(guard);
-            }
-            // guard will buffer 8 drop methods, flush here to clear the buffer.
-            guard.flush();
+            self.delete_range_cf(cf, range);
         });
     }
 }
@@ -588,6 +592,10 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
 
     fn enabled(&self) -> bool {
         self.config.value().enabled
+    }
+
+    fn evict_range(&self, range: &CacheRange) {
+        self.evict_range(range)
     }
 }
 

@@ -5,6 +5,7 @@ use std::{fmt::Debug, ops::Deref, result, sync::Arc};
 
 use bytes::Bytes;
 use crossbeam::epoch::{self};
+use crossbeam_skiplist::{base::OwnedIter, SkipList};
 use engine_rocks::{raw::SliceTransform, util::FixedSuffixSliceTransform};
 use engine_traits::{
     CacheRange, CfNamesExt, DbVector, Error, FailedReason, IterMetricsCollector, IterOptions,
@@ -12,7 +13,6 @@ use engine_traits::{
     CF_DEFAULT,
 };
 use prometheus::local::LocalHistogram;
-use skiplist_rs::{base::OwnedIter, SkipList};
 use slog_global::error;
 use tikv_util::{box_err, time::Instant};
 
@@ -30,6 +30,8 @@ use crate::{
     RangeCacheMemoryEngine,
 };
 
+// The max snapshot number that can exist in the RocksDB. This is typically used
+// for search.
 pub const MAX_SEQUENCE_NUMBER: u64 = (1 << 56) - 1;
 
 #[derive(PartialEq)]
@@ -662,6 +664,7 @@ mod tests {
 
     use bytes::{BufMut, Bytes};
     use crossbeam::epoch;
+    use crossbeam_skiplist::SkipList;
     use engine_rocks::{
         raw::DBStatisticsTickerType, util::new_engine_opt, RocksDbOptions, RocksStatistics,
     };
@@ -670,7 +673,6 @@ mod tests {
         MetricsExt, Mutable, Peekable, RangeCacheEngine, ReadOptions, WriteBatch, WriteBatchExt,
         CF_DEFAULT, CF_LOCK, CF_WRITE,
     };
-    use skiplist_rs::SkipList;
     use tempfile::Builder;
     use tikv_util::config::VersionTrack;
 

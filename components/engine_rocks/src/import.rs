@@ -21,23 +21,23 @@ impl ImportExt for RocksEngine {
         let now = Instant::now_coarse();
         // This is calling a specially optimized version of
         // ingest_external_file_cf. In cases where the memtable needs to be
-        // flushed it avoids blocking writers while doing the flush. The unused
+        // flushed it avoids blocking writers while doing the flush. The
         // return value here just indicates whether the fallback path requiring
         // the manual memtable flush was taken.
-        let did_nonblocking_memtable_flush = self
+        let did_memtable_flush = self
             .as_inner()
             .ingest_external_file_optimized(cf, &opts.0, files)
             .map_err(r2e)?;
         let time_cost = now.saturating_elapsed_secs();
-        if did_nonblocking_memtable_flush {
+        if did_memtable_flush {
             INGEST_EXTERNAL_FILE_TIME_HISTOGRAM
                 .get(cf_name.into())
-                .non_block
+                .block
                 .observe(time_cost);
         } else {
             INGEST_EXTERNAL_FILE_TIME_HISTOGRAM
                 .get(cf_name.into())
-                .block
+                .non_block
                 .observe(time_cost);
         }
         Ok(())

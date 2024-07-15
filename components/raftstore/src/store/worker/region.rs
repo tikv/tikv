@@ -46,7 +46,7 @@ use crate::{
         },
         snap::{plain_file_used, Error, Result, SNAPSHOT_CFS},
         transport::CasualRouter,
-        ApplyOptions, CasualMessage, Config, SnapEntry, SnapError, SnapKey, SnapManager,
+        ApplyOptions, CasualMessage, Config, SnapEntry, SnapKey, SnapManager,
     },
 };
 
@@ -659,12 +659,13 @@ where
         info!("begin apply snap data"; "region_id" => region_id, "peer_id" => peer_id);
         fail_point!("region_apply_snap", |_| { Ok(()) });
         fail_point!("region_apply_snap_io_err", |_| {
-            Err(SnapError::Other(box_err!("io error")))
+            Err(crate::store::SnapError::Other(box_err!("io error")))
         });
         check_abort(&abort)?;
 
         let mut region_state = self.region_state(region_id)?;
         let region = region_state.get_region().clone();
+
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;

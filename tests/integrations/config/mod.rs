@@ -804,7 +804,7 @@ fn test_serde_custom_tikv_config() {
         key_path: "invalid path".to_owned(),
         override_ssl_target: "".to_owned(),
         cert_allowed_cn,
-        redact_info_log: Some(true),
+        redact_info_log: log_wrappers::RedactOption::Flag(true),
         encryption: EncryptionConfig {
             data_encryption_method: EncryptionMethod::Aes128Ctr,
             data_key_rotation_period: ReadableDuration::days(14),

@@ -58,7 +58,7 @@ use raftstore::{
     coprocessor::{Config as CopConfig, RegionInfoAccessor},
     store::{CompactionGuardGeneratorFactory, Config as RaftstoreConfig, SplitConfig},
 };
-use region_cache_memory_engine::RangeCacheEngineConfig;
+use range_cache_memory_engine::RangeCacheEngineConfig;
 use resource_control::Config as ResourceControlConfig;
 use resource_metering::Config as ResourceMeteringConfig;
 use security::SecurityConfig;
@@ -7018,7 +7018,7 @@ mod tests {
             default_cfg.raft_engine.config().batch_compression_threshold,
             RaftEngineReadableSize::kb(4)
         );
-        default_cfg.security.redact_info_log = Some(false);
+        default_cfg.security.redact_info_log = log_wrappers::RedactOption::default();
         default_cfg.coprocessor.region_max_size = Some(default_cfg.coprocessor.region_max_size());
         default_cfg.coprocessor.region_max_keys = Some(default_cfg.coprocessor.region_max_keys());
         default_cfg.coprocessor.region_split_keys =

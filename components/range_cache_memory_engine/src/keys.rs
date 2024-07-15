@@ -24,7 +24,7 @@ pub struct InternalBytes {
 
 impl Drop for InternalBytes {
     fn drop(&mut self) {
-        let size = self.bytes.len() + MEM_CONTROLLER_OVERHEAD;
+        let size = InternalBytes::memory_size_required(self.bytes.len());
         let controller = self.memory_controller.take();
         if let Some(controller) = controller {
             // Reclaim the memory though the bytes have not been drop. This time
@@ -76,6 +76,14 @@ impl InternalBytes {
             ..
         } = decode_key(other.as_slice());
         user_key == other_user_key
+    }
+
+    // The IntervalBytes that has been written in the in-memory engine have set the
+    // `memory_controller`, so the memory usage of it is the memory usage of bytes +
+    // 8 bytes (the size of Arc).
+    #[inline]
+    pub fn memory_size_required(bytes_size: usize) -> usize {
+        bytes_size + MEM_CONTROLLER_OVERHEAD
     }
 }
 
@@ -153,6 +161,7 @@ pub struct InternalKey<'a> {
     pub sequence: u64,
 }
 
+// The size of sequence number suffix
 pub const ENC_KEY_SEQ_LENGTH: usize = std::mem::size_of::<u64>();
 
 impl<'a> From<&'a [u8]> for InternalKey<'a> {

@@ -11,8 +11,8 @@ failpoints = ["fail/failpoints"]
 [dependencies]
 byteorder = "1.2"
 collections = { workspace = true }
-crossbeam = "0.8"
-crossbeam-skiplist = "0.1"
+crossbeam = { workspace = true }
+crossbeam-skiplist = { workspace = true }
 dashmap = "5.1"
 fail = "0.5"
 file_system = { workspace = true }

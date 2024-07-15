@@ -34,7 +34,7 @@ bitflags = "1.0"
 causal_ts = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
-crossbeam = "0.8"
+crossbeam = { workspace = true }
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 fail = "0.5"

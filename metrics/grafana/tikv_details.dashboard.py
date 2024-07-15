@@ -5016,7 +5016,7 @@ def RocksDB() -> RowPanel:
                             "tikv_engine_num_files_in_single_compaction",
                             label_selectors=[
                                 'db="$db"',
-                                'type="compaction_job_size_max"',
+                                'type="num_files_in_single_compaction_max"',
                             ],
                             by_labels=[],  # override default by instance.
                         ),
@@ -5027,7 +5027,7 @@ def RocksDB() -> RowPanel:
                             "tikv_engine_num_files_in_single_compaction",
                             label_selectors=[
                                 'db="$db"',
-                                'type="compaction_job_size_percentile99"',
+                                'type="num_files_in_single_compaction_percentile99"',
                             ],
                             by_labels=[],  # override default by instance.
                         ),
@@ -5038,7 +5038,7 @@ def RocksDB() -> RowPanel:
                             "tikv_engine_num_files_in_single_compaction",
                             label_selectors=[
                                 'db="$db"',
-                                'type="compaction_job_size_percentile95"',
+                                'type="num_files_in_single_compaction_percentile95"',
                             ],
                             by_labels=[],  # override default by instance.
                         ),
@@ -5049,7 +5049,7 @@ def RocksDB() -> RowPanel:
                             "tikv_engine_num_files_in_single_compaction",
                             label_selectors=[
                                 'db="$db"',
-                                'type="compaction_job_size_average"',
+                                'type="num_files_in_single_compaction_average"',
                             ],
                             by_labels=[],  # override default by instance.
                         ),
@@ -5888,26 +5888,18 @@ def RocksDB() -> RowPanel:
     )
     layout.row(
         [
-            graph_panel(
-                title="Stall conditions changed of each CF",
-                description="Stall conditions changed of each column family",
-                yaxes=yaxes(left_format=UNITS.SHORT),
-                targets=[
-                    target(
-                        expr=expr_simple(
-                            "tikv_engine_stall_conditions_changed",
-                            label_selectors=['db="$db"'],
-                        ),
-                        legend_format="{{instance}}-{{cf}}-{{type}}",
-                    ),
-                ],
+            heatmap_panel(
+                title="Ingestion picked level",
+                description="The level that the external file ingests into",
+                yaxis=yaxis(format=UNITS.SHORT),
+                metric="tikv_engine_ingestion_picked_level_bucket",
+                label_selectors=['db="$db"'],
             ),
             graph_panel_histogram_quantiles(
                 title="Ingest SST duration seconds",
                 description="Bucketed histogram of ingest external SST files duration.",
                 yaxes=yaxes(left_format=UNITS.SECONDS),
                 metric="tikv_storage_ingest_external_file_duration_secs",
-                label_selectors=['db="$db"'],
                 by_labels=["cf", "type"],
                 hide_count=True,
             ),
@@ -5978,12 +5970,19 @@ def RocksDB() -> RowPanel:
     )
     layout.row(
         [
-            heatmap_panel(
-                title="Ingestion picked level",
-                description="The level that the external file ingests into",
-                yaxis=yaxis(format=UNITS.SHORT),
-                metric="tikv_engine_ingestion_picked_level_bucket",
-                label_selectors=['db="$db"'],
+            graph_panel(
+                title="Stall conditions changed of each CF",
+                description="Stall conditions changed of each column family",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_engine_stall_conditions_changed",
+                            label_selectors=['db="$db"'],
+                        ),
+                        legend_format="{{instance}}-{{cf}}-{{type}}",
+                    ),
+                ],
             ),
             graph_panel(
                 title="Memtable size",

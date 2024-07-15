@@ -821,13 +821,14 @@ mod test {
     use engine_traits::WriteOptions;
     use futures::executor::block_on;
     use kvproto::metapb::{Region, RegionEpoch};
+    use log_wrappers::RedactOption;
     use tokio::io::{AsyncWriteExt, BufReader};
 
     use crate::utils::{is_in_range, FutureWaitGroup, SegmentMap};
 
     #[test]
     fn test_redact() {
-        log_wrappers::set_redact_info_log(true);
+        log_wrappers::set_redact_info_log(RedactOption::Flag(true));
         let mut region = Region::default();
         region.set_id(42);
         region.set_start_key(b"TiDB".to_vec());

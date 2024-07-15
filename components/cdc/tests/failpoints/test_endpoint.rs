@@ -15,7 +15,7 @@ use kvproto::{cdcpb::*, kvrpcpb::*, tikvpb_grpc::TikvClient};
 use pd_client::PdClient;
 use test_raftstore::*;
 use tikv_util::{debug, worker::Scheduler, HandyRwLock};
-use txn_types::TimeStamp;
+use txn_types::{Key, TimeStamp};
 
 use crate::{new_event_feed, new_event_feed_v2, ClientReceiver, TestSuite, TestSuiteBuilder};
 
@@ -594,4 +594,65 @@ fn test_cdc_notify_pending_regions() {
         Some(Event_oneof_event::Error(ref e)) if e.has_region_not_found(),
     );
     fail::remove("cdc_before_initialize");
+}
+
+// The case check whether https://github.com/tikv/tikv/issues/17233 is fixed or not.
+#[test]
+fn test_delegate_fail_during_incremental_scan() {
+    let mut cluster = new_server_cluster(0, 1);
+    configure_for_lease_read(&mut cluster.cfg, Some(100), Some(10));
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let region = suite.cluster.get_region(&[]);
+    let rid = region.id;
+    let cf_tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+
+    let start_tso = cf_tso.next();
+    let pk = format!("key_{:03}", 0).into_bytes();
+    let mut mutations = Vec::with_capacity(10);
+    for i in 0..10 {
+        let mut mutation = Mutation::default();
+        mutation.set_op(Op::Put);
+        mutation.key = format!("key_{:03}", i).into_bytes();
+        mutation.value = vec![b'x'; 16];
+        mutations.push(mutation);
+    }
+    suite.must_kv_prewrite(rid, mutations, pk.clone(), start_tso);
+
+    fail::cfg("before_schedule_incremental_scan", "1*pause").unwrap();
+
+    let (mut req_tx, recv, receive_event) = new_event_feed_v2(suite.get_region_cdc_client(rid));
+    let mut req = suite.new_changedata_request(rid);
+    req.request_id = 100;
+    req.checkpoint_ts = cf_tso.into_inner();
+    req.set_start_key(Key::from_raw(b"a").into_encoded());
+    req.set_end_key(Key::from_raw(b"z").into_encoded());
+    block_on(req_tx.send((req.clone(), WriteFlags::default()))).unwrap();
+    std::thread::sleep(Duration::from_millis(500));
+
+    suite.cluster.must_split(&region, b"f");
+
+    // After the incremental scan is canceled, we can get the epoch_not_match error.
+    // And after the error is retrieved, no more entries can be received.
+    let mut get_epoch_not_match = false;
+    while !get_epoch_not_match {
+        for event in receive_event(false).events.to_vec() {
+            match event.event {
+                Some(Event_oneof_event::Error(err)) => {
+                    assert!(err.has_epoch_not_match(), "{:?}", err);
+                    get_epoch_not_match = true;
+                }
+                Some(Event_oneof_event::Entries(..)) => {
+                    assert!(!get_epoch_not_match);
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    fail::remove("before_schedule_incremental_scan");
+
+    let mut recver = recv.replace(None).unwrap();
+    recv_timeout(&mut recver, Duration::from_secs(1)).unwrap_err();
+    recv.replace(Some(recver));
 }

@@ -12,6 +12,7 @@ use engine_rocks::RocksEngine;
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, KvEngine, SnapshotContext};
 use health_controller::HealthController;
+use hybrid_engine::observer::Observer as HybridEngineObserver;
 use kvproto::{
     kvrpcpb::ApiVersion,
     metapb,
@@ -31,7 +32,7 @@ use raftstore::{
     },
     Result,
 };
-use region_cache_memory_engine::RangeCacheEngineConfig;
+use range_cache_memory_engine::RangeCacheEngineConfig;
 use resource_control::ResourceGroupManager;
 use resource_metering::CollectorRegHandle;
 use service::service_manager::GrpcServiceManager;
@@ -161,6 +162,7 @@ pub struct NodeCluster<EK: KvEngine> {
     cfg_controller: HashMap<u64, ConfigController>,
     simulate_trans: HashMap<u64, SimulateChannelTransport<EK>>,
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
+    importers: HashMap<u64, Arc<SstImporter<EK>>>,
     #[allow(clippy::type_complexity)]
     post_create_coprocessor_host: Option<Box<dyn Fn(u64, &mut CoprocessorHost<EK>)>>,
 }
@@ -175,6 +177,7 @@ impl<EK: KvEngine> NodeCluster<EK> {
             cfg_controller: HashMap::default(),
             simulate_trans: HashMap::default(),
             concurrency_managers: HashMap::default(),
+            importers: HashMap::default(),
             post_create_coprocessor_host: None,
         }
     }
@@ -217,6 +220,10 @@ impl<EK: KvEngine> NodeCluster<EK> {
 
     pub fn get_cfg_controller(&self, node_id: u64) -> Option<&ConfigController> {
         self.cfg_controller.get(&node_id)
+    }
+
+    pub fn get_importer(&self, node_id: u64) -> Option<Arc<SstImporter<EK>>> {
+        self.importers.get(&node_id).cloned()
     }
 }
 
@@ -295,6 +302,12 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
             f(node_id, &mut coprocessor_host);
         }
 
+        // Hybrid engine observer.
+        if cfg.tikv.range_cache_engine.enabled {
+            let observer = HybridEngineObserver::new(Arc::new(engines.kv.clone()));
+            observer.register_to(&mut coprocessor_host);
+        }
+
         let cm = ConcurrencyManager::new(1.into());
         self.concurrency_managers.insert(node_id, cm.clone());
         ReplicaReadLockChecker::new(cm.clone()).register(&mut coprocessor_host);
@@ -305,6 +318,7 @@ impl<EK: KvEngine> Simulator<EK> for NodeCluster<EK> {
                 SstImporter::new(&cfg.import, dir, None, cfg.storage.api_version(), false).unwrap(),
             )
         };
+        self.importers.insert(node_id, importer.clone());
 
         let local_reader = LocalReader::new(
             engines.kv.clone(),
