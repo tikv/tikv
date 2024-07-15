@@ -1386,7 +1386,7 @@ where
                             IMPORTER_INGEST_COUNT_NOPOLLER
                                 .observe(apply_ctx.pending_ssts.len() as _);
                         }
-                        apply_ctx.commit(self);
+                        //apply_ctx.commit(self);
                     }
                     if ingest_sst {
                         RAFT_APPLY_SST_YIELD_BY_VEC
@@ -4282,7 +4282,7 @@ where
             ctx.timer = Some(Instant::now_coarse());
         }
         if !state.pending_entries.is_empty() {
-            // self.delegate.priority = Priority::Normal;
+            self.delegate.priority = Priority::Normal;
             self.delegate
                 .handle_raft_committed_entries(ctx, state.pending_entries.drain(..));
             if let Some(ref mut s) = self.delegate.yield_state {
