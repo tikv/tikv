@@ -969,7 +969,6 @@ impl PdConnector {
                     Some(TimestampOracle::new(
                         resp.get_header().get_cluster_id(),
                         &client,
-                        self.handle.clone(),
                     )?)
                 } else {
                     None
@@ -988,7 +987,6 @@ impl PdConnector {
                             Some(TimestampOracle::new(
                                 resp.get_header().get_cluster_id(),
                                 &client,
-                                self.handle.clone(),
                             )?)
                         } else {
                             None

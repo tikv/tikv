@@ -61,7 +61,6 @@ impl TimestampOracle {
     pub(crate) fn new(
         cluster_id: u64,
         pd_client: &PDClient<Channel>,
-        spawn_handle: tokio::runtime::Handle,
     ) -> Result<TimestampOracle> {
         let (request_tx, request_rx) = mpsc::channel(MAX_BATCH_SIZE);
         let (close_tx, close_rx) = watch::channel(());
