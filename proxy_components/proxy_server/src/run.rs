@@ -62,7 +62,7 @@ use raftstore::{
         SplitCheckRunner, SplitConfigManager, StoreMetaDelegate,
     },
 };
-use region_cache_memory_engine::{RangeCacheEngineContext, RangeCacheMemoryEngineStatistics};
+use range_cache_memory_engine::{RangeCacheEngineContext, RangeCacheMemoryEngineStatistics};
 use resource_control::{
     ResourceGroupManager, ResourceManagerService, MIN_PRIORITY_UPDATE_INTERVAL,
 };
@@ -498,7 +498,7 @@ impl<CER: ConfiguredRaftEngine, F: KvFormat> TiKvServer<CER, F> {
             self.core.config.range_cache_engine.clone(),
         ));
         let range_cache_engine_context =
-            RangeCacheEngineContext::new(range_cache_engine_config.clone());
+            RangeCacheEngineContext::new(range_cache_engine_config.clone(), self.pd_client.clone());
         let range_cache_engine_statistics = range_cache_engine_context.statistics();
         self.kv_statistics = Some(factory.rocks_statistics());
         self.range_cache_engine_statistics = Some(range_cache_engine_statistics);

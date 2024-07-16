@@ -38,7 +38,7 @@ openssl-vendored = ["tikv/openssl-vendored", "openssl/vendored"]
 external-jemalloc = ["engine_store_ffi/external-jemalloc"]
 
 [dependencies]
-region_cache_memory_engine = { workspace = true }
+range_cache_memory_engine = { workspace = true }
 health_controller = { workspace = true }
 api_version = { workspace = true }
 async-stream = "0.2"

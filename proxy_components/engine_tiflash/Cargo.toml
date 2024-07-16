@@ -43,7 +43,6 @@ openssl-vendored = [
 
 [dependencies]
 api_version = { workspace = true, default-features = false }
-case_macros = { workspace = true }
 collections = { workspace = true, default-features = false }
 
 derive_more = "0.99.3"

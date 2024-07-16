@@ -24,7 +24,7 @@ where
         }
     }
 
-    pub fn region_cache_engine_iterator(iter: <EC::Snapshot as Iterable>::Iterator) -> Self {
+    pub fn range_cache_engine_iterator(iter: <EC::Snapshot as Iterable>::Iterator) -> Self {
         Self {
             iter: Either::Right(iter),
         }

@@ -2,7 +2,7 @@
 
 // #[PerformanceCriticalPath]
 use std::{
-    cell::RefCell,
+    cell::{Ref, RefCell},
     error,
     ops::{Deref, DerefMut},
     sync::{
@@ -29,6 +29,7 @@ use raft::{
     eraftpb::{self, ConfState, Entry, HardState, Snapshot},
     Error as RaftError, GetEntriesContext, RaftState, Ready, Storage, StorageError,
 };
+use rand::Rng;
 use tikv_util::{
     box_err, box_try, debug, defer, error, info,
     store::find_peer_by_id,
@@ -48,6 +49,10 @@ use crate::{
     },
     Error, Result,
 };
+
+// The maximum tick interval between precheck requests. The tick interval helps
+// prevent sending the precheck requests too aggressively.
+const SNAP_GEN_PRECHECK_MAX_TICK_INTERVAL: usize = 5;
 
 // When we create a region peer, we should initialize its log term/index > 0,
 // so that we can force the follower peer to sync the snapshot first.
@@ -529,25 +534,25 @@ where
             panic!("{} unexpected state: {:?}", self.tag, *snap_state);
         }
 
-        let max_snap_try_cnt = (|| {
-            fail_point!("ignore_snap_try_cnt", |_| usize::MAX);
-            MAX_SNAP_TRY_CNT
-        })();
-
-        if *tried_cnt >= max_snap_try_cnt {
-            let cnt = *tried_cnt;
-            *tried_cnt = 0;
-            return Err(raft::Error::Store(box_err!(
-                "failed to get snapshot after {} times",
-                cnt
-            )));
-        }
-        if !tried || !last_canceled {
-            *tried_cnt += 1;
-        }
-
         match find_peer_by_id(&self.region, to) {
             Some(to_peer) => {
+                let max_snap_try_cnt = (|| {
+                    fail_point!("ignore_snap_try_cnt", |_| usize::MAX);
+                    MAX_SNAP_TRY_CNT
+                })();
+
+                if *tried_cnt >= max_snap_try_cnt {
+                    let cnt = *tried_cnt;
+                    *tried_cnt = 0;
+                    return Err(raft::Error::Store(box_err!(
+                        "failed to get snapshot after {} times",
+                        cnt
+                    )));
+                }
+                if !tried || !last_canceled {
+                    *tried_cnt += 1;
+                }
+
                 info!(
                     "requesting snapshot";
                     "region_id" => self.region.get_id(),
@@ -589,16 +594,37 @@ where
         ))
     }
 
+    pub fn need_gen_snap_precheck(&self) -> Option<metapb::Peer> {
+        let mut gen_task = self.gen_snap_task.borrow_mut();
+        let task = gen_task.as_mut()?;
+        if task.precheck_remaining_ticks == 0 {
+            // Use random tick counts to space out the requests.
+            task.precheck_remaining_ticks =
+                rand::thread_rng().gen_range(1..=SNAP_GEN_PRECHECK_MAX_TICK_INTERVAL);
+            Some(task.to_peer.clone())
+        } else {
+            task.precheck_remaining_ticks -= 1;
+            None
+        }
+    }
+
+    pub fn set_gen_snap_task_for_balance(&self) {
+        if let Some(gen_task) = self.gen_snap_task.borrow_mut().as_mut() {
+            gen_task.set_for_balance();
+        }
+    }
+
+    pub fn get_gen_snap_task(&self) -> Ref<'_, Option<GenSnapTask>> {
+        self.gen_snap_task.borrow()
+    }
+
     pub fn has_gen_snap_task(&self) -> bool {
         self.gen_snap_task.borrow().is_some()
     }
 
-    pub fn mut_gen_snap_task(&mut self) -> &mut Option<GenSnapTask> {
-        self.gen_snap_task.get_mut()
-    }
-
-    pub fn take_gen_snap_task(&mut self) -> Option<GenSnapTask> {
-        self.gen_snap_task.get_mut().take()
+    pub fn take_gen_snap_task(&self) -> Option<GenSnapTask> {
+        let mut task = self.gen_snap_task.borrow_mut();
+        (*task).take()
     }
 
     pub fn set_gen_snap_task(&self, task: GenSnapTask) {
@@ -864,7 +890,7 @@ where
     }
 
     /// Cancel generating snapshot.
-    pub fn cancel_generating_snap(&mut self, compact_to: Option<u64>) {
+    pub fn cancel_generating_snap(&self, compact_to: Option<u64>) {
         let snap_state = self.snap_state.borrow();
         if let SnapState::Generating {
             ref canceled,
@@ -875,11 +901,20 @@ where
             if !canceled.load(Ordering::SeqCst) {
                 if let Some(idx) = compact_to {
                     let snap_index = index.load(Ordering::SeqCst);
+                    // Do not cancel if the snapshot is still valid after the
+                    // compaction.
                     if snap_index == 0 || idx <= snap_index + 1 {
                         return;
                     }
                 }
                 canceled.store(true, Ordering::SeqCst);
+                // Cancel snapshot precheck.
+                self.take_gen_snap_task();
+                info!(
+                    "canceled generating snap";
+                    "region_id" => self.region.get_id(),
+                    "peer_id" => self.peer_id,
+                );
             }
         }
     }
@@ -905,6 +940,7 @@ where
             region_id: self.get_region_id(),
             status,
             peer_id: self.peer_id,
+            create_time: Instant::now_coarse(),
         };
 
         // Don't schedule the snapshot to region worker.
@@ -1667,10 +1703,25 @@ pub mod tests {
         );
         worker.start_with_timer(runner);
         let to_peer_id = s.peer_id;
-        let snap = s.snapshot(0, to_peer_id);
         let unavailable = RaftError::Store(StorageError::SnapshotTemporarilyUnavailable);
+
+        // Verify that an unknown peer asking for a snapshot will be ignored and
+        // won't count toward `tried_cnt`.
+        let unknown_peer_id = 0;
+        assert_eq!(s.snapshot(0, unknown_peer_id).unwrap_err(), unavailable);
+        assert_eq!(*s.snap_tried_cnt.borrow(), 0);
+
+        let snap = s.snapshot(0, to_peer_id);
         assert_eq!(snap.unwrap_err(), unavailable);
         assert_eq!(*s.snap_tried_cnt.borrow(), 1);
+
+        // Verify that a fake cancellation doesn't increment `tried_cnt`. The
+        // `cancel_generating_snap` function should be a no-op if `compact_to`
+        // is so small that it doesn't make the snapshot stale.
+        s.cancel_generating_snap(Some(0));
+        assert_eq!(s.snapshot(0, to_peer_id).unwrap_err(), unavailable);
+        assert_eq!(*s.snap_tried_cnt.borrow(), 1);
+
         let gen_task = s.gen_snap_task.borrow_mut().take().unwrap();
         generate_and_schedule_snapshot(gen_task, &s.engines, &sched).unwrap();
         let snap = match *s.snap_state.borrow() {

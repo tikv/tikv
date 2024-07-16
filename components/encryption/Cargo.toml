@@ -17,7 +17,7 @@ byteorder = "1.2"
 bytes = "1.0"
 cloud = { workspace = true }
 crc32fast = "1.2"
-crossbeam = "0.8"
+crossbeam = { workspace = true }
 crypto = { workspace = true }
 derive_more = "0.99.3"
 error_code = { workspace = true }
