@@ -38,7 +38,7 @@ pub const METADATA_PREFIX: &'static str = "v1/backupmeta";
 pub const COMPACTION_OUT_PREFIX: &'static str = "compaction_out";
 pub const MIGRATION_PREFIX: &'static str = "v1/migrations";
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct MetaFile {
     pub name: Arc<str>,
     pub physical_files: Vec<PhysicalLogFile>,
@@ -91,14 +91,14 @@ impl MetaFile {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct PhysicalLogFile {
     pub size: u64,
     pub name: Arc<str>,
     pub files: Vec<LogFile>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 
 pub struct LogFile {
     pub id: LogFileId,
@@ -144,12 +144,13 @@ impl std::fmt::Debug for LogFileId {
     }
 }
 
-pub struct LoadFromExt {
+pub struct LoadFromExt<'a> {
     pub max_concurrent_fetch: usize,
     pub loading_content_span: Option<Span>,
+    pub meta_prefix: &'a str,
 }
 
-impl LoadFromExt {
+impl<'a> LoadFromExt<'a> {
     fn enter_load_span(&self) -> Option<Entered> {
         if let Some(span) = &self.loading_content_span {
             Some(span.enter())
@@ -159,11 +160,12 @@ impl LoadFromExt {
     }
 }
 
-impl<'a> Default for LoadFromExt {
+impl<'a> Default for LoadFromExt<'a> {
     fn default() -> Self {
         Self {
             max_concurrent_fetch: 16,
             loading_content_span: None,
+            meta_prefix: &METADATA_PREFIX,
         }
     }
 }
@@ -173,7 +175,7 @@ pub struct StreamyMetaStorage<'a> {
         Prefetch<Pin<Box<dyn Future<Output = Result<(MetaFile, LoadMetaStatistic)>> + 'a>>>,
     >,
     ext_storage: &'a dyn ExternalStorage,
-    ext: LoadFromExt,
+    ext: LoadFromExt<'a>,
     stat: LoadMetaStatistic,
 
     files: Fuse<Pin<Box<dyn Stream<Item = std::io::Result<BlobObject>> + 'a>>>,
@@ -278,7 +280,8 @@ impl<'a> StreamyMetaStorage<'a> {
                     self.stat.prefetch_task_emitted += 1;
                     self.prefetch.push_back(fut);
                 }
-                Poll::Ready(None) | Poll::Pending => return Poll::Pending,
+                Poll::Ready(None) => continue,
+                Poll::Pending => return Poll::Pending,
             }
         }
     }
@@ -309,8 +312,8 @@ impl<'a> StreamyMetaStorage<'a> {
         std::mem::take(&mut self.stat)
     }
 
-    pub fn load_from_ext(s: &'a dyn FullFeaturedStorage, ext: LoadFromExt) -> Self {
-        let files = s.walk(&METADATA_PREFIX).fuse();
+    pub fn load_from_ext(s: &'a dyn FullFeaturedStorage, ext: LoadFromExt<'a>) -> Self {
+        let files = s.walk(ext.meta_prefix).fuse();
         Self {
             prefetch: VecDeque::new(),
             files,
@@ -322,6 +325,7 @@ impl<'a> StreamyMetaStorage<'a> {
 
     pub async fn count_objects(s: &'a dyn FullFeaturedStorage) -> std::io::Result<u64> {
         let mut n = 0;
+        // NOTE: should we allow user to specify the prefix?
         let mut items = s.walk(&METADATA_PREFIX);
         while let Some(_) = items.try_next().await? {
             n += 1
@@ -525,4 +529,87 @@ pub fn hash_meta_edit(meta_edit: &brpb::MetaEdit) -> u64 {
     let mut crc = crc64fast::Digest::new();
     crc.write(&[meta_edit.destruct_self as u8]);
     crc64 ^ crc.sum64()
+}
+
+#[cfg(test)]
+mod test {
+    use futures::stream::TryStreamExt;
+
+    use super::{LoadFromExt, MetaFile, StreamyMetaStorage};
+    use crate::test_util::{gen_step, KvGen, LogFileBuilder, TmpStorage};
+
+    async fn construct_storage(
+        st: &TmpStorage,
+        meta_path: impl Fn(i64) -> String,
+        log_path: impl Fn(i64) -> String,
+    ) -> Vec<MetaFile> {
+        let gen_builder = |batch, num| {
+            (num * batch..num * (batch + 1))
+                .map(move |v| {
+                    KvGen::new(gen_step(1, v + batch * num, num), |_| b"val".to_vec()).take(2)
+                })
+                .enumerate()
+                .map(|(n, it)| {
+                    let mut b = LogFileBuilder::new(|v| v.region_id = n as u64);
+                    for kv in it {
+                        b.add_encoded(&kv.key, &kv.value)
+                    }
+                    b
+                })
+        };
+        let mut mfs = vec![];
+        for i in 0..5 {
+            let mf = st
+                .build_flush(&log_path(i), &meta_path(i), gen_builder(i, 10))
+                .await;
+            mfs.push(mf);
+        }
+        mfs
+    }
+
+    #[tokio::test]
+    async fn test_load_from_storage() {
+        let st = TmpStorage::create();
+        let mfs = construct_storage(
+            &st,
+            |i| format!("v1/backupmeta/the-meta-{}.bin", i),
+            |i| format!("out/the-log-{}.bin", i),
+        )
+        .await;
+
+        tracing_active_tree::init();
+
+        let mfs = &mfs;
+        let st = &st;
+        let test_for_concurrency = |n| async move {
+            let mut ext = LoadFromExt::default();
+            ext.max_concurrent_fetch = n;
+            let sst = StreamyMetaStorage::load_from_ext(st.storage().as_ref(), ext);
+            let mut result = sst.try_collect::<Vec<_>>().await.unwrap();
+            result.sort_by(|a, b| a.name.cmp(&b.name));
+            assert_eq!(&result, mfs);
+        };
+
+        test_for_concurrency(1).await;
+        test_for_concurrency(2).await;
+        test_for_concurrency(16).await;
+    }
+
+    #[tokio::test]
+    async fn test_different_prefix() {
+        let st = TmpStorage::create();
+        let mfs = construct_storage(
+            &st,
+            |i| format!("my-fantastic-meta-dir/{}.meta", i),
+            |i| format!("{}.log", i),
+        )
+        .await;
+
+        let mut ext = LoadFromExt::default();
+        ext.meta_prefix = "my-fantastic-meta-dir";
+        let sst = StreamyMetaStorage::load_from_ext(st.storage().as_ref(), ext);
+        let mut result = sst.try_collect::<Vec<_>>().await.unwrap();
+        result.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(result, mfs);
+    }
 }

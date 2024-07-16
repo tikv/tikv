@@ -20,9 +20,9 @@ use crate::{
     NoopStorage, RestoreConfig, UnpinReader,
 };
 
-pub trait FullFeaturedStorage: ExternalStorage + WalkBlobStorage + DeleteBlobStorage {}
+pub trait FullFeaturedStorage: ExternalStorage + WalkBlobStorage {}
 
-impl<T: ExternalStorage + WalkBlobStorage + DeleteBlobStorage> FullFeaturedStorage for T {}
+impl<T: ExternalStorage + WalkBlobStorage> FullFeaturedStorage for T {}
 
 pub fn create_storage(
     storage_backend: &StorageBackend,

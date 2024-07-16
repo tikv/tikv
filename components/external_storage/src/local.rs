@@ -8,12 +8,14 @@ use std::{
 };
 
 use async_trait::async_trait;
-use futures::io::AllowStdIo;
+use cloud::blob::{BlobObject, WalkBlobStorage};
+use futures::{io::AllowStdIo, prelude::Stream};
 use futures_util::stream::TryStreamExt;
 use rand::Rng;
 use tikv_util::stream::error_stream;
 use tokio::fs::{self, File};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
+use walkdir::WalkDir;
 
 use super::ExternalStorage;
 use crate::UnpinReader;
@@ -25,6 +27,45 @@ const LOCAL_STORAGE_TMP_FILE_SUFFIX: &str = "tmp";
 pub struct LocalStorage {
     base: PathBuf,
     base_dir: Arc<File>,
+}
+
+impl WalkBlobStorage for LocalStorage {
+    fn walk<'c, 'a: 'c, 'b: 'c>(
+        &'a self,
+        prefix: &'b str,
+    ) -> std::pin::Pin<Box<dyn Stream<Item = io::Result<BlobObject>> + 'c>> {
+        Box::pin(
+            futures::stream::iter(
+                WalkDir::new(&self.base.join(prefix))
+                    .follow_links(false)
+                    .into_iter()
+                    .filter(|v| v.as_ref().map(|d| d.file_type().is_file()).unwrap_or(false)),
+            )
+            .map_err(|err| {
+                let kind = err
+                    .io_error()
+                    .map(|err| err.kind())
+                    .unwrap_or(io::ErrorKind::Other);
+                io::Error::new(kind, err)
+            })
+            .and_then(|v| {
+                let rel = v
+                    .path()
+                    .strip_prefix(&self.base);
+                    
+                    match rel {
+                        Err(_) => 
+                        futures::future::err(io::Error::new(
+                            io::ErrorKind::Other,
+                            format!("unknown: we found something not match the prefix... it is {}, our prefix is {}", v.path().display(), self.base.display()),
+                        )),
+                        Ok(item) => futures::future::ok(BlobObject{
+                            key: item.to_string_lossy().into_owned(),
+                        })
+                    }
+            })
+        )
+    }
 }
 
 impl LocalStorage {

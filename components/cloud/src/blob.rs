@@ -72,6 +72,7 @@ pub trait WalkBlobStorage: 'static + Send + Sync {
     ) -> Pin<Box<dyn Stream<Item = std::result::Result<BlobObject, io::Error>> + 'c>>;
 }
 
+// NOTE: maybe remove it
 pub trait DeleteBlobStorage: 'static + Send + Sync {
     // For future developer: add `Send` or `Sync` when you need them.
     // Or just use `async_trait`. Or use assoc types.

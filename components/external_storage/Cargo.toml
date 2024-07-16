@@ -31,6 +31,7 @@ tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["time", "fs", "process"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 url = "2.0"
+walkdir="2"
 
 [dev-dependencies]
 matches = "0.1.8"

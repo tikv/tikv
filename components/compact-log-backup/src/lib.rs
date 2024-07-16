@@ -1,4 +1,8 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
+
+#![feature(test)]
+#![feature(custom_test_frameworks)]
+
 mod compaction;
 mod errors;
 mod source;

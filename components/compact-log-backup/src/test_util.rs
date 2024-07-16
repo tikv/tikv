@@ -1,24 +1,32 @@
+#![cfg(test)]
+
 use std::{
     collections::BTreeMap,
     io::{Cursor, Write},
-    path::{Iter, Path},
+    path::{Iter, Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 use codec::number::NumberEncoder;
+use engine_rocks::RocksEngine;
 use engine_traits::{IterOptions, Iterator as _, RefIterable, SstExt, CF_DEFAULT, CF_WRITE};
 use external_storage::ExternalStorage;
 use file_system::sha256;
 use futures::io::Cursor as ACursor;
 use keys::{data_key, origin_key};
 use kvproto::brpb::{self, Metadata};
+use tempdir::TempDir;
 use tidb_query_datatype::codec::table::encode_row_key;
 use tikv_util::codec::stream_event::EventEncoder;
 use txn_types::Key;
 
 use crate::{
+    compaction::{
+        exec::{SubcompactExt, SubcompactionExec},
+        Subcompaction, SubcompactionResult,
+    },
     errors::{OtherErrExt, Result},
-    storage::{LogFile, LogFileId},
+    storage::{LogFile, LogFileId, MetaFile, PhysicalLogFile},
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -341,4 +349,83 @@ pub async fn save_many_log_files(
     }
     st.write(name, ACursor::new(w).into(), cl).await?;
     Ok(md)
+}
+
+pub struct TmpStorage {
+    path: Option<TempDir>,
+    storage: Arc<external_storage::LocalStorage>,
+}
+
+impl TmpStorage {
+    pub fn create() -> TmpStorage {
+        let path = TempDir::new("test").unwrap();
+        let storage = external_storage::LocalStorage::new(path.path()).unwrap();
+        TmpStorage {
+            path: Some(path),
+            storage: Arc::new(storage),
+        }
+    }
+
+    /// leak the current external storage.
+    /// this should only be called once.
+    pub fn leak(&mut self) -> PathBuf {
+        self.path.take().unwrap().into_path()
+    }
+
+    pub fn path(&self) -> &Path {
+        self.path.as_ref().unwrap().path()
+    }
+
+    pub fn storage(&self) -> &Arc<external_storage::LocalStorage> {
+        &self.storage
+    }
+}
+
+impl TmpStorage {
+    pub async fn run_subcompaction(&self, c: Subcompaction) -> SubcompactionResult {
+        self.try_run_subcompaction(c).await.unwrap()
+    }
+
+    pub async fn try_run_subcompaction(&self, c: Subcompaction) -> Result<SubcompactionResult> {
+        let cw = SubcompactionExec::<RocksEngine>::default_config(self.storage.clone());
+        let ext = SubcompactExt::default();
+        Ok(cw.run(c, ext).await?)
+    }
+
+    #[track_caller]
+    pub fn verify_result(&self, res: SubcompactionResult, mut cm: CompactInMem) {
+        let sst_path = self.path().join(&res.meta.sst_outputs[0].name);
+        res.verify_checksum().unwrap();
+        verify_the_same::<RocksEngine>(sst_path, cm.must_iter()).unwrap();
+    }
+
+    pub async fn build_log_file(&self, name: &str, kvs: impl Iterator<Item = Kv>) -> LogFile {
+        let mut b = LogFileBuilder::new(|v| v.name = name.to_owned());
+        for kv in kvs {
+            b.add_encoded(&kv.key, &kv.value);
+        }
+        b.must_save(self.storage.as_ref()).await
+    }
+
+    pub async fn build_flush(
+        &self,
+        log_path: &str,
+        meta_path: &str,
+        builders: impl IntoIterator<Item = LogFileBuilder>,
+    ) -> MetaFile {
+        use protobuf::Message;
+        let result = save_many_log_files(log_path, builders, self.storage.as_ref())
+            .await
+            .unwrap();
+        let content = result.write_to_bytes().unwrap();
+        self.storage
+            .write(
+                meta_path,
+                ACursor::new(&content).into(),
+                content.len() as u64,
+            )
+            .await
+            .unwrap();
+        MetaFile::from_file(Arc::from(meta_path), result)
+    }
 }

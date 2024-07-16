@@ -364,54 +364,13 @@ mod test {
         storage::{LogFile, MetaFile},
         test_util::{
             build_many_log_files, gen_step, save_many_log_files, verify_the_same, CompactInMem, Kv,
-            KvGen, LogFileBuilder,
+            KvGen, LogFileBuilder, TmpStorage,
         },
     };
 
-    struct TempStorage {
-        path: TempDir,
-        storage: Arc<external_storage::LocalStorage>,
-    }
-
-    fn create_local_storage() -> TempStorage {
-        let path = TempDir::new("test").unwrap();
-        let storage = external_storage::LocalStorage::new(path.path()).unwrap();
-        TempStorage {
-            path,
-            storage: Arc::new(storage),
-        }
-    }
-
-    impl TempStorage {
-        async fn run_subcompaction(&self, c: Subcompaction) -> SubcompactionResult {
-            self.try_run_subcompaction(c).await.unwrap()
-        }
-
-        async fn try_run_subcompaction(&self, c: Subcompaction) -> Result<SubcompactionResult> {
-            let cw = SubcompactionExec::<RocksEngine>::default_config(self.storage.clone());
-            let ext = SubcompactExt::default();
-            Ok(cw.run(c, ext).await?)
-        }
-
-        #[track_caller]
-        fn verify_result(&self, res: SubcompactionResult, mut cm: CompactInMem) {
-            let sst_path = self.path.path().join(&res.meta.sst_outputs[0].name);
-            res.verify_checksum().unwrap();
-            verify_the_same::<RocksEngine>(sst_path, cm.must_iter()).unwrap();
-        }
-
-        async fn build_log_file(&self, name: &str, kvs: impl Iterator<Item = Kv>) -> LogFile {
-            let mut b = LogFileBuilder::new(|v| v.name = name.to_owned());
-            for kv in kvs {
-                b.add_encoded(&kv.key, &kv.value);
-            }
-            b.must_save(self.storage.as_ref()).await
-        }
-    }
-
     #[tokio::test]
     async fn test_compact_one() {
-        let st = create_local_storage();
+        let st = TmpStorage::create();
 
         let const_val = |_| vec![42u8];
         let mut cm = CompactInMem::default();
@@ -422,15 +381,15 @@ mod test {
         let s2 = KvGen::new(gen_step(1, 1, 2).take(100), const_val);
         let i2 = st.build_log_file("b.log", cm.tap_on(s2)).await;
 
-        let mut c = Subcompaction::of_many([i1, i2]);
+        let c = Subcompaction::of_many([i1, i2]);
 
         st.verify_result(st.run_subcompaction(c).await, cm);
     }
 
     #[tokio::test]
     async fn test_compact_dup() {
-        let st = create_local_storage();
-        let mut cm = CompactInMem::default();
+        let st = TmpStorage::create();
+        let cm = CompactInMem::default();
 
         let s1 = KvGen::new(gen_step(1, 0, 3).take(100), |_| b"value".to_vec());
         let i1 = st.build_log_file("three.log", cm.tap_on(s1)).await;
@@ -447,7 +406,7 @@ mod test {
 
     #[tokio::test]
     async fn test_compact_from_one_file() {
-        let st = create_local_storage();
+        let st = TmpStorage::create();
         let cm = CompactInMem::default();
 
         let s1 = KvGen::new(gen_step(1, 0, 2).take(100), |_| b"value".to_vec());
@@ -460,7 +419,7 @@ mod test {
         cm.tap_on(s2)
             .for_each(|kv| i2.add_encoded(&kv.key, &kv.value));
 
-        let meta = save_many_log_files("data.log", [i1, i2], st.storage.as_ref())
+        let meta = save_many_log_files("data.log", [i1, i2], st.storage().as_ref())
             .await
             .unwrap();
         let ml = MetaFile::from(meta);
@@ -470,16 +429,20 @@ mod test {
     }
 
     #[tokio::test]
+    #[cfg(feature = "failpoints")]
+    // Note: maybe just modify the log files?
     async fn test_failed_checksumming() {
-        fail::cfg(name, actions);
-        let st = create_local_storage();
+        let _fg = fail::FailGuard::new("compact_log_backup_omit_key", "1*return");
+        let st = TmpStorage::create();
 
-        let mut cm = CompactInMem::default();
+        let cm = CompactInMem::default();
 
         let s1 = KvGen::new(gen_step(1, 0, 3).take(100), |_| b"value".to_vec());
         let i1 = st.build_log_file("three.log", cm.tap_on(s1)).await;
 
-        let c = Subcompaction::of_many([i1, i2]);
-        let res = st.try_run_subcompaction(c).await.unwrap_err();
+        let c = Subcompaction::singleton(i1);
+        let res = st.run_subcompaction(c).await;
+        res.verify_checksum()
+            .expect_err("should failed to verify checksum");
     }
 }
