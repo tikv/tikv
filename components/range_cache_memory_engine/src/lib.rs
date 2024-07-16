@@ -16,6 +16,7 @@ use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
 
 mod background;
 pub mod config;
+mod cross_check;
 mod engine;
 mod keys;
 mod memory_controller;
