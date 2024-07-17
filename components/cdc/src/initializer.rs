@@ -1,5 +1,8 @@
 // Copyright 2022 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{atomic::AtomicBool, Arc},
+    time::Duration,
+};
 
 use api_version::ApiV2;
 use crossbeam::atomic::AtomicCell;

@@ -215,15 +215,6 @@ impl Downstream {
         self.sink_event(change_data_event, force_send)
     }
 
-<<<<<<< HEAD
-    pub fn sink_region_not_found(&self, region_id: u64) -> Result<()> {
-        let mut err_event = EventError::default();
-        err_event.mut_region_not_found().region_id = region_id;
-        self.sink_error_event(region_id, err_event)
-    }
-
-=======
->>>>>>> 4013c09630 (cdc: skip incremental scaned events after region fails (#17248))
     pub fn set_sink(&mut self, sink: Sink) {
         self.sink = Some(sink);
     }

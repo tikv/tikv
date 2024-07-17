@@ -736,30 +736,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             return;
         }
 
-<<<<<<< HEAD
-=======
-        let scan_task_counter = self.scan_task_counter.clone();
-        let scan_task_count = scan_task_counter.fetch_add(1, Ordering::Relaxed);
-        let release_scan_task_counter = tikv_util::DeferContext::new(move || {
-            scan_task_counter.fetch_sub(1, Ordering::Relaxed);
-        });
-        if scan_task_count + 1 > self.config.incremental_scan_concurrency_limit as isize {
-            debug!("cdc rejects registration, too many scan tasks";
-                "region_id" => region_id,
-                "conn_id" => ?conn_id,
-                "req_id" => request_id,
-                "scan_task_count" => scan_task_count,
-                "incremental_scan_concurrency_limit" => self.config.incremental_scan_concurrency_limit,
-            );
-            // To avoid OOM (e.g., https://github.com/tikv/tikv/issues/16035),
-            // TiKV needs to reject and return error immediately.
-            let mut err_event = EventError::default();
-            err_event.mut_server_is_busy().reason = "too many pending incremental scans".to_owned();
-            let _ = downstream.sink_error_event(region_id, err_event);
-            return;
-        }
-
->>>>>>> 4013c09630 (cdc: skip incremental scaned events after region fails (#17248))
         let txn_extra_op = match self.store_meta.lock().unwrap().reader(region_id) {
             Some(reader) => reader.txn_extra_op.clone(),
             None => {
