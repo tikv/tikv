@@ -1896,7 +1896,7 @@ where
             let mut start_ts: u64 = 0;
             let mut rctx = ReadIndexContext::parse(m.get_entries()[0].get_data()).unwrap();
             if let Some(request) = rctx.request.take() {
-                start_ts = request.get_start_ts().into();
+                start_ts = request.get_start_ts();
             }
 
             // Check if the log term of this index is equal to current term, if so,
