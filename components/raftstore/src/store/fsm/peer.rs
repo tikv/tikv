@@ -22,6 +22,7 @@ use engine_traits::{Engines, KvEngine, RaftEngine, SstMetaInfo, WriteBatchExt, C
 use error_code::ErrorCodeExt;
 use fail::fail_point;
 use futures::channel::mpsc::UnboundedSender;
+use itertools::Itertools;
 use keys::{self, enc_end_key, enc_start_key};
 use kvproto::{
     brpb::CheckAdminResponse,
@@ -49,13 +50,15 @@ use raft::{
     GetEntriesContext, Progress, ReadState, SnapshotStatus, StateRole, INVALID_INDEX, NO_LIMIT,
 };
 use smallvec::SmallVec;
+use strum::{EnumCount, VariantNames};
 use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err, debug, defer, error, escape, info, info_or_debug, is_zero_duration,
     mpsc::{self, LooseBoundedSender, Receiver},
+    slow_log,
     store::{find_peer, find_peer_by_id, is_learner, region_on_same_stores},
     sys::disk::DiskUsage,
-    time::{monotonic_raw_now, Instant as TiInstant},
+    time::{monotonic_raw_now, Instant as TiInstant, SlowTimer},
     trace, warn,
     worker::{ScheduleError, Scheduler},
     Either,
@@ -617,9 +620,12 @@ where
     }
 
     pub fn handle_msgs(&mut self, msgs: &mut Vec<PeerMsg<EK>>) {
-        let timer = TiInstant::now_coarse();
+        let timer = SlowTimer::from_millis(100);
         let count = msgs.len();
+        #[allow(const_evaluatable_unchecked)]
+        let mut distribution = [0; PeerMsg::<EK>::COUNT];
         for m in msgs.drain(..) {
+            distribution[m.discriminant()] += 1;
             match m {
                 PeerMsg::RaftMessage(msg, sent_time) => {
                     if let Some(sent_time) = sent_time {
@@ -705,12 +711,19 @@ where
             }
         }
         self.on_loop_finished();
+        slow_log!(
+            T timer,
+            "{} handle {} peer messages {:?}",
+            self.fsm.peer.tag,
+            count,
+            PeerMsg::<EK>::VARIANTS.iter().zip(distribution).filter(|(_, c)| *c > 0).format(", "),
+        );
         self.ctx.raft_metrics.peer_msg_len.observe(count as f64);
         self.ctx
             .raft_metrics
             .event_time
             .peer_msg
-            .observe(timer.saturating_elapsed_secs());
+            .observe(timer.saturating_elapsed().as_secs_f64());
     }
 
     #[inline]
@@ -1230,8 +1243,18 @@ where
                 let raft_msg = self.fsm.peer.build_raft_messages(self.ctx, vec![msg]);
                 self.fsm.peer.send_raft_messages(self.ctx, raft_msg);
             }
-            CasualMessage::SnapshotApplied => {
+            CasualMessage::SnapshotApplied { peer_id, tombstone } => {
                 self.fsm.has_ready = true;
+                // If failed on applying snapshot, it should record the peer as an invalid peer.
+                if tombstone && self.fsm.peer.peer_id() == peer_id && !self.fsm.peer.is_leader() {
+                    info!(
+                        "mark the region damaged on applying snapshot";
+                        "region_id" => self.region_id(),
+                        "peer_id" => peer_id,
+                    );
+                    let mut meta = self.ctx.store_meta.lock().unwrap();
+                    meta.damaged_regions.insert(self.region_id());
+                }
                 if self.fsm.peer.should_destroy_after_apply_snapshot() {
                     self.maybe_destroy();
                 }
@@ -3150,11 +3173,12 @@ where
             return;
         }
 
-        if self.fsm.peer.peer != *msg.get_to_peer() {
+        if self.fsm.peer.peer.get_id() != msg.get_to_peer().get_id() {
             info!(
                 "receive stale gc message, ignore.";
                 "region_id" => self.fsm.region_id(),
                 "peer_id" => self.fsm.peer_id(),
+                "to_peer_id" => msg.get_to_peer().get_id(),
             );
             self.ctx.raft_metrics.message_dropped.stale_msg.inc();
             return;
@@ -3197,7 +3221,7 @@ where
             // No need to get snapshot for witness, as witness's empty snapshot bypass
             // snapshot manager.
             let key = SnapKey::from_region_snap(region_id, snap);
-            self.ctx.snap_mgr.get_snapshot_for_applying(&key)?;
+            self.ctx.snap_mgr.meta_file_exist(&key)?;
             Some(key)
         } else {
             None
@@ -3779,6 +3803,8 @@ where
             );
         })();
         let mut meta = self.ctx.store_meta.lock().unwrap();
+        meta.damaged_regions.remove(&self.fsm.region_id());
+        meta.damaged_regions.shrink_to_fit();
         let is_latest_initialized = {
             if let Some(latest_region_info) = meta.regions.get(&region_id) {
                 util::is_region_initialized(latest_region_info)
