@@ -22,7 +22,10 @@ use engine_traits::{
 use kvproto::metapb::Region;
 use parking_lot::RwLock;
 use pd_client::{PdClient, RpcClient};
-use raftstore::{coprocessor::RegionInfoProvider, store::fsm::apply::PRINTF_LOG};
+use raftstore::{
+    coprocessor::RegionInfoProvider,
+    store::fsm::apply::{GC_LOG, PRINTF_LOG},
+};
 use slog_global::{error, info, warn};
 use tikv_util::{
     config::ReadableSize,
@@ -1310,10 +1313,7 @@ impl Runnable for BackgroundRunner {
                                                 core.memory_controller.clone(),
                                             );
 
-                                            if PRINTF_LOG.load(Ordering::Relaxed)
-                                                || (cf == CF_LOCK
-                                                    && PRINTF_LOG.load(Ordering::Relaxed))
-                                            {
+                                            if PRINTF_LOG.load(Ordering::Relaxed) {
                                                 info!(
                                                     "write to memory in load";
                                                     "key" => log_wrappers::Value(encoded_key.as_slice()),
@@ -1590,13 +1590,11 @@ impl Runnable for DeleteRangeRunner {
     fn run(&mut self, task: Self::Task) {
         match task {
             BackgroundTask::DeleteRange((ranges, reason)) => {
-                if PRINTF_LOG.load(Ordering::Relaxed) {
-                    info!(
-                        "try to delete ranges";
-                        "ranges" => ?ranges,
-                        "reason" => reason,
-                    );
-                }
+                info!(
+                    "try to delete ranges";
+                    "ranges" => ?ranges,
+                    "reason" => reason,
+                );
                 let (mut ranges_to_delay, ranges_to_delete) = {
                     let core = self.engine.read();
                     let mut ranges_to_delay = vec![];
@@ -1637,12 +1635,10 @@ impl Runnable for DeleteRangeRunner {
                     (ranges_to_delay, ranges_to_delete)
                 };
                 if !ranges_to_delay.is_empty() {
-                    if PRINTF_LOG.load(Ordering::Relaxed) {
                         info!(
                             "delay range delete";
                             "ranges_to_delay" => ?ranges_to_delay,
                         );
-                    }
                     self.delay_ranges.append(&mut ranges_to_delay);
                 }
                 if !ranges_to_delete.is_empty() {
@@ -1796,7 +1792,7 @@ impl Drop for Filter {
         if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
             let guard = &epoch::pin();
             self.metrics.filtered += 1;
-            if PRINTF_LOG.load(Ordering::Relaxed) {
+            if GC_LOG.load(Ordering::Relaxed) {
                 info!(
                     "gc filter write n";
                     "key" => log_wrappers::Value(&cached_delete_key),
@@ -1809,7 +1805,7 @@ impl Drop for Filter {
         if let Some(cached_delete_key) = self.cached_skiplist_delete_key.take() {
             let guard = &epoch::pin();
             self.metrics.filtered += 1;
-            if PRINTF_LOG.load(Ordering::Relaxed) {
+            if GC_LOG.load(Ordering::Relaxed) {
                 info!(
                     "gc filter tombstone";
                     "key" => log_wrappers::Value(&cached_delete_key),
@@ -1877,7 +1873,7 @@ impl Filter {
                 let guard = &epoch::pin();
                 let key = InternalBytes::from_vec(cache_skiplist_delete_key);
                 self.write_cf_handle.remove(&key, guard);
-                if PRINTF_LOG.load(Ordering::Relaxed) {
+                if GC_LOG.load(Ordering::Relaxed) {
                     info!(
                         "delete in memory due to gc";
                         "key" => log_wrappers::Value(key.as_bytes()),
@@ -1898,7 +1894,7 @@ impl Filter {
                 self.metrics.filtered += 1;
                 self.write_cf_handle
                     .remove(&InternalBytes::from_bytes(key.clone()), guard);
-                if PRINTF_LOG.load(Ordering::Relaxed) {
+                if GC_LOG.load(Ordering::Relaxed) {
                     info!(
                         "gc filter write hidden by tombstone";
                         "key" => log_wrappers::Value(key),
@@ -1909,7 +1905,7 @@ impl Filter {
                 return Ok(());
             } else {
                 self.metrics.filtered += 1;
-                if PRINTF_LOG.load(Ordering::Relaxed) {
+                if GC_LOG.load(Ordering::Relaxed) {
                     info!(
                         "gc filter write tombstone";
                         "key" => log_wrappers::Value(&self.cached_skiplist_delete_key.as_ref().unwrap()),
@@ -1932,7 +1928,7 @@ impl Filter {
         } else {
             self.write_cf_handle
                 .remove(&InternalBytes::from_bytes(key.clone()), guard);
-            if PRINTF_LOG.load(Ordering::Relaxed) {
+            if GC_LOG.load(Ordering::Relaxed) {
                 info!(
                     "gc filter write user key";
                     "key" => log_wrappers::Value(&key),
@@ -1951,7 +1947,7 @@ impl Filter {
             self.remove_older = false;
             if let Some(cached_delete_key) = self.cached_mvcc_delete_key.take() {
                 self.metrics.filtered += 1;
-                if PRINTF_LOG.load(Ordering::Relaxed) {
+                if GC_LOG.load(Ordering::Relaxed) {
                     info!(
                         "gc filter write n";
                         "key" => log_wrappers::Value(&cached_delete_key),
@@ -1986,7 +1982,7 @@ impl Filter {
         }
 
         if !filtered {
-            if PRINTF_LOG.load(Ordering::Relaxed) {
+            if GC_LOG.load(Ordering::Relaxed) {
                 info!(
                     "gc filter not filter";
                     "key" => log_wrappers::Value(key),
@@ -2001,7 +1997,7 @@ impl Filter {
         self.metrics.filtered += 1;
         self.write_cf_handle
             .remove(&InternalBytes::from_bytes(key.clone()), guard);
-        if PRINTF_LOG.load(Ordering::Relaxed) {
+        if GC_LOG.load(Ordering::Relaxed) {
             info!(
                 "gc filter write";
                 "key" => log_wrappers::Value(key),
@@ -2034,7 +2030,7 @@ impl Filter {
             iter.seek(&default_key, guard);
             while iter.valid() && iter.key().same_user_key_with(&default_key) {
                 self.default_cf_handle.remove(iter.key(), guard);
-                if PRINTF_LOG.load(Ordering::Relaxed) {
+                if GC_LOG.load(Ordering::Relaxed) {
                     info!(
                         "gc filter default";
                         "key" => log_wrappers::Value(iter.key().as_bytes()),

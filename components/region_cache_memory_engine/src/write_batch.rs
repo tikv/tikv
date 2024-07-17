@@ -648,24 +648,20 @@ impl Mutable for RangeCacheWriteBatch {
     // them directly
     fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let range = CacheRange::new(begin_key.to_vec(), end_key.to_vec());
-        if PRINTF_LOG.load(Ordering::Relaxed) {
-            info!(
-                "evict range due to delete range";
-                "range" => ?range,
-            );
-        }
+        info!(
+            "evict range due to delete range";
+            "range" => ?range,
+        );
         self.engine.evict_range(&range);
         Ok(())
     }
 
     fn delete_range_cf(&mut self, _cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         let range = CacheRange::new(begin_key.to_vec(), end_key.to_vec());
-        if PRINTF_LOG.load(Ordering::Relaxed) {
-            info!(
-                "evict range due to delete range cf";
-                "range" => ?range,
-            );
-        }
+        info!(
+            "evict range due to delete range cf";
+            "range" => ?range,
+        );
         self.engine.evict_range(&range);
         Ok(())
     }

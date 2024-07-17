@@ -44,7 +44,7 @@ use openssl::{
 use pin_project::pin_project;
 use profile::*;
 use prometheus::TEXT_FORMAT;
-use raftstore::store::fsm::apply::{PRINTF_LOG, TXN_LOG};
+use raftstore::store::fsm::apply::{GC_LOG, PRINTF_LOG, TXN_LOG};
 use regex::Regex;
 use resource_control::ResourceGroupManager;
 use security::{self, SecurityConfig};
@@ -764,6 +764,20 @@ where
                             }
                             (Method::PUT, "/turn_off_print_log") => {
                                 PRINTF_LOG.store(false, Ordering::Relaxed);
+                                Ok(make_response(
+                                    StatusCode::OK,
+                                    "Successfully turn off printf log",
+                                ))
+                            }
+                            (Method::PUT, "/turn_on_gc_log") => {
+                                GC_LOG.store(true, Ordering::Relaxed);
+                                Ok(make_response(
+                                    StatusCode::OK,
+                                    "Successfully turn on printf log",
+                                ))
+                            }
+                            (Method::PUT, "/turn_off_gc_log") => {
+                                GC_LOG.store(false, Ordering::Relaxed);
                                 Ok(make_response(
                                     StatusCode::OK,
                                     "Successfully turn off printf log",
