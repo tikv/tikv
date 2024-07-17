@@ -93,6 +93,10 @@ fn create_full_featured_backend(
         Backend::Gcs(config) => {
             Box::new(BlobStore::new(GcsStorage::from_input(config.clone())?)) as _
         }
+        Backend::Local(config) => {
+            let p = Path::new(&config.path);
+            Box::new(LocalStorage::new(p)?) as _
+        }
         #[allow(unreachable_patterns)]
         _ => return Err(walk_not_supported(backend.clone())),
     };

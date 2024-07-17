@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc, task::ready};
 
 use engine_traits::{ExternalSstFileInfo, SstWriterBuilder};
 use kvproto::brpb::FileType;
-use tikv_util::{codec::stream_event::Iterator as KvStreamIter, config::ReadableSize};
+use tikv_util::codec::stream_event::Iterator as KvStreamIter;
 use tokio_stream::Stream;
 
 use super::Input;
@@ -222,61 +222,18 @@ impl<S: Stream<Item = Result<LogFile>>> Stream for CollectSubcompaction<S> {
 
 #[cfg(test)]
 mod test {
-    use std::{pin, sync::Arc};
+    use std::sync::Arc;
 
+    use engine_traits::CF_WRITE;
     use futures::stream::{self, StreamExt, TryStreamExt};
     use kvproto::brpb;
-    use tikv_util::log;
 
-    use super::{
-        CollectSubcompaction, CollectSubcompactionConfig, SubcompactionCollectKey,
-        SubcompactionCollector,
-    };
+    use super::{CollectSubcompaction, CollectSubcompactionConfig, SubcompactionCollectKey};
     use crate::{
         errors::{Error, ErrorKind, Result},
         storage::{LogFile, LogFileId},
+        test_util::LogFileBuilder,
     };
-
-    struct LogFileBuilder {
-        pub name: String,
-        pub region_id: u64,
-        pub cf: &'static str,
-        pub ty: brpb::FileType,
-        pub is_meta: bool,
-
-        content: Vec<u8>,
-        min_ts: u64,
-        max_ts: u64,
-        min_key: Vec<u8>,
-        max_key: Vec<u8>,
-        number_of_entries: u64,
-        crc64xor: u64,
-        compression: brpb::CompressionType,
-        file_real_size: u64,
-    }
-
-    impl LogFileBuilder {
-        pub fn new(name: &str, region_id: u64) -> Self {
-            Self {
-                name: name.to_owned(),
-                region_id,
-                cf: "default",
-                ty: brpb::FileType::Put,
-                is_meta: false,
-
-                content: vec![],
-                min_ts: 0,
-                max_ts: 0,
-
-                min_key: vec![],
-                max_key: vec![],
-                number_of_entries: 0,
-                crc64xor: 0,
-                compression: brpb::CompressionType::Zstd,
-                file_real_size: 0,
-            }
-        }
-    }
 
     fn log_file(name: &str, len: u64, key: SubcompactionCollectKey) -> LogFile {
         LogFile {
@@ -293,7 +250,7 @@ mod test {
             max_ts: 0,
             min_key: Arc::from([]),
             max_key: Arc::from([]),
-            is_meta: false,
+            is_meta: key.is_meta,
             region_id: key.region_id,
             cf: key.cf,
             ty: key.ty,
@@ -302,6 +259,12 @@ mod test {
             resolved_ts: 0,
             sha256: Arc::from([]),
         }
+    }
+
+    fn with_ts(mut lf: LogFile, min_ts: u64, max_ts: u64) -> LogFile {
+        lf.min_ts = min_ts;
+        lf.max_ts = max_ts;
+        lf
     }
 
     impl SubcompactionCollectKey {
@@ -374,5 +337,116 @@ mod test {
         let mut st = collector.map_ok(|v| v.size);
         assert_eq!(st.next().await.unwrap().unwrap(), 129);
         st.next().await.unwrap().unwrap_err();
+    }
+
+    #[tokio::test]
+    async fn test_filter_out() {
+        let r = SubcompactionCollectKey::of_region;
+        let m = |mut k: SubcompactionCollectKey| {
+            k.is_meta = true;
+            k
+        };
+        let t = with_ts;
+
+        let items = vec![
+            // should be filtered out.
+            t(log_file("1", 999, r(1)), 40, 49),
+            t(log_file("11", 456, r(1)), 201, 288),
+            t(log_file("11", 789, m(r(1))), 201, 288),
+            // total in range.
+            t(log_file("2", 20, r(1)), 50, 199),
+            // having overlap.
+            t(log_file("3", 100, r(1)), 199, 201),
+            t(log_file("4", 9, r(1)), 48, 51),
+            // other regions
+            t(log_file("5", 999, r(2)), 52, 55),
+        ];
+
+        let mut collector = CollectSubcompaction::new(
+            stream::iter(items.iter().cloned().map(Ok)),
+            CollectSubcompactionConfig {
+                compact_from_ts: 50,
+                compact_to_ts: 200,
+                compaction_size_threshold: 128,
+            },
+        );
+
+        let res = (&mut collector)
+            .map_ok(|v| (v.size, v.region_id))
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        println!("{res:?}");
+        assert_eq!(res, [(129, 1), (999, 2)]);
+        let stat = collector.take_statistic();
+        println!("{:?}", stat);
+        assert_eq!(stat.files_filtered_out, 3);
+        assert_eq!(stat.compactions_out, 2);
+        assert_eq!(stat.files_in + stat.files_filtered_out, items.len() as u64);
+    }
+
+    #[tokio::test]
+    async fn test_group() {
+        let r = SubcompactionCollectKey::of_region;
+        let m = |mut k: SubcompactionCollectKey| {
+            k.is_meta = true;
+            k
+        };
+        let d = |mut k: SubcompactionCollectKey| {
+            k.ty = brpb::FileType::Delete;
+            k
+        };
+        let w = |mut k: SubcompactionCollectKey| {
+            k.cf = CF_WRITE;
+            k
+        };
+
+        let files = vec![
+            log_file("x", 100, r(1)),
+            log_file("m", 101, m(r(1))),
+            log_file("d", 102, d(r(1))),
+            log_file("w", 103, w(r(1))),
+            log_file("md", 104, d(m(r(1)))),
+            log_file("wd", 105, w(d(r(1)))),
+            log_file("all", 106, m(w(d(r(1))))),
+            log_file("other_region", 107, r(2)),
+            log_file("other_region_w", 108, w(r(2))),
+        ];
+
+        let mut collector = CollectSubcompaction::new(
+            stream::iter(files.iter().cloned().map(Ok)),
+            CollectSubcompactionConfig {
+                compact_from_ts: 0,
+                compact_to_ts: u64::MAX,
+                compaction_size_threshold: 128,
+            },
+        );
+
+        let mut res = (&mut collector)
+            .map_ok(|v| (v.size, v.region_id, v.cf, v.ty))
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+
+        res.sort_by_key(|v| v.0);
+
+        use brpb::FileType::*;
+        assert_eq!(
+            res,
+            [
+                (100, 1, "default", Put),
+                (102, 1, "default", Delete),
+                (103, 1, "write", Put),
+                (105, 1, "write", Delete),
+                (107, 2, "default", Put),
+                (108, 2, "write", Put)
+            ]
+        );
+
+        let stat = collector.take_statistic();
+        assert_eq!(stat.files_in + stat.files_filtered_out, files.len() as u64);
+        assert_eq!(stat.compactions_out, 6);
+        assert_eq!(stat.files_filtered_out, 3);
     }
 }

@@ -1,7 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
-use std::{fmt::Display, future::Future, process::Output};
+use std::future::Future;
 
-use chrono::{DateTime, Duration, Local};
+use chrono::{Duration, Local};
 pub use engine_traits::SstCompressionType;
 use external_storage::{FullFeaturedStorage, UnpinReader};
 use futures::{future::TryFutureExt, io::Cursor};
@@ -101,7 +101,8 @@ impl<T: ExecHooks, U: ExecHooks> ExecHooks for (T, U) {
             .after_a_compaction_end(
                 cid,
                 // This arg was derived to be `&'a mut`... But it can have a shorter
-                // lifetime...
+                // lifetime, which is the same as the `self.0.after_a_compaction_end`
+                // expression's...
                 unsafe { &mut *cx },
             )
             .await?;

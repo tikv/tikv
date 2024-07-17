@@ -3,18 +3,21 @@
 use std::{
     collections::BTreeMap,
     io::{Cursor, Write},
-    path::{Iter, Path, PathBuf},
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
-use codec::number::NumberEncoder;
 use engine_rocks::RocksEngine;
 use engine_traits::{IterOptions, Iterator as _, RefIterable, SstExt, CF_DEFAULT, CF_WRITE};
-use external_storage::ExternalStorage;
+use external_storage::{ExternalStorage, WalkBlobStorage};
 use file_system::sha256;
-use futures::io::Cursor as ACursor;
-use keys::{data_key, origin_key};
+use futures::{
+    io::{AsyncReadExt, Cursor as ACursor},
+    stream::StreamExt,
+};
+use keys::origin_key;
 use kvproto::brpb::{self, Metadata};
+use protobuf::{parse_from_bytes, Message};
 use tempdir::TempDir;
 use tidb_query_datatype::codec::table::encode_row_key;
 use tikv_util::codec::stream_event::EventEncoder;
@@ -26,7 +29,7 @@ use crate::{
         Subcompaction, SubcompactionResult,
     },
     errors::{OtherErrExt, Result},
-    storage::{LogFile, LogFileId, MetaFile, PhysicalLogFile},
+    storage::{id_of_migration, LogFile, LogFileId, MetaFile},
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -41,7 +44,7 @@ struct TxnLogFileBuilder {
 }
 
 impl TxnLogFileBuilder {
-    fn new(region_id: u64, configure: impl FnOnce(&mut Self)) -> Self {
+    fn new(_region_id: u64, configure: impl FnOnce(&mut Self)) -> Self {
         let mut this = Self {
             default: LogFileBuilder::new(|v| {
                 v.cf = CF_DEFAULT;
@@ -56,9 +59,9 @@ impl TxnLogFileBuilder {
 
     fn add_txn<'a>(
         &mut self,
-        kvs: impl Iterator<Item = (Vec<u8>, Vec<u8>)>,
-        start_ts: u64,
-        commit_ts: u64,
+        _kvs: impl Iterator<Item = (Vec<u8>, Vec<u8>)>,
+        _start_ts: u64,
+        _commit_ts: u64,
     ) {
     }
 }
@@ -87,9 +90,22 @@ pub struct CompactInMem {
 }
 
 impl CompactInMem {
-    pub fn tap_on(&self, it: impl Iterator<Item = Kv>) -> impl Iterator<Item = Kv> {
+    pub fn tap_on<'it>(
+        &self,
+        it: impl Iterator<Item = Kv> + 'it,
+    ) -> impl Iterator<Item = Kv> + 'it {
         RecordSorted {
             target: self.clone(),
+            inner: it,
+        }
+    }
+
+    pub fn tap_on_owned<'it>(
+        self,
+        it: impl Iterator<Item = Kv> + 'it,
+    ) -> impl Iterator<Item = Kv> + 'it {
+        RecordSorted {
+            target: self,
             inner: it,
         }
     }
@@ -176,7 +192,11 @@ impl<S: Iterator<Item = Kv>> Iterator for RecordSorted<S> {
     }
 }
 
-pub type KeySeed = (i64 /* table_id */, i64 /* handle_id */);
+pub type KeySeed = (
+    i64, // table_id
+    i64, // handle_id
+    u64, // ts
+);
 
 pub struct KvGen<S> {
     value: Box<dyn FnMut(KeySeed) -> Vec<u8>>,
@@ -196,16 +216,28 @@ impl<S: Iterator<Item = KeySeed>> Iterator for KvGen<S> {
     type Item = Kv;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.sources.next().map(|(table_id, handle_id)| {
-            let key = Key::from_raw(&encode_row_key(table_id, handle_id)).into_encoded();
-            let value = (self.value)((table_id, handle_id));
+        self.sources.next().map(|(table_id, handle_id, ts)| {
+            let key = Key::from_raw(&encode_row_key(table_id, handle_id))
+                .append_ts(ts.into())
+                .into_encoded();
+            let value = (self.value)((table_id, handle_id, ts));
             Kv { key, value }
         })
     }
 }
 
 pub fn gen_step(table_id: i64, start: i64, step: i64) -> impl Iterator<Item = KeySeed> {
-    (0..).map(move |v| (table_id, v * step + start))
+    (0..).map(move |v| (table_id, v * step + start, 42))
+}
+
+pub fn gen_min_max(
+    table_id: i64,
+    min_hnd: i64,
+    max_hnd: i64,
+    min_ts: u64,
+    max_ts: u64,
+) -> impl Iterator<Item = KeySeed> {
+    [(table_id, min_hnd, min_ts), (table_id, max_hnd, max_ts)].into_iter()
 }
 
 impl LogFileBuilder {
@@ -320,16 +352,12 @@ pub fn build_many_log_files(
         md.max_ts = md.max_ts.max(log_info.max_ts);
 
         let pb = log_info.into_pb();
-        unsafe {
-            // SAFETY: we just pushed the first one.
-            md.mut_file_groups()
-                .get_unchecked_mut(0)
-                .data_files_info
-                .push(pb);
-        }
+        md.mut_file_groups()[0].data_files_info.push(pb);
 
         offset += content.len() as u64;
     }
+    md.mut_file_groups()[0].set_length(offset);
+
     Ok(md)
 }
 
@@ -341,12 +369,8 @@ pub async fn save_many_log_files(
     let mut w = vec![];
     let mut md = build_many_log_files(log_files, &mut w)?;
     let cl = w.len() as u64;
-    unsafe {
-        // SAFETY: we just pushed the first one.
-        md.file_groups
-            .get_unchecked_mut(0)
-            .set_path(name.to_string());
-    }
+    let v = &mut md.file_groups[0];
+    v.set_path(name.to_string());
     st.write(name, ACursor::new(w).into(), cl).await?;
     Ok(md)
 }
@@ -354,6 +378,18 @@ pub async fn save_many_log_files(
 pub struct TmpStorage {
     path: Option<TempDir>,
     storage: Arc<external_storage::LocalStorage>,
+}
+
+impl Drop for TmpStorage {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            let path = self.leak();
+            eprintln!(
+                "It seems we are in a failed test case, the temprory storage will be kept at {}",
+                path.display()
+            );
+        }
+    }
 }
 
 impl TmpStorage {
@@ -378,6 +414,16 @@ impl TmpStorage {
 
     pub fn storage(&self) -> &Arc<external_storage::LocalStorage> {
         &self.storage
+    }
+
+    pub fn backend(&self) -> brpb::StorageBackend {
+        let mut bknd = brpb::StorageBackend::default();
+        bknd.set_local({
+            let mut loc = brpb::Local::default();
+            loc.set_path(self.path().to_string_lossy().into_owned());
+            loc
+        });
+        bknd
     }
 }
 
@@ -427,5 +473,42 @@ impl TmpStorage {
             .await
             .unwrap();
         MetaFile::from_file(Arc::from(meta_path), result)
+    }
+
+    pub async fn load_migrations(&self) -> crate::Result<Vec<(u64, brpb::Migration)>> {
+        let pfx = "v1/migrations";
+        let mut stream = self.storage.walk(pfx);
+        let mut output = vec![];
+        while let Some(file) = stream.next().await {
+            let file = file?;
+            let mut content = vec![];
+            self.storage
+                .read(&file.key)
+                .read_to_end(&mut content)
+                .await?;
+            let mig = parse_from_bytes::<brpb::Migration>(&content)?;
+            let id = id_of_migration(&file.key).unwrap_or(0);
+            output.push((id, mig));
+        }
+        Ok(output)
+    }
+
+    pub async fn load_subcompactions(
+        &self,
+        pfx: &str,
+    ) -> crate::Result<Vec<brpb::LogFileSubcompaction>> {
+        let mut stream = self.storage.walk(pfx);
+        let mut output = vec![];
+        while let Some(file) = stream.next().await {
+            let file = file?;
+            let mut content = vec![];
+            self.storage
+                .read(&file.key)
+                .read_to_end(&mut content)
+                .await?;
+            let mig = parse_from_bytes::<brpb::LogFileSubcompaction>(&content)?;
+            output.push(mig);
+        }
+        Ok(output)
     }
 }

@@ -1,13 +1,12 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
     collections::{hash_map::Entry, BTreeSet, HashMap},
-    hash::Hash,
     sync::Arc,
 };
 
 use external_storage::FullFeaturedStorage;
 use futures::stream::TryStreamExt;
-use kvproto::brpb::{self, DeleteSpansOfFile, SpansOfFile};
+use kvproto::brpb::{self, DeleteSpansOfFile};
 
 use super::{Input, Subcompaction, SubcompactionResult};
 use crate::{

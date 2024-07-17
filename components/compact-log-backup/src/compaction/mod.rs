@@ -38,7 +38,7 @@ pub struct Subcompaction {
     pub ty: FileType,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SubcompactionResult {
     pub origin: Subcompaction,
     pub meta: brpb::LogFileSubcompaction,

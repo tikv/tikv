@@ -1,11 +1,13 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 pub mod hooks;
 
+#[cfg(test)]
+mod test;
+
 use std::{
     borrow::Cow,
-    collections::VecDeque,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{Arc},
 };
 
 use engine_rocks::RocksEngine;

@@ -8,16 +8,16 @@ use engine_traits::{
     CfName, ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,
     DATA_KEY_PREFIX_LEN,
 };
-use external_storage::{ExternalStorage, UnpinReader};
+use external_storage::{ExternalStorage};
 use file_system::Sha256Reader;
 use futures::{
     future::TryFutureExt,
-    io::{AllowStdIo, Cursor},
+    io::{AllowStdIo},
 };
 use kvproto::brpb::{self, LogFileSubcompaction};
 use tikv_util::{
     retry_expr,
-    stream::{JustRetry, RetryExt},
+    stream::{JustRetry},
     time::Instant,
 };
 
@@ -350,20 +350,19 @@ where
 
 #[cfg(test)]
 mod test {
-    use std::{path::PathBuf, sync::Arc};
+    
 
-    use engine_rocks::RocksEngine;
-    use external_storage::{BlobObject, ExternalStorage};
-    use futures::future::FutureExt;
-    use tempdir::TempDir;
+    
+    use external_storage::{ExternalStorage};
+    
+    
 
-    use super::SubcompactionExec;
+    
     use crate::{
-        compaction::{exec::SubcompactExt, Subcompaction, SubcompactionResult},
-        errors::Result,
-        storage::{LogFile, MetaFile},
+        compaction::{Subcompaction},
+        storage::{MetaFile},
         test_util::{
-            build_many_log_files, gen_step, save_many_log_files, verify_the_same, CompactInMem, Kv,
+            gen_step, save_many_log_files, CompactInMem,
             KvGen, LogFileBuilder, TmpStorage,
         },
     };
@@ -373,7 +372,7 @@ mod test {
         let st = TmpStorage::create();
 
         let const_val = |_| vec![42u8];
-        let mut cm = CompactInMem::default();
+        let cm = CompactInMem::default();
 
         let s1 = KvGen::new(gen_step(1, 0, 2).take(100), const_val);
         let i1 = st.build_log_file("a.log", cm.tap_on(s1)).await;

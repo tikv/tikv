@@ -10,7 +10,7 @@ use std::{
 use async_compression::futures::write::ZstdDecoder;
 use external_storage::ExternalStorage;
 use futures::io::{AllowStdIo, AsyncWriteExt, Cursor};
-use futures_io::{AsyncRead, AsyncWrite};
+use futures_io::{AsyncWrite};
 use kvproto::brpb;
 use prometheus::core::{Atomic, AtomicU64};
 use tikv_util::{
@@ -20,7 +20,7 @@ use tikv_util::{
 use tokio::sync::OnceCell;
 use txn_types::Key;
 
-use super::{statistic::LoadStatistic, storage::LogFileId, util::Cooperate};
+use super::{statistic::LoadStatistic, util::Cooperate};
 use crate::{compaction::Input, errors::Result};
 
 #[derive(Clone)]

@@ -15,10 +15,7 @@ use crate::{
         meta::CompactionRunInfoBuilder,
         SubcompactionResult,
     },
-    execute::{
-        hooks::{LogToTerm, SaveMeta},
-        Execution, ExecutionConfig,
-    },
+    execute::{hooks::SaveMeta, Execution, ExecutionConfig},
     statistic::{CompactStatistic, LoadStatistic},
     storage::{LoadFromExt, StreamyMetaStorage},
 };
@@ -114,6 +111,7 @@ fn start_async_backtrace() {
 }
 
 #[tokio::test]
+#[ignore]
 async fn playground_no_pref() {
     start_async_backtrace();
 
@@ -202,6 +200,7 @@ async fn playground_no_pref() {
 }
 
 #[test]
+#[ignore = "manual test"]
 fn cli_playground() {
     let mut backend = StorageBackend::new();
     let mut s3 = S3::new();
@@ -231,6 +230,7 @@ fn cli_playground() {
 }
 
 #[tokio::test]
+#[ignore = "manual test"]
 async fn gcloud() {
     let mut backend = StorageBackend::new();
     let mut gcs = Gcs::new();
@@ -279,6 +279,7 @@ async fn gcloud() {
 }
 
 #[tokio::test]
+#[ignore = "manual test"]
 async fn gcloud_count() {
     test_util::init_log_for_test();
     let mut backend = StorageBackend::new();
