@@ -815,7 +815,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let change_cmd = ChangeObserver::from_cdc(region_id, delegate.handle.clone());
         let observed_range = downstream_.observed_range;
         let region_epoch = request.take_region_epoch();
-        let scan_truncated = downstream_.scan_truncated.clone();
+        let scan_truncated = downstream_.scan_truncated;
         let mut init = Initializer {
             tablet: self.tablets.get(region_id).map(|t| t.into_owned()),
             sched,

@@ -617,7 +617,7 @@ fn test_delegate_fail_during_incremental_scan() {
         mutation.value = vec![b'x'; 16];
         mutations.push(mutation);
     }
-    suite.must_kv_prewrite(rid, mutations, pk.clone(), start_tso);
+    suite.must_kv_prewrite(rid, mutations, pk, start_tso);
 
     fail::cfg("before_schedule_incremental_scan", "1*pause").unwrap();
 
