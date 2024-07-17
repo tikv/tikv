@@ -7755,7 +7755,7 @@
           "yaxes": [
             {
               "decimals": null,
-              "format": "\u00b5s",
+              "format": "ns",
               "label": null,
               "logBase": 1,
               "max": null,
@@ -7764,7 +7764,7 @@
             },
             {
               "decimals": null,
-              "format": "short",
+              "format": "ns",
               "label": null,
               "logBase": 1,
               "max": null,
