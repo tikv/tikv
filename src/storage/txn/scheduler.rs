@@ -1926,9 +1926,8 @@ pub async fn get_raw_ext(
         match cmd {
             Command::RawCompareAndSwap(_) | Command::RawAtomicStore(_) => {
                 if !max_ts_synced {
-                    return Err(ErrorInner::MaxTimestampNotSynced {
+                    return Err(ErrorInner::RawKvMaxTimestampNotSynced {
                         region_id: cmd.ctx().get_region_id(),
-                        start_ts: TimeStamp::zero(),
                     }
                     .into());
                 }
