@@ -911,7 +911,7 @@ impl Delegate {
         Ok(())
     }
 
-    fn sink_downstream_tidb(&mut self, mut entries: Vec<(EventRow, isize)>) -> Result<()> {
+    fn sink_downstream_tidb(&mut self, entries: Vec<(EventRow, isize)>) -> Result<()> {
         let mut downstreams = Vec::with_capacity(self.downstreams.len());
         for d in &mut self.downstreams {
             if d.kv_api == ChangeDataRequestKvApi::TiDb && d.state.load().ready_for_change_events()
@@ -923,12 +923,13 @@ impl Delegate {
             return Ok(());
         }
 
-        // Drop lossy DDL entries.
-        entries.retain(|(x, _)| !TxnSource::is_lossy_ddl_reorg_source_set(x.txn_source));
-
         for downstream in downstreams {
             let mut filtered_entries = Vec::with_capacity(entries.len());
             for (entry, lock_count_modify) in &entries {
+                if !downstream.observed_range.contains_raw_key(&entry.key) {
+                    continue;
+                }
+
                 if *lock_count_modify != 0 && downstream.lock_heap.is_some() {
                     let lock_heap = downstream.lock_heap.as_mut().unwrap();
                     match lock_heap.entry(entry.start_ts.into()) {
@@ -949,7 +950,7 @@ impl Delegate {
                     }
                 }
 
-                if !downstream.observed_range.contains_raw_key(&entry.key)
+                if TxnSource::is_lossy_ddl_reorg_source_set(entry.txn_source)
                     || downstream.filter_loop
                         && TxnSource::is_cdc_write_source_set(entry.txn_source)
                 {
@@ -1056,9 +1057,14 @@ impl Delegate {
         match delete.cf.as_str() {
             "lock" => {
                 let key = Key::from_encoded(delete.take_key());
-                let row = rows.txns_by_key.get_mut(&key).unwrap();
-                assert_eq!(row.lock_count_modify, 0);
-                row.lock_count_modify = self.pop_lock(key)?;
+                let lock_count_modify = self.pop_lock(key.clone())?;
+                if lock_count_modify != 0 {
+                    // If lock_count_modify isn't 0 it means the deletion must come from a commit
+                    // or rollback, instead of any `Unlock` operations.
+                    let row = rows.txns_by_key.get_mut(&key).unwrap();
+                    assert_eq!(row.lock_count_modify, 0);
+                    row.lock_count_modify = lock_count_modify;
+                }
             }
             "" | "default" | "write" => {}
             other => panic!("invalid cf {}", other),

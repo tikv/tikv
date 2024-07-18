@@ -13,7 +13,7 @@ use raft::eraftpb::MessageType;
 use test_raftstore::*;
 use tikv::server::DEFAULT_CLUSTER_ID;
 use tikv_util::{config::ReadableDuration, HandyRwLock};
-use txn_types::{Key, Lock, LockType};
+use txn_types::{Key, Lock, LockType, TimeStamp};
 
 use crate::{new_event_feed, new_event_feed_v2, TestSuite, TestSuiteBuilder};
 
@@ -2860,4 +2860,49 @@ fn test_cdc_rollback_prewrites_with_txn_source() {
         }
     }
     panic!("resolved ts must be advanced correctly");
+}
+
+#[test]
+fn test_cdc_pessimistic_lock_unlock() {
+    let mut cluster = new_server_cluster(0, 1);
+    configure_for_lease_read(&mut cluster.cfg, Some(100), Some(10));
+    cluster.pd_client.disable_default_operator();
+    let mut suite = TestSuiteBuilder::new().cluster(cluster).build();
+    let region = suite.cluster.get_region(&[]);
+    let rid = region.id;
+    let cf_tso = block_on(suite.cluster.pd_client.get_tso()).unwrap();
+
+    let (mut req_tx, _, receive_event) = new_event_feed_v2(suite.get_region_cdc_client(rid));
+    let mut req = suite.new_changedata_request(rid);
+    req.request_id = 1;
+    req.checkpoint_ts = cf_tso.into_inner();
+    req.filter_loop = true;
+    req.set_start_key(Key::from_raw(b"a").into_encoded());
+    req.set_end_key(Key::from_raw(b"z").into_encoded());
+    block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
+
+    let cdc_event = receive_event(false);
+    'WaitInit: for event in cdc_event.get_events() {
+        for entry in event.get_entries().get_entries() {
+            match entry.get_type() {
+                EventLogType::Prewrite => {}
+                EventLogType::Initialized => break 'WaitInit,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    let start_tso = cf_tso.next();
+    let k = b"key".to_vec();
+    let v = vec![b'x'; 16 * 1024];
+    let mut mutation = Mutation::default();
+    mutation.set_op(Op::PessimisticLock);
+    mutation.key = k.clone();
+    mutation.value = v;
+    let for_update_tso = TimeStamp::from(start_tso.into_inner() + 10);
+    suite.must_acquire_pessimistic_lock(rid, vec![mutation], k.clone(), start_tso, for_update_tso);
+    std::thread::sleep(Duration::from_millis(500));
+
+    suite.must_release_pessimistic_lock(rid, k.clone(), start_tso, for_update_tso);
+    std::thread::sleep(Duration::from_millis(500));
 }
