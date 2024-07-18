@@ -490,6 +490,13 @@ Full""",
                         ),
                         legend_format=r"store-write-channelfull-{{instance}}",
                     ),
+                    target(
+                        expr=expr_sum(
+                            "tikv_raftstore_process_busy",
+                            by_labels=["instance", "type"],
+                        ),
+                        legend_format=r"{{instance}}-{{type}}",
+                    ),
                 ],
             ),
             graph_panel(
@@ -2163,6 +2170,46 @@ def RaftProcess() -> RowPanel:
                 title="Peer msg length distribution",
                 description="The length of peer msgs for each round handling",
                 metric="tikv_raftstore_peer_msg_len_bucket",
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Enable apply unpersisted log regoin count",
+                description="The number of regions that enable apply unpersisted raft log",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_simple(
+                            "tikv_raft_enable_unpersisted_apply_regions",
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+            graph_panel(
+                title="Apply ahead of persistence raft log count",
+                description="The number of raft logs between apply and persisted index",
+                yaxes=yaxes(left_format=UNITS.SHORT),
+                targets=[
+                    target(
+                        expr=expr_histogram_quantile(
+                            0.99,
+                            "tikv_raft_apply_ahead_of_persist",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}-99%",
+                    ),
+                    target(
+                        expr=expr_histogram_quantile(
+                            1,
+                            "tikv_raft_apply_ahead_of_persist",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}-max",
+                    ),
+                ],
             ),
         ]
     )
@@ -5868,6 +5915,12 @@ def RaftEngine() -> RowPanel:
                     ),
                 ],
             ),
+            graph_panel_histogram_quantiles(
+                title="Write Compression Ratio",
+                description="The compression ratio per write",
+                yaxes=yaxes(left_format=UNITS.NONE_FORMAT),
+                metric="raft_engine_write_compression_ratio",
+            ),
         ]
     )
     return layout.row_panel
@@ -7560,7 +7613,7 @@ def Memory() -> RowPanel:
     layout.row(
         [
             graph_panel(
-                title="Newly Allocated Bytes by Thread",
+                title="Allocated Bytes Rate per Thread",
                 description=None,
                 yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 targets=[
@@ -7574,7 +7627,7 @@ def Memory() -> RowPanel:
                 ],
             ),
             graph_panel(
-                title="Recently Released Bytes by Thread",
+                title="Released Bytes Rate per Thread",
                 description=None,
                 yaxes=yaxes(left_format=UNITS.BYTES_IEC),
                 targets=[
@@ -7584,6 +7637,36 @@ def Memory() -> RowPanel:
                             label_selectors=['type="dealloc"'],
                             by_labels=["thread_name"],
                         ),
+                    )
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            graph_panel(
+                title="Mapped Allocation per Thread",
+                description=None,
+                yaxes=yaxes(left_format=UNITS.BYTES_IEC),
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_allocator_thread_stats",
+                            label_selectors=['type="mapped"'],
+                            by_labels=["thread_name"],
+                        )
+                    )
+                ],
+            ),
+            graph_panel(
+                title="Arena Count",
+                description=None,
+                targets=[
+                    target(
+                        expr=expr_sum(
+                            "tikv_allocator_arena_count",
+                            by_labels=["instance"],
+                        )
                     )
                 ],
             ),

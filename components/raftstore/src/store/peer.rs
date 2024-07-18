@@ -917,6 +917,10 @@ where
     /// * `Some(false)` => initial state, not be recorded.
     /// * `Some(true)` => busy on apply, and already recorded.
     pub busy_on_apply: Option<bool>,
+    /// The index of last commited idx in the leader. It's used to check whether
+    /// this peer has raft log gaps and whether should be marked busy on
+    /// apply.
+    pub last_leader_committed_idx: Option<u64>,
 }
 
 impl<EK, ER> Peer<EK, ER>
@@ -966,7 +970,9 @@ where
             pre_vote: cfg.prevote,
             max_committed_size_per_ready: MAX_COMMITTED_SIZE_PER_READY,
             priority: if peer.is_witness { -1 } else { 0 },
-            max_apply_unpersisted_log_limit: cfg.max_apply_unpersisted_log_limit,
+            // always disable applying unpersisted log at initialization,
+            // will enable it after applying to the current last_index.
+            max_apply_unpersisted_log_limit: 0,
             ..Default::default()
         };
 
@@ -1065,6 +1071,7 @@ where
             unsafe_recovery_state: None,
             snapshot_recovery_state: None,
             busy_on_apply: Some(false),
+            last_leader_committed_idx: None,
         };
 
         // If this region has only one peer and I am the one, campaign directly.
@@ -1190,7 +1197,7 @@ where
                     .max_apply_unpersisted_log_limit
                     == 0
             {
-                RAFT_DISABLE_UNPERSISTED_APPLY_GAUGE.dec();
+                RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE.inc();
             }
             self.raft_group
                 .raft
@@ -1200,7 +1207,7 @@ where
     }
 
     #[inline]
-    fn disable_apply_unpersisted_log(&mut self, min_enable_index: u64) {
+    pub fn disable_apply_unpersisted_log(&mut self, min_enable_index: u64) {
         self.min_safe_index_for_unpersisted_apply =
             std::cmp::max(self.min_safe_index_for_unpersisted_apply, min_enable_index);
         if self
@@ -1211,7 +1218,7 @@ where
             > 0
         {
             self.raft_group.raft.set_max_apply_unpersisted_log_limit(0);
-            RAFT_DISABLE_UNPERSISTED_APPLY_GAUGE.inc();
+            RAFT_ENABLE_UNPERSISTED_APPLY_GAUGE.dec();
         }
     }
 
@@ -5320,6 +5327,37 @@ where
             }
         }
     }
+
+    pub fn update_last_leader_committed_idx(&mut self, committed_index: u64) {
+        if self.is_leader() {
+            // Ignore.
+            return;
+        }
+
+        let local_committed_index = self.get_store().commit_index();
+        if committed_index < local_committed_index {
+            warn!(
+                "stale committed index";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.peer_id(),
+                "last_committed_index" => committed_index,
+                "local_index" => local_committed_index,
+            );
+        } else {
+            self.last_leader_committed_idx = Some(committed_index);
+            debug!(
+                "update last committed index from leader";
+                "region_id" => self.region().get_id(),
+                "peer_id" => self.peer_id(),
+                "last_committed_index" => committed_index,
+                "local_index" => local_committed_index,
+            );
+        }
+    }
+
+    pub fn needs_update_last_leader_committed_idx(&self) -> bool {
+        self.busy_on_apply.is_some() && self.last_leader_committed_idx.is_none()
+    }
 }
 
 #[derive(Default, Debug)]
@@ -5755,7 +5793,7 @@ where
             != self.max_apply_unpersisted_log_limit
         {
             if self.max_apply_unpersisted_log_limit == 0 {
-                self.raft_group.raft.set_max_apply_unpersisted_log_limit(0);
+                self.disable_apply_unpersisted_log(0);
             } else if self.is_leader() {
                 // Currently only enable unpersisted apply on leader.
                 self.maybe_update_apply_unpersisted_log_state(
