@@ -4,7 +4,7 @@ use std::{
     mem,
     string::String,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
 };
@@ -136,6 +136,10 @@ pub struct Downstream {
     kv_api: ChangeDataRequestKvApi,
     filter_loop: bool,
     pub(crate) observed_range: ObservedRange,
+
+    // When meet region errors like split or merge, we can cancel incremental scan draining
+    // by `scan_truncated`.
+    pub(crate) scan_truncated: Arc<AtomicBool>,
 }
 
 impl Downstream {
@@ -163,10 +167,14 @@ impl Downstream {
             kv_api,
             filter_loop,
             observed_range,
+
+            scan_truncated: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    /// Sink events to the downstream.
+    // NOTE: it's not allowed to sink `EventError` directly by this function,
+    // because the sink can be also used by an incremental scan. We must ensure
+    // no more events can be pushed to the sink after an `EventError` is sent.
     pub fn sink_event(&self, mut event: Event, force: bool) -> Result<()> {
         event.set_request_id(self.req_id);
         if self.sink.is_none() {
@@ -191,19 +199,20 @@ impl Downstream {
         }
     }
 
+    /// EventErrors must be sent by this function. And we must ensure no more
+    /// events or ResolvedTs will be sent to the downstream after
+    /// `sink_error_event` is called.
     pub fn sink_error_event(&self, region_id: u64, err_event: EventError) -> Result<()> {
+        info!("cdc downstream meets region error";
+            "conn_id" => ?self.conn_id, "downstream_id" => ?self.id, "req_id" => self.req_id);
+
+        self.scan_truncated.store(true, Ordering::Release);
         let mut change_data_event = Event::default();
         change_data_event.event = Some(Event_oneof_event::Error(err_event));
         change_data_event.region_id = region_id;
         // Try it's best to send error events.
         let force_send = true;
         self.sink_event(change_data_event, force_send)
-    }
-
-    pub fn sink_region_not_found(&self, region_id: u64) -> Result<()> {
-        let mut err_event = EventError::default();
-        err_event.mut_region_not_found().region_id = region_id;
-        self.sink_error_event(region_id, err_event)
     }
 
     pub fn set_sink(&mut self, sink: Sink) {
@@ -248,7 +257,7 @@ impl Pending {
     }
 
     fn push_pending_lock(&mut self, lock: PendingLock) -> Result<()> {
-        let bytes = lock.heap_size();
+        let bytes = lock.approximate_heap_size();
         self.memory_quota.alloc(bytes)?;
         self.locks.push(lock);
         self.pending_bytes += bytes;
@@ -262,7 +271,7 @@ impl Pending {
         ));
         // Must take locks, otherwise it may double free memory quota on drop.
         for lock in mem::take(&mut self.locks) {
-            self.memory_quota.free(lock.heap_size());
+            self.memory_quota.free(lock.approximate_heap_size());
             match lock {
                 PendingLock::Track { key, start_ts } => {
                     resolver.track_lock(start_ts, key, None)?;
@@ -286,7 +295,7 @@ impl Drop for Pending {
         let mut bytes = 0;
         let num_locks = locks.len();
         for lock in locks {
-            bytes += lock.heap_size();
+            bytes += lock.approximate_heap_size();
         }
         if bytes > ON_DROP_WARN_HEAP_SIZE {
             warn!("cdc drop huge Pending";
@@ -306,9 +315,11 @@ enum PendingLock {
 }
 
 impl HeapSize for PendingLock {
-    fn heap_size(&self) -> usize {
+    fn approximate_heap_size(&self) -> usize {
         match self {
-            PendingLock::Track { key, .. } | PendingLock::Untrack { key } => key.heap_size(),
+            PendingLock::Track { key, .. } | PendingLock::Untrack { key } => {
+                key.approximate_heap_size()
+            }
         }
     }
 }
@@ -1553,6 +1564,7 @@ mod tests {
             region_epoch: RegionEpoch::default(),
             sink: Some(sink),
             state: Arc::new(AtomicCell::new(DownstreamState::Normal)),
+            scan_truncated: Arc::new(Default::default()),
             kv_api: ChangeDataRequestKvApi::TiDb,
             filter_loop: false,
             observed_range,
@@ -1627,6 +1639,7 @@ mod tests {
             region_epoch: RegionEpoch::default(),
             sink: Some(sink),
             state: Arc::new(AtomicCell::new(DownstreamState::Normal)),
+            scan_truncated: Arc::new(Default::default()),
             kv_api: ChangeDataRequestKvApi::TiDb,
             filter_loop,
             observed_range,

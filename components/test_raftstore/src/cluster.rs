@@ -52,7 +52,7 @@ use raftstore::{
 use resource_control::ResourceGroupManager;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
-use tikv::server::Result as ServerResult;
+use tikv::{config::TikvConfig, server::Result as ServerResult};
 use tikv_util::{
     thread_group::GroupProperties,
     time::{Instant, ThreadReadId},
@@ -194,10 +194,7 @@ impl<T: Simulator> Cluster<T> {
         // TODO: In the future, maybe it's better to test both case where
         // `use_delete_range` is true and false
         Cluster {
-            cfg: Config {
-                tikv: new_tikv_config_with_api_ver(id, api_version),
-                prefer_mem: true,
-            },
+            cfg: Config::new(new_tikv_config_with_api_ver(id, api_version), true),
             leaders: HashMap::default(),
             count,
             paths: vec![],
@@ -217,6 +214,11 @@ impl<T: Simulator> Cluster<T> {
             kv_statistics: vec![],
             raft_statistics: vec![],
         }
+    }
+
+    pub fn set_cfg(&mut self, mut cfg: TikvConfig) {
+        cfg.cfg_path = self.cfg.tikv.cfg_path.clone();
+        self.cfg.tikv = cfg;
     }
 
     // To destroy temp dir later.
@@ -1298,6 +1300,34 @@ impl<T: Simulator> Cluster<T> {
         panic!(
             "[region {}] peer state still not reach {:?}",
             region_id, peer_state
+        );
+    }
+
+    pub fn wait_peer_role(&self, region_id: u64, store_id: u64, peer_id: u64, role: PeerRole) {
+        for _ in 0..100 {
+            if let Some(state) = self
+                .get_engine(store_id)
+                .get_msg_cf::<RegionLocalState>(
+                    engine_traits::CF_RAFT,
+                    &keys::region_state_key(region_id),
+                )
+                .unwrap()
+            {
+                let peer = state
+                    .get_region()
+                    .get_peers()
+                    .iter()
+                    .find(|p| p.get_id() == peer_id)
+                    .unwrap();
+                if peer.role == role {
+                    return;
+                }
+            }
+            sleep_ms(10);
+        }
+        panic!(
+            "[region {}] peer state still not reach {:?}",
+            region_id, role
         );
     }
 

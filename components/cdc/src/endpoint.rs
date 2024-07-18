@@ -36,7 +36,7 @@ use raftstore::{
 use resolved_ts::{resolve_by_raft, LeadershipResolver, Resolver};
 use security::SecurityManager;
 use tikv::{
-    config::CdcConfig,
+    config::{CdcConfig, ResolvedTsConfig},
     storage::{kv::LocalTablets, Statistics},
 };
 use tikv_util::{
@@ -378,6 +378,7 @@ pub struct Endpoint<T, E, S> {
 
     raftstore_v2: bool,
     config: CdcConfig,
+    resolved_ts_config: ResolvedTsConfig,
     api_version: ApiVersion,
 
     // Incremental scan
@@ -407,6 +408,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
     pub fn new(
         cluster_id: u64,
         config: &CdcConfig,
+        resolved_ts_config: &ResolvedTsConfig,
         raftstore_v2: bool,
         api_version: ApiVersion,
         pd_client: Arc<dyn PdClient>,
@@ -480,6 +482,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             max_scan_batch_bytes,
             max_scan_batch_size,
             config: config.clone(),
+            resolved_ts_config: resolved_ts_config.clone(),
             raftstore_v2,
             api_version,
             workers,
@@ -691,8 +694,20 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let downstream_id = downstream.get_id();
         let downstream_state = downstream.get_state();
 
-        // Register must follow OpenConn, so the connection must be available.
-        let conn = self.connections.get_mut(&conn_id).unwrap();
+        // The connection can be deregistered by some internal errors. Clients will
+        // be always notified by closing the GRPC server stream, so it's OK to drop
+        // the task directly.
+        let conn = match self.connections.get_mut(&conn_id) {
+            Some(conn) => conn,
+            None => {
+                info!("cdc register region on an deregistered connection, ignore";
+                    "region_id" => region_id,
+                    "conn_id" => ?conn_id,
+                    "req_id" => request_id,
+                    "downstream_id" => ?downstream_id);
+                return;
+            }
+        };
         downstream.set_sink(conn.get_sink().clone());
 
         // Check if the cluster id matches if supported.
@@ -725,7 +740,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             Some(reader) => reader.txn_extra_op.clone(),
             None => {
                 error!("cdc register for a not found region"; "region_id" => region_id);
-                let _ = downstream.sink_region_not_found(region_id);
+                let mut err_event = EventError::default();
+                err_event.mut_region_not_found().region_id = region_id;
+                let _ = downstream.sink_error_event(region_id, err_event);
                 return;
             }
         };
@@ -798,6 +815,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let change_cmd = ChangeObserver::from_cdc(region_id, delegate.handle.clone());
         let observed_range = downstream_.observed_range;
         let region_epoch = request.take_region_epoch();
+        let scan_truncated = downstream_.scan_truncated;
         let mut init = Initializer {
             tablet: self.tablets.get(region_id).map(|t| t.into_owned()),
             sched,
@@ -809,6 +827,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             sink: conn.get_sink().clone(),
             request_id: request.get_request_id(),
             downstream_state,
+            scan_truncated,
             scan_speed_limiter: self.scan_speed_limiter.clone(),
             fetch_speed_limiter: self.fetch_speed_limiter.clone(),
             max_scan_batch_bytes: self.max_scan_batch_bytes,
@@ -1118,6 +1137,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let causal_ts_provider = self.causal_ts_provider.clone();
         // We use channel to deliver leader_resolver in async block.
         let (leader_resolver_tx, leader_resolver_rx) = bounded(1);
+        let advance_ts_interval = self.resolved_ts_config.advance_ts_interval.0;
 
         let fut = async move {
             let _ = timeout.compat().await;
@@ -1172,7 +1192,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             let regions =
                 if hibernate_regions_compatible && gate.can_enable(FEATURE_RESOLVED_TS_STORE) {
                     CDC_RESOLVED_TS_ADVANCE_METHOD.set(1);
-                    leader_resolver.resolve(regions, min_ts).await
+                    leader_resolver
+                        .resolve(regions, min_ts, Some(advance_ts_interval))
+                        .await
                 } else {
                     CDC_RESOLVED_TS_ADVANCE_METHOD.set(0);
                     resolve_by_raft(regions, min_ts, cdc_handle).await
@@ -1496,6 +1518,7 @@ mod tests {
         let ep = Endpoint::new(
             DEFAULT_CLUSTER_ID,
             cfg,
+            &ResolvedTsConfig::default(),
             false,
             api_version,
             pd_client,
@@ -2990,5 +3013,44 @@ mod tests {
             });
             assert!(check);
         }
+    }
+
+    #[test]
+    fn test_register_after_connection_deregistered() {
+        let cfg = CdcConfig {
+            min_ts_interval: ReadableDuration(Duration::from_secs(60)),
+            ..Default::default()
+        };
+        let mut suite = mock_endpoint(&cfg, None, ApiVersion::V1);
+        suite.add_region(1, 100);
+        let quota = Arc::new(MemoryQuota::new(usize::MAX));
+        let (tx, _rx) = channel::channel(1, quota);
+
+        let conn = Conn::new(tx, String::new());
+        let conn_id = conn.get_id();
+        suite.run(Task::OpenConn { conn });
+
+        suite.run(Task::Deregister(Deregister::Conn(conn_id)));
+
+        let mut req = ChangeDataRequest::default();
+
+        req.set_region_id(1);
+        req.set_request_id(1);
+        let region_epoch = req.get_region_epoch().clone();
+        let downstream = Downstream::new(
+            "".to_string(),
+            region_epoch,
+            1,
+            conn_id,
+            ChangeDataRequestKvApi::TiDb,
+            false,
+            ObservedRange::default(),
+        );
+        suite.run(Task::Register {
+            request: req,
+            downstream,
+            conn_id,
+        });
+        assert!(suite.connections.is_empty());
     }
 }
