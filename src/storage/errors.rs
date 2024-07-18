@@ -283,6 +283,14 @@ pub fn extract_region_error_from_error(e: &Error) -> Option<errorpb::Error> {
             err.set_max_timestamp_not_synced(Default::default());
             Some(err)
         }
+        Error(box ErrorInner::Txn(
+            e @ TxnError(box TxnErrorInner::RawKvMaxTimestampNotSynced { .. }),
+        )) => {
+            let mut err = errorpb::Error::default();
+            err.set_max_timestamp_not_synced(Default::default());
+            err.set_message(format!("{}", e));
+            Some(err)
+        }
         Error(box ErrorInner::Txn(TxnError(box TxnErrorInner::FlashbackNotPrepared(
             region_id,
         )))) => {
