@@ -462,6 +462,7 @@ where
                     }
                 }
                 ObserveOp::ResolveRegions { callback, min_ts } => {
+                    fail::fail_point!("subscription_manager_resolve_regions");
                     let now = Instant::now();
                     let timedout = self.wait(Duration::from_secs(5)).await;
                     if timedout {
@@ -469,7 +470,7 @@ where
                             "take" => ?now.saturating_elapsed(), "timedout" => %timedout);
                     }
                     let regions = leader_checker
-                        .resolve(self.subs.current_regions(), min_ts)
+                        .resolve(self.subs.current_regions(), min_ts, None)
                         .await;
                     let cps = self.subs.resolve_with(min_ts, regions);
                     let min_region = cps.iter().min_by_key(|rs| rs.checkpoint);

@@ -337,6 +337,16 @@ impl MiscExt for RocksEngine {
                 .unwrap_or_default()
                 != 0
     }
+
+    fn disable_manual_compaction(&self) -> Result<()> {
+        self.as_inner().disable_manual_compaction();
+        Ok(())
+    }
+
+    fn enable_manual_compaction(&self) -> Result<()> {
+        self.as_inner().enable_manual_compaction();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
