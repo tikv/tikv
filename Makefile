@@ -137,7 +137,7 @@ CARGO_TARGET_DIR ?= $(CURDIR)/target
 # Build-time environment, captured for reporting by the application binary
 BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
 BUILD_INFO_RUSTC_FALLBACK := "Unknown"
-export PROXY_BUILD_TIME := $(shell date -u '+%Y-%m-%d %H:%M:%S')
+export PROXY_BUILD_TIME := ""   # No need to regenerate proxy build time, just follow TiFlash's.
 export PROXY_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
 export PROXY_BUILD_GIT_HASH ?= $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 export PROXY_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
