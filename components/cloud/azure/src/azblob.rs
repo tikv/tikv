@@ -725,7 +725,7 @@ impl BlobStorage for AzureStorage {
     async fn put(
         &self,
         name: &str,
-        mut reader: PutResource,
+        mut reader: PutResource<'_>,
         content_length: u64,
     ) -> io::Result<()> {
         let name = self.maybe_prefix_key(name);
