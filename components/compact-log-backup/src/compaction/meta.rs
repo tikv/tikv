@@ -336,3 +336,100 @@ impl CompactionRunInfoBuilder {
         result
     }
 }
+
+#[cfg(test)]
+mod test {
+    use kvproto::brpb;
+
+    use super::CompactionRunInfoBuilder;
+    use crate::{
+        compaction::{exec::SubcompactionExec, Subcompaction, SubcompactionResult},
+        test_util::{build_many_log_files, gen_min_max, KvGen, LogFileBuilder, TmpStorage},
+    };
+
+    #[tokio::test]
+    async fn test_collect_single() {
+        let const_val = |_| b"fiolvit".to_vec();
+        let g1 =
+            LogFileBuilder::from_iter(KvGen::new(gen_min_max(1, 1, 2, 10, 20), const_val), |_| {});
+        let g2 =
+            LogFileBuilder::from_iter(KvGen::new(gen_min_max(1, 3, 4, 15, 25), const_val), |_| {});
+        let st = TmpStorage::create();
+        let m = st
+            .build_flush("1.log", "v1/backupmeta/1.meta", [g1, g2])
+            .await;
+
+        let mut coll = CompactionRunInfoBuilder::default();
+        let cr = SubcompactionExec::default_config(st.storage().clone());
+        let subc = Subcompaction::singleton(m.physical_files[0].files[0].clone());
+        let res = cr.run(subc, Default::default()).await.unwrap();
+        coll.add_subcompaction(&res);
+        let mig = coll.migration(st.storage().as_ref()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(!mig.edit_meta[0].destruct_self);
+
+        let mut coll = CompactionRunInfoBuilder::default();
+        let subc = Subcompaction::of_many(m.physical_files[0].files.iter().cloned());
+        coll.add_subcompaction(&SubcompactionResult::of(subc));
+        let mig = coll.migration(st.storage().as_ref()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 1);
+        assert!(mig.edit_meta[0].destruct_self);
+    }
+
+    #[tokio::test]
+    async fn test_collect_many() {
+        let const_val = |_| b"fiolvit".to_vec();
+        let st = TmpStorage::create();
+        let of_region = |region| {
+            LogFileBuilder::from_iter(
+                KvGen::new(gen_min_max(region, 1, 2, 10, 20), const_val),
+                |v| v.region_id = region as u64,
+            )
+        };
+        let f1 = st
+            .build_flush(
+                "1.log",
+                "v1/backupmeta/1.meta",
+                [of_region(1), of_region(2), of_region(3)],
+            )
+            .await;
+        let f2 = st
+            .build_flush(
+                "2.log",
+                "v1/backupmeta/2.meta",
+                [of_region(1), of_region(2), of_region(3)],
+            )
+            .await;
+
+        let subc1 = Subcompaction::of_many([
+            f1.physical_files[0].files[0].clone(),
+            f2.physical_files[0].files[0].clone(),
+        ]);
+        let subc2 = Subcompaction::of_many([
+            f1.physical_files[0].files[1].clone(),
+            f2.physical_files[0].files[1].clone(),
+        ]);
+        let subc3 = Subcompaction::singleton(f2.physical_files[0].files[2].clone());
+
+        let mut coll = CompactionRunInfoBuilder::default();
+        coll.add_subcompaction(&SubcompactionResult::of(subc1));
+        coll.add_subcompaction(&SubcompactionResult::of(subc2));
+        coll.add_subcompaction(&SubcompactionResult::of(subc3));
+        let mig = coll.migration(st.storage().as_ref()).await.unwrap();
+        assert_eq!(mig.edit_meta.len(), 2);
+        let check = |me: &brpb::MetaEdit| match me.get_path() {
+            "v1/backupmeta/1.meta" => {
+                assert!(!me.destruct_self);
+                assert_eq!(me.delete_logical_files.len(), 1);
+                assert_eq!(me.delete_logical_files[0].spans.len(), 2);
+            }
+            "v1/backupmeta/2.meta" => {
+                assert!(me.destruct_self);
+                assert_eq!(me.delete_physical_files.len(), 1, "{:?}", me);
+                assert_eq!(me.delete_logical_files.len(), 0, "{:?}", me);
+            }
+            _ => unreachable!(),
+        };
+        mig.edit_meta.iter().for_each(check);
+    }
+}

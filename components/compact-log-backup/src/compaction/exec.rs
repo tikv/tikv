@@ -4,22 +4,16 @@ use std::{
     sync::Arc,
 };
 
+use engine_rocks::RocksEngine;
 use engine_traits::{
     CfName, ExternalSstFileInfo, SstCompressionType, SstExt, SstWriter, SstWriterBuilder,
     DATA_KEY_PREFIX_LEN,
 };
-use external_storage::{ExternalStorage};
+use external_storage::ExternalStorage;
 use file_system::Sha256Reader;
-use futures::{
-    future::TryFutureExt,
-    io::{AllowStdIo},
-};
+use futures::{future::TryFutureExt, io::AllowStdIo};
 use kvproto::brpb::{self, LogFileSubcompaction};
-use tikv_util::{
-    retry_expr,
-    stream::{JustRetry},
-    time::Instant,
-};
+use tikv_util::{retry_expr, stream::JustRetry, time::Instant};
 
 use super::{Subcompaction, SubcompactionResult};
 use crate::{
@@ -81,7 +75,7 @@ impl<DB> From<SubcompactionExecArg<DB>> for SubcompactionExec<DB> {
     }
 }
 
-impl<DB> SubcompactionExec<DB> {
+impl SubcompactionExec<RocksEngine> {
     #[cfg(test)]
     pub fn default_config(storage: Arc<dyn ExternalStorage>) -> Self {
         Self::from(SubcompactionExecArg {
@@ -350,20 +344,13 @@ where
 
 #[cfg(test)]
 mod test {
-    
+    use external_storage::ExternalStorage;
 
-    
-    use external_storage::{ExternalStorage};
-    
-    
-
-    
     use crate::{
-        compaction::{Subcompaction},
-        storage::{MetaFile},
+        compaction::Subcompaction,
+        storage::MetaFile,
         test_util::{
-            gen_step, save_many_log_files, CompactInMem,
-            KvGen, LogFileBuilder, TmpStorage,
+            gen_step, save_many_log_files, CompactInMem, KvGen, LogFileBuilder, TmpStorage,
         },
     };
 

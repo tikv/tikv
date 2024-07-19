@@ -263,6 +263,14 @@ impl LogFileBuilder {
         res
     }
 
+    pub fn from_iter(it: impl IntoIterator<Item = Kv>, configure: impl FnOnce(&mut Self)) -> Self {
+        let mut res = Self::new(configure);
+        for kv in it {
+            res.add_encoded(&kv.key, &kv.value);
+        }
+        res
+    }
+
     pub fn add_encoded(&mut self, key: &[u8], value: &[u8]) {
         let ts = txn_types::Key::decode_ts_from(key)
             .expect("key without ts")
@@ -459,7 +467,6 @@ impl TmpStorage {
         meta_path: &str,
         builders: impl IntoIterator<Item = LogFileBuilder>,
     ) -> MetaFile {
-        use protobuf::Message;
         let result = save_many_log_files(log_path, builders, self.storage.as_ref())
             .await
             .unwrap();
