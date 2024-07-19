@@ -5,7 +5,7 @@ use std::{io, path::Path, pin::Pin, result::Result, sync::Arc};
 use async_trait::async_trait;
 pub use aws::{Config as S3Config, S3Storage};
 pub use azure::{AzureStorage, Config as AzureConfig};
-use cloud::blob::{BlobObject, BlobStorage, DeleteBlobStorage, PutResource, WalkBlobStorage};
+use cloud::blob::{BlobObject, BlobStorage, PutResource, WalkBlobStorage};
 use encryption::DataKeyManager;
 use futures::prelude::Stream;
 use gcp::GcsStorage;
@@ -20,6 +20,9 @@ use crate::{
     NoopStorage, RestoreConfig, UnpinReader,
 };
 
+/// An interface that supports more operations than `ExternalStorage`.
+/// Some of operations may not be required by all users. Using a thiner
+/// interface will make them easier to be tested.
 pub trait FullFeaturedStorage: ExternalStorage + WalkBlobStorage {}
 
 impl<T: ExternalStorage + WalkBlobStorage> FullFeaturedStorage for T {}
@@ -35,6 +38,9 @@ pub fn create_storage(
     }
 }
 
+/// Create an full featured storage.
+/// If the `StorageBackend` provided isn't full-featured, will return a
+/// [`io::ErrorKind::NotFound`].
 pub fn create_full_featured_storage(
     storage_backend: &StorageBackend,
     config: BackendConfig,
@@ -46,17 +52,14 @@ pub fn create_full_featured_storage(
     }
 }
 
-fn walk_not_supported(backend: Backend) -> io::Error {
+fn not_full_featured(backend: Backend) -> io::Error {
     let storage_backend = StorageBackend {
         backend: Some(backend),
         ..Default::default()
     };
     io::Error::new(
         io::ErrorKind::NotFound,
-        format!(
-            "storage backend doesn't support walking {:?}",
-            storage_backend
-        ),
+        format!("storage backend isn't full featured {:?}", storage_backend),
     )
 }
 
@@ -98,7 +101,7 @@ fn create_full_featured_backend(
             Box::new(LocalStorage::new(p)?) as _
         }
         #[allow(unreachable_patterns)]
-        _ => return Err(walk_not_supported(backend.clone())),
+        _ => return Err(not_full_featured(backend.clone())),
     };
     record_storage_create(start, &*storage);
     Ok(storage)
@@ -197,15 +200,6 @@ impl<Blob: BlobStorage + WalkBlobStorage> WalkBlobStorage for BlobStore<Blob> {
         prefix: &'b str,
     ) -> Pin<Box<dyn Stream<Item = Result<BlobObject, io::Error>> + 'c>> {
         self.0.walk(prefix)
-    }
-}
-
-impl<Blob: BlobStorage + DeleteBlobStorage> DeleteBlobStorage for BlobStore<Blob> {
-    fn delete(
-        &self,
-        key: &str,
-    ) -> Pin<Box<dyn futures::prelude::Future<Output = io::Result<()>> + '_>> {
-        self.0.delete(key)
     }
 }
 

@@ -4,8 +4,8 @@ use std::{fmt::Display, io, pin::Pin};
 use async_trait::async_trait;
 use cloud::{
     blob::{
-        none_to_empty, BlobConfig, BlobObject, BlobStorage, BucketConf, DeleteBlobStorage,
-        PutResource, StringNonEmpty, WalkBlobStorage,
+        none_to_empty, BlobConfig, BlobObject, BlobStorage, BucketConf, PutResource,
+        StringNonEmpty, WalkBlobStorage,
     },
     metrics,
 };
@@ -399,6 +399,8 @@ impl<'cli, 'arg> GcsWalker<'cli, 'arg> {
         let resp = utils::read_from_http_body::<ListResponse>(res).await?;
         debug!("requesting paging GCP"; "prefix" => self.prefix, "page_token" => self.page_token.as_deref(), 
             "response_size" => resp.objects.len(), "new_page_token" => resp.page_token.as_deref());
+        // GCP returns an empty page token when returning the last page...
+        // We need to break there or we will enter an infinity loop...
         if resp.page_token.is_none() || resp.objects.is_empty() {
             self.finished = true;
         }
@@ -440,38 +442,6 @@ impl WalkBlobStorage for GcsStorage {
         .map_ok(|data| stream::iter(data.into_iter().map(Ok)))
         .try_flatten();
         Box::pin(s)
-    }
-}
-
-impl DeleteBlobStorage for GcsStorage {
-    fn delete(
-        &self,
-        key: &str,
-    ) -> Pin<Box<dyn futures_util::Future<Output = Result<(), std::io::Error>> + '_>> {
-        let key = self.maybe_prefix_key(key);
-        async move {
-            let bucket = self.config.bucket.bucket.to_string();
-            let oid = ObjectId::new(bucket, key.clone()).or_invalid_input(format_args!(
-                "invalid object id bucket {} key {}",
-                self.config.bucket.bucket, key
-            ))?;
-            let req = Object::delete(&oid, None).or_io_error(format_args!(
-                "failed to delete object {} in bucket {}",
-                key, self.config.bucket.bucket
-            ))?;
-            let res = self
-                .make_request(req.map(|_e| Body::empty()), tame_gcs::Scopes::ReadWrite)
-                .await
-                .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
-            if !res.status().is_success() {
-                return Err(io::Error::from(status_code_error(
-                    res.status(),
-                    "bucket delete".to_string(),
-                )));
-            }
-            Ok(())
-        }
-        .boxed()
     }
 }
 

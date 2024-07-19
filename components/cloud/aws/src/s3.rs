@@ -9,8 +9,8 @@ use std::{
 use async_trait::async_trait;
 use cloud::{
     blob::{
-        none_to_empty, BlobConfig, BlobObject, BlobStorage, BucketConf, DeleteBlobStorage,
-        PutResource, StringNonEmpty, WalkBlobStorage,
+        none_to_empty, BlobConfig, BlobObject, BlobStorage, BucketConf, PutResource,
+        StringNonEmpty, WalkBlobStorage,
     },
     metrics::CLOUD_REQUEST_HISTOGRAM_VEC,
 };
@@ -703,22 +703,6 @@ impl WalkBlobStorage for S3Storage {
         .map_ok(|data| stream::iter(data.into_iter().map(Ok)))
         .try_flatten();
         Box::pin(s)
-    }
-}
-
-impl DeleteBlobStorage for S3Storage {
-    fn delete(
-        &self,
-        key: &str,
-    ) -> Pin<Box<dyn futures_util::Future<Output = Result<(), std::io::Error>> + '_>> {
-        let mut input = DeleteObjectRequest::default();
-        input.bucket = String::clone(&self.config.bucket.bucket);
-        input.key = self.maybe_prefix_key(key);
-        self.client
-            .delete_object(input)
-            .map_ok(|_v| ())
-            .map_err(|err| io::Error::new(io::ErrorKind::Other, err))
-            .boxed()
     }
 }
 

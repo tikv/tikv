@@ -65,26 +65,14 @@ impl Display for BlobObject {
     }
 }
 
+/// An walkable blob storage.
 pub trait WalkBlobStorage: 'static + Send + Sync {
+    /// Walk the prefix of the blob storage.
+    /// It returns the stream of items.
     fn walk<'c, 'a: 'c, 'b: 'c>(
         &'a self,
         prefix: &'b str,
     ) -> Pin<Box<dyn Stream<Item = std::result::Result<BlobObject, io::Error>> + 'c>>;
-}
-
-// NOTE: maybe remove it
-pub trait DeleteBlobStorage: 'static + Send + Sync {
-    // For future developer: add `Send` or `Sync` when you need them.
-    // Or just use `async_trait`. Or use assoc types.
-    /// Delete a object.
-    ///
-    /// # Returns
-    ///
-    /// If the object exists and have been deleted, return `Ok(())`.
-    /// If the object doesn't exist, the implementation may(or may not) return
-    /// `Err({kind = NotFound})`.
-    /// If other errors encountered, return `Err(anything)`.
-    fn delete(&self, key: &str) -> Pin<Box<dyn Future<Output = io::Result<()>> + '_>>;
 }
 
 impl BlobConfig for dyn BlobStorage {
