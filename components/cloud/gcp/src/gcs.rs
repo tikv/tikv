@@ -4,15 +4,15 @@ use std::{fmt::Display, io, pin::Pin};
 use async_trait::async_trait;
 use cloud::{
     blob::{
-        none_to_empty, BlobConfig, BlobObject, BlobStorage, BucketConf, PutResource,
-        StringNonEmpty, WalkBlobStorage,
+        none_to_empty, BlobConfig, BlobObject, BlobStorage, BucketConf, IterableStorage,
+        PutResource, StringNonEmpty,
     },
     metrics,
 };
 use futures_util::{
     future::{FutureExt, TryFutureExt},
     io::{self as async_io, AsyncRead, Cursor},
-    stream::{self, StreamExt, TryStreamExt},
+    stream::{self, Stream, StreamExt, TryStreamExt},
 };
 use http::HeaderValue;
 use hyper::{body::Bytes, Body, Request, Response};
@@ -34,6 +34,7 @@ use crate::{
     utils::{self, retry},
 };
 
+const SEP: char = '/';
 const GOOGLE_APIS: &str = "https://www.googleapis.com";
 const HARDCODED_ENDPOINTS_SUFFIX: &[&str] = &["upload/storage/v1/", "storage/v1/"];
 
@@ -151,7 +152,7 @@ impl GcsStorage {
 
     fn maybe_prefix_key(&self, key: &str) -> String {
         if let Some(prefix) = &self.config.bucket.prefix {
-            return format!("{}/{}", prefix, key);
+            return format!("{}{}{}", prefix, SEP, key);
         }
         key.to_owned()
     }
@@ -174,10 +175,10 @@ impl GcsStorage {
         self.client.make_request(req, scope).await
     }
 
-    fn maybe_strip_prefix_for_string(&self, key: String) -> String {
+    fn strip_prefix_if_needed(&self, key: String) -> String {
         if let Some(prefix) = &self.config.bucket.prefix {
             if key.starts_with(prefix.as_str()) {
-                return key[prefix.len()..].trim_start_matches('/').to_owned();
+                return key[prefix.len()..].trim_start_matches(SEP).to_owned();
             }
         }
         key
@@ -365,14 +366,14 @@ impl BlobStorage for GcsStorage {
     }
 }
 
-struct GcsWalker<'cli, 'arg> {
+struct GcsPrefixIter<'cli> {
     cli: &'cli GcsStorage,
     page_token: Option<String>,
-    prefix: &'arg str,
+    prefix: String,
     finished: bool,
 }
 
-impl<'cli, 'arg> GcsWalker<'cli, 'arg> {
+impl<'cli> GcsPrefixIter<'cli> {
     async fn one_page(&mut self) -> io::Result<Option<Vec<BlobObject>>> {
         if self.finished {
             return Ok(None);
@@ -385,7 +386,6 @@ impl<'cli, 'arg> GcsWalker<'cli, 'arg> {
             )?;
         let prefix = self.cli.maybe_prefix_key(&self.prefix);
         opt.prefix = Some(&prefix);
-        opt.max_results = Some(2048);
         opt.page_token = self.page_token.as_deref();
         let req = Object::list(&bucket, Some(opt)).or_io_error(format_args!(
             "failed to list with prefix {} page_token {:?}",
@@ -397,11 +397,11 @@ impl<'cli, 'arg> GcsWalker<'cli, 'arg> {
             .await
             .map_err(|err| io::Error::new(io::ErrorKind::Other, err))?;
         let resp = utils::read_from_http_body::<ListResponse>(res).await?;
-        debug!("requesting paging GCP"; "prefix" => self.prefix, "page_token" => self.page_token.as_deref(), 
+        debug!("requesting paging GCP"; "prefix" => %self.prefix, "page_token" => self.page_token.as_deref(), 
             "response_size" => resp.objects.len(), "new_page_token" => resp.page_token.as_deref());
         // GCP returns an empty page token when returning the last page...
         // We need to break there or we will enter an infinity loop...
-        if resp.page_token.is_none() || resp.objects.is_empty() {
+        if resp.page_token.is_none() {
             self.finished = true;
         }
         self.page_token = resp.page_token;
@@ -409,30 +409,22 @@ impl<'cli, 'arg> GcsWalker<'cli, 'arg> {
             .objects
             .into_iter()
             .map(|v| BlobObject {
-                key: self
-                    .cli
-                    .maybe_strip_prefix_for_string(v.name.unwrap_or_default()),
+                key: self.cli.strip_prefix_if_needed(v.name.unwrap_or_default()),
             })
             .collect::<Vec<_>>();
         Ok(Some(items))
     }
 }
 
-impl WalkBlobStorage for GcsStorage {
-    fn walk<'c, 'a: 'c, 'b: 'c>(
-        &'a self,
-        prefix: &'b str,
-    ) -> std::pin::Pin<
-        Box<
-            dyn futures_util::stream::Stream<
-                    Item = std::result::Result<cloud::blob::BlobObject, io::Error>,
-                > + 'c,
-        >,
-    > {
-        let walker = GcsWalker {
+impl IterableStorage for GcsStorage {
+    fn iter_prefix(
+        &self,
+        prefix: &str,
+    ) -> std::pin::Pin<Box<dyn Stream<Item = io::Result<cloud::blob::BlobObject>> + '_>> {
+        let walker = GcsPrefixIter {
             cli: self,
             page_token: None,
-            prefix,
+            prefix: prefix.to_owned(),
             finished: false,
         };
         let s = stream::try_unfold(walker, |mut w| async move {

@@ -8,7 +8,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use cloud::blob::{BlobObject, WalkBlobStorage};
+use cloud::blob::{BlobObject, IterableStorage};
 use futures::{io::AllowStdIo, prelude::Stream};
 use futures_util::stream::TryStreamExt;
 use rand::Rng;
@@ -29,14 +29,14 @@ pub struct LocalStorage {
     base_dir: Arc<File>,
 }
 
-impl WalkBlobStorage for LocalStorage {
-    fn walk<'c, 'a: 'c, 'b: 'c>(
-        &'a self,
-        prefix: &'b str,
-    ) -> std::pin::Pin<Box<dyn Stream<Item = io::Result<BlobObject>> + 'c>> {
+impl IterableStorage for LocalStorage {
+    fn iter_prefix(
+        &self,
+        prefix: &str,
+    ) -> std::pin::Pin<Box<dyn Stream<Item = io::Result<BlobObject>> + '_>> {
         Box::pin(
             futures::stream::iter(
-                WalkDir::new(&self.base.join(prefix))
+                WalkDir::new(self.base.join(prefix))
                     .follow_links(false)
                     .into_iter()
                     .filter(|v| v.as_ref().map(|d| d.file_type().is_file()).unwrap_or(false)),
@@ -52,10 +52,8 @@ impl WalkBlobStorage for LocalStorage {
                 let rel = v
                     .path()
                     .strip_prefix(&self.base);
-                    
                     match rel {
-                        Err(_) => 
-                        futures::future::err(io::Error::new(
+                        Err(_) => futures::future::err(io::Error::new(
                             io::ErrorKind::Other,
                             format!("unknown: we found something not match the prefix... it is {}, our prefix is {}", v.path().display(), self.base.display()),
                         )),

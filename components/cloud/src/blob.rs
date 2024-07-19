@@ -1,6 +1,6 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{fmt::Display, future::Future, io, marker::Unpin, pin::Pin, task::Poll};
+use std::{fmt::Display, io, marker::Unpin, pin::Pin, task::Poll};
 
 use async_trait::async_trait;
 use futures::stream::Stream;
@@ -65,14 +65,14 @@ impl Display for BlobObject {
     }
 }
 
-/// An walkable blob storage.
-pub trait WalkBlobStorage: 'static + Send + Sync {
+/// An storage that its content can be enumerated by prefix.
+pub trait IterableStorage: 'static + Send + Sync {
     /// Walk the prefix of the blob storage.
     /// It returns the stream of items.
-    fn walk<'c, 'a: 'c, 'b: 'c>(
-        &'a self,
-        prefix: &'b str,
-    ) -> Pin<Box<dyn Stream<Item = std::result::Result<BlobObject, io::Error>> + 'c>>;
+    fn iter_prefix(
+        &self,
+        prefix: &str,
+    ) -> Pin<Box<dyn Stream<Item = std::result::Result<BlobObject, io::Error>> + '_>>;
 }
 
 impl BlobConfig for dyn BlobStorage {

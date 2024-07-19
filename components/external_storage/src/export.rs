@@ -5,7 +5,7 @@ use std::{io, path::Path, pin::Pin, result::Result, sync::Arc};
 use async_trait::async_trait;
 pub use aws::{Config as S3Config, S3Storage};
 pub use azure::{AzureStorage, Config as AzureConfig};
-use cloud::blob::{BlobObject, BlobStorage, PutResource, WalkBlobStorage};
+use cloud::blob::{BlobObject, BlobStorage, IterableStorage, PutResource};
 use encryption::DataKeyManager;
 use futures::prelude::Stream;
 use gcp::GcsStorage;
@@ -23,9 +23,9 @@ use crate::{
 /// An interface that supports more operations than `ExternalStorage`.
 /// Some of operations may not be required by all users. Using a thiner
 /// interface will make them easier to be tested.
-pub trait FullFeaturedStorage: ExternalStorage + WalkBlobStorage {}
+pub trait IterableExternalStorage: ExternalStorage + IterableStorage {}
 
-impl<T: ExternalStorage + WalkBlobStorage> FullFeaturedStorage for T {}
+impl<T: ExternalStorage + IterableStorage> IterableExternalStorage for T {}
 
 pub fn create_storage(
     storage_backend: &StorageBackend,
@@ -41,18 +41,18 @@ pub fn create_storage(
 /// Create an full featured storage.
 /// If the `StorageBackend` provided isn't full-featured, will return a
 /// [`io::ErrorKind::NotFound`].
-pub fn create_full_featured_storage(
+pub fn create_iterable_storage(
     storage_backend: &StorageBackend,
     config: BackendConfig,
-) -> io::Result<Box<dyn FullFeaturedStorage>> {
+) -> io::Result<Box<dyn IterableExternalStorage>> {
     if let Some(backend) = &storage_backend.backend {
-        create_full_featured_backend(backend, config)
+        create_iterable_backend(backend, config)
     } else {
         Err(bad_storage_backend(storage_backend))
     }
 }
 
-fn not_full_featured(backend: Backend) -> io::Error {
+fn not_iterable(backend: Backend) -> io::Error {
     let storage_backend = StorageBackend {
         backend: Some(backend),
         ..Default::default()
@@ -82,12 +82,12 @@ fn blob_store<Blob: BlobStorage>(store: Blob) -> Box<dyn ExternalStorage> {
     Box::new(BlobStore::new(store)) as Box<dyn ExternalStorage>
 }
 
-fn create_full_featured_backend(
+fn create_iterable_backend(
     backend: &Backend,
     backend_config: BackendConfig,
-) -> io::Result<Box<dyn FullFeaturedStorage>> {
+) -> io::Result<Box<dyn IterableExternalStorage>> {
     let start = Instant::now();
-    let storage: Box<dyn FullFeaturedStorage> = match backend {
+    let storage: Box<dyn IterableExternalStorage> = match backend {
         Backend::S3(config) => {
             let mut s = S3Storage::from_input(config.clone())?;
             s.set_multi_part_size(backend_config.s3_multi_part_size);
@@ -101,7 +101,7 @@ fn create_full_featured_backend(
             Box::new(LocalStorage::new(p)?) as _
         }
         #[allow(unreachable_patterns)]
-        _ => return Err(not_full_featured(backend.clone())),
+        _ => return Err(not_iterable(backend.clone())),
     };
     record_storage_create(start, &*storage);
     Ok(storage)
@@ -194,12 +194,12 @@ impl<Blob: BlobStorage> std::ops::Deref for BlobStore<Blob> {
     }
 }
 
-impl<Blob: BlobStorage + WalkBlobStorage> WalkBlobStorage for BlobStore<Blob> {
-    fn walk<'c, 'a: 'c, 'b: 'c>(
-        &'a self,
-        prefix: &'b str,
-    ) -> Pin<Box<dyn Stream<Item = Result<BlobObject, io::Error>> + 'c>> {
-        self.0.walk(prefix)
+impl<Blob: BlobStorage + IterableStorage> IterableStorage for BlobStore<Blob> {
+    fn iter_prefix(
+        &self,
+        prefix: &str,
+    ) -> Pin<Box<dyn Stream<Item = Result<BlobObject, io::Error>> + '_>> {
+        self.0.iter_prefix(prefix)
     }
 }
 

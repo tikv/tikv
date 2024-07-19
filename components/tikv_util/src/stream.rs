@@ -245,7 +245,7 @@ where
 {
     ext.max_retry_times = (|| {
         fail::fail_point!("retry_count", |t| t
-            .and_then(|v| dbg!(v.parse::<usize>().ok()))
+            .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(ext.max_retry_times));
         ext.max_retry_times
     })();
