@@ -214,6 +214,11 @@ make_static_metric! {
 
     pub label_enum RaftEventDurationType {
         compact_check,
+<<<<<<< HEAD
+=======
+        periodic_full_compact,
+        load_metrics_window,
+>>>>>>> dce0e55ad7 (raftstore: make full compaction incremental, pause when load is high (#15995))
         pd_store_heartbeat,
         snap_gc,
         compact_lock_cf,
