@@ -613,6 +613,10 @@ impl BackgroundRunnerCore {
                 range_stats_manager.handle_range_evicted(range);
             }
         }
+        self.engine
+            .write()
+            .mut_range_manager()
+            .schedule_ranges_to_delete(&mut ranges_to_delete);
 
         if !ranges_to_delete.is_empty() {
             if let Err(e) =
@@ -665,6 +669,12 @@ impl BackgroundRunnerCore {
                 ranges_to_delete.append(&mut ranges);
             }
         }
+
+        self.engine
+            .write()
+            .mut_range_manager()
+            .schedule_ranges_to_delete(&mut ranges_to_delete);
+
         if !ranges_to_delete.is_empty() {
             if let Err(e) =
                 delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(ranges_to_delete))

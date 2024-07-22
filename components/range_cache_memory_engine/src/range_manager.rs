@@ -482,6 +482,19 @@ impl RangeManager {
     pub fn get_and_reset_range_evictions(&self) -> u64 {
         self.range_evictions.swap(0, Ordering::Relaxed)
     }
+
+    // Only ranges that have not been scheduled will be retained in `ranges`
+    pub fn schedule_ranges_to_delete(&mut self, ranges: &mut Vec<CacheRange>) {
+        ranges.retain(|r| {
+            let scheduled = self.ranges_being_deleted.get_mut(r).unwrap();
+            if !*scheduled {
+                *scheduled = true;
+                true
+            } else {
+                false
+            }
+        });
+    }
 }
 
 #[derive(Debug, PartialEq)]
