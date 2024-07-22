@@ -234,7 +234,7 @@ pub fn read_file(path: &str) -> Result<Vec<u8>, String> {
 pub fn jeprof_heap_profile(path: &str) -> Result<Vec<u8>, String> {
     info!("using jeprof to process {}", path);
     let output = Command::new("./jeprof")
-        .args(["--show_bytes", "./bin/tikv-server", path, "--svg"])
+        .args(["--show_bytes", "./bin/tiflash/tiflash", path, "--svg"])
         .output()
         .map_err(|e| format!("jeprof: {}", e))?;
     if !output.status.success() {

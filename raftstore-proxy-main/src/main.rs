@@ -5,7 +5,7 @@ use std::{
 };
 
 use engine_store_ffi::ffi::get_engine_store_server_helper;
-use mock_engine_store::make_global_ffi_helper_set_no_bind;
+use mock_engine_store::mock_cluster::make_global_ffi_helper_set_no_bind;
 
 /// # Safety
 /// Print version infomatin to std output.

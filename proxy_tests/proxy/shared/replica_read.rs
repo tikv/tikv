@@ -388,7 +388,6 @@ fn test_raft_cmd_request_cant_advanve_max_ts() {
 
     let env = Arc::new(Environment::new(1));
     let channel = ChannelBuilder::new(env).connect(&addr);
-    let client = TikvClient::new(channel);
 
     let mut ctx = Context::default();
     let region_id = leader.get_id();
@@ -498,7 +497,6 @@ fn test_raft_cmd_request_learner_advanve_max_ts() {
 
     let env = Arc::new(Environment::new(1));
     let channel = ChannelBuilder::new(env).connect(&addr);
-    let client = TikvClient::new(channel);
 
     // cluster.must_put(b"k", b"v");
 
@@ -590,7 +588,6 @@ fn test_raft_message_can_advanve_max_ts() {
 
     let env = Arc::new(Environment::new(1));
     let channel = ChannelBuilder::new(env).connect(&addr);
-    let client = TikvClient::new(channel);
 
     let region_id = leader.get_id();
 

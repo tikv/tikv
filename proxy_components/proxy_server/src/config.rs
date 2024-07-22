@@ -279,6 +279,9 @@ pub struct ProxyConfig {
 
     #[online_config(skip)]
     pub engine_store: EngineStoreConfig,
+
+    #[online_config(submodule)]
+    pub memory: MemoryConfig,
 }
 
 /// We use custom default, in case of later non-ordinary config items.
@@ -296,6 +299,7 @@ impl Default for ProxyConfig {
             readpool: ReadPoolConfig::default(),
             import: ImportConfig::default(),
             engine_store: EngineStoreConfig::default(),
+            memory: MemoryConfig::default(),
         }
     }
 }
@@ -367,6 +371,15 @@ pub fn setup_default_tikv_config(default: &mut TikvConfig) {
     // Do not add here, try use `address_proxy_config`.
 }
 
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Debug, OnlineConfig)]
+#[serde(default)]
+#[serde(rename_all = "kebab-case")]
+pub struct MemoryConfig {
+    // Whether enables the heap profiling which may have a bit performance overhead about 2% for
+    // the default sample rate.
+    pub enable_heap_profiling: bool,
+}
+
 /// This function changes TiKV's config according to ProxyConfig.
 /// Add a case in `test_config_proxy_default_no_config_item` to guard this
 /// logic.
@@ -433,6 +446,9 @@ pub fn address_proxy_config(config: &mut TikvConfig, proxy_config: &ProxyConfig)
     if proxy_config.engine_store.enable_fast_add_peer && !proxy_config.engine_store.enable_unips {
         fatal!("fast add peer can only work when using unips");
     }
+
+    // Currently, we do not support continous memory profiling.
+    config.memory.enable_heap_profiling = false;
 }
 
 pub fn validate_and_persist_config(config: &mut TikvConfig, persist: bool) {

@@ -9,6 +9,7 @@ mod ingest;
 mod jemalloc;
 mod mock;
 mod normal;
+mod pprof_jemalloc;
 mod region;
 mod replica_read;
 mod server_cluster_test;

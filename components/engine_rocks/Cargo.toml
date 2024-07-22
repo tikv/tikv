@@ -62,6 +62,6 @@ package = "rocksdb"
 features = ["encryption"]
 
 [dev-dependencies]
+proptest = "1.0.0"
 rand = "0.8"
 toml = "0.5"
-proptest = "1.0.0"

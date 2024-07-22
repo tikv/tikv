@@ -20,6 +20,8 @@ extern "C" {
     ) -> ::std::os::raw::c_int;
 }
 
+extern crate libc;
+
 #[allow(unused_variables)]
 #[allow(unused_mut)]
 #[allow(unused_unsafe)]
@@ -29,32 +31,42 @@ pub fn issue_mallctl_args(
     oldsize: *mut u64,
     newptr: *mut ::std::os::raw::c_void,
     newsize: u64,
-) {
+) -> ::std::os::raw::c_int {
     unsafe {
         let c_str = std::ffi::CString::new(command).unwrap();
         let c_ptr: *const ::std::os::raw::c_char = c_str.as_ptr() as *const ::std::os::raw::c_char;
         // See unprefixed_malloc_on_supported_platforms in tikv-jemalloc-sys.
         #[cfg(any(test, feature = "testexport"))]
         {
+            // Test part
             #[cfg(feature = "jemalloc")]
             {
                 // See NO_UNPREFIXED_MALLOC
                 #[cfg(any(target_os = "android", target_os = "dragonfly", target_os = "macos"))]
-                _rjem_mallctl(c_ptr, oldptr, oldsize, newptr, newsize);
+                return _rjem_mallctl(c_ptr, oldptr, oldsize, newptr, newsize);
                 #[cfg(not(any(
                     target_os = "android",
                     target_os = "dragonfly",
                     target_os = "macos"
                 )))]
-                mallctl(c_ptr, oldptr, oldsize, newptr, newsize);
+                return mallctl(c_ptr, oldptr, oldsize, newptr, newsize);
             }
+            0
         }
 
         #[cfg(not(any(test, feature = "testexport")))]
         {
-            // Must linked to tiflash.
+            // No test part
             #[cfg(feature = "external-jemalloc")]
-            let r = mallctl(c_ptr, oldptr, oldsize, newptr, newsize);
+            {
+                // Must linked to tiflash.
+                return mallctl(c_ptr, oldptr, oldsize, newptr, newsize);
+            }
+            #[cfg(not(feature = "external-jemalloc"))]
+            {
+                // Happens only with `raftstore-proxy-main`
+                return mallctl(c_ptr, oldptr, oldsize, newptr, newsize);
+            }
         }
     }
 }

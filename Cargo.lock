@@ -4893,6 +4893,7 @@ dependencies = [
  "engine_store_ffi",
  "mock-engine-store",
  "proxy_server",
+ "tempfile",
 ]
 
 [[package]]

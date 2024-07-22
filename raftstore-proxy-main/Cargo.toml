@@ -43,3 +43,4 @@ path = "src/main.rs"
 engine_store_ffi = { workspace = true }
 mock-engine-store = { workspace = true }
 proxy_server = { workspace = true }
+tempfile = "3.0"

@@ -1,7 +1,7 @@
 // Copyright 2018 TiKV Project Authors. Licensed under Apache-2.0.
 
-mod profile;
-mod vendored_utils;
+pub mod profile;
+pub mod vendored_utils;
 
 use std::{
     error::Error as StdError,
