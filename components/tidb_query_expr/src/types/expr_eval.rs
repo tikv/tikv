@@ -66,6 +66,7 @@ impl<'a> RpnStackNodeVectorValue<'a> {
                         Json => JsonRef,
                         Enum => EnumRef,
                         Set => SetRef,
+                        VectorFloat32,
                     ],
                     match &mut result_vec {
                         VectorValue::TT(dest_column) => {
