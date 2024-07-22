@@ -301,11 +301,6 @@ mod tests {
         let data_path = tmp_dir.path();
         let file_path = data_path.join(SPACE_PLACEHOLDER_FILE);
         let f = File::create(file_path).unwrap();
-        // 调试信息
-        match f.allocate(0) {
-            Ok(_) => println!("allocate(0) returned Ok"),
-            Err(e) => println!("allocate(0) returned Err: {:?}", e),
-        }
         // EINVAL when len == 0.
         assert_eq!(
             f.allocate(0).unwrap_err().raw_os_error().unwrap(),
