@@ -915,6 +915,7 @@ mod tests {
             &self,
             _start_key: &[u8],
             _end_key: &[u8],
+            _: bool,
         ) -> raftstore::coprocessor::Result<Vec<Region>> {
             Ok(vec![])
         }

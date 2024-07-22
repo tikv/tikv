@@ -394,6 +394,24 @@ impl BackgroundRunnerCore {
     fn gc_range(&self, range: &CacheRange, safe_point: u64, oldest_seqno: u64) -> FilterMetrics {
         let (skiplist_engine, safe_ts) = {
             let mut core = self.engine.write();
+            // We should also consider the ongoing snapshot of the historical ranges (ranges
+            // that have been evicted).
+            let historical_safe_point = core
+                .range_manager()
+                .historical_ranges()
+                .iter()
+                .find_map(|(r, m)| {
+                    if r.contains_range(range) {
+                        Some(
+                            m.range_snapshot_list()
+                                .min_snapshot_ts()
+                                .unwrap_or(u64::MAX),
+                        )
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(u64::MAX);
             let Some(range_meta) = core.mut_range_manager().mut_range_meta(range) else {
                 return FilterMetrics::default();
             };
@@ -402,6 +420,7 @@ impl BackgroundRunnerCore {
                 .min_snapshot_ts()
                 .unwrap_or(u64::MAX);
             let safe_point = u64::min(safe_point, min_snapshot);
+            let safe_point = u64::min(safe_point, historical_safe_point);
 
             if safe_point <= range_meta.safe_point() {
                 info!(
@@ -2801,7 +2820,8 @@ pub mod tests {
         );
         let s1 = engine.snapshot(range.clone(), 10, u64::MAX);
         let s2 = engine.snapshot(range.clone(), 11, u64::MAX);
-        let s3 = engine.snapshot(range.clone(), 20, u64::MAX);
+        let s3: Result<RangeCacheSnapshot, engine_traits::FailedReason> =
+            engine.snapshot(range.clone(), 20, u64::MAX);
 
         // nothing will be removed due to snapshot 5
         worker.core.gc_range(&range, 30, 100);
@@ -2822,6 +2842,142 @@ pub mod tests {
         worker.core.gc_range(&range, 30, 100);
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
+    }
+
+    #[test]
+    fn test_gc_range_contained_in_historical_range() {
+        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
+            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
+        )));
+        let memory_controller = engine.memory_controller();
+        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        engine.new_range(range.clone());
+        let (write, default) = {
+            let skiplist_engine = engine.core().write().engine();
+            (
+                skiplist_engine.cf_handle(CF_WRITE),
+                skiplist_engine.cf_handle(CF_DEFAULT),
+            )
+        };
+
+        put_data(
+            b"key1",
+            b"value1",
+            9,
+            10,
+            10,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key1",
+            b"value2",
+            11,
+            12,
+            11,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key1",
+            b"value3",
+            30,
+            31,
+            20,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+
+        put_data(
+            b"key9",
+            b"value4",
+            13,
+            14,
+            12,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key9",
+            b"value5",
+            14,
+            15,
+            13,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+        put_data(
+            b"key9",
+            b"value6",
+            30,
+            31,
+            21,
+            false,
+            &default,
+            &write,
+            memory_controller.clone(),
+        );
+
+        let snap1 = engine.snapshot(range.clone(), 20, 1000).unwrap();
+        let snap2 = engine.snapshot(range.clone(), 22, 1000).unwrap();
+        let _snap3 = engine.snapshot(range.clone(), 60, 1000).unwrap();
+
+        let range2 = CacheRange::new(b"key5".to_vec(), b"key8".to_vec());
+        engine.evict_range(&range2);
+
+        assert_eq!(6, element_count(&default));
+        assert_eq!(6, element_count(&write));
+
+        let (worker, ..) = BackgroundRunner::new(
+            engine.core.clone(),
+            memory_controller,
+            None,
+            engine.expected_region_size(),
+        );
+
+        let ranges: Vec<_> = engine
+            .core
+            .read()
+            .range_manager()
+            .ranges()
+            .keys()
+            .cloned()
+            .collect();
+        let mut filter = FilterMetrics::default();
+        for r in &ranges {
+            filter.merge(&worker.core.gc_range(r, 50, 1000));
+        }
+        assert_eq!(2, filter.filtered);
+        assert_eq!(4, element_count(&default));
+        assert_eq!(4, element_count(&write));
+
+        drop(snap1);
+        let mut filter = FilterMetrics::default();
+        for r in &ranges {
+            filter.merge(&worker.core.gc_range(r, 50, 1000));
+        }
+        assert_eq!(0, filter.filtered);
+        assert_eq!(4, element_count(&default));
+        assert_eq!(4, element_count(&write));
+
+        drop(snap2);
+        let mut filter = FilterMetrics::default();
+        for r in &ranges {
+            filter.merge(&worker.core.gc_range(r, 50, 1000));
+        }
+        assert_eq!(2, filter.filtered);
+        assert_eq!(2, element_count(&default));
+        assert_eq!(2, element_count(&write));
     }
 
     #[test]
