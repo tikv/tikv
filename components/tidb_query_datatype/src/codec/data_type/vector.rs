@@ -15,13 +15,13 @@ pub enum VectorValue {
     Int(ChunkedVecSized<Int>),
     Real(ChunkedVecSized<Real>),
     Decimal(ChunkedVecSized<Decimal>),
-    // TODO: We need to improve its performance, i.e. store strings in adjacent memory places
     Bytes(ChunkedVecBytes),
     DateTime(ChunkedVecSized<DateTime>),
     Duration(ChunkedVecSized<Duration>),
     Json(ChunkedVecJson),
     Enum(ChunkedVecEnum),
     Set(ChunkedVecSet),
+    VectorFloat32(ChunkedVecVectorFloat32),
 }
 
 impl VectorValue {
@@ -72,6 +72,7 @@ impl VectorValue {
             Duration: ChunkedVecSized<Duration>,
             Set: ChunkedVecSet,
             Json: ChunkedVecJson,
+            VectorFloat32: ChunkedVecVectorFloat32,
             Enum: ChunkedVecEnum,
             Bytes: ChunkedVecBytes
         )
@@ -261,6 +262,21 @@ impl VectorValue {
                 }
                 size
             }
+            VectorValue::VectorFloat32(vec) => {
+                let mut size = 0;
+                for idx in logical_rows {
+                    let el = vec.get_option_ref(*idx);
+                    match el {
+                        Some(v) => {
+                            size += 1 /* FLAG */ + v.encoded_len();
+                        }
+                        None => {
+                            size += 1;
+                        }
+                    }
+                }
+                size
+            }
             VectorValue::Enum(_) => logical_rows.len() * 9,
             // TODO: implement here after we implement set encoding
             VectorValue::Set(_) => unimplemented!(),
@@ -297,6 +313,21 @@ impl VectorValue {
                     match el {
                         Some(v) => {
                             size += 8 /* Offset */ + v.binary_len();
+                        }
+                        None => {
+                            size += 8 /* Offset */;
+                        }
+                    }
+                }
+                size
+            }
+            VectorValue::VectorFloat32(vec) => {
+                let mut size = logical_rows.len() + 10;
+                for idx in logical_rows {
+                    let el = vec.get_option_ref(*idx);
+                    match el {
+                        Some(v) => {
+                            size += 8 /* Offset */ + v.encoded_len();
                         }
                         None => {
                             size += 8 /* Offset */;
@@ -415,6 +446,17 @@ impl VectorValue {
                 }
                 Ok(())
             }
+            VectorValue::VectorFloat32(ref vec) => {
+                match &vec.get_option_ref(row_index) {
+                    None => {
+                        output.write_evaluable_datum_null()?;
+                    }
+                    Some(ref val) => {
+                        output.write_evaluable_datum_vector_float32(*val)?;
+                    }
+                }
+                Ok(())
+            }
             VectorValue::Enum(ref vec) => {
                 match &vec.get_option_ref(row_index) {
                     None => {
@@ -496,6 +538,7 @@ impl_as_slice! { Bytes, to_bytes_vec }
 impl_as_slice! { DateTime, to_date_time_vec }
 impl_as_slice! { Duration, to_duration_vec }
 impl_as_slice! { Json, to_json_vec }
+impl_as_slice! { VectorFloat32, to_vector_float32_vec }
 impl_as_slice! { Enum, to_enum_vec }
 impl_as_slice! { Set, to_set_vec }
 
@@ -548,6 +591,7 @@ impl_ext! { Bytes, push_bytes }
 impl_ext! { DateTime, push_date_time }
 impl_ext! { Duration, push_duration }
 impl_ext! { Json, push_json }
+impl_ext! { VectorFloat32, push_vector_float32 }
 impl_ext! { Enum, push_enum }
 impl_ext! { Set, push_set }
 
@@ -569,6 +613,7 @@ impl_from! { Bytes, ChunkedVecBytes }
 impl_from! { DateTime, ChunkedVecSized<DateTime> }
 impl_from! { Duration, ChunkedVecSized<Duration> }
 impl_from! { Json, ChunkedVecJson }
+impl_from! { VectorFloat32, ChunkedVecVectorFloat32 }
 impl_from! { Enum, ChunkedVecEnum }
 impl_from! { Set, ChunkedVecSet }
 

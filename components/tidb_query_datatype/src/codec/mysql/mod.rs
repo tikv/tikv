@@ -33,6 +33,7 @@ pub mod enums;
 pub mod json;
 pub mod set;
 pub mod time;
+pub mod vector;
 
 pub use self::{
     decimal::{dec_encoded_len, Decimal, DecimalDecoder, DecimalEncoder, Res, RoundMode},
@@ -44,4 +45,5 @@ pub use self::{
     },
     set::{Set, SetRef},
     time::{Time, TimeDecoder, TimeEncoder, TimeType, Tz},
+    vector::{VectorFloat32, VectorFloat32Decoder, VectorFloat32Encoder, VectorFloat32Ref},
 };

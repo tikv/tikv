@@ -40,6 +40,18 @@ pub fn any_value_json(args: &[Option<JsonRef>]) -> Result<Option<Json>> {
 
 #[rpn_fn(nullable, varg)]
 #[inline]
+pub fn any_value_vector_float32(
+    args: &[Option<VectorFloat32Ref>],
+) -> Result<Option<VectorFloat32>> {
+    if let Some(arg) = args.first() {
+        Ok(arg.map(|x| x.to_owned()))
+    } else {
+        Ok(None)
+    }
+}
+
+#[rpn_fn(nullable, varg)]
+#[inline]
 pub fn any_value_bytes(args: &[Option<BytesRef>]) -> Result<Option<Bytes>> {
     if let Some(arg) = args.first() {
         Ok(arg.map(|x| x.to_vec()))
