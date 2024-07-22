@@ -515,7 +515,7 @@ fn test_double_delete_range_schedule() {
     let range3 = CacheRange::new(b"k40".to_vec(), b"k50".to_vec());
     let (snapshot_load_tx, snapshot_load_rx) = sync_channel(0);
     let engine_clone = engine.clone();
-    let r = CacheRange::new(b"k00".to_vec(), b"k30".to_vec());
+    let r = CacheRange::new(b"k00".to_vec(), b"k60".to_vec());
     fail::cfg_callback("on_snapshot_load_finished", move || {
         let _ = snapshot_load_tx.send(true);
         // evict all ranges. So the loading ranges will also be evicted and a delete
@@ -525,7 +525,7 @@ fn test_double_delete_range_schedule() {
     .unwrap();
 
     let (delete_range_tx, delete_range_rx) = sync_channel(0);
-    fail::cfg_callback("in_memory_engine_delete_range_done", move || {
+    fail::cfg_callback("on_in_memory_engine_delete_range", move || {
         let _ = delete_range_tx.send(true);
     })
     .unwrap();
@@ -546,12 +546,22 @@ fn test_double_delete_range_schedule() {
     snapshot_load_rx
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
+    delete_range_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+
     drop(snap1);
     drop(snap2);
 
+    // two cached ranges
+    delete_range_rx
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
     delete_range_rx
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
     // sleep a while to ensure no further delete range will be scheduled
-    std::thread::sleep(Duration::from_secs(1));
+    delete_range_rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap_err();
 }

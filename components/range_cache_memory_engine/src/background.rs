@@ -1151,6 +1151,7 @@ impl Runnable for DeleteRangeRunner {
     fn run(&mut self, task: Self::Task) {
         match task {
             BackgroundTask::DeleteRange(ranges) => {
+                fail::fail_point!("on_in_memory_engine_delete_range");
                 let (mut ranges_to_delay, ranges_to_delete) = {
                     let core = self.engine.read();
                     let mut ranges_to_delay = vec![];
