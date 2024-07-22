@@ -35,6 +35,10 @@ impl Display for CrossCheckTask {
     }
 }
 
+// Checks the data consistency in the mvcc snapshot semantics between in-memory
+// engine and rocksdb. It compares keys one by one in the in-memory engine
+// with keys in the rocksdb and for those keys that are missed or redundant
+// in the in-memory engine, check the validity.
 pub(crate) struct CrossChecker {
     pd_client: Arc<dyn PdClient>,
     memory_engine: RangeCacheMemoryEngine,
@@ -145,7 +149,7 @@ impl CrossChecker {
             let mut last_disk_user_key = vec![];
             // We can have this state:
             // Safe point: 6
-            // IME:                        [k2-7]
+            // IME:                       [k2-7]
             // Rocks: k1-5-delete, [k1-3], k2-7
             // where k1-5-delete and k1-3 are filtered which is legal as k1-5 is a delete
             // type. At some time, rocksdb iterator points to k1-3 while IME iterator points
@@ -175,7 +179,7 @@ impl CrossChecker {
                 mvcc_recordings: vec![],
                 // We can have this sate:
                 // Safe point: 6
-                // IME:   k1-7, k1-5,               [k2-7]
+                // IME:   k1-7, k1-5,              [k2-7]
                 // Rocks: k1-7, k1-5, [k1-3], k1-2, k2-7
                 // where k1-3 and k1-2 are filtered which is valid. At some time, rocksdb
                 // iterator points to k1-3 and IME iterator points to k2-7. We need
@@ -217,7 +221,7 @@ impl CrossChecker {
                 }
             }
 
-            CrossChecker::check_next_in_disk_iter(
+            CrossChecker::check_with_key_in_disk_iter(
                 cf,
                 &mem_iter,
                 &mut disk_iter,
@@ -278,7 +282,7 @@ impl CrossChecker {
                     }
                 }
 
-                CrossChecker::check_next_in_disk_iter(
+                CrossChecker::check_with_key_in_disk_iter(
                     cf,
                     &mem_iter,
                     &mut disk_iter,
@@ -343,7 +347,8 @@ impl CrossChecker {
 
             let (disk_user_key, disk_mvcc) = split_ts(disk_iter.key()).unwrap();
             // We cannot miss any types of write if the mvcc version is larger than
-            // safe_point of the relevant range
+            // safe_point of the relevant range. But the safe point can be updated during
+            // the cross check. Fetch it and check again.
             if disk_mvcc > *safe_point {
                 *safe_point = {
                     let s = engine.core().read().range_manager().get_safe_point(range);
@@ -402,8 +407,8 @@ impl CrossChecker {
     // disk_iter for some times to get aligned with mem_iter.
     // After each call of disk_iter, we will check whether the key missed in the
     // in-memory engine will not make it compromise data consistency.
-    // `next_fisrt` denotes whether disk_iter should call next before comparison
-    fn check_next_in_disk_iter(
+    // `next_fisrt` denotes whether disk_iter should call next before comparison.
+    fn check_with_key_in_disk_iter(
         cf: &str,
         mem_iter: &RangeCacheIterator,
         disk_iter: &mut RocksEngineIterator,
@@ -475,7 +480,6 @@ impl CrossChecker {
             }
 
             let (mem_user_key, mem_mvcc) = split_ts(mem_key).unwrap();
-            // Some versions that are in rocksdb but have gced by in-memory engine
             let (disk_user_key, disk_mvcc) = split_ts(disk_key).unwrap();
 
             let write = match parse_write(disk_iter.value()) {
@@ -515,7 +519,7 @@ impl CrossChecker {
                         // deleted at last, so we may see an intermediate
                         // state [k1-10, k1-8, k1-5(mvcc delete), k1-3] where k1-4 is filtered so we
                         // have a lower mvcc key k1-3 and a higher mvcc key
-                        // k1-5. So we should user the safe_point to compare
+                        // k1-5. So we should use the safe_point to compare
                         // the mvcc version.
                         if disk_mvcc >= *safe_point {
                             if disk_mvcc < read_ts {
@@ -546,12 +550,13 @@ impl CrossChecker {
 
                         cur_key_info.update_last_mvcc_version_before_safe_point(*safe_point);
                         // We record the largest mvcc version below safe_point for each user_key --
-                        // last_mvcc_before_safe_point, and there should not be any version between
-                        // it and safe_point
+                        // and there should not be any version between it and safe_point
                         // So,   for [k1-10, k1-8, k1-5, k1-4, k1-3]
                         // safe_point: 6
-                        // If we see [k1-10, k1-8, k1-4, k1-3] in the in-memory engine, and iterator
-                        // points to
+                        // If we see [k1-10, k1-8, k1-4, k1-3] in the in-memory engine, and we
+                        // record the last_mvcc_version_before_safe_point be 4. When we see k1-5
+                        // from rocksdb, we have this version 5 which is between 6 and 4 which
+                        // denotes we have gced a version that should not be gced.
                         if disk_mvcc < *safe_point
                             && disk_mvcc > cur_key_info.last_mvcc_version_before_safe_point
                             && (write.write_type != WriteType::Rollback
@@ -627,6 +632,8 @@ impl CrossChecker {
         }
     }
 
+    // mem_iter has pointed to the next user key whereas disk_iter still has some
+    // versions.
     #[allow(clippy::collapsible_else_if)]
     fn check_with_last_user_key(
         cf: &str,
