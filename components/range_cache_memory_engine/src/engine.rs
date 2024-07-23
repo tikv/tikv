@@ -32,7 +32,7 @@ use crate::{
         encode_key_for_boundary_with_mvcc, encode_key_for_boundary_without_mvcc, InternalBytes,
     },
     memory_controller::MemoryController,
-    range_manager::{LoadFailedReason, RangeCacheStatus, RangeManager},
+    range_manager::{RangeCacheStatus, RangeManager},
     read::{RangeCacheIterator, RangeCacheSnapshot},
     statistics::Statistics,
     write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
@@ -359,7 +359,11 @@ impl RangeCacheMemoryEngine {
     // This method only push the range in the `pending_range` where sometime
     // later in `prepare_for_apply`, the range will be scheduled to load snapshot
     // data into engine.
-    pub fn load_range(&self, range: CacheRange) -> result::Result<(), LoadFailedReason> {
+    #[cfg(test)]
+    pub fn load_range(
+        &self,
+        range: CacheRange,
+    ) -> result::Result<(), crate::range_manager::LoadFailedReason> {
         let mut core = self.core.write();
         core.mut_range_manager().load_range(range)
     }
@@ -402,6 +406,14 @@ impl RangeCacheMemoryEngine {
         if range_manager.contains_range(range) {
             range_manager.record_in_ranges_being_written(write_batch_id, range);
             return RangeCacheStatus::Cached;
+        }
+        if range_manager.overlap_with_preferred_range(range) {
+            if range_manager.load_range(range.clone()).is_ok() {
+                info!(
+                    "try to load range in preferred range";
+                    "range" => ?range,
+                );
+            }
         }
 
         let mut overlapped = false;

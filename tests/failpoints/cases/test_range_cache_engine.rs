@@ -21,6 +21,7 @@ use test_raftstore::{
     make_cb, new_node_cluster_with_hybrid_engine_with_no_range_cache, new_peer, new_put_cmd,
     new_request, Cluster, HybridEngineImpl, NodeCluster, Simulator,
 };
+use test_util::eventually;
 use tikv_util::HandyRwLock;
 use txn_types::Key;
 
@@ -608,6 +609,40 @@ fn test_eviction_after_merge() {
 
     range_cache_engine.snapshot(range1, 100, 100).unwrap_err();
     range_cache_engine.snapshot(range2, 100, 100).unwrap_err();
+}
+
+#[test]
+fn test_preferred_range_after_transfer_leader() {
+    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 2);
+    cluster.run();
+
+    let r = cluster.get_region(b"");
+    cluster.must_transfer_leader(r.id, new_peer(1, 1));
+
+    // Set preferred range on store 2.
+    let cache_range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
+    let range_cache_engine = {
+        let range_cache_engine = cluster.get_range_cache_engine(2);
+        let mut core = range_cache_engine.core().write();
+        core.mut_range_manager()
+            .add_preferred_range(cache_range.clone());
+        drop(core);
+        range_cache_engine
+    };
+
+    range_cache_engine
+        .snapshot(cache_range.clone(), 100, 100)
+        .unwrap_err();
+
+    // For region in preferred range, it must load cache automatically after leader
+    // transfer.
+    cluster.must_transfer_leader(r.id, new_peer(2, 2));
+
+    eventually(Duration::from_millis(100), Duration::from_secs(5), || {
+        range_cache_engine
+            .snapshot(cache_range.clone(), 100, 100)
+            .is_ok()
+    });
 }
 
 #[test]

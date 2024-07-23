@@ -40,7 +40,7 @@ use crate::{
     range_manager::LoadFailedReason,
     range_stats::{RangeStatsManager, DEFAULT_EVICT_MIN_DURATION},
     region_label::{
-        LabelRule, RegionLabelAddedCb, RegionLabelRulesManager, RegionLabelServiceBuilder,
+        LabelRule, RegionLabelChangedCallback, RegionLabelRulesManager, RegionLabelServiceBuilder,
     },
     write_batch::RangeCacheWriteBatchEntry,
 };
@@ -157,40 +157,43 @@ impl PdRangeHintService {
     /// label is removed or no longer set to always.
     pub fn start<F>(&self, remote: Remote<yatp::task::future::TaskCell>, range_manager_load_cb: F)
     where
-        F: Fn(&CacheRange) -> Result<(), LoadFailedReason> + Send + Sync + 'static,
+        F: Fn(&CacheRange, bool) -> Result<(), LoadFailedReason> + Send + Sync + 'static,
     {
         let pd_client = self.0.clone();
-        let region_label_added_cb: RegionLabelAddedCb = Arc::new(move |label_rule: &LabelRule| {
-            if !label_rule
-                .labels
-                .iter()
-                .any(|e| e.key == CACHE_LABEL_RULE_KEY && e.value == CACHE_LABEL_RULE_ALWAYS)
-            {
-                // not related to caching, skip.
-                return;
-            }
-            for key_range in &label_rule.data {
-                match CacheRange::try_from(key_range) {
-                    Ok(cache_range) => {
-                        info!("Requested to cache range"; "cache_range" => ?&cache_range);
-                        if let Err(reason) = range_manager_load_cb(&cache_range) {
-                            error!("Cache range load failed"; "range" => ?&cache_range, "reason" => ?reason);
+        let region_label_changed_cb: RegionLabelChangedCallback = Arc::new(
+            move |label_rule: &LabelRule, is_add: bool| {
+                if !label_rule
+                    .labels
+                    .iter()
+                    .any(|e| e.key == CACHE_LABEL_RULE_KEY && e.value == CACHE_LABEL_RULE_ALWAYS)
+                {
+                    // not related to caching, skip.
+                    return;
+                }
+                for key_range in &label_rule.data {
+                    match CacheRange::try_from(key_range) {
+                        Ok(cache_range) => {
+                            info!("Requested to cache range"; "cache_range" => ?&cache_range);
+                            if let Err(reason) = range_manager_load_cb(&cache_range, is_add) {
+                                error!("Cache range load failed"; "range" => ?&cache_range, "reason" => ?reason);
+                            }
+                        }
+                        Err(e) => {
+                            error!("Unable to convert key_range rule to cache range"; "err" => ?e);
                         }
                     }
-                    Err(e) => {
-                        error!("Unable to convert key_range rule to cache range"; "err" => ?e);
-                    }
                 }
-            }
-        });
+            },
+        );
         let mut region_label_svc = RegionLabelServiceBuilder::new(
             Arc::new(RegionLabelRulesManager {
-                region_label_added_cb: Some(region_label_added_cb),
+                region_label_change_cb: Some(region_label_changed_cb),
                 ..RegionLabelRulesManager::default()
             }),
             pd_client,
         )
         .rule_filter_fn(|label_rule| {
+            info!("dbg rule"; "rule" => ?label_rule);
             label_rule
                 .labels
                 .iter()
@@ -248,14 +251,25 @@ impl BgWorkManager {
 
     pub fn start_bg_hint_service(&self, range_hint_service: PdRangeHintService) {
         let core = self.core.clone();
-        range_hint_service.start(self.worker.remote(), move |cache_range: &CacheRange| {
-            let mut engine = core.write();
-            engine.mut_range_manager().load_range(cache_range.clone())?;
-            // TODO (afeinberg): This does not actually load the range. The load happens
-            // the apply thread begins to apply raft entries. To force this (for read-only
-            // use-cases) we should propose a No-Op command.
-            Ok(())
-        });
+        range_hint_service.start(
+            self.worker.remote(),
+            move |cache_range: &CacheRange, is_add: bool| {
+                let mut engine = core.write();
+                if is_add {
+                    engine
+                        .mut_range_manager()
+                        .add_preferred_range(cache_range.clone());
+                } else {
+                    engine
+                        .mut_range_manager()
+                        .remove_preferred_range(cache_range.clone());
+                }
+                // TODO (afeinberg): This does not actually load the range. The load happens
+                // the apply thread begins to apply raft entries. To force this (for read-only
+                // use-cases) we should propose a No-Op command.
+                Ok(())
+            },
+        );
     }
 
     fn start_tick(
