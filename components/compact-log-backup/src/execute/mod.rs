@@ -4,18 +4,16 @@ pub mod hooks;
 #[cfg(test)]
 mod test;
 
-use std::{
-    borrow::Cow,
-    path::Path,
-    sync::{Arc},
-};
+use std::{borrow::Cow, path::Path, sync::Arc};
 
 use engine_rocks::RocksEngine;
 pub use engine_traits::SstCompressionType;
 use engine_traits::SstExt;
 use external_storage::{BackendConfig, FullFeaturedStorage};
 use futures::stream::{self, StreamExt};
-use hooks::{AfterFinishCtx, BeforeStartCtx, CId, CompactionFinishCtx, ExecHooks};
+use hooks::{
+    AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SubcompactionFinishCtx, SubcompactionStartCtx,
+};
 use kvproto::brpb::StorageBackend;
 use tikv_util::config::ReadableSize;
 use tokio::runtime::Handle;
@@ -128,12 +126,17 @@ impl Execution {
                 .instrument(next_compaction.clone())
                 .await
             {
-                hooks.update_collect_compaction_stat(&compact_stream.take_statistic());
-                hooks.update_load_meta_stat(&compact_stream.get_mut().get_mut().take_statistic());
+                let cstat = compact_stream.take_statistic();
+                let lstat = compact_stream.get_mut().get_mut().take_statistic();
 
                 let c = c?;
                 let cid = CId(id);
-                hooks.before_a_compaction_start(cid, &c);
+                let cx = SubcompactionStartCtx {
+                    subc: &c,
+                    load_stat_diff: &lstat,
+                    collect_compaction_stat_diff: &cstat,
+                };
+                hooks.before_a_subcompaction_start(cid, cx);
 
                 id += 1;
 
@@ -158,8 +161,6 @@ impl Execution {
 
                 if pending.len() >= self.max_concurrent_compaction as _ {
                     let join = util::select_vec(&mut pending);
-                    // TODO: sometimes the first compaction will be pretty slow, in which case CPU
-                    // will be idle for a long time due to blocking here.
                     let (cres, cid) = frame!("wait_for_compaction"; join).await.unwrap()?;
                     self.on_compaction_finish(cid, &cres, storage.as_ref(), &mut hooks)
                         .await?;
@@ -167,19 +168,16 @@ impl Execution {
             }
             drop(next_compaction);
 
-            hooks.update_collect_compaction_stat(&compact_stream.take_statistic());
-
             for join in pending {
                 let (cres, cid) = frame!("final_wait"; join).await.unwrap()?;
                 self.on_compaction_finish(cid, &cres, storage.as_ref(), &mut hooks)
                     .await?;
             }
-            let mut cx = AfterFinishCtx {
-                async_rt: Handle::current(),
-                comments: String::new(),
+            let cx = AfterFinishCtx {
+                async_rt: &Handle::current(),
                 external_storage: storage.as_ref(),
             };
-            hooks.after_execution_finished(&mut cx).await?;
+            hooks.after_execution_finished(cx).await?;
 
             Result::Ok(())
         };
@@ -193,12 +191,12 @@ impl Execution {
         external_storage: &dyn FullFeaturedStorage,
         hooks: &mut impl ExecHooks,
     ) -> Result<()> {
-        let mut cx = CompactionFinishCtx {
+        let cx = SubcompactionFinishCtx {
             this: &self,
             external_storage,
             result,
         };
-        hooks.after_a_compaction_end(cid, &mut cx).await?;
+        hooks.after_a_subcompaction_end(cid, cx).await?;
         Result::Ok(())
     }
 }

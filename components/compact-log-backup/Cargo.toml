@@ -44,6 +44,7 @@ tidb_query_datatype = { workspace = true }
 codec = {workspace = true}
 fail = "0.5"
 
+
 [dev-dependencies]
 pprof = { version = "0.13", default-features = false, features = [
   "flamegraph",

@@ -151,7 +151,7 @@ pub struct LoadFromExt<'a> {
 }
 
 impl<'a> LoadFromExt<'a> {
-    fn enter_load_span(&self) -> Option<Entered> {
+    fn enter_load_span(&self) -> Option<Entered<'_>> {
         if let Some(span) = &self.loading_content_span {
             Some(span.enter())
         } else {

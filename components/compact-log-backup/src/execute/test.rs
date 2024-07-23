@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 
 use engine_rocks::RocksEngine;
-use futures::future::{FutureExt};
-
+use futures::future::FutureExt;
 use tokio::sync::mpsc::Sender;
 
 use super::{hooks::SaveMeta, Execution};
@@ -16,10 +15,10 @@ use crate::{
 struct CompactionSpy(Sender<SubcompactionResult>);
 
 impl ExecHooks for CompactionSpy {
-    fn after_a_compaction_end<'a>(
+    fn after_a_subcompaction_end<'a>(
         &'a mut self,
         _cid: super::hooks::CId,
-        res: &'a mut super::hooks::CompactionFinishCtx<'a>,
+        res: super::hooks::SubcompactionFinishCtx<'a>,
     ) -> impl futures::prelude::Future<Output = crate::Result<()>> + 'a {
         self.0.send(res.result.clone()).map(|res| res.adapt_err())
     }
