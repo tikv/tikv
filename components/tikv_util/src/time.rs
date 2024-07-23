@@ -559,14 +559,12 @@ pub fn setup_for_spin_interval() {
     INIT.call_once(|| {
         let inspect_duration = Duration::from_millis(10);
         let start = Instant::now();
-        let mut count = 1;
+        let mut count = 0;
         // Spin for a while to get the duration for one round.
-        for _ in 0..2_000_000 {
-            if count % 1000 == 0 {
-                count += 1000;
-                if start.saturating_elapsed() >= inspect_duration {
-                    break;
-                }
+        for _ in 0..2_097_152 {
+            count += 1;
+            if count % 1024 == 0 && start.saturating_elapsed() >= inspect_duration {
+                break;
             }
         }
         let elapsed_one_round = start.saturating_elapsed().as_nanos() as u64 / count;
@@ -750,11 +748,15 @@ mod tests {
     }
 
     #[test]
-    fn test_yield_at_least() {
+    fn test_wait_at_least() {
         setup_for_spin_interval();
 
         let start = Instant::now();
         yield_at_least(Duration::from_micros(100));
+        assert!(start.saturating_elapsed() >= Duration::from_micros(100));
+
+        let start = Instant::now();
+        spin_at_least(Duration::from_micros(500));
         assert!(start.saturating_elapsed() >= Duration::from_micros(100));
     }
 
