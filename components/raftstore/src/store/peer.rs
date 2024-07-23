@@ -1886,6 +1886,11 @@ where
         let msg_type = m.get_msg_type();
         if msg_type == MessageType::MsgReadIndex {
             fail_point!("on_step_read_index_msg");
+            let mut start_ts: u64 = 0;
+            let mut rctx = ReadIndexContext::parse(m.get_entries()[0].get_data()).unwrap();
+            if let Some(request) = rctx.request.take() {
+                start_ts = request.get_start_ts();
+            }
             ctx.coprocessor_host
                 .on_step_read_index(&mut m, self.get_role());
             // Must use the commit index of `PeerStorage` instead of the commit index
@@ -1893,11 +1898,6 @@ where
             // For more details, see the annotations above `on_leader_commit_idx_changed`.
             let index = self.get_store().commit_index();
 
-            let mut start_ts: u64 = 0;
-            let mut rctx = ReadIndexContext::parse(m.get_entries()[0].get_data()).unwrap();
-            if let Some(request) = rctx.request.take() {
-                start_ts = request.get_start_ts();
-            }
 
             // Check if the log term of this index is equal to current term, if so,
             // this index can be used to reply the read index request if the leader holds
