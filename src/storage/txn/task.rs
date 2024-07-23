@@ -17,33 +17,79 @@ use crate::storage::{
     },
 };
 
-pub(super) struct Task {
+/// ExecutionContext is used store the query execution context of the command,
+/// it is expected to be pass through the whole execution process from
+/// scheduler, to raft and engine, to track the status of the command from the
+/// perspective of SQL statement or transaction.
+/// It's expected to be a read-only struct.
+#[derive(Debug, Clone)]
+pub struct ExecutionContext {
+    tag: CommandKind,
     cid: u64,
-    tracker: TrackerToken,
-    cmd: Option<Command>,
+    tracker_token: TrackerToken,
     extra_op: ExtraOp,
     owned_quota: Option<OwnedAllocated>,
 }
 
-impl Task {
-    /// Creates a task for a running command.
-    pub(super) fn new(cid: u64, cmd: Command) -> Task {
-        let tracker = get_tls_tracker_token();
-        Task {
+impl ExecutionContext {
+    pub fn new(
+        tag: CommandKind,
+        cid: u64,
+        tracker_token: TrackerToken,
+        extra_op: ExtraOp,
+        owned_quota: Option<OwnedAllocated>,
+    ) -> Self {
+        ExecutionContext {
+            tag,
             cid,
-            tracker,
-            cmd: Some(cmd),
-            extra_op: ExtraOp::Noop,
-            owned_quota: None,
+            tracker_token,
+            extra_op,
+            owned_quota,
         }
     }
 
-    pub(super) fn cid(&self) -> u64 {
+    pub fn get_tag(&self) -> CommandKind {
+        self.tag
+    }
+
+    pub fn get_cid(&self) -> u64 {
         self.cid
     }
 
+    pub fn get_tracker_token(&self) -> TrackerToken {
+        self.tracker_token
+    }
+}
+
+pub(super) struct Task {
+    cmd: Option<Command>,
+    exec_ctx: ExecutionContext,
+}
+
+impl Task {
+    /// Creates a task for a running command.
+    pub(super) fn allocate(
+        cid: u64,
+        cmd: Command,
+        memory_quota: Arc<MemoryQuota>,
+    ) -> Result<Self, MemoryQuotaExceeded> {
+        let tracker = get_tls_tracker_token();
+        let tag = cmd.tag();
+        let mut task = Task {
+            cmd: Some(cmd),
+            exec_ctx: ExecutionContext::new(tag, cid, tracker, ExtraOp::Noop, None),
+        };
+        task.alloc_memory_quota(memory_quota)?;
+
+        Ok(task)
+    }
+
+    pub(super) fn cid(&self) -> u64 {
+        self.exec_ctx.cid
+    }
+
     pub(super) fn tracker(&self) -> TrackerToken {
-        self.tracker
+        self.exec_ctx.tracker_token
     }
 
     pub(super) fn cmd(&self) -> &Command {
@@ -55,24 +101,26 @@ impl Task {
     }
 
     pub(super) fn extra_op(&self) -> ExtraOp {
-        self.extra_op
+        self.exec_ctx.extra_op
     }
 
+    /// Set_extra_op is called after getting snapshot and before the command is
+    /// processed.
     pub(super) fn set_extra_op(&mut self, extra_op: ExtraOp) {
-        self.extra_op = extra_op
+        self.exec_ctx.extra_op = extra_op
     }
 
-    pub(super) fn alloc_memory_quota(
+    fn alloc_memory_quota(
         &mut self,
         memory_quota: Arc<MemoryQuota>,
     ) -> Result<(), MemoryQuotaExceeded> {
-        if self.owned_quota.is_none() {
+        if self.exec_ctx.owned_quota.is_none() {
             let mut owned = OwnedAllocated::new(memory_quota);
             owned.alloc(self.cmd.approximate_heap_size())?;
             SCHED_TXN_MEMORY_QUOTA
                 .in_use
                 .set(owned.source().in_use() as i64);
-            self.owned_quota = Some(owned);
+            self.exec_ctx.owned_quota = Some(owned);
         }
         Ok(())
     }
@@ -94,6 +142,10 @@ impl Task {
         let cmd = self.cmd.take().unwrap();
         cmd.process_read(snapshot, statistics)
     }
+
+    pub fn get_exec_ctx(&self) -> ExecutionContext {
+        self.exec_ctx.clone()
+    }
 }
 
 #[cfg(test)]
@@ -107,8 +159,8 @@ mod tests {
     fn test_alloc_memory_quota() {
         let p = PrewriteRequest::default();
         let cmd: TypedCommand<_> = p.into();
-        let mut task = Task::new(0, cmd.cmd);
         let quota = Arc::new(MemoryQuota::new(1 << 32));
+        let mut task = Task::allocate(0, cmd.cmd, quota.clone()).unwrap();
         task.alloc_memory_quota(quota.clone()).unwrap();
         assert_ne!(quota.in_use(), 0);
         let in_use = quota.in_use();

@@ -58,7 +58,7 @@ use tikv_util::{
 use tracker::{set_tls_tracker_token, TrackerToken, GLOBAL_TRACKERS};
 use txn_types::TimeStamp;
 
-use super::task::Task;
+use super::task::{ExecutionContext, Task};
 use crate::{
     server::lock_manager::waiter_manager,
     storage::{
@@ -89,7 +89,7 @@ use crate::{
             txn_status_cache::TxnStatusCache,
             Error, ErrorInner, ProcessResult,
         },
-        types::StorageCallback,
+        types::{is_external_req, StorageCallback},
         DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
         PessimisticLockKeyResult, PessimisticLockResults,
     },
@@ -230,6 +230,12 @@ impl SchedulerTaskCallback {
             Self::NormalRequestCallback(cb) => cb,
             _ => panic!(""),
         }
+    }
+}
+
+impl From<StorageCallback> for SchedulerTaskCallback {
+    fn from(cb: StorageCallback) -> Self {
+        Self::NormalRequestCallback(cb)
     }
 }
 
@@ -508,37 +514,34 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         self.inner.memory_quota.set_capacity(cap)
     }
 
+    pub(in crate::storage) fn fail_with_busy(tag: CommandKind, callback: SchedulerTaskCallback) {
+        SCHED_TOO_BUSY_COUNTER_VEC.get(tag).inc();
+        callback.execute(ProcessResult::Failed {
+            err: StorageError::from(StorageErrorInner::SchedTooBusy),
+        });
+    }
+
     pub(in crate::storage) fn run_cmd(&self, cmd: Command, callback: StorageCallback) {
         let tag = cmd.tag();
-        let fail_with_busy = |callback: StorageCallback| {
-            SCHED_TOO_BUSY_COUNTER_VEC.get(tag).inc();
-            callback.execute(ProcessResult::Failed {
-                err: StorageError::from(StorageErrorInner::SchedTooBusy),
-            });
-        };
         // write flow control
         //
         // TODO: Consider deprecating this write flow control. Reasons being:
         // 1) The flow_controller accomplishes the same task, and
         // 2) The "admission control" functionality has been superseded by memory quota.
         if cmd.need_flow_control() && self.inner.too_busy(cmd.ctx().region_id) {
-            fail_with_busy(callback);
+            Self::fail_with_busy(tag, callback.into());
             return;
         }
         let cid = self.inner.gen_id();
-        let mut task = Task::new(cid, cmd);
-        if task
-            .alloc_memory_quota(self.inner.memory_quota.clone())
-            .is_err()
-        {
-            fail_with_busy(callback);
-            return;
+        if let Ok(task) = Task::allocate(cid, cmd, self.inner.memory_quota.clone()) {
+            self.schedule_command(
+                task,
+                SchedulerTaskCallback::NormalRequestCallback(callback),
+                None,
+            );
+        } else {
+            Self::fail_with_busy(tag, callback.into());
         }
-        self.schedule_command(
-            task,
-            SchedulerTaskCallback::NormalRequestCallback(callback),
-            None,
-        );
     }
 
     /// Releases all the latches held by a command.
@@ -687,15 +690,15 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             .collect();
 
         let cmd = commands::AcquirePessimisticLockResumed::from_lock_wait_entries(awakened_entries);
+        let tag = cmd.cmd.tag();
         let cid = specified_cid.unwrap_or_else(|| self.inner.gen_id());
-        let task = Task::new(cid, cmd.into());
-
-        // TODO: Make flow control take effect on this thing.
-        self.schedule_command(
-            task,
-            SchedulerTaskCallback::LockKeyCallbacks(key_callbacks),
-            prepared_latches,
-        );
+        let callback = SchedulerTaskCallback::LockKeyCallbacks(key_callbacks);
+        if let Ok(task) = Task::allocate(cid, cmd.into(), self.inner.memory_quota.clone()) {
+            // TODO: Make flow control take effect on this thing.
+            self.schedule_command(task, callback, prepared_latches);
+        } else {
+            Self::fail_with_busy(tag, callback);
+        }
     }
 
     // pub for test
@@ -766,7 +769,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 Err(err) => {
                     SCHED_STAGE_COUNTER_VEC.get(tag).snapshot_err.inc();
 
-                    info!("get snapshot failed"; "cid" => task.cid(), "err" => ?err);
+                    info!("get snapshot failed"; "cid" => task.cid(), "err" => ?err, "cmd" => ?task.cmd());
                     sched.finish_with_err(task.cid(), Error::from(err), None);
                 }
             }
@@ -834,8 +837,15 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let tctx = self.inner.dequeue_task_context(cid);
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-            let task = Task::new(self.inner.gen_id(), cmd);
-            self.schedule_command(task, tctx.cb.unwrap(), None);
+            let callback = tctx.cb.unwrap();
+            let tag = cmd.tag();
+            if let Ok(task) =
+                Task::allocate(self.inner.gen_id(), cmd, self.inner.memory_quota.clone())
+            {
+                self.schedule_command(task, callback, None);
+            } else {
+                Self::fail_with_busy(tag, callback);
+            }
         } else {
             tctx.cb.unwrap().execute(pr);
         }
@@ -912,8 +922,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             };
             if let ProcessResult::NextCommand { cmd } = pr {
                 SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-                let task = Task::new(self.inner.gen_id(), cmd);
-                self.schedule_command(task, cb, None);
+                if let Ok(task) =
+                    Task::allocate(self.inner.gen_id(), cmd, self.inner.memory_quota.clone())
+                {
+                    self.schedule_command(task, cb, None);
+                } else {
+                    Self::fail_with_busy(tag, cb);
+                }
             } else {
                 GLOBAL_TRACKERS.with_tracker(sched_details.tracker, |tracker| {
                     tracker.metrics.scheduler_process_nanos = sched_details
@@ -1246,24 +1261,18 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         self.on_read_finished(cid, pr, tag);
     }
 
-    /// Processes a write command within a worker thread, then posts either a
-    /// `WriteFinished` message if successful or a `FinishedWithErr` message
-    /// back to the `TxnScheduler`.
-    async fn process_write(
-        self,
+    /// Use the command handler to process the write command and return the
+    /// write result.
+    async fn handle_task(
+        txn_scheduler: TxnScheduler<E, L>,
         snapshot: E::Snap,
         task: Task,
         sched_details: &mut SchedulerDetails,
-    ) {
-        fail_point!("txn_before_process_write");
+    ) -> super::Result<WriteResult> {
         let write_bytes = task.cmd().write_bytes();
         let tag = task.cmd().tag();
-        let cid = task.cid();
-        let metadata = TaskMetadata::from_ctx(task.cmd().resource_control_ctx());
-        let tracker = task.tracker();
-        let scheduler = self.clone();
-        let quota_limiter = self.inner.quota_limiter.clone();
-        let resource_limiter = self.inner.resource_manager.as_ref().and_then(|m| {
+        let quota_limiter = txn_scheduler.inner.quota_limiter.clone();
+        let resource_limiter = txn_scheduler.inner.resource_manager.as_ref().and_then(|m| {
             let ctx = task.cmd().ctx();
             m.get_resource_limiter(
                 ctx.get_resource_control_context().get_resource_group_name(),
@@ -1275,13 +1284,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         if resource_limiter.is_some() {
             sample.enable_cpu_limit();
         }
-        let pessimistic_lock_mode = self.pessimistic_lock_mode();
-        let pipelined = task.cmd().can_be_pipelined()
-            && pessimistic_lock_mode == PessimisticLockMode::Pipelined;
-        let txn_ext = snapshot.ext().get_txn_ext().cloned();
         let max_ts_synced = snapshot.ext().is_max_ts_synced();
-        let causal_ts_provider = self.inner.causal_ts_provider.clone();
-        let concurrency_manager = self.inner.concurrency_manager.clone();
+        let causal_ts_provider = txn_scheduler.inner.causal_ts_provider.clone();
+        let concurrency_manager = txn_scheduler.inner.concurrency_manager.clone();
 
         let raw_ext = get_raw_ext(
             causal_ts_provider,
@@ -1289,32 +1294,21 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             max_ts_synced,
             task.cmd(),
         )
-        .await;
-        if let Err(err) = raw_ext {
-            info!("get_raw_ext failed"; "cid" => cid, "err" => ?err);
-            scheduler.finish_with_err(cid, err, Some(sched_details));
-            return;
-        }
-        let raw_ext = raw_ext.unwrap();
-
-        let deadline = task.cmd().deadline();
+        .await?;
         let write_result = {
             let _guard = sample.observe_cpu();
             let context = WriteContext {
-                lock_mgr: &self.inner.lock_mgr,
+                lock_mgr: &txn_scheduler.inner.lock_mgr,
                 concurrency_manager,
                 extra_op: task.extra_op(),
                 statistics: &mut sched_details.stat,
-                async_apply_prewrite: self.inner.enable_async_apply_prewrite,
+                async_apply_prewrite: txn_scheduler.inner.enable_async_apply_prewrite,
                 raw_ext,
-                txn_status_cache: &self.inner.txn_status_cache,
+                txn_status_cache: &txn_scheduler.inner.txn_status_cache,
             };
             let begin_instant = Instant::now();
             let res = unsafe {
-                with_perf_context::<E, _, _>(tag, || {
-                    task.process_write(snapshot, context)
-                        .map_err(StorageError::from)
-                })
+                with_perf_context::<E, _, _>(tag, || task.process_write(snapshot, context))
             };
             let cmd_process_duration = begin_instant.saturating_elapsed();
             sched_details.cmd_process_nanos = cmd_process_duration.as_nanos() as u64;
@@ -1371,39 +1365,37 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 .inc_by(quota_delay.as_micros() as u64);
         }
 
+        write_result
+    }
+
+    /// Process the locks encountered or released by the write command, and try
+    /// to write pessimistic locks in the memory if `in-memory` lock is
+    /// enabled. Return updated `WriteResult` if there are still data to be
+    /// persisted, or None if there is nothing left to do.
+    fn handle_lock_info<'a>(
+        txn_scheduler: TxnScheduler<E, L>,
+        exec_ctx: &ExecutionContext,
+        task_meta_data: TaskMetadata<'a>,
+        write_result: WriteResult,
+        sched_details: &mut SchedulerDetails,
+        txn_ext: Option<Arc<TxnExt>>,
+    ) -> Option<(WriteResult, TaskMetadata<'a>)> {
+        let tag = exec_ctx.get_tag();
+        let cid = exec_ctx.get_cid();
         let WriteResult {
             ctx,
             mut to_be_write,
             rows,
-            pr,
+            mut pr,
             lock_info,
             released_locks,
             new_acquired_locks,
             lock_guards,
             response_policy,
             known_txn_status,
-        } = match deadline
-            .check()
-            .map_err(StorageError::from)
-            .and(write_result)
-        {
-            // Write prepare failure typically means conflicting transactions are detected. Delivers
-            // the error to the callback, and releases the latches.
-            Err(err) => {
-                SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
-                debug!("write command failed"; "cid" => cid, "err" => ?err);
-                scheduler.finish_with_err(cid, err, Some(sched_details));
-                return;
-            }
-            // Initiates an async write operation on the storage engine, there'll be a
-            // `WriteFinished` message when it finishes.
-            Ok(res) => res,
-        };
-        let region_id = ctx.get_region_id();
-        SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
+        } = write_result;
 
-        let mut pr = Some(pr);
-
+        // Process the possible encountered locks.
         if !lock_info.is_empty() {
             if tag == CommandKind::acquire_pessimistic_lock {
                 assert_eq!(lock_info.len(), 1);
@@ -1414,24 +1406,29 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 // immediately.
                 if lock_info.parameters.wait_timeout.is_some() {
                     assert_eq!(to_be_write.size(), 0);
-                    pr = Some(ProcessResult::Res);
+                    pr = ProcessResult::Res;
 
-                    scheduler.on_wait_for_lock(&ctx, cid, lock_info, tracker);
+                    txn_scheduler.on_wait_for_lock(
+                        &ctx,
+                        cid,
+                        lock_info,
+                        exec_ctx.get_tracker_token(),
+                    );
                 } else {
                     // For requests with `allow_lock_with_conflict`, key errors are set key-wise.
                     // TODO: It's better to return this error from
                     // `commands::AcquirePessimisticLocks::process_write`.
                     if lock_info.parameters.allow_lock_with_conflict {
-                        pr = Some(ProcessResult::PessimisticLockRes {
+                        pr = ProcessResult::PessimisticLockRes {
                             res: Err(StorageError::from(Error::from(MvccError::from(
                                 MvccErrorInner::KeyIsLocked(lock_info.lock_info_pb),
                             )))),
-                        });
+                        };
                     }
                 }
             } else if tag == CommandKind::acquire_pessimistic_lock_resumed {
                 // Some requests meets lock again after waiting and resuming.
-                scheduler.on_wait_for_lock_after_resuming(cid, pr.as_mut().unwrap(), lock_info);
+                txn_scheduler.on_wait_for_lock_after_resuming(cid, &mut pr, lock_info);
             } else {
                 // WriteResult returning lock info is only expected to exist for pessimistic
                 // lock requests.
@@ -1440,21 +1437,21 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         }
 
         let woken_up_resumable_entries = if !released_locks.is_empty() {
-            scheduler.on_release_locks(&metadata, released_locks)
+            txn_scheduler.on_release_locks(&task_meta_data, released_locks)
         } else {
             smallvec![]
         };
 
         if !woken_up_resumable_entries.is_empty() {
-            scheduler
+            txn_scheduler
                 .inner
                 .store_lock_changes(cid, woken_up_resumable_entries);
         }
 
         if to_be_write.modifies.is_empty() {
-            scheduler.on_write_finished(
+            txn_scheduler.on_write_finished(
                 cid,
-                pr,
+                Some(pr),
                 Ok(()),
                 lock_guards,
                 false,
@@ -1462,16 +1459,16 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 new_acquired_locks,
                 known_txn_status,
                 tag,
-                metadata,
+                task_meta_data,
                 sched_details,
             );
-            return;
+            return None;
         }
 
         if (tag == CommandKind::acquire_pessimistic_lock
             || tag == CommandKind::acquire_pessimistic_lock_resumed)
-            && pessimistic_lock_mode == PessimisticLockMode::InMemory
-            && self.try_write_in_memory_pessimistic_locks(
+            && txn_scheduler.pessimistic_lock_mode() == PessimisticLockMode::InMemory
+            && txn_scheduler.try_write_in_memory_pessimistic_locks(
                 txn_ext.as_deref(),
                 &mut to_be_write,
                 &ctx,
@@ -1488,9 +1485,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     engine.schedule_txn_extra(to_be_write.extra);
                 })
             }
-            scheduler.on_write_finished(
+            txn_scheduler.on_write_finished(
                 cid,
-                pr,
+                Some(pr),
                 Ok(()),
                 lock_guards,
                 false,
@@ -1498,59 +1495,75 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 new_acquired_locks,
                 known_txn_status,
                 tag,
-                metadata,
+                task_meta_data,
                 sched_details,
             );
-            return;
+            return None;
         }
+        Some((
+            WriteResult::new(
+                ctx,
+                to_be_write,
+                rows,
+                pr,
+                vec![],
+                ReleasedLocks::new(),
+                new_acquired_locks,
+                lock_guards,
+                response_policy,
+                known_txn_status,
+            ),
+            task_meta_data,
+        ))
+    }
 
-        let mut is_async_apply_prewrite = false;
-        let write_size = to_be_write.size();
-        if ctx.get_disk_full_opt() == DiskFullOpt::AllowedOnAlmostFull {
-            to_be_write.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull
-        }
-        to_be_write.deadline = Some(deadline);
-
-        let sched = scheduler.clone();
-
-        let mut subscribed = WriteEvent::BASIC_EVENT;
-        match response_policy {
-            ResponsePolicy::OnCommitted => {
-                subscribed |= WriteEvent::EVENT_COMMITTED;
-                is_async_apply_prewrite = true;
-            }
-            ResponsePolicy::OnProposed if pipelined => subscribed |= WriteEvent::EVENT_PROPOSED,
-            _ => (),
-        }
-
-        if self.inner.flow_controller.enabled() {
-            if self.inner.flow_controller.is_unlimited(region_id) {
+    /// Handle the flow control of the write command, return true
+    /// if the command should is already timed out.
+    async fn handle_flow_control(
+        txn_scheduler: TxnScheduler<E, L>,
+        exec_ctx: &ExecutionContext,
+        write_result: &WriteResult,
+        sched_details: &mut SchedulerDetails,
+    ) -> bool {
+        if txn_scheduler.inner.flow_controller.enabled() {
+            let region_id = write_result.ctx.region_id;
+            let write_size = write_result.to_be_write.size();
+            if txn_scheduler.inner.flow_controller.is_unlimited(region_id) {
                 // no need to delay if unthrottled, just call consume to record write flow
-                let _ = self.inner.flow_controller.consume(region_id, write_size);
+                let _ = txn_scheduler
+                    .inner
+                    .flow_controller
+                    .consume(region_id, write_size);
             } else {
                 let start = Instant::now_coarse();
                 // Control mutex is used to ensure there is only one request consuming the
                 // quota. The delay may exceed 1s, and the speed limit is changed every second.
                 // If the speed of next second is larger than the one of first second, without
                 // the mutex, the write flow can't throttled strictly.
-                let control_mutex = self.inner.control_mutex.clone();
+                let control_mutex = txn_scheduler.inner.control_mutex.clone();
                 let _guard = control_mutex.lock().await;
-                let delay = self.inner.flow_controller.consume(region_id, write_size);
+                let delay = txn_scheduler
+                    .inner
+                    .flow_controller
+                    .consume(region_id, write_size);
                 let delay_end = Instant::now_coarse() + delay;
-                while !self.inner.flow_controller.is_unlimited(region_id) {
+                while !txn_scheduler.inner.flow_controller.is_unlimited(region_id) {
                     let now = Instant::now_coarse();
                     if now >= delay_end {
                         break;
                     }
-                    if now >= deadline.inner() {
-                        scheduler.finish_with_err(
-                            cid,
+                    if now >= write_result.to_be_write.deadline.as_ref().unwrap().inner() {
+                        txn_scheduler.finish_with_err(
+                            exec_ctx.get_cid(),
                             StorageErrorInner::DeadlineExceeded,
                             Some(sched_details),
                         );
-                        self.inner.flow_controller.unconsume(region_id, write_size);
+                        txn_scheduler
+                            .inner
+                            .flow_controller
+                            .unconsume(region_id, write_size);
                         SCHED_THROTTLE_TIME.observe(start.saturating_elapsed_secs());
-                        return;
+                        return true;
                     }
                     GLOBAL_TIMER_HANDLE
                         .delay(std::time::Instant::now() + Duration::from_millis(1))
@@ -1563,7 +1576,47 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 sched_details.flow_control_nanos = elapsed.as_nanos() as u64;
             }
         }
+        false
+    }
 
+    /// Propose the to be persisted data into raftstore, handle the response and
+    /// invoke callbacks according to the write policy.
+    async fn handle_async_write(
+        txn_scheduler: TxnScheduler<E, L>,
+        exec_ctx: &ExecutionContext,
+        pipelined: bool,
+        txn_ext: Option<Arc<TxnExt>>,
+        sched_details: &mut SchedulerDetails,
+        task_meta_data: TaskMetadata<'_>,
+        mut write_result: WriteResult,
+    ) {
+        let cid = exec_ctx.get_cid();
+        let tag = exec_ctx.get_tag();
+        let region_id = write_result.ctx.region_id;
+        let write_size = write_result.to_be_write.size();
+        let mut is_async_apply_prewrite = false;
+        if write_result.ctx.get_disk_full_opt() == DiskFullOpt::AllowedOnAlmostFull {
+            write_result.to_be_write.disk_full_opt = DiskFullOpt::AllowedOnAlmostFull
+        }
+        let mut subscribed = WriteEvent::BASIC_EVENT;
+        match write_result.response_policy {
+            ResponsePolicy::OnCommitted => {
+                subscribed |= WriteEvent::EVENT_COMMITTED;
+                is_async_apply_prewrite = true;
+            }
+            ResponsePolicy::OnProposed if pipelined => subscribed |= WriteEvent::EVENT_PROPOSED,
+            _ => (),
+        }
+        let WriteResult {
+            ctx,
+            to_be_write,
+            rows,
+            pr,
+            new_acquired_locks,
+            lock_guards,
+            known_txn_status,
+            ..
+        } = write_result;
         let (version, term) = (ctx.get_region_epoch().get_version(), ctx.get_term());
         // Mutations on the lock CF should overwrite the memory locks.
         // We only set a deleted flag here, and the lock will be finally removed when it
@@ -1575,23 +1628,23 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             .map(|txn_ext| txn_ext.pessimistic_locks.write());
         let removed_pessimistic_locks = match pessimistic_locks_guard.as_mut() {
             Some(locks)
-                // If there is a leader or region change, removing the locks is unnecessary.
-                if locks.term == term && locks.version == version && !locks.is_empty() =>
-            {
-                to_be_write
-                    .modifies
-                    .iter()
-                    .filter_map(|write| match write {
-                        Modify::Put(cf, key, ..) | Modify::Delete(cf, key) if *cf == CF_LOCK => {
-                            locks.get_mut(key).map(|(_, deleted)| {
-                                *deleted = true;
-                                key.to_owned()
-                            })
-                        }
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-            }
+            // If there is a leader or region change, removing the locks is unnecessary.
+            if locks.term == term && locks.version == version && !locks.is_empty() =>
+                {
+                    to_be_write
+                        .modifies
+                        .iter()
+                        .filter_map(|write| match write {
+                            Modify::Put(cf, key, ..) | Modify::Delete(cf, key) if *cf == CF_LOCK => {
+                                locks.get_mut(key).map(|(_, deleted)| {
+                                    *deleted = true;
+                                    key.to_owned()
+                                })
+                            }
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                }
             _ => vec![],
         };
         // Keep the read lock guard of the pessimistic lock table until the request is
@@ -1634,6 +1687,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         };
         drop(downgraded_guard);
 
+        let mut final_pr = Some(pr);
         while let Some(ev) = res.next().await {
             match ev {
                 WriteEvent::Committed => {
@@ -1644,11 +1698,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     if WriteEvent::subscribed_committed(subscribed) && early_return {
                         // Currently, the only case that response is returned after finishing
                         // commit is async applying prewrites for async commit transactions.
-                        let cb = scheduler.inner.take_task_cb(cid);
+                        let cb = txn_scheduler.inner.take_task_cb(cid);
                         Self::early_response(
                             cid,
                             cb.unwrap(),
-                            pr.take().unwrap(),
+                            final_pr.take().unwrap(),
                             tag,
                             CommandStageKind::async_apply_prewrite,
                         );
@@ -1670,11 +1724,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         // proposed phase is pipelined pessimistic lock.
                         // TODO: Unify the code structure of pipelined pessimistic lock and
                         // async apply prewrite.
-                        let cb = scheduler.inner.take_task_cb(cid);
+                        let cb = txn_scheduler.inner.take_task_cb(cid);
                         Self::early_response(
                             cid,
                             cb.unwrap(),
-                            pr.take().unwrap(),
+                            final_pr.take().unwrap(),
                             tag,
                             CommandStageKind::pipelined_write,
                         );
@@ -1684,9 +1738,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     fail_point!("scheduler_async_write_finish");
                     let ok = res.is_ok();
 
-                    sched.on_write_finished(
+                    txn_scheduler.on_write_finished(
                         cid,
-                        pr,
+                        final_pr,
                         res,
                         lock_guards,
                         pipelined,
@@ -1694,7 +1748,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         new_acquired_locks,
                         known_txn_status,
                         tag,
-                        metadata,
+                        task_meta_data,
                         sched_details,
                     );
                     KV_COMMAND_KEYWRITE_HISTOGRAM_VEC
@@ -1705,8 +1759,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                         // Only consume the quota when write succeeds, otherwise failed write
                         // requests may exhaust the quota and other write requests would be in long
                         // delay.
-                        if sched.inner.flow_controller.enabled() {
-                            sched.inner.flow_controller.unconsume(region_id, write_size);
+                        if txn_scheduler.inner.flow_controller.enabled() {
+                            txn_scheduler
+                                .inner
+                                .flow_controller
+                                .unconsume(region_id, write_size);
                         }
                     }
                     sched_details.async_write_nanos =
@@ -1731,6 +1788,79 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 tag, cid
             );
         }
+    }
+
+    /// Processes a write command within a worker thread, then posts either a
+    /// `WriteFinished` message if successful or a `FinishedWithErr` message
+    /// back to the `TxnScheduler`.
+    async fn process_write(
+        self,
+        snapshot: E::Snap,
+        task: Task,
+        sched_details: &mut SchedulerDetails,
+    ) {
+        fail_point!("txn_before_process_write");
+        let exec_ctx = task.get_exec_ctx();
+        let cid = exec_ctx.get_cid();
+        let tag = exec_ctx.get_tag();
+        let mut task_meta_data = TaskMetadata::from_ctx(task.cmd().resource_control_ctx());
+        let pipelined = task.cmd().can_be_pipelined()
+            && self.pessimistic_lock_mode() == PessimisticLockMode::Pipelined;
+        let txn_ext = snapshot.ext().get_txn_ext().cloned();
+        let deadline = task.cmd().deadline();
+        let is_external_req = is_external_req(task.cmd().ctx().get_request_source());
+        let write_result = Self::handle_task(self.clone(), snapshot, task, sched_details).await;
+
+        let mut write_result = match deadline
+            .check()
+            .map_err(StorageError::from)
+            .and(write_result.map_err(StorageError::from))
+        {
+            // Write prepare failure typically means conflicting transactions are detected. Delivers
+            // the error to the callback, and releases the latches.
+            Err(err) => {
+                SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
+                debug!("write command failed"; "cid" => cid, "err" => ?err, "is_external_req" => is_external_req);
+                self.finish_with_err(cid, err, Some(sched_details));
+                return;
+            }
+            // Initiates an async write operation on the storage engine, there'll be a
+            // `WriteFinished` message when it finishes.
+            Ok(res) => res,
+        };
+        SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
+
+        // Continue to process if there is data to be persisted in the `WriteResult`, or
+        // return.
+        if let Some((write_result_res, task_meta_data_res)) = Self::handle_lock_info(
+            self.clone(),
+            &exec_ctx,
+            task_meta_data,
+            write_result,
+            sched_details,
+            txn_ext.clone(),
+        ) {
+            write_result = write_result_res;
+            task_meta_data = task_meta_data_res;
+        } else {
+            return;
+        }
+
+        write_result.to_be_write.deadline = Some(deadline);
+        // Return if the task is already timed out.
+        if Self::handle_flow_control(self.clone(), &exec_ctx, &write_result, sched_details).await {
+            return;
+        }
+        Self::handle_async_write(
+            self.clone(),
+            &exec_ctx,
+            pipelined,
+            txn_ext,
+            sched_details,
+            task_meta_data,
+            write_result,
+        )
+        .await;
     }
 
     /// Returns whether it succeeds to write pessimistic locks to the in-memory
