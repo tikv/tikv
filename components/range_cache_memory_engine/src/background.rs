@@ -616,7 +616,7 @@ impl BackgroundRunnerCore {
         self.engine
             .write()
             .mut_range_manager()
-            .schedule_ranges_to_delete(&mut ranges_to_delete);
+            .mark_delete_ranges_scheduled(&mut ranges_to_delete);
 
         if !ranges_to_delete.is_empty() {
             if let Err(e) =
@@ -673,7 +673,7 @@ impl BackgroundRunnerCore {
         self.engine
             .write()
             .mut_range_manager()
-            .schedule_ranges_to_delete(&mut ranges_to_delete);
+            .mark_delete_ranges_scheduled(&mut ranges_to_delete);
 
         if !ranges_to_delete.is_empty() {
             if let Err(e) =
@@ -1160,17 +1160,10 @@ impl Runnable for DeleteRangeRunner {
                         // Check whether range exists in `ranges_being_deleted` and it's scheduled
                         if !core.range_manager.ranges_being_deleted.iter().any(
                             |(range_being_delete, scheduled)| {
-                                if range_being_delete == &r {
-                                    if !scheduled {
-                                        panic!(
-                                            "range to delete with scheduled false; range={:?}",
-                                            r,
-                                        );
-                                    }
-                                    true
-                                } else {
-                                    false
-                                }
+                                if range_being_delete == &r && !scheduled {
+                                    panic!("range to delete with scheduled false; range={:?}", r,);
+                                };
+                                range_being_delete == &r
                             },
                         ) {
                             panic!("range to delete not in ranges_being_deleted; range={:?}", r,);

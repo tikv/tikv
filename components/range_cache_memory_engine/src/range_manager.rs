@@ -118,7 +118,7 @@ pub struct RangeManager {
     historical_ranges: BTreeMap<CacheRange, RangeMeta>,
     // `ranges_being_deleted` contains ranges that are evicted but not finished the delete (or even
     // not start to delete due to ongoing snapshot)
-    // `bool` means whether the range has been scheduled to delete
+    // `bool` means whether the range has been scheduled to the delete range worker
     pub(crate) ranges_being_deleted: BTreeMap<CacheRange, bool>,
     // ranges that are cached now
     ranges: BTreeMap<CacheRange, RangeMeta>,
@@ -484,15 +484,12 @@ impl RangeManager {
     }
 
     // Only ranges that have not been scheduled will be retained in `ranges`
-    pub fn schedule_ranges_to_delete(&mut self, ranges: &mut Vec<CacheRange>) {
+    pub fn mark_delete_ranges_scheduled(&mut self, ranges: &mut Vec<CacheRange>) {
         ranges.retain(|r| {
             let scheduled = self.ranges_being_deleted.get_mut(r).unwrap();
-            if !*scheduled {
-                *scheduled = true;
-                true
-            } else {
-                false
-            }
+            let has_scheduled = *scheduled;
+            *scheduled = true;
+            !has_scheduled
         });
     }
 }
