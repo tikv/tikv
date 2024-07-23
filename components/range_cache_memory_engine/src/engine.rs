@@ -12,6 +12,10 @@ use std::{
 };
 
 use crossbeam::epoch::{self, default_collector, Guard};
+use crossbeam_skiplist::{
+    base::{Entry, OwnedIter},
+    SkipList,
+};
 use engine_rocks::RocksEngine;
 use engine_traits::{
     CacheRange, FailedReason, IterOptions, Iterable, KvEngine, RangeCacheEngine, Result,
@@ -19,10 +23,6 @@ use engine_traits::{
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
 use raftstore::coprocessor::RegionInfoProvider;
-use skiplist_rs::{
-    base::{Entry, OwnedIter},
-    SkipList,
-};
 use slog_global::error;
 use tikv_util::{config::VersionTrack, info};
 
