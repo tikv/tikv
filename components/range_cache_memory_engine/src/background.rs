@@ -361,11 +361,7 @@ impl BackgroundRunnerCore {
                 .iter()
                 .find_map(|(r, m)| {
                     if r.contains_range(range) {
-                        Some(
-                            m.range_snapshot_list()
-                                .min_snapshot_ts()
-                                .unwrap_or(u64::MAX),
-                        )
+                        m.range_snapshot_list().min_snapshot_ts()
                     } else {
                         None
                     }
