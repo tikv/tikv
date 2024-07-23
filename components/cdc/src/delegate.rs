@@ -668,14 +668,14 @@ impl Delegate {
                 let k = (d.conn_id, d.req_id);
                 let v = advance.multiplexing.entry(k).or_default();
                 v.push(self.region_id, advanced_to);
-            } else {
+            } else if features.contains(FeatureGate::BATCH_RESOLVED_TS) {
                 let v = advance.exclusive.entry(d.conn_id).or_default();
                 v.push(self.region_id, advanced_to);
-                if !features.contains(FeatureGate::BATCH_RESOLVED_TS) {
-                    let k = (d.conn_id, self.region_id);
-                    advance.dispersed.insert(k, d.req_id.0);
-                }
-            };
+            } else {
+                let k = (d.conn_id, self.region_id);
+                let v = (d.req_id, advanced_to);
+                advance.compat.insert(k, v);
+            }
 
             let lag = current_ts
                 .physical()

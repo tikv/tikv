@@ -361,63 +361,75 @@ pub(crate) struct Advance {
 
     // To be compatible with old TiCDC client before v4.0.8.
     // TODO(qupeng): we can deprecate support for too old TiCDC clients.
-    // map[(ConnId, region_id)]->request_id.
-    pub(crate) dispersed: HashMap<(ConnId, u64), u64>,
+    // map[(ConnId, region_id)]->(request_id, ts).
+    pub(crate) compat: HashMap<(ConnId, u64), (RequestId, TimeStamp)>,
 
     pub(crate) scan_finished: usize,
 
     pub(crate) blocked_on_scan: usize,
 
     pub(crate) blocked_on_locks: usize,
+
+    min_resolved_ts: u64,
+    min_ts_region_id: u64,
 }
 
 impl Advance {
-    fn emit_resolved_ts(&mut self, connections: &HashMap<ConnId, Conn>) -> (u64, TimeStamp) {
-        let handle_send_result = |conn: &Conn, res: Result<(), SendError>| -> bool {
-            match res {
-                Ok(_) => return true,
-                Err(SendError::Disconnected) => {
-                    debug!("cdc send event failed, disconnected";
+    fn emit_resolved_ts(&mut self, connections: &HashMap<ConnId, Conn>) {
+        let handle_send_result = |conn: &Conn, res: Result<(), SendError>| match res {
+            Ok(_) => return,
+            Err(SendError::Disconnected) => {
+                debug!("cdc send event failed, disconnected";
                         "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
-                }
-                Err(SendError::Full) | Err(SendError::Congested) => {
-                    info!("cdc send event failed, full";
-                        "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
-                }
             }
-            false
+            Err(SendError::Full) | Err(SendError::Congested) => {
+                info!("cdc send event failed, full";
+                        "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
+            }
         };
 
-        let send_cdc_events = |ts: u64, conn: &Conn, request_id: RequestId, regions: Vec<u64>| {
-            let mut resolved_ts = ResolvedTs::default();
-            resolved_ts.ts = ts;
-            resolved_ts.request_id = request_id.0;
-            *resolved_ts.mut_regions() = regions;
+        let mut batch_min_resolved_ts = 0;
+        let mut batch_min_ts_region_id = 0;
+        let mut send_cdc_events =
+            |ts: u64, conn: &Conn, request_id: RequestId, regions: Vec<u64>| {
+                if batch_min_resolved_ts == 0 || batch_min_resolved_ts > ts {
+                    batch_min_resolved_ts = ts;
+                    if !regions.is_empty() {
+                        batch_min_ts_region_id = regions[0];
+                    }
+                }
 
-            let res = conn
-                .get_sink()
-                .unbounded_send(CdcEvent::ResolvedTs(resolved_ts), false);
-            handle_send_result(conn, res);
-        };
+                let mut resolved_ts = ResolvedTs::default();
+                resolved_ts.ts = ts;
+                resolved_ts.request_id = request_id.0;
+                *resolved_ts.mut_regions() = regions;
 
-        let send_cdc_events_compact = |ts: u64, conn: &Conn, regions: HashSet<u64>| {
-            for region_id in regions {
-                let k = (conn.get_id(), region_id);
-                let request_id = self.dispersed.get(&k).unwrap();
+                let res = conn
+                    .get_sink()
+                    .unbounded_send(CdcEvent::ResolvedTs(resolved_ts), false);
+                handle_send_result(conn, res);
+            };
+
+        let mut compat_min_resolved_ts = 0;
+        let mut compat_min_ts_region_id = 0;
+        let mut send_cdc_events_compat =
+            |ts: u64, conn: &Conn, region_id: u64, req_id: RequestId| {
+                if compat_min_resolved_ts == 0 || compat_min_resolved_ts > ts {
+                    compat_min_resolved_ts = ts;
+                    compat_min_ts_region_id = region_id;
+                }
+
                 let event = Event {
                     region_id,
-                    request_id: *request_id,
+                    request_id: req_id.0,
                     event: Some(Event_oneof_event::ResolvedTs(ts)),
                     ..Default::default()
                 };
                 let res = conn
                     .get_sink()
                     .unbounded_send(CdcEvent::Event(event), false);
-                if handle_send_result(conn, res) {
-                    break;
-                }
-            }
-        };
+                handle_send_result(conn, res);
+            };
 
         let multiplexing = std::mem::take(&mut self.multiplexing).into_iter();
         let exclusive = std::mem::take(&mut self.exclusive).into_iter();
@@ -425,25 +437,30 @@ impl Advance {
             .map(|((a, b), c)| (a, b, c))
             .chain(exclusive.map(|(a, c)| (a, RequestId(0), c)));
 
-        let mut min_resolved: Option<(u64, TimeStamp)> = None;
         for (conn_id, req_id, mut region_ts_heap) in unioned {
             let conn = connections.get(&conn_id).unwrap();
             let mut batch_count = 8;
             while !region_ts_heap.is_empty() {
                 let (ts, regions) = region_ts_heap.pop(batch_count);
-                if min_resolved.is_none() {
-                    let rid = regions.iter().next().map_or(0, |x| *x);
-                    min_resolved = Some((rid, ts));
-                }
                 if conn.features().contains(FeatureGate::BATCH_RESOLVED_TS) {
                     send_cdc_events(ts.into_inner(), conn, req_id, Vec::from_iter(regions));
-                } else {
-                    send_cdc_events_compact(ts.into_inner(), conn, regions);
                 }
                 batch_count *= 4;
             }
         }
-        min_resolved.unwrap_or_default()
+
+        for ((conn_id, region_id), (req_id, ts)) in std::mem::take(&mut self.compat) {
+            let conn = connections.get(&conn_id).unwrap();
+            send_cdc_events_compat(ts.into_inner(), conn, region_id, req_id);
+        }
+
+        if batch_min_resolved_ts > 0 {
+            self.min_resolved_ts = batch_min_resolved_ts;
+            self.min_ts_region_id = batch_min_ts_region_id;
+        } else {
+            self.min_resolved_ts = compat_min_resolved_ts;
+            self.min_ts_region_id = compat_min_ts_region_id;
+        }
     }
 }
 
@@ -1059,11 +1076,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
         self.resolved_region_count = advance.scan_finished;
         self.unresolved_region_count = advance.blocked_on_scan;
-        let (rid, ts) = advance.emit_resolved_ts(&self.connections);
-        if rid > 0 {
-            self.min_resolved_ts = ts;
-            self.min_ts_region_id = rid;
-        }
+        advance.emit_resolved_ts(&self.connections);
+        self.min_resolved_ts = advance.min_resolved_ts.into();
+        self.min_ts_region_id = advance.min_ts_region_id;
     }
 
     fn register_min_ts_event(&self, mut leader_resolver: LeadershipResolver, event_time: Instant) {
