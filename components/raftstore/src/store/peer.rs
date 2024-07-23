@@ -1887,6 +1887,7 @@ where
         if msg_type == MessageType::MsgReadIndex {
             fail_point!("on_step_read_index_msg");
             let mut start_ts: u64 = 0;
+            assert_eq!(m.get_entries().len(), 1);
             let mut rctx = ReadIndexContext::parse(m.get_entries()[0].get_data()).unwrap();
             if let Some(request) = rctx.request.take() {
                 start_ts = request.get_start_ts();
