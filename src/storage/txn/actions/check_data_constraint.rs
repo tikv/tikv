@@ -117,7 +117,7 @@ mod tests {
                 // should detect an older version when the current write type is `Rollback`
                 expected: Err(ErrorInner::AlreadyExist {
                     key: b"a".to_vec(),
-                    existing_start_ts: TimeStamp::new(3),
+                    existing_start_ts: TimeStamp::new(2),
                 }
                 .into()),
                 should_not_exist: true,
@@ -129,7 +129,7 @@ mod tests {
                 // should detect an older version when the current write type is `Lock`
                 expected: Err(ErrorInner::AlreadyExist {
                     key: b"a".to_vec(),
-                    existing_start_ts: TimeStamp::new(10),
+                    existing_start_ts: TimeStamp::new(2),
                 }
                 .into()),
                 should_not_exist: true,
