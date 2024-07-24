@@ -1302,7 +1302,7 @@ mod tests {
     use hybrid_engine::{HybridEngine, HybridEngineSnapshot};
     use keys::DATA_PREFIX;
     use kvproto::{metapb::RegionEpoch, raft_cmdpb::*};
-    use region_cache_memory_engine::{
+    use range_cache_memory_engine::{
         RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
     };
     use tempfile::{Builder, TempDir};
@@ -2593,7 +2593,7 @@ mod tests {
         cmd.set_requests(vec![req].into());
 
         let s = get_snapshot(None, &mut reader, cmd.clone(), &rx);
-        assert!(!s.region_cache_snapshot_available());
+        assert!(!s.range_cache_snapshot_available());
 
         {
             let mut core = memory_engine.core().write();
@@ -2606,7 +2606,7 @@ mod tests {
         };
 
         let s = get_snapshot(Some(snap_ctx.clone()), &mut reader, cmd.clone(), &rx);
-        assert!(s.region_cache_snapshot_available());
+        assert!(s.range_cache_snapshot_available());
         assert_eq!(s.get_value(kv.0).unwrap().unwrap(), kv.1);
     }
 

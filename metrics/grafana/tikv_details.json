@@ -28614,7 +28614,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "max((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"compaction_job_size_max\"}\n    \n))  ",
+              "expr": "max((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"num_files_in_single_compaction_max\"}\n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -28622,14 +28622,14 @@
               "intervalFactor": 1,
               "legendFormat": "max",
               "metric": "",
-              "query": "max((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"compaction_job_size_max\"}\n    \n))  ",
+              "query": "max((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"num_files_in_single_compaction_max\"}\n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "avg((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"compaction_job_size_percentile99\"}\n    \n))  ",
+              "expr": "avg((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"num_files_in_single_compaction_percentile99\"}\n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -28637,14 +28637,14 @@
               "intervalFactor": 1,
               "legendFormat": "99%",
               "metric": "",
-              "query": "avg((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"compaction_job_size_percentile99\"}\n    \n))  ",
+              "query": "avg((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"num_files_in_single_compaction_percentile99\"}\n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "avg((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"compaction_job_size_percentile95\"}\n    \n))  ",
+              "expr": "avg((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"num_files_in_single_compaction_percentile95\"}\n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -28652,14 +28652,14 @@
               "intervalFactor": 1,
               "legendFormat": "95%",
               "metric": "",
-              "query": "avg((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"compaction_job_size_percentile95\"}\n    \n))  ",
+              "query": "avg((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"num_files_in_single_compaction_percentile95\"}\n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "avg((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"compaction_job_size_average\"}\n    \n))  ",
+              "expr": "avg((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"num_files_in_single_compaction_average\"}\n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -28667,7 +28667,7 @@
               "intervalFactor": 1,
               "legendFormat": "avg",
               "metric": "",
-              "query": "avg((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"compaction_job_size_average\"}\n    \n))  ",
+              "query": "avg((\n    tikv_engine_num_files_in_single_compaction\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\",type=\"num_files_in_single_compaction_average\"}\n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -31813,11 +31813,23 @@
           }
         },
         {
-          "aliasColors": {},
-          "bars": false,
           "cacheTimeout": null,
+          "cards": {
+            "cardPadding": null,
+            "cardRound": null
+          },
+          "color": {
+            "cardColor": "#b4ff00",
+            "colorScale": "sqrt",
+            "colorScheme": "interpolateSpectral",
+            "exponent": 0.5,
+            "max": null,
+            "min": null,
+            "mode": "spectrum"
+          },
+          "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "Stall conditions changed of each column family",
+          "description": "The level that the external file ingests into",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -31828,122 +31840,81 @@
               }
             }
           },
-          "fill": 1,
-          "fillGradient": 1,
-          "grid": {
-            "threshold1": null,
-            "threshold1Color": "rgba(216, 200, 27, 0.27)",
-            "threshold2": null,
-            "threshold2Color": "rgba(234, 112, 112, 0.22)"
-          },
           "gridPos": {
             "h": 7,
             "w": 12,
             "x": 0,
             "y": 112
           },
+          "heatmap": {},
           "height": null,
           "hideTimeOverride": false,
+          "hideZeroBuckets": true,
+          "highlightCards": true,
           "id": 224,
           "interval": null,
-          "isNew": true,
           "legend": {
-            "alignAsTable": true,
-            "avg": false,
-            "current": true,
-            "hideEmpty": true,
-            "hideZero": true,
-            "max": true,
-            "min": false,
-            "rightSide": true,
-            "show": true,
-            "sideWidth": null,
-            "sort": "max",
-            "sortDesc": true,
-            "total": false,
-            "values": true
+            "show": false
           },
-          "lines": true,
-          "linewidth": 1,
           "links": [],
-          "maxDataPoints": null,
+          "maxDataPoints": 512,
           "maxPerRow": null,
           "minSpan": null,
-          "nullPointMode": "null as zero",
-          "options": {
-            "alertThreshold": true,
-            "dataLinks": []
-          },
-          "percentage": false,
-          "pointradius": 5,
-          "points": false,
-          "renderer": "flot",
+          "options": {},
           "repeat": null,
           "repeatDirection": null,
-          "seriesOverrides": [],
+          "reverseYBuckets": false,
           "span": null,
-          "stack": false,
-          "steppedLine": false,
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "((\n    tikv_engine_stall_conditions_changed\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    \n))  ",
-              "format": "time_series",
+              "expr": "sum(rate(\n    tikv_engine_ingestion_picked_level_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    [$__rate_interval]\n)) by (le) ",
+              "format": "heatmap",
               "hide": false,
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{instance}}-{{cf}}-{{type}}",
+              "legendFormat": "{{le}}",
               "metric": "",
-              "query": "((\n    tikv_engine_stall_conditions_changed\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    \n))  ",
+              "query": "sum(rate(\n    tikv_engine_ingestion_picked_level_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    [$__rate_interval]\n)) by (le) ",
               "refId": "",
               "step": 10,
               "target": ""
             }
           ],
-          "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Stall conditions changed of each CF",
+          "title": "Ingestion picked level",
           "tooltip": {
             "msResolution": true,
             "shared": true,
+            "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
           },
           "transformations": [],
           "transparent": false,
-          "type": "graph",
-          "xaxis": {
+          "type": "heatmap",
+          "xAxis": {
             "mode": "time",
             "name": null,
             "show": true,
             "values": []
           },
-          "yaxes": [
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            },
-            {
-              "decimals": null,
-              "format": "short",
-              "label": null,
-              "logBase": 1,
-              "max": null,
-              "min": null,
-              "show": true
-            }
-          ],
-          "yaxis": {
-            "align": false,
-            "alignLevel": 0
-          }
+          "xBucketNumber": null,
+          "xBucketSize": null,
+          "yAxis": {
+            "decimals": 1,
+            "format": "short",
+            "label": null,
+            "logBase": 1,
+            "max": null,
+            "min": null,
+            "show": true
+          },
+          "yBucketBound": "upper",
+          "yBucketNumber": null,
+          "yBucketSize": null
         },
         {
           "aliasColors": {},
@@ -32043,7 +32014,7 @@
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_storage_ingest_external_file_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    [$__rate_interval]\n)) by (cf, type, le) \n    \n    \n))  ",
+              "expr": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_storage_ingest_external_file_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (cf, type, le) \n    \n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -32051,14 +32022,14 @@
               "intervalFactor": 1,
               "legendFormat": "99.99%-{{cf}}-{{type}}",
               "metric": "",
-              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_storage_ingest_external_file_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    [$__rate_interval]\n)) by (cf, type, le) \n    \n    \n))  ",
+              "query": "histogram_quantile(0.9999,(\n    sum(rate(\n    tikv_storage_ingest_external_file_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (cf, type, le) \n    \n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_storage_ingest_external_file_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    [$__rate_interval]\n)) by (cf, type, le) \n    \n    \n))  ",
+              "expr": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_storage_ingest_external_file_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (cf, type, le) \n    \n    \n))  ",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -32066,14 +32037,14 @@
               "intervalFactor": 1,
               "legendFormat": "99%-{{cf}}-{{type}}",
               "metric": "",
-              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_storage_ingest_external_file_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    [$__rate_interval]\n)) by (cf, type, le) \n    \n    \n))  ",
+              "query": "histogram_quantile(0.99,(\n    sum(rate(\n    tikv_storage_ingest_external_file_duration_secs_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (cf, type, le) \n    \n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "(sum(rate(\n    tikv_storage_ingest_external_file_duration_secs_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    [$__rate_interval]\n)) by (cf, type)  / sum(rate(\n    tikv_storage_ingest_external_file_duration_secs_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    [$__rate_interval]\n)) by (cf, type) )",
+              "expr": "(sum(rate(\n    tikv_storage_ingest_external_file_duration_secs_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (cf, type)  / sum(rate(\n    tikv_storage_ingest_external_file_duration_secs_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (cf, type) )",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -32081,14 +32052,14 @@
               "intervalFactor": 1,
               "legendFormat": "avg-{{cf}}-{{type}}",
               "metric": "",
-              "query": "(sum(rate(\n    tikv_storage_ingest_external_file_duration_secs_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    [$__rate_interval]\n)) by (cf, type)  / sum(rate(\n    tikv_storage_ingest_external_file_duration_secs_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    [$__rate_interval]\n)) by (cf, type) )",
+              "query": "(sum(rate(\n    tikv_storage_ingest_external_file_duration_secs_sum\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (cf, type)  / sum(rate(\n    tikv_storage_ingest_external_file_duration_secs_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (cf, type) )",
               "refId": "",
               "step": 10,
               "target": ""
             },
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_storage_ingest_external_file_duration_secs_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    [$__rate_interval]\n)) by (cf, type) ",
+              "expr": "sum(rate(\n    tikv_storage_ingest_external_file_duration_secs_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (cf, type) ",
               "format": "time_series",
               "hide": true,
               "instant": false,
@@ -32096,7 +32067,7 @@
               "intervalFactor": 1,
               "legendFormat": "count-{{cf}}-{{type}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_storage_ingest_external_file_duration_secs_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    [$__rate_interval]\n)) by (cf, type) ",
+              "query": "sum(rate(\n    tikv_storage_ingest_external_file_duration_secs_count\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\"}\n    [$__rate_interval]\n)) by (cf, type) ",
               "refId": "",
               "step": 10,
               "target": ""
@@ -32458,23 +32429,11 @@
           }
         },
         {
+          "aliasColors": {},
+          "bars": false,
           "cacheTimeout": null,
-          "cards": {
-            "cardPadding": null,
-            "cardRound": null
-          },
-          "color": {
-            "cardColor": "#b4ff00",
-            "colorScale": "sqrt",
-            "colorScheme": "interpolateSpectral",
-            "exponent": 0.5,
-            "max": null,
-            "min": null,
-            "mode": "spectrum"
-          },
-          "dataFormat": "tsbuckets",
           "datasource": "${DS_TEST-CLUSTER}",
-          "description": "The level that the external file ingests into",
+          "description": "Stall conditions changed of each column family",
           "editable": true,
           "error": false,
           "fieldConfig": {
@@ -32485,81 +32444,122 @@
               }
             }
           },
+          "fill": 1,
+          "fillGradient": 1,
+          "grid": {
+            "threshold1": null,
+            "threshold1Color": "rgba(216, 200, 27, 0.27)",
+            "threshold2": null,
+            "threshold2Color": "rgba(234, 112, 112, 0.22)"
+          },
           "gridPos": {
             "h": 7,
             "w": 12,
             "x": 0,
             "y": 126
           },
-          "heatmap": {},
           "height": null,
           "hideTimeOverride": false,
-          "hideZeroBuckets": true,
-          "highlightCards": true,
           "id": 228,
           "interval": null,
+          "isNew": true,
           "legend": {
-            "show": false
+            "alignAsTable": true,
+            "avg": false,
+            "current": true,
+            "hideEmpty": true,
+            "hideZero": true,
+            "max": true,
+            "min": false,
+            "rightSide": true,
+            "show": true,
+            "sideWidth": null,
+            "sort": "max",
+            "sortDesc": true,
+            "total": false,
+            "values": true
           },
+          "lines": true,
+          "linewidth": 1,
           "links": [],
-          "maxDataPoints": 512,
+          "maxDataPoints": null,
           "maxPerRow": null,
           "minSpan": null,
-          "options": {},
+          "nullPointMode": "null as zero",
+          "options": {
+            "alertThreshold": true,
+            "dataLinks": []
+          },
+          "percentage": false,
+          "pointradius": 5,
+          "points": false,
+          "renderer": "flot",
           "repeat": null,
           "repeatDirection": null,
-          "reverseYBuckets": false,
+          "seriesOverrides": [],
           "span": null,
+          "stack": false,
+          "steppedLine": false,
           "targets": [
             {
               "datasource": "${DS_TEST-CLUSTER}",
-              "expr": "sum(rate(\n    tikv_engine_ingestion_picked_level_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    [$__rate_interval]\n)) by (le) ",
-              "format": "heatmap",
+              "expr": "((\n    tikv_engine_stall_conditions_changed\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    \n))  ",
+              "format": "time_series",
               "hide": false,
               "instant": false,
               "interval": "",
               "intervalFactor": 1,
-              "legendFormat": "{{le}}",
+              "legendFormat": "{{instance}}-{{cf}}-{{type}}",
               "metric": "",
-              "query": "sum(rate(\n    tikv_engine_ingestion_picked_level_bucket\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    [$__rate_interval]\n)) by (le) ",
+              "query": "((\n    tikv_engine_stall_conditions_changed\n    {k8s_cluster=\"$k8s_cluster\",tidb_cluster=\"$tidb_cluster\",instance=~\"$instance\",db=\"$db\"}\n    \n))  ",
               "refId": "",
               "step": 10,
               "target": ""
             }
           ],
+          "thresholds": [],
           "timeFrom": null,
           "timeShift": null,
-          "title": "Ingestion picked level",
+          "title": "Stall conditions changed of each CF",
           "tooltip": {
             "msResolution": true,
             "shared": true,
-            "showHistogram": true,
             "sort": 0,
             "value_type": "individual"
           },
           "transformations": [],
           "transparent": false,
-          "type": "heatmap",
-          "xAxis": {
+          "type": "graph",
+          "xaxis": {
             "mode": "time",
             "name": null,
             "show": true,
             "values": []
           },
-          "xBucketNumber": null,
-          "xBucketSize": null,
-          "yAxis": {
-            "decimals": 1,
-            "format": "short",
-            "label": null,
-            "logBase": 1,
-            "max": null,
-            "min": null,
-            "show": true
-          },
-          "yBucketBound": "upper",
-          "yBucketNumber": null,
-          "yBucketSize": null
+          "yaxes": [
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            },
+            {
+              "decimals": null,
+              "format": "short",
+              "label": null,
+              "logBase": 1,
+              "max": null,
+              "min": null,
+              "show": true
+            }
+          ],
+          "yaxis": {
+            "align": false,
+            "alignLevel": 0
+          }
         },
         {
           "aliasColors": {},

@@ -10,7 +10,7 @@ test-runner = ["derive_more"]
 
 [dependencies]
 collections = { workspace = true }
-crossbeam = "0.8"
+crossbeam = { workspace = true }
 dashmap = "5.2"
 derive_more = { version = "0.99", optional = true }
 fail = "0.5"

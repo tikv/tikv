@@ -6,7 +6,7 @@ license = "Apache-2.0"
 
 [dependencies]
 collections = { workspace = true }
-crossbeam = "0.8"
+crossbeam = { workspace = true }
 futures = "0.3"
 grpcio = { workspace = true }
 kvproto = { workspace = true }
