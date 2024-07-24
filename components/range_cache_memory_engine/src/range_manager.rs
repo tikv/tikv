@@ -183,10 +183,6 @@ impl RangeManager {
         self.ranges.get(range)
     }
 
-    pub fn history_range_meta(&self, range: &CacheRange) -> Option<&RangeMeta> {
-        self.historical_ranges.get(range)
-    }
-
     pub fn set_safe_point(&mut self, range: &CacheRange, safe_ts: u64) -> bool {
         if let Some(meta) = self.ranges.get_mut(range) {
             if meta.safe_point > safe_ts {
@@ -199,12 +195,8 @@ impl RangeManager {
         }
     }
 
-    pub fn get_safe_point(&self, range: &CacheRange) -> u64 {
-        if let Some(meta) = self.range_meta(range) {
-            meta.safe_point()
-        } else {
-            self.history_range_meta(range).unwrap().safe_point()
-        }
+    pub fn get_safe_point(&self, range: &CacheRange) -> Option<u64> {
+        self.range_meta(range).map(|meta| meta.safe_point)
     }
 
     pub fn contains(&self, key: &[u8]) -> bool {
