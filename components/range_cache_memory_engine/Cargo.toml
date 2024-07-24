@@ -17,7 +17,7 @@ required-features = ["failpoints"]
 [dependencies]
 engine_traits = { workspace = true }
 collections = { workspace = true }
-skiplist-rs = { git = "https://github.com/tikv/skiplist-rs.git", branch = "main" }
+crossbeam-skiplist = { workspace = true }
 bytes = "1.0"
 crossbeam = { workspace = true }
 futures = { version = "0.3", features = ["compat"] }
@@ -53,3 +53,4 @@ tempfile = "3.0"
 test_pd = { workspace = true }
 test_pd_client = { workspace = true }
 test_util = { workspace = true }
+proptest = "1.0.0"

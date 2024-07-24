@@ -22,6 +22,8 @@ mod keys;
 mod memory_controller;
 mod metrics;
 mod perf_context;
+#[cfg(test)]
+mod prop_test;
 mod range_manager;
 mod range_stats;
 mod read;

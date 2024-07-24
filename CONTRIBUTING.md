@@ -20,7 +20,7 @@ To build TiKV you'll need to at least have the following installed:
 * `cmake` - Build tool (required for gRPC)
 * `awk` - Pattern scanning/processing language
 * [`protoc`](https://github.com/protocolbuffers/protobuf/releases) - Google protocol buffer compiler
-* C++ compiler - gcc 5+ (required for gRPC)
+* `C++ compiler` - gcc 5+ or clang (required for gRPC)
 
 If you are targeting platforms other than x86_64/aarch64 Linux or macOS, you'll also need:
 
