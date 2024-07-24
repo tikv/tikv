@@ -51,5 +51,36 @@ reason = """
 X509StoreRef::objects is unsound, see RUSTSEC-2020-0071
 """
 
+# See more about RUSTSEC-2024-0357 in deny.toml.
+[[disallowed-types]]
+path = "openssl::bio::MemBio"
+reason = """
+openssl::bio::MemBio::get_buf is unsound, see RUSTSEC-2024-0357
+"""
+[[disallowed-types]]
+path = "openssl::pkcs7::Pkcs7"
+reason = """
+openssl::pkcs7::Pkcs7 may call openssl::bio::MemBio::get_buf, \
+see RUSTSEC-2024-0357
+"""
+[[disallowed-types]]
+path = "openssl::pkey::PKeyRef"
+reason = """
+openssl::pkey::PKeyRef may call openssl::bio::MemBio::get_buf, \
+see RUSTSEC-2024-0357
+"""
+[[disallowed-types]]
+path = "openssl::cms::CmsContentInfoRef"
+reason = """
+openssl::cms::CmsContentInfoRef may call openssl::bio::MemBio::get_buf, \
+see RUSTSEC-2024-0357
+"""
+[[disallowed-types]]
+path = "openssl::asn1::Asn1GeneralizedTimeRef"
+reason = """
+openssl::asn1::Asn1GeneralizedTimeRef may call openssl::bio::MemBio::get_buf, \
+see RUSTSEC-2024-0357
+"""
+
 avoid-breaking-exported-api = false
 upper-case-acronyms-aggressive = true
