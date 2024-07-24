@@ -66,6 +66,7 @@ impl<'a> RpnStackNodeVectorValue<'a> {
                         Json => JsonRef,
                         Enum => EnumRef,
                         Set => SetRef,
+                        VectorFloat32 => VectorFloat32Ref,
                     ],
                     match &mut result_vec {
                         VectorValue::TT(dest_column) => {
@@ -74,12 +75,6 @@ impl<'a> RpnStackNodeVectorValue<'a> {
                                 dest_column.push(src_ref.get_option_ref(*index).map(|x| x.into_owned_value()));
                             }
                         },
-                        VectorValue::VectorFloat32(dest_column) => {
-                            let src_ref = VectorFloat32Ref::borrow_vector_value(physical_value);
-                            for index in logical_rows {
-                                dest_column.push(src_ref.get_option_ref(*index).map(|x| x.into_owned_value()));
-                            }
-                        }
                     }
                 }
                 Ok(result_vec)
