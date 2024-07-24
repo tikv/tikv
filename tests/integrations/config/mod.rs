@@ -249,7 +249,7 @@ fn test_serde_custom_tikv_config() {
         cmd_batch_concurrent_ready_max_count: 123,
         raft_write_size_limit: ReadableSize::mb(34),
         raft_write_batch_size_hint: ReadableSize::mb(1),
-        raft_write_wait_duration: 1000,
+        raft_write_wait_duration: ReadableDuration::micros(444),
         waterfall_metrics: true,
         io_reschedule_concurrent_max_count: 1234,
         io_reschedule_hotpot_duration: ReadableDuration::secs(4321),

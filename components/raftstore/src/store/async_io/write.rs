@@ -501,7 +501,11 @@ where
     EK: KvEngine,
     ER: RaftEngine,
 {
-    fn new(raft_wb: ER::LogBatch, write_batch_size_hint: usize, write_wait_duration: u64) -> Self {
+    fn new(
+        raft_wb: ER::LogBatch,
+        write_batch_size_hint: usize,
+        write_wait_duration: Duration,
+    ) -> Self {
         Self {
             raft_wbs: vec![raft_wb],
             raft_states: HashMap::default(),
@@ -511,10 +515,7 @@ where
             persisted_cbs: vec![],
             readies: HashMap::default(),
             raft_wb_split_size: RAFT_WB_SPLIT_SIZE,
-            recorder: WriteTaskBatchRecorder::new(
-                write_batch_size_hint,
-                Duration::from_nanos(write_wait_duration),
-            ),
+            recorder: WriteTaskBatchRecorder::new(write_batch_size_hint, write_wait_duration),
         }
     }
 
@@ -673,9 +674,8 @@ where
     }
 
     #[inline]
-    fn update_config(&mut self, batch_size: usize, wait_duration: u64) {
-        self.recorder
-            .update_config(batch_size, Duration::from_nanos(wait_duration));
+    fn update_config(&mut self, batch_size: usize, wait_duration: Duration) {
+        self.recorder.update_config(batch_size, wait_duration);
     }
 
     #[inline]
@@ -730,7 +730,7 @@ where
         let batch = WriteTaskBatch::new(
             raft_engine.log_batch(RAFT_WB_DEFAULT_SIZE),
             cfg.value().raft_write_batch_size_hint.0 as usize,
-            cfg.value().raft_write_wait_duration,
+            cfg.value().raft_write_wait_duration.0,
         );
         let perf_context =
             ER::get_perf_context(cfg.value().perf_level, PerfContextKind::RaftstoreStore);
@@ -1020,7 +1020,7 @@ where
             self.metrics.waterfall_metrics = incoming.waterfall_metrics;
             self.batch.update_config(
                 incoming.raft_write_batch_size_hint.0 as usize,
-                incoming.raft_write_wait_duration,
+                incoming.raft_write_wait_duration.0,
             );
         }
     }
@@ -1205,7 +1205,11 @@ pub fn write_to_db_for_test<EK, ER>(
     EK: KvEngine,
     ER: RaftEngine,
 {
-    let mut batch = WriteTaskBatch::new(engines.raft.log_batch(RAFT_WB_DEFAULT_SIZE), 0, 0);
+    let mut batch = WriteTaskBatch::new(
+        engines.raft.log_batch(RAFT_WB_DEFAULT_SIZE),
+        0,
+        Duration::default(),
+    );
     batch.add_write_task(&engines.raft, task);
     let metrics = StoreWriteMetrics::new(false);
     batch.before_write_to_db(&metrics);
