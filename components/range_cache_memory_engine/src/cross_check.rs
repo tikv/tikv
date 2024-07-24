@@ -203,10 +203,13 @@ impl CrossChecker {
                         );
                     }
                 };
+                let (user_key, ts) = split_ts(mem_iter.key()).unwrap();
+
                 if write.write_type != WriteType::Lock && write.write_type != WriteType::Rollback {
-                    let (_, ts) = split_ts(mem_iter.key()).unwrap();
                     cur_key_info.mvcc_recordings.push(ts);
                 }
+
+                cur_key_info.user_key = user_key.to_vec();
             }
 
             CrossChecker::check_with_key_in_disk_iter(
