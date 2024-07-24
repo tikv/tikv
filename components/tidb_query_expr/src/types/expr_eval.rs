@@ -77,6 +77,7 @@ impl<'a> RpnStackNodeVectorValue<'a> {
                         },
                     }
                 }
+                
                 Ok(result_vec)
             }
         }
