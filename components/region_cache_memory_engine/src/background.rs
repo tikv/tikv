@@ -402,11 +402,7 @@ impl BackgroundRunnerCore {
                 .iter()
                 .find_map(|(r, m)| {
                     if r.contains_range(range) {
-                        Some(
-                            m.range_snapshot_list()
-                                .min_snapshot_ts()
-                                .unwrap_or(u64::MAX),
-                        )
+                        m.range_snapshot_list().min_snapshot_ts()
                     } else {
                         None
                     }
@@ -679,7 +675,7 @@ impl BackgroundRunnerCore {
         self.engine
             .write()
             .mut_range_manager()
-            .schedule_ranges(&mut ranges_to_delete);
+            .schedule_ranges_to_delete(&mut ranges_to_delete);
 
         if !ranges_to_delete.is_empty() {
             if let Err(e) = delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange((
@@ -741,7 +737,7 @@ impl BackgroundRunnerCore {
         self.engine
             .write()
             .mut_range_manager()
-            .schedule_ranges(&mut ranges_to_delete);
+            .schedule_ranges_to_delete(&mut ranges_to_delete);
 
         if !ranges_to_delete.is_empty() {
             if let Err(e) = delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange((

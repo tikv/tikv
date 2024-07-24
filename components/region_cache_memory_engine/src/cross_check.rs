@@ -73,17 +73,13 @@ impl CrossChecker {
         );
         let mut safe_point = {
             let core = self.memory_engine.core().read();
-            if let Some(meta) = core
+            let Some(s) = core
                 .range_manager
-                .range_meta(&range_snap.snapshot_meta().range)
-            {
-                meta.safe_point()
-            } else {
-                core.range_manager
-                    .history_range_meta(&range_snap.snapshot_meta().range)
-                    .unwrap()
-                    .safe_point()
-            }
+                .get_safe_point(&range_snap.snapshot_meta().range)
+            else {
+                return;
+            };
+            s
         };
 
         for cf in &[CF_LOCK, CF_WRITE] {
@@ -96,7 +92,7 @@ impl CrossChecker {
                 let mut last_disk_user_key = vec![];
                 let mut last_disk_user_key_delete = false;
                 let mut prev_key_info = KeyCheckingInfo::default();
-                CrossChecker::check_remain_disk_key(
+                if !CrossChecker::check_remain_disk_key(
                     cf,
                     &range_snap.snapshot_meta().range,
                     &mut safe_point,
@@ -106,7 +102,9 @@ impl CrossChecker {
                     &mut last_disk_user_key,
                     &mut last_disk_user_key_delete,
                     &self.memory_engine,
-                );
+                ) {
+                    return;
+                }
                 continue;
             }
             if !disk_valid {
@@ -302,7 +300,7 @@ impl CrossChecker {
             }
             prev_key_info = cur_key_info;
             disk_iter.next().unwrap();
-            CrossChecker::check_remain_disk_key(
+            if !CrossChecker::check_remain_disk_key(
                 cf,
                 &range_snap.snapshot_meta().range,
                 &mut safe_point,
@@ -312,7 +310,9 @@ impl CrossChecker {
                 &mut last_disk_user_key,
                 &mut last_disk_user_key_delete,
                 &self.memory_engine,
-            );
+            ) {
+                return;
+            }
         }
         info!(
             "cross check range done";
@@ -322,6 +322,8 @@ impl CrossChecker {
 
     // IME iterator has reached to end, now check the validity of the remaining keys
     // in rocksdb iterator.
+    // Return false means the range has been evicted, and for simplicity, stop the
+    // check.
     fn check_remain_disk_key(
         cf: &&str,
         range: &CacheRange,
@@ -332,7 +334,7 @@ impl CrossChecker {
         last_disk_user_key: &mut Vec<u8>,
         last_disk_user_key_delete: &mut bool,
         engine: &RangeCacheMemoryEngine,
-    ) {
+    ) -> bool {
         while disk_iter.valid().unwrap() {
             if *cf == CF_LOCK {
                 panic!(
@@ -351,7 +353,9 @@ impl CrossChecker {
             // the cross check. Fetch it and check again.
             if disk_mvcc > *safe_point {
                 *safe_point = {
-                    let s = engine.core().read().range_manager().get_safe_point(range);
+                    let Some(s) = engine.core().read().range_manager().get_safe_point(range) else {
+                        return false;
+                    };
                     assert!(s >= *safe_point);
                     s
                 };
@@ -384,7 +388,7 @@ impl CrossChecker {
                 }
             };
 
-            CrossChecker::check_with_last_user_key(
+            if !CrossChecker::check_with_last_user_key(
                 cf,
                 range,
                 mem_iter,
@@ -397,10 +401,14 @@ impl CrossChecker {
                 last_disk_user_key,
                 last_disk_user_key_delete,
                 engine,
-            );
+            ) {
+                return false;
+            };
 
             disk_iter.next().unwrap();
         }
+
+        true
     }
 
     // In-memory engine may have gced some versions, so we should call next of
@@ -420,7 +428,7 @@ impl CrossChecker {
         cur_key_info: &mut KeyCheckingInfo,
         last_disk_user_key_delete: &mut bool,
         last_disk_user_key: &mut Vec<u8>,
-    ) {
+    ) -> bool {
         let read_ts = mem_iter.snapshot_read_ts;
         let mem_key = mem_iter.key();
         if next_fisrt && !disk_iter.next().unwrap() {
@@ -525,8 +533,11 @@ impl CrossChecker {
                             if disk_mvcc < read_ts {
                                 // get safe point again as it may be updated
                                 *safe_point = {
-                                    let s =
-                                        engine.core().read().range_manager().get_safe_point(range);
+                                    let Some(s) =
+                                        engine.core().read().range_manager().get_safe_point(range)
+                                    else {
+                                        return false;
+                                    };
                                     assert!(s >= *safe_point);
                                     s
                                 };
@@ -580,7 +591,10 @@ impl CrossChecker {
             } else {
                 if disk_mvcc > *safe_point {
                     *safe_point = {
-                        let s = engine.core().read().range_manager().get_safe_point(range);
+                        let Some(s) = engine.core().read().range_manager().get_safe_point(range)
+                        else {
+                            return false;
+                        };
                         assert!(s >= *safe_point);
                         s
                     };
@@ -598,7 +612,7 @@ impl CrossChecker {
                     }
                 }
 
-                CrossChecker::check_with_last_user_key(
+                if !CrossChecker::check_with_last_user_key(
                     cf,
                     range,
                     mem_iter,
@@ -611,7 +625,9 @@ impl CrossChecker {
                     last_disk_user_key,
                     last_disk_user_key_delete,
                     engine,
-                );
+                ) {
+                    return false;
+                }
             }
 
             if disk_key > mem_key {
@@ -630,6 +646,8 @@ impl CrossChecker {
 
             assert!(disk_iter.next().unwrap());
         }
+
+        true
     }
 
     // mem_iter has pointed to the next user key whereas disk_iter still has some
@@ -648,7 +666,7 @@ impl CrossChecker {
         last_disk_user_key: &mut Vec<u8>,
         last_disk_user_key_delete: &mut bool,
         engine: &RangeCacheMemoryEngine,
-    ) {
+    ) -> bool {
         if write.write_type == WriteType::Rollback || write.write_type == WriteType::Lock {
             info!(
                 "meet gced rollback or lock";
@@ -658,7 +676,7 @@ impl CrossChecker {
                 "seqno" => mem_iter.sequence_number,
                 "cf" => ?cf,
             );
-            return;
+            return true;
         }
 
         if disk_user_key == prev_key_info.user_key {
@@ -674,7 +692,9 @@ impl CrossChecker {
             // legally.
             if prev_key_info.last_mvcc_version_before_safe_point == 0 {
                 *safe_point = {
-                    let s = engine.core().read().range_manager().get_safe_point(range);
+                    let Some(s) = engine.core().read().range_manager().get_safe_point(range) else {
+                        return false;
+                    };
                     assert!(s >= *safe_point);
                     s
                 };
@@ -759,6 +779,8 @@ impl CrossChecker {
                 }
             }
         }
+
+        true
     }
 }
 

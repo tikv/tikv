@@ -212,7 +212,7 @@ impl RangeCacheWriteBatch {
             core.mut_range_manager()
                 .clear_ranges_in_being_written(self.id, have_entry_applied);
             core.mut_range_manager()
-                .schedule_ranges(&mut ranges_to_delete);
+                .schedule_ranges_to_delete(&mut ranges_to_delete);
         }
 
         self.engine
