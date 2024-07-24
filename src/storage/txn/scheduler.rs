@@ -1815,9 +1815,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // the error to the callback, and releases the latches.
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
-                let req_info = GLOBAL_TRACKERS
-                    .with_tracker(tracker_token, |tracker| tracker.req_info.clone())
-                    .unwrap();
+                let req_info =
+                    GLOBAL_TRACKERS.with_tracker(tracker_token, |tracker| tracker.req_info.clone());
                 debug!("write command failed"; "cid" => cid, "err" => ?err, "req_info" => ?req_info);
                 self.finish_with_err(cid, err, Some(sched_details));
                 return;
