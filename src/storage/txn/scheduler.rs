@@ -58,7 +58,7 @@ use tikv_util::{
 use tracker::{set_tls_tracker_token, TrackerToken, GLOBAL_TRACKERS};
 use txn_types::TimeStamp;
 
-use super::task::{ExecutionContext, Task};
+use super::task::Task;
 use crate::{
     server::lock_manager::waiter_manager,
     storage::{
@@ -89,7 +89,7 @@ use crate::{
             txn_status_cache::TxnStatusCache,
             Error, ErrorInner, ProcessResult,
         },
-        types::{is_external_req, StorageCallback},
+        types::StorageCallback,
         DynamicConfigs, Error as StorageError, ErrorInner as StorageErrorInner,
         PessimisticLockKeyResult, PessimisticLockResults,
     },
@@ -179,7 +179,7 @@ impl TaskContext {
     fn on_schedule(&mut self) {
         let elapsed = self.latch_timer.saturating_elapsed();
         if let Some(task) = &self.task.as_ref() {
-            GLOBAL_TRACKERS.with_tracker(task.tracker(), |tracker| {
+            GLOBAL_TRACKERS.with_tracker(task.tracker_token(), |tracker| {
                 tracker.metrics.latch_wait_nanos = elapsed.as_nanos() as u64;
             });
         }
@@ -568,12 +568,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     ) {
         let now = Instant::now();
         let cid = task.cid();
-        let tracker = task.tracker();
+        let tracker_token = task.tracker_token();
         let cmd = task.cmd();
-        debug!("received new command"; "cid" => cid, "cmd" => ?cmd, "tracker" => ?tracker);
+        debug!("received new command"; "cid" => cid, "cmd" => ?cmd, "tracker" => ?tracker_token);
 
         let tag = cmd.tag();
         let priority_tag = get_priority_tag(cmd.priority());
+        let cmd_type = cmd.request_type();
         cmd.incr_cmd_metric();
         SCHED_STAGE_COUNTER_VEC.get(tag).new.inc();
         SCHED_COMMANDS_PRI_COUNTER_VEC_STATIC
@@ -585,8 +586,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             self.inner
                 .new_task_context(task, callback, prepared_latches)
         });
-        GLOBAL_TRACKERS.with_tracker(tracker, |tracker| {
+        GLOBAL_TRACKERS.with_tracker(tracker_token, |tracker| {
             tracker.metrics.grpc_process_nanos = now.saturating_elapsed().as_nanos() as u64;
+            tracker.req_info.request_type = cmd_type;
+            tracker.req_info.cid = cid;
         });
         if self.inner.latches.acquire(&mut tctx.lock, cid) {
             fail_point!("txn_scheduler_acquire_success");
@@ -694,7 +697,6 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let cid = specified_cid.unwrap_or_else(|| self.inner.gen_id());
         let callback = SchedulerTaskCallback::LockKeyCallbacks(key_callbacks);
         if let Ok(task) = Task::allocate(cid, cmd.into(), self.inner.memory_quota.clone()) {
-            // TODO: Make flow control take effect on this thing.
             self.schedule_command(task, callback, prepared_latches);
         } else {
             Self::fail_with_busy(tag, callback);
@@ -708,7 +710,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
     /// Executes the task in the sched pool.
     fn execute(&self, mut task: Task) {
-        set_tls_tracker_token(task.tracker());
+        set_tls_tracker_token(task.tracker_token());
         let sched = self.clone();
         let metadata = TaskMetadata::from_ctx(task.cmd().resource_control_ctx());
         let priority = task.cmd().priority();
@@ -762,7 +764,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     debug!(
                         "process cmd with snapshot";
                         "cid" => task.cid(), "term" => ?term, "extra_op" => ?extra_op,
-                        "tracker" => ?task.tracker()
+                        "tracker" => ?task.tracker_token()
                     );
                     sched.process(snapshot, task).await;
                 }
@@ -1201,7 +1203,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
             let region_id = task.cmd().ctx().get_region_id();
             let ts = task.cmd().ts();
-            let mut sched_details = SchedulerDetails::new(task.tracker(), timer);
+            let mut sched_details = SchedulerDetails::new(task.tracker_token(), timer);
             match task.cmd() {
                 Command::Prewrite(_) | Command::PrewritePessimistic(_) => {
                     tls_collect_query(region_id, QueryKind::Prewrite);
@@ -1374,14 +1376,14 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     /// persisted, or None if there is nothing left to do.
     fn handle_lock_info<'a>(
         txn_scheduler: TxnScheduler<E, L>,
-        exec_ctx: &ExecutionContext,
+        cid: u64,
+        tag: CommandKind,
+        tracker_token: TrackerToken,
         task_meta_data: TaskMetadata<'a>,
         write_result: WriteResult,
         sched_details: &mut SchedulerDetails,
         txn_ext: Option<Arc<TxnExt>>,
     ) -> Option<(WriteResult, TaskMetadata<'a>)> {
-        let tag = exec_ctx.get_tag();
-        let cid = exec_ctx.get_cid();
         let WriteResult {
             ctx,
             mut to_be_write,
@@ -1408,12 +1410,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     assert_eq!(to_be_write.size(), 0);
                     pr = ProcessResult::Res;
 
-                    txn_scheduler.on_wait_for_lock(
-                        &ctx,
-                        cid,
-                        lock_info,
-                        exec_ctx.get_tracker_token(),
-                    );
+                    txn_scheduler.on_wait_for_lock(&ctx, cid, lock_info, tracker_token);
                 } else {
                     // For requests with `allow_lock_with_conflict`, key errors are set key-wise.
                     // TODO: It's better to return this error from
@@ -1521,7 +1518,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     /// if the command should is already timed out.
     async fn handle_flow_control(
         txn_scheduler: TxnScheduler<E, L>,
-        exec_ctx: &ExecutionContext,
+        cid: u64,
         write_result: &WriteResult,
         sched_details: &mut SchedulerDetails,
     ) -> bool {
@@ -1554,7 +1551,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     }
                     if now >= write_result.to_be_write.deadline.as_ref().unwrap().inner() {
                         txn_scheduler.finish_with_err(
-                            exec_ctx.get_cid(),
+                            cid,
                             StorageErrorInner::DeadlineExceeded,
                             Some(sched_details),
                         );
@@ -1583,15 +1580,14 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     /// invoke callbacks according to the write policy.
     async fn handle_async_write(
         txn_scheduler: TxnScheduler<E, L>,
-        exec_ctx: &ExecutionContext,
+        cid: u64,
+        tag: CommandKind,
         pipelined: bool,
         txn_ext: Option<Arc<TxnExt>>,
         sched_details: &mut SchedulerDetails,
         task_meta_data: TaskMetadata<'_>,
         mut write_result: WriteResult,
     ) {
-        let cid = exec_ctx.get_cid();
-        let tag = exec_ctx.get_tag();
         let region_id = write_result.ctx.region_id;
         let write_size = write_result.to_be_write.size();
         let mut is_async_apply_prewrite = false;
@@ -1800,15 +1796,14 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         sched_details: &mut SchedulerDetails,
     ) {
         fail_point!("txn_before_process_write");
-        let exec_ctx = task.get_exec_ctx();
-        let cid = exec_ctx.get_cid();
-        let tag = exec_ctx.get_tag();
+        let cid = task.cid();
+        let tag = task.cmd().tag();
+        let tracker_token = task.tracker_token();
         let mut task_meta_data = TaskMetadata::from_ctx(task.cmd().resource_control_ctx());
         let pipelined = task.cmd().can_be_pipelined()
             && self.pessimistic_lock_mode() == PessimisticLockMode::Pipelined;
         let txn_ext = snapshot.ext().get_txn_ext().cloned();
         let deadline = task.cmd().deadline();
-        let is_external_req = is_external_req(task.cmd().ctx().get_request_source());
         let write_result = Self::handle_task(self.clone(), snapshot, task, sched_details).await;
 
         let mut write_result = match deadline
@@ -1820,7 +1815,10 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             // the error to the callback, and releases the latches.
             Err(err) => {
                 SCHED_STAGE_COUNTER_VEC.get(tag).prepare_write_err.inc();
-                debug!("write command failed"; "cid" => cid, "err" => ?err, "is_external_req" => is_external_req);
+                let req_info = GLOBAL_TRACKERS
+                    .with_tracker(tracker_token, |tracker| tracker.req_info.clone())
+                    .unwrap();
+                debug!("write command failed"; "cid" => cid, "err" => ?err, "req_info" => ?req_info);
                 self.finish_with_err(cid, err, Some(sched_details));
                 return;
             }
@@ -1834,7 +1832,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         // return.
         if let Some((write_result_res, task_meta_data_res)) = Self::handle_lock_info(
             self.clone(),
-            &exec_ctx,
+            cid,
+            tag,
+            tracker_token,
             task_meta_data,
             write_result,
             sched_details,
@@ -1848,12 +1848,13 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
         write_result.to_be_write.deadline = Some(deadline);
         // Return if the task is already timed out.
-        if Self::handle_flow_control(self.clone(), &exec_ctx, &write_result, sched_details).await {
+        if Self::handle_flow_control(self.clone(), cid, &write_result, sched_details).await {
             return;
         }
         Self::handle_async_write(
             self.clone(),
-            &exec_ctx,
+            cid,
+            tag,
             pipelined,
             txn_ext,
             sched_details,

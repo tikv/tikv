@@ -458,6 +458,3 @@ storage_callback! {
 pub trait StorageCallbackType: Sized {
     fn callback(cb: Callback<Self>) -> StorageCallback;
 }
-pub fn is_external_req(s: &str) -> bool {
-    s.starts_with("external")
-}

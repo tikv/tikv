@@ -189,7 +189,9 @@ pub struct MemoryQuota {
     capacity: AtomicUsize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+/// OwnedAllocated should not be cloned, the counted memory is freed when its
+/// owner is dropped.
 pub struct OwnedAllocated {
     allocated: usize,
     from: Arc<MemoryQuota>,
