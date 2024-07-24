@@ -203,19 +203,9 @@ impl CrossChecker {
                         );
                     }
                 };
-                let (user_key, ts) = split_ts(mem_iter.key()).unwrap();
-
                 if write.write_type != WriteType::Lock && write.write_type != WriteType::Rollback {
+                    let (_, ts) = split_ts(mem_iter.key()).unwrap();
                     cur_key_info.mvcc_recordings.push(ts);
-                }
-
-                cur_key_info.user_key = user_key.to_vec();
-                if cur_key_info.last_mvcc_version_before_safe_point == 0
-                    && ts < safe_point
-                    && (write.write_type != WriteType::Lock
-                        && write.write_type != WriteType::Rollback)
-                {
-                    cur_key_info.last_mvcc_version_before_safe_point = ts;
                 }
             }
 
@@ -269,14 +259,6 @@ impl CrossChecker {
                         && write.write_type != WriteType::Rollback
                     {
                         cur_key_info.mvcc_recordings.push(ts);
-                    }
-
-                    if cur_key_info.last_mvcc_version_before_safe_point == 0
-                        && ts < safe_point
-                        && (write.write_type != WriteType::Lock
-                            && write.write_type != WriteType::Rollback)
-                    {
-                        cur_key_info.last_mvcc_version_before_safe_point = ts;
                     }
                 }
 
