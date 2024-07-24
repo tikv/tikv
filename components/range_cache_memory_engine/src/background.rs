@@ -883,7 +883,7 @@ impl Runnable for BackgroundRunner {
                 let mut core = self.core.clone();
                 let delete_range_scheduler = self.delete_range_scheduler.clone();
                 let pd_client = self.pd_client.clone();
-                let gc_interval = self.gc_interval.clone();
+                let gc_interval = self.gc_interval;
                 let f = async move {
                     let skiplist_engine = {
                         let core = core.engine.read();
@@ -983,7 +983,7 @@ impl Runnable for BackgroundRunner {
                                 });
 
                                 let safe_point = now.physical() - gc_interval.as_millis() as u64;
-                                TimeStamp::compose(safe_point, 0).into_inner().into()
+                                TimeStamp::compose(safe_point, 0).into_inner()
                             })();
 
                             let write_cf_handle = skiplist_engine.cf_handle(CF_WRITE);
