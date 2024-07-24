@@ -170,6 +170,10 @@ impl RangeManager {
         &self.ranges
     }
 
+    pub(crate) fn historical_ranges(&self) -> &BTreeMap<CacheRange, RangeMeta> {
+        &self.historical_ranges
+    }
+
     pub fn new_range(&mut self, range: CacheRange) {
         assert!(!self.overlap_with_range(&range));
         let range_meta = RangeMeta::new(self.id_allocator.allocate_id());
