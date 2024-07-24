@@ -218,6 +218,8 @@ impl BgWorkManager {
             memory_controller,
             region_info_provider,
             expected_region_size,
+            gc_interval,
+            pd_client.clone(),
         );
         let scheduler = worker.start_with_timer("range-cache-engine-background", runner);
 
@@ -720,6 +722,9 @@ pub(crate) fn flush_epoch() {
 pub struct BackgroundRunner {
     core: BackgroundRunnerCore,
 
+    pd_client: Arc<dyn PdClient>,
+    gc_interval: Duration,
+
     // We have following four separate workers so that each type of task would not block each
     // others
     range_load_remote: Remote<yatp::task::future::TaskCell>,
@@ -761,6 +766,8 @@ impl BackgroundRunner {
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
         expected_region_size: usize,
+        gc_interval: Duration,
+        pd_client: Arc<dyn PdClient>,
     ) -> (Self, Scheduler<BackgroundTask>) {
         let range_load_worker = Builder::new("background-range-load-worker")
             // Range load now is implemented sequentially, so we must use exactly one thread to handle it.
@@ -802,6 +809,8 @@ impl BackgroundRunner {
                     memory_controller,
                     range_stats_manager,
                 },
+                pd_client,
+                gc_interval,
                 range_load_worker,
                 range_load_remote,
                 delete_range_worker,
@@ -873,6 +882,8 @@ impl Runnable for BackgroundRunner {
             BackgroundTask::LoadRange => {
                 let mut core = self.core.clone();
                 let delete_range_scheduler = self.delete_range_scheduler.clone();
+                let pd_client = self.pd_client.clone();
+                let gc_interval = self.gc_interval.clone();
                 let f = async move {
                     let skiplist_engine = {
                         let core = core.engine.read();
@@ -950,6 +961,56 @@ impl Runnable for BackgroundRunner {
                                     }
                                 }
                             }
+
+                            // gc the range
+                            let tso_timeout = std::cmp::min(gc_interval, Duration::from_secs(5));
+                            let now = match block_on_timeout(pd_client.get_tso(), tso_timeout) {
+                                Ok(Ok(ts)) => ts,
+                                err => {
+                                    error!(
+                                        "get timestamp failed, skip gc loaded range";
+                                        "timeout_duration" => ?tso_timeout,
+                                        "error" => ?err,
+                                    );
+                                    // Get timestamp fail so don't do gc.
+                                    return true;
+                                }
+                            };
+
+                            let safe_point = (|| {
+                                fail::fail_point!("in_memory_engine_safe_point_in_loading", |t| {
+                                    t.unwrap().parse::<u64>().unwrap()
+                                });
+
+                                let safe_point = now.physical() - gc_interval.as_millis() as u64;
+                                TimeStamp::compose(safe_point, 0).into_inner().into()
+                            })();
+
+                            let write_cf_handle = skiplist_engine.cf_handle(CF_WRITE);
+                            let default_cf_handle = skiplist_engine.cf_handle(CF_DEFAULT);
+                            let mut filter = Filter::new(
+                                safe_point,
+                                u64::MAX,
+                                default_cf_handle,
+                                write_cf_handle.clone(),
+                            );
+
+                            let mut iter = write_cf_handle.iterator();
+                            let guard = &epoch::pin();
+                            let (start_key, end_key) = encode_key_for_boundary_with_mvcc(&range);
+                            iter.seek(&start_key, guard);
+                            while iter.valid() && iter.key() < &end_key {
+                                let k = iter.key();
+                                let v = iter.value();
+                                if let Err(e) = filter.filter(k.as_bytes(), v.as_bytes()) {
+                                    warn!(
+                                        "Something Wrong in memory engine GC";
+                                        "error" => ?e,
+                                    );
+                                }
+                                iter.next(guard);
+                            }
+
                             true
                         };
 
@@ -1567,6 +1628,13 @@ pub mod tests {
         encoding_for_filter(key.as_encoded(), ts)
     }
 
+    struct MockPdClient {}
+    impl PdClient for MockPdClient {
+        fn get_tso(&self) -> pd_client::PdFuture<txn_types::TimeStamp> {
+            Box::pin(ready(Ok(TimeStamp::compose(TimeStamp::physical_now(), 0))))
+        }
+    }
+
     #[test]
     fn test_filter() {
         let skiplist_engine = SkiplistEngine::new();
@@ -1779,6 +1847,8 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            Duration::from_secs(100),
+            Arc::new(MockPdClient {}),
         );
         worker.core.gc_range(&range, 40, 100);
 
@@ -1853,6 +1923,8 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            Duration::from_secs(100),
+            Arc::new(MockPdClient {}),
         );
 
         // gc should not hanlde keys with larger seqno than oldest seqno
@@ -2015,6 +2087,8 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            Duration::from_secs(100),
+            Arc::new(MockPdClient {}),
         );
         let filter = worker.core.gc_range(&range1, 100, 100);
         assert_eq!(2, filter.filtered);
@@ -2030,6 +2104,8 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            Duration::from_secs(100),
+            Arc::new(MockPdClient {}),
         );
         worker.core.gc_range(&range2, 100, 100);
         assert_eq!(2, filter.filtered);
@@ -2078,6 +2154,8 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            Duration::from_secs(100),
+            Arc::new(MockPdClient {}),
         );
 
         let filter = worker.core.gc_range(&range, 20, 200);
@@ -2176,6 +2254,8 @@ pub mod tests {
             memory_controller,
             None,
             engine.expected_region_size(),
+            Duration::from_secs(100),
+            Arc::new(MockPdClient {}),
         );
         let s1 = engine.snapshot(range.clone(), 10, u64::MAX);
         let s2 = engine.snapshot(range.clone(), 11, u64::MAX);
@@ -2305,6 +2385,8 @@ pub mod tests {
             memory_controller,
             None,
             engine.expected_region_size(),
+            Duration::from_secs(100),
+            Arc::new(MockPdClient {}),
         );
 
         let ranges: Vec<_> = engine
@@ -2439,6 +2521,8 @@ pub mod tests {
             memory_controller,
             None,
             engine.expected_region_size(),
+            Duration::from_secs(100),
+            Arc::new(MockPdClient {}),
         );
         let ranges = runner.core.ranges_for_gc().unwrap();
         assert_eq!(2, ranges.len());
