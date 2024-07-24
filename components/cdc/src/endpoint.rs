@@ -377,7 +377,7 @@ pub(crate) struct Advance {
 impl Advance {
     fn emit_resolved_ts(&mut self, connections: &HashMap<ConnId, Conn>) {
         let handle_send_result = |conn: &Conn, res: Result<(), SendError>| match res {
-            Ok(_) => return,
+            Ok(_) => {}
             Err(SendError::Disconnected) => {
                 debug!("cdc send event failed, disconnected";
                         "conn_id" => ?conn.get_id(), "downstream" => ?conn.get_peer());
@@ -390,46 +390,44 @@ impl Advance {
 
         let mut batch_min_resolved_ts = 0;
         let mut batch_min_ts_region_id = 0;
-        let mut send_cdc_events =
-            |ts: u64, conn: &Conn, request_id: RequestId, regions: Vec<u64>| {
-                if batch_min_resolved_ts == 0 || batch_min_resolved_ts > ts {
-                    batch_min_resolved_ts = ts;
-                    if !regions.is_empty() {
-                        batch_min_ts_region_id = regions[0];
-                    }
+        let mut batch_send = |ts: u64, conn: &Conn, req_id: RequestId, regions: Vec<u64>| {
+            if batch_min_resolved_ts == 0 || batch_min_resolved_ts > ts {
+                batch_min_resolved_ts = ts;
+                if !regions.is_empty() {
+                    batch_min_ts_region_id = regions[0];
                 }
+            }
 
-                let mut resolved_ts = ResolvedTs::default();
-                resolved_ts.ts = ts;
-                resolved_ts.request_id = request_id.0;
-                *resolved_ts.mut_regions() = regions;
+            let mut resolved_ts = ResolvedTs::default();
+            resolved_ts.ts = ts;
+            resolved_ts.request_id = req_id.0;
+            *resolved_ts.mut_regions() = regions;
 
-                let res = conn
-                    .get_sink()
-                    .unbounded_send(CdcEvent::ResolvedTs(resolved_ts), false);
-                handle_send_result(conn, res);
-            };
+            let res = conn
+                .get_sink()
+                .unbounded_send(CdcEvent::ResolvedTs(resolved_ts), false);
+            handle_send_result(conn, res);
+        };
 
         let mut compat_min_resolved_ts = 0;
         let mut compat_min_ts_region_id = 0;
-        let mut send_cdc_events_compat =
-            |ts: u64, conn: &Conn, region_id: u64, req_id: RequestId| {
-                if compat_min_resolved_ts == 0 || compat_min_resolved_ts > ts {
-                    compat_min_resolved_ts = ts;
-                    compat_min_ts_region_id = region_id;
-                }
+        let mut compat_send = |ts: u64, conn: &Conn, region_id: u64, req_id: RequestId| {
+            if compat_min_resolved_ts == 0 || compat_min_resolved_ts > ts {
+                compat_min_resolved_ts = ts;
+                compat_min_ts_region_id = region_id;
+            }
 
-                let event = Event {
-                    region_id,
-                    request_id: req_id.0,
-                    event: Some(Event_oneof_event::ResolvedTs(ts)),
-                    ..Default::default()
-                };
-                let res = conn
-                    .get_sink()
-                    .unbounded_send(CdcEvent::Event(event), false);
-                handle_send_result(conn, res);
+            let event = Event {
+                region_id,
+                request_id: req_id.0,
+                event: Some(Event_oneof_event::ResolvedTs(ts)),
+                ..Default::default()
             };
+            let res = conn
+                .get_sink()
+                .unbounded_send(CdcEvent::Event(event), false);
+            handle_send_result(conn, res);
+        };
 
         let multiplexing = std::mem::take(&mut self.multiplexing).into_iter();
         let exclusive = std::mem::take(&mut self.exclusive).into_iter();
@@ -443,7 +441,7 @@ impl Advance {
             while !region_ts_heap.is_empty() {
                 let (ts, regions) = region_ts_heap.pop(batch_count);
                 if conn.features().contains(FeatureGate::BATCH_RESOLVED_TS) {
-                    send_cdc_events(ts.into_inner(), conn, req_id, Vec::from_iter(regions));
+                    batch_send(ts.into_inner(), conn, req_id, Vec::from_iter(regions));
                 }
                 batch_count *= 4;
             }
@@ -451,7 +449,7 @@ impl Advance {
 
         for ((conn_id, region_id), (req_id, ts)) in std::mem::take(&mut self.compat) {
             let conn = connections.get(&conn_id).unwrap();
-            send_cdc_events_compat(ts.into_inner(), conn, region_id, req_id);
+            compat_send(ts.into_inner(), conn, region_id, req_id);
         }
 
         if batch_min_resolved_ts > 0 {
