@@ -472,6 +472,7 @@ impl BackgroundRunnerCore {
         &mut self,
         range: CacheRange,
         delete_range_scheduler: &Scheduler<BackgroundTask>,
+        safe_point: u64,
     ) -> bool {
         fail::fail_point!("on_snapshot_load_finished");
         fail::fail_point!("on_snapshot_load_finished2");
@@ -534,7 +535,9 @@ impl BackgroundRunnerCore {
                 fail::fail_point!("on_cached_write_batch_consumed");
             } else {
                 core.remove_cached_write_batch(&range);
-                RangeCacheMemoryEngineCore::pending_range_completes_loading(&mut core, &range);
+                RangeCacheMemoryEngineCore::pending_range_completes_loading(
+                    &mut core, &range, safe_point,
+                );
                 drop(core);
 
                 fail::fail_point!("pending_range_completes_loading");
@@ -920,7 +923,7 @@ impl Runnable for BackgroundRunner {
                             continue;
                         }
 
-                        let snapshot_load = || -> bool {
+                        let snapshot_load = || -> Option<u64> {
                             for &cf in DATA_CFS {
                                 let handle = skiplist_engine.cf_handle(cf);
                                 let seq = snap.sequence_number();
@@ -952,7 +955,7 @@ impl Runnable for BackgroundRunner {
                                                     "range" => ?range,
                                                     "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
                                                 );
-                                                return false;
+                                                return None;
                                             }
 
                                             encoded_key.set_memory_controller(
@@ -967,7 +970,7 @@ impl Runnable for BackgroundRunner {
                                     }
                                     Err(e) => {
                                         error!("creating rocksdb iterator failed"; "cf" => cf, "err" => %e);
-                                        return false;
+                                        return None;
                                     }
                                 }
                             }
@@ -983,7 +986,7 @@ impl Runnable for BackgroundRunner {
                                         "error" => ?err,
                                     );
                                     // Get timestamp fail so don't do gc.
-                                    return true;
+                                    return Some(0);
                                 }
                             };
 
@@ -1021,29 +1024,33 @@ impl Runnable for BackgroundRunner {
                                 iter.next(guard);
                             }
 
-                            true
+                            Some(safe_point)
                         };
 
                         let start = Instant::now();
-                        if !snapshot_load() {
+                        if let Some(safe_point) = snapshot_load() {
+                            if core.on_snapshot_load_finished(
+                                range.clone(),
+                                &delete_range_scheduler,
+                                safe_point,
+                            ) {
+                                let duration = start.saturating_elapsed();
+                                RANGE_LOAD_TIME_HISTOGRAM.observe(duration.as_secs_f64());
+                                info!(
+                                    "Loading range finished";
+                                    "range" => ?range,
+                                    "duration(sec)" => ?duration,
+                                );
+                            } else {
+                                info!("Loading range canceled";"range" => ?range);
+                            }
+                        } else {
                             info!(
                                 "snapshot load failed";
                                 "range" => ?range,
                             );
                             core.on_snapshot_load_canceled(range, &delete_range_scheduler);
                             continue;
-                        }
-
-                        if core.on_snapshot_load_finished(range.clone(), &delete_range_scheduler) {
-                            let duration = start.saturating_elapsed();
-                            RANGE_LOAD_TIME_HISTOGRAM.observe(duration.as_secs_f64());
-                            info!(
-                                "Loading range finished";
-                                "range" => ?range,
-                                "duration(sec)" => ?duration,
-                            );
-                        } else {
-                            info!("Loading range canceled";"range" => ?range);
                         }
                     }
                 };
