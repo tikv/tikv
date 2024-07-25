@@ -287,9 +287,10 @@ fn test_evict_with_loading_range() {
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
 
-    engine.snapshot(range1, 100, 100).unwrap_err();
-    engine.snapshot(range2, 100, 100).unwrap_err();
-    engine.snapshot(range3, 100, 100).unwrap();
+    let read_ts = TimeStamp::compose(TimeStamp::physical_now(), 0).into_inner();
+    engine.snapshot(range1, read_ts, 100).unwrap_err();
+    engine.snapshot(range2, read_ts, 100).unwrap_err();
+    engine.snapshot(range3, read_ts, 100).unwrap();
 }
 
 #[test]
