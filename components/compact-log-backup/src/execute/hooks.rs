@@ -3,7 +3,7 @@ use std::future::Future;
 
 use chrono::{Duration, Local};
 pub use engine_traits::SstCompressionType;
-use external_storage::{FullFeaturedStorage, UnpinReader};
+use external_storage::{IterableExternalStorage, UnpinReader};
 use futures::{future::TryFutureExt, io::Cursor};
 use kvproto::brpb;
 use tikv_util::{
@@ -48,13 +48,13 @@ pub struct BeforeStartCtx<'a> {
 #[derive(Clone, Copy)]
 pub struct AfterFinishCtx<'a> {
     pub async_rt: &'a Handle,
-    pub external_storage: &'a dyn FullFeaturedStorage,
+    pub external_storage: &'a dyn IterableExternalStorage,
 }
 
 #[derive(Clone, Copy)]
 pub struct SubcompactionFinishCtx<'a> {
     pub this: &'a Execution,
-    pub external_storage: &'a dyn FullFeaturedStorage,
+    pub external_storage: &'a dyn IterableExternalStorage,
     pub result: &'a SubcompactionResult,
 }
 

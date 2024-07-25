@@ -2,7 +2,7 @@
 use std::{any::Any, collections::HashMap, sync::Arc, time::Instant};
 
 use engine_rocks::RocksEngine;
-use external_storage::{BackendConfig, BlobStore, FullFeaturedStorage, S3Storage};
+use external_storage::{BackendConfig, BlobStore, IterableExternalStorage, S3Storage};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use kvproto::brpb::{self, Gcs, StorageBackend, S3};
 use tikv_util::config::ReadableSize;
@@ -242,7 +242,7 @@ async fn gcloud() {
     .unwrap();
     backend.set_gcs(gcs);
     let storage =
-        external_storage::create_full_featured_storage(&backend, BackendConfig::default()).unwrap();
+        external_storage::create_iterable_storage(&backend, BackendConfig::default()).unwrap();
 
     let now = Instant::now();
     let mut ext = LoadFromExt::default();
@@ -268,7 +268,7 @@ async fn gcloud() {
         ..Default::default()
     };
     drop(coll);
-    let arc_store: Arc<dyn FullFeaturedStorage> = Arc::from(storage);
+    let arc_store: Arc<dyn IterableExternalStorage> = Arc::from(storage);
     let compact_worker =
         SubcompactionExec::<RocksEngine>::default_config(Arc::clone(&arc_store) as _);
     let result = compact_worker
@@ -292,7 +292,7 @@ async fn gcloud_count() {
     .unwrap();
     backend.set_gcs(gcs);
     let storage =
-        external_storage::create_full_featured_storage(&backend, BackendConfig::default()).unwrap();
+        external_storage::create_iterable_storage(&backend, BackendConfig::default()).unwrap();
 
     let n = StreamyMetaStorage::count_objects(storage.as_ref())
         .await

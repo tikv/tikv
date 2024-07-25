@@ -9,7 +9,7 @@ use std::{
 
 use engine_rocks::RocksEngine;
 use engine_traits::{IterOptions, Iterator as _, RefIterable, SstExt, CF_DEFAULT, CF_WRITE};
-use external_storage::{ExternalStorage, WalkBlobStorage};
+use external_storage::{ExternalStorage, IterableStorage};
 use file_system::sha256;
 use futures::{
     io::{AsyncReadExt, Cursor as ACursor},
@@ -203,6 +203,13 @@ pub struct KvGen<S> {
     sources: S,
 }
 
+pub fn sow((table_id, handle_id, ts): KeySeed) -> Vec<u8> {
+    let key = Key::from_raw(&encode_row_key(table_id, handle_id))
+        .append_ts(ts.into())
+        .into_encoded();
+    key
+}
+
 impl<S> KvGen<S> {
     pub fn new(s: S, value: impl FnMut(KeySeed) -> Vec<u8> + 'static) -> Self {
         Self {
@@ -216,11 +223,9 @@ impl<S: Iterator<Item = KeySeed>> Iterator for KvGen<S> {
     type Item = Kv;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.sources.next().map(|(table_id, handle_id, ts)| {
-            let key = Key::from_raw(&encode_row_key(table_id, handle_id))
-                .append_ts(ts.into())
-                .into_encoded();
-            let value = (self.value)((table_id, handle_id, ts));
+        self.sources.next().map(|seed| {
+            let key = sow(seed);
+            let value = (self.value)(seed);
             Kv { key, value }
         })
     }
@@ -228,6 +233,14 @@ impl<S: Iterator<Item = KeySeed>> Iterator for KvGen<S> {
 
 pub fn gen_step(table_id: i64, start: i64, step: i64) -> impl Iterator<Item = KeySeed> {
     (0..).map(move |v| (table_id, v * step + start, 42))
+}
+
+pub fn gen_adjacent_with_ts(
+    table_id: i64,
+    offset: usize,
+    ts: u64,
+) -> impl Iterator<Item = KeySeed> {
+    (offset..).map(move |v| (table_id, v as i64, ts))
 }
 
 pub fn gen_min_max(
@@ -484,7 +497,7 @@ impl TmpStorage {
 
     pub async fn load_migrations(&self) -> crate::Result<Vec<(u64, brpb::Migration)>> {
         let pfx = "v1/migrations";
-        let mut stream = self.storage.walk(pfx);
+        let mut stream = self.storage.iter_prefix(pfx);
         let mut output = vec![];
         while let Some(file) = stream.next().await {
             let file = file?;
@@ -504,7 +517,7 @@ impl TmpStorage {
         &self,
         pfx: &str,
     ) -> crate::Result<Vec<brpb::LogFileSubcompaction>> {
-        let mut stream = self.storage.walk(pfx);
+        let mut stream = self.storage.iter_prefix(pfx);
         let mut output = vec![];
         while let Some(file) = stream.next().await {
             let file = file?;

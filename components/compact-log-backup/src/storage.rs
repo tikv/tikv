@@ -10,7 +10,7 @@ use std::{
 
 use derive_more::Display;
 use external_storage::{
-    BlobObject, ExternalStorage, FullFeaturedStorage, UnpinReader, WalkBlobStorage,
+    BlobObject, ExternalStorage, IterableExternalStorage, IterableStorage, UnpinReader,
 };
 use futures::{
     future::{FusedFuture, FutureExt, TryFutureExt},
@@ -330,8 +330,8 @@ impl<'a> StreamyMetaStorage<'a> {
     /// Streaming metadata from an external storage.
     /// Defaultly this will fetch metadata from `v1/backupmeta`, you may
     /// override this in `ext`.
-    pub fn load_from_ext(s: &'a dyn FullFeaturedStorage, ext: LoadFromExt<'a>) -> Self {
-        let files = s.walk(ext.meta_prefix).fuse();
+    pub fn load_from_ext(s: &'a dyn IterableExternalStorage, ext: LoadFromExt<'a>) -> Self {
+        let files = s.iter_prefix(ext.meta_prefix).fuse();
         Self {
             prefetch: VecDeque::new(),
             files,
@@ -342,10 +342,10 @@ impl<'a> StreamyMetaStorage<'a> {
     }
 
     /// Counter the number of the metadata prefix.
-    pub async fn count_objects(s: &'a dyn FullFeaturedStorage) -> std::io::Result<u64> {
+    pub async fn count_objects(s: &'a dyn IterableExternalStorage) -> std::io::Result<u64> {
         let mut n = 0;
         // NOTE: should we allow user to specify the prefix?
-        let mut items = s.walk(&METADATA_PREFIX);
+        let mut items = s.iter_prefix(&METADATA_PREFIX);
         while let Some(_) = items.try_next().await? {
             n += 1
         }
@@ -453,12 +453,12 @@ impl LogFile {
 }
 
 pub struct MigartionStorageWrapper<'a> {
-    storage: &'a dyn FullFeaturedStorage,
+    storage: &'a dyn IterableExternalStorage,
     migartions_prefix: &'a str,
 }
 
 impl<'a> MigartionStorageWrapper<'a> {
-    pub fn new(storage: &'a dyn FullFeaturedStorage) -> Self {
+    pub fn new(storage: &'a dyn IterableExternalStorage) -> Self {
         Self {
             storage,
             migartions_prefix: &MIGRATION_PREFIX,
@@ -488,7 +488,7 @@ impl<'a> MigartionStorageWrapper<'a> {
 
     pub async fn largest_id(&self) -> Result<u64> {
         self.storage
-            .walk(&self.migartions_prefix)
+            .iter_prefix(&self.migartions_prefix)
             .err_into::<Error>()
             .map(|v| {
                 v.and_then(|v| match id_of_migration(&v.key) {

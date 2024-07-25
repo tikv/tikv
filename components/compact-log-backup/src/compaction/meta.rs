@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use external_storage::FullFeaturedStorage;
+use external_storage::IterableExternalStorage;
 use futures::stream::TryStreamExt;
 use kvproto::brpb::{self, DeleteSpansOfFile};
 
@@ -90,6 +90,7 @@ impl Subcompaction {
                 }
             }
         }
+        out.set_table_id(self.table_id);
         out.set_region_id(self.region_id);
         out.set_cf(self.cf.to_owned());
         out.set_size(self.size);
@@ -246,14 +247,14 @@ impl CompactionRunInfoBuilder {
         &mut self.compaction
     }
 
-    pub async fn write_migration(&self, s: &dyn FullFeaturedStorage) -> Result<()> {
+    pub async fn write_migration(&self, s: &dyn IterableExternalStorage) -> Result<()> {
         let migration = self.migration(s).await?;
         let wrapped_storage = MigartionStorageWrapper::new(s);
         wrapped_storage.write(migration).await?;
         Ok(())
     }
 
-    pub async fn migration(&self, s: &dyn FullFeaturedStorage) -> Result<brpb::Migration> {
+    pub async fn migration(&self, s: &dyn IterableExternalStorage) -> Result<brpb::Migration> {
         let mut migration = brpb::Migration::new();
         let files = self.find_expiring_files(s).await?;
         for files in files {
@@ -276,7 +277,7 @@ impl CompactionRunInfoBuilder {
 
     async fn find_expiring_files(
         &self,
-        s: &dyn FullFeaturedStorage,
+        s: &dyn IterableExternalStorage,
     ) -> Result<Vec<ExpiringFilesOfMeta>> {
         let ext = LoadFromExt::default();
         let mut storage = StreamyMetaStorage::load_from_ext(s, ext);

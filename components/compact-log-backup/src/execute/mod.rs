@@ -9,7 +9,7 @@ use std::{borrow::Cow, path::Path, sync::Arc};
 use engine_rocks::RocksEngine;
 pub use engine_traits::SstCompressionType;
 use engine_traits::SstExt;
-use external_storage::{BackendConfig, FullFeaturedStorage};
+use external_storage::{BackendConfig, IterableExternalStorage};
 use futures::stream::{self, StreamExt};
 use hooks::{
     AfterFinishCtx, BeforeStartCtx, CId, ExecHooks, SubcompactionFinishCtx, SubcompactionStartCtx,
@@ -79,11 +79,11 @@ impl Execution {
     }
 
     pub fn run(self, mut hooks: impl ExecHooks) -> Result<()> {
-        let storage = external_storage::create_full_featured_storage(
+        let storage = external_storage::create_iterable_storage(
             &self.external_storage,
             BackendConfig::default(),
         )?;
-        let storage: Arc<dyn FullFeaturedStorage> = Arc::from(storage);
+        let storage: Arc<dyn IterableExternalStorage> = Arc::from(storage);
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -188,7 +188,7 @@ impl Execution {
         &self,
         cid: CId,
         result: &SubcompactionResult,
-        external_storage: &dyn FullFeaturedStorage,
+        external_storage: &dyn IterableExternalStorage,
         hooks: &mut impl ExecHooks,
     ) -> Result<()> {
         let cx = SubcompactionFinishCtx {

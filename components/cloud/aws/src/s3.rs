@@ -830,7 +830,7 @@ mod tests {
         };
 
         let storage = S3Storage::new(s3).unwrap();
-        let s = storage.walk("tpcc-1000-incr-with-crc64/v1/backupmeta");
+        let s = storage.iter_prefix("tpcc-1000-incr-with-crc64/v1/backupmeta");
         let items = block_on_external_io(TryStreamExt::try_collect::<Vec<_>>(s));
         println!("{:?}", items);
         println!("{}", items.unwrap().len());
