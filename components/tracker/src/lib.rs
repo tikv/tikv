@@ -92,7 +92,7 @@ pub struct RequestInfo {
     pub task_id: u64,
     pub resource_group_tag: Vec<u8>,
 
-    /// Information recorded after the task is scheduled.
+    // Information recorded after the task is scheduled.
     pub request_type: RequestType,
     pub cid: u64,
     pub is_external_req: bool,
