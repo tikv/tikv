@@ -26,96 +26,11 @@ use crate::{compaction::Input, errors::Result};
 #[derive(Clone)]
 pub struct Source {
     inner: Arc<dyn ExternalStorage>,
-    cache_manager: Option<Arc<CacheManager>>,
-}
-
-struct CacheManager {
-    base: PathBuf,
-    files: Mutex<HashMap<Arc<str>, Arc<OnceCell<PathBuf>>>>,
 }
 
 impl Source {
     pub fn new(inner: Arc<dyn ExternalStorage>) -> Self {
-        Self {
-            inner,
-            cache_manager: None,
-        }
-    }
-
-    pub fn with_cache(
-        inner: Arc<dyn ExternalStorage>,
-        cache_prefix: impl AsRef<Path>,
-    ) -> std::io::Result<Self> {
-        Ok(Self {
-            inner,
-            cache_manager: Some(Arc::new(CacheManager::new(cache_prefix)?)),
-        })
-    }
-}
-
-impl CacheManager {
-    fn new(path: impl AsRef<Path>) -> std::io::Result<Self> {
-        let base = path.as_ref().join(format!(
-            "compact-log-cache-{}",
-            tikv_util::sys::thread::process_id()
-        ));
-        std::fs::create_dir_all(&base)?;
-        Ok(Self {
-            base,
-            files: Default::default(),
-        })
-    }
-
-    async fn load_file(
-        &self,
-        input: Input,
-        storage: &Arc<dyn ExternalStorage>,
-    ) -> std::io::Result<(Vec<u8>, u64, u64)> {
-        // (error_during_downloading, physical_bytes_in)
-        let stat = Arc::new((AtomicU64::new(0), AtomicU64::new(0)));
-        let stat_ref = Arc::clone(&stat);
-        let ext = RetryExt::default().with_fail_hook(move |err: &JustRetry<std::io::Error>| {
-            eprintln!("retry the error: {:?}", err.0);
-            stat_ref.0.inc_by(1)
-        });
-        let fetch = || {
-            let storage = storage.clone();
-            let id = input.id.clone();
-            let stat = Arc::clone(&stat);
-            let compression_ty = input.compression;
-            async move {
-                let path = self.base.join(id.name.as_ref());
-                let local = pin!(AllowStdIo::new(std::fs::File::create(&path)?));
-                let mut decompress = decompress(compression_ty, local)?;
-                let source = storage.read(&id.name);
-                let n = futures::io::copy(source, &mut decompress).await?;
-                stat.1.inc_by(n);
-                decompress.flush().await?;
-                std::result::Result::<_, std::io::Error>::Ok(path)
-            }
-        };
-
-        let path_cell = {
-            let mut files = self.files.lock().unwrap();
-            if !files.contains_key(&input.id.name) {
-                files.insert(Arc::clone(&input.id.name), Arc::default());
-            }
-            Arc::clone(&files[&input.id.name])
-        };
-
-        let path = path_cell
-            .get_or_try_init(|| retry_all_ext(fetch, ext))
-            .await?;
-        let mut f = std::fs::File::options()
-            .read(true)
-            .write(false)
-            .open(path)?;
-        // NOTE: initializing this is somehow costy. Maybe don't initialize this?
-        // (unsafe)
-        let mut v = vec![0u8; input.id.length as usize];
-        f.seek(futures_io::SeekFrom::Start(input.id.offset))?;
-        f.read_exact(&mut v[..])?;
-        Ok((v, stat.0.get(), stat.1.get()))
+        Self { inner }
     }
 }
 
@@ -179,16 +94,7 @@ impl Source {
         mut stat: Option<&mut LoadStatistic>,
         mut on_key_value: impl FnMut(&[u8], &[u8]),
     ) -> Result<()> {
-        let content = if let Some(cache_mgr) = &self.cache_manager {
-            let (content, errors, loaded_bytes) = cache_mgr.load_file(input, &self.inner).await?;
-            stat.as_mut().map(|s| {
-                s.error_during_downloading += errors;
-                s.physical_bytes_in += loaded_bytes;
-            });
-            content
-        } else {
-            self.load_remote(input, &mut stat).await?
-        };
+        let content = self.load_remote(input, &mut stat).await?;
 
         let mut co = Cooperate::new(4096);
         let mut iter = stream_event::EventIterator::new(&content);
@@ -226,14 +132,12 @@ fn decompress<'a>(
 
 #[cfg(test)]
 mod tests {
-    use tempdir::TempDir;
-
     use super::Source;
     use crate::{
         compaction::{Input, Subcompaction},
         statistic::LoadStatistic,
         storage::{LogFile, MetaFile},
-        test_util::{gen_adjacent_with_ts, gen_step, KvGen, LogFileBuilder, TmpStorage},
+        test_util::{gen_adjacent_with_ts, KvGen, LogFileBuilder, TmpStorage},
     };
 
     const NUM_FLUSH: usize = 2;
@@ -300,33 +204,6 @@ mod tests {
                 assert_eq!(stat.logical_key_bytes_in, 350);
                 assert_eq!(stat.logical_value_bytes_in, 30);
                 assert_eq!(stat.error_during_downloading, 0);
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_cached() {
-        let st = TmpStorage::create();
-        let m = construct_storage(&st).await;
-        let cache = TempDir::new("cache").unwrap();
-
-        let so = Source::with_cache(st.storage().clone(), cache.path()).unwrap();
-        for epoch in 0..NUM_FLUSH {
-            for seg in 0..NUM_REGION {
-                let input = as_input(&m[epoch].physical_files[0].files[seg]);
-                let mut i = 0;
-                let mut stat = LoadStatistic::default();
-                so.load(input, Some(&mut stat), |k, v| {
-                    assert_eq!(
-                        k,
-                        crate::test_util::sow((1, (seg * NUM_KV + i) as i64, epoch as u64))
-                    );
-                    assert_eq!(v, format!("v@{epoch}").as_bytes());
-                    i += 1;
-                })
-                .await
-                .unwrap();
-                println!("{stat:?}");
             }
         }
     }
