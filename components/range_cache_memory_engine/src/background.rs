@@ -995,7 +995,9 @@ impl Runnable for BackgroundRunner {
                                     t.unwrap().parse::<u64>().unwrap()
                                 });
 
-                                let safe_point = now.physical() - gc_interval.as_millis() as u64;
+                                let safe_point = now
+                                    .physical()
+                                    .saturating_sub(gc_interval.as_millis() as u64);
                                 TimeStamp::compose(safe_point, 0).into_inner()
                             })();
 
