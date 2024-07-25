@@ -247,6 +247,8 @@ impl BgWorkManager {
             memory_controller,
             region_info_provider,
             expected_region_size,
+            gc_interval,
+            pd_client.clone(),
         );
         let scheduler = worker.start_with_timer("range-cache-engine-background", runner);
 
@@ -504,6 +506,7 @@ impl BackgroundRunnerCore {
         &mut self,
         range: CacheRange,
         delete_range_scheduler: &Scheduler<BackgroundTask>,
+        safe_point: u64,
     ) -> bool {
         fail::fail_point!("on_snapshot_load_finished");
         fail::fail_point!("on_snapshot_load_finished2");
@@ -570,7 +573,9 @@ impl BackgroundRunnerCore {
                 fail::fail_point!("on_cached_write_batch_consumed");
             } else {
                 core.remove_cached_write_batch(&range);
-                RangeCacheMemoryEngineCore::pending_range_completes_loading(&mut core, &range);
+                RangeCacheMemoryEngineCore::pending_range_completes_loading(
+                    &mut core, &range, safe_point,
+                );
                 drop(core);
 
                 fail::fail_point!("pending_range_completes_loading");
@@ -780,6 +785,9 @@ pub(crate) fn flush_epoch() {
 pub struct BackgroundRunner {
     core: BackgroundRunnerCore,
 
+    pd_client: Arc<dyn PdClient>,
+    gc_interval: Duration,
+
     // We have following four separate workers so that each type of task would not block each
     // others
     range_load_remote: Remote<yatp::task::future::TaskCell>,
@@ -828,6 +836,8 @@ impl BackgroundRunner {
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
         expected_region_size: usize,
+        gc_interval: Duration,
+        pd_client: Arc<dyn PdClient>,
     ) -> (Self, Scheduler<BackgroundTask>, Scheduler<BackgroundTask>) {
         let range_load_worker = Builder::new("background-range-load-worker")
             // Range load now is implemented sequentially, so we must use exactly one thread to handle it.
@@ -880,6 +890,8 @@ impl BackgroundRunner {
                     memory_controller,
                     range_stats_manager,
                 },
+                pd_client,
+                gc_interval,
                 range_load_worker,
                 range_load_remote,
                 delete_range_worker,
@@ -1241,6 +1253,8 @@ impl Runnable for BackgroundRunner {
             BackgroundTask::LoadRange => {
                 let mut core = self.core.clone();
                 let delete_range_scheduler = self.delete_range_scheduler.clone();
+                let pd_client = self.pd_client.clone();
+                let gc_interval = self.gc_interval;
                 let f = async move {
                     let skiplist_engine = {
                         let core = core.engine.read();
@@ -1268,7 +1282,7 @@ impl Runnable for BackgroundRunner {
                         }
 
                         let seq = snap.sequence_number();
-                        let snapshot_load = || -> bool {
+                        let snapshot_load = || -> Option<u64> {
                             for &cf in DATA_CFS {
                                 let handle = skiplist_engine.cf_handle(cf);
                                 let mut iter = handle.iterator();
@@ -1319,7 +1333,7 @@ impl Runnable for BackgroundRunner {
                                                     "range" => ?range,
                                                     "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
                                                 );
-                                                return false;
+                                                return None;
                                             }
 
                                             encoded_key.set_memory_controller(
@@ -1343,34 +1357,88 @@ impl Runnable for BackgroundRunner {
                                     }
                                     Err(e) => {
                                         error!("creating rocksdb iterator failed"; "cf" => cf, "err" => %e);
-                                        return false;
+                                        return None;
                                     }
                                 }
                             }
-                            true
+                            // gc the range
+                            let tso_timeout = std::cmp::min(gc_interval, Duration::from_secs(5));
+                            let now = match block_on_timeout(pd_client.get_tso(), tso_timeout) {
+                                Ok(Ok(ts)) => ts,
+                                err => {
+                                    error!(
+                                        "get timestamp failed, skip gc loaded range";
+                                        "timeout_duration" => ?tso_timeout,
+                                        "error" => ?err,
+                                    );
+                                    // Get timestamp fail so don't do gc.
+                                    return Some(0);
+                                }
+                            };
+
+                            let safe_point = (|| {
+                                fail::fail_point!("in_memory_engine_safe_point_in_loading", |t| {
+                                    t.unwrap().parse::<u64>().unwrap()
+                                });
+
+                                let safe_point = now
+                                    .physical()
+                                    .saturating_sub(gc_interval.as_millis() as u64);
+                                TimeStamp::compose(safe_point, 0).into_inner()
+                            })();
+
+                            let write_cf_handle = skiplist_engine.cf_handle(CF_WRITE);
+                            let default_cf_handle = skiplist_engine.cf_handle(CF_DEFAULT);
+                            let mut filter = Filter::new(
+                                safe_point,
+                                u64::MAX,
+                                default_cf_handle,
+                                write_cf_handle.clone(),
+                            );
+
+                            let mut iter = write_cf_handle.iterator();
+                            let guard = &epoch::pin();
+                            let (start_key, end_key) = encode_key_for_boundary_with_mvcc(&range);
+                            iter.seek(&start_key, guard);
+                            while iter.valid() && iter.key() < &end_key {
+                                let k = iter.key();
+                                let v = iter.value();
+                                if let Err(e) = filter.filter(k.as_bytes(), v.as_bytes()) {
+                                    warn!(
+                                        "Something Wrong in memory engine GC";
+                                        "error" => ?e,
+                                    );
+                                }
+                                iter.next(guard);
+                            }
+
+                            Some(safe_point)
                         };
 
                         let start = Instant::now();
-                        if !snapshot_load() {
+                        if let Some(safe_point) = snapshot_load() {
+                            if core.on_snapshot_load_finished(
+                                range.clone(),
+                                &delete_range_scheduler,
+                                safe_point,
+                            ) {
+                                let duration = start.saturating_elapsed();
+                                RANGE_LOAD_TIME_HISTOGRAM.observe(duration.as_secs_f64());
+                                info!(
+                                    "Loading range finished";
+                                    "range" => ?range,
+                                    "duration(sec)" => ?duration,
+                                );
+                            } else {
+                                info!("Loading range canceled";"range" => ?range);
+                            }
+                        } else {
                             info!(
                                 "snapshot load failed";
                                 "range" => ?range,
                             );
                             core.on_snapshot_load_canceled(range, &delete_range_scheduler);
                             continue;
-                        }
-
-                        if core.on_snapshot_load_finished(range.clone(), &delete_range_scheduler) {
-                            let duration = start.saturating_elapsed();
-                            RANGE_LOAD_TIME_HISTOGRAM.observe(duration.as_secs_f64());
-                            info!(
-                                "Loading range finished";
-                                "range" => ?range,
-                                "duration(sec)" => ?duration,
-                                "seqno" => seq,
-                            );
-                        } else {
-                            info!("Loading range canceled";"range" => ?range);
                         }
                     }
                 };

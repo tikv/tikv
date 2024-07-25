@@ -268,6 +268,7 @@ impl RangeCacheMemoryEngineCore {
     pub(crate) fn pending_range_completes_loading(
         core: &mut RwLockWriteGuard<'_, Self>,
         range: &CacheRange,
+        safe_point: u64,
     ) {
         assert!(!core.has_cached_write_batch(range));
         let range_manager = core.mut_range_manager();
@@ -277,7 +278,7 @@ impl RangeCacheMemoryEngineCore {
             .unwrap();
         assert_eq!(&r, range);
         assert!(!canceled);
-        range_manager.new_range(r);
+        range_manager.new_range_with_safe_point(r, safe_point);
     }
 
     pub fn dump_cached_write_batch(&self, region_id: u64) -> String {
