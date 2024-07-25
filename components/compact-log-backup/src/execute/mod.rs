@@ -115,7 +115,7 @@ impl Execution {
                 CollectSubcompactionConfig {
                     compact_from_ts: self.cfg.from_ts,
                     compact_to_ts: self.cfg.until_ts,
-                    compaction_size_threshold: ReadableSize::mb(128).0,
+                    subcompaction_size_threshold: ReadableSize::mb(128).0,
                 },
             );
             let mut pending = Vec::new();

@@ -25,6 +25,7 @@ use crate::{
     util::{self, Cooperate, ExecuteAllExt},
 };
 
+/// The state of executing a subcompaction.
 pub struct SubcompactionExec<DB> {
     source: Source,
     output: Arc<dyn ExternalStorage>,
@@ -92,6 +93,11 @@ struct WrittenSst<S> {
     physical_size: u64,
 }
 
+/// Log backup may generate duplicated key-value entries.
+/// When compacting them in the same subcompaction, we will dedup them. Hence
+/// the checksum of output varies.
+///
+/// During compacting, those difference will be recorded here.
 #[derive(Default)]
 struct ChecksumDiff {
     removed_key: u64,
@@ -114,6 +120,7 @@ where
         diff.crc64xor_diff ^= d.sum64();
     }
 
+    /// Sort all inputs and dedup them, generating the checksum diff.
     #[tracing::instrument(skip_all)]
     async fn process_input(
         &mut self,
@@ -344,8 +351,6 @@ where
 
 #[cfg(test)]
 mod test {
-    use external_storage::ExternalStorage;
-
     use crate::{
         compaction::Subcompaction,
         storage::MetaFile,

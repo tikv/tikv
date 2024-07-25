@@ -6,7 +6,7 @@ use kvproto::brpb::FileType;
 use tikv_util::codec::stream_event::Iterator as KvStreamIter;
 use tokio_stream::Stream;
 
-use super::Input;
+use super::{Input, SubcompactionCollectKey};
 use crate::{
     compaction::Subcompaction,
     errors::{Result, TraceResultExt},
@@ -14,6 +14,7 @@ use crate::{
     storage::LogFile,
 };
 
+/// A collecting subcompaction.
 struct UnformedSubcompaction {
     size: u64,
     inputs: Vec<Input>,
@@ -23,6 +24,7 @@ struct UnformedSubcompaction {
     max_key: Arc<[u8]>,
 }
 
+/// Collecting a stream of [`LogFile`], and generate a stream of compactions.
 #[pin_project::pin_project]
 pub struct CollectSubcompaction<S: Stream<Item = Result<LogFile>>> {
     #[pin]
@@ -33,19 +35,26 @@ pub struct CollectSubcompaction<S: Stream<Item = Result<LogFile>>> {
 }
 
 impl<S: Stream<Item = Result<LogFile>>> CollectSubcompaction<S> {
+    /// Get delta of statistic between last call to this.
     pub fn take_statistic(&mut self) -> CollectCompactionStatistic {
         std::mem::take(&mut self.collector.stat)
     }
 
+    /// Get the mutable internal stream.
     pub fn get_mut(&mut self) -> &mut S {
         &mut self.inner
     }
 }
 
 pub struct CollectSubcompactionConfig {
+    /// Lower bound of timestamps.
+    /// Files donesn't contain any record with a timestamp greater than this
+    /// will be filtered out.
     pub compact_from_ts: u64,
+    /// Upper bound of timestamps.
     pub compact_to_ts: u64,
-    pub compaction_size_threshold: u64,
+    /// The expected size of a subcompaction.
+    pub subcompaction_size_threshold: u64,
 }
 
 impl<S: Stream<Item = Result<LogFile>>> CollectSubcompaction<S> {
@@ -62,14 +71,10 @@ impl<S: Stream<Item = Result<LogFile>>> CollectSubcompaction<S> {
     }
 }
 
-#[derive(Hash, Debug, PartialEq, Eq, Clone, Copy)]
-struct SubcompactionCollectKey {
-    cf: &'static str,
-    region_id: u64,
-    ty: FileType,
-    is_meta: bool,
-}
-
+/// Collects subcompactions by upstream log files.
+/// For now, we collect subcompactions by grouping the input files with
+/// [`SubcompactionCollectKey`]. When each group grows to the specified size, a
+/// subcompaction will be generated.
 struct SubcompactionCollector {
     items: HashMap<SubcompactionCollectKey, UnformedSubcompaction>,
     stat: CollectCompactionStatistic,
@@ -77,6 +82,7 @@ struct SubcompactionCollector {
 }
 
 impl SubcompactionCollector {
+    /// Convert a log file to an input of compaction.
     fn to_input(file: &LogFile) -> Input {
         Input {
             id: file.id.clone(),
@@ -87,6 +93,7 @@ impl SubcompactionCollector {
         }
     }
 
+    /// Adding a new log file input to the collector.
     fn add_new_file(&mut self, file: LogFile) -> Option<Subcompaction> {
         use std::collections::hash_map::Entry;
         let key = SubcompactionCollectKey {
@@ -94,6 +101,7 @@ impl SubcompactionCollector {
             region_id: file.region_id,
             cf: file.cf,
             ty: file.ty,
+            table_id: file.table_id,
         };
 
         // Skip out-of-range files and schema meta files.
@@ -125,11 +133,9 @@ impl SubcompactionCollector {
                     u.min_key = file.min_key;
                 }
 
-                if u.size > self.cfg.compaction_size_threshold {
+                if u.size > self.cfg.subcompaction_size_threshold {
                     let c = Subcompaction {
                         inputs: std::mem::take(&mut u.inputs),
-                        region_id: key.region_id,
-                        cf: key.cf,
                         size: u.size,
                         input_min_ts: u.min_ts,
                         input_max_ts: u.max_ts,
@@ -137,7 +143,7 @@ impl SubcompactionCollector {
                         max_key: u.max_key.clone(),
                         compact_from_ts: self.cfg.compact_from_ts,
                         compact_to_ts: self.cfg.compact_to_ts,
-                        ty: key.ty,
+                        subc_key: key.clone(),
                     };
                     o.remove();
                     self.stat.compactions_out += 1;
@@ -160,20 +166,20 @@ impl SubcompactionCollector {
         None
     }
 
-    fn take_pending_compactions(&mut self) -> impl Iterator<Item = Subcompaction> + '_ {
+    /// Force create subcompaction by the current pending unformed
+    /// subcompactions. These subcompaction will be undersized.
+    fn take_pending_subcompactions(&mut self) -> impl Iterator<Item = Subcompaction> + '_ {
         self.items.drain().map(|(key, c)| {
             let c = Subcompaction {
                 inputs: c.inputs,
-                region_id: key.region_id,
                 size: c.size,
-                cf: key.cf,
                 input_max_ts: c.max_ts,
                 input_min_ts: c.min_ts,
                 min_key: c.min_key,
                 max_key: c.max_key,
                 compact_from_ts: self.cfg.compact_from_ts,
                 compact_to_ts: self.cfg.compact_to_ts,
-                ty: key.ty,
+                subc_key: key,
             };
             // Hacking: update the statistic when we really yield the compaction.
             // (At `poll_next`.)
@@ -207,7 +213,7 @@ impl<S: Stream<Item = Result<LogFile>>> Stream for CollectSubcompaction<S> {
             match item {
                 None => {
                     *this.last_compactions =
-                        Some(this.collector.take_pending_compactions().collect())
+                        Some(this.collector.take_pending_subcompactions().collect())
                 }
                 Some(Err(err)) => return Some(Err(err).trace_err()).into(),
                 Some(Ok(item)) => {
@@ -232,7 +238,6 @@ mod test {
     use crate::{
         errors::{Error, ErrorKind, Result},
         storage::{LogFile, LogFileId},
-        test_util::LogFileBuilder,
     };
 
     fn log_file(name: &str, len: u64, key: SubcompactionCollectKey) -> LogFile {
@@ -274,6 +279,7 @@ mod test {
                 region_id: r,
                 ty: kvproto::brpb::FileType::Put,
                 is_meta: false,
+                table_id: 0,
             }
         }
     }
@@ -295,7 +301,7 @@ mod test {
             CollectSubcompactionConfig {
                 compact_from_ts: 0,
                 compact_to_ts: u64::MAX,
-                compaction_size_threshold: 128,
+                subcompaction_size_threshold: 128,
             },
         );
 
@@ -331,7 +337,7 @@ mod test {
             CollectSubcompactionConfig {
                 compact_from_ts: 0,
                 compact_to_ts: u64::MAX,
-                compaction_size_threshold: 128,
+                subcompaction_size_threshold: 128,
             },
         );
         let mut st = collector.map_ok(|v| v.size);
@@ -367,7 +373,7 @@ mod test {
             CollectSubcompactionConfig {
                 compact_from_ts: 50,
                 compact_to_ts: 200,
-                compaction_size_threshold: 128,
+                subcompaction_size_threshold: 128,
             },
         );
 
@@ -419,7 +425,7 @@ mod test {
             CollectSubcompactionConfig {
                 compact_from_ts: 0,
                 compact_to_ts: u64::MAX,
-                compaction_size_threshold: 128,
+                subcompaction_size_threshold: 128,
             },
         );
 

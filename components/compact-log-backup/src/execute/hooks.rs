@@ -5,11 +5,11 @@ use chrono::{Duration, Local};
 pub use engine_traits::SstCompressionType;
 use external_storage::{FullFeaturedStorage, UnpinReader};
 use futures::{future::TryFutureExt, io::Cursor};
+use kvproto::brpb;
 use tikv_util::{
     info,
     logger::{get_log_level, Level},
-    retry_expr,
-    stream::JustRetry,
+    stream::{retry, JustRetry},
     warn,
 };
 use tokio::{io::AsyncWriteExt, runtime::Handle, signal::unix::SignalKind};
@@ -316,12 +316,15 @@ impl ExecHooks for SaveMeta {
                 util::aligned_u64(cx.result.origin.crc64())
             );
             let meta_name = format!("{}/{}/{}", cx.this.out_prefix, META_OUT_REL, meta_name);
-            let meta_bytes = cx.result.meta.write_to_bytes()?;
-            retry_expr!({
+            let mut metas = brpb::LogFileSubcompactions::new();
+            metas.mut_subcompactions().push(cx.result.meta.clone());
+            let meta_bytes = metas.write_to_bytes()?;
+            retry(|| async {
                 let reader = UnpinReader(Box::new(Cursor::new(&meta_bytes)));
                 cx.external_storage
                     .write(&meta_name, reader, meta_bytes.len() as _)
                     .map_err(JustRetry)
+                    .await
             })
             .await
             .map_err(|err| err.0)?;

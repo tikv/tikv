@@ -144,9 +144,16 @@ impl std::fmt::Debug for LogFileId {
     }
 }
 
+/// Extra config for loading metadata.
 pub struct LoadFromExt<'a> {
+    /// Max number of concurrent fetching from remote tasks.
     pub max_concurrent_fetch: usize,
+    /// The [`tracing::Span`] of loading remote tasks.
+    /// This span will be entered when fetching the remote tasks.
+    /// This span will be closed when all metadata loaded.
     pub loading_content_span: Option<Span>,
+    /// The prefix of metadata in the external storage.
+    /// By default it is `v1/backupmeta`.
     pub meta_prefix: &'a str,
 }
 
@@ -170,7 +177,10 @@ impl<'a> Default for LoadFromExt<'a> {
     }
 }
 
+/// A stream of metadatas.
 pub struct StreamyMetaStorage<'a> {
+    // NOTE: we want to keep the order of incoming meta files, so the subcompactions generated will
+    // be probably adjacent.
     prefetch: VecDeque<
         Prefetch<Pin<Box<dyn Future<Output = Result<(MetaFile, LoadMetaStatistic)>> + 'a>>>,
     >,
@@ -181,6 +191,11 @@ pub struct StreamyMetaStorage<'a> {
     files: Fuse<Pin<Box<dyn Stream<Item = std::io::Result<BlobObject>> + 'a>>>,
 }
 
+/// A future that stores its result for future use when completed.
+///
+/// This wraps a [`Future`](std::future::Future) yields `T` to a future yields
+/// nothing. Once the future is terminaled (resolved), the content can then be
+/// fetch by `must_fetch`.
 #[pin_project::pin_project(project = ProjPrefetch)]
 enum Prefetch<F: Future> {
     Polling(#[pin] F),
@@ -312,6 +327,9 @@ impl<'a> StreamyMetaStorage<'a> {
         std::mem::take(&mut self.stat)
     }
 
+    /// Streaming metadata from an external storage.
+    /// Defaultly this will fetch metadata from `v1/backupmeta`, you may
+    /// override this in `ext`.
     pub fn load_from_ext(s: &'a dyn FullFeaturedStorage, ext: LoadFromExt<'a>) -> Self {
         let files = s.walk(ext.meta_prefix).fuse();
         Self {
@@ -323,6 +341,7 @@ impl<'a> StreamyMetaStorage<'a> {
         }
     }
 
+    /// Counter the number of the metadata prefix.
     pub async fn count_objects(s: &'a dyn FullFeaturedStorage) -> std::io::Result<u64> {
         let mut n = 0;
         // NOTE: should we allow user to specify the prefix?

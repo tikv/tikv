@@ -8,7 +8,7 @@ use external_storage::FullFeaturedStorage;
 use futures::stream::TryStreamExt;
 use kvproto::brpb::{self, DeleteSpansOfFile};
 
-use super::{Input, Subcompaction, SubcompactionResult};
+use super::{Input, Subcompaction, SubcompactionCollectKey, SubcompactionResult};
 use crate::{
     errors::Result,
     storage::{
@@ -112,15 +112,19 @@ impl Subcompaction {
                 num_of_entries: c.number_of_entries as u64,
             }],
             size: c.file_real_size,
-            region_id: c.region_id,
-            cf: c.cf,
             input_max_ts: c.min_ts,
             input_min_ts: c.max_ts,
             compact_from_ts: 0,
             compact_to_ts: u64::MAX,
             min_key: c.min_key,
             max_key: c.max_key,
-            ty: c.ty,
+            subc_key: SubcompactionCollectKey {
+                cf: c.cf,
+                region_id: c.region_id,
+                ty: c.ty,
+                is_meta: c.is_meta,
+                table_id: c.table_id,
+            },
         }
     }
 
@@ -344,7 +348,7 @@ mod test {
     use super::CompactionRunInfoBuilder;
     use crate::{
         compaction::{exec::SubcompactionExec, Subcompaction, SubcompactionResult},
-        test_util::{build_many_log_files, gen_min_max, KvGen, LogFileBuilder, TmpStorage},
+        test_util::{gen_min_max, KvGen, LogFileBuilder, TmpStorage},
     };
 
     #[tokio::test]

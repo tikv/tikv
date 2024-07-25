@@ -50,7 +50,7 @@ async fn playground() {
         CollectSubcompactionConfig {
             compact_from_ts: 0,
             compact_to_ts: u64::MAX,
-            compaction_size_threshold: ReadableSize::mb(128).0,
+            subcompaction_size_threshold: ReadableSize::mb(128).0,
         },
     );
     println!("{:?}", now.elapsed());
@@ -143,7 +143,7 @@ async fn playground_no_pref() {
         CollectSubcompactionConfig {
             compact_from_ts: 0,
             compact_to_ts: u64::MAX,
-            compaction_size_threshold: ReadableSize::mb(128).0,
+            subcompaction_size_threshold: ReadableSize::mb(128).0,
         },
     );
 
@@ -257,7 +257,7 @@ async fn gcloud() {
         CollectSubcompactionConfig {
             compact_from_ts: 0,
             compact_to_ts: u64::MAX,
-            compaction_size_threshold: ReadableSize::mb(128).0,
+            subcompaction_size_threshold: ReadableSize::mb(128).0,
         },
     );
     let compaction = coll.try_next().await;

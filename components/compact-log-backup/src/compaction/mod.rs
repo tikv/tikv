@@ -1,5 +1,5 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
-use std::sync::Arc;
+use std::{ops::Deref, sync::Arc};
 
 use derive_more::Display;
 use kvproto::brpb::{self, FileType};
@@ -22,30 +22,63 @@ pub struct Input {
     pub num_of_entries: u64,
 }
 
+/// The group key of collecting subcompactions.
+#[derive(Hash, Debug, PartialEq, Eq, Clone, Copy, Display)]
+#[display(
+    fmt = "key(r={},{},{:?},m?={},t={})",
+    region_id,
+    cf,
+    ty,
+    is_meta,
+    table_id
+)]
+pub struct SubcompactionCollectKey {
+    pub cf: &'static str,
+    pub region_id: u64,
+    pub ty: FileType,
+    pub is_meta: bool,
+    pub table_id: i64,
+}
+
+/// A subcompaction.
 #[derive(Debug, Display, Clone)]
-#[display(fmt = "compaction(region={},size={},cf={})", region_id, size, cf)]
+#[display(fmt = "compaction({},sz={})", subc_key, size)]
 pub struct Subcompaction {
     pub inputs: Vec<Input>,
     pub size: u64,
-    pub region_id: u64,
-    pub cf: &'static str,
+    pub subc_key: SubcompactionCollectKey,
+
     pub input_max_ts: u64,
     pub input_min_ts: u64,
     pub compact_from_ts: u64,
     pub compact_to_ts: u64,
     pub min_key: Arc<[u8]>,
     pub max_key: Arc<[u8]>,
-    pub ty: FileType,
+}
+
+// "Embed" the subcompaction collect key field here.
+impl Deref for Subcompaction {
+    type Target = SubcompactionCollectKey;
+
+    fn deref(&self) -> &Self::Target {
+        &self.subc_key
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct SubcompactionResult {
+    /// The origin subcompaction.
     pub origin: Subcompaction,
+    /// The serializable metadata of this subcompaction.
     pub meta: brpb::LogFileSubcompaction,
 
+    /// The expected crc64 for the generated SSTs.
     pub expected_crc64: Option<u64>,
+    /// The expected key count for the generated SSTs.
     pub expected_keys: u64,
+    /// The expected logical data size for the generated SSTs.
     pub expected_size: u64,
+
     pub load_stat: LoadStatistic,
     pub compact_stat: CompactStatistic,
 }

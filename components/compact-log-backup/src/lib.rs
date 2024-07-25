@@ -23,6 +23,12 @@ mod util {
 
     use engine_traits::{CfName, SstCompressionType, CF_DEFAULT, CF_LOCK, CF_RAFT, CF_WRITE};
 
+    /// A helper for cooperative concurrency.
+    ///
+    /// When doing a tight loop (say, traversing a huge slice) that may use many
+    /// CPU time, you may inject [`Cooperate::step`] to each run. This will try
+    /// to yield the current task periodically so other coroutines can be
+    /// executed.
     pub struct Cooperate {
         work_count: usize,
         yield_every: usize,
@@ -48,6 +54,8 @@ mod util {
     }
 
     impl Cooperate {
+        /// Create a new [`Cooperate`] that yields when a fixed number of works
+        /// done.
         pub fn new(yield_every: usize) -> Self {
             Self {
                 work_count: 0,
@@ -55,6 +63,8 @@ mod util {
             }
         }
 
+        /// Finishing one tiny task. This will yield the current carrier thread
+        /// when needed.
         pub fn step(&mut self) -> Step {
             self.work_count += 1;
             if self.work_count > self.yield_every {
@@ -92,7 +102,9 @@ mod util {
         })
     }
 
+    /// The extra config for [`execute_all_ext`].
     pub struct ExecuteAllExt {
+        /// The max number of concurrent tasks.
         pub max_concurrency: usize,
     }
 
@@ -135,6 +147,7 @@ mod util {
         }
     }
 
+    /// A wrapper that make a `u64` always be displayed as {:016X}.
     #[derive(Debug)]
     struct HexU64(u64);
 
