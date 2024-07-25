@@ -210,13 +210,6 @@ impl CrossChecker {
                 }
 
                 cur_key_info.user_key = user_key.to_vec();
-                if cur_key_info.last_mvcc_version_before_safe_point == 0
-                    && ts < safe_point
-                    && (write.write_type != WriteType::Lock
-                        && write.write_type != WriteType::Rollback)
-                {
-                    cur_key_info.last_mvcc_version_before_safe_point = ts;
-                }
             }
 
             CrossChecker::check_with_key_in_disk_iter(
@@ -269,14 +262,6 @@ impl CrossChecker {
                         && write.write_type != WriteType::Rollback
                     {
                         cur_key_info.mvcc_recordings.push(ts);
-                    }
-
-                    if cur_key_info.last_mvcc_version_before_safe_point == 0
-                        && ts < safe_point
-                        && (write.write_type != WriteType::Lock
-                            && write.write_type != WriteType::Rollback)
-                    {
-                        cur_key_info.last_mvcc_version_before_safe_point = ts;
                     }
                 }
 
