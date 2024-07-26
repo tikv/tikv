@@ -11,6 +11,7 @@ pub mod msg;
 mod peer;
 mod read_queue;
 pub mod region_meta;
+pub mod snapshot_backup;
 pub mod transport;
 #[macro_use]
 pub mod util;
@@ -74,8 +75,18 @@ pub use self::{
         ApplyOptions, CfFile, Error as SnapError, SnapEntry, SnapKey, SnapManager,
         SnapManagerBuilder, Snapshot, SnapshotStatistics, TabletSnapKey, TabletSnapManager,
     },
+    snapshot_backup::SnapshotBrWaitApplySyncer,
     transport::{CasualRouter, ProposalRouter, SignificantRouter, StoreRouter, Transport},
     txn_ext::{LocksStatus, PeerPessimisticLocks, PessimisticLockPair, TxnExt},
+<<<<<<< HEAD
+=======
+    unsafe_recovery::{
+        demote_failed_voters_request, exit_joint_request, ForceLeaderState,
+        UnsafeRecoveryExecutePlanSyncer, UnsafeRecoveryFillOutReportSyncer,
+        UnsafeRecoveryForceLeaderSyncer, UnsafeRecoveryHandle, UnsafeRecoveryState,
+        UnsafeRecoveryWaitApplySyncer,
+    },
+>>>>>>> 956c9f377d (snapshot_backup: enhanced prepare stage (#15946))
     util::{RegionReadProgress, RegionReadProgressRegistry},
     worker::{
         metrics as worker_metrics, AutoSplitController, Bucket, BucketRange, CachedReadDelegate,
