@@ -40,28 +40,50 @@ impl std::fmt::Display for CId {
 
 #[derive(Clone, Copy)]
 pub struct BeforeStartCtx<'a> {
+    /// The asynchronous runtime that we are about to use.
     pub async_rt: &'a Handle,
-    pub est_meta_size: u64,
+    /// Reference to the execution context.
     pub this: &'a Execution,
+    /// The source external storage of this compaction.
+    pub storage: &'a dyn IterableExternalStorage,
 }
 
 #[derive(Clone, Copy)]
 pub struct AfterFinishCtx<'a> {
+    /// The asynchronous runtime that we are about to use.
     pub async_rt: &'a Handle,
+    /// The target external storage of this compaction.
+    ///
+    /// For now, it is always the same as the source storage.
     pub external_storage: &'a dyn IterableExternalStorage,
 }
 
 #[derive(Clone, Copy)]
 pub struct SubcompactionFinishCtx<'a> {
+    /// Reference to the execution context.
     pub this: &'a Execution,
+    /// The target external storage of this compaction.
     pub external_storage: &'a dyn IterableExternalStorage,
+    /// The result of this compaction.
+    ///
+    /// If this is an `Err`, the whole procedure may fail soon.
     pub result: &'a SubcompactionResult,
 }
 
 #[derive(Clone, Copy)]
 pub struct SubcompactionStartCtx<'a> {
+    /// The subcompaction about to start.
     pub subc: &'a Subcompaction,
+    /// The diff of statistic of loading metadata.
+    ///
+    /// The diff is between the last trigger of `before_a_subcompaction_start`
+    /// and now. Due to we will usually prefetch metadata, this diff may not
+    /// just contributed by the `subc` only.
     pub load_stat_diff: &'a LoadMetaStatistic,
+    /// The diff of collecting compaction between last trigger of this event.
+    ///
+    /// Like `load_stat_diff`, we collect subcompactions for every region
+    /// concurrently. The statistic diff may not just contributed by the `subc`.
     pub collect_compaction_stat_diff: &'a CollectCompactionStatistic,
 }
 
@@ -72,6 +94,9 @@ pub trait ExecHooks: 'static {
     /// This hook will be called when a subcompaction has been finished.
     /// You may use the `cid` to match a subcompaction previously known by
     /// [`ExecHooks::before_a_subcompaction_start`].
+    ///
+    /// If an error was returned, the whole procedure will fail and be
+    /// terminated!
     fn after_a_subcompaction_end<'a>(
         &'a mut self,
         _cid: CId,
@@ -85,6 +110,8 @@ pub trait ExecHooks: 'static {
     /// created.
     fn before_execution_started(&mut self, _cx: BeforeStartCtx<'_>) {}
     /// This hook will be called after the whole compaction finished.
+    ///
+    /// If an error was returned, the execution will be mark as failed.
     fn after_execution_finished<'a>(
         &'a mut self,
         _cx: AfterFinishCtx<'a>,
@@ -215,7 +242,6 @@ impl ExecHooks for TuiHooks {
         };
 
         cx.async_rt.spawn(sigusr1_handler);
-        self.meta_len = cx.est_meta_size;
     }
 }
 
@@ -242,6 +268,28 @@ impl CollectStatistic {
     }
 }
 
+/// Save the metadata to external storage after every subcompaction. After
+/// everything done, it saves the whole compaction to a "migration" that can be
+/// read by the BR CLI.
+///
+/// This is an essential plugin for real-world compacting, as single SST cannot
+/// be restored.
+///
+/// "But why not just save the metadata of compaction in
+/// [`SubcompactionExec`](crate::compaction::exec::SubcompactionExec)?"
+///
+/// First, As the hook system isn't exposed to end user, whether inlining this
+/// is transparent to them -- they won't mistakely forget to add this hook and
+/// ruin everything.
+///
+/// Also this make `SubcompactionExec` standalone, it will be easier to test.
+///
+/// The most important is, the hook knows metadata crossing subcompactions,
+/// we can then optimize the arrangement of subcompactions (say, batching
+/// subcompactoins), and save the final result in a single migration.
+/// While [`SubcompactionExec`](crate::compaction::exec::SubcompactionExec)
+/// knows only the subcompaction it handles, it is impossible to do such
+/// optimizations.
 #[derive(Default)]
 pub struct SaveMeta {
     collector: CompactionRunInfoBuilder,

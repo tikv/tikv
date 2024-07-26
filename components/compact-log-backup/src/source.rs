@@ -17,12 +17,12 @@ use tikv_util::{
     codec::stream_event::{self, Iterator},
     stream::{retry_all_ext, JustRetry, RetryExt},
 };
-use tokio::sync::OnceCell;
 use txn_types::Key;
 
 use super::{statistic::LoadStatistic, util::Cooperate};
 use crate::{compaction::Input, errors::Result};
 
+/// The manager of fetching log files from remote for compacting.
 #[derive(Clone)]
 pub struct Source {
     inner: Arc<dyn ExternalStorage>,
@@ -34,6 +34,7 @@ impl Source {
     }
 }
 
+/// A record from log files.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct Record {
     pub key: Vec<u8>,
@@ -52,6 +53,7 @@ impl Record {
 }
 
 impl Source {
+    /// Load the content of an input.
     #[tracing::instrument(skip_all)]
     pub async fn load_remote(
         &self,
@@ -60,10 +62,8 @@ impl Source {
     ) -> Result<Vec<u8>> {
         let error_during_downloading = Arc::new(AtomicU64::new(0));
         let counter = error_during_downloading.clone();
-        let ext = RetryExt::default().with_fail_hook(move |err: &JustRetry<std::io::Error>| {
-            eprintln!("retry the error2: {:?}", err.0);
-            counter.inc_by(1)
-        });
+        let ext = RetryExt::default()
+            .with_fail_hook(move |_: &JustRetry<std::io::Error>| counter.inc_by(1));
         let fetch = || {
             let storage = self.inner.clone();
             let id = input.id.clone();
@@ -87,6 +87,7 @@ impl Source {
         Ok(content)
     }
 
+    /// Load key value pairs from remote.
     #[tracing::instrument(skip_all, fields(id=?input.id))]
     pub async fn load(
         &self,

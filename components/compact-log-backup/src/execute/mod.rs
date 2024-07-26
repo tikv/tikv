@@ -98,9 +98,8 @@ impl Execution {
                 "load_meta_file_names"
             ));
 
-            let total = StreamyMetaStorage::count_objects(storage.as_ref()).await?;
             let cx = BeforeStartCtx {
-                est_meta_size: total,
+                storage: storage.as_ref(),
                 async_rt: &tokio::runtime::Handle::current(),
                 this: &self,
             };

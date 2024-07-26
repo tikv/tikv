@@ -186,20 +186,30 @@ impl Ord for SortByOffset {
     }
 }
 
+/// Collecting metadata of subcomapctions.
+///
+/// Finally, it calculates which files can be deleted.
 #[derive(Default)]
 pub struct CompactionRunInfoBuilder {
     files: HashMap<Arc<str>, BTreeSet<SortByOffset>>,
     compaction: brpb::LogFileCompaction,
 }
 
+/// A set of deletable log files from the same metadata.
 pub struct ExpiringFilesOfMeta {
     meta_path: Arc<str>,
     logs: Vec<Arc<str>>,
+    /// Whether the log file is still needed.
+    ///
+    /// When we are going to delete every log files recoreded in a log file, the
+    /// logfile itself can also be removed.
     destruct_self: bool,
+    /// The logical log files that can be removed.
     spans_of_file: HashMap<Arc<str>, (Vec<brpb::Span>, /* physical file size */ u64)>,
 }
 
 impl ExpiringFilesOfMeta {
+    /// Create a list of expliring log files from a meta file.
     pub fn of(path: &Arc<str>) -> Self {
         Self {
             meta_path: Arc::clone(path),
@@ -209,10 +219,12 @@ impl ExpiringFilesOfMeta {
         }
     }
 
+    /// Whether we are going to delete nothing.
     pub fn is_empty(&self) -> bool {
         self.logs.is_empty() && self.spans_of_file.is_empty() && !self.destruct_self
     }
 
+    /// Get the list of physical files that can be deleted.
     pub fn to_delete(&self) -> impl Iterator<Item = &str> + '_ {
         self.logs.iter().map(|s| s.as_ref())
     }
@@ -248,16 +260,15 @@ impl CompactionRunInfoBuilder {
     }
 
     pub async fn write_migration(&self, s: &dyn IterableExternalStorage) -> Result<()> {
-        let migration = self.migration(s).await?;
+        let migration = self.migration_of(self.find_expiring_files(s).await?);
         let wrapped_storage = MigartionStorageWrapper::new(s);
         wrapped_storage.write(migration).await?;
         Ok(())
     }
 
-    pub async fn migration(&self, s: &dyn IterableExternalStorage) -> Result<brpb::Migration> {
+    pub fn migration_of(&self, metas: Vec<ExpiringFilesOfMeta>) -> brpb::Migration {
         let mut migration = brpb::Migration::new();
-        let files = self.find_expiring_files(s).await?;
-        for files in files {
+        for files in metas {
             let mut medit = brpb::MetaEdit::new();
             medit.set_path(files.meta_path.to_string());
             for file in files.to_delete() {
@@ -272,7 +283,7 @@ impl CompactionRunInfoBuilder {
         migration
             .mut_compactions()
             .push(self.compaction.clone().into());
-        Ok(migration)
+        migration
     }
 
     async fn find_expiring_files(
@@ -344,6 +355,7 @@ impl CompactionRunInfoBuilder {
 
 #[cfg(test)]
 mod test {
+    use external_storage::IterableExternalStorage;
     use kvproto::brpb;
 
     use super::CompactionRunInfoBuilder;
@@ -351,6 +363,12 @@ mod test {
         compaction::{exec::SubcompactionExec, Subcompaction, SubcompactionResult},
         test_util::{gen_min_max, KvGen, LogFileBuilder, TmpStorage},
     };
+
+    impl CompactionRunInfoBuilder {
+        async fn mig(&self, s: &dyn IterableExternalStorage) -> crate::Result<brpb::Migration> {
+            Ok(self.migration_of(self.find_expiring_files(s).await?))
+        }
+    }
 
     #[tokio::test]
     async fn test_collect_single() {
@@ -369,14 +387,14 @@ mod test {
         let subc = Subcompaction::singleton(m.physical_files[0].files[0].clone());
         let res = cr.run(subc, Default::default()).await.unwrap();
         coll.add_subcompaction(&res);
-        let mig = coll.migration(st.storage().as_ref()).await.unwrap();
+        let mig = coll.mig(st.storage().as_ref()).await.unwrap();
         assert_eq!(mig.edit_meta.len(), 1);
         assert!(!mig.edit_meta[0].destruct_self);
 
         let mut coll = CompactionRunInfoBuilder::default();
         let subc = Subcompaction::of_many(m.physical_files[0].files.iter().cloned());
         coll.add_subcompaction(&SubcompactionResult::of(subc));
-        let mig = coll.migration(st.storage().as_ref()).await.unwrap();
+        let mig = coll.mig(st.storage().as_ref()).await.unwrap();
         assert_eq!(mig.edit_meta.len(), 1);
         assert!(mig.edit_meta[0].destruct_self);
     }
@@ -420,7 +438,7 @@ mod test {
         coll.add_subcompaction(&SubcompactionResult::of(subc1));
         coll.add_subcompaction(&SubcompactionResult::of(subc2));
         coll.add_subcompaction(&SubcompactionResult::of(subc3));
-        let mig = coll.migration(st.storage().as_ref()).await.unwrap();
+        let mig = coll.mig(st.storage().as_ref()).await.unwrap();
         assert_eq!(mig.edit_meta.len(), 2);
         let check = |me: &brpb::MetaEdit| match me.get_path() {
             "v1/backupmeta/1.meta" => {
