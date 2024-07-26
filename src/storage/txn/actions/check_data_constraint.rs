@@ -33,8 +33,8 @@ pub(crate) fn check_data_constraint<S: Snapshot>(
     // version.
     if let Some(existing_start_ts) = if write.write_type == WriteType::Put {
         Some(write.start_ts)
-    } else if let Some(write) = reader.get_write(key, write_commit_ts.prev())? {
-        Some(write.start_ts)
+    } else if let Some(prev_write) = reader.get_write(key, write_commit_ts.prev())? {
+        Some(prev_write.start_ts)
     } else {
         None
     } {

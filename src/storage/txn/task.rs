@@ -89,7 +89,7 @@ impl Task {
         self.extra_op
     }
 
-    /// Set_extra_op is called after getting snapshot and before the command is
+    /// extra_op is set after getting snapshot and before the command is
     /// processed.
     pub(super) fn set_extra_op(&mut self, extra_op: ExtraOp) {
         self.extra_op = extra_op
