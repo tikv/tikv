@@ -1470,6 +1470,12 @@ pub mod test_gc_worker {
                 Ok(RegionSnapshot::from_snapshot(snap, Arc::new(region)))
             }
         }
+
+        type IMSnap = Self::Snap;
+        type IMSnapshotRes = Self::SnapshotRes;
+        fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
+            self.async_snapshot(ctx)
+        }
     }
 
     pub struct MockSafePointProvider(pub u64);
@@ -1528,6 +1534,12 @@ pub mod test_gc_worker {
                 .get_mut(&region_id)
                 .unwrap()
                 .async_snapshot(ctx)
+        }
+
+        type IMSnap = Self::Snap;
+        type IMSnapshotRes = Self::SnapshotRes;
+        fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
+            self.async_snapshot(ctx)
         }
     }
 }
