@@ -31,6 +31,7 @@ pub mod region_info_accessor;
 mod split_check;
 pub mod split_observer;
 use kvproto::raft_serverpb::RaftMessage;
+mod write_batch;
 
 pub use self::{
     config::{Config, ConsistencyCheckMethod},
