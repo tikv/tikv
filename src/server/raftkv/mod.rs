@@ -63,10 +63,7 @@ use txn_types::{Key, TimeStamp, TxnExtra, TxnExtraScheduler, WriteBatchFlags};
 use super::metrics::*;
 use crate::storage::{
     self, kv,
-    kv::{
-        CacheableEngine, Engine, Error as KvError, ErrorInner as KvErrorInner, Modify, SnapContext,
-        WriteData,
-    },
+    kv::{Engine, Error as KvError, ErrorInner as KvErrorInner, Modify, SnapContext, WriteData},
 };
 
 pub const ASYNC_WRITE_CALLBACK_DROPPED_ERR_MSG: &str = "async write on_applied callback is dropped";
@@ -615,6 +612,31 @@ where
         self.router.release_snapshot_cache();
     }
 
+    type IMSnap = RegionSnapshot<HybridEngineSnapshot<E, RangeCacheMemoryEngine>>;
+    type IMSnapshotRes = impl Future<Output = kv::Result<Self::IMSnap>> + Send;
+    fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
+        let snap_ctx = if self.engine.range_cache_engine_enabled() {
+            // When range cache engine is enabled, we need snapshot context to determine
+            // whether we should use range cache engine snapshot for this request.
+            ctx.start_ts.map(|ts| SnapshotContext {
+                read_ts: ts.into_inner(),
+                range: None,
+            })
+        } else {
+            None
+        };
+        let cacheable_engine = self.cacheable_engine.clone();
+        async_snapshot(&mut self.router, ctx, snap_ctx.clone()).map_ok(|region_snap| {
+            region_snap.replace_snapshot(move |disk_snap| {
+                let in_memory_snapshot = cacheable_engine
+                    .as_ref()
+                    .map(|he| he.new_in_memory_snapshot(disk_snap.sequence_number(), snap_ctx))
+                    .flatten();
+                HybridEngineSnapshot::new(disk_snap, in_memory_snapshot)
+            })
+        })
+    }
+
     fn get_mvcc_properties_cf(
         &self,
         cf: CfName,
@@ -792,37 +814,6 @@ where
                 Err(e)
             }
         }
-    }
-}
-
-impl<E, S> CacheableEngine for RaftKv<E, S>
-where
-    E: KvEngine,
-    S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
-{
-    type Snap = RegionSnapshot<HybridEngineSnapshot<E, RangeCacheMemoryEngine>>;
-    type SnapshotRes = impl Future<Output = kv::Result<Self::Snap>> + Send;
-    fn async_cacheable_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes {
-        let snap_ctx = if self.engine.range_cache_engine_enabled() {
-            // When range cache engine is enabled, we need snapshot context to determine
-            // whether we should use range cache engine snapshot for this request.
-            ctx.start_ts.map(|ts| SnapshotContext {
-                read_ts: ts.into_inner(),
-                range: None,
-            })
-        } else {
-            None
-        };
-        let cacheable_engine = self.cacheable_engine.clone();
-        async_snapshot(&mut self.router, ctx, snap_ctx.clone()).map_ok(|region_snap| {
-            region_snap.replace_snapshot(move |disk_snap| {
-                let in_memory_snapshot = cacheable_engine
-                    .as_ref()
-                    .map(|he| he.new_in_memory_snapshot(disk_snap.sequence_number(), snap_ctx))
-                    .flatten();
-                HybridEngineSnapshot::new(disk_snap, in_memory_snapshot)
-            })
-        })
     }
 }
 

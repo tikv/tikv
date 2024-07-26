@@ -367,6 +367,14 @@ pub trait Engine: Send + Clone + 'static {
     /// future is polled or not.
     fn async_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes;
 
+    type IMSnap: Snapshot;
+    type IMSnapshotRes: Future<Output = Result<Self::IMSnap>> + Send + 'static;
+    /// Get a snapshot asynchronously.
+    ///
+    /// Note the snapshot is queried immediately no matter whether the returned
+    /// future is polled or not.
+    fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes;
+
     /// Precheck request which has write with it's context.
     fn precheck_write_with_ctx(&self, _ctx: &Context) -> Result<()> {
         Ok(())
@@ -457,14 +465,6 @@ pub trait Engine: Send + Clone + 'static {
     /// the engine there is probably a notable difference in range, so
     /// engine may update its statistics.
     fn hint_change_in_range(&self, _start_key: Vec<u8>, _end_key: Vec<u8>) {}
-}
-
-/// Engine defines the common behaviour for a storage engine type.
-pub trait CacheableEngine: Send + Clone + 'static {
-    type Snap: Snapshot;
-    type SnapshotRes: Future<Output = Result<Self::Snap>> + Send + 'static;
-
-    fn async_cacheable_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes;
 }
 
 /// A Snapshot is a consistent view of the underlying engine at a given point in
