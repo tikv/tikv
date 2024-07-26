@@ -514,7 +514,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         self.inner.memory_quota.set_capacity(cap)
     }
 
-    pub(in crate::storage) fn fail_with_busy(tag: CommandKind, callback: SchedulerTaskCallback) {
+    fn fail_with_busy(tag: CommandKind, callback: SchedulerTaskCallback) {
         SCHED_TOO_BUSY_COUNTER_VEC.get(tag).inc();
         callback.execute(ProcessResult::Failed {
             err: StorageError::from(StorageErrorInner::SchedTooBusy),
@@ -693,14 +693,14 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             .collect();
 
         let cmd = commands::AcquirePessimisticLockResumed::from_lock_wait_entries(awakened_entries);
-        let tag = cmd.cmd.tag();
         let cid = specified_cid.unwrap_or_else(|| self.inner.gen_id());
-        let callback = SchedulerTaskCallback::LockKeyCallbacks(key_callbacks);
-        if let Ok(task) = Task::allocate(cid, cmd.into(), self.inner.memory_quota.clone()) {
-            self.schedule_command(task, callback, prepared_latches);
-        } else {
-            Self::fail_with_busy(tag, callback);
-        }
+        let task = Task::force_create(cid, cmd.into());
+        // TODO: Make flow control take effect on this thing.
+        self.schedule_command(
+            task,
+            SchedulerTaskCallback::LockKeyCallbacks(key_callbacks),
+            prepared_latches,
+        );
     }
 
     // pub for test
@@ -839,15 +839,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         let tctx = self.inner.dequeue_task_context(cid);
         if let ProcessResult::NextCommand { cmd } = pr {
             SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-            let callback = tctx.cb.unwrap();
-            let tag = cmd.tag();
-            if let Ok(task) =
-                Task::allocate(self.inner.gen_id(), cmd, self.inner.memory_quota.clone())
-            {
-                self.schedule_command(task, callback, None);
-            } else {
-                Self::fail_with_busy(tag, callback);
-            }
+            let task = Task::force_create(self.inner.gen_id(), cmd);
+            self.schedule_command(task, tctx.cb.unwrap(), None);
         } else {
             tctx.cb.unwrap().execute(pr);
         }
@@ -924,13 +917,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             };
             if let ProcessResult::NextCommand { cmd } = pr {
                 SCHED_STAGE_COUNTER_VEC.get(tag).next_cmd.inc();
-                if let Ok(task) =
-                    Task::allocate(self.inner.gen_id(), cmd, self.inner.memory_quota.clone())
-                {
-                    self.schedule_command(task, cb, None);
-                } else {
-                    Self::fail_with_busy(tag, cb);
-                }
+                let task = Task::force_create(self.inner.gen_id(), cmd);
+                self.schedule_command(task, cb, None);
             } else {
                 GLOBAL_TRACKERS.with_tracker(sched_details.tracker, |tracker| {
                     tracker.metrics.scheduler_process_nanos = sched_details
