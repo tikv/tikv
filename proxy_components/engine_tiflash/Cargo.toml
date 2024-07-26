@@ -42,21 +42,21 @@ openssl-vendored = [
 ]
 
 [dependencies]
-api_version = { workspace = true, default-features = false }
-collections = { workspace = true, default-features = false }
+api_version = { workspace = true }
+collections = { workspace = true }
 
 derive_more = "0.99.3"
-encryption = { workspace = true, default-features = false }
+encryption = { workspace = true }
 openssl = { workspace = true } # TODO only for feature
-engine_rocks = { workspace = true, default-features = false }
-engine_traits = { workspace = true, default-features = false }
+engine_rocks = { workspace = true }
+engine_traits = { workspace = true }
 # TODO: Imported for `test-` features to make cargo clippy happy.
 # Need to findout how to fix.
 engine_test = { workspace = true, default-features = false }
-engine_panic = { workspace = true, default-features = false }
+engine_panic = { workspace = true }
 fail = "0.5"
-file_system = { workspace = true, default-features = false }
-keys = { workspace = true, default-features = false }
+file_system = { workspace = true}
+keys = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.4.0"
 libc = "0.2"
@@ -77,11 +77,11 @@ slog-global = { workspace = true }
 slog_derive = "0.2"
 tempfile = "3.0"
 tikv_alloc = { workspace = true }
-tikv_util = { workspace = true, default-features = false }
+tikv_util = { workspace = true }
 time = "0.1"
 
 tracker = { workspace = true }
-txn_types = { workspace = true, default-features = false }
+txn_types = { workspace = true }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dependencies.rocksdb]

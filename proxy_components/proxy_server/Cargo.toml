@@ -48,20 +48,20 @@ causal_ts = { workspace = true }
 chrono = "0.4"
 clap = "2.32"
 collections = { workspace = true }
-concurrency_manager = { workspace = true, default-features = false }
+concurrency_manager = { workspace = true }
 crossbeam = "0.8"
-encryption = { workspace = true, default-features = false }
-encryption_export = { workspace = true, default-features = false }
-engine_rocks = { workspace = true, default-features = false }
+encryption = { workspace = true }
+encryption_export = { workspace = true }
+engine_rocks = { workspace = true }
 engine_rocks_helper = { workspace = true }
 service = { workspace = true }
 proxy_ffi = { workspace = true, default-features = false }
 engine_store_ffi = { workspace = true, default-features = false }
 engine_tiflash = { workspace = true, default-features = false }
-engine_traits = { workspace = true, default-features = false }
-error_code = { workspace = true, default-features = false }
+engine_traits = { workspace = true }
+error_code = { workspace = true }
 fail = "0.5"
-file_system = { workspace = true, default-features = false }
+file_system = { workspace = true }
 fs2 = "0.4"
 futures = "0.3"
 grpcio = { version = "0.10", default-features = false, features = ["openssl-vendored"] }
@@ -69,7 +69,7 @@ grpcio-health = { version = "0.10", default-features = false, features = ["proto
 hex = "0.4"
 hyper = { version = "0.14", features = ["full"] }
 itertools = "0.10"
-keys = { workspace = true, default-features = false }
+keys = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.3"
 libc = "0.2"
@@ -80,7 +80,7 @@ nix = "0.23"
 online_config = { workspace = true }
 
 openssl = { workspace = true }
-pd_client = { workspace = true, default-features = false }
+pd_client = { workspace = true }
 pin-project = "1.0"
 pprof = { version = "0.13", default-features = false, features = [
   "flamegraph",
@@ -90,30 +90,30 @@ pprof = { version = "0.13", default-features = false, features = [
 prometheus = { version = "0.13", features = ["nightly"] }
 protobuf = { version = "2.8", features = ["bytes"] }
 raft = { version = "0.7.0", default-features = false, features = ["protobuf-codec"] }
-raft_log_engine = { workspace = true, default-features = false }
+raft_log_engine = { workspace = true }
 raftstore = { workspace = true, default-features = false }
 rand = "0.8"
 regex = "1.3"
-resolved_ts = { workspace = true, default-features = false }
+resolved_ts = { workspace = true }
 resource_control = { workspace = true }
 resource_metering = { workspace = true }
-security = { workspace = true, default-features = false }
+security = { workspace = true }
 serde = "1.0"
 serde_derive = "1.0"
 serde_ignored = "0.1"
 serde_json = "1.0"
 serde_with = "1.4"
-server = { workspace = true, default-features = false }
+server = { workspace = true }
 slog = { workspace = true }
 slog-global = { workspace = true }
 tempfile = "3.0"
 tikv = { workspace = true, default-features = false }
 tikv_alloc = { workspace = true }
-tikv_util = { workspace = true, default-features = false }
+tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread"] }
 tokio-openssl = "0.6"
 toml = "0.5"
-txn_types = { workspace = true, default-features = false }
+txn_types = { workspace = true }
 url = "2"
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 

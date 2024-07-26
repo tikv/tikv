@@ -50,6 +50,25 @@ pub fn deactivate_prof() -> ProfResult<()> {
 
 extern crate libc;
 
+fn print_error_message(s: &str, r: ::std::os::raw::c_int) {
+    #[cfg(not(any(target_os = "android", target_os = "dragonfly", target_os = "macos")))]
+    {
+        unsafe {
+            let err = *libc::__errno_location();
+            let err_msg = libc::strerror(err);
+            let c_str = std::ffi::CStr::from_ptr(err_msg);
+            let str_slice = c_str.to_str().unwrap_or("Unknown error");
+            tikv_util::warn!(
+                "{} returns non-zero {} error_code: {} error_message: {}",
+                s,
+                r,
+                err,
+                str_slice
+            );
+        }
+    }
+}
+
 pub fn dump_prof(path: &str) -> tikv_alloc::error::ProfResult<()> {
     {
         let mut bytes = std::ffi::CString::new(path)?.into_bytes_with_nul();
@@ -63,18 +82,7 @@ pub fn dump_prof(path: &str) -> tikv_alloc::error::ProfResult<()> {
             len,
         );
         if r != 0 {
-            unsafe {
-                let err = *libc::__errno_location();
-                let err_msg = libc::strerror(err);
-                let c_str = std::ffi::CStr::from_ptr(err_msg);
-                let str_slice = c_str.to_str().unwrap_or("Unknown error");
-                tikv_util::warn!(
-                    "dump_prof returns non-zero {} error_code: {} error_message: {}",
-                    r,
-                    err,
-                    str_slice
-                );
-            }
+            print_error_message("dump_prof", r);
         }
     }
     Ok(())
@@ -93,18 +101,7 @@ pub fn adhoc_dump(path: &str) -> tikv_alloc::error::ProfResult<()> {
             len,
         );
         if r != 0 {
-            unsafe {
-                let err = *libc::__errno_location();
-                let err_msg = libc::strerror(err);
-                let c_str = std::ffi::CStr::from_ptr(err_msg);
-                let str_slice = c_str.to_str().unwrap_or("Unknown error");
-                tikv_util::warn!(
-                    "adhoc_dump returns non-zero {} error_code: {} error_message: {}",
-                    r,
-                    err,
-                    str_slice
-                );
-            }
+            print_error_message("adhoc_dump", r);
         }
     }
     Ok(())

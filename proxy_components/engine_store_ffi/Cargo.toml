@@ -36,32 +36,32 @@ jemalloc = ["proxy_ffi/jemalloc"]
 external-jemalloc = ["proxy_ffi/external-jemalloc"]
 
 [dependencies]
-batch-system = { workspace = true, default-features = false }
+batch-system = { workspace = true }
 bitflags = "1.0.1"
 byteorder = "1.2"
 bytes = "1.0"
 collections = { workspace = true }
 crossbeam = "0.8"
 derivative = "2"
-encryption = { workspace = true, default-features = false }
+encryption = { workspace = true }
 openssl = { workspace = true } # TODO only for feature
-engine_rocks = { workspace = true, default-features = false }
+engine_rocks = { workspace = true }
 # Should be [dev-dependencies] but we need to control the features
 # https://github.com/rust-lang/cargo/issues/6915
 engine_test = { workspace = true, default-features = false }
 engine_tiflash = { workspace = true, default-features = false }
-engine_traits = { workspace = true, default-features = false }
-error_code = { workspace = true, default-features = false }
+engine_traits = { workspace = true }
+error_code = { workspace = true }
 fail = "0.5"
-file_system = { workspace = true, default-features = false }
+file_system = { workspace = true }
 fs2 = "0.4"
 futures = "0.3"
 futures-util = { version = "0.3.1", default-features = false, features = ["io"] }
 getset = "0.1"
 grpcio-health = { version = "0.10", default-features = false, features = ["protobuf-codec"] }
-into_other = { workspace = true, default-features = false }
+into_other = { workspace = true }
 itertools = "0.10"
-keys = { workspace = true, default-features = false }
+keys = { workspace = true }
 kvproto = { workspace = true }
 lazy_static = "1.3"
 log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
@@ -69,7 +69,7 @@ log_wrappers = { workspace = true }
 online_config = { workspace = true }
 ordered-float = "2.6"
 parking_lot = "0.12"
-pd_client = { workspace = true, default-features = false }
+pd_client = { workspace = true }
 portable-atomic = "0.3"
 prometheus = { version = "0.13", features = ["nightly"] }
 prometheus-static-metric = "0.5"
@@ -89,16 +89,16 @@ sst_importer = { workspace = true, default-features = false }
 tempfile = "3.0"
 thiserror = "1.0"
 tikv_alloc = { workspace = true }
-tikv_util = { workspace = true, default-features = false }
+tikv_util = { workspace = true }
 time = "0.1"
 tokio = { version = "1.5", features = ["sync", "rt-multi-thread"] }
 tokio-timer = { git = "https://github.com/tikv/tokio", branch = "tokio-timer-hotfix" }
-tracker = { workspace = true, default-features = false }
+tracker = { workspace = true }
 uuid = { version = "0.8.1", features = ["serde", "v4"] }
 yatp = { git = "https://github.com/tikv/yatp.git", branch = "master" }
 
 [dev-dependencies]
-encryption_export = { workspace = true, default-features = false }
-engine_panic = { workspace = true, default-features = false }
+encryption_export = { workspace = true }
+engine_panic = { workspace = true }
 panic_hook = { workspace = true }
-test_sst_importer = { workspace = true, default-features = false }
+test_sst_importer = { workspace = true }
