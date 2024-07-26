@@ -506,14 +506,14 @@
 ## When Region [a,e) size exceeds `region_max_size`, it will be split into several Regions [a,b),
 ## [b,c), [c,d), [d,e) and the size of [a,b), [b,c), [c,d) will be `region_split_size` (or a
 ## little larger).
-# region-max-size = "144MB"
-# region-split-size = "96MB"
+# region-max-size = "384MB"
+# region-split-size = "256MB"
 
 ## When the number of keys in Region [a,e) exceeds the `region_max_keys`, it will be split into
 ## several Regions [a,b), [b,c), [c,d), [d,e) and the number of keys in [a,b), [b,c), [c,d) will be
 ## `region_split_keys`.
-# region-max-keys = 1440000
-# region-split-keys = 960000
+# region-max-keys = 3840000
+# region-split-keys = 2560000
 
 ## Set to "mvcc" to do consistency check for MVCC data, or "raw" for raw data.
 # consistency-check-method = "mvcc"
