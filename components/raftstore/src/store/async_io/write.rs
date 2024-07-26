@@ -384,6 +384,8 @@ impl<W: WriteBatch, L: RaftLogBatch> ExtraBatchWrite<W, L> {
 /// batch size. The range of the trend is [0.5, 2.0]. If the batch size is
 /// increasing, the trend will be larger than 1.0, and the wait duration will
 /// be shorter.
+/// By default, the wait duration is 20us, the relative range for wait duration
+/// is [10us, 40us].
 struct WriteTaskBatchRecorder {
     batch_size_hint: usize,
     capacity: usize,
