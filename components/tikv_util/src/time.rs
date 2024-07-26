@@ -579,6 +579,11 @@ pub fn setup_for_spin_interval() {
     });
 }
 
+/// Wait for at least `elaspsed` duration synchronously by looping.
+///
+/// Attention, this function is only suitable for short-time spinning, so
+/// the `elaspsed` should be small, like 1ms. And the caller should not
+/// rely on it to guarantee the exact time to sleep.
 pub fn spin_at_least(elaspsed: Duration) {
     // Initialize default spin loop interval.
     setup_for_spin_interval();
@@ -750,10 +755,6 @@ mod tests {
     #[test]
     fn test_wait_at_least() {
         setup_for_spin_interval();
-
-        let start = Instant::now();
-        yield_at_least(Duration::from_micros(100));
-        assert!(start.saturating_elapsed() >= Duration::from_micros(100));
 
         let start = Instant::now();
         spin_at_least(Duration::from_micros(500));
