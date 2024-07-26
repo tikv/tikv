@@ -431,7 +431,7 @@ pub struct RaftlogFetchResult {
     pub term: u64,
 }
 
-impl Debug for RaftlogFetchResult {
+impl std::fmt::Debug for RaftlogFetchResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // avoid dumping entries content
         f.debug_struct("RaftlogFetchResult")

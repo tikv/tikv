@@ -733,12 +733,26 @@ pub struct RaftCmdExtraOpts {
 
 /// Raft command is the command that is expected to be proposed by the
 /// leader of the target raft group.
-#[derive(Debug)]
 pub struct RaftCommand<S: Snapshot> {
     pub send_time: Instant,
     pub request: RaftCmdRequest,
     pub callback: Callback<S>,
     pub extra_opts: RaftCmdExtraOpts,
+}
+
+impl<S: Snapshot> fmt::Debug for RaftCommand<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RaftCommand")
+            .field("send_time", &self.send_time)
+            .field("request", &self.request.get_requests().len())
+            .field(
+                "admin_request",
+                &self.request.get_admin_request().get_cmd_type(),
+            )
+            .field("callback", &self.callback)
+            .field("extra_opts", &self.extra_opts)
+            .finish()
+    }
 }
 
 impl<S: Snapshot> RaftCommand<S> {
