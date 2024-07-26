@@ -118,7 +118,8 @@ pub struct RangeManager {
     historical_ranges: BTreeMap<CacheRange, RangeMeta>,
     // `ranges_being_deleted` contains ranges that are evicted but not finished the delete (or even
     // not start to delete due to ongoing snapshot)
-    pub(crate) ranges_being_deleted: BTreeSet<CacheRange>,
+    // `bool` means whether the range has been scheduled to the delete range worker
+    pub(crate) ranges_being_deleted: BTreeMap<CacheRange, bool>,
     // ranges that are cached now
     ranges: BTreeMap<CacheRange, RangeMeta>,
 
@@ -226,7 +227,9 @@ impl RangeManager {
     }
 
     fn overlap_with_evicting_range(&self, range: &CacheRange) -> bool {
-        self.ranges_being_deleted.iter().any(|r| r.overlaps(range))
+        self.ranges_being_deleted
+            .iter()
+            .any(|(r, _)| r.overlaps(range))
     }
 
     fn overlap_with_range_in_gc(&self, range: &CacheRange) -> bool {
@@ -292,7 +295,7 @@ impl RangeManager {
 
             return self
                 .ranges_being_deleted
-                .iter()
+                .keys()
                 .filter(|evicted_range| {
                     !self
                         .historical_ranges
@@ -403,7 +406,7 @@ impl RangeManager {
             self.ranges.insert(right_range, right_meta);
         }
 
-        self.ranges_being_deleted.insert(evict_range.clone());
+        self.ranges_being_deleted.insert(evict_range.clone(), false);
 
         if !meta.range_snapshot_list.is_empty() {
             self.historical_ranges.insert(cached_range.clone(), meta);
@@ -423,7 +426,7 @@ impl RangeManager {
 
     pub fn on_delete_ranges(&mut self, ranges: &[CacheRange]) {
         for r in ranges {
-            self.ranges_being_deleted.remove(r);
+            assert!(self.ranges_being_deleted.remove(r).unwrap());
         }
     }
 
@@ -484,6 +487,16 @@ impl RangeManager {
 
     pub fn get_and_reset_range_evictions(&self) -> u64 {
         self.range_evictions.swap(0, Ordering::Relaxed)
+    }
+
+    // Only ranges that have not been scheduled will be retained in `ranges`
+    pub fn mark_delete_ranges_scheduled(&mut self, ranges: &mut Vec<CacheRange>) {
+        ranges.retain(|r| {
+            let scheduled = self.ranges_being_deleted.get_mut(r).unwrap();
+            let has_scheduled = *scheduled;
+            *scheduled = true;
+            !has_scheduled
+        });
     }
 
     pub fn overlap_with_preferred_range(&self, range: &CacheRange) -> bool {
@@ -597,7 +610,7 @@ mod tests {
         let r_right = CacheRange::new(b"k06".to_vec(), b"k10".to_vec());
         range_mgr.evict_range(&r_evict);
         let meta1 = range_mgr.historical_ranges.get(&r1).unwrap();
-        assert!(range_mgr.ranges_being_deleted.contains(&r_evict));
+        assert!(range_mgr.ranges_being_deleted.get(&r_evict).is_some());
         assert!(range_mgr.ranges.get(&r1).is_none());
         let meta2 = range_mgr.ranges.get(&r_left).unwrap();
         let meta3 = range_mgr.ranges.get(&r_right).unwrap();
@@ -607,7 +620,7 @@ mod tests {
         let _ = range_mgr.range_snapshot(&r_left, 10);
         range_mgr.evict_range(&r_left);
         assert!(range_mgr.historical_ranges.get(&r_left).is_some());
-        assert!(range_mgr.ranges_being_deleted.contains(&r_left));
+        assert!(range_mgr.ranges_being_deleted.get(&r_left).is_some());
         assert!(range_mgr.ranges.get(&r_left).is_none());
 
         assert!(range_mgr.evict_range(&r_right).is_empty());

@@ -373,7 +373,9 @@ impl RangeCacheMemoryEngine {
     /// immediately due to some ongoing snapshots.
     pub fn evict_range(&self, range: &CacheRange) {
         let mut core = self.core.write();
-        let ranges_to_delete = core.range_manager.evict_range(range);
+        let mut ranges_to_delete = core.range_manager.evict_range(range);
+        core.mut_range_manager()
+            .mark_delete_ranges_scheduled(&mut ranges_to_delete);
         if !ranges_to_delete.is_empty() {
             drop(core);
             // The range can be deleted directly.
@@ -461,7 +463,8 @@ impl RangeCacheMemoryEngine {
 
             let range_manager = core.mut_range_manager();
             range_manager.pending_ranges.swap_remove(idx);
-            // let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
+            // let rocks_snap =
+            // Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
             // Here, we use the range in `pending_ranges` rather than the parameter range as
             // the region may be splitted.
             range_manager
