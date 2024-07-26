@@ -459,6 +459,14 @@ pub trait Engine: Send + Clone + 'static {
     fn hint_change_in_range(&self, _start_key: Vec<u8>, _end_key: Vec<u8>) {}
 }
 
+/// Engine defines the common behaviour for a storage engine type.
+pub trait CacheableEngine: Send + Clone + 'static {
+    type Snap: Snapshot;
+    type SnapshotRes: Future<Output = Result<Self::Snap>> + Send + 'static;
+
+    fn async_cacheable_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::SnapshotRes;
+}
+
 /// A Snapshot is a consistent view of the underlying engine at a given point in
 /// time.
 ///

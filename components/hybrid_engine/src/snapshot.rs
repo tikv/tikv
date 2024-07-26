@@ -9,6 +9,7 @@ use engine_traits::{
 
 use crate::{db_vector::HybridDbVector, engine_iterator::HybridEngineIterator};
 
+#[derive(Clone)]
 pub struct HybridEngineSnapshot<EK, EC>
 where
     EK: KvEngine,

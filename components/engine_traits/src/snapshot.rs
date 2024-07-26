@@ -10,8 +10,16 @@ use crate::{iterable::Iterable, peekable::Peekable, CfNamesExt, SnapshotMiscExt}
 /// clonable, call `into_sync` to create a `SyncSnapshot`.
 pub trait Snapshot
 where
-    Self:
-        'static + Peekable + Iterable + CfNamesExt + SnapshotMiscExt + Send + Sync + Sized + Debug,
+    Self: 'static
+        + Peekable
+        + Iterable
+        + CfNamesExt
+        + SnapshotMiscExt
+        + Send
+        + Sync
+        + Sized
+        + Debug
+        + Clone,
 {
     /// Whether the snapshot acquired hit the cached range in the range cache
     /// engine. It always returns false if the range cahce engine is not
