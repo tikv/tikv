@@ -731,6 +731,24 @@ pub fn snapshot<E: Engine>(
     }
 }
 
+/// Get a snapshot of `engine`.
+pub fn in_memory_snapshot<E: Engine>(
+    engine: &mut E,
+    ctx: SnapContext<'_>,
+) -> impl std::future::Future<Output = Result<E::IMSnap>> {
+    let begin = Instant::now();
+    let val = engine.async_in_memory_snapshot(ctx);
+    // make engine not cross yield point
+    async move {
+        let result = val.await;
+        with_tls_tracker(|tracker| {
+            tracker.metrics.get_snapshot_nanos += begin.elapsed().as_nanos() as u64;
+        });
+        fail_point!("after-snapshot");
+        result
+    }
+}
+
 pub fn write<E: Engine>(
     engine: &E,
     ctx: &Context,
