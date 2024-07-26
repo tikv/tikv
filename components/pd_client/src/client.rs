@@ -1045,9 +1045,7 @@ impl PdClient for RpcClient {
             }) as PdFuture<_>
         };
 
-        self.pd_client
-            .request(req, executor, LEADER_CHANGE_RETRY)
-            .execute()
+        self.pd_client.request(req, executor, NO_RETRY).execute()
     }
 
     fn report_region_buckets(&self, bucket_stat: &BucketStat, period: Duration) -> PdFuture<()> {

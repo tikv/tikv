@@ -503,6 +503,7 @@ pub fn disable_all_auto_ticks(cfg: &mut Config) {
     cfg.region_compact_check_interval = ReadableDuration::ZERO;
     cfg.pd_heartbeat_tick_interval = ReadableDuration::ZERO;
     cfg.pd_store_heartbeat_tick_interval = ReadableDuration::ZERO;
+    cfg.pd_report_min_resolved_ts_interval = ReadableDuration::ZERO;
     cfg.snap_mgr_gc_tick_interval = ReadableDuration::ZERO;
     cfg.lock_cf_compact_interval = ReadableDuration::ZERO;
     cfg.peer_stale_state_check_interval = ReadableDuration::ZERO;
@@ -512,7 +513,6 @@ pub fn disable_all_auto_ticks(cfg: &mut Config) {
     cfg.merge_check_tick_interval = ReadableDuration::ZERO;
     cfg.cleanup_import_sst_interval = ReadableDuration::ZERO;
     cfg.inspect_interval = ReadableDuration::ZERO;
-    cfg.report_min_resolved_ts_interval = ReadableDuration::ZERO;
     cfg.reactive_memory_lock_tick_interval = ReadableDuration::ZERO;
     cfg.report_region_buckets_tick_interval = ReadableDuration::ZERO;
     cfg.check_long_uncommitted_interval = ReadableDuration::ZERO;

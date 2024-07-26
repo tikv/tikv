@@ -379,6 +379,9 @@
 ## Store heartbeat tick interval for reporting to PD.
 # pd-store-heartbeat-tick-interval = "10s"
 
+## Store min resolved ts tick interval for reporting to PD.
+# pd-report-min-resolved-ts-interval = "1s"
+
 ## The threshold of triggering Region split check.
 ## When Region size change exceeds this config, TiKV will check whether the Region should be split
 ## or not. To reduce the cost of scanning data in the checking process, you can set the value to

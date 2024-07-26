@@ -19,6 +19,7 @@ use engine_traits::{
     CfName, CfNamesExt, Engines, Iterable, KvEngine, Peekable, RaftEngineDebug, RaftEngineReadOnly,
     CF_DEFAULT, CF_RAFT,
 };
+use fail::fail_point;
 use file_system::IoRateLimiter;
 use futures::{executor::block_on, future::BoxFuture, StreamExt};
 use grpcio::{ChannelBuilder, Environment};
@@ -179,7 +180,18 @@ pub fn new_tikv_config_with_api_ver(cluster_id: u64, api_ver: ApiVersion) -> Tik
     let mut cfg = TEST_CONFIG.clone();
     cfg.server.cluster_id = cluster_id;
     cfg.storage.set_api_version(api_ver);
+    cfg.raft_store.pd_report_min_resolved_ts_interval = config(ReadableDuration::secs(1));
     cfg
+}
+
+fn config(interval: ReadableDuration) -> ReadableDuration {
+    fail_point!("mock_min_resolved_ts_interval", |_| {
+        ReadableDuration::millis(50)
+    });
+    fail_point!("mock_min_resolved_ts_interval_disable", |_| {
+        ReadableDuration::millis(0)
+    });
+    interval
 }
 
 // Create a base request.

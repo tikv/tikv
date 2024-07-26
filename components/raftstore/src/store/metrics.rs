@@ -215,6 +215,7 @@ make_static_metric! {
     pub label_enum RaftEventDurationType {
         compact_check,
         pd_store_heartbeat,
+        pd_report_min_resolved_ts,
         snap_gc,
         compact_lock_cf,
         consistency_check,
