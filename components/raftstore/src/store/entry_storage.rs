@@ -416,7 +416,7 @@ pub enum RaftlogFetchState {
     Fetched(Box<RaftlogFetchResult>),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub struct RaftlogFetchResult {
     pub ents: raft::Result<Vec<Entry>>,
     // because entries may be empty, so store the original low index that the task issued
@@ -429,6 +429,19 @@ pub struct RaftlogFetchResult {
     pub tried_cnt: usize,
     // the term when the task issued
     pub term: u64,
+}
+
+impl std::fmt::Debug for RaftlogFetchResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // avoid dumping entries content
+        f.debug_struct("RaftlogFetchResult")
+            .field("low", &self.low)
+            .field("max_size", &self.max_size)
+            .field("hit_size_limit", &self.hit_size_limit)
+            .field("tried_cnt", &self.tried_cnt)
+            .field("term", &self.term)
+            .finish()
+    }
 }
 
 #[derive(Default)]
