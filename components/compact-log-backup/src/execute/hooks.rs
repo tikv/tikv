@@ -1,5 +1,4 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
-use std::future::Future;
 
 use chrono::{Duration, Local};
 pub use engine_traits::SstCompressionType;
@@ -22,6 +21,7 @@ use crate::{
     errors::Result,
     execute::Execution,
     statistic::{CollectCompactionStatistic, CompactStatistic, LoadMetaStatistic, LoadStatistic},
+    storage::StreamyMetaStorage,
     util,
 };
 
@@ -88,6 +88,8 @@ pub struct SubcompactionStartCtx<'a> {
 }
 
 /// The hook points of an execution of compaction.
+// We don't need the returned future be either `Send` or `Sync`.
+#[allow(async_fn_in_trait)]
 pub trait ExecHooks: 'static {
     /// This hook will be called when a subcompaction is about to start.
     fn before_a_subcompaction_start(&mut self, _cid: CId, _c: SubcompactionStartCtx<'_>) {}
@@ -97,26 +99,27 @@ pub trait ExecHooks: 'static {
     ///
     /// If an error was returned, the whole procedure will fail and be
     /// terminated!
-    fn after_a_subcompaction_end<'a>(
-        &'a mut self,
+    async fn after_a_subcompaction_end(
+        &mut self,
         _cid: CId,
-        _res: SubcompactionFinishCtx<'a>,
-    ) -> impl Future<Output = Result<()>> + 'a {
-        futures::future::ok(())
+        _res: SubcompactionFinishCtx<'_>,
+    ) -> Result<()> {
+        Ok(())
     }
 
     /// This hook will be called before all works begin.
     /// In this time, the asynchronous runtime and external storage have been
     /// created.
-    fn before_execution_started(&mut self, _cx: BeforeStartCtx<'_>) {}
+    ///
+    /// If an error was returned, the execution will be aborted.
+    async fn before_execution_started(&mut self, _cx: BeforeStartCtx<'_>) -> Result<()> {
+        Ok(())
+    }
     /// This hook will be called after the whole compaction finished.
     ///
     /// If an error was returned, the execution will be mark as failed.
-    fn after_execution_finished<'a>(
-        &'a mut self,
-        _cx: AfterFinishCtx<'a>,
-    ) -> impl Future<Output = Result<()>> + 'a {
-        futures::future::ok(())
+    async fn after_execution_finished(&mut self, _cx: AfterFinishCtx<'_>) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -126,10 +129,10 @@ impl<T: ExecHooks, U: ExecHooks> ExecHooks for (T, U) {
         self.1.before_a_subcompaction_start(cid, c);
     }
 
-    async fn after_a_subcompaction_end<'a>(
-        &'a mut self,
+    async fn after_a_subcompaction_end(
+        &mut self,
         cid: CId,
-        cx: SubcompactionFinishCtx<'a>,
+        cx: SubcompactionFinishCtx<'_>,
     ) -> Result<()> {
         futures::future::try_join(
             self.0.after_a_subcompaction_end(cid, cx),
@@ -139,12 +142,16 @@ impl<T: ExecHooks, U: ExecHooks> ExecHooks for (T, U) {
         Ok(())
     }
 
-    fn before_execution_started(&mut self, cx: BeforeStartCtx<'_>) {
-        self.0.before_execution_started(cx);
-        self.1.before_execution_started(cx);
+    async fn before_execution_started(&mut self, cx: BeforeStartCtx<'_>) -> Result<()> {
+        futures::future::try_join(
+            self.0.before_execution_started(cx),
+            self.1.before_execution_started(cx),
+        )
+        .await?;
+        Ok(())
     }
 
-    async fn after_execution_finished<'a>(&'a mut self, cx: AfterFinishCtx<'a>) -> Result<()> {
+    async fn after_execution_finished(&mut self, cx: AfterFinishCtx<'_>) -> Result<()> {
         futures::future::try_join(
             self.0.after_execution_finished(cx),
             self.1.after_execution_finished(cx),
@@ -188,11 +195,11 @@ impl ExecHooks for TuiHooks {
             "region_id" => c.region_id);
     }
 
-    fn after_a_subcompaction_end<'a>(
-        &'a mut self,
+    async fn after_a_subcompaction_end(
+        &mut self,
         cid: CId,
-        cx: SubcompactionFinishCtx<'a>,
-    ) -> impl Future<Output = Result<()>> + 'a {
+        cx: SubcompactionFinishCtx<'_>,
+    ) -> Result<()> {
         let lst = &cx.result.load_stat;
         let cst = &cx.result.compact_stat;
         let logical_input_size = lst.logical_key_bytes_in + lst.logical_value_bytes_in;
@@ -210,18 +217,15 @@ impl ExecHooks for TuiHooks {
             "speed(KiB/s)" => speed, 
             "total_take" => ?total_take, 
             "global_load_meta_stat" => ?self.stats.load_meta_stat);
-        futures::future::ok(())
+        Ok(())
     }
 
-    fn after_execution_finished<'a>(
-        &'a mut self,
-        _cx: AfterFinishCtx<'a>,
-    ) -> impl Future<Output = Result<()>> + 'a {
+    async fn after_execution_finished(&mut self, _cx: AfterFinishCtx<'_>) -> Result<()> {
         info!("All compactions done.");
-        futures::future::ok(())
+        Ok(())
     }
 
-    fn before_execution_started(&mut self, cx: BeforeStartCtx<'_>) {
+    async fn before_execution_started(&mut self, cx: BeforeStartCtx<'_>) -> Result<()> {
         tracing_active_tree::init();
 
         let sigusr1_handler = async {
@@ -242,6 +246,8 @@ impl ExecHooks for TuiHooks {
         };
 
         cx.async_rt.spawn(sigusr1_handler);
+        self.meta_len = StreamyMetaStorage::count_objects(cx.storage).await?;
+        Ok(())
     }
 }
 
@@ -323,7 +329,7 @@ impl SaveMeta {
 }
 
 impl ExecHooks for SaveMeta {
-    fn before_execution_started(&mut self, cx: BeforeStartCtx<'_>) {
+    async fn before_execution_started(&mut self, cx: BeforeStartCtx<'_>) -> Result<()> {
         self.begin = Some(Local::now());
         let run_info = &mut self.collector;
         run_info.mut_meta().set_name(cx.this.gen_name());
@@ -339,6 +345,7 @@ impl ExecHooks for SaveMeta {
         run_info
             .mut_meta()
             .set_generated_files(format!("{}/{}", cx.this.out_prefix, SST_OUT_REL));
+        Ok(())
     }
 
     fn before_a_subcompaction_start(&mut self, _cid: CId, c: SubcompactionStartCtx<'_>) {
@@ -347,45 +354,41 @@ impl ExecHooks for SaveMeta {
         self.stats.update_load_meta_stat(c.load_stat_diff);
     }
 
-    fn after_a_subcompaction_end<'a>(
-        &'a mut self,
+    async fn after_a_subcompaction_end(
+        &mut self,
         _cid: CId,
-        cx: SubcompactionFinishCtx<'a>,
-    ) -> impl Future<Output = Result<()>> + 'a {
+        cx: SubcompactionFinishCtx<'_>,
+    ) -> Result<()> {
+        use protobuf::Message;
+
         self.collector.add_subcompaction(&cx.result);
         self.stats.update_subcompaction(&cx.result);
 
-        async {
-            use protobuf::Message;
-            let meta_name = format!(
-                "{}_{}_{}.cmeta",
-                util::aligned_u64(cx.result.origin.input_min_ts),
-                util::aligned_u64(cx.result.origin.input_max_ts),
-                util::aligned_u64(cx.result.origin.crc64())
-            );
-            let meta_name = format!("{}/{}/{}", cx.this.out_prefix, META_OUT_REL, meta_name);
-            let mut metas = brpb::LogFileSubcompactions::new();
-            metas.mut_subcompactions().push(cx.result.meta.clone());
-            let meta_bytes = metas.write_to_bytes()?;
-            retry(|| async {
-                let reader = UnpinReader(Box::new(Cursor::new(&meta_bytes)));
-                cx.external_storage
-                    .write(&meta_name, reader, meta_bytes.len() as _)
-                    .map_err(JustRetry)
-                    .await
-            })
-            .await
-            .map_err(|err| err.0)?;
-            Result::Ok(())
-        }
+        let meta_name = format!(
+            "{}_{}_{}.cmeta",
+            util::aligned_u64(cx.result.origin.input_min_ts),
+            util::aligned_u64(cx.result.origin.input_max_ts),
+            util::aligned_u64(cx.result.origin.crc64())
+        );
+        let meta_name = format!("{}/{}/{}", cx.this.out_prefix, META_OUT_REL, meta_name);
+        let mut metas = brpb::LogFileSubcompactions::new();
+        metas.mut_subcompactions().push(cx.result.meta.clone());
+        let meta_bytes = metas.write_to_bytes()?;
+        retry(|| async {
+            let reader = UnpinReader(Box::new(Cursor::new(&meta_bytes)));
+            cx.external_storage
+                .write(&meta_name, reader, meta_bytes.len() as _)
+                .map_err(JustRetry)
+                .await
+        })
+        .await
+        .map_err(|err| err.0)?;
+        Result::Ok(())
     }
 
-    fn after_execution_finished<'a>(
-        &'a mut self,
-        cx: AfterFinishCtx<'a>,
-    ) -> impl Future<Output = Result<()>> + 'a {
+    async fn after_execution_finished(&mut self, cx: AfterFinishCtx<'_>) -> Result<()> {
         let comments = self.comments();
         self.collector.mut_meta().set_comments(comments);
-        self.collector.write_migration(cx.external_storage)
+        self.collector.write_migration(cx.external_storage).await
     }
 }

@@ -11,6 +11,7 @@ failpoints = ["fail/failpoints"]
 async-compression = { version = "0.3.14", features = ["tokio", "zstd"] }
 bytes = "1"
 chrono = { workspace = true }
+codec = { workspace = true }
 crc64fast = "0.1"
 dashmap = "5"
 derive_more = "0.99.3"
@@ -18,6 +19,7 @@ encryption = { workspace = true }
 engine_rocks = { workspace = true }
 engine_traits = { workspace = true }
 external_storage = { workspace = true }
+fail = "0.5"
 file_system = { workspace = true }
 futures = "0.3"
 futures-io = "0.3"
@@ -30,6 +32,7 @@ protobuf = { version = "2.8", features = ["bytes"] }
 slog = { workspace = true }
 slog-global ={ workspace = true }
 thiserror = "1"
+tidb_query_datatype = { workspace = true }
 tikv_util = { workspace = true }
 tokio = { version = "1.5", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
 tokio-stream = "0.1"
@@ -40,15 +43,11 @@ txn_types = { workspace = true }
 
 # Below are used by `test_utils` only.
 zstd = "0.11"
-tidb_query_datatype = { workspace = true }
-codec = {workspace = true}
-fail = "0.5"
-
 
 [dev-dependencies]
 pprof = { version = "0.13", default-features = false, features = [
   "flamegraph",
   "protobuf-codec",
 ] } 
-test_util = { workspace = true }
 tempdir = "0.3"
+test_util = { workspace = true }

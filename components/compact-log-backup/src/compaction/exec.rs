@@ -38,9 +38,15 @@ pub struct SubcompactionExec<DB> {
     db: Option<DB>,
 }
 
+/// The extra config of executing a subcompaction.
 pub struct SubcompactExt {
+    /// The number of max concurrency of loading input files.
     pub max_load_concurrency: usize,
+    /// The compression type that will be used for the output file.
     pub compression: SstCompressionType,
+    /// The compression level of the output file.
+    ///
+    /// When `None`, will use the default level of the compression algorithm.
     pub compression_level: Option<i32>,
 }
 
@@ -54,9 +60,14 @@ impl<'a> Default for SubcompactExt {
     }
 }
 
+// NOTE: maybe we can merge this and `SubcompactionExt`?
+/// The information used for constructing a [`SubcompactionExec`].
 pub struct SubcompactionExecArg<DB> {
+    /// The prefix of the output SST.
     pub out_prefix: Option<PathBuf>,
+    /// The RocksDB instance used for creating the SST writer.
     pub db: Option<DB>,
+    /// The output storage.
     pub storage: Arc<dyn ExternalStorage>,
 }
 
@@ -118,6 +129,10 @@ where
         let mut d = crc64fast::Digest::new();
         d.write(&a.key);
         d.write(&a.value);
+        // When we remove even number of the same key-value pair, we don't need to
+        // update the crc64xor checksum. Trick here: If a key-value pair appears
+        // even times, that key will be eliminated in this checksum, so we just
+        // need to `XOR` all duplicated keys up, we will get the right crc64xor diff.
         diff.crc64xor_diff ^= d.sum64();
     }
 

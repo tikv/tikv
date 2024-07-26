@@ -116,6 +116,9 @@ mod util {
         }
     }
 
+    /// Execute a set of tasks concurrently.
+    ///
+    /// You may restrict the max concurrency by the `ext`.
     #[tracing::instrument(skip_all, fields(size = futs.len()))]
     pub async fn execute_all_ext<T, F, E>(futs: Vec<F>, ext: ExecuteAllExt) -> Result<Vec<T>, E>
     where

@@ -103,7 +103,7 @@ impl Execution {
                 async_rt: &tokio::runtime::Handle::current(),
                 this: &self,
             };
-            hooks.before_execution_started(cx);
+            hooks.before_execution_started(cx).await?;
             let meta = StreamyMetaStorage::load_from_ext(storage.as_ref(), ext);
             let stream = meta.flat_map(|file| match file {
                 Ok(file) => stream::iter(file.into_logs()).map(Ok).left_stream(),

@@ -9,9 +9,7 @@ use std::{
 };
 
 use derive_more::Display;
-use external_storage::{
-    BlobObject, ExternalStorage, IterableExternalStorage, IterableStorage, UnpinReader,
-};
+use external_storage::{BlobObject, ExternalStorage, IterableExternalStorage, UnpinReader};
 use futures::{
     future::{FusedFuture, FutureExt, TryFutureExt},
     io::{AsyncReadExt, Cursor},

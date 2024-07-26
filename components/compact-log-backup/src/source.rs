@@ -1,15 +1,12 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
-    collections::HashMap,
-    io::{Read, Seek},
-    path::{Path, PathBuf},
     pin::{pin, Pin},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use async_compression::futures::write::ZstdDecoder;
 use external_storage::ExternalStorage;
-use futures::io::{AllowStdIo, AsyncWriteExt, Cursor};
+use futures::io::{AsyncWriteExt, Cursor};
 use futures_io::AsyncWrite;
 use kvproto::brpb;
 use prometheus::core::{Atomic, AtomicU64};

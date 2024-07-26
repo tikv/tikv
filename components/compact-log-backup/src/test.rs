@@ -179,13 +179,6 @@ async fn playground_no_pref() {
     let min_ts = compactions.iter().map(|c| c.input_min_ts).min().unwrap();
     let max_ts = compactions.iter().map(|c| c.input_max_ts).max().unwrap();
 
-    let mig = compacted_files.migration(storage.as_ref()).await.unwrap();
-    for em in &mig.edit_meta {
-        println!("====={}=====", em.path);
-        println!("{:?}", em.delete_physical_files);
-        println!("{:?}", em.delete_logical_files);
-    }
-
     println!(
         "{} ~ {} total {} files, {} compactions totally {} hash {} {}~{}",
         minimal_size,

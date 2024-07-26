@@ -1,9 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{collections::HashMap, sync::Arc, task::ready};
 
-use engine_traits::{ExternalSstFileInfo, SstWriterBuilder};
-use kvproto::brpb::FileType;
-use tikv_util::codec::stream_event::Iterator as KvStreamIter;
 use tokio_stream::Stream;
 
 use super::{Input, SubcompactionCollectKey};

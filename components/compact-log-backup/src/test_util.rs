@@ -8,7 +8,7 @@ use std::{
 };
 
 use engine_rocks::RocksEngine;
-use engine_traits::{IterOptions, Iterator as _, RefIterable, SstExt, CF_DEFAULT, CF_WRITE};
+use engine_traits::{IterOptions, Iterator as _, RefIterable, SstExt};
 use external_storage::{ExternalStorage, IterableStorage};
 use file_system::sha256;
 use futures::{
@@ -36,34 +36,6 @@ use crate::{
 pub struct Kv {
     pub key: Vec<u8>,
     pub value: Vec<u8>,
-}
-
-struct TxnLogFileBuilder {
-    default: LogFileBuilder,
-    write: LogFileBuilder,
-}
-
-impl TxnLogFileBuilder {
-    fn new(_region_id: u64, configure: impl FnOnce(&mut Self)) -> Self {
-        let mut this = Self {
-            default: LogFileBuilder::new(|v| {
-                v.cf = CF_DEFAULT;
-            }),
-            write: LogFileBuilder::new(|v| {
-                v.cf = CF_WRITE;
-            }),
-        };
-        configure(&mut this);
-        this
-    }
-
-    fn add_txn<'a>(
-        &mut self,
-        _kvs: impl Iterator<Item = (Vec<u8>, Vec<u8>)>,
-        _start_ts: u64,
-        _commit_ts: u64,
-    ) {
-    }
 }
 
 pub struct LogFileBuilder {

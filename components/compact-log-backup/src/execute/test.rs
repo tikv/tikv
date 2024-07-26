@@ -15,12 +15,15 @@ use crate::{
 struct CompactionSpy(Sender<SubcompactionResult>);
 
 impl ExecHooks for CompactionSpy {
-    fn after_a_subcompaction_end<'a>(
-        &'a mut self,
+    async fn after_a_subcompaction_end(
+        &mut self,
         _cid: super::hooks::CId,
-        res: super::hooks::SubcompactionFinishCtx<'a>,
-    ) -> impl futures::prelude::Future<Output = crate::Result<()>> + 'a {
-        self.0.send(res.result.clone()).map(|res| res.adapt_err())
+        res: super::hooks::SubcompactionFinishCtx<'_>,
+    ) -> crate::Result<()> {
+        self.0
+            .send(res.result.clone())
+            .map(|res| res.adapt_err())
+            .await
     }
 }
 
