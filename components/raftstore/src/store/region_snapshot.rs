@@ -77,6 +77,23 @@ where
         }
     }
 
+    pub fn replace_snapshot<Sp, F>(self, snap_fn: F) -> RegionSnapshot<Sp>
+    where
+        Sp: Snapshot,
+        F: FnOnce(S) -> Sp,
+    {
+        RegionSnapshot {
+            snap: Arc::new(snap_fn(Arc::unwrap_or_clone(self.snap))),
+            region: self.region,
+            apply_index: self.apply_index,
+            from_v2: self.from_v2,
+            term: self.term,
+            txn_extra_op: self.txn_extra_op,
+            txn_ext: self.txn_ext,
+            bucket_meta: self.bucket_meta,
+        }
+    }
+
     #[inline]
     pub fn get_region(&self) -> &Region {
         &self.region

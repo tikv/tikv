@@ -10,7 +10,15 @@ use crate::{iterable::Iterable, peekable::Peekable, CfNamesExt, SnapshotMiscExt}
 /// clonable, call `into_sync` to create a `SyncSnapshot`.
 pub trait Snapshot
 where
-    Self:
-        'static + Peekable + Iterable + CfNamesExt + SnapshotMiscExt + Send + Sync + Sized + Debug,
+    Self: 'static
+        + Peekable
+        + Iterable
+        + CfNamesExt
+        + SnapshotMiscExt
+        + Send
+        + Sync
+        + Sized
+        + Debug
+        + Clone,
 {
 }

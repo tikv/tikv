@@ -48,6 +48,44 @@ where
     pub fn mut_range_cache_engine(&mut self) -> &mut EC {
         &mut self.range_cache_engine
     }
+
+    pub fn new_in_memory_snapshot(
+        &self,
+        sequence_number: u64,
+        ctx: Option<SnapshotContext>,
+    ) -> Option<EC::Snapshot> {
+        if let Some(ctx) = ctx {
+            match self
+                .range_cache_engine
+                .snapshot(ctx.range.unwrap(), ctx.read_ts, sequence_number)
+            {
+                Ok(snap) => {
+                    SNAPSHOT_TYPE_COUNT_STATIC.range_cache_engine.inc();
+                    Some(snap)
+                }
+                Err(FailedReason::TooOldRead) => {
+                    RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+                        .too_old_read
+                        .inc();
+                    SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
+                    None
+                }
+                Err(FailedReason::NotCached) => {
+                    RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+                        .not_cached
+                        .inc();
+                    SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
+                    None
+                }
+            }
+        } else {
+            RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+                .no_read_ts
+                .inc();
+            SNAPSHOT_TYPE_COUNT_STATIC.rocksdb.inc();
+            None
+        }
+    }
 }
 
 impl<EK, EC> HybridEngine<EK, EC>
