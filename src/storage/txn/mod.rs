@@ -85,7 +85,6 @@ pub enum ProcessResult {
         previous_value: Option<Value>,
         succeed: bool,
     },
-    NothingToWrite,
 }
 
 impl ProcessResult {
