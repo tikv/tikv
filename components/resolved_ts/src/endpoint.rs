@@ -420,17 +420,12 @@ where
                     }
                 } else {
                     // follower safe-ts
-                    RTS_MIN_FOLLOWER_SAFE_TS_GAP_HISTOGRAM.observe(now.saturating_sub(
-                        TimeStamp::from(stats.min_follower_safe_ts.safe_ts).physical(),
-                    ) as f64);
+                    RTS_MIN_FOLLOWER_SAFE_TS_GAP_HISTOGRAM
+                        .observe(now.saturating_sub(TimeStamp::from(safe_ts).physical()) as f64);
 
                     if safe_ts > 0 && safe_ts < stats.min_follower_safe_ts.safe_ts {
                         stats.min_follower_safe_ts.set(*region_id, &core);
                     }
-
-                    RTS_MIN_FOLLOWER_SAFE_TS_GAP_HISTOGRAM.observe(now.saturating_sub(
-                        TimeStamp::from(stats.min_follower_resolved_ts.resolved_ts).physical(),
-                    ) as f64);
 
                     // follower resolved-ts
                     if resolved_ts < stats.min_follower_resolved_ts.resolved_ts {
