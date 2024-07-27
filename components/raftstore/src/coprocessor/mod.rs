@@ -52,6 +52,7 @@ pub use self::{
         HalfCheckObserver, Host as SplitCheckerHost, KeysCheckObserver, SizeCheckObserver,
         TableCheckObserver,
     },
+    write_batch::{ObservableWriteBatch, WriteBatchObserver, WriteBatchWrapper},
 };
 pub use crate::store::{Bucket, KeyEntry};
 

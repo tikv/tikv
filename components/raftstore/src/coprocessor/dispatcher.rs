@@ -3,7 +3,7 @@
 // #[PerformanceCriticalPath] called by Fsm on_ready_compute_hash
 use std::{borrow::Cow, marker::PhantomData, mem, ops::Deref};
 
-use engine_traits::{CfName, KvEngine};
+use engine_traits::{CfName, KvEngine, WriteBatch};
 use kvproto::{
     metapb::{Region, RegionEpoch},
     pdpb::CheckPolicy,
@@ -13,6 +13,7 @@ use kvproto::{
 use protobuf::Message;
 use raft::eraftpb;
 use tikv_util::box_try;
+use write_batch::WriteBatchObserver;
 
 use super::{split_observer::SplitObserver, *};
 use crate::store::BucketRange;
@@ -295,6 +296,12 @@ impl_box_observer!(
     RegionHeartbeatObserver,
     WrappedRegionHeartbeatObserver
 );
+impl_box_observer!(
+    BoxWriteBatchObserver,
+    WriteBatchObserver,
+    WrappedBoxWriteBatchObserver
+);
+
 /// Registry contains all registered coprocessors.
 #[derive(Clone)]
 pub struct Registry<E>
@@ -314,6 +321,7 @@ where
     update_safe_ts_observers: Vec<Entry<BoxUpdateSafeTsObserver>>,
     message_observers: Vec<Entry<BoxMessageObserver>>,
     region_heartbeat_observers: Vec<Entry<BoxRegionHeartbeatObserver>>,
+    write_batch_observer: Option<BoxWriteBatchObserver>,
     // TODO: add endpoint
 }
 
@@ -333,6 +341,7 @@ impl<E: KvEngine> Default for Registry<E> {
             update_safe_ts_observers: Default::default(),
             message_observers: Default::default(),
             region_heartbeat_observers: Default::default(),
+            write_batch_observer: None,
         }
     }
 }
@@ -412,6 +421,10 @@ impl<E: KvEngine> Registry<E> {
         qo: BoxRegionHeartbeatObserver,
     ) {
         push!(priority, qo, self.region_heartbeat_observers);
+    }
+
+    pub fn register_write_batch_observer(&mut self, write_batch_observer: BoxWriteBatchObserver) {
+        self.write_batch_observer = Some(write_batch_observer);
     }
 }
 
@@ -884,6 +897,15 @@ impl<E: KvEngine> CoprocessorHost<E> {
             let observer = observer.observer.inner();
             observer.on_update_safe_ts(region_id, self_safe_ts, leader_safe_ts)
         }
+    }
+
+    pub fn on_create_apply_write_batch<WB: WriteBatch>(&self, wb: WB) -> WriteBatchWrapper<WB> {
+        let observable_wb = self
+            .registry
+            .write_batch_observer
+            .as_ref()
+            .map(|observer| observer.inner().create_observable_write_batch());
+        WriteBatchWrapper::new(wb, observable_wb)
     }
 
     pub fn shutdown(&self) {
