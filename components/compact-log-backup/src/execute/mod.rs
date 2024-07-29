@@ -33,14 +33,31 @@ use crate::{
     util,
 };
 
+/// The config for an execution of a compaction.
+///
+/// This structure itself fully defines what work the compaction need to do.
+/// That is, keeping this structure unchanged, the compaction should always
+/// generate the same artifices.
 pub struct ExecutionConfig {
+    /// Filter out files doesn't contain any record with TS great or equal than
+    /// this.
     pub from_ts: u64,
+    /// Filter out files doesn't contain any record with TS less than this.
     pub until_ts: u64,
+    /// The compress algorithm we are going to use for output.
     pub compression: SstCompressionType,
+    /// The compress level we are going to use.
+    ///
+    /// If `None`, we will use the default level of the selected algorithm.
     pub compression_level: Option<i32>,
 }
 
 impl ExecutionConfig {
+    /// Create a suitable (but not forced) prefix for the artifices of the
+    /// compaction.
+    ///
+    /// You may specify a `name`, which will be included in the path, then the
+    /// compaction will be easier to be found.
     pub fn recommended_prefix(&self, name: &str) -> String {
         let mut hasher = crc64fast::Digest::new();
         hasher.write(name.as_bytes());
@@ -53,12 +70,18 @@ impl ExecutionConfig {
     }
 }
 
+/// An execution of compaction.
 pub struct Execution<DB: SstExt = RocksEngine> {
+    /// The configuration.
     pub cfg: ExecutionConfig,
 
-    pub max_concurrent_compaction: u64,
+    /// Max subcompactions can be executed concurrently.
+    pub max_concurrent_subcompaction: u64,
+    /// The external storage for input and output.
     pub external_storage: StorageBackend,
+    /// The RocksDB instance for generating SST.
     pub db: Option<DB>,
+    /// The prefix of the artifices.
     pub out_prefix: String,
 }
 
@@ -158,7 +181,7 @@ impl Execution {
                 let join_handle = tokio::spawn(root!(compact_work));
                 pending.push(join_handle);
 
-                if pending.len() >= self.max_concurrent_compaction as _ {
+                if pending.len() >= self.max_concurrent_subcompaction as _ {
                     let join = util::select_vec(&mut pending);
                     let (cres, cid) = frame!("wait_for_compaction"; join).await.unwrap()?;
                     self.on_compaction_finish(cid, &cres, storage.as_ref(), &mut hooks)

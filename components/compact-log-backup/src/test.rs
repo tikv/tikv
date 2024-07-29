@@ -214,7 +214,7 @@ fn cli_playground() {
     let exec = Execution {
         out_prefix: cfg.recommended_prefix("fivloit"),
         cfg,
-        max_concurrent_compaction: 16,
+        max_concurrent_subcompaction: 16,
         external_storage: backend,
         db: None,
     };

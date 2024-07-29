@@ -428,7 +428,7 @@ fn main() {
             let exec = compact_log::Execution {
                 out_prefix: cfg.recommended_prefix(&name),
                 cfg,
-                max_concurrent_compaction: max_compaction_num,
+                max_concurrent_subcompaction: max_compaction_num,
                 external_storage,
                 db: Some(tmp_engine.rocks),
             };

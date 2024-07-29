@@ -66,7 +66,7 @@ async fn test_exec_simple() {
             compression: engine_traits::SstCompressionType::Lz4,
             compression_level: None,
         },
-        max_concurrent_compaction: 3,
+        max_concurrent_subcompaction: 3,
         external_storage: st.backend(),
         db: None,
         out_prefix: "test-output".to_owned(),
