@@ -776,7 +776,7 @@ where
     pub fn on_unregister(&self, task_name: &str) -> Option<StreamBackupTaskInfo> {
         let info = self.unload_task(task_name);
         self.clean_pause_guard_id_for_task(task_name);
-        self.remove_metrics_after_unregister(task);
+        self.remove_metrics_after_unregister(task_name);
         info
     }
 
