@@ -2630,6 +2630,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         let completed_apply_peers_count: Option<u64>;
         let busy_apply_peers_count: u64;
         {
+            let meta = self.ctx.store_meta.lock().unwrap();
             stats.set_region_count(meta.regions.len() as u32);
 
             if !meta.damaged_ranges.is_empty() {
