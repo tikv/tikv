@@ -4221,21 +4221,59 @@ def RangeCacheMemoryEngine() -> RowPanel:
                     ),
                 ],
             ),
-        ]
-    )
-    layout.row(
-        [
-            heatmap_panel(
-                title="Range load duration",
-                description="The handle duration of range load",
-                yaxis=yaxis(format=UNITS.SECONDS),
-                metric="tikv_range_load_duration_secs_bucket",
-            ),
             heatmap_panel(
                 title="Range gc duration",
                 description="The handle duration of range gc",
                 yaxis=yaxis(format=UNITS.SECONDS),
                 metric="tikv_range_gc_duration_secs_bucket",
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Range Load Duration",
+                description="The handle duration of range load",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_range_load_duration_secs_bucket",
+            ),
+            graph_panel(
+                title="Range Load Count",
+                description="The count of range loading per seconds",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_range_load_duration_secs_count",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}",
+                    ),
+                ],
+            ),
+        ]
+    )
+    layout.row(
+        [
+            heatmap_panel(
+                title="Range Eviction Duration",
+                description="The handle duration of range eviction",
+                yaxis=yaxis(format=UNITS.SECONDS),
+                metric="tikv_range_eviction_duration_secs_bucket",
+            ),
+            graph_panel(
+                title="Range Eviction Count",
+                description="The count of range eviction per seconds",
+                yaxes=yaxes(left_format=UNITS.OPS_PER_SEC),
+                targets=[
+                    target(
+                        expr=expr_sum_rate(
+                            "tikv_range_load_duration_secs_count",
+                            by_labels=["instance"],
+                        ),
+                        legend_format="{{instance}}--loading2",
+                    ),
+                ],
             ),
         ]
     )

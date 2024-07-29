@@ -13,9 +13,9 @@ use collections::HashMap;
 use engine_rocks::RocksSnapshot;
 use engine_traits::{CacheRange, FailedReason};
 use raftstore::store::fsm::apply::PRINTF_LOG;
-use tikv_util::info;
+use tikv_util::{info, time::Instant};
 
-use crate::read::RangeCacheSnapshotMeta;
+use crate::{metrics::RANGE_EVICTION_DURATION_HISTOGRAM, read::RangeCacheSnapshotMeta};
 
 // read_ts -> ref_count
 #[derive(Default, Debug)]
@@ -120,7 +120,8 @@ pub struct RangeManager {
     // `ranges_being_deleted` contains ranges that are evicted but not finished the delete (or even
     // not start to delete due to ongoing snapshot)
     // bool means whether the range has been scheduled to delelte
-    pub(crate) ranges_being_deleted: BTreeMap<CacheRange, bool>,
+    // Instant records the time of the eviction
+    pub(crate) ranges_being_deleted: BTreeMap<CacheRange, (bool, Instant)>,
     // ranges that are cached now
     ranges: BTreeMap<CacheRange, RangeMeta>,
 
@@ -163,7 +164,6 @@ pub struct RangeManager {
     // the ranges of this batch. So, when the write batch is consumed by the in-memory engine,
     // all ranges of it are cleared from `ranges_being_written`.
     pub(crate) ranges_being_written: HashMap<u64, Vec<CacheRange>>,
-    range_evictions: AtomicU64,
 }
 
 impl RangeManager {
@@ -428,7 +428,6 @@ impl RangeManager {
             "evict_range" => ?evict_range,
             "cached_range" => ?cached_range,
         );
-        self.range_evictions.fetch_add(1, Ordering::Relaxed);
         let meta = self.ranges.remove(cached_range).unwrap();
         let (left_range, right_range) = cached_range.split_off(evict_range);
         assert!((left_range.is_some() || right_range.is_some()) || evict_range == cached_range);
@@ -443,7 +442,8 @@ impl RangeManager {
             self.ranges.insert(right_range, right_meta);
         }
 
-        self.ranges_being_deleted.insert(evict_range.clone(), false);
+        self.ranges_being_deleted
+            .insert(evict_range.clone(), (false, Instant::now()));
 
         if !meta.range_snapshot_list.is_empty() {
             self.historical_ranges.insert(cached_range.clone(), meta);
@@ -463,7 +463,8 @@ impl RangeManager {
 
     pub fn on_delete_ranges(&mut self, ranges: &[CacheRange]) {
         for r in ranges {
-            self.ranges_being_deleted.remove(&r).unwrap();
+            let (_, t) = self.ranges_being_deleted.remove(&r).unwrap();
+            RANGE_EVICTION_DURATION_HISTOGRAM.observe(t.saturating_elapsed_secs());
             info!(
                 "range eviction done";
                 "range" => ?r,
@@ -528,10 +529,6 @@ impl RangeManager {
         );
         self.pending_ranges.push(cache_range);
         Ok(())
-    }
-
-    pub fn get_and_reset_range_evictions(&self) -> u64 {
-        self.range_evictions.swap(0, Ordering::Relaxed)
     }
 
     pub fn get_range_by_id(&self, region_id: u64) -> Option<CacheRange> {
@@ -599,7 +596,7 @@ impl RangeManager {
 
     pub fn schedule_ranges_to_delete(&mut self, ranges: &mut Vec<CacheRange>) {
         ranges.retain(|r| {
-            let mut scheduled = self.ranges_being_deleted.get_mut(r).unwrap();
+            let (ref mut scheduled, _) = self.ranges_being_deleted.get_mut(r).unwrap();
             if !*scheduled {
                 *scheduled = true;
                 true

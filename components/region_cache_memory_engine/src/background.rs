@@ -533,7 +533,7 @@ impl BackgroundRunnerCore {
                 assert_eq!(r, range);
                 core.mut_range_manager()
                     .ranges_being_deleted
-                    .insert(r.clone(), true);
+                    .insert(r.clone(), (true, Instant::now()));
                 core.remove_cached_write_batch(&range);
                 drop(core);
                 fail::fail_point!("in_memory_engine_snapshot_load_canceled");
@@ -600,7 +600,7 @@ impl BackgroundRunnerCore {
         core.remove_cached_write_batch(&range);
         core.mut_range_manager()
             .ranges_being_deleted
-            .insert(r.clone(), true);
+            .insert(r.clone(), (true, Instant::now()));
 
         if let Err(e) = delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange((
             vec![r],
@@ -1601,17 +1601,11 @@ impl RunnableWithTimer for BackgroundRunner {
         let core = self.core.engine.read();
         let pending = core.range_manager.pending_ranges.len();
         let cached = core.range_manager.ranges().len();
-        let loading = core.range_manager.pending_ranges_loading_data.len();
-        let evictions = core.range_manager.get_and_reset_range_evictions();
-        let deleting = core.range_manager.ranges_being_deleted.len();
         drop(core);
         info!(
             "range types";
             "pending_range" => pending,
             "cached_range" => cached,
-            "loading_range" => loading,
-            "range_evictions" => evictions,
-            "range_deleting" => deleting,
         );
         RANGE_CACHE_COUNT
             .with_label_values(&["pending_range"])
@@ -1619,19 +1613,10 @@ impl RunnableWithTimer for BackgroundRunner {
         RANGE_CACHE_COUNT
             .with_label_values(&["cached_range"])
             .set(cached as i64);
-        RANGE_CACHE_COUNT
-            .with_label_values(&["loading_range"])
-            .set(loading as i64);
-        RANGE_CACHE_COUNT
-            .with_label_values(&["range_evictions"])
-            .set(evictions as i64);
-        RANGE_CACHE_COUNT
-            .with_label_values(&["range_deleting"])
-            .set(deleting as i64);
     }
 
     fn get_interval(&self) -> Duration {
-        Duration::from_millis(500)
+        Duration::from_secs(10)
     }
 }
 
@@ -1688,7 +1673,7 @@ impl Runnable for DeleteRangeRunner {
                             .range_manager
                             .ranges_being_deleted
                             .iter()
-                            .find(|&(range_being_delete, scheduled)| {
+                            .find(|&(range_being_delete, &(scheduled, _))| {
                                 if range_being_delete == &r {
                                     if !scheduled {
                                         panic!(
