@@ -1817,16 +1817,18 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
         // Continue to process if there is data to be persisted in the `WriteResult`, or
         // return.
-        if let Some((write_result_res, task_meta_data_res)) = Self::handle_non_persistent_write_result(
-            self.clone(),
-            cid,
-            tag,
-            tracker_token,
-            task_meta_data,
-            write_result,
-            sched_details,
-            txn_ext.clone(),
-        ) {
+        if let Some((write_result_res, task_meta_data_res)) =
+            Self::handle_non_persistent_write_result(
+                self.clone(),
+                cid,
+                tag,
+                tracker_token,
+                task_meta_data,
+                write_result,
+                sched_details,
+                txn_ext.clone(),
+            )
+        {
             write_result = write_result_res;
             task_meta_data = task_meta_data_res;
         } else {
