@@ -930,7 +930,7 @@ where
     /// All of messages that need to continue to be handled after
     /// the source peer has applied its logs and pending entries
     /// are all handled.
-    pending_msgs: Vec<Msg<EK>>,
+    pending_msgs: Vec<Box<Msg<EK>>>,
 
     /// Cache heap size for itself.
     heap_size: Option<usize>,
@@ -3795,13 +3795,13 @@ where
     },
 }
 
-impl<EK: KvEngine> ResourceMetered for Msg<EK> {
+impl<EK: KvEngine> ResourceMetered for Box<Msg<EK>> {
     fn consume_resource(&self, resource_ctl: &Arc<ResourceController>) -> Option<String> {
         if !resource_ctl.is_customized() {
             return None;
         }
-        match self {
-            Msg::Apply { apply, .. } => {
+        match **self {
+            Msg::Apply { ref apply, .. } => {
                 let mut dominant_group = "".to_owned();
                 let mut max_write_bytes = 0;
                 for cached_entries in &apply.entries {
@@ -3945,7 +3945,7 @@ where
     EK: KvEngine,
 {
     delegate: ApplyDelegate<EK>,
-    receiver: Receiver<Msg<EK>>,
+    receiver: Receiver<Box<Msg<EK>>>,
     mailbox: Option<BasicMailbox<ApplyFsm<EK>>>,
 }
 
@@ -3955,12 +3955,14 @@ where
 {
     fn from_peer<ER: RaftEngine>(
         peer: &Peer<EK, ER>,
-    ) -> (LooseBoundedSender<Msg<EK>>, Box<ApplyFsm<EK>>) {
+    ) -> (LooseBoundedSender<Box<Msg<EK>>>, Box<ApplyFsm<EK>>) {
         let reg = Registration::new(peer);
         ApplyFsm::from_registration(reg)
     }
 
-    fn from_registration(reg: Registration) -> (LooseBoundedSender<Msg<EK>>, Box<ApplyFsm<EK>>) {
+    fn from_registration(
+        reg: Registration,
+    ) -> (LooseBoundedSender<Box<Msg<EK>>>, Box<ApplyFsm<EK>>) {
         let (tx, rx) = loose_bounded(usize::MAX);
         let delegate = ApplyDelegate::from_registration(reg);
         (
@@ -4199,7 +4201,7 @@ where
             .store(region_id, Ordering::SeqCst);
         // To trigger the target apply fsm
         if let Some(mailbox) = ctx.router.mailbox(catch_up_logs.target_region_id) {
-            let _ = mailbox.force_send(Msg::Noop);
+            let _ = mailbox.force_send(Box::new(Msg::Noop));
         } else {
             error!(
                 "failed to get mailbox, are we shutting down?";
@@ -4410,7 +4412,7 @@ where
         ctx.finish_for(&mut self.delegate, result);
     }
 
-    fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext<EK>, msgs: &mut Vec<Msg<EK>>) {
+    fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext<EK>, msgs: &mut Vec<Box<Msg<EK>>>) {
         let mut drainer = msgs.drain(..);
         let mut batch_apply = None;
         loop {
@@ -4425,7 +4427,7 @@ where
             };
 
             if batch_apply.is_some() {
-                match &msg {
+                match *msg {
                     Msg::Apply { .. } => (),
                     _ => {
                         self.handle_apply(apply_ctx, batch_apply.take().unwrap());
@@ -4438,7 +4440,7 @@ where
                 }
             }
 
-            match msg {
+            match *msg {
                 Msg::Apply { start, mut apply } => {
                     let apply_wait = start.saturating_elapsed();
                     apply_ctx.apply_wait.observe(apply_wait.as_secs_f64());
@@ -4459,7 +4461,9 @@ where
                         } else {
                             self.handle_apply(apply_ctx, batch_apply.take().unwrap());
                             if let Some(ref mut state) = self.delegate.yield_state {
-                                state.pending_msgs.push(Msg::Apply { start, apply });
+                                state
+                                    .pending_msgs
+                                    .push(Box::new(Msg::Apply { start, apply }));
                                 state.pending_msgs.extend(drainer);
                                 break;
                             }
@@ -4512,7 +4516,7 @@ impl<EK> Fsm for ApplyFsm<EK>
 where
     EK: KvEngine,
 {
-    type Message = Msg<EK>;
+    type Message = Box<Msg<EK>>;
 
     #[inline]
     fn is_stopped(&self) -> bool {
@@ -4619,7 +4623,7 @@ pub struct ApplyPoller<EK>
 where
     EK: KvEngine,
 {
-    msg_buf: Vec<Msg<EK>>,
+    msg_buf: Vec<Box<Msg<EK>>>,
     apply_ctx: ApplyContext<EK>,
     messages_per_tick: usize,
     cfg_tracker: Tracker<Config>,
@@ -4851,9 +4855,9 @@ where
     EK: KvEngine,
 {
     pub fn schedule_task(&self, region_id: u64, msg: Msg<EK>) {
-        let reg = match self.try_send(region_id, msg) {
+        let reg = match self.try_send(region_id, Box::new(msg)) {
             Either::Left(Ok(())) => return,
-            Either::Left(Err(TrySendError::Disconnected(msg))) | Either::Right(msg) => match msg {
+            Either::Left(Err(TrySendError::Disconnected(msg))) | Either::Right(msg) => match *msg {
                 Msg::Registration(reg) => reg,
                 Msg::Apply { mut apply, .. } => {
                     info!(
@@ -5579,7 +5583,7 @@ mod tests {
         router.schedule_task(2, Msg::destroy(2, false));
         let (region_id, peer_id) = match rx.recv_timeout(Duration::from_secs(3)) {
             Ok(PeerMsg::ApplyRes(box TaskRes::Destroy {
-                    region_id, peer_id, ..
+                region_id, peer_id, ..
             })) => (region_id, peer_id),
             e => panic!("expected destroy result, but got {:?}", e),
         };
@@ -7843,9 +7847,9 @@ mod tests {
             .unwrap();
         assert_ne!(initial_state.get_applied_index(), 0);
         match apply_res_rx.recv_timeout(Duration::from_secs(3)) {
-            Ok(PeerMsg::ApplyRes {
-                res: TaskRes::Apply(apply_res),
-            }) => assert_eq!(apply_res.apply_state, initial_state),
+            Ok(PeerMsg::ApplyRes(box TaskRes::Apply(apply_res))) => {
+                assert_eq!(apply_res.apply_state, initial_state)
+            }
             e => panic!("unexpected result: {:?}", e),
         }
         index_id += 1;
@@ -7877,9 +7881,9 @@ mod tests {
             .unwrap()
             .unwrap();
         match apply_res_rx.recv_timeout(Duration::from_secs(3)) {
-            Ok(PeerMsg::ApplyRes {
-                res: TaskRes::Apply(apply_res),
-            }) => assert_eq!(apply_res.apply_state, apply_state),
+            Ok(PeerMsg::ApplyRes(box TaskRes::Apply(apply_res))) => {
+                assert_eq!(apply_res.apply_state, apply_state)
+            }
             e => panic!("unexpected result: {:?}", e),
         }
         assert!(
