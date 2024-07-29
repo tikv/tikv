@@ -1362,7 +1362,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
     /// to write pessimistic locks in the memory if `in-memory` lock is
     /// enabled. Return updated `WriteResult` if there are still data to be
     /// persisted, or None if there is nothing left to do.
-    fn handle_lock_info<'a>(
+    fn handle_non_persistent_write_result<'a>(
         txn_scheduler: TxnScheduler<E, L>,
         cid: u64,
         tag: CommandKind,
@@ -1817,7 +1817,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
 
         // Continue to process if there is data to be persisted in the `WriteResult`, or
         // return.
-        if let Some((write_result_res, task_meta_data_res)) = Self::handle_lock_info(
+        if let Some((write_result_res, task_meta_data_res)) = Self::handle_non_persistent_write_result(
             self.clone(),
             cid,
             tag,
