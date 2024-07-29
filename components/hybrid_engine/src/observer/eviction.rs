@@ -12,14 +12,14 @@ use raftstore::coprocessor::{
 };
 
 #[derive(Clone)]
-pub struct Observer {
+pub struct EvictionObserver {
     pending_evict: Arc<Mutex<Vec<CacheRange>>>,
     cache_engine: Arc<dyn RangeCacheEngineExt + Send + Sync>,
 }
 
-impl Observer {
+impl EvictionObserver {
     pub fn new(cache_engine: Arc<dyn RangeCacheEngineExt + Send + Sync>) -> Self {
-        Observer {
+        EvictionObserver {
             pending_evict: Arc::default(),
             cache_engine,
         }
@@ -115,9 +115,9 @@ impl Observer {
     }
 }
 
-impl Coprocessor for Observer {}
+impl Coprocessor for EvictionObserver {}
 
-impl QueryObserver for Observer {
+impl QueryObserver for EvictionObserver {
     fn post_exec_query(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -133,7 +133,7 @@ impl QueryObserver for Observer {
     }
 }
 
-impl AdminObserver for Observer {
+impl AdminObserver for EvictionObserver {
     fn post_exec_admin(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -149,7 +149,7 @@ impl AdminObserver for Observer {
     }
 }
 
-impl RoleObserver for Observer {
+impl RoleObserver for EvictionObserver {
     fn on_role_change(
         &self,
         ctx: &mut ObserverContext<'_>,
@@ -163,7 +163,7 @@ impl RoleObserver for Observer {
     }
 }
 
-impl<E> CmdObserver<E> for Observer {
+impl<E> CmdObserver<E> for EvictionObserver {
     fn on_flush_applied_cmd_batch(
         &self,
         _max_level: ObserveLevel,
@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn test_do_not_evict_range_region_split() {
         let cache_engine = Arc::new(MockRangeCacheEngine::default());
-        let observer = Observer::new(cache_engine.clone());
+        let observer = EvictionObserver::new(cache_engine.clone());
 
         let mut region = Region::default();
         region.set_id(1);
@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn test_evict_range_ingest_sst() {
         let cache_engine = Arc::new(MockRangeCacheEngine::default());
-        let observer = Observer::new(cache_engine.clone());
+        let observer = EvictionObserver::new(cache_engine.clone());
 
         let mut region = Region::default();
         region.set_id(1);

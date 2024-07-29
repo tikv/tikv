@@ -12,7 +12,7 @@ use engine_rocks::RocksEngine;
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{Engines, KvEngine, SnapshotContext};
 use health_controller::HealthController;
-use hybrid_engine::observer::Observer as HybridEngineObserver;
+use hybrid_engine::observer::EvictionObserver as HybridEngineObserver;
 use kvproto::{
     kvrpcpb::ApiVersion,
     metapb,
