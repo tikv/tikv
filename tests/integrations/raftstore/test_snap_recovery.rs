@@ -45,7 +45,7 @@ fn test_check_pending_admin() {
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
     router.broadcast_normal(|| {
-        PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.clone()))
+        PeerMsg::SignificantMsg(Box::new(SignificantMsg::CheckPendingAdmin(tx.clone())))
     });
     futures::executor::block_on(async {
         let r = rx.next().await;
@@ -61,7 +61,7 @@ fn test_check_pending_admin() {
 
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
     router.broadcast_normal(|| {
-        PeerMsg::SignificantMsg(SignificantMsg::CheckPendingAdmin(tx.clone()))
+        PeerMsg::SignificantMsg(Box::new(SignificantMsg::CheckPendingAdmin(tx.clone())))
     });
     futures::executor::block_on(async {
         let r = rx.next().await;

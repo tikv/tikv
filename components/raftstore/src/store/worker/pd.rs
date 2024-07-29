@@ -1547,7 +1547,7 @@ where
                             cb: Callback::None,
                         }
                     };
-                    if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
+                    if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(Box::new(msg))) {
                         error!("send halfsplit request failed"; "region_id" => region_id, "err" => ?e);
                     }
                 } else if resp.has_merge() {
@@ -1737,7 +1737,7 @@ where
             match resp.await {
                 Ok(Some((region, leader))) => {
                     if leader.get_store_id() != 0 {
-                        let msg = CasualMessage::QueryRegionLeaderResp { region, leader };
+                        let msg = Box::new(CasualMessage::QueryRegionLeaderResp { region, leader });
                         if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
                             error!("send region info message failed"; "region_id" => region_id, "err" => ?e);
                         }
@@ -1991,14 +1991,14 @@ where
                             let start_key = split_info.start_key.unwrap();
                             let end_key = split_info.end_key.unwrap();
                             let region_id = region.get_id();
-                            let msg = CasualMessage::HalfSplitRegion {
+                            let msg = Box::new(CasualMessage::HalfSplitRegion {
                                 region_epoch: region.get_region_epoch().clone(),
                                 start_key: Some(start_key.clone()),
                                 end_key: Some(end_key.clone()),
                                 policy: pdpb::CheckPolicy::Scan,
                                 source: "auto_split",
                                 cb: Callback::None,
-                            };
+                            });
                             if let Err(e) = router.send(region_id, PeerMsg::CasualMessage(msg)) {
                                 error!("send auto half split request failed";
                                     "region_id" => region_id,

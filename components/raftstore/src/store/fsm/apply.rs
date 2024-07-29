@@ -2880,11 +2880,11 @@ where
             fail_point!("before_handle_catch_up_logs_for_merge");
             // Sends message to the source peer fsm and pause `exec_commit_merge` process
             let logs_up_to_date = Arc::new(AtomicU64::new(0));
-            let msg = SignificantMsg::CatchUpLogs(CatchUpLogs {
+            let msg = Box::new(SignificantMsg::CatchUpLogs(CatchUpLogs {
                 target_region_id: self.region_id(),
                 merge: merge.to_owned(),
                 logs_up_to_date: logs_up_to_date.clone(),
-            });
+            }));
             ctx.notifier
                 .notify_one(source_region_id, PeerMsg::SignificantMsg(msg));
             return Ok((
@@ -4131,13 +4131,11 @@ where
             self.destroy(ctx);
             ctx.notifier.notify_one(
                 self.delegate.region_id(),
-                PeerMsg::ApplyRes {
-                    res: TaskRes::Destroy {
-                        region_id: self.delegate.region_id(),
-                        peer_id: self.delegate.id(),
-                        merge_from_snapshot: d.merge_from_snapshot,
-                    },
-                },
+                PeerMsg::ApplyRes(Box::new(TaskRes::Destroy {
+                    region_id: self.delegate.region_id(),
+                    peer_id: self.delegate.id(),
+                    merge_from_snapshot: d.merge_from_snapshot,
+                })),
             );
         }
     }
@@ -5193,8 +5191,8 @@ mod tests {
     impl<EK: KvEngine> Notifier<EK> for TestNotifier<EK> {
         fn notify(&self, apply_res: Vec<ApplyRes<EK::Snapshot>>) {
             for r in apply_res {
-                let res = TaskRes::Apply(r);
-                let _ = self.tx.send(PeerMsg::ApplyRes { res });
+                let res = Box::new(TaskRes::Apply(r));
+                let _ = self.tx.send(PeerMsg::ApplyRes(res));
             }
         }
         fn notify_one(&self, _: u64, msg: PeerMsg<EK>) {
@@ -5401,10 +5399,7 @@ mod tests {
         E: KvEngine,
     {
         match receiver.recv_timeout(Duration::from_secs(3)) {
-            Ok(PeerMsg::ApplyRes {
-                res: TaskRes::Apply(res),
-                ..
-            }) => res,
+            Ok(PeerMsg::ApplyRes(box TaskRes::Apply(res))) => res,
             e => panic!("unexpected res {:?}", e),
         }
     }
@@ -5552,10 +5547,7 @@ mod tests {
             ],
         );
         let apply_res = match rx.recv_timeout(Duration::from_secs(3)) {
-            Ok(PeerMsg::ApplyRes {
-                res: TaskRes::Apply(res),
-                ..
-            }) => res,
+            Ok(PeerMsg::ApplyRes(box TaskRes::Apply(res))) => res,
             e => panic!("unexpected apply result: {:?}", e),
         };
         let apply_state_key = keys::apply_state_key(2);
@@ -5586,12 +5578,9 @@ mod tests {
 
         router.schedule_task(2, Msg::destroy(2, false));
         let (region_id, peer_id) = match rx.recv_timeout(Duration::from_secs(3)) {
-            Ok(PeerMsg::ApplyRes {
-                res: TaskRes::Destroy {
+            Ok(PeerMsg::ApplyRes(box TaskRes::Destroy {
                     region_id, peer_id, ..
-                },
-                ..
-            }) => (region_id, peer_id),
+            })) => (region_id, peer_id),
             e => panic!("expected destroy result, but got {:?}", e),
         };
         assert_eq!(peer_id, 1);
