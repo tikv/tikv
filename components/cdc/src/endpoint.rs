@@ -927,9 +927,18 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
 
     fn on_region_ready(&mut self, observe_id: ObserveId, resolver: Resolver, region: Region) {
         let region_id = region.get_id();
-        let mut deregisters = Vec::new();
-        if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-            if delegate.handle.id == observe_id {
+        match self.capture_regions.get_mut(&region_id) {
+            None => debug!("cdc region not found on region ready (finish building resolver)";
+                "region_id" => region.get_id()),
+            Some(delegate) => {
+                if delegate.handle.id != observe_id {
+                    debug!("cdc stale region ready";
+                        "region_id" => region.get_id(),
+                        "observe_id" => ?observe_id,
+                        "current_id" => ?delegate.handle.id);
+                    return;
+                }
+                let mut deregisters = Vec::new();
                 match delegate.on_region_ready(resolver, region) {
                     Ok(fails) => {
                         for (downstream, e) in fails {
@@ -948,20 +957,11 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         err: e,
                     }),
                 }
-            } else {
-                debug!("cdc stale region ready";
-                    "region_id" => region.get_id(),
-                    "observe_id" => ?observe_id,
-                    "current_id" => ?delegate.handle.id);
+                // Deregister downstreams if there is any downstream fails to subscribe.
+                for deregister in deregisters {
+                    self.on_deregister(deregister);
+                }
             }
-        } else {
-            debug!("cdc region not found on region ready (finish building resolver)";
-                "region_id" => region.get_id());
-        }
-
-        // Deregister downstreams if there is any downstream fails to subscribe.
-        for deregister in deregisters {
-            self.on_deregister(deregister);
         }
     }
 
