@@ -321,6 +321,20 @@ make_static_metric! {
     pub struct LoadBaseSplitEventCounterVec: IntCounter {
         "type" => LoadBaseSplitEventType,
     }
+
+    pub struct StoreBusyOnApplyRegionsGaugeVec: IntGauge {
+        "type" => {
+            busy_apply_peers,
+            completed_apply_peers,
+        },
+    }
+
+    pub struct StoreBusyStateGaugeVec: IntGauge {
+        "type" => {
+            raftstore_busy,
+            applystore_busy,
+        },
+    }
 }
 
 lazy_static! {
@@ -943,4 +957,20 @@ lazy_static! {
         "The events of the lease to denying new admin commands being proposed by snapshot br.",
         &["event"]
     ).unwrap();
+
+    pub static ref STORE_BUSY_ON_APPLY_REGIONS_GAUGE_VEC: StoreBusyOnApplyRegionsGaugeVec =
+        register_static_int_gauge_vec!(
+            StoreBusyOnApplyRegionsGaugeVec,
+            "tikv_raftstore_busy_on_apply_region_total",
+            "Total number of regions busy on apply or complete apply.",
+            &["type"]
+        ).unwrap();
+
+    pub static ref STORE_PROCESS_BUSY_GAUGE_VEC: StoreBusyStateGaugeVec =
+        register_static_int_gauge_vec!(
+            StoreBusyStateGaugeVec,
+            "tikv_raftstore_process_busy",
+            "Is raft process busy or not",
+            &["type"]
+        ).unwrap();
 }
