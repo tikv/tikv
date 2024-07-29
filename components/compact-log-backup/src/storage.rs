@@ -508,7 +508,9 @@ pub fn name_of_migration(id: u64, m: &Migration) -> String {
 
 pub fn id_of_migration(name: &str) -> Option<u64> {
     let file_name = Path::new(name).file_name()?.to_string_lossy();
-
+    if file_name == "BASE" {
+        return Some(0);
+    }
     if file_name.len() < 8 {
         return None;
     }
