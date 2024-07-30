@@ -118,25 +118,13 @@ fn test_pending_on_region_ready_memory_quota_exceeded() {
     fail::cfg("cdc_event_size", "return(0)").unwrap();
 
     // Trigger memory quota exceeded error.
-    fail::cfg("cdc_pending_on_region_ready", "return").unwrap();
+    fail::cfg("cdc_finish_scan_locks_memory_quota_exceed", "return").unwrap();
     let req = suite.new_changedata_request(1);
     let (mut req_tx, _event_feed_wrap, receive_event) =
         new_event_feed(suite.get_region_cdc_client(1));
     block_on(req_tx.send((req, WriteFlags::default()))).unwrap();
-    let event = receive_event(false);
-    event.events.into_iter().for_each(|e| {
-        match e.event.unwrap() {
-            // Even if there is no write,
-            // it should always outputs an Initialized event.
-            Event_oneof_event::Entries(es) => {
-                assert!(es.entries.len() == 1, "{:?}", es);
-                let e = &es.entries[0];
-                assert_eq!(e.get_type(), EventLogType::Initialized, "{:?}", es);
-            }
-            other => panic!("unknown event {:?}", other),
-        }
-    });
-    // MemoryQuotaExceeded error is triggered on_region_ready.
+
+    // MemoryQuotaExceeded error is triggered.
     let mut events = receive_event(false).events.to_vec();
     assert_eq!(events.len(), 1, "{:?}", events);
     match events.pop().unwrap().event.unwrap() {
@@ -164,7 +152,8 @@ fn test_pending_on_region_ready_memory_quota_exceeded() {
         "find unexpected delegate"
     );
 
-    fail::remove("cdc_incremental_scan_start");
+    fail::remove("cdc_event_size");
+    fail::remove("cdc_finish_scan_locks_memory_quota_exceed");
     suite.stop();
 }
 
@@ -227,6 +216,7 @@ fn test_pending_push_lock_memory_quota_exceeded() {
         "find unexpected delegate"
     );
 
+    fail::remove("cdc_event_size");
     fail::remove("cdc_incremental_scan_start");
     suite.stop();
 }
@@ -285,5 +275,6 @@ fn test_scan_lock_memory_quota_exceeded() {
         "find unexpected delegate"
     );
 
+    fail::remove("cdc_event_size");
     suite.stop();
 }
