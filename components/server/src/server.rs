@@ -984,12 +984,25 @@ where
             .unwrap_or_else(|e| fatal!("failed to bootstrap node id: {}", e));
 
         self.snap_mgr = Some(snap_mgr.clone());
+
+        // Create coprocessor endpoint.
+        let copr = coprocessor::Endpoint::new(
+            &server_config.value(),
+            cop_read_pool_handle,
+            self.concurrency_manager.clone(),
+            resource_tag_factory,
+            self.quota_limiter.clone(),
+            self.resource_manager.clone(),
+        );
+        let copr_config_manager = copr.config_manager();
+
         // Create server
         let server = Server::new(
             node.id(),
             &server_config,
             &self.security_mgr,
             storage.clone(),
+<<<<<<< HEAD
             coprocessor::Endpoint::new(
                 &server_config.value(),
                 cop_read_pool_handle,
@@ -998,6 +1011,10 @@ where
                 Arc::clone(&self.quota_limiter),
             ),
             coprocessor_v2::Endpoint::new(&self.config.coprocessor_v2),
+=======
+            copr,
+            coprocessor_v2::Endpoint::new(&self.core.config.coprocessor_v2),
+>>>>>>> a1a8672e93 (coprocessor: limit concurrent requests by memory quota (#16662))
             self.resolver.clone().unwrap(),
             snap_mgr.clone(),
             gc_worker.clone(),
@@ -1014,6 +1031,7 @@ where
                 server.get_snap_worker_scheduler(),
                 server_config.clone(),
                 server.get_grpc_mem_quota().clone(),
+                copr_config_manager,
             )),
         );
 
