@@ -63,7 +63,6 @@ impl VectorValue {
                 }
             }
         }
-
         expand_convertion!(
             scalar,
             Int: ChunkedVecSized<Int>,
