@@ -109,7 +109,7 @@ impl<E: Engine> Tracker<E> {
         }
     }
 
-    pub fn adjust_request_type(&mut self, range_cache_engine: bool) {
+    pub fn adjust_snapshot_type(&mut self, range_cache_engine: bool) {
         if range_cache_engine {
             if self.req_ctx.tag == ReqTag::select {
                 self.req_ctx.tag = ReqTag::select_by_range_cache;

@@ -453,7 +453,7 @@ impl<E: Engine> Endpoint<E> {
         let snapshot_seqno = snapshot.ext().snapshot_seqno();
         let range_cache_snap = snapshot.ext().range_cache_engine_snap();
         let read_ts = snapshot.ext().snapshot_read_ts();
-        tracker.adjust_request_type(range_cache_snap);
+        tracker.adjust_snapshot_type(range_cache_snap);
 
         // Check if the buckets version is latest.
         // skip if request don't carry this bucket version.
