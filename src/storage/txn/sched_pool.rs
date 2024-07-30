@@ -120,12 +120,18 @@ impl PriorityQueue {
         let mut extras = Extras::new_multilevel(task_id, fixed_level);
         extras.set_metadata(group_name.as_bytes().to_owned());
         self.worker_pool.spawn_with_extras(
+<<<<<<< HEAD
             ControlledFuture::new(
                 async move {
                     f.await;
                 },
                 self.resource_ctl.clone(),
                 group_name.as_bytes().to_owned(),
+=======
+            with_resource_limiter(
+                ControlledFuture::new(f, self.resource_ctl.clone(), group_name),
+                resource_limiter,
+>>>>>>> 66847e9c5a (*: remove unnecessary async blocks to save memory (#16541))
             ),
             extras,
         )
