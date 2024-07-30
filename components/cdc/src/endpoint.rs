@@ -1107,7 +1107,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
             let regions =
                 if hibernate_regions_compatible && gate.can_enable(FEATURE_RESOLVED_TS_STORE) {
                     CDC_RESOLVED_TS_ADVANCE_METHOD.set(1);
-                    leader_resolver.resolve(regions, min_ts).await
+                    leader_resolver.resolve(regions, min_ts, None).await
                 } else {
                     CDC_RESOLVED_TS_ADVANCE_METHOD.set(0);
                     resolve_by_raft(regions, min_ts, cdc_handle).await
