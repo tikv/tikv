@@ -296,6 +296,7 @@ pub(crate) fn make_txn_error(
             },
             "alreadyexist" => ErrorInner::AlreadyExist {
                 key: key.to_raw().unwrap(),
+                existing_start_ts: start_ts,
             },
             "committsexpired" => ErrorInner::CommitTsExpired {
                 start_ts,
