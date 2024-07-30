@@ -27,7 +27,6 @@ nortcheck = []
 
 [dependencies]
 api_version = { workspace = true }
-case_macros = { workspace = true }
 collections = { workspace = true }
 derive_more = "0.99.3"
 encryption = { workspace = true }

@@ -46,7 +46,7 @@ use crate::{
         },
         snap::{plain_file_used, Error, Result, SNAPSHOT_CFS},
         transport::CasualRouter,
-        ApplyOptions, CasualMessage, Config, SnapEntry, SnapError, SnapKey, SnapManager,
+        ApplyOptions, CasualMessage, Config, SnapEntry, SnapKey, SnapManager,
     },
 };
 
@@ -73,6 +73,7 @@ pub enum Task<S> {
         region_id: u64,
         status: Arc<AtomicUsize>,
         peer_id: u64,
+        create_time: Instant,
     },
     /// Destroy data between [start_key, end_key).
     ///
@@ -455,12 +456,13 @@ where
         info!("begin apply snap data"; "region_id" => region_id, "peer_id" => peer_id);
         fail_point!("region_apply_snap", |_| { Ok(()) });
         fail_point!("region_apply_snap_io_err", |_| {
-            Err(SnapError::Other(box_err!("io error")))
+            Err(crate::store::SnapError::Other(box_err!("io error")))
         });
         check_abort(&abort)?;
 
         let mut region_state = self.region_state(region_id)?;
         let region = region_state.get_region().clone();
+
         let start_key = keys::enc_start_key(&region);
         let end_key = keys::enc_end_key(&region);
         check_abort(&abort)?;
@@ -764,6 +766,7 @@ where
                 region_id,
                 status,
                 peer_id,
+                ..
             } => (region_id, status.clone(), peer_id),
             _ => panic!("invalid apply snapshot task"),
         };
@@ -805,6 +808,7 @@ where
             // ingested. check level 0 every time because we can not make sure
             // how does the number of level 0 files change.
             if self.ingest_maybe_stall() {
+                SNAP_COUNTER.apply.ingest_delay.inc();
                 break;
             }
             if let Some(Task::Apply { region_id, .. }) = self.pending_applies.front() {
@@ -816,20 +820,25 @@ where
                     self.pending_applies.len(),
                 ) {
                     // KvEngine can't apply snapshot for other reasons.
+                    SNAP_COUNTER.apply.ingest_delay.inc();
                     break;
                 }
                 if let Some(Task::Apply {
                     region_id,
                     status,
                     peer_id,
+                    create_time,
                 }) = self.pending_applies.pop_front()
                 {
+                    SNAP_APPLY_WAIT_DURATION_HISTOGRAM
+                        .observe(create_time.saturating_elapsed_secs());
                     new_batch = false;
                     self.handle_apply(region_id, peer_id, status);
                     self.mgr.set_pending_apply_count(self.pending_applies.len());
                 }
             }
         }
+        SNAP_PENDING_APPLIES_GAUGE.set(self.pending_applies.len() as i64);
     }
 }
 
@@ -1278,6 +1287,7 @@ pub(crate) mod tests {
                     region_id: id,
                     status,
                     peer_id: 1,
+                    create_time: Instant::now(),
                 })
                 .unwrap();
         };

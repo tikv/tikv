@@ -59,7 +59,7 @@ use crate::{
     endpoint::Deregister,
     metrics::*,
     old_value::{near_seek_old_value, OldValueCursors},
-    service::ConnId,
+    service::{ConnId, RequestId},
     Error, Result, Task,
 };
 
@@ -86,7 +86,7 @@ pub(crate) enum Scanner<S: Snapshot> {
 pub(crate) struct Initializer<E> {
     pub(crate) region_id: u64,
     pub(crate) conn_id: ConnId,
-    pub(crate) request_id: u64,
+    pub(crate) request_id: RequestId,
     pub(crate) checkpoint_ts: TimeStamp,
     pub(crate) region_epoch: RegionEpoch,
 
@@ -101,6 +101,7 @@ pub(crate) struct Initializer<E> {
     pub(crate) observe_handle: ObserveHandle,
     pub(crate) downstream_id: DownstreamId,
     pub(crate) downstream_state: Arc<AtomicCell<DownstreamState>>,
+    pub(crate) scan_truncated: Arc<AtomicBool>,
 
     pub(crate) tablet: Option<E>,
     pub(crate) sched: Scheduler<Task>,
@@ -146,7 +147,7 @@ impl<E: KvEngine> Initializer<E> {
             region_epoch,
             ChangeObserver::from_cdc(self.region_id, self.observe_handle.clone()),
             // NOTE: raftstore handles requests in serial for every region.
-            // That's why we can determine whehter to build a lock resolver or not
+            // That's why we can determine whether to build a lock resolver or not
             // without check and compare snapshot sequence number.
             Callback::read(Box::new(move |resp| {
                 if let Err(e) = sched.schedule(Task::InitDownstream {
@@ -274,6 +275,7 @@ impl<E: KvEngine> Initializer<E> {
             assert!(!has_remain);
             let mut locks = BTreeMap::<Key, MiniLock>::new();
             for (key, lock) in key_locks {
+                // When `decode_lock`, only consider `Put` and `Delete`
                 if matches!(lock.lock_type, LockType::Put | LockType::Delete) {
                     let mini_lock = MiniLock::new(lock.ts, lock.txn_source, lock.generation);
                     locks.insert(key, mini_lock);
@@ -505,7 +507,11 @@ impl<E: KvEngine> Initializer<E> {
             events.push(CdcEvent::Barrier(Some(cb)));
             barrier = Some(fut);
         }
-        if let Err(e) = self.sink.send_all(events).await {
+        if let Err(e) = self
+            .sink
+            .send_all(events, self.scan_truncated.clone())
+            .await
+        {
             error!("cdc send scan event failed"; "req_id" => ?self.request_id);
             return Err(Error::Sink(e));
         }
@@ -714,7 +720,7 @@ mod tests {
         let initializer = Initializer {
             region_id: 1,
             conn_id: ConnId::new(),
-            request_id: 0,
+            request_id: RequestId(0),
             checkpoint_ts: 1.into(),
             region_epoch: RegionEpoch::default(),
 
@@ -723,6 +729,7 @@ mod tests {
             observe_handle: ObserveHandle::new(),
             downstream_id: DownstreamId::new(),
             downstream_state,
+            scan_truncated: Arc::new(Default::default()),
 
             tablet: engine.or_else(|| {
                 TestEngineBuilder::new()

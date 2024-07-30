@@ -709,15 +709,14 @@ where
         let region_id = msg.get_region_id();
         let from_peer = msg.get_from_peer();
         let to_peer = msg.get_to_peer();
-        let msg_type = msg.get_message().get_msg_type();
 
         info!(
             "raft message is stale, tell to gc";
             "region_id" => region_id,
             "current_region_epoch" => ?cur_epoch,
-            "msg_type" => ?msg_type,
-            "to_peer_id" => ?from_peer.get_id(),
-            "to_peer_store_id" => ?from_peer.get_store_id(),
+            "msg_region_epoch" => ?msg.get_region_epoch(),
+            "msg_type" => %util::MsgType(msg),
+            "to_peer" => ?from_peer
         );
 
         self.raft_metrics.message_dropped.stale_msg.inc();
@@ -839,6 +838,14 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         let count = msgs.len();
         #[allow(const_evaluatable_unchecked)]
         let mut distribution = [0; StoreMsg::<EK>::COUNT];
+        // As the detail of one msg is not very useful when handling multiple messages,
+        // only format the msg detail in slow log when there is only one message.
+        let detail = if msgs.len() == 1 {
+            msgs.first().map(|m| format!("{:?}", m))
+        } else {
+            None
+        };
+
         for m in msgs.drain(..) {
             distribution[m.discriminant()] += 1;
             match m {
@@ -903,10 +910,11 @@ impl<'a, EK: KvEngine + 'static, ER: RaftEngine + 'static, T: Transport>
         }
         slow_log!(
             T timer,
-            "[store {}] handle {} store messages {:?}",
+            "[store {}] handle {} store messages {:?}, detail: {:?}",
             self.fsm.store.id,
             count,
             StoreMsg::<EK>::VARIANTS.iter().zip(distribution).filter(|(_, c)| *c > 0).format(", "),
+            detail,
         );
         self.ctx
             .raft_metrics
@@ -1995,7 +2003,6 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
     fn check_msg(&mut self, msg: &RaftMessage) -> Result<CheckMsgStatus> {
         let region_id = msg.get_region_id();
         let from_epoch = msg.get_region_epoch();
-        let msg_type = msg.get_message().get_msg_type();
         let from_store_id = msg.get_from_peer().get_store_id();
         let to_peer_id = msg.get_to_peer().get_id();
 
@@ -2039,7 +2046,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 "merged peer receives a stale message";
                 "region_id" => region_id,
                 "current_region_epoch" => ?region_epoch,
-                "msg_type" => ?msg_type,
+                "msg_type" => %util::MsgType(msg),
             );
 
             let merge_target = if let Some(peer) = find_peer(region, from_store_id) {
@@ -2077,7 +2084,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 "region_id" => region_id,
                 "from_region_epoch" => ?from_epoch,
                 "current_region_epoch" => ?region_epoch,
-                "msg_type" => ?msg_type,
+                "msg_type" => %util::MsgType(msg),
             );
             if find_peer(region, from_store_id).is_none() {
                 self.ctx.handle_stale_msg(msg, region_epoch.clone(), None);
@@ -2128,7 +2135,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     "region_id" => region_id,
                     "local_peer_id" => local_peer_id,
                     "to_peer_id" => to_peer_id,
-                    "msg_type" => ?msg_type
+                    "msg_type" => %util::MsgType(msg),
                 );
                 return Ok(CheckMsgStatus::DropMsg);
             }
@@ -2173,6 +2180,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 "store_id" => self.ctx.store_id(),
                 "to_store_id" => msg.get_to_peer().get_store_id(),
                 "region_id" => region_id,
+                "msg_type" => %util::MsgType(&msg),
             );
             self.ctx
                 .raft_metrics
@@ -2272,12 +2280,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         is_local_first: bool,
     ) -> Result<bool> {
         if !is_initial_msg(msg.get_message()) {
-            let msg_type = msg.get_message().get_msg_type();
             debug!(
                 "target peer doesn't exist, stale message";
                 "target_peer" => ?msg.get_to_peer(),
                 "region_id" => region_id,
-                "msg_type" => ?msg_type,
+                "msg_type" => %util::MsgType(msg),
             );
             self.ctx.raft_metrics.message_dropped.stale_msg.inc();
             return Ok(false);

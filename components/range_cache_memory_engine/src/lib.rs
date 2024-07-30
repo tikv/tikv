@@ -21,6 +21,8 @@ mod keys;
 mod memory_controller;
 mod metrics;
 mod perf_context;
+#[cfg(test)]
+mod prop_test;
 mod range_manager;
 mod range_stats;
 mod read;
@@ -31,7 +33,10 @@ mod write_batch;
 
 pub use background::{BackgroundRunner, BackgroundTask, GcTask};
 pub use engine::{RangeCacheMemoryEngine, SkiplistHandle};
-pub use keys::{decode_key, encoding_for_filter, InternalBytes, InternalKey, ValueType};
+pub use keys::{
+    decode_key, encode_key_for_boundary_without_mvcc, encoding_for_filter, InternalBytes,
+    InternalKey, ValueType,
+};
 pub use metrics::flush_range_cache_engine_statistics;
 pub use range_manager::RangeCacheStatus;
 pub use statistics::Statistics as RangeCacheMemoryEngineStatistics;

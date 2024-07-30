@@ -6,8 +6,11 @@ publish = false
 license = "Apache-2.0"
 
 [dependencies]
+atomic = "0.5"
 hex = "0.4"
 protobuf = { version = "2.8", features = ["bytes"] }
+serde = { version = "1.0", features = ["derive"] }
 slog = "2.3"
 slog-term = "2.4"
 tikv_alloc = { workspace = true }
+toml = "0.5"

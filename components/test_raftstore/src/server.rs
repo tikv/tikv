@@ -42,7 +42,7 @@ use raftstore::{
     },
     Result,
 };
-use region_cache_memory_engine::RangeCacheEngineConfig;
+use range_cache_memory_engine::RangeCacheEngineConfig;
 use resource_control::ResourceGroupManager;
 use resource_metering::{CollectorRegHandle, ResourceTagFactory};
 use security::SecurityManager;
@@ -162,6 +162,7 @@ pub struct ServerCluster<EK: KvEngine> {
     concurrency_managers: HashMap<u64, ConcurrencyManager>,
     env: Arc<Environment>,
     pub causal_ts_providers: HashMap<u64, Arc<CausalTsProviderImpl>>,
+    pub encryption: Option<Arc<DataKeyManager>>,
 }
 
 impl<EK: KvEngineWithRocks> ServerCluster<EK> {
@@ -205,6 +206,7 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
             env,
             txn_extra_schedulers: HashMap::default(),
             causal_ts_providers: HashMap::default(),
+            encryption: None,
         }
     }
 
@@ -269,6 +271,8 @@ impl<EK: KvEngineWithRocks> ServerCluster<EK> {
         system: RaftBatchSystem<EK, RaftTestEngine>,
         resource_manager: &Option<Arc<ResourceGroupManager>>,
     ) -> ServerResult<u64> {
+        self.encryption = key_manager.clone();
+
         let (tmp_str, tmp) = if node_id == 0 || !self.snap_paths.contains_key(&node_id) {
             let p = test_util::temp_dir("test_cluster", cfg.prefer_mem);
             (p.path().to_str().unwrap().to_owned(), Some(p))

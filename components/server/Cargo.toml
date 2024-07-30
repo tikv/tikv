@@ -40,7 +40,7 @@ chrono = { workspace = true }
 clap = { workspace = true }
 collections = { workspace = true }
 concurrency_manager = { workspace = true }
-crossbeam = "0.8"
+crossbeam = { workspace = true }
 encryption = { workspace = true }
 encryption_export = { workspace = true }
 engine_rocks = { workspace = true }
@@ -68,7 +68,7 @@ raft = { workspace = true }
 raft_log_engine = { workspace = true }
 raftstore = { workspace = true, features = ["engine_rocks"] }
 raftstore-v2 = { workspace = true }
-region_cache_memory_engine = { workspace = true }
+range_cache_memory_engine = { workspace = true }
 resolved_ts = { workspace = true }
 resource_control = { workspace = true }
 resource_metering = { workspace = true }
