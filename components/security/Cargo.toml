@@ -8,9 +8,13 @@ publish = false
 collections = { workspace = true }
 encryption = { workspace = true }
 grpcio = { workspace = true }
+log_wrappers = { workspace = true }
+online_config = { workspace = true }
 serde = "1.0"
 serde_derive = "1.0"
 serde_json = "1.0"
+slog = { version = "2.3", features = ["max_level_trace", "release_max_level_debug"] }
+slog-global = { version = "0.1", git = "https://github.com/breeswish/slog-global.git", rev = "d592f88e4dbba5eb439998463054f1a44fbf17b9" }
 tikv_util = { workspace = true }
 
 [dev-dependencies]
