@@ -492,7 +492,7 @@ impl BackgroundRunnerCore {
                 assert_eq!(r, range);
                 core.mut_range_manager()
                     .ranges_being_deleted
-                    .insert(r.clone());
+                    .insert(r.clone(), (true, Instant::now()));
                 core.remove_cached_write_batch(&range);
                 drop(core);
                 fail::fail_point!("in_memory_engine_snapshot_load_canceled");
@@ -557,7 +557,7 @@ impl BackgroundRunnerCore {
         core.remove_cached_write_batch(&range);
         core.mut_range_manager()
             .ranges_being_deleted
-            .insert(r.clone());
+            .insert(r.clone(), (true, Instant::now()));
 
         if let Err(e) = delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(vec![r]))
         {
@@ -628,6 +628,10 @@ impl BackgroundRunnerCore {
                 range_stats_manager.handle_range_evicted(range);
             }
         }
+        self.engine
+            .write()
+            .mut_range_manager()
+            .mark_delete_ranges_scheduled(&mut ranges_to_delete);
 
         if !ranges_to_delete.is_empty() {
             if let Err(e) =
@@ -680,6 +684,12 @@ impl BackgroundRunnerCore {
                 ranges_to_delete.append(&mut ranges);
             }
         }
+
+        self.engine
+            .write()
+            .mut_range_manager()
+            .mark_delete_ranges_scheduled(&mut ranges_to_delete);
+
         if !ranges_to_delete.is_empty() {
             if let Err(e) =
                 delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(ranges_to_delete))
@@ -1095,8 +1105,6 @@ impl RunnableWithTimer for BackgroundRunner {
         let core = self.core.engine.read();
         let pending = core.range_manager.pending_ranges.len();
         let cached = core.range_manager.ranges().len();
-        let loading = core.range_manager.pending_ranges_loading_data.len();
-        let evictions = core.range_manager.get_and_reset_range_evictions();
         drop(core);
         RANGE_CACHE_COUNT
             .with_label_values(&["pending_range"])
@@ -1104,16 +1112,10 @@ impl RunnableWithTimer for BackgroundRunner {
         RANGE_CACHE_COUNT
             .with_label_values(&["cached_range"])
             .set(cached as i64);
-        RANGE_CACHE_COUNT
-            .with_label_values(&["loading_range"])
-            .set(loading as i64);
-        RANGE_CACHE_COUNT
-            .with_label_values(&["range_evictions"])
-            .set(evictions as i64);
     }
 
     fn get_interval(&self) -> Duration {
-        Duration::from_secs(1)
+        Duration::from_secs(10)
     }
 }
 
@@ -1156,11 +1158,24 @@ impl Runnable for DeleteRangeRunner {
     fn run(&mut self, task: Self::Task) {
         match task {
             BackgroundTask::DeleteRange(ranges) => {
+                fail::fail_point!("on_in_memory_engine_delete_range");
                 let (mut ranges_to_delay, ranges_to_delete) = {
                     let core = self.engine.read();
                     let mut ranges_to_delay = vec![];
                     let mut ranges_to_delete = vec![];
                     for r in ranges {
+                        // Check whether range exists in `ranges_being_deleted` and it's scheduled
+                        if !core.range_manager.ranges_being_deleted.iter().any(
+                            |(range_being_delete, &(scheduled, _))| {
+                                if range_being_delete == &r && !scheduled {
+                                    panic!("range to delete with scheduled false; range={:?}", r,);
+                                };
+                                range_being_delete == &r
+                            },
+                        ) {
+                            panic!("range to delete not in ranges_being_deleted; range={:?}", r,);
+                        }
+
                         // If the range is overlapped with ranges in `ranges_being_written`, the
                         // range has to be delayed to delete. See comment on `delay_ranges`.
                         if core

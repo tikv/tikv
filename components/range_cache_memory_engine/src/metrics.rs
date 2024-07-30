@@ -63,6 +63,12 @@ lazy_static! {
         exponential_buckets(0.001, 2.0, 20).unwrap()
     )
     .unwrap();
+    pub static ref RANGE_EVICTION_DURATION_HISTOGRAM: Histogram = register_histogram!(
+        "tikv_range_eviction_duration_secs",
+        "Bucketed histogram of range eviction time duration.",
+        exponential_buckets(0.001, 2.0, 20).unwrap()
+    )
+    .unwrap();
     pub static ref WRITE_DURATION_HISTOGRAM: Histogram = register_histogram!(
         "tikv_range_cache_engine_write_duration_seconds",
         "Bucketed histogram of write duration in range cache engine.",
