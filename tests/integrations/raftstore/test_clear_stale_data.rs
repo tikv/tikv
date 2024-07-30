@@ -47,7 +47,7 @@ fn check_kv_in_all_cfs(db: &RocksEngine, i: u8, found: bool) {
     }
 }
 
-fn test_clear_stale_data<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_clear_stale_data<T: Simulator>(cluster: &mut Cluster<T>) {
     // Disable compaction at level 0.
     cluster
         .cfg

@@ -9,7 +9,6 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::RocksEngine;
 use kvproto::metapb::Region;
 use raft::StateRole;
 use raftstore::coprocessor::{
@@ -40,7 +39,7 @@ impl RegionChangeObserver for TestObserver {
     }
 }
 
-fn test_region_change_observer_impl(mut cluster: Cluster<RocksEngine, NodeCluster<RocksEngine>>) {
+fn test_region_change_observer_impl(mut cluster: Cluster<NodeCluster>) {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.disable_default_operator();
 

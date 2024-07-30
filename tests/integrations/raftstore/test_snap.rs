@@ -12,7 +12,6 @@ use std::{
 };
 
 use collections::HashMap;
-use engine_rocks::RocksEngine;
 use engine_traits::{Checkpointer, KvEngine, RaftEngineDebug};
 use file_system::{IoOp, IoType};
 use futures::executor::block_on;
@@ -40,10 +39,7 @@ use tikv_util::{
     HandyRwLock,
 };
 
-fn test_huge_snapshot<T: Simulator<RocksEngine>>(
-    cluster: &mut Cluster<RocksEngine, T>,
-    max_snapshot_file_size: u64,
-) {
+fn test_huge_snapshot<T: Simulator>(cluster: &mut Cluster<T>, max_snapshot_file_size: u64) {
     cluster.cfg.rocksdb.titan.enabled = Some(true);
     cluster.cfg.raft_store.raft_log_gc_count_limit = Some(1000);
     cluster.cfg.raft_store.raft_log_gc_tick_interval = ReadableDuration::millis(10);

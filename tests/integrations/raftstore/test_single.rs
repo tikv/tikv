@@ -15,7 +15,6 @@ use tikv_util::{config::*, time::Instant};
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
 #[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_put() {
     let mut cluster = new_cluster(0, 1);
@@ -65,7 +64,6 @@ fn test_put() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
 #[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_delete() {
     let mut cluster = new_cluster(0, 1);
@@ -121,7 +119,6 @@ fn test_node_not_use_delete_range() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
 #[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_wrong_store_id() {
     let mut cluster = new_cluster(0, 1);
@@ -152,7 +149,6 @@ fn test_wrong_store_id() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
 #[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_put_large_entry() {
     let mut cluster = new_cluster(0, 1);

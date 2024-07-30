@@ -1,5 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use engine_traits::{CacheRange, Mutable, Result, WriteBatch, WriteOptions, CF_DEFAULT};
 
 pub trait WriteBatchObserver: Send {
@@ -49,10 +51,13 @@ impl<WB: WriteBatch> WriteBatch for WriteBatchWrapper<WB> {
     }
 
     fn write_callback_opt(&mut self, opts: &WriteOptions, mut cb: impl FnMut(u64)) -> Result<u64> {
+        let called = AtomicBool::new(false);
         self.write_batch.write_callback_opt(opts, |s| {
-            self.observable_write_batch
-                .as_mut()
-                .map(|w| w.write_opt(opts, s));
+            if !called.fetch_or(true, Ordering::SeqCst) {
+                self.observable_write_batch
+                    .as_mut()
+                    .map(|w| w.write_opt(opts, s));
+            }
             cb(s);
         })
     }

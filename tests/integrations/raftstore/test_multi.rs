@@ -6,7 +6,6 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::RocksEngine;
 use engine_traits::Peekable;
 use kvproto::raft_cmdpb::RaftCmdResponse;
 use raft::eraftpb::MessageType;
@@ -17,15 +16,13 @@ use tikv::storage::{kv::SnapshotExt, Snapshot};
 use tikv_util::{config::*, HandyRwLock};
 use txn_types::{Key, LastChange, PessimisticLock};
 
-fn test_multi_base<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_multi_base<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
 
     test_multi_base_after_bootstrap(cluster);
 }
 
-fn test_multi_base_after_bootstrap<T: Simulator<RocksEngine>>(
-    cluster: &mut Cluster<RocksEngine, T>,
-) {
+fn test_multi_base_after_bootstrap<T: Simulator>(cluster: &mut Cluster<T>) {
     let (key, value) = (b"k1", b"v1");
 
     cluster.must_put(key, value);
@@ -52,7 +49,7 @@ fn test_multi_base_after_bootstrap<T: Simulator<RocksEngine>>(
     // TODO add epoch not match test cases.
 }
 
-fn test_multi_leader_crash<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_multi_leader_crash<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
 
     let (key1, value1) = (b"k1", b"v1");
@@ -93,7 +90,7 @@ fn test_multi_leader_crash<T: Simulator<RocksEngine>>(cluster: &mut Cluster<Rock
     must_get_none(&cluster.engines[&last_leader.get_store_id()].kv, key1);
 }
 
-fn test_multi_cluster_restart<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_multi_cluster_restart<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
 
     let (key, value) = (b"k1", b"v1");
@@ -113,10 +110,7 @@ fn test_multi_cluster_restart<T: Simulator<RocksEngine>>(cluster: &mut Cluster<R
     assert_eq!(cluster.get(key), Some(value.to_vec()));
 }
 
-fn test_multi_lost_majority<T: Simulator<RocksEngine>>(
-    cluster: &mut Cluster<RocksEngine, T>,
-    count: usize,
-) {
+fn test_multi_lost_majority<T: Simulator>(cluster: &mut Cluster<T>, count: usize) {
     cluster.run();
     let leader = cluster.leader_of_region(1);
 
@@ -135,8 +129,8 @@ fn test_multi_lost_majority<T: Simulator<RocksEngine>>(
     assert!(cluster.leader_of_region(1).is_none());
 }
 
-fn test_multi_random_restart<T: Simulator<RocksEngine>>(
-    cluster: &mut Cluster<RocksEngine, T>,
+fn test_multi_random_restart<T: Simulator>(
+    cluster: &mut Cluster<T>,
     node_count: usize,
     restart_count: u32,
 ) {
@@ -179,7 +173,7 @@ fn test_multi_server_base() {
     test_multi_base(&mut cluster)
 }
 
-fn test_multi_latency<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_multi_latency<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
     cluster.add_send_filter(CloneFilterFactory(DelayFilter::new(Duration::from_millis(
         30,
@@ -201,7 +195,7 @@ fn test_multi_server_latency() {
     test_multi_latency(&mut cluster);
 }
 
-fn test_multi_random_latency<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_multi_random_latency<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
     cluster.add_send_filter(CloneFilterFactory(RandomLatencyFilter::new(50)));
     test_multi_base_after_bootstrap(cluster);
@@ -221,7 +215,7 @@ fn test_multi_server_random_latency() {
     test_multi_random_latency(&mut cluster);
 }
 
-fn test_multi_drop_packet<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_multi_drop_packet<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
     cluster.add_send_filter(CloneFilterFactory(DropPacketFilter::new(30)));
     test_multi_base_after_bootstrap(cluster);
@@ -301,9 +295,7 @@ fn test_multi_server_random_restart() {
     test_multi_random_restart(&mut cluster, count, 10);
 }
 
-fn test_leader_change_with_uncommitted_log<T: Simulator<RocksEngine>>(
-    cluster: &mut Cluster<RocksEngine, T>,
-) {
+fn test_leader_change_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_election_timeout_ticks = 50;
     // disable compact log to make test more stable.
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
@@ -493,9 +485,7 @@ fn test_node_leader_change_with_log_overlap() {
     panic!("callback has not been called after 5s.");
 }
 
-fn test_read_leader_with_unapplied_log<T: Simulator<RocksEngine>>(
-    cluster: &mut Cluster<RocksEngine, T>,
-) {
+fn test_read_leader_with_unapplied_log<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_election_timeout_ticks = 50;
     // disable compact log to make test more stable.
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
@@ -584,8 +574,8 @@ fn test_server_read_leader_with_unapplied_log() {
     test_read_leader_with_unapplied_log(&mut cluster);
 }
 
-fn get_with_timeout<T: Simulator<RocksEngine>>(
-    cluster: &mut Cluster<RocksEngine, T>,
+fn get_with_timeout<T: Simulator>(
+    cluster: &mut Cluster<T>,
     key: &[u8],
     read_quorum: bool,
     timeout: Duration,
@@ -601,9 +591,7 @@ fn get_with_timeout<T: Simulator<RocksEngine>>(
     cluster.call_command_on_leader(req, timeout)
 }
 
-fn test_remove_leader_with_uncommitted_log<T: Simulator<RocksEngine>>(
-    cluster: &mut Cluster<RocksEngine, T>,
-) {
+fn test_remove_leader_with_uncommitted_log<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_election_timeout_ticks = 50;
     // disable compact log to make test more stable.
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
@@ -729,7 +717,7 @@ fn test_node_dropped_proposal() {
         .expect("callback should have been called with in 5s.");
 }
 
-fn test_consistency_check<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_consistency_check<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.cfg.raft_store.raft_election_timeout_ticks = 50;
     // disable compact log to make test more stable.
     cluster.cfg.raft_store.raft_log_gc_threshold = 1000;
@@ -752,7 +740,7 @@ fn test_node_consistency_check() {
     test_consistency_check(&mut cluster);
 }
 
-fn test_batch_write<T: Simulator<RocksEngine>>(cluster: &mut Cluster<RocksEngine, T>) {
+fn test_batch_write<T: Simulator>(cluster: &mut Cluster<T>) {
     cluster.run();
     let r = cluster.get_region(b"");
     cluster.must_split(&r, b"k3");
