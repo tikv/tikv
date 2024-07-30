@@ -31,8 +31,20 @@ pub(crate) fn check_data_constraint<S: Snapshot>(
     // 1.The current write type is `PUT`
     // 2.The current write type is `Rollback` or `Lock`, and the key have an older
     // version.
-    if write.write_type == WriteType::Put || reader.key_exist(key, write_commit_ts.prev())? {
-        return Err(ErrorInner::AlreadyExist { key: key.to_raw()? }.into());
+    let existing_start_ts = if write.write_type == WriteType::Put {
+        Some(write.start_ts)
+    } else if let Some(prev_write) = reader.get_write(key, write_commit_ts.prev())? {
+        Some(prev_write.start_ts)
+    } else {
+        None
+    };
+
+    if let Some(existing_start_ts) = existing_start_ts {
+        return Err(ErrorInner::AlreadyExist {
+            key: key.to_raw()?,
+            existing_start_ts,
+        }
+        .into());
     }
     Ok(())
 }
@@ -93,7 +105,11 @@ mod tests {
             },
             Case {
                 // should detect conflict `Put`
-                expected: Err(ErrorInner::AlreadyExist { key: b"a".to_vec() }.into()),
+                expected: Err(ErrorInner::AlreadyExist {
+                    key: b"a".to_vec(),
+                    existing_start_ts: TimeStamp::new(3),
+                }
+                .into()),
                 should_not_exist: true,
                 write: Write::new(WriteType::Put, TimeStamp::new(3), None),
                 write_commit_ts: Default::default(),
@@ -101,7 +117,11 @@ mod tests {
             },
             Case {
                 // should detect an older version when the current write type is `Rollback`
-                expected: Err(ErrorInner::AlreadyExist { key: b"a".to_vec() }.into()),
+                expected: Err(ErrorInner::AlreadyExist {
+                    key: b"a".to_vec(),
+                    existing_start_ts: TimeStamp::new(2),
+                }
+                .into()),
                 should_not_exist: true,
                 write: Write::new(WriteType::Rollback, TimeStamp::new(3), None),
                 write_commit_ts: TimeStamp::new(6),
@@ -109,7 +129,11 @@ mod tests {
             },
             Case {
                 // should detect an older version when the current write type is `Lock`
-                expected: Err(ErrorInner::AlreadyExist { key: b"a".to_vec() }.into()),
+                expected: Err(ErrorInner::AlreadyExist {
+                    key: b"a".to_vec(),
+                    existing_start_ts: TimeStamp::new(2),
+                }
+                .into()),
                 should_not_exist: true,
                 write: Write::new(WriteType::Lock, TimeStamp::new(10), None),
                 write_commit_ts: TimeStamp::new(15),
