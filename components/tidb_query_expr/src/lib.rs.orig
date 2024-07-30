@@ -642,11 +642,6 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         // impl_vec
         ScalarFuncSig::VecAsTextSig => vec_as_text_fn_meta(),
         ScalarFuncSig::VecDimsSig => vec_dims_fn_meta(),
-        ScalarFuncSig::VecL1DistanceSig => vec_l1_distance_fn_meta(),
-        ScalarFuncSig::VecL2DistanceSig => vec_l2_distance_fn_meta(),
-        ScalarFuncSig::VecNegativeInnerProductSig => vec_negative_inner_product_fn_meta(),
-        ScalarFuncSig::VecCosineDistanceSig => vec_cosine_distance_fn_meta(),
-        ScalarFuncSig::VecL2NormSig => vec_l2_norm_fn_meta(),
         // impl_like
         ScalarFuncSig::LikeSig => map_like_sig(ft, children)?,
         // impl_regexp
