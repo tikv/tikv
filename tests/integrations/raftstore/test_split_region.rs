@@ -7,7 +7,6 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::RocksEngine;
 use engine_traits::{Peekable, CF_DEFAULT, CF_WRITE};
 use keys::data_key;
 use kvproto::{
@@ -160,7 +159,6 @@ fn test_server_split_region_twice() {
 #[test_case(test_raftstore::new_incompatible_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
 #[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_auto_split_region() {
     let count = 5;
@@ -354,7 +352,6 @@ fn test_delay_split_region() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
 #[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_node_split_overlap_snapshot() {
     let mut cluster = new_cluster(0, 3);
@@ -412,7 +409,6 @@ fn test_node_split_overlap_snapshot() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
 #[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_apply_new_version_snapshot() {
     let mut cluster = new_cluster(0, 3);
@@ -544,7 +540,6 @@ fn test_server_split_with_stale_peer() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
 #[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_split_region_diff_check() {
     let count = 1;
@@ -643,10 +638,7 @@ fn test_node_split_region_after_reboot_with_config_change() {
     }
 }
 
-fn test_split_epoch_not_match<T: Simulator<RocksEngine>>(
-    cluster: &mut Cluster<RocksEngine, T>,
-    right_derive: bool,
-) {
+fn test_split_epoch_not_match<T: Simulator>(cluster: &mut Cluster<T>, right_derive: bool) {
     cluster.cfg.raft_store.right_derive_when_split = right_derive;
     cluster.run();
     let pd_client = Arc::clone(&cluster.pd_client);
@@ -744,7 +736,6 @@ fn test_node_split_epoch_not_match_right_derive() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
 #[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_node_quick_election_after_split() {
     let mut cluster = new_cluster(0, 3);
@@ -784,7 +775,6 @@ fn test_node_quick_election_after_split() {
 #[test_case(test_raftstore::new_server_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_server_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
 #[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_node_split_region() {
     let count = 5;
@@ -826,7 +816,7 @@ fn test_node_split_region() {
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_node_split_update_region_right_derive() {
     let mut cluster = new_cluster(0, 3);
     // Election timeout and max leader lease is 1s.
@@ -1331,7 +1321,7 @@ fn test_split_region_keep_records() {
 
 #[test_case(test_raftstore::new_node_cluster)]
 #[test_case(test_raftstore_v2::new_node_cluster)]
-#[test_case(test_raftstore::new_node_cluster_with_hybrid_engine)]
+#[test_case(test_raftstore::new_server_cluster_with_hybrid_engine)]
 fn test_node_slow_split_does_not_cause_snapshot() {
     // We use three nodes([1, 2, 3]) for this test.
     let mut cluster = new_cluster(0, 3);

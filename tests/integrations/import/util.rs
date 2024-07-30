@@ -13,7 +13,7 @@ use tikv_util::HandyRwLock;
 
 const CLEANUP_SST_MILLIS: u64 = 10;
 
-pub fn new_cluster(cfg: TikvConfig) -> (Cluster<RocksEngine, ServerCluster<RocksEngine>>, Context) {
+pub fn new_cluster(cfg: TikvConfig) -> (Cluster<ServerCluster>, Context) {
     let count = 1;
     let mut cluster = new_server_cluster(0, count);
     cluster.set_cfg(cfg);
@@ -54,12 +54,7 @@ pub fn new_cluster_v2(
 
 pub fn open_cluster_and_tikv_import_client(
     cfg: Option<TikvConfig>,
-) -> (
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
-    Context,
-    TikvClient,
-    ImportSstClient,
-) {
+) -> (Cluster<ServerCluster>, Context, TikvClient, ImportSstClient) {
     let cfg = cfg.unwrap_or_else(|| {
         let mut config = TikvConfig::default();
         config.server.addr = "127.0.0.1:0".to_owned();
@@ -132,18 +127,14 @@ pub fn open_cluster_and_tikv_import_client_v2(
     (cluster, ctx, tikv, import)
 }
 
-pub fn new_cluster_and_tikv_import_client() -> (
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
-    Context,
-    TikvClient,
-    ImportSstClient,
-) {
+pub fn new_cluster_and_tikv_import_client()
+-> (Cluster<ServerCluster>, Context, TikvClient, ImportSstClient) {
     open_cluster_and_tikv_import_client(None)
 }
 
 pub fn new_cluster_and_tikv_import_client_tde() -> (
     tempfile::TempDir,
-    Cluster<RocksEngine, ServerCluster<RocksEngine>>,
+    Cluster<ServerCluster>,
     Context,
     TikvClient,
     ImportSstClient,

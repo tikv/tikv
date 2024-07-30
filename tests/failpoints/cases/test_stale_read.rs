@@ -6,7 +6,6 @@ use std::{
     time::Duration,
 };
 
-use engine_rocks::RocksEngine;
 use kvproto::metapb::{Peer, Region};
 use pd_client::PdClient;
 use raft::eraftpb::MessageType;
@@ -84,7 +83,7 @@ fn stale_read_during_splitting(right_derive: bool) {
 }
 
 fn must_not_stale_read(
-    cluster: &mut Cluster<RocksEngine, NodeCluster<RocksEngine>>,
+    cluster: &mut Cluster<NodeCluster>,
     stale_key: &[u8],
     old_region: &Region,
     old_leader: &Peer,
@@ -167,7 +166,7 @@ fn must_not_stale_read(
 }
 
 fn must_not_eq_on_key(
-    cluster: &mut Cluster<RocksEngine, NodeCluster<RocksEngine>>,
+    cluster: &mut Cluster<NodeCluster>,
     key: &[u8],
     value: &[u8],
     read_quorum: bool,

@@ -355,7 +355,7 @@ where
 {
     router: RaftRouterWrap<S, E>,
     engine: E,
-    cacheable_engine: Option<HybridEngine<E, RangeCacheMemoryEngine>>,
+    in_memory_engine: Option<HybridEngine<E, RangeCacheMemoryEngine>>,
     txn_extra_scheduler: Option<Arc<dyn TxnExtraScheduler>>,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
 }
@@ -366,11 +366,16 @@ where
     S: RaftStoreRouter<E> + LocalReadRouter<E> + 'static,
 {
     /// Create a RaftKv using specified configuration.
-    pub fn new(router: S, engine: E, region_leaders: Arc<RwLock<HashSet<u64>>>) -> RaftKv<E, S> {
+    pub fn new(
+        router: S,
+        engine: E,
+        in_memory_engine: Option<HybridEngine<E, RangeCacheMemoryEngine>>,
+        region_leaders: Arc<RwLock<HashSet<u64>>>,
+    ) -> RaftKv<E, S> {
         RaftKv {
             router: RaftRouterWrap::new(router),
             engine,
-            cacheable_engine: None,
+            in_memory_engine,
             txn_extra_scheduler: None,
             region_leaders,
         }
@@ -615,7 +620,7 @@ where
     type IMSnap = RegionSnapshot<HybridEngineSnapshot<E, RangeCacheMemoryEngine>>;
     type IMSnapshotRes = impl Future<Output = kv::Result<Self::IMSnap>> + Send;
     fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
-        let snap_ctx = if self.engine.range_cache_engine_enabled() {
+        let snap_ctx = if self.in_memory_engine.is_some() {
             // When range cache engine is enabled, we need snapshot context to determine
             // whether we should use range cache engine snapshot for this request.
             ctx.start_ts.map(|ts| SnapshotContext {
@@ -625,7 +630,7 @@ where
         } else {
             None
         };
-        let cacheable_engine = self.cacheable_engine.clone();
+        let cacheable_engine = self.in_memory_engine.clone();
         async_snapshot(&mut self.router, ctx, snap_ctx.clone()).map_ok(|region_snap| {
             region_snap.replace_snapshot(move |disk_snap| {
                 let in_memory_snapshot = cacheable_engine
@@ -739,17 +744,6 @@ where
         cb(on_read_result(resp).map_err(Error::into));
     }));
     let tracker = store_cb.read_tracker().unwrap();
-
-    // let snap_ctx = if self.engine.range_cache_engine_enabled() {
-    //     // When range cache engine is enabled, we need snapshot context to
-    // determine     // whether we should use range cache engine snapshot for
-    // this request.     ctx.start_ts.map(|ts| SnapshotContext {
-    //         read_ts: ts.into_inner(),
-    //         range: None,
-    //     })
-    // } else {
-    //     None
-    // };
 
     if res.is_ok() {
         res = router

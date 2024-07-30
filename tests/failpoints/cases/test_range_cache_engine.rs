@@ -18,19 +18,19 @@ use kvproto::{
 };
 use tempfile::tempdir;
 use test_raftstore::{
-    make_cb, new_node_cluster_with_hybrid_engine_with_no_range_cache, new_peer, new_put_cmd,
-    new_request, Cluster, HybridEngineImpl, NodeCluster, Simulator,
+    make_cb, new_peer, new_put_cmd, new_request,
+    new_server_cluster_with_hybrid_engine_with_no_range_cache, Cluster, ServerCluster, Simulator,
 };
 use tikv_util::HandyRwLock;
 use txn_types::Key;
 
 #[test]
 fn test_basic_put_get() {
-    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
     cluster.run();
 
-    let range_cache_engine = cluster.get_range_cache_engine(1);
+    let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
     // FIXME: load is not implemented, so we have to insert range manually
     {
         let mut core = range_cache_engine.core().write();
@@ -60,7 +60,7 @@ fn test_basic_put_get() {
 #[test]
 fn test_load() {
     let test_load = |concurrent_with_split: bool| {
-        let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+        let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
         cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
         cluster.run();
 
@@ -87,7 +87,7 @@ fn test_load() {
 
         // load range
         {
-            let range_cache_engine = cluster.get_range_cache_engine(1);
+            let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
             let mut core = range_cache_engine.core().write();
             if concurrent_with_split {
                 // Load the whole range as if it is not splitted. Loading process should handle
@@ -165,7 +165,7 @@ fn test_load() {
 
 #[test]
 fn test_write_batch_cache_during_load() {
-    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     cluster.run();
 
@@ -181,7 +181,7 @@ fn test_write_batch_cache_during_load() {
     fail::cfg("on_snapshot_load_finished", "pause").unwrap();
     // load range
     {
-        let range_cache_engine = cluster.get_range_cache_engine(1);
+        let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
         let mut core = range_cache_engine.core().write();
         let cache_range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
         core.mut_range_manager().load_range(cache_range).unwrap();
@@ -270,7 +270,7 @@ fn test_write_batch_cache_during_load() {
 // It tests that after we schedule the pending range to load snapshot, the range
 // splits.
 fn test_load_with_split() {
-    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     cluster.run();
 
@@ -295,7 +295,7 @@ fn test_load_with_split() {
 
     // load range
     {
-        let range_cache_engine = cluster.get_range_cache_engine(1);
+        let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
         let mut core = range_cache_engine.core().write();
         // Load the whole range as if it is not splitted. Loading process should handle
         // it correctly.
@@ -369,7 +369,7 @@ fn test_load_with_split() {
 // this PR.
 #[test]
 fn test_load_with_split2() {
-    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 4;
     cluster.run();
 
@@ -381,7 +381,7 @@ fn test_load_with_split2() {
 
     fail::cfg("on_handle_put", "pause").unwrap();
     let write_req = make_write_req(&mut cluster, b"k02");
-    let (cb, _) = make_cb::<HybridEngineImpl>(&write_req);
+    let (cb, _) = make_cb(&write_req);
     cluster
         .sim
         .rl()
@@ -390,7 +390,7 @@ fn test_load_with_split2() {
 
     std::thread::sleep(Duration::from_secs(1));
     {
-        let range_cache_engine = cluster.get_range_cache_engine(1);
+        let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
         let mut core = range_cache_engine.core().write();
         core.mut_range_manager()
             .load_range(CacheRange::new(
@@ -407,7 +407,7 @@ fn test_load_with_split2() {
     .unwrap();
 
     let write_req = make_write_req(&mut cluster, b"k09");
-    let (cb2, _) = make_cb::<HybridEngineImpl>(&write_req);
+    let (cb2, _) = make_cb(&write_req);
     cluster
         .sim
         .rl()
@@ -447,10 +447,7 @@ fn test_load_with_split2() {
     assert!(rx.try_recv().unwrap());
 }
 
-fn make_write_req(
-    cluster: &mut Cluster<HybridEngineImpl, NodeCluster<HybridEngineImpl>>,
-    k: &[u8],
-) -> RaftCmdRequest {
+fn make_write_req(cluster: &mut Cluster<ServerCluster>, k: &[u8]) -> RaftCmdRequest {
     let r = cluster.get_region(k);
     let mut req = new_request(
         r.get_id(),
@@ -463,17 +460,17 @@ fn make_write_req(
     req
 }
 
+// It tests that for a apply delegate, at the time it prepares to apply
+// something, the range of it is in pending range. When it begins to write the
+// write batch to engine, the range has finished the loading, became a normal
+// range, and even been evicted.
 #[test]
-// It tests that for a apply delete, at the time it prepares to apply something,
-// the range of it is in pending range. When it begins to write the write batch
-// to engine, the range has finished the loading, became a normal range, and
-// even been evicted.
 fn test_load_with_eviction() {
-    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
     cluster.run();
     // load range
     {
-        let range_cache_engine = cluster.get_range_cache_engine(1);
+        let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
         let mut core = range_cache_engine.core().write();
         // Load the whole range as if it is not splitted. Loading process should handle
         // it correctly.
@@ -484,9 +481,9 @@ fn test_load_with_eviction() {
     let r = cluster.get_region(b"");
     cluster.must_split(&r, b"k10");
 
-    fail::cfg("on_write_impl", "pause").unwrap();
+    fail::cfg("on_range_cache_write_batch_write_impl", "pause").unwrap();
     let write_req = make_write_req(&mut cluster, b"k01");
-    let (cb, mut cb_rx) = make_cb::<HybridEngineImpl>(&write_req);
+    let (cb, mut cb_rx) = make_cb(&write_req);
     cluster
         .sim
         .rl()
@@ -494,7 +491,7 @@ fn test_load_with_eviction() {
         .unwrap();
 
     let write_req = make_write_req(&mut cluster, b"k15");
-    let (cb, mut cb_rx2) = make_cb::<HybridEngineImpl>(&write_req);
+    let (cb, mut cb_rx2) = make_cb(&write_req);
     cluster
         .sim
         .rl()
@@ -502,7 +499,7 @@ fn test_load_with_eviction() {
         .unwrap();
 
     {
-        let range_cache_engine = cluster.get_range_cache_engine(1);
+        let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
         let mut tried_count = 0;
         while range_cache_engine
             .snapshot(
@@ -521,7 +518,7 @@ fn test_load_with_eviction() {
         range_cache_engine.evict_range(&range, EvictReason::AutoEvict);
     }
 
-    fail::remove("on_write_impl");
+    fail::remove("on_range_cache_write_batch_write_impl");
     let _ = cb_rx.recv_timeout(Duration::from_secs(5));
     let _ = cb_rx2.recv_timeout(Duration::from_secs(5));
 
@@ -550,7 +547,7 @@ fn test_load_with_eviction() {
 
 #[test]
 fn test_evictions_after_transfer_leader() {
-    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 2);
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 2);
     cluster.run();
 
     let r = cluster.get_region(b"");
@@ -558,7 +555,7 @@ fn test_evictions_after_transfer_leader() {
 
     let cache_range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
     let range_cache_engine = {
-        let range_cache_engine = cluster.get_range_cache_engine(1);
+        let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
         let mut core = range_cache_engine.core().write();
         core.mut_range_manager().new_range(cache_range.clone());
         drop(core);
@@ -577,7 +574,7 @@ fn test_evictions_after_transfer_leader() {
 
 #[test]
 fn test_eviction_after_merge() {
-    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
     cluster.run();
     let r = cluster.get_region(b"");
     cluster.must_split(&r, b"key1");
@@ -588,7 +585,7 @@ fn test_eviction_after_merge() {
     let range2 = CacheRange::from_region(&r2);
 
     let range_cache_engine = {
-        let range_cache_engine = cluster.get_range_cache_engine(1);
+        let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
         let mut core = range_cache_engine.core().write();
         core.mut_range_manager().new_range(range1.clone());
         core.mut_range_manager().new_range(range2.clone());
@@ -612,7 +609,7 @@ fn test_eviction_after_merge() {
 
 #[test]
 fn test_eviction_after_ingest_sst() {
-    let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
+    let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
     cluster.run();
 
     // Generate a sst file.
@@ -628,7 +625,7 @@ fn test_eviction_after_ingest_sst() {
     let region = cluster.get_region(b"");
     let range = CacheRange::from_region(&region);
     let range_cache_engine = {
-        let range_cache_engine = cluster.get_range_cache_engine(1);
+        let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
         let mut core = range_cache_engine.core().write();
         core.mut_range_manager().new_range(range.clone());
         drop(core);
@@ -654,7 +651,7 @@ fn test_eviction_after_ingest_sst() {
     sst_meta.cf_name = CF_DEFAULT.to_owned();
 
     // Prepare ingest.
-    let importer = cluster.sim.rl().get_importer(1).unwrap();
+    let importer = cluster.sim.rl().importers.get(&1).unwrap().clone();
     let mut f = importer.create(&sst_meta).unwrap();
     f.append(&content).unwrap();
     f.finish().unwrap();

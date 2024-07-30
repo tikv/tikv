@@ -739,6 +739,26 @@ impl KvEngineBuilder for HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
     }
 }
 
+pub fn build_in_memory_engine(
+    range_cache_engine_context: RangeCacheEngineContext,
+    disk_engine: RocksEngine,
+    pd_client: Option<Arc<RpcClient>>,
+    region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
+) -> HybridEngine<RocksEngine, RangeCacheMemoryEngine> {
+    // todo(SpadeA): add config for it
+    let mut memory_engine = RangeCacheMemoryEngine::with_region_info_provider(
+        range_cache_engine_context,
+        region_info_provider,
+    );
+    memory_engine.set_disk_engine(disk_engine.clone());
+    if let Some(pd_client) = pd_client.as_ref() {
+        memory_engine.start_hint_service(
+            <RangeCacheMemoryEngine as RangeCacheEngine>::RangeHintService::from(pd_client.clone()),
+        )
+    }
+    HybridEngine::new(disk_engine, memory_engine)
+}
+
 pub trait ConfiguredRaftEngine: RaftEngine {
     fn build(
         _: &TikvConfig,
