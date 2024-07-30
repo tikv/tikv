@@ -938,9 +938,9 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         "current_id" => ?delegate.handle.id);
                     return;
                 }
-                let mut deregisters = Vec::new();
                 match delegate.on_region_ready(resolver, region) {
                     Ok(fails) => {
+                        let mut deregisters = Vec::new();
                         for (downstream, e) in fails {
                             deregisters.push(Deregister::Downstream {
                                 conn_id: downstream.get_conn_id(),
@@ -950,16 +950,16 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                                 err: Some(e),
                             });
                         }
+                        // Deregister downstreams if there is any downstream fails to subscribe.
+                        for deregister in deregisters {
+                            self.on_deregister(deregister);
+                        }
                     }
-                    Err(e) => deregisters.push(Deregister::Delegate {
+                    Err(e) => self.on_deregister(Deregister::Delegate {
                         region_id,
                         observe_id,
                         err: e,
                     }),
-                }
-                // Deregister downstreams if there is any downstream fails to subscribe.
-                for deregister in deregisters {
-                    self.on_deregister(deregister);
                 }
             }
         }
