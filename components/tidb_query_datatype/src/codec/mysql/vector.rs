@@ -8,10 +8,10 @@ use crate::codec::Result;
 // TODO: Implement generic version
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct VectorFloat32 {
+<<<<<<< HEAD
     pub value: Vec<NotNan<f32>>,
 }
 
-impl VectorFloat32 {
     pub fn new(value: Vec<f32>) -> Result<Self> {
         // Check again that NaN and ±Inf is not contained
         for v in &value {
@@ -28,10 +28,10 @@ impl VectorFloat32 {
                 .map(|v| NotNan::<f32>::new(v).unwrap())
                 .collect(),
         })
-    }
+=======
+    pub value: Vec<OrderedFloat<f32>>,
+}
 
-    pub fn as_ref(&self) -> VectorFloat32Ref<'_> {
-        VectorFloat32Ref {
             value: self.value.as_slice(),
         }
     }
@@ -70,13 +70,23 @@ pub trait VectorFloat32Decoder: NumberDecoder {
         }
 
         if self.bytes().is_empty() {
+<<<<<<< HEAD
             return VectorFloat32Ref::new(&[]);
+=======
+            return Ok(VectorFloat32Ref::new(&[]));
+>>>>>>> 62c0635b2 (copr: Support Vector data type (#17287))
         }
         let n = self.read_u32_le()? as usize;
         let data_size = n * 4;
         let data = self.read_bytes(data_size)?;
+<<<<<<< HEAD
         let data_in_f32 = unsafe { std::slice::from_raw_parts(data.as_ptr() as *const f32, n) };
         VectorFloat32Ref::new(data_in_f32)
+=======
+        let data_in_f32 =
+            unsafe { std::slice::from_raw_parts(data.as_ptr() as *const OrderedFloat<f32>, n) };
+        Ok(VectorFloat32Ref::new(data_in_f32))
+>>>>>>> 62c0635b2 (copr: Support Vector data type (#17287))
     }
 
     // `read_vector_float32` decodes value encoded by `write_vector_float32` before.
@@ -92,6 +102,7 @@ impl<T: BufferReader> VectorFloat32Decoder for T {}
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct VectorFloat32Ref<'a> {
     // Referred value
+<<<<<<< HEAD
     value: &'a [NotNan<f32>],
 }
 
@@ -112,6 +123,14 @@ impl<'a> VectorFloat32Ref<'a> {
         Ok(VectorFloat32Ref {
             value: value_in_notnan,
         })
+=======
+    value: &'a [OrderedFloat<f32>],
+}
+
+impl<'a> VectorFloat32Ref<'a> {
+    pub fn new(value: &[OrderedFloat<f32>]) -> VectorFloat32Ref<'_> {
+        VectorFloat32Ref { value }
+>>>>>>> 62c0635b2 (copr: Support Vector data type (#17287))
     }
 
     pub fn encoded_len(&self) -> usize {
@@ -131,6 +150,7 @@ impl<'a> VectorFloat32Ref<'a> {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+<<<<<<< HEAD
 
     fn primitive_value(&self) -> &[f32] {
         unsafe { std::slice::from_raw_parts(self.value.as_ptr() as *const f32, self.value.len()) }
@@ -226,6 +246,8 @@ impl<'a> VectorFloat32Ref<'a> {
         }
         norm.sqrt()
     }
+=======
+>>>>>>> 62c0635b2 (copr: Support Vector data type (#17287))
 }
 
 pub trait VectorFloat32Encoder: NumberEncoder {
@@ -275,6 +297,7 @@ mod tests {
     use super::*;
 
     #[test]
+<<<<<<< HEAD
     fn test_nan_inf() {
         let v = VectorFloat32::new(vec![1.0, std::f32::NAN]);
         v.unwrap_err();
@@ -304,12 +327,26 @@ mod tests {
         assert_eq!("[1.1,2.2]", v.to_string());
 
         let v = VectorFloat32::new(vec![]).unwrap();
+=======
+    fn test_to_string() {
+        let v = VectorFloat32::new(vec![OrderedFloat(1.0), OrderedFloat(2.0)]);
+        assert_eq!("[1,2]", v.to_string());
+
+        let v = VectorFloat32::new(vec![OrderedFloat(1.1), OrderedFloat(2.2)]);
+        assert_eq!("[1.1,2.2]", v.to_string());
+
+        let v = VectorFloat32::new(vec![]);
+>>>>>>> 62c0635b2 (copr: Support Vector data type (#17287))
         assert_eq!("[]", v.to_string());
     }
 
     #[test]
     fn test_encode() {
+<<<<<<< HEAD
         let v = VectorFloat32::new(vec![1.1, 2.2]).unwrap();
+=======
+        let v = VectorFloat32::new(vec![OrderedFloat(1.1), OrderedFloat(2.2)]);
+>>>>>>> 62c0635b2 (copr: Support Vector data type (#17287))
         let mut encoded = Vec::new();
         encoded.write_vector_float32(v.as_ref()).unwrap();
         assert_eq!(
