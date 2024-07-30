@@ -45,6 +45,9 @@ use crate::{
     write_batch::RangeCacheWriteBatchEntry,
 };
 
+// 5 seconds should be long enough for getting a TSO from PD.
+const TIMTOUT_FOR_TSO: Duration = Duration::from_secs(5);
+
 /// Try to extract the key and `u64` timestamp from `encoded_key`.
 ///
 /// See also: [`txn_types::Key::split_on_ts_for`]
@@ -272,8 +275,7 @@ impl BgWorkManager {
         let h = std::thread::spawn(move || {
             let gc_ticker = tick(gc_interval);
             let load_evict_ticker = tick(load_evict_interval); // TODO (afeinberg): Use a real value.
-            // 5 seconds should be long enough for getting a TSO from PD.
-            let tso_timeout = std::cmp::min(gc_interval, Duration::from_secs(5));
+            let tso_timeout = std::cmp::min(gc_interval, TIMTOUT_FOR_TSO);
             'LOOP: loop {
                 select! {
                     recv(gc_ticker) -> _ => {
@@ -976,7 +978,7 @@ impl Runnable for BackgroundRunner {
                             }
 
                             // gc the range
-                            let tso_timeout = std::cmp::min(gc_interval, Duration::from_secs(5));
+                            let tso_timeout = std::cmp::min(gc_interval, TIMTOUT_FOR_TSO);
                             let now = match block_on_timeout(pd_client.get_tso(), tso_timeout) {
                                 Ok(Ok(ts)) => ts,
                                 err => {
@@ -1019,7 +1021,7 @@ impl Runnable for BackgroundRunner {
                                 let v = iter.value();
                                 if let Err(e) = filter.filter(k.as_bytes(), v.as_bytes()) {
                                     warn!(
-                                        "Something Wrong in memory engine GC";
+                                        "something wrong in memory engine GC";
                                         "error" => ?e,
                                     );
                                 }
@@ -1488,16 +1490,12 @@ impl Filter {
         self.metrics.filtered += 1;
         self.write_cf_handle
             .remove(&InternalBytes::from_bytes(key.clone()), guard);
-        self.handle_filtered_write(write, guard)?;
+        self.handle_filtered_write(write, guard);
 
         Ok(())
     }
 
-    fn handle_filtered_write(
-        &mut self,
-        write: WriteRef<'_>,
-        guard: &epoch::Guard,
-    ) -> std::result::Result<(), String> {
+    fn handle_filtered_write(&mut self, write: WriteRef<'_>, guard: &epoch::Guard) {
         if write.short_value.is_none() && write.write_type == WriteType::Put {
             // todo(SpadeA): We don't know the sequence number of the key in the skiplist so
             // we cannot delete it directly. So we encoding a key with MAX sequence number
@@ -1513,7 +1511,6 @@ impl Filter {
                 iter.next(guard);
             }
         }
-        Ok(())
     }
 }
 
