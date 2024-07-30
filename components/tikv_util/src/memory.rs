@@ -181,6 +181,7 @@ impl std::error::Error for MemoryQuotaExceeded {}
 
 impl_display_as_debug!(MemoryQuotaExceeded);
 
+#[derive(Debug)]
 pub struct MemoryQuota {
     // We suppose the memory quota should not exceed the upper bound of `isize`.
     // As we don't support 32bit(or lower) arch, this won't be a problem.
@@ -188,6 +189,9 @@ pub struct MemoryQuota {
     capacity: AtomicUsize,
 }
 
+#[derive(Debug)]
+/// OwnedAllocated should not be cloned, the counted memory is freed when its
+/// owner is dropped.
 pub struct OwnedAllocated {
     allocated: usize,
     from: Arc<MemoryQuota>,
