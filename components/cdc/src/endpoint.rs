@@ -1023,18 +1023,10 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         locks: BTreeMap<Key, MiniLock>,
     ) {
         let region_id = region.get_id();
-        match self.capture_regions.get_mut(&region_id) {
-            None => debug!("cdc region not found on region ready (finish building resolver)";
-                "region_id" => region.get_id()),
-            Some(delegate) => {
-                if delegate.handle.id != observe_id {
-                    debug!("cdc stale region ready";
-                        "region_id" => region.get_id(),
-                        "observe_id" => ?observe_id,
-                        "current_id" => ?delegate.handle.id);
-                    return;
-                }
-                match delegate.on_region_ready(resolver, region) {
+        let mut deregisters = Vec::new();
+        if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
+            if delegate.handle.id == observe_id {
+                match delegate.finish_scan_locks(region, locks) {
                     Ok(fails) => {
                         let mut deregisters = Vec::new();
                         for (downstream, e) in fails {
@@ -1051,12 +1043,17 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                             self.on_deregister(deregister);
                         }
                     }
-                    Err(e) => self.on_deregister(Deregister::Delegate {
+                    Err(e) => deregisters.push(Deregister::Delegate {
                         region_id,
                         observe_id,
                         err: e,
                     }),
                 }
+            } else {
+                debug!("cdc stale region ready";
+                    "region_id" => region.get_id(),
+                    "observe_id" => ?observe_id,
+                    "current_id" => ?delegate.handle.id);
             }
         }
     }

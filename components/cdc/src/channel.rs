@@ -362,7 +362,6 @@ impl<'a> Drain {
         let observed = (&mut self.unbounded_receiver).map(|x| (x.created, x.event, x.size));
         let scaned = (&mut self.bounded_receiver).filter_map(|x| {
             if x.truncated.load(Ordering::Acquire) {
-                // todo: shall we free memory quota here ?
                 self.memory_quota.free(x.size as _);
                 return futures::future::ready(None);
             }
