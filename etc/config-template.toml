@@ -405,7 +405,8 @@
 ## When Region size change exceeds this config, TiKV will check whether the Region should be split
 ## or not. To reduce the cost of scanning data in the checking process, you can set the value to
 ## 32MB during checking and set it back to the default value in normal operations.
-# region-split-check-diff = "6MB"
+## It's recommanded to set it to 1/16 of `region-split-size`.
+# region-split-check-diff = "16MB"
 
 ## The interval of triggering Region split check.
 # split-region-check-tick-interval = "10s"
@@ -423,11 +424,11 @@
 # raft-log-gc-threshold = 50
 
 ## When the entry count exceeds this value, GC will be forced to trigger.
-# raft-log-gc-count-limit = 73728
+# raft-log-gc-count-limit = 196608
 
 ## When the approximate size of Raft log entries exceeds this value, GC will be forced trigger.
 ## It's recommanded to set it to 3/4 of `region-split-size`.
-# raft-log-gc-size-limit = "72MB"
+# raft-log-gc-size-limit = "192MB"
 
 ## Old Raft logs could be reserved if `raft_log_gc_threshold` is not reached.
 ## GC them after ticks `raft_log_reserve_max_ticks` times.
@@ -1295,7 +1296,7 @@
 ## When Backup region [a,e) size exceeds `sst-max-size`, it will be backuped into several Files [a,b),
 ## [b,c), [c,d), [d,e) and the size of [a,b), [b,c), [c,d) will be `sst-max-size` (or a
 ## little larger).
-# sst-max-size = "144MB"
+# sst-max-size = "384MB"
 
 ## Automatically reduce the number of backup threads when the current workload is high,
 ## in order to reduce impact on the cluster's performance during back up.
