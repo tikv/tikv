@@ -6350,6 +6350,7 @@ dependencies = [
  "codec",
  "collections",
  "crc32fast",
+ "criterion",
  "encoding_rs 0.8.29",
  "error_code",
  "hex 0.4.2",
