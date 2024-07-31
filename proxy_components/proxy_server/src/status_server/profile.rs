@@ -1,10 +1,10 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 use std::{
     fs::{File, Metadata},
-    io::Read,
+    io::{Read, Write},
     path::PathBuf,
     pin::Pin,
-    process::Command,
+    process::{Command, Stdio},
     sync::Mutex as StdMutex,
     time::{Duration, UNIX_EPOCH},
 };
@@ -232,14 +232,34 @@ pub fn read_file(path: &str) -> Result<Vec<u8>, String> {
 }
 
 pub fn jeprof_heap_profile(path: &str) -> Result<Vec<u8>, String> {
-    info!("using jeprof to process {}", path);
-    let output = Command::new("./jeprof")
-        .args(["--show_bytes", "./bin/tiflash/tiflash", path, "--svg"])
-        .output()
+    let bin = std::env::current_exe().map_err(|e| format!("get current exe path fail: {}", e))?;
+    let bin_str = &bin.as_os_str().to_string_lossy();
+    info!(
+        "using jeprof to process {} bin {} exist {}",
+        path,
+        bin_str,
+        std::path::Path::new(path).exists()
+    );
+    let mut jeprof = Command::new("perl")
+        .args(["/dev/stdin", "--show_bytes", bin_str, path, "--svg"])
+        .stdin(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn jeprof fail: {}", e))?;
+    jeprof
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(include_bytes!("jeprof.in"))
+        .unwrap();
+    let output = jeprof
+        .wait_with_output()
         .map_err(|e| format!("jeprof: {}", e))?;
     if !output.status.success() {
         let stderr = std::str::from_utf8(&output.stderr).unwrap_or("invalid utf8");
-        return Err(format!("jeprof stderr: {:?}", stderr));
+        let stdout = std::str::from_utf8(&output.stdout).unwrap_or("invalid utf8");
+        return Err(format!("jeprof stderr: {:?} stdout: {:?}", stderr, stdout));
     }
     Ok(output.stdout)
 }
