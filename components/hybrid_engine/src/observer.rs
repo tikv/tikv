@@ -91,6 +91,7 @@ impl Observer {
                     region: ctx.region().clone(),
                 });
         }
+        // there are new_regions, this must be a split event.
         if !state.new_regions.is_empty() {
             let cmd_type = cmd.request.get_admin_request().get_cmd_type();
             assert!(cmd_type == AdminCmdType::BatchSplit || cmd_type == AdminCmdType::Split);
