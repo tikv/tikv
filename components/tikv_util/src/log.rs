@@ -177,6 +177,74 @@ macro_rules! slog_panic {
     }};
 }
 
+/// Helper macro to log a message with the request info of the given trackers,
+/// so it could be used to trace the request flow with transaction read/write
+/// timestamp.
+#[macro_export]
+macro_rules! debug_with_req_info {
+    // Case with additional key-value pairs
+    ($log_msg:expr, $trackers:expr, $( $key:tt => ?$value:expr ),+ ) => {
+        if let Some(slog::Level::Debug) = tikv_util::logger::get_log_level() {
+            for tracker in $trackers {
+                debug!(
+                    $log_msg;
+                    "req_info" => ?tracker.as_tracker_token().map(|tracker_token| {
+                        GLOBAL_TRACKERS.with_tracker(tracker_token, |t| t.req_info.clone())
+                    }),
+                    $(
+                        $key => ?$value
+                    ),+
+                );
+            }
+        }
+    };
+    // Case with no additional key-value pairs
+    ($log_msg:expr, $trackers:expr $(,)? ) => {
+        if let Some(slog::Level::Debug) = tikv_util::logger::get_log_level() {
+            for tracker in $trackers {
+                debug!(
+                    $log_msg;
+                    "req_info" => ?tracker.as_tracker_token().map(|tracker_token| {
+                        GLOBAL_TRACKERS.with_tracker(tracker_token, |t| t.req_info.clone())
+                    }),
+                );
+            }
+        }
+    };
+}
+
+/// Helper macro to log a message with the request info of the given trackers,
+/// so it could be used to trace the request flow with transaction read/write
+/// timestamp. For the read Tracker type, use this macro.
+#[macro_export]
+macro_rules! debug_with_req_info_tracker {
+    // Case with additional key-value pairs
+    ($log_msg:expr, $trackers:expr, $( $key:tt => ?$value:expr ),+ ) => {
+        if let Some(slog::Level::Debug) = tikv_util::logger::get_log_level() {
+            for tracker_token in $trackers {
+                debug!(
+                    $log_msg;
+                    "req_info" => ?GLOBAL_TRACKERS.with_tracker(tracker_token, |t| t.req_info.clone()),
+                    $(
+                        $key => ?$value
+                    ),+
+                );
+            }
+        }
+    };
+    // Case with no additional key-value pairs
+    ($log_msg:expr, $trackers:expr $(,)? ) => {
+        if let Some(slog::Level::Debug) = tikv_util::logger::get_log_level() {
+            for tracker_token in $trackers {
+                debug!(
+                    $log_msg;
+                    "req_info" => ?GLOBAL_TRACKERS.with_tracker(tracker_token, |t| t.req_info.clone()),
+                );
+            }
+        }
+    };
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
