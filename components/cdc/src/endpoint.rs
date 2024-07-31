@@ -955,7 +955,6 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let mut statistics = Statistics::default();
         for batch in multi {
             let region_id = batch.region_id;
-            let mut deregister = None;
             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                 if delegate.has_failed() {
                     // Skip the batch if the delegate has failed.
@@ -969,15 +968,12 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                 ) {
                     delegate.mark_failed();
                     // Delegate has error, deregister the delegate.
-                    deregister = Some(Deregister::Delegate {
+                    self.on_deregister(Deregister::Delegate {
                         region_id,
                         observe_id: delegate.handle.id,
                         err: e,
                     });
                 }
-            }
-            if let Some(deregister) = deregister {
-                self.on_deregister(deregister);
             }
         }
         flush_oldvalue_stats(&statistics, TAG_DELTA_CHANGE);
@@ -990,14 +986,23 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         locks: BTreeMap<Key, MiniLock>,
     ) {
         let region_id = region.get_id();
-        let mut deregisters = Vec::new();
-        if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
-            if delegate.handle.id == observe_id {
+        match self.capture_regions.get_mut(&region_id) {
+            None => {
+                debug!("cdc region not found on region ready (finish scan locks)";
+                    "region_id" => region.get_id());
+                return;
+            }
+            Some(delegate) => {
+                if delegate.handle.id != observe_id {
+                    debug!("cdc stale region ready";"region_id" => region.get_id(),
+                        "observe_id" => ?observe_id,"current_id" => ?delegate.handle.id);
+                    return;
+                }
                 match delegate.finish_scan_locks(region, locks) {
                     Ok(fails) => {
                         let mut deregisters = Vec::new();
                         for (downstream, e) in fails {
-                            deregisters.push(Deregister::Downstream {
+                            self.on_deregister(Deregister::Downstream {
                                 conn_id: downstream.conn_id,
                                 request_id: downstream.req_id,
                                 region_id,
@@ -1010,17 +1015,12 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                             self.on_deregister(deregister);
                         }
                     }
-                    Err(e) => deregisters.push(Deregister::Delegate {
+                    Err(e) => self.on_deregister(Deregister::Delegate {
                         region_id,
                         observe_id,
                         err: e,
                     }),
                 }
-            } else {
-                debug!("cdc stale region ready";
-                    "region_id" => region.get_id(),
-                    "observe_id" => ?observe_id,
-                    "current_id" => ?delegate.handle.id);
             }
         }
     }
