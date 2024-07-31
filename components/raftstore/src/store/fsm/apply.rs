@@ -1265,7 +1265,6 @@ where
                     {
                         return ApplyResult::Yield;
                     }
-                    has_unflushed_data = false;
                 }
                 if self.priority != apply_ctx.priority {
                     return ApplyResult::Yield;
