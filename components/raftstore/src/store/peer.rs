@@ -57,7 +57,7 @@ use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err,
     codec::number::decode_u64,
-    debug, error, info,
+    debug, debug_with_req_info, error, info,
     store::find_peer_by_id,
     sys::disk::DiskUsage,
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, InstantExt},
@@ -3085,6 +3085,7 @@ where
                             // In this case the apply can be guaranteed to be successful. Invoke the
                             // on_committed callback if necessary.
                             p.cb.invoke_committed();
+                            debug_with_req_info!("raft log is committed", p.cb.write_trackers());
                         }
                         p
                     })

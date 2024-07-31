@@ -59,7 +59,7 @@ use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err, box_try,
     config::{Tracker, VersionTrack},
-    debug, error, info,
+    debug, debug_with_req_info, error, info,
     memory::HeapSize,
     mpsc::{loose_bounded, LooseBoundedSender, Receiver},
     safe_panic, slow_log,
@@ -644,6 +644,13 @@ where
         } = mem::replace(&mut self.applied_batch, ApplyCallbackBatch::new());
         // Call it before invoking callback for preventing Commit is executed before
         // Prewrite is observed.
+        for (cb, _) in cb_batch.iter() {
+            debug_with_req_info!(
+                "raft log is applied to the kv db",
+                cb.write_trackers(),
+                "cmd_batch" => ?cmd_batch
+            );
+        }
         self.host
             .on_flush_applied_cmd_batch(batch_max_level, cmd_batch, &self.engine);
         // Invoke callbacks

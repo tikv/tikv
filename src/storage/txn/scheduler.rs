@@ -764,7 +764,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                     debug!(
                         "process cmd with snapshot";
                         "cid" => task.cid(), "term" => ?term, "extra_op" => ?extra_op,
-                        "tracker" => ?task.tracker_token()
+                        "task" => ?&task,
                     );
                     sched.process(snapshot, task).await;
                 }
@@ -809,14 +809,16 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             err: StorageError::from(err),
         };
         if let Some(details) = sched_details {
-            GLOBAL_TRACKERS.with_tracker(details.tracker, |tracker| {
+            let req_info = GLOBAL_TRACKERS.with_tracker(details.tracker, |tracker| {
                 tracker.metrics.scheduler_process_nanos = details
                     .start_process_instant
                     .saturating_elapsed()
                     .as_nanos() as u64;
                 tracker.metrics.scheduler_throttle_nanos =
                     details.flow_control_nanos + details.quota_limit_delay_nanos;
+                tracker.req_info.clone()
             });
+            debug!("write command finished with error"; "cid" => cid, "pr" => ?&pr, "req_info" => ?req_info);
         }
         if let Some(cb) = tctx.cb {
             cb.execute(pr);
@@ -878,8 +880,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
         }
 
-        debug!("write command finished";
-            "cid" => cid, "pipelined" => pipelined, "async_apply_prewrite" => async_apply_prewrite);
+        debug_with_req_info_tracker!("write_command_finished",
+            [sched_details.tracker],
+            "cid" => ?cid,
+            "pipelined" => ?pipelined,
+            "async_apply_prewrite" => ?async_apply_prewrite
+        );
         drop(lock_guards);
 
         if result.is_ok() && !known_txn_status.is_empty() {
@@ -1459,6 +1465,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 &ctx,
             )
         {
+            debug_with_req_info_tracker!("pessimistic locks to be written in-memory",
+                [tracker_token],
+                "locks" => ?&to_be_write.modifies,
+                "cid" => ?cid
+            );
             // Safety: `self.sched_pool` ensures a TLS engine exists.
             unsafe {
                 with_tls_engine(|engine: &mut E| {
@@ -1570,6 +1581,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
         txn_scheduler: TxnScheduler<E, L>,
         cid: u64,
         tag: CommandKind,
+        tracker_token: TrackerToken,
         pipelined: bool,
         txn_ext: Option<Arc<TxnExt>>,
         sched_details: &mut SchedulerDetails,
@@ -1631,6 +1643,12 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 }
             _ => vec![],
         };
+        debug_with_req_info_tracker!(
+            "to be removed pessimistic_locks",
+            [tracker_token],
+            "removed_locks" => ?&removed_pessimistic_locks,
+            "cid" => ?cid
+        );
         // Keep the read lock guard of the pessimistic lock table until the request is
         // sent to the raftstore.
         //
@@ -1814,6 +1832,11 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             Ok(res) => res,
         };
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
+        debug_with_req_info_tracker!("process_write task handle result",
+            [tracker_token],
+            "cid" => ?cid,
+            "process_result" => ?&write_result.pr
+        );
 
         // Continue to process if there is data to be persisted in the `WriteResult`, or
         // return.
@@ -1844,6 +1867,7 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             self.clone(),
             cid,
             tag,
+            tracker_token,
             pipelined,
             txn_ext,
             sched_details,

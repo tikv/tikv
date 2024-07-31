@@ -37,12 +37,13 @@ use resource_control::{
 use tikv_util::{
     box_err,
     config::{ReadableSize, Tracker, VersionTrack},
-    debug, info, slow_log,
+    debug, debug_with_req_info_tracker, info, slow_log,
     sys::thread::StdThreadBuildWrapper,
     thd_name,
     time::{duration_to_sec, setup_for_spin_interval, spin_at_least, Duration, Instant},
     warn,
 };
+use tracker::GLOBAL_TRACKERS;
 
 use super::write_router::{SharedSenders, WriteSenders};
 use crate::{
@@ -925,6 +926,7 @@ where
             self.perf_context.report_metrics(&trackers);
             write_raft_time = duration_to_sec(now.saturating_elapsed());
             STORE_WRITE_RAFTDB_DURATION_HISTOGRAM.observe(write_raft_time);
+            debug_with_req_info_tracker!("raft log is persisted", trackers);
         }
 
         fail_point!("raft_after_save");
