@@ -63,6 +63,26 @@ where
     }
 }
 
+impl<EK, EC> HybridEngine<EK, EC>
+where
+    EK: KvEngine,
+    EC: RangeCacheEngine,
+    HybridEngine<EK, EC>: WriteBatchExt,
+{
+    fn sync_write<F>(&self, key: &[u8], f: F) -> Result<()>
+    where
+        F: FnOnce(&mut <Self as WriteBatchExt>::WriteBatch) -> Result<()>,
+    {
+        let mut batch = self.write_batch();
+        if let Some(region) = self.range_cache_engine.get_region_for_key(key) {
+            batch.prepare_for_region(&region);
+        }
+        f(&mut batch)?;
+        let _ = batch.write()?;
+        Ok(())
+    }
+}
+
 // todo: implement KvEngine methods as well as it's super traits.
 impl<EK, EC> KvEngine for HybridEngine<EK, EC>
 where
@@ -78,6 +98,8 @@ where
             None
         } else if let Some(ctx) = ctx {
             match self.range_cache_engine.snapshot(
+                ctx.region_id,
+                ctx.epoch_version,
                 ctx.range.unwrap(),
                 ctx.read_ts,
                 disk_snap.sequence_number(),
@@ -155,63 +177,27 @@ where
     HybridEngine<EK, EC>: WriteBatchExt,
 {
     fn put(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        let mut batch = self.write_batch();
-        if let Some(range) = self.range_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(range);
-        }
-        batch.put(key, value)?;
-        let _ = batch.write()?;
-        Ok(())
+        self.sync_write(key, |b| b.put(key, value))
     }
 
     fn put_cf(&self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
-        let mut batch = self.write_batch();
-        if let Some(range) = self.range_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(range);
-        }
-        batch.put_cf(cf, key, value)?;
-        let _ = batch.write()?;
-        Ok(())
+        self.sync_write(key, |b| b.put_cf(cf, key, value))
     }
 
     fn delete(&self, key: &[u8]) -> Result<()> {
-        let mut batch = self.write_batch();
-        if let Some(range) = self.range_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(range);
-        }
-        batch.delete(key)?;
-        let _ = batch.write()?;
-        Ok(())
+        self.sync_write(key, |b| b.delete(key))
     }
 
     fn delete_cf(&self, cf: &str, key: &[u8]) -> Result<()> {
-        let mut batch = self.write_batch();
-        if let Some(range) = self.range_cache_engine.get_range_for_key(key) {
-            batch.prepare_for_range(range);
-        }
-        batch.delete_cf(cf, key)?;
-        let _ = batch.write()?;
-        Ok(())
+        self.sync_write(key, |b| b.delete_cf(cf, key))
     }
 
     fn delete_range(&self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        let mut batch = self.write_batch();
-        if let Some(range) = self.range_cache_engine.get_range_for_key(begin_key) {
-            batch.prepare_for_range(range);
-        }
-        batch.delete_range(begin_key, end_key)?;
-        let _ = batch.write()?;
-        Ok(())
+        self.sync_write(begin_key, |b| b.delete_range(begin_key, end_key))
     }
 
     fn delete_range_cf(&self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        let mut batch = self.write_batch();
-        if let Some(range) = self.range_cache_engine.get_range_for_key(begin_key) {
-            batch.prepare_for_range(range);
-        }
-        batch.delete_range_cf(cf, begin_key, end_key)?;
-        let _ = batch.write()?;
-        Ok(())
+        self.sync_write(begin_key, |b| b.delete_range_cf(cf, begin_key, end_key))
     }
 }
 

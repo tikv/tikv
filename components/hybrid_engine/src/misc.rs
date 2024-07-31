@@ -1,6 +1,8 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{CacheRange, KvEngine, MiscExt, RangeCacheEngine, Result, WriteBatchExt};
+use engine_traits::{
+    CacheRange, KvEngine, MiscExt, RangeCacheEngine, RegionEvent, Result, WriteBatchExt,
+};
 
 use crate::{engine::HybridEngine, hybrid_metrics::HybridEngineStatisticsReporter};
 
@@ -37,7 +39,9 @@ where
     ) -> Result<bool> {
         for r in ranges {
             self.range_cache_engine()
-                .evict_range(&CacheRange::new(r.start_key.to_vec(), r.end_key.to_vec()));
+                .on_region_event(RegionEvent::EvictByRange {
+                    range: CacheRange::new(r.start_key.to_vec(), r.end_key.to_vec()),
+                });
         }
         self.disk_engine()
             .delete_ranges_cf(wopts, cf, strategy, ranges)
@@ -175,13 +179,13 @@ mod tests {
         )
         .unwrap();
         let mut write_batch = hybrid_engine.write_batch();
-        write_batch.prepare_for_range(range1.clone());
+        write_batch.prepare_for_region(range1.clone());
         write_batch.put(b"k02", b"val").unwrap();
         write_batch.put(b"k03", b"val").unwrap();
-        write_batch.prepare_for_range(range2.clone());
+        write_batch.prepare_for_region(range2.clone());
         write_batch.put(b"k22", b"val").unwrap();
         write_batch.put(b"k23", b"val").unwrap();
-        write_batch.prepare_for_range(range3.clone());
+        write_batch.prepare_for_region(range3.clone());
         write_batch.put(b"k42", b"val").unwrap();
         write_batch.put(b"k42", b"val").unwrap();
         write_batch.write().unwrap();

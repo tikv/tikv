@@ -167,7 +167,7 @@ fn test_clean_up_tombstone() {
 
     engine.new_range(range.clone());
     let mut wb = engine.write_batch();
-    wb.prepare_for_range(range.clone());
+    wb.prepare_for_region(range.clone());
     wb.put_cf("lock", b"k", b"val").unwrap();
     wb.put_cf("lock", b"k1", b"val").unwrap();
     wb.put_cf("lock", b"k2", b"val").unwrap();
@@ -179,7 +179,7 @@ fn test_clean_up_tombstone() {
     wb.write().unwrap();
 
     let mut wb = engine.write_batch();
-    wb.prepare_for_range(range.clone());
+    wb.prepare_for_region(range.clone());
     wb.put_cf("lock", b"k", b"val").unwrap(); // seq 120
     wb.put_cf("lock", b"k1", b"val").unwrap(); // seq 121
     wb.put_cf("lock", b"k2", b"val").unwrap(); // seq 122
@@ -269,9 +269,9 @@ fn test_evict_with_loading_range() {
 
     let mut wb = engine.write_batch();
     // prepare range to trigger loading
-    wb.prepare_for_range(range1.clone());
-    wb.prepare_for_range(range2.clone());
-    wb.prepare_for_range(range3.clone());
+    wb.prepare_for_region(range1.clone());
+    wb.prepare_for_region(range2.clone());
+    wb.prepare_for_region(range3.clone());
     wb.set_sequence_number(10).unwrap();
     wb.write().unwrap();
 
@@ -322,12 +322,12 @@ fn test_cached_write_batch_cleared_when_load_failed() {
 
     let mut wb = engine.write_batch();
     // range1 starts to load
-    wb.prepare_for_range(range1.clone());
+    wb.prepare_for_region(range1.clone());
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     wb.put(b"k05", b"val").unwrap();
     wb.put(b"k06", b"val").unwrap();
-    wb.prepare_for_range(range2.clone());
+    wb.prepare_for_region(range2.clone());
     wb.put(b"k25", b"val").unwrap();
     wb.set_sequence_number(100).unwrap();
     wb.write().unwrap();
@@ -402,20 +402,20 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     let range3_clone = range3.clone();
     let handle = std::thread::spawn(move || {
         let mut wb = engine_clone.write_batch();
-        wb.prepare_for_range(range1_clone);
+        wb.prepare_for_region(range1_clone);
         wb.put_cf(CF_LOCK, b"k02", b"val").unwrap();
         wb.put_cf(CF_LOCK, b"k03", b"val").unwrap();
         wb.put_cf(CF_LOCK, b"k04", b"val").unwrap();
         wb.set_sequence_number(100).unwrap();
 
         let mut wb2 = engine_clone.write_batch();
-        wb2.prepare_for_range(range2_clone);
+        wb2.prepare_for_region(range2_clone);
         wb.put_cf(CF_LOCK, b"k22", b"val").unwrap();
         wb.put_cf(CF_LOCK, b"k23", b"val").unwrap();
         wb2.set_sequence_number(200).unwrap();
 
         let mut wb3 = engine_clone.write_batch();
-        wb3.prepare_for_range(range3_clone);
+        wb3.prepare_for_region(range3_clone);
         wb3.set_sequence_number(300).unwrap();
 
         range_prepared_tx.send(true).unwrap();
@@ -539,7 +539,7 @@ fn test_double_delete_range_schedule() {
 
     let mut wb = engine.write_batch();
     // prepare range to trigger loading
-    wb.prepare_for_range(range3.clone());
+    wb.prepare_for_region(range3.clone());
     wb.set_sequence_number(10).unwrap();
     wb.write().unwrap();
 

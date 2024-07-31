@@ -1,7 +1,7 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, VecDeque},
     result,
     sync::Arc,
 };
@@ -9,6 +9,7 @@ use std::{
 use collections::HashMap;
 use engine_rocks::RocksSnapshot;
 use engine_traits::{CacheRange, FailedReason};
+use kvproto::metapb::Region;
 use tikv_util::{info, time::Instant};
 
 use crate::{metrics::RANGE_EVICTION_DURATION_HISTOGRAM, read::RangeCacheSnapshotMeta};
@@ -49,17 +50,24 @@ pub struct RangeMeta {
     // start_key and end_key cannot uniquely identify a range as range can split and merge, so we
     // need a range id.
     id: u64,
+    region: Region,
     range_snapshot_list: SnapshotList,
     safe_point: u64,
 }
 
 impl RangeMeta {
-    fn new(id: u64) -> Self {
+    fn new(id: u64, region: Region) -> Self {
         Self {
             id,
+            region,
             range_snapshot_list: SnapshotList::default(),
             safe_point: 0,
         }
+    }
+
+    #[inline]
+    pub(crate) fn region(&self) -> &Region {
+        &self.region
     }
 
     pub(crate) fn safe_point(&self) -> u64 {
@@ -74,6 +82,7 @@ impl RangeMeta {
     fn derive_from(id: u64, r: &RangeMeta) -> Self {
         Self {
             id,
+            region: r.region.clone(),
             range_snapshot_list: SnapshotList::default(),
             safe_point: r.safe_point,
         }
@@ -110,15 +119,16 @@ impl IdAllocator {
 pub struct RangeManager {
     // Each new range will increment it by one.
     id_allocator: IdAllocator,
-    // Range before an eviction. It is recorded due to some undropped snapshot, which block the
+    // Region before an eviction. It is recorded due to some undropped snapshot, which block the
     // evicted range deleting the relevant data.
-    historical_ranges: BTreeMap<CacheRange, RangeMeta>,
+    historical_regions: BTreeMap<CacheRange, RangeMeta>,
     // `ranges_being_deleted` contains ranges that are evicted but not finished the delete (or even
     // not start to delete due to ongoing snapshot)
     // `bool` means whether the range has been scheduled to the delete range worker
-    pub(crate) ranges_being_deleted: BTreeMap<CacheRange, (bool, Instant)>,
+    pub(crate) regions_being_deleted: BTreeMap<CacheRange, (Region, bool, Instant)>,
     // ranges that are cached now
-    ranges: BTreeMap<CacheRange, RangeMeta>,
+    regions_by_range: BTreeMap<CacheRange, u64>,
+    regions: HashMap<u64, RangeMeta>,
 
     // `pending_ranges` contains ranges that will be loaded into the memory engine. To guarantee
     // the completeness of the data, we also need to write the data that is applied after the
@@ -141,11 +151,11 @@ pub struct RangeManager {
     // to schedule it. We should cache writes for all child regions, and the load task
     // completes as long as the snapshot has been loaded and the cached write batches for this
     // super range have all been consumed.
-    pub(crate) pending_ranges: Vec<CacheRange>,
+    pub(crate) pending_regions: Vec<Region>,
     // The bool indicates the loading is canceled due to memory capcity issue
-    pub(crate) pending_ranges_loading_data: VecDeque<(CacheRange, Arc<RocksSnapshot>, bool)>,
+    pub(crate) pending_regions_loading_data: VecDeque<(Region, Arc<RocksSnapshot>, bool)>,
 
-    ranges_in_gc: BTreeSet<CacheRange>,
+    regions_in_gc: BTreeMap<CacheRange, u64>,
     // Record the ranges that are being written.
     //
     // It is used to avoid the conccurency issue between delete range and write to memory: after
@@ -158,30 +168,33 @@ pub struct RangeManager {
     // The key in this map is the id of the write batch, and the value is a collection
     // the ranges of this batch. So, when the write batch is consumed by the in-memory engine,
     // all ranges of it are cleared from `ranges_being_written`.
-    ranges_being_written: HashMap<u64, Vec<CacheRange>>,
+    regions_being_written: HashMap<u64, Vec<(u64, CacheRange)>>,
 }
 
 impl RangeManager {
-    pub(crate) fn ranges(&self) -> &BTreeMap<CacheRange, RangeMeta> {
-        &self.ranges
+    pub(crate) fn regions(&self) -> &HashMap<u64, RangeMeta> {
+        &self.regions
     }
 
-    pub(crate) fn historical_ranges(&self) -> &BTreeMap<CacheRange, RangeMeta> {
-        &self.historical_ranges
+    pub(crate) fn historical_regions(&self) -> &BTreeMap<CacheRange, RangeMeta> {
+        &self.historical_regions
     }
 
-    pub fn new_range(&mut self, range: CacheRange) {
-        assert!(!self.overlap_with_range(&range));
-        let range_meta = RangeMeta::new(self.id_allocator.allocate_id());
-        self.ranges.insert(range, range_meta);
+    pub fn new_region(&mut self, region: Region) {
+        assert!(!self.overlap_with_region(&region));
+        let id = region.id;
+        let region_range = CacheRange::new(region.start_key.clone(), region.end_key.clone());
+        let range_meta = RangeMeta::new(self.id_allocator.allocate_id(), region);
+        self.regions.insert(id, range_meta);
+        self.regions_by_range.insert(region_range, id);
     }
 
-    pub fn mut_range_meta(&mut self, range: &CacheRange) -> Option<&mut RangeMeta> {
-        self.ranges.get_mut(range)
+    pub fn mut_region_meta(&mut self, id: u64) -> Option<&mut RangeMeta> {
+        self.regions.get_mut(&id)
     }
 
-    pub fn set_safe_point(&mut self, range: &CacheRange, safe_ts: u64) -> bool {
-        if let Some(meta) = self.ranges.get_mut(range) {
+    pub fn set_safe_point(&mut self, region_id: u64, safe_ts: u64) -> bool {
+        if let Some(meta) = self.regions.get_mut(&region_id) {
             if meta.safe_point > safe_ts {
                 return false;
             }
@@ -192,68 +205,48 @@ impl RangeManager {
         }
     }
 
-    pub fn contains(&self, key: &[u8]) -> bool {
-        self.ranges.keys().any(|r| r.contains_key(key))
-    }
-
-    pub fn get_range_for_key(&self, key: &[u8]) -> Option<CacheRange> {
-        self.ranges.keys().find_map(|r| {
-            if r.contains_key(key) {
-                Some(r.clone())
+    pub fn get_region_for_key(&self, key: &[u8]) -> Option<Region> {
+        let id = self.regions_by_range.iter().find_map(|r| {
+            if r.0.contains_key(key) {
+                Some(*r.1)
             } else {
                 None
             }
-        })
+        });
+        id.and_then(|id| self.regions.get(&id).map(|m| m.region.clone()))
     }
 
-    pub fn contains_range(&self, range: &CacheRange) -> bool {
-        self.ranges.keys().any(|r| r.contains_range(range))
+    pub fn contains_region(&self, region_id: u64) -> bool {
+        self.regions.contains_key(&region_id)
     }
 
-    pub fn pending_ranges_in_loading_contains(&self, range: &CacheRange) -> bool {
-        self.pending_ranges_loading_data
+    pub fn pending_regions_in_loading_contains(&self, region_id: u64) -> bool {
+        self.pending_regions_loading_data
             .iter()
-            .any(|(r, ..)| r.contains_range(range))
+            .any(|r| r.0.id == region_id)
+        // self.pending_ranges_loading_data
+        //     .iter()
+        //     .any(|(r, ..)| r.contains_range(range))
     }
 
-    fn overlap_with_range(&self, range: &CacheRange) -> bool {
-        self.ranges.keys().any(|r| r.overlaps(range))
-    }
-
-    fn overlap_with_evicting_range(&self, range: &CacheRange) -> bool {
-        self.ranges_being_deleted
-            .iter()
-            .any(|(r, _)| r.overlaps(range))
-    }
-
-    fn overlap_with_range_in_gc(&self, range: &CacheRange) -> bool {
-        self.ranges_in_gc.iter().any(|r| r.overlaps(range))
-    }
-
-    fn overlap_with_pending_range(&self, range: &CacheRange) -> bool {
-        self.pending_ranges.iter().any(|r| r.overlaps(range))
-            || self
-                .pending_ranges_loading_data
-                .iter()
-                .any(|(r, ..)| r.overlaps(range))
+    fn overlap_with_region(&self, region: &Region) -> bool {
+        self.regions_by_range
+            .keys()
+            .any(|r| r.overlaps_with_region(region))
     }
 
     // Acquire a snapshot of the `range` with `read_ts`. If the range is not
     // accessable, None will be returned. Otherwise, the range id will be returned.
-    pub(crate) fn range_snapshot(
+    pub(crate) fn region_snapshot(
         &mut self,
-        range: &CacheRange,
+        region_id: u64,
+        region_epoch: u64,
         read_ts: u64,
     ) -> result::Result<u64, FailedReason> {
-        let Some(range_key) = self
-            .ranges
-            .keys()
-            .find(|&r| r.contains_range(range))
-            .cloned()
-        else {
+        let Some(meta) = self.regions.get_mut(&region_id) else {
             return Err(FailedReason::NotCached);
         };
-        let meta = self.ranges.get_mut(&range_key).unwrap();
+        assert_eq!(meta.region.get_region_epoch().version, region_epoch);
 
         if read_ts <= meta.safe_point {
             return Err(FailedReason::TooOldRead);
@@ -267,51 +260,35 @@ impl RangeManager {
     // historical_ranges, it means one or some evicted_ranges may be ready to be
     // removed physically.
     // So, we return a vector of ranges to denote the ranges that are ready to be
-    // removed.
-    pub(crate) fn remove_range_snapshot(
+    // removed.range_key
+    pub(crate) fn remove_region_snapshot(
         &mut self,
         snapshot_meta: &RangeCacheSnapshotMeta,
-    ) -> Vec<CacheRange> {
-        if let Some(range_key) = self
-            .historical_ranges
-            .iter()
-            .find(|&(range, meta)| {
-                range.contains_range(&snapshot_meta.range) && meta.id == snapshot_meta.range_id
-            })
-            .map(|(r, _)| r.clone())
-        {
-            let meta = self.historical_ranges.get_mut(&range_key).unwrap();
+    ) -> Vec<Region> {
+        if let Some(meta) = self.historical_regions.get_mut(&snapshot_meta.range) {
             meta.range_snapshot_list
                 .remove_snapshot(snapshot_meta.snapshot_ts);
             if meta.range_snapshot_list.is_empty() {
-                self.historical_ranges.remove(&range_key);
+                self.historical_regions.remove(&snapshot_meta.range);
             }
 
-            return self
-                .ranges_being_deleted
-                .keys()
-                .filter(|evicted_range| {
-                    !self
-                        .historical_ranges
-                        .keys()
-                        .any(|r| r.overlaps(evicted_range))
-                })
-                .cloned()
-                .collect::<Vec<_>>();
+            let mut deletable_regions = vec![];
+            for (range, (region, scheduled, _)) in &mut self.regions_being_deleted {
+                if !self.historical_regions.keys().any(|r| r.overlaps(range)) {
+                    *scheduled = true;
+                    deletable_regions.push(region.clone());
+                }
+            }
+            return deletable_regions;
         }
 
-        // It must belong to the `self.ranges` if not found in `self.historical_ranges`
-        let range_key = self
-            .ranges
-            .iter()
-            .find(|&(range, meta)| {
-                range.contains_range(&snapshot_meta.range) && meta.id == snapshot_meta.range_id
-            })
-            .map(|(r, _)| r.clone())
-            .unwrap();
-        let meta = self.ranges.get_mut(&range_key).unwrap();
-        meta.range_snapshot_list
+        // It must belong to the `self.regions` if not found in
+        // `self.historical_regions`
+        let region_meta = self.regions.get_mut(&snapshot_meta.region_id).unwrap();
+        region_meta
+            .range_snapshot_list
             .remove_snapshot(snapshot_meta.snapshot_ts);
+
         vec![]
     }
 
@@ -329,98 +306,56 @@ impl RangeManager {
     //
     // For 2, this is caused by some special operations such as merge and delete
     // range. So, conservatively, we evict all ranges overlap with it.
-    pub(crate) fn evict_range(&mut self, evict_range: &CacheRange) -> Vec<CacheRange> {
+    pub(crate) fn evict_region(&mut self, evict_region: &Region) -> bool {
         info!(
-            "try to evict range";
-            "evict_range" => ?evict_range,
+            "try to evict region";
+            "evict_region" => ?evict_region,
         );
 
         // cancel loading ranges overlapped with `evict_range`
-        self.pending_ranges_loading_data
+        self.pending_regions_loading_data
             .iter_mut()
             .for_each(|(r, _, canceled)| {
-                if evict_range.overlaps(r) {
-                    info!(
-                        "evict range that overlaps with loading range";
-                        "evicted_range" => ?evict_range,
-                        "overlapped_range" => ?r,
-                    );
+                if evict_region.id == r.id {
+                    // TODO: handle epoch changes.
+                    info!("evict overlapped region with stale epoch"; "evicted_region" => ?evict_region, "overlapped_region" => ?r,);
                     *canceled = true;
                 }
             });
 
-        let mut overlapped_ranges = vec![];
-        for r in self.ranges.keys() {
-            if r.contains_range(evict_range) {
-                if self.evict_within_range(evict_range, &r.clone()) {
-                    return vec![evict_range.clone()];
-                } else {
-                    return vec![];
-                }
-            } else if r.overlaps(evict_range) {
-                overlapped_ranges.push(r.clone());
+        let should_evict = self.regions.contains_key(&evict_region.id);
+        if !should_evict {
+            info!(
+                "evict a region that is not cached";
+                "range" => ?evict_region,
+            );
+        } else {
+            let meta = self.regions.remove(&evict_region.id).unwrap();
+            info!(
+                "evict region in cache range engine";
+                "evict_region" => ?meta.region,
+            );
+            let range =
+                CacheRange::new(evict_region.start_key.clone(), evict_region.end_key.clone());
+            self.regions_being_deleted
+                .insert(range, (meta.region.clone(), false, Instant::now()));
+            if !meta.range_snapshot_list.is_empty() {
+                let range =
+                    CacheRange::new(meta.region.start_key.clone(), meta.region.end_key.clone());
+                self.historical_regions.insert(range, meta);
             }
         }
 
-        if overlapped_ranges.is_empty() {
-            info!(
-                "evict a range that is not cached";
-                "range" => ?evict_range,
-            );
-            return vec![];
-        }
-
-        overlapped_ranges
-            .into_iter()
-            .filter(|r| self.evict_within_range(r, r))
-            .collect()
+        should_evict
     }
 
-    // Return true means there is no ongoing snapshot, the evicted_range can be
-    // deleted now.
-    fn evict_within_range(&mut self, evict_range: &CacheRange, cached_range: &CacheRange) -> bool {
-        assert!(cached_range.contains_range(evict_range));
-        info!(
-            "evict range in cache range engine";
-            "evict_range" => ?evict_range,
-            "cached_range" => ?cached_range,
-        );
-        let meta = self.ranges.remove(cached_range).unwrap();
-        let (left_range, right_range) = cached_range.split_off(evict_range);
-        assert!((left_range.is_some() || right_range.is_some()) || evict_range == cached_range);
-
-        if let Some(left_range) = left_range {
-            let left_meta = RangeMeta::derive_from(self.id_allocator.allocate_id(), &meta);
-            self.ranges.insert(left_range, left_meta);
-        }
-
-        if let Some(right_range) = right_range {
-            let right_meta = RangeMeta::derive_from(self.id_allocator.allocate_id(), &meta);
-            self.ranges.insert(right_range, right_meta);
-        }
-
-        self.ranges_being_deleted
-            .insert(evict_range.clone(), (false, Instant::now()));
-
-        if !meta.range_snapshot_list.is_empty() {
-            self.historical_ranges.insert(cached_range.clone(), meta);
-            return false;
-        }
-
-        // we also need to check with previous historical_ranges
-        !self
-            .historical_ranges
-            .keys()
-            .any(|r| r.overlaps(evict_range))
-    }
-
-    pub fn has_ranges_in_gc(&self) -> bool {
-        !self.ranges_in_gc.is_empty()
+    pub fn has_regions_in_gc(&self) -> bool {
+        !self.regions_in_gc.is_empty()
     }
 
     pub fn on_delete_ranges(&mut self, ranges: &[CacheRange]) {
         for r in ranges {
-            let (_, t) = self.ranges_being_deleted.remove(r).unwrap();
+            let (_, _, t) = self.regions_being_deleted.remove(r).unwrap();
             RANGE_EVICTION_DURATION_HISTOGRAM.observe(t.saturating_elapsed_secs());
             info!(
                 "range eviction done";
@@ -429,70 +364,141 @@ impl RangeManager {
         }
     }
 
-    pub fn set_ranges_in_gc(&mut self, ranges_in_gc: BTreeSet<CacheRange>) {
-        self.ranges_in_gc = ranges_in_gc;
+    pub fn set_regions_in_gc(&mut self, regions_in_gc: BTreeMap<CacheRange, u64>) {
+        self.regions_in_gc = regions_in_gc;
     }
 
-    pub(crate) fn is_overlapped_with_ranges_being_written(&self, range: &CacheRange) -> bool {
-        self.ranges_being_written.iter().any(|(_, ranges)| {
+    pub(crate) fn is_overlapped_with_regions_being_written(&self, r: &Region) -> bool {
+        self.regions_being_written.iter().any(|(_, ranges)| {
             ranges
                 .iter()
-                .any(|range_being_written| range_being_written.overlaps(range))
+                .any(|range_being_written| range_being_written.1.overlaps_with_region(r))
         })
     }
 
-    pub(crate) fn record_in_ranges_being_written(
+    pub(crate) fn record_in_region_being_written(
         &mut self,
         write_batch_id: u64,
-        range: &CacheRange,
+        range: CacheRange,
+        region_id: u64,
     ) {
-        self.ranges_being_written
+        self.regions_being_written
             .entry(write_batch_id)
             .or_default()
-            .push(range.clone())
+            .push((region_id, range))
     }
 
-    pub(crate) fn clear_ranges_in_being_written(
+    pub(crate) fn clear_regions_in_being_written(
         &mut self,
         write_batch_id: u64,
         has_entry_applied: bool,
     ) {
-        let ranges = self.ranges_being_written.remove(&write_batch_id);
+        let regions = self.regions_being_written.remove(&write_batch_id);
         if has_entry_applied {
-            assert!(!ranges.unwrap().is_empty());
+            assert!(!regions.unwrap().is_empty());
         }
     }
 
-    pub fn on_gc_finished(&mut self, range: BTreeSet<CacheRange>) {
-        assert_eq!(range, std::mem::take(&mut self.ranges_in_gc));
+    pub fn on_gc_finished(&mut self, range: BTreeMap<CacheRange, u64>) {
+        assert_eq!(range, std::mem::take(&mut self.regions_in_gc));
     }
 
-    pub fn load_range(&mut self, cache_range: CacheRange) -> Result<(), LoadFailedReason> {
-        if self.overlap_with_range(&cache_range) {
+    pub fn add_pinned_range(&mut self, _cache_range: CacheRange) {
+        // TODO: handle pinned range later
+    }
+
+    pub fn load_region(&mut self, region: Region) -> Result<(), LoadFailedReason> {
+        if self.overlap_with_region(&region) {
             return Err(LoadFailedReason::Overlapped);
-        };
-        if self.overlap_with_pending_range(&cache_range) {
+        }
+        if self
+            .pending_regions
+            .iter()
+            .any(|r| is_region_overlap(r, &region))
+            || self
+                .pending_regions_loading_data
+                .iter()
+                .any(|(r, ..)| is_region_overlap(r, &region))
+        {
             return Err(LoadFailedReason::PendingRange);
         }
-        if self.overlap_with_range_in_gc(&cache_range) {
+        if self
+            .regions_in_gc
+            .keys()
+            .any(|r| r.overlaps_with_region(&region))
+        {
             return Err(LoadFailedReason::InGc);
         }
-        if self.overlap_with_evicting_range(&cache_range) {
+        if self
+            .regions_being_deleted
+            .values()
+            .any(|r| is_region_overlap(&r.0, &region))
+        {
             return Err(LoadFailedReason::Evicting);
         }
-        self.pending_ranges.push(cache_range);
+        self.pending_regions.push(region);
         Ok(())
     }
 
     // Only ranges that have not been scheduled will be retained in `ranges`
-    pub fn mark_delete_ranges_scheduled(&mut self, ranges: &mut Vec<CacheRange>) {
-        ranges.retain(|r| {
-            let (ref mut scheduled, _) = self.ranges_being_deleted.get_mut(r).unwrap();
-            let has_scheduled = *scheduled;
-            *scheduled = true;
-            !has_scheduled
+    pub fn mark_delete_regions_scheduled(&mut self, regions: &mut Vec<Region>) {
+        regions.retain(|r| {
+            let range = CacheRange::new(r.start_key.clone(), r.end_key.clone());
+            let (_, scheduled, _) = self.regions_being_deleted.get_mut(&range).unwrap();
+            !std::mem::replace(scheduled, true)
         });
     }
+
+    // return `true` is the region is evicted.
+    pub(crate) fn split_region(
+        &mut self,
+        source_region: &Region,
+        new_regions: Vec<kvproto::metapb::Region>,
+    ) -> bool {
+        if !self.regions.contains_key(&source_region.id) {
+            info!("split source region not cached"; "region_id" => source_region.id);
+            return false;
+        }
+
+        if let Some(source_meta) = self.regions.remove(&source_region.id) {
+            assert_eq!(
+                source_meta.region.get_region_epoch().version,
+                source_region.get_region_epoch().version
+            );
+            let region_range = CacheRange::new(
+                source_meta.region.start_key.clone(),
+                source_meta.region.end_key.clone(),
+            );
+            assert!(self.regions_by_range.remove(&region_range).is_some());
+            for region in new_regions {
+                let id = self.id_allocator.allocate_id();
+                let region_id = region.id;
+                let range = CacheRange::new(region.start_key.clone(), region.end_key.clone());
+                let mut meta = RangeMeta::new(id, region);
+                meta.set_safe_point(source_meta.safe_point());
+                self.regions_by_range.insert(range, region_id);
+                self.regions.insert(region_id, meta);
+            }
+            self.historical_regions.insert(region_range, source_meta);
+            // TODO: handle regions_in_gc
+            return false;
+        }
+
+        // TODO: to make the temp change easier, we just evict corresponding region if
+        // it is not in the active state.
+        self.pending_regions.retain(|r| r.id == source_region.id);
+        for (r, _, canceled) in &mut self.pending_regions_loading_data {
+            if r.id == source_region.id {
+                *canceled = true;
+                return true;
+            }
+        }
+        false
+    }
+}
+
+pub fn is_region_overlap(rg1: &Region, rg2: &Region) -> bool {
+    rg1.start_key < rg2.end_key && rg1.end_key > rg2.start_key
 }
 
 #[derive(Debug, PartialEq)]

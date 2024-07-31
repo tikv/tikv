@@ -11,7 +11,6 @@ use std::{
 };
 
 use crossbeam::sync::ShardedLock;
-use engine_traits::CacheRange;
 use kvproto::metapb::Region;
 use parking_lot::Mutex;
 use raftstore::coprocessor::RegionInfoProvider;
@@ -57,13 +56,9 @@ impl RangeStatsManager {
     }
 
     /// Prevents two instances of this from running concurrently.
-    pub fn set_checking_top_regions(&self, v: bool) {
-        self.checking_top_regions.store(v, Ordering::Relaxed);
-    }
-
-    /// Returns true if another thread is checking top regions.
-    pub fn checking_top_regions(&self) -> bool {
-        self.checking_top_regions.load(Ordering::Relaxed)
+    /// Return `bool`
+    pub fn set_checking_top_regions(&self, v: bool) -> bool {
+        self.checking_top_regions.swap(v, Ordering::Relaxed)
     }
 
     fn set_max_num_regions(&self, v: usize) {
@@ -89,20 +84,19 @@ impl RangeStatsManager {
     /// 4. Store the results in `ranges_out` using [Vec::extend].
     pub fn collect_candidates_for_eviction<F>(
         &self,
-        ranges_out: &mut Vec<(CacheRange, u64)>,
+        regions_out: &mut Vec<(Region, u64)>,
         is_cached_pred: F,
     ) where
-        F: Fn(&CacheRange) -> bool,
+        F: Fn(&Region) -> bool,
     {
         // Gets all of the regions, sorted by activity.
         let all_regions = self.info_provider.get_top_regions(None).unwrap();
         let regions_loaded = self.region_loaded_at.read().unwrap();
-        ranges_out.extend(
+        regions_out.extend(
             all_regions
                 .iter()
                 .filter_map(|(region, approx_size)| {
-                    let r = CacheRange::from_region(region);
-                    is_cached_pred(&r)
+                    is_cached_pred(&region)
                         .then(|| {
                             match regions_loaded.get(&region.get_id()) {
                                 // Do not evict ranges that were loaded less than
@@ -115,7 +109,7 @@ impl RangeStatsManager {
                                 Some(_) | None =>
                                 // None indicates range loaded from a hint, not by this manager.
                                 {
-                                    Some((r, *approx_size))
+                                    Some((region.clone(), *approx_size))
                                 }
                             }
                         })
@@ -134,19 +128,9 @@ impl RangeStatsManager {
     ///
     /// TODO (afeinberg): This is inefficient, either make this method bulk, or
     /// find another way to avoid calling `find_region_by_key` in a loop.
-    pub fn handle_range_evicted(&self, evicted_range: &CacheRange) {
-        // TODO (afeinberg): This is inefficient.
-        let _ = self
-            .info_provider
-            .find_region_by_key(&evicted_range.start)
-            .map(|region| {
-                let id = region.get_id();
-                let _ = self.prev_top_regions.lock().remove(&id);
-                let _ = {
-                    let mut regions_loaded = self.region_loaded_at.write().unwrap();
-                    regions_loaded.remove(&id)
-                };
-            });
+    pub fn handle_region_evicted(&self, region: &Region) {
+        self.prev_top_regions.lock().remove(&region.id);
+        self.region_loaded_at.write().unwrap().remove(&region.id);
     }
 
     /// Attempt to adjust the maximum number of cached regions based on memory
@@ -212,8 +196,8 @@ impl RangeStatsManager {
     ///     current ones are stored in `ranges_removed_out`.
     pub fn collect_changed_ranges(
         &self,
-        ranges_added_out: &mut Vec<CacheRange>,
-        ranges_removed_out: &mut Vec<CacheRange>,
+        regions_added_out: &mut Vec<Region>,
+        regions_removed_out: &mut Vec<Region>,
     ) {
         info!("collect_changed_ranges"; "num_regions" => self.max_num_regions());
         let curr_top_regions = self
@@ -236,13 +220,13 @@ impl RangeStatsManager {
             ret
         };
         if prev_top_regions.is_empty() {
-            ranges_added_out.extend(curr_top_regions.values().map(CacheRange::from_region));
+            regions_added_out.extend(curr_top_regions.values().map(|r| r.clone()));
             return;
         }
         let added_ranges = curr_top_regions
             .iter()
             .filter(|(id, _)| !prev_top_regions.contains_key(id))
-            .map(|(_, region)| CacheRange::from_region(region));
+            .map(|(_, region)| region.clone());
         let regions_loaded = self.region_loaded_at.read().unwrap();
         let removed_ranges = prev_top_regions.iter().filter_map(|(&id, region)| {
             if !curr_top_regions.contains_key(&id) {
@@ -255,19 +239,20 @@ impl RangeStatsManager {
                         let _ = mut_prev_top_regions.insert(id, region.clone());
                         None
                     }
-                    _ => Some(CacheRange::from_region(region)),
+                    _ => Some(region.clone()),
                 }
             } else {
                 None
             }
         });
-        ranges_added_out.extend(added_ranges);
-        ranges_removed_out.extend(removed_ranges);
+        regions_added_out.extend(added_ranges);
+        regions_removed_out.extend(removed_ranges);
     }
 }
 
 #[cfg(test)]
 pub mod tests {
+    use engine_traits::CacheRange;
     use kvproto::metapb::Peer;
     use raftstore::coprocessor::{self, region_info_accessor::TopRegions, RegionInfoProvider};
     use tikv_util::box_err;

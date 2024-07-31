@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use engine_traits::{CacheRange, KvEngine, RangeCacheEngineExt};
+use engine_traits::{CacheRange, KvEngine, RangeCacheEngineExt, RegionEvent};
 use kvproto::{metapb::Region, raft_cmdpb::AdminCmdType, raft_serverpb::RaftApplyState};
 use raft::StateRole;
 use raftstore::coprocessor::{
@@ -13,14 +13,15 @@ use raftstore::coprocessor::{
 
 #[derive(Clone)]
 pub struct Observer {
-    pending_evict: Arc<Mutex<Vec<CacheRange>>>,
+    // TODO: remove the useless Mutex.
+    pending_events: Arc<Mutex<Vec<RegionEvent>>>,
     cache_engine: Arc<dyn RangeCacheEngineExt + Send + Sync>,
 }
 
 impl Observer {
     pub fn new(cache_engine: Arc<dyn RangeCacheEngineExt + Send + Sync>) -> Self {
         Observer {
-            pending_evict: Arc::default(),
+            pending_events: Arc::default(),
             cache_engine,
         }
     }
@@ -80,9 +81,34 @@ impl Observer {
                 "region_id" => ctx.region().get_id(),
                 "is_ingest_sst" => apply.pending_handle_ssts.is_some(),
                 "admin_command" => ?cmd.request.get_admin_request().get_cmd_type(),
-                "range" => ?range,
+                "start_key" => ?ctx.region().start_key,
+                "end_key" => ?ctx.region().end_key,
             );
-            self.pending_evict.lock().unwrap().push(range);
+            self.pending_events
+                .lock()
+                .unwrap()
+                .push(RegionEvent::Eviction {
+                    region: ctx.region().clone(),
+                });
+        }
+        if !state.new_regions.is_empty() {
+            let cmd_type = cmd.request.get_admin_request().get_cmd_type();
+            assert!(cmd_type == AdminCmdType::BatchSplit || cmd_type == AdminCmdType::Split);
+            tikv_util::info!(
+                "in-memory-engine handle region split";
+                "region_id" => ctx.region().get_id(),
+                "admin_command" => ?cmd.request.get_admin_request().get_cmd_type(),
+                "region" => ?state.modified_region.as_ref().unwrap(),
+                "new_regions" => ?state.new_regions,
+            );
+
+            self.pending_events
+                .lock()
+                .unwrap()
+                .push(RegionEvent::Split {
+                    source: ctx.region().clone(),
+                    new_regions: state.new_regions.clone(),
+                });
         }
     }
 
@@ -91,12 +117,9 @@ impl Observer {
             return;
         }
 
-        let ranges = {
-            let mut ranges = self.pending_evict.lock().unwrap();
-            std::mem::take(&mut *ranges)
-        };
-        for range in ranges {
-            self.cache_engine.evict_range(&range);
+        let events = std::mem::take(&mut *self.pending_events.lock().unwrap());
+        for e in events {
+            self.cache_engine.on_region_event(e);
         }
     }
 
@@ -107,11 +130,18 @@ impl Observer {
 
         let range = CacheRange::from_region(region);
         tikv_util::info!(
-            "evict range due to leader step down";
-            "region_id" => region.get_id(),
-            "range" => ?range,
+           "evict range due to leader step down";
+           "region_id" => region.get_id(),
+           "epoch" => ?region.get_region_epoch(),
+           "start_key" => ?region.start_key,
+           "end_key" => ?region.end_key,
         );
-        self.pending_evict.lock().unwrap().push(range);
+        self.pending_events
+            .lock()
+            .unwrap()
+            .push(RegionEvent::Eviction {
+                region: region.clone(),
+            });
     }
 }
 
@@ -179,7 +209,7 @@ impl<E> CmdObserver<E> for Observer {
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use engine_traits::SstMetaInfo;
+    use engine_traits::{RegionEvent, SstMetaInfo};
     use kvproto::{
         import_sstpb::SstMeta,
         metapb::Peer,
@@ -197,8 +227,8 @@ mod tests {
         fn range_cache_engine_enabled(&self) -> bool {
             self.enabled.load(Ordering::Relaxed)
         }
-        fn evict_range(&self, range: &CacheRange) {
-            self.evicted_ranges.lock().unwrap().push(range.clone());
+        fn on_region_event(&self, event: RegionEvent) {
+            // TODO
         }
     }
 

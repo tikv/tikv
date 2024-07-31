@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::HashMap,
     sync::{atomic::Ordering, Arc},
     time::Duration,
 };
@@ -10,6 +10,7 @@ use engine_traits::{
     CacheRange, MiscExt, Mutable, RangeCacheEngine, Result, WriteBatch, WriteBatchExt,
     WriteOptions, CF_DEFAULT,
 };
+use kvproto::metapb::Region;
 use tikv_util::{box_err, config::ReadableSize, error, info, time::Instant, warn};
 
 use crate::{
@@ -62,12 +63,13 @@ pub struct RangeCacheWriteBatch {
     memory_controller: Arc<MemoryController>,
     memory_usage_reach_hard_limit: bool,
 
-    current_range: Option<CacheRange>,
     // the ranges that reaches the hard limit and need to be evicted
-    ranges_to_evict: BTreeSet<CacheRange>,
+    regions_to_evict: HashMap<u64, Region>,
 
     // record the total durations of the prepare work for write in the write batch
     prepare_for_write_duration: Duration,
+
+    current_region: Option<Region>,
 }
 
 impl std::fmt::Debug for RangeCacheWriteBatch {
@@ -92,9 +94,9 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
             sequence_number: None,
             memory_controller: engine.memory_controller(),
             memory_usage_reach_hard_limit: false,
-            current_range: None,
-            ranges_to_evict: BTreeSet::default(),
+            regions_to_evict: HashMap::default(),
             prepare_for_write_duration: Duration::default(),
+            current_region: None,
         }
     }
 }
@@ -112,9 +114,9 @@ impl RangeCacheWriteBatch {
             sequence_number: None,
             memory_controller: engine.memory_controller(),
             memory_usage_reach_hard_limit: false,
-            current_range: None,
-            ranges_to_evict: BTreeSet::default(),
+            regions_to_evict: HashMap::default(),
             prepare_for_write_duration: Duration::default(),
+            current_region: None,
         }
     }
 
@@ -174,7 +176,7 @@ impl RangeCacheWriteBatch {
     // that all keys have unique sequence numbers.
     fn write_impl(&mut self, mut seq: u64) -> Result<()> {
         fail::fail_point!("on_write_impl");
-        let mut ranges_to_delete = self.handle_ranges_to_evict();
+        let mut regions_to_delete = self.handle_regions_to_evict();
         let (entries_to_write, engine) = self.engine.handle_pending_range_in_loading_buffer(
             &mut seq,
             std::mem::take(&mut self.pending_range_in_loading_buffer),
@@ -205,20 +207,20 @@ impl RangeCacheWriteBatch {
         {
             let mut core = self.engine.core.write();
             core.mut_range_manager()
-                .clear_ranges_in_being_written(self.id, have_entry_applied);
+                .clear_regions_in_being_written(self.id, have_entry_applied);
             core.mut_range_manager()
-                .mark_delete_ranges_scheduled(&mut ranges_to_delete);
+                .mark_delete_regions_scheduled(&mut regions_to_delete);
         }
 
         self.engine
             .lock_modification_bytes
             .fetch_add(lock_modification, Ordering::Relaxed);
 
-        if !ranges_to_delete.is_empty() {
+        if !regions_to_delete.is_empty() {
             if let Err(e) = self
                 .engine
                 .bg_worker_manager()
-                .schedule_task(BackgroundTask::DeleteRange(ranges_to_delete))
+                .schedule_task(BackgroundTask::DeleteRegions(regions_to_delete))
             {
                 error!(
                     "schedule delete range failed";
@@ -235,18 +237,16 @@ impl RangeCacheWriteBatch {
     }
 
     // return ranges that can be deleted from engine now
-    fn handle_ranges_to_evict(&mut self) -> Vec<CacheRange> {
-        if self.ranges_to_evict.is_empty() {
+    fn handle_regions_to_evict(&mut self) -> Vec<Region> {
+        if self.regions_to_evict.is_empty() {
             return vec![];
         }
         let mut core = self.engine.core.write();
         let mut ranges = vec![];
         let range_manager = core.mut_range_manager();
-        for r in std::mem::take(&mut self.ranges_to_evict) {
-            let mut ranges_to_delete = range_manager.evict_range(&r);
-            if !ranges_to_delete.is_empty() {
-                ranges.append(&mut ranges_to_delete);
-                continue;
+        for (_, r) in self.regions_to_evict.drain() {
+            if !range_manager.evict_region(&r) {
+                ranges.push(r);
             }
         }
         ranges
@@ -271,24 +271,25 @@ impl RangeCacheWriteBatch {
         }
 
         if !self.engine.enabled() {
-            let range = self.current_range.clone().unwrap();
+            let region = self.current_region.clone().unwrap();
             info!(
                 "range cache is disabled, evict the range";
-                "range_start" => log_wrappers::Value(&range.start),
-                "range_end" => log_wrappers::Value(&range.end),
+                "range_start" => log_wrappers::Value(&region.start_key),
+                "range_end" => log_wrappers::Value(&region.end_key),
             );
-            self.ranges_to_evict.insert(range);
+            self.regions_to_evict
+                .insert(self.current_region.as_ref().unwrap().id, region);
             return;
         }
         let memory_expect = entry_size();
         if !self.memory_acquire(memory_expect) {
-            let range = self.current_range.clone().unwrap();
+            let region = self.current_region.clone().unwrap();
             info!(
                 "memory acquire failed due to reaching hard limit";
-                "range_start" => log_wrappers::Value(&range.start),
-                "range_end" => log_wrappers::Value(&range.end),
+                "range_start" => log_wrappers::Value(&region.start_key),
+                "range_end" => log_wrappers::Value(&region.end_key),
             );
-            self.ranges_to_evict.insert(range);
+            self.regions_to_evict.insert(region.id, region);
             return;
         }
 
@@ -329,7 +330,7 @@ impl RangeCacheWriteBatch {
                 self.memory_usage_reach_hard_limit = true;
                 warn!(
                     "the memory usage of in-memory engine reaches to hard limit";
-                    "range" => ?self.current_range.as_ref().unwrap(),
+                    "region" => ?self.current_region.as_ref().unwrap(),
                     "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
                 );
                 self.schedule_memory_check();
@@ -454,41 +455,41 @@ pub fn group_write_batch_entries(
     mut entries: Vec<RangeCacheWriteBatchEntry>,
     range_manager: &RangeManager,
 ) -> (
-    Vec<(CacheRange, Vec<RangeCacheWriteBatchEntry>)>,
+    Vec<(u64, Vec<RangeCacheWriteBatchEntry>)>,
     Vec<RangeCacheWriteBatchEntry>,
 ) {
-    let mut group_entries_to_cache: Vec<(CacheRange, Vec<RangeCacheWriteBatchEntry>)> = vec![];
+    let mut group_entries_to_cache: Vec<(u64, Vec<RangeCacheWriteBatchEntry>)> = vec![];
     let mut entries_to_write: Vec<RangeCacheWriteBatchEntry> = vec![];
     let mut drain = entries.drain(..).peekable();
     while let Some(mut e) = drain.next() {
-        if let Some((range_loading, ..)) = range_manager
-            .pending_ranges_loading_data
+        if let Some((region_loading, ..)) = range_manager
+            .pending_regions_loading_data
             .iter()
-            .find(|r| r.0.contains_key(&e.key))
+            .find(|r| region_contains_key(&r.0, &e.key))
         {
             // The range of this write batch entry is still in loading status
             let mut current_group = vec![];
             loop {
                 current_group.push(e);
                 if let Some(next_e) = drain.peek()
-                    && range_loading.contains_key(&next_e.key)
+                    && region_contains_key(&region_loading, &next_e.key)
                 {
                     e = drain.next().unwrap();
                 } else {
                     break;
                 }
             }
-            group_entries_to_cache.push((range_loading.clone(), current_group));
-        } else if let Some(range) = range_manager
-            .ranges()
-            .keys()
-            .find(|r| r.contains_key(&e.key))
+            group_entries_to_cache.push((region_loading.id, current_group));
+        } else if let Some(meta) = range_manager
+            .regions()
+            .values()
+            .find(|r| region_contains_key(r.region(), &e.key))
         {
             // The range has finished loading and became a normal cache range
             loop {
                 entries_to_write.push(e);
                 if let Some(next_e) = drain.peek()
-                    && range.contains_key(&next_e.key)
+                    && region_contains_key(&meta.region(), &next_e.key)
                 {
                     e = drain.next().unwrap();
                 } else {
@@ -501,6 +502,10 @@ pub fn group_write_batch_entries(
         }
     }
     (group_entries_to_cache, entries_to_write)
+}
+
+fn region_contains_key(r: &Region, key: &[u8]) -> bool {
+    r.start_key.as_slice() <= key && r.end_key.as_slice() > key
 }
 
 impl WriteBatchExt for RangeCacheMemoryEngine {
@@ -575,11 +580,13 @@ impl WriteBatch for RangeCacheWriteBatch {
         Ok(())
     }
 
-    fn prepare_for_range(&mut self, range: CacheRange) {
+    fn prepare_for_region(&mut self, region: &Region) {
         let time = Instant::now();
-        self.set_range_cache_status(self.engine.prepare_for_apply(self.id, &range));
+        self.current_region = Some(region.clone());
+        // TODO: remote range.
+        let range = CacheRange::new(region.start_key.clone(), region.end_key.clone());
+        self.set_range_cache_status(self.engine.prepare_for_apply(self.id, range, &region));
         self.memory_usage_reach_hard_limit = false;
-        self.current_range = Some(range);
         self.prepare_for_write_duration += time.saturating_elapsed();
     }
 }
@@ -611,15 +618,15 @@ impl Mutable for RangeCacheWriteBatch {
 
     // rather than delete the keys in the range, we evict ranges that overlap with
     // them directly
-    fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        let range = CacheRange::new(begin_key.to_vec(), end_key.to_vec());
-        self.engine.evict_range(&range);
+    fn delete_range(&mut self, _begin_key: &[u8], _end_key: &[u8]) -> Result<()> {
+        self.engine
+            .evict_region(self.current_region.clone().unwrap());
         Ok(())
     }
 
-    fn delete_range_cf(&mut self, _: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
-        let range = CacheRange::new(begin_key.to_vec(), end_key.to_vec());
-        self.engine.evict_range(&range);
+    fn delete_range_cf(&mut self, _: &str, _begin_key: &[u8], _end_key: &[u8]) -> Result<()> {
+        self.engine
+            .evict_region(self.current_region.clone().unwrap());
         Ok(())
     }
 }
@@ -672,7 +679,7 @@ mod tests {
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.range_cache_status = RangeCacheStatus::Cached;
-        wb.prepare_for_range(r.clone());
+        wb.prepare_for_region(r.clone());
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
         assert_eq!(wb.write().unwrap(), 1);
@@ -695,7 +702,7 @@ mod tests {
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.range_cache_status = RangeCacheStatus::Cached;
-        wb.prepare_for_range(r.clone());
+        wb.prepare_for_region(r.clone());
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_save_point();
         wb.put(b"aaa", b"ccc").unwrap();
@@ -723,12 +730,12 @@ mod tests {
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.range_cache_status = RangeCacheStatus::Cached;
-        wb.prepare_for_range(r.clone());
+        wb.prepare_for_region(r.clone());
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
         _ = wb.write();
         wb.clear();
-        wb.prepare_for_range(r.clone());
+        wb.prepare_for_region(r.clone());
         wb.put(b"bbb", b"ccc").unwrap();
         wb.delete(b"aaa").unwrap();
         wb.set_sequence_number(2).unwrap();
@@ -767,11 +774,11 @@ mod tests {
                 .push_back((r2.clone(), snap, false));
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
-        wb.prepare_for_range(r1.clone());
+        wb.prepare_for_region(r1.clone());
         wb.put(b"k01", b"val1").unwrap();
-        wb.prepare_for_range(r2.clone());
+        wb.prepare_for_region(r2.clone());
         wb.put(b"k05", b"val5").unwrap();
-        wb.prepare_for_range(r3);
+        wb.prepare_for_region(r3);
         wb.put(b"k10", b"val10").unwrap();
         wb.set_sequence_number(2).unwrap();
         let _ = wb.write();
@@ -786,7 +793,7 @@ mod tests {
         }
 
         let mut wb = RangeCacheWriteBatch::from(&engine);
-        wb.prepare_for_range(r1.clone());
+        wb.prepare_for_region(r1.clone());
         wb.delete(b"k01").unwrap();
         wb.set_sequence_number(5).unwrap();
         let _ = wb.write();
@@ -893,14 +900,14 @@ mod tests {
 
         let val1: Vec<u8> = (0..150).map(|_| 0).collect();
         let mut wb = RangeCacheWriteBatch::from(&engine);
-        wb.prepare_for_range(range1.clone());
+        wb.prepare_for_region(range1.clone());
         // memory required:
         // 4(key) + 8(sequencen number) + 150(value) + 16(2 Arc<MemoryController) = 178
         wb.put(b"kk01", &val1).unwrap();
-        wb.prepare_for_range(range2.clone());
+        wb.prepare_for_region(range2.clone());
         // Now, 356
         wb.put(b"kk11", &val1).unwrap();
-        wb.prepare_for_range(range3.clone());
+        wb.prepare_for_region(range3.clone());
         // Now, 534
         wb.put(b"kk21", &val1).unwrap();
         // memory required:
@@ -913,13 +920,13 @@ mod tests {
 
         // The memory capacity is enough for the following two inserts
         let val3: Vec<u8> = (0..150).map(|_| 3).collect();
-        wb.prepare_for_range(range4.clone());
+        wb.prepare_for_region(range4.clone());
         // Now, 740
         wb.put(b"kk32", &val3).unwrap();
 
         // The memory will fail to acquire
         let val4: Vec<u8> = (0..300).map(|_| 3).collect();
-        wb.prepare_for_range(range5.clone());
+        wb.prepare_for_region(range5.clone());
         wb.put(b"kk41", &val4).unwrap();
 
         let memory_controller = engine.memory_controller();
@@ -986,7 +993,7 @@ mod tests {
 
         let val1: Vec<u8> = (0..150).map(|_| 0).collect();
         let mut wb = RangeCacheWriteBatch::from(&engine);
-        wb.prepare_for_range(r2.clone());
+        wb.prepare_for_region(r2.clone());
         wb.put(b"kk11", &val1).unwrap();
         let snap1 = engine.snapshot(r1.clone(), 1000, 1000).unwrap();
 
@@ -1002,7 +1009,7 @@ mod tests {
         assert!(snap1.get_value(b"kk00").unwrap().is_none());
 
         let mut wb = RangeCacheWriteBatch::from(&engine);
-        wb.prepare_for_range(r1.clone());
+        wb.prepare_for_region(r1.clone());
         // put should trigger the evict and it won't write into range cache
         wb.put(b"kk01", &val1).unwrap();
         wb.write_impl(1000).unwrap();

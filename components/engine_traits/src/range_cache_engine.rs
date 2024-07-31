@@ -7,7 +7,7 @@ use std::{
 };
 
 use keys::{enc_end_key, enc_start_key};
-use kvproto::metapb;
+use kvproto::metapb::Region;
 
 use crate::{Iterable, KvEngine, Snapshot, WriteBatchExt};
 
@@ -15,6 +15,19 @@ use crate::{Iterable, KvEngine, Snapshot, WriteBatchExt};
 pub enum FailedReason {
     NotCached,
     TooOldRead,
+}
+
+pub enum RegionEvent {
+    Split {
+        source: Region,
+        new_regions: Vec<Region>,
+    },
+    Eviction {
+        region: Region,
+    },
+    EvictByRange {
+        range: CacheRange,
+    },
 }
 
 /// RangeCacheEngine works as a range cache caching some ranges (in Memory or
@@ -30,6 +43,8 @@ pub trait RangeCacheEngine:
     // provide atomic write
     fn snapshot(
         &self,
+        reigon_id: u64,
+        region_epoch: u64,
         range: CacheRange,
         read_ts: u64,
         seq_num: u64,
@@ -38,8 +53,8 @@ pub trait RangeCacheEngine:
     type DiskEngine: KvEngine;
     fn set_disk_engine(&mut self, disk_engine: Self::DiskEngine);
 
-    // return the range containing the key
-    fn get_range_for_key(&self, key: &[u8]) -> Option<CacheRange>;
+    // return the region containing the key
+    fn get_region_for_key(&self, key: &[u8]) -> Option<Region>;
 
     type RangeHintService: RangeHintService;
     fn start_hint_service(&self, range_hint_service: Self::RangeHintService);
@@ -48,7 +63,7 @@ pub trait RangeCacheEngine:
         false
     }
 
-    fn evict_range(&self, range: &CacheRange);
+    fn on_region_event(&self, event: RegionEvent);
 }
 
 pub trait RangeCacheEngineExt {
@@ -56,7 +71,7 @@ pub trait RangeCacheEngineExt {
 
     // TODO(SpadeA): try to find a better way to reduce coupling degree of range
     // cache engine and kv engine
-    fn evict_range(&self, range: &CacheRange);
+    fn on_region_event(&self, event: RegionEvent);
 }
 
 /// A service that should run in the background to retrieve and apply cache
@@ -101,7 +116,7 @@ impl CacheRange {
         }
     }
 
-    pub fn from_region(region: &metapb::Region) -> Self {
+    pub fn from_region(region: &Region) -> Self {
         Self {
             start: enc_start_key(region),
             end: enc_end_key(region),
@@ -153,6 +168,10 @@ impl CacheRange {
         self.start < other.end && other.start < self.end
     }
 
+    pub fn overlaps_with_region(&self, region: &Region) -> bool {
+        self.start < region.end_key && region.start_key < self.end
+    }
+
     pub fn split_off(&self, range: &CacheRange) -> (Option<CacheRange>, Option<CacheRange>) {
         assert!(self.contains_range(range));
         let left = if self.start != range.start {
@@ -182,7 +201,7 @@ impl CacheRange {
 mod tests {
     use std::cmp::Ordering;
 
-    use crate::CacheRange;
+    use super::CacheRange;
 
     #[test]
     fn test_cache_range_eq() {

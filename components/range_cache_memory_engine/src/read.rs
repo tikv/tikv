@@ -45,6 +45,7 @@ enum Direction {
 pub struct RangeCacheSnapshotMeta {
     pub(crate) range_id: u64,
     pub(crate) range: CacheRange,
+    pub(crate) region_id: u64,
     pub(crate) snapshot_ts: u64,
     // Sequence number is shared between RangeCacheEngine and disk KvEnigne to
     // provide atomic write
@@ -52,10 +53,17 @@ pub struct RangeCacheSnapshotMeta {
 }
 
 impl RangeCacheSnapshotMeta {
-    fn new(range_id: u64, range: CacheRange, snapshot_ts: u64, sequence_number: u64) -> Self {
+    fn new(
+        range_id: u64,
+        region_id: u64,
+        range: CacheRange,
+        snapshot_ts: u64,
+        sequence_number: u64,
+    ) -> Self {
         Self {
             range_id,
             range,
+            region_id,
             snapshot_ts,
             sequence_number,
         }
@@ -72,14 +80,20 @@ pub struct RangeCacheSnapshot {
 impl RangeCacheSnapshot {
     pub fn new(
         engine: RangeCacheMemoryEngine,
+        region_id: u64,
+        region_epoch: u64,
         range: CacheRange,
         read_ts: u64,
         seq_num: u64,
     ) -> result::Result<Self, FailedReason> {
         let mut core = engine.core.write();
-        let range_id = core.range_manager.range_snapshot(&range, read_ts)?;
+        let range_id = core
+            .range_manager
+            .region_snapshot(region_id, region_epoch, read_ts)?;
         Ok(RangeCacheSnapshot {
-            snapshot_meta: RangeCacheSnapshotMeta::new(range_id, range, read_ts, seq_num),
+            snapshot_meta: RangeCacheSnapshotMeta::new(
+                range_id, region_id, range, read_ts, seq_num,
+            ),
             skiplist_engine: core.engine.clone(),
             engine: engine.clone(),
         })
@@ -89,17 +103,15 @@ impl RangeCacheSnapshot {
 impl Drop for RangeCacheSnapshot {
     fn drop(&mut self) {
         let mut core = self.engine.core.write();
-        let mut ranges_removable = core
+        let regions_removable = core
             .range_manager
-            .remove_range_snapshot(&self.snapshot_meta);
-        core.mut_range_manager()
-            .mark_delete_ranges_scheduled(&mut ranges_removable);
-        if !ranges_removable.is_empty() {
+            .remove_region_snapshot(&self.snapshot_meta);
+        if !regions_removable.is_empty() {
             drop(core);
             if let Err(e) = self
                 .engine
                 .bg_worker_manager()
-                .schedule_task(BackgroundTask::DeleteRange(ranges_removable))
+                .schedule_task(BackgroundTask::DeleteRegions(regions_removable))
             {
                 error!(
                     "schedule delete range failed";
@@ -2085,7 +2097,7 @@ mod tests {
         engine.new_range(range.clone());
 
         let mut wb = engine.write_batch();
-        wb.prepare_for_range(range.clone());
+        wb.prepare_for_region(range.clone());
         put_entries(&mut wb);
         wb.set_sequence_number(wb_sequence).unwrap();
         wb.write().unwrap();
@@ -2146,7 +2158,7 @@ mod tests {
         });
 
         let mut wb = engine.write_batch();
-        wb.prepare_for_range(CacheRange::new(b"".to_vec(), b"z".to_vec()));
+        wb.prepare_for_region(CacheRange::new(b"".to_vec(), b"z".to_vec()));
         wb.put(b"b", b"f").unwrap();
         wb.set_sequence_number(200).unwrap();
 

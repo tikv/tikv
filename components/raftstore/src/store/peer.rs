@@ -5009,6 +5009,8 @@ where
         let snap_ctx = if let Ok(read_ts) = decode_u64(&mut req.get_header().get_flag_data()) {
             Some(SnapshotContext {
                 range: Some(CacheRange::from_region(&region)),
+                region_id: region.id,
+                epoch_version: region.get_region_epoch().version,
                 read_ts,
             })
         } else {

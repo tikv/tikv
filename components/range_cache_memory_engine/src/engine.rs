@@ -1,7 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
-    collections::BTreeMap,
+    collections::HashMap,
     fmt::{self, Debug},
     ops::Bound,
     result,
@@ -18,10 +18,11 @@ use crossbeam_skiplist::{
 };
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    CacheRange, FailedReason, IterOptions, Iterable, KvEngine, RangeCacheEngine, Result,
-    CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    CacheRange, FailedReason, IterOptions, Iterable, KvEngine, RangeCacheEngine, RegionEvent,
+    Result, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
-use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
+use kvproto::metapb::Region;
+use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock};
 use raftstore::coprocessor::RegionInfoProvider;
 use slog_global::error;
 use tikv_util::{config::VersionTrack, info};
@@ -32,7 +33,7 @@ use crate::{
         encode_key_for_boundary_with_mvcc, encode_key_for_boundary_without_mvcc, InternalBytes,
     },
     memory_controller::MemoryController,
-    range_manager::{LoadFailedReason, RangeCacheStatus, RangeManager},
+    range_manager::{RangeCacheStatus, RangeManager},
     read::{RangeCacheIterator, RangeCacheSnapshot},
     statistics::Statistics,
     write_batch::{group_write_batch_entries, RangeCacheWriteBatchEntry},
@@ -187,7 +188,7 @@ impl Debug for SkiplistEngine {
 pub struct RangeCacheMemoryEngineCore {
     pub(crate) engine: SkiplistEngine,
     pub(crate) range_manager: RangeManager,
-    pub(crate) cached_write_batch: BTreeMap<CacheRange, Vec<(u64, RangeCacheWriteBatchEntry)>>,
+    pub(crate) cached_write_batch: HashMap<u64, Vec<(u64, RangeCacheWriteBatchEntry)>>,
 }
 
 impl Default for RangeCacheMemoryEngineCore {
@@ -201,7 +202,7 @@ impl RangeCacheMemoryEngineCore {
         RangeCacheMemoryEngineCore {
             engine: SkiplistEngine::new(),
             range_manager: RangeManager::default(),
-            cached_write_batch: BTreeMap::default(),
+            cached_write_batch: HashMap::default(),
         }
     }
 
@@ -218,53 +219,41 @@ impl RangeCacheMemoryEngineCore {
     }
 
     // `cached_range` must not exist in the `cached_write_batch`
-    pub fn init_cached_write_batch(&mut self, cache_range: &CacheRange) {
-        assert!(
-            self.cached_write_batch
-                .insert(cache_range.clone(), vec![])
-                .is_none()
-        );
+    pub fn init_cached_write_batch(&mut self, region_id: u64) {
+        assert!(self.cached_write_batch.insert(region_id, vec![]).is_none());
     }
 
-    pub fn has_cached_write_batch(&self, cache_range: &CacheRange) -> bool {
+    pub fn has_cached_write_batch(&self, id: u64) -> bool {
         self.cached_write_batch
-            .get(cache_range)
+            .get(&id)
             .map_or(false, |entries| !entries.is_empty())
     }
 
     pub(crate) fn take_cached_write_batch_entries(
         &mut self,
-        cache_range: &CacheRange,
+        id: u64,
     ) -> Vec<(u64, RangeCacheWriteBatchEntry)> {
-        std::mem::take(self.cached_write_batch.get_mut(cache_range).unwrap())
+        std::mem::take(self.cached_write_batch.get_mut(&id).unwrap())
     }
 
-    pub fn remove_cached_write_batch(&mut self, cache_range: &CacheRange) {
-        self.cached_write_batch
-            .remove(cache_range)
-            .unwrap_or_else(|| {
-                panic!(
-                    "range cannot be found in cached_write_batch: {:?}",
-                    cache_range
-                );
-            });
+    pub fn remove_cached_write_batch(&mut self, id: u64) {
+        self.cached_write_batch.remove(&id).unwrap_or_else(|| {
+            panic!("region {} cannot be found in cached_write_batch", id);
+        });
     }
 
-    // ensure that the transfer from `pending_ranges_loading_data` to
-    // `range` is atomic with cached_write_batch empty
-    pub(crate) fn pending_range_completes_loading(
-        core: &mut RwLockWriteGuard<'_, Self>,
-        range: &CacheRange,
-    ) {
-        assert!(!core.has_cached_write_batch(range));
-        let range_manager = core.mut_range_manager();
-        let (r, _, canceled) = range_manager
-            .pending_ranges_loading_data
+    // ensure that the transfer from `pending_regions_loading_data` to
+    // `region` is atomic with cached_write_batch empty
+    pub(crate) fn pending_region_completes_loading(&mut self, region: &Region) {
+        assert!(!self.has_cached_write_batch(region.id));
+        let (r, _, canceled) = self
+            .range_manager
+            .pending_regions_loading_data
             .pop_front()
             .unwrap();
-        assert_eq!(&r, range);
+        assert_eq!(&r, region);
         assert!(!canceled);
-        range_manager.new_range(r);
+        self.range_manager.new_region(region.clone());
     }
 }
 
@@ -301,6 +290,7 @@ pub struct RangeCacheMemoryEngine {
 
     // `write_batch_id_allocator` is used to allocate id for each write batch
     write_batch_id_allocator: Arc<AtomicU64>,
+    region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
 }
 
 impl RangeCacheMemoryEngine {
@@ -331,7 +321,7 @@ impl RangeCacheMemoryEngine {
             config.value().load_evict_interval.0,
             config.value().expected_region_size(),
             memory_controller.clone(),
-            region_info_provider,
+            region_info_provider.clone(),
         ));
 
         Self {
@@ -343,6 +333,7 @@ impl RangeCacheMemoryEngine {
             config,
             lock_modification_bytes: Arc::default(),
             write_batch_id_allocator: Arc::default(),
+            region_info_provider,
         }
     }
 
@@ -350,40 +341,29 @@ impl RangeCacheMemoryEngine {
         self.config.value().expected_region_size()
     }
 
-    pub fn new_range(&self, range: CacheRange) {
-        let mut core = self.core.write();
-        core.range_manager.new_range(range);
-    }
-
-    /// Load the range in the in-memory engine.
-    // This method only push the range in the `pending_range` where sometime
-    // later in `prepare_for_apply`, the range will be scheduled to load snapshot
-    // data into engine.
-    pub fn load_range(&self, range: CacheRange) -> result::Result<(), LoadFailedReason> {
-        let mut core = self.core.write();
-        core.mut_range_manager().load_range(range)
-    }
-
-    /// Evict a range from the in-memory engine. After this call, the range will
-    /// not be readable, but the data of the range may not be deleted
+    /// Evict a region from the in-memory engine. After this call, the region
+    /// will not be readable, but the data of the region may not be deleted
     /// immediately due to some ongoing snapshots.
-    pub fn evict_range(&self, range: &CacheRange) {
+    pub fn evict_region(&self, region: Region) {
         let mut core = self.core.write();
-        let mut ranges_to_delete = core.range_manager.evict_range(range);
-        core.mut_range_manager()
-            .mark_delete_ranges_scheduled(&mut ranges_to_delete);
-        if !ranges_to_delete.is_empty() {
-            drop(core);
-            // The range can be deleted directly.
-            if let Err(e) = self
-                .bg_worker_manager()
-                .schedule_task(BackgroundTask::DeleteRange(ranges_to_delete))
-            {
-                error!(
-                    "schedule delete range failed";
-                    "err" => ?e,
-                );
-                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+        let should_evict = core.range_manager.evict_region(&region);
+        if should_evict {
+            let mut regions = vec![region];
+            core.mut_range_manager()
+                .mark_delete_regions_scheduled(&mut regions);
+            if !regions.is_empty() {
+                drop(core);
+                // The range can be deleted directly.
+                if let Err(e) = self
+                    .bg_worker_manager()
+                    .schedule_task(BackgroundTask::DeleteRegions(regions))
+                {
+                    error!(
+                        "schedule delete region failed";
+                        "err" => ?e,
+                    );
+                    assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+                }
             }
         }
     }
@@ -393,99 +373,69 @@ impl RangeCacheMemoryEngine {
     pub(crate) fn prepare_for_apply(
         &self,
         write_batch_id: u64,
-        range: &CacheRange,
+        range: CacheRange,
+        region: &Region,
     ) -> RangeCacheStatus {
         let mut core = self.core.write();
-        let range_manager = core.mut_range_manager();
-        if range_manager.pending_ranges_in_loading_contains(range) {
-            range_manager.record_in_ranges_being_written(write_batch_id, range);
+        let range_manager: &mut RangeManager = core.mut_range_manager();
+        if range_manager.pending_regions_in_loading_contains(region.id) {
+            range_manager.record_in_region_being_written(write_batch_id, range, region.id);
             return RangeCacheStatus::Loading;
         }
-        if range_manager.contains_range(range) {
-            range_manager.record_in_ranges_being_written(write_batch_id, range);
+        if range_manager.contains_region(region.id) {
+            range_manager.record_in_region_being_written(write_batch_id, range, region.id);
             return RangeCacheStatus::Cached;
         }
 
-        let mut overlapped = false;
-        // check whether the range is in pending_range and we can schedule load task if
-        // it is
-        if let Some((idx, (left_range, right_range))) = range_manager
-            .pending_ranges
+        let idx = match range_manager
+            .pending_regions
             .iter()
             .enumerate()
-            .find_map(|(idx, pending_range)| {
-                if pending_range.contains_range(range) {
-                    // The `range` may be a proper subset of `r` and we should split it in this case
-                    // and push the rest back to `pending_range` so that each range only schedules
-                    // load task of its own.
-                    Some((idx, pending_range.split_off(range)))
-                } else if range.overlaps(pending_range) {
-                    // Pending range `range` does not contains the applying range `r` but overlap
-                    // with it, which means the pending range is out dated, we remove it directly.
-                    info!(
-                        "out of date pending ranges";
-                        "applying_range" => ?range,
-                        "pending_range" => ?pending_range,
-                    );
-                    overlapped = true;
-                    Some((idx, (None, None)))
-                } else {
-                    None
-                }
-            })
+            .find_map(|(idx, r)| if r.id == region.id { Some(idx) } else { None })
         {
-            if overlapped {
-                core.mut_range_manager().pending_ranges.swap_remove(idx);
+            Some(idx) => idx,
+            None => {
                 return RangeCacheStatus::NotInCache;
             }
+        };
 
-            let range_manager = core.mut_range_manager();
-            if let Some(left_range) = left_range {
-                range_manager.pending_ranges.push(left_range);
-            }
-
-            if let Some(right_range) = right_range {
-                range_manager.pending_ranges.push(right_range);
-            }
-
-            let range_manager = core.mut_range_manager();
-            range_manager.pending_ranges.swap_remove(idx);
-            let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
-            // Here, we use the range in `pending_ranges` rather than the parameter range as
-            // the region may be splitted.
-            range_manager
-                .pending_ranges_loading_data
-                .push_back((range.clone(), rocks_snap, false));
-
-            range_manager.record_in_ranges_being_written(write_batch_id, range);
-
-            info!(
-                "Range to load";
-                "Tag" => &range.tag,
-                "Cached" => range_manager.ranges().len(),
-                "Pending" => range_manager.pending_ranges_loading_data.len(),
-            );
-
-            // init cached write batch to cache the writes before loading complete
-            core.init_cached_write_batch(range);
-
-            if let Err(e) = self
-                .bg_worker_manager()
-                .schedule_task(BackgroundTask::LoadRange)
-            {
-                error!(
-                    "schedule range load failed";
-                    "err" => ?e,
-                    "tag" => &range.tag,
-                );
-                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
-            }
-            // We have scheduled the range to loading data, so the writes of the range
-            // should be buffered
-            return RangeCacheStatus::Loading;
+        let cached_region = range_manager.pending_regions.swap_remove(idx);
+        // region range changes, discard this range.
+        if cached_region.get_region_epoch().version != region.get_region_epoch().version {
+            return RangeCacheStatus::NotInCache;
         }
 
-        RangeCacheStatus::NotInCache
+        let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
+        range_manager
+            .pending_regions_loading_data
+            .push_back((region.clone(), rocks_snap, false));
+
+        let tag = range.tag.clone();
+        range_manager.record_in_region_being_written(write_batch_id, range, region.id);
+        info!(
+            "range to load";
+            "tag" => &tag,
+            "cached" => range_manager.regions().len(),
+            "pending" => range_manager.pending_regions_loading_data.len(),
+        );
+
+        // init cached write batch to cache the writes before loading complete
+        core.init_cached_write_batch(region.id);
+
+        if let Err(e) = self
+            .bg_worker_manager()
+            .schedule_task(BackgroundTask::LoadRange)
+        {
+            error!(
+                "schedule range load failed";
+                "err" => ?e,
+                "tag" => &tag,
+            );
+            assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
+        }
+        // We have scheduled the range to loading data, so the writes of the range
+        // should be buffered
+        RangeCacheStatus::Loading
     }
 
     // The writes in `handle_pending_range_in_loading_buffer` indicating the ranges
@@ -506,15 +456,16 @@ impl RangeCacheMemoryEngine {
             let engine = core.engine().clone();
             if !group_entries_to_cache.is_empty() {
                 let mut core = RwLockUpgradableReadGuard::upgrade(core);
-                for (range, write_batches) in group_entries_to_cache {
-                    core.cached_write_batch.entry(range).or_default().extend(
-                        write_batches.into_iter().map(|e| {
+                for (region_id, write_batches) in group_entries_to_cache {
+                    core.cached_write_batch
+                        .entry(region_id)
+                        .or_default()
+                        .extend(write_batches.into_iter().map(|e| {
                             // We should confirm the sequence number for cached entries, and
                             // also increased for each of them.
                             *seq += 1;
                             (*seq - 1, e)
-                        }),
-                    );
+                        }));
                 }
             }
             (entries_to_write, engine)
@@ -559,11 +510,20 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
 
     fn snapshot(
         &self,
+        region_id: u64,
+        region_epoch: u64,
         range: CacheRange,
         read_ts: u64,
         seq_num: u64,
     ) -> result::Result<Self::Snapshot, FailedReason> {
-        RangeCacheSnapshot::new(self.clone(), range, read_ts, seq_num)
+        RangeCacheSnapshot::new(
+            self.clone(),
+            region_id,
+            region_epoch,
+            range,
+            read_ts,
+            seq_num,
+        )
     }
 
     type DiskEngine = RocksEngine;
@@ -587,17 +547,43 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
             .start_bg_hint_service(range_hint_service)
     }
 
-    fn get_range_for_key(&self, key: &[u8]) -> Option<CacheRange> {
-        let core = self.core.read();
-        core.range_manager().get_range_for_key(key)
+    fn get_region_for_key(&self, key: &[u8]) -> Option<Region> {
+        self.core.read().range_manager().get_region_for_key(key)
     }
 
     fn enabled(&self) -> bool {
         self.config.value().enabled
     }
 
-    fn evict_range(&self, range: &CacheRange) {
-        self.evict_range(range)
+    fn on_region_event(&self, event: RegionEvent) {
+        match event {
+            RegionEvent::Eviction { region } => {
+                self.evict_region(region);
+            }
+            RegionEvent::Split {
+                source,
+                new_regions,
+            } => {
+                let mut core = self.core.write();
+                let is_evicted = core.range_manager.split_region(&source, new_regions);
+                if is_evicted {
+                    core.cached_write_batch.remove(&source.id);
+                }
+            }
+            RegionEvent::EvictByRange { range } => {
+                // TOOD: handle overlapped region locally after we change to state machine.
+                if let Some(provider) = &self.region_info_provider {
+                    let regions = provider
+                        .get_regions_in_range(&range.start, &range.end)
+                        .unwrap();
+                    for r in regions {
+                        self.evict_region(r);
+                    }
+                } else {
+                    unimplemented!("Does not support currently");
+                }
+            }
+        }
     }
 }
 

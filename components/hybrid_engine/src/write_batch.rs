@@ -3,8 +3,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use engine_traits::{
-    is_data_cf, CacheRange, KvEngine, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions,
+    is_data_cf, KvEngine, Mutable, Result, WriteBatch, WriteBatchExt, WriteOptions,
 };
+use kvproto::metapb::Region;
 use range_cache_memory_engine::{RangeCacheMemoryEngine, RangeCacheWriteBatch};
 
 use crate::engine::HybridEngine;
@@ -100,8 +101,8 @@ impl<EK: KvEngine> WriteBatch for HybridEngineWriteBatch<EK> {
         self.cache_write_batch.merge(other.cache_write_batch)
     }
 
-    fn prepare_for_range(&mut self, range: CacheRange) {
-        self.cache_write_batch.prepare_for_range(range);
+    fn prepare_for_region(&mut self, r: &Region) {
+        self.cache_write_batch.prepare_for_region(r);
     }
 }
 
@@ -176,7 +177,7 @@ mod tests {
         )
         .unwrap();
         let mut write_batch = hybrid_engine.write_batch();
-        write_batch.prepare_for_range(range.clone());
+        write_batch.prepare_for_region(range.clone());
         write_batch
             .cache_write_batch
             .set_range_cache_status(RangeCacheStatus::Cached);
@@ -250,10 +251,10 @@ mod tests {
         .unwrap();
 
         let mut wb = hybrid_engine.write_batch();
-        wb.prepare_for_range(range1.clone());
+        wb.prepare_for_region(range1.clone());
         wb.put(b"k05", b"val").unwrap();
         wb.put(b"k08", b"val2").unwrap();
-        wb.prepare_for_range(range2.clone());
+        wb.prepare_for_region(range2.clone());
         wb.put(b"k25", b"val3").unwrap();
         wb.put(b"k27", b"val4").unwrap();
         wb.write().unwrap();

@@ -1071,6 +1071,8 @@ where
         match self.pre_propose_raft_command(&req) {
             Ok(Some((mut delegate, policy))) => {
                 if let Some(ref mut ctx) = snap_ctx {
+                    ctx.region_id = delegate.region.id;
+                    ctx.epoch_version = delegate.region.get_region_epoch().version;
                     ctx.set_range(CacheRange::from_region(&delegate.region))
                 }
 

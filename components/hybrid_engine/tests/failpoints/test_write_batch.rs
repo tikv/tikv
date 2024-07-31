@@ -36,17 +36,17 @@ fn test_sequence_number_unique() {
     // the delete will be hidden by the put even the delete is performed
     // after the put.
     let mut wb = hybrid_engine.write_batch();
-    wb.prepare_for_range(r.clone());
+    wb.prepare_for_region(r.clone());
     wb.put(b"k", b"val").unwrap(); // seq 6
     wb.delete(b"k").unwrap(); // seq 7
     wb.put(b"k2", b"val").unwrap(); // seq 8
 
-    wb.prepare_for_range(r2.clone());
+    wb.prepare_for_region(r2.clone());
     wb.put(b"k6", b"val").unwrap(); // seq 3
     wb.put(b"k5", b"val").unwrap(); // seq 4
     wb.delete(b"k5").unwrap(); // seq 5
 
-    wb.prepare_for_range(r3.clone());
+    wb.prepare_for_region(r3.clone());
     wb.put(b"k8", b"val").unwrap(); // seq 1
     wb.put(b"k7", b"val").unwrap(); // seq 2
 

@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{collections::BTreeSet, fmt::Display, sync::Arc, thread::JoinHandle, time::Duration};
+use std::{collections::BTreeMap, fmt::Display, sync::Arc, thread::JoinHandle, time::Duration};
 
 use bytes::Bytes;
 use crossbeam::{
@@ -12,6 +12,7 @@ use engine_traits::{
     CacheRange, IterOptions, Iterable, Iterator, MiscExt, RangeHintService, SnapshotMiscExt,
     CF_DEFAULT, CF_WRITE, DATA_CFS,
 };
+use kvproto::metapb::Region;
 use parking_lot::RwLock;
 use pd_client::{PdClient, RpcClient};
 use raftstore::coprocessor::RegionInfoProvider;
@@ -73,7 +74,7 @@ pub enum BackgroundTask {
     Gc(GcTask),
     LoadRange,
     MemoryCheckAndEvict,
-    DeleteRange(Vec<CacheRange>),
+    DeleteRegions(Vec<Region>),
     TopRegionsLoadEvict,
     CleanLockTombstone(u64),
     SetRocksEngine(RocksEngine),
@@ -81,15 +82,15 @@ pub enum BackgroundTask {
 
 impl Display for BackgroundTask {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            BackgroundTask::Gc(ref t) => t.fmt(f),
+        match &self {
+            BackgroundTask::Gc(t) => t.fmt(f),
             BackgroundTask::LoadRange => f.debug_struct("LoadTask").finish(),
             BackgroundTask::MemoryCheckAndEvict => f.debug_struct("MemoryCheckAndEvict").finish(),
-            BackgroundTask::DeleteRange(ref r) => {
-                f.debug_struct("DeleteRange").field("range", r).finish()
+            BackgroundTask::DeleteRegions(r) => {
+                f.debug_struct("DeleteRange").field("region", r).finish()
             }
             BackgroundTask::TopRegionsLoadEvict => f.debug_struct("CheckTopRegions").finish(),
-            BackgroundTask::CleanLockTombstone(ref r) => f
+            BackgroundTask::CleanLockTombstone(r) => f
                 .debug_struct("CleanLockTombstone")
                 .field("seqno", r)
                 .finish(),
@@ -118,7 +119,7 @@ impl Display for GcTask {
 pub struct BgWorkManager {
     worker: Worker,
     scheduler: Scheduler<BackgroundTask>,
-    delete_range_scheduler: Scheduler<BackgroundTask>,
+    delete_region_scheduler: Scheduler<BackgroundTask>,
     tick_stopper: Option<(JoinHandle<()>, Sender<bool>)>,
     core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
 }
@@ -231,7 +232,7 @@ impl BgWorkManager {
         Self {
             worker,
             scheduler,
-            delete_range_scheduler,
+            delete_region_scheduler: delete_range_scheduler,
             tick_stopper: Some((h, tx)),
             core,
         }
@@ -239,8 +240,8 @@ impl BgWorkManager {
 
     pub fn schedule_task(&self, task: BackgroundTask) -> Result<(), ScheduleError<BackgroundTask>> {
         match task {
-            task @ BackgroundTask::DeleteRange(_) => {
-                self.delete_range_scheduler.schedule_force(task)
+            task @ BackgroundTask::DeleteRegions(_) => {
+                self.delete_region_scheduler.schedule_force(task)
             }
             task => self.scheduler.schedule_force(task),
         }
@@ -250,7 +251,9 @@ impl BgWorkManager {
         let core = self.core.clone();
         range_hint_service.start(self.worker.remote(), move |cache_range: &CacheRange| {
             let mut engine = core.write();
-            engine.mut_range_manager().load_range(cache_range.clone())?;
+            engine
+                .mut_range_manager()
+                .add_pinned_range(cache_range.clone());
             // TODO (afeinberg): This does not actually load the range. The load happens
             // the apply thread begins to apply raft entries. To force this (for read-only
             // use-cases) we should propose a No-Op command.
@@ -331,33 +334,43 @@ impl BackgroundRunnerCore {
     ///
     /// Returns `None` if there are no ranges cached or the previous gc is not
     /// finished.
-    fn ranges_for_gc(&self) -> Option<BTreeSet<CacheRange>> {
-        let ranges: BTreeSet<CacheRange> = {
+    fn regions_for_gc(&self) -> Option<BTreeMap<CacheRange, u64>> {
+        let region_ranges = {
             let core = self.engine.read();
-            if core.range_manager().has_ranges_in_gc() {
+            if core.range_manager().has_regions_in_gc() {
                 return None;
             }
-            core.range_manager().ranges().keys().cloned().collect()
+            BTreeMap::from_iter(core.range_manager().regions().values().map(|m| {
+                let range =
+                    CacheRange::new(m.region().start_key.clone(), m.region().end_key.clone());
+                (range, m.region().id)
+            }))
         };
-        let ranges_clone = ranges.clone();
-        if ranges_clone.is_empty() {
+        if region_ranges.is_empty() {
             return None;
         }
         {
             let mut core = self.engine.write();
-            core.mut_range_manager().set_ranges_in_gc(ranges_clone);
+            core.mut_range_manager()
+                .set_regions_in_gc(region_ranges.clone());
         }
-        Some(ranges)
+        Some(region_ranges)
     }
 
-    fn gc_range(&self, range: &CacheRange, safe_point: u64, oldest_seqno: u64) -> FilterMetrics {
+    fn gc_region(
+        &self,
+        id: u64,
+        range: &CacheRange,
+        safe_point: u64,
+        oldest_seqno: u64,
+    ) -> FilterMetrics {
         let (skiplist_engine, safe_ts) = {
             let mut core = self.engine.write();
             // We should also consider the ongoing snapshot of the historical ranges (ranges
             // that have been evicted).
             let historical_safe_point = core
                 .range_manager()
-                .historical_ranges()
+                .historical_regions()
                 .iter()
                 .find_map(|(r, m)| {
                     if r.contains_range(range) {
@@ -367,20 +380,28 @@ impl BackgroundRunnerCore {
                     }
                 })
                 .unwrap_or(u64::MAX);
-            let Some(range_meta) = core.mut_range_manager().mut_range_meta(range) else {
+
+            let Some(region_meta) = core.mut_range_manager().mut_region_meta(id) else {
                 return FilterMetrics::default();
             };
-            let min_snapshot = range_meta
+
+            if region_meta.region().start_key != range.start
+                || region_meta.region().end_key != range.end
+            {
+                return FilterMetrics::default();
+            }
+
+            let min_snapshot = region_meta
                 .range_snapshot_list()
                 .min_snapshot_ts()
                 .unwrap_or(u64::MAX);
             let safe_point = u64::min(safe_point, min_snapshot);
             let safe_point = u64::min(safe_point, historical_safe_point);
 
-            if safe_point <= range_meta.safe_point() {
+            if safe_point <= region_meta.safe_point() {
                 info!(
                     "safe point not large enough";
-                    "prev" => range_meta.safe_point(),
+                    "prev" => region_meta.safe_point(),
                     "current" => safe_point,
                 );
                 return FilterMetrics::default();
@@ -389,11 +410,11 @@ impl BackgroundRunnerCore {
             // todo: change it to debug!
             info!(
                 "safe point update";
-                "prev" => range_meta.safe_point(),
+                "prev" => region_meta.safe_point(),
                 "current" => safe_point,
                 "range" => ?range,
             );
-            range_meta.set_safe_point(safe_point);
+            region_meta.set_safe_point(safe_point);
             (core.engine(), safe_point)
         };
 
@@ -447,7 +468,7 @@ impl BackgroundRunnerCore {
         metrics
     }
 
-    fn on_gc_finished(&mut self, ranges: BTreeSet<CacheRange>) {
+    fn on_gc_finished(&mut self, ranges: BTreeMap<CacheRange, u64>) {
         let mut core = self.engine.write();
         core.mut_range_manager().on_gc_finished(ranges);
     }
@@ -457,10 +478,10 @@ impl BackgroundRunnerCore {
     /// issue.
     ///
     /// Returns `None` if there are no ranges to load.
-    fn get_range_to_load(&self) -> Option<(CacheRange, Arc<RocksSnapshot>, bool)> {
+    fn get_region_to_load(&self) -> Option<(Region, Arc<RocksSnapshot>, bool)> {
         let core = self.engine.read();
         core.range_manager()
-            .pending_ranges_loading_data
+            .pending_regions_loading_data
             .front()
             .cloned()
     }
@@ -468,7 +489,7 @@ impl BackgroundRunnerCore {
     // if `false` is returned, the load is canceled
     fn on_snapshot_load_finished(
         &mut self,
-        range: CacheRange,
+        region: &Region,
         delete_range_scheduler: &Scheduler<BackgroundTask>,
     ) -> bool {
         fail::fail_point!("on_snapshot_load_finished");
@@ -479,26 +500,27 @@ impl BackgroundRunnerCore {
             // We still need to check whether the snapshot is canceled during the load
             let canceled = core
                 .range_manager()
-                .pending_ranges_loading_data
+                .pending_regions_loading_data
                 .front()
                 .unwrap()
                 .2;
             if canceled {
                 let (r, ..) = core
                     .mut_range_manager()
-                    .pending_ranges_loading_data
+                    .pending_regions_loading_data
                     .pop_front()
                     .unwrap();
-                assert_eq!(r, range);
-                core.mut_range_manager()
-                    .ranges_being_deleted
-                    .insert(r.clone(), (true, Instant::now()));
-                core.remove_cached_write_batch(&range);
+                assert_eq!(&r, region);
+                core.mut_range_manager().regions_being_deleted.insert(
+                    CacheRange::new(r.start_key.clone(), r.end_key.clone()),
+                    (r.clone(), true, Instant::now()),
+                );
+                core.remove_cached_write_batch(r.id);
                 drop(core);
                 fail::fail_point!("in_memory_engine_snapshot_load_canceled");
 
                 if let Err(e) =
-                    delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(vec![r]))
+                    delete_range_scheduler.schedule_force(BackgroundTask::DeleteRegions(vec![r]))
                 {
                     error!(
                         "schedule delete range failed";
@@ -510,10 +532,10 @@ impl BackgroundRunnerCore {
                 return false;
             }
 
-            if core.has_cached_write_batch(&range) {
+            if core.has_cached_write_batch(region.id) {
                 let (cache_batch, skiplist_engine) = {
                     (
-                        core.take_cached_write_batch_entries(&range),
+                        core.take_cached_write_batch_entries(region.id),
                         core.engine().clone(),
                     )
                 };
@@ -531,8 +553,8 @@ impl BackgroundRunnerCore {
                 }
                 fail::fail_point!("on_cached_write_batch_consumed");
             } else {
-                core.remove_cached_write_batch(&range);
-                RangeCacheMemoryEngineCore::pending_range_completes_loading(&mut core, &range);
+                core.remove_cached_write_batch(region.id);
+                RangeCacheMemoryEngineCore::pending_region_completes_loading(&mut core, region);
                 drop(core);
 
                 fail::fail_point!("pending_range_completes_loading");
@@ -544,22 +566,24 @@ impl BackgroundRunnerCore {
 
     fn on_snapshot_load_canceled(
         &mut self,
-        range: CacheRange,
+        region: &Region,
         delete_range_scheduler: &Scheduler<BackgroundTask>,
     ) {
         let mut core = self.engine.write();
         let (r, ..) = core
             .mut_range_manager()
-            .pending_ranges_loading_data
+            .pending_regions_loading_data
             .pop_front()
             .unwrap();
-        assert_eq!(r, range);
-        core.remove_cached_write_batch(&range);
-        core.mut_range_manager()
-            .ranges_being_deleted
-            .insert(r.clone(), (true, Instant::now()));
+        assert_eq!(&r, region);
+        core.remove_cached_write_batch(region.id);
+        core.mut_range_manager().regions_being_deleted.insert(
+            CacheRange::new(r.start_key.clone(), r.end_key.clone()),
+            (r.clone(), true, Instant::now()),
+        );
 
-        if let Err(e) = delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(vec![r]))
+        if let Err(e) =
+            delete_range_scheduler.schedule_force(BackgroundTask::DeleteRegions(vec![r]))
         {
             error!(
                 "schedule delete range failed";
@@ -581,61 +605,54 @@ impl BackgroundRunnerCore {
             return;
         }
         let range_stats_manager = self.range_stats_manager.as_ref().unwrap();
-        let to_shrink_by = self
+        let mut remaining = self
             .memory_controller
             .mem_usage()
-            .checked_sub(self.memory_controller.soft_limit_threshold());
-        if to_shrink_by.is_none() {
+            .saturating_sub(self.memory_controller.soft_limit_threshold());
+        if remaining == 0 {
             return;
         }
-        let mut remaining = to_shrink_by.unwrap();
-        let mut ranges_to_evict = Vec::<(CacheRange, u64)>::with_capacity(256);
+
+        let mut regions_to_evict = Vec::with_capacity(256);
 
         // TODO (afeinberg, low): consider returning just an iterator and using scan
         // below for cleaner code.
-        range_stats_manager.collect_candidates_for_eviction(&mut ranges_to_evict, |range| {
-            self.engine.read().range_manager().contains_range(range)
+        range_stats_manager.collect_candidates_for_eviction(&mut regions_to_evict, |region| {
+            self.engine
+                .read()
+                .range_manager()
+                .contains_region(region.id)
         });
 
-        let mut ranges_to_delete = vec![];
+        let mut regions_to_delete = vec![];
         // TODO (afeinberg): approximate size may differ from size in in-memory cache,
         // consider taking the actual size into account.
-        for (range, approx_size) in &ranges_to_evict {
+        for (region, approx_size) in regions_to_evict {
             if remaining == 0 {
                 break;
             }
-            let evicted_range = {
-                let mut engine_wr = self.engine.write();
-                let mut ranges = engine_wr.mut_range_manager().evict_range(range);
-                if !ranges.is_empty() {
-                    info!(
-                        "evict on soft limit reached";
-                        "range_to_evict" => ?&range,
-                        "ranges_evicted" => ?ranges,
-                        "approx_size" => approx_size,
-                        "remaining" => remaining
-                    );
-                    remaining = remaining
-                        .checked_sub(*approx_size as usize)
-                        .unwrap_or_default();
-                    ranges_to_delete.append(&mut ranges);
-                    true
-                } else {
-                    false
-                }
-            };
-            if evicted_range {
-                range_stats_manager.handle_range_evicted(range);
+            let mut engine_wr = self.engine.write();
+            let is_evicted = engine_wr.mut_range_manager().evict_region(&region);
+            if is_evicted {
+                info!(
+                    "evict on soft limit reached";
+                    "region_to_evict" => ?&region,
+                    "approx_size" => approx_size,
+                    "remaining" => remaining
+                );
+                remaining = remaining.saturating_sub(approx_size as usize);
+                range_stats_manager.handle_region_evicted(&region);
+                regions_to_delete.push(region);
             }
         }
         self.engine
             .write()
             .mut_range_manager()
-            .mark_delete_ranges_scheduled(&mut ranges_to_delete);
+            .mark_delete_regions_scheduled(&mut regions_to_delete);
 
-        if !ranges_to_delete.is_empty() {
-            if let Err(e) =
-                delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(ranges_to_delete))
+        if !regions_to_delete.is_empty() {
+            if let Err(e) = delete_range_scheduler
+                .schedule_force(BackgroundTask::DeleteRegions(regions_to_delete))
             {
                 error!(
                     "schedule deletet range failed";
@@ -654,45 +671,46 @@ impl BackgroundRunnerCore {
     /// See: [`RangeStatsManager::collect_changes_ranges`] for
     /// algorithm details.
     fn top_regions_load_evict(&self, delete_range_scheduler: &Scheduler<BackgroundTask>) {
-        if self.range_stats_manager.is_none() {
+        let range_stats_manager = match &self.range_stats_manager {
+            Some(m) => m,
+            None => {
+                return;
+            }
+        };
+        if range_stats_manager.set_checking_top_regions(true) {
             return;
         }
-        let range_stats_manager: &RangeStatsManager = self.range_stats_manager.as_ref().unwrap();
-        if range_stats_manager.checking_top_regions() {
-            return;
-        }
-        range_stats_manager.set_checking_top_regions(true);
 
         let curr_memory_usage = self.memory_controller.mem_usage();
         let threshold = self.memory_controller.soft_limit_threshold();
         range_stats_manager.adjust_max_num_regions(curr_memory_usage, threshold);
 
-        let mut ranges_to_add = Vec::<CacheRange>::with_capacity(256);
-        let mut ranges_to_remove = Vec::<CacheRange>::with_capacity(256);
-        range_stats_manager.collect_changed_ranges(&mut ranges_to_add, &mut ranges_to_remove);
-        let mut ranges_to_delete = vec![];
-        info!("load_evict"; "ranges_to_add" => ?&ranges_to_add, "may_evict" => ?&ranges_to_remove);
-        for evict_range in ranges_to_remove {
+        let mut regions_to_add = Vec::with_capacity(256);
+        let mut regions_to_remove = Vec::with_capacity(256);
+        range_stats_manager.collect_changed_ranges(&mut regions_to_add, &mut regions_to_remove);
+        let mut regions_to_delete = Vec::with_capacity(regions_to_remove.len());
+        info!("load_evict"; "ranges_to_add" => ?&regions_to_add, "may_evict" => ?&regions_to_remove);
+        for evict_region in regions_to_remove {
             if self.memory_controller.reached_soft_limit() {
                 let mut core = self.engine.write();
-                let mut ranges = core.mut_range_manager().evict_range(&evict_range);
+                let evicted = core.mut_range_manager().evict_region(&evict_region);
                 info!(
                     "load_evict: soft limit reached";
-                    "range_to_evict" => ?&evict_range,
-                    "ranges_evicted" => ?ranges
+                    "range_to_evict" => ?&evict_region,
+                    "evicted" => evicted,
                 );
-                ranges_to_delete.append(&mut ranges);
+                regions_to_delete.push(evict_region);
             }
         }
 
         self.engine
             .write()
             .mut_range_manager()
-            .mark_delete_ranges_scheduled(&mut ranges_to_delete);
+            .mark_delete_regions_scheduled(&mut regions_to_delete);
 
-        if !ranges_to_delete.is_empty() {
-            if let Err(e) =
-                delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(ranges_to_delete))
+        if !regions_to_delete.is_empty() {
+            if let Err(e) = delete_range_scheduler
+                .schedule_force(BackgroundTask::DeleteRegions(regions_to_delete))
             {
                 error!(
                     "schedule deletet range failed";
@@ -701,10 +719,10 @@ impl BackgroundRunnerCore {
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
         }
-        for cache_range in ranges_to_add {
+        for region in regions_to_add {
             let mut core = self.engine.write();
-            if let Err(e) = core.mut_range_manager().load_range(cache_range.clone()) {
-                error!("error loading range"; "cache_range" => ?&cache_range, "err" => ?e);
+            if let Err(e) = core.mut_range_manager().load_region(region.clone()) {
+                error!("error loading range"; "cache_range" => ?region, "err" => ?e);
             }
         }
         range_stats_manager.set_checking_top_regions(false);
@@ -866,14 +884,14 @@ impl Runnable for BackgroundRunner {
                     "oldest_sequence" => seqno,
                 );
                 let mut core = self.core.clone();
-                if let Some(ranges) = core.ranges_for_gc() {
+                if let Some(region_ranges) = core.regions_for_gc() {
                     let f = async move {
                         let mut metrics = FilterMetrics::default();
-                        for range in &ranges {
-                            let m = core.gc_range(range, t.safe_point, seqno);
+                        for (range, id) in &region_ranges {
+                            let m = core.gc_region(*id, range, t.safe_point, seqno);
                             metrics.merge(&m);
                         }
-                        core.on_gc_finished(ranges);
+                        core.on_gc_finished(region_ranges);
                         metrics.flush();
                         fail::fail_point!("in_memory_engine_gc_finish");
                     };
@@ -888,11 +906,11 @@ impl Runnable for BackgroundRunner {
                         let core = core.engine.read();
                         core.engine().clone()
                     };
-                    while let Some((range, snap, mut canceled)) = core.get_range_to_load() {
-                        info!("Loading range"; "range" => ?&range);
+                    while let Some((region, snap, mut canceled)) = core.get_region_to_load() {
+                        info!("Loading region"; "region" => ?&region);
                         let iter_opt = IterOptions::new(
-                            Some(KeyBuilder::from_vec(range.start.clone(), 0, 0)),
-                            Some(KeyBuilder::from_vec(range.end.clone(), 0, 0)),
+                            Some(KeyBuilder::from_slice(&region.start_key, 0, 0)),
+                            Some(KeyBuilder::from_slice(&region.end_key, 0, 0)),
                             false,
                         );
                         if core.memory_controller.reached_soft_limit() {
@@ -903,9 +921,9 @@ impl Runnable for BackgroundRunner {
                         if canceled {
                             info!(
                                 "snapshot load canceled due to memory reaching soft limit";
-                                "range" => ?range,
+                                "region" => ?region,
                             );
-                            core.on_snapshot_load_canceled(range, &delete_range_scheduler);
+                            core.on_snapshot_load_canceled(&region, &delete_range_scheduler);
                             continue;
                         }
 
@@ -938,7 +956,7 @@ impl Runnable for BackgroundRunner {
                                             {
                                                 warn!(
                                                     "stop loading snapshot due to memory reaching hard limit";
-                                                    "range" => ?range,
+                                                    "region" => ?region,
                                                     "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
                                                 );
                                                 return false;
@@ -967,22 +985,22 @@ impl Runnable for BackgroundRunner {
                         if !snapshot_load() {
                             info!(
                                 "snapshot load failed";
-                                "range" => ?range,
+                                "region" => ?region,
                             );
-                            core.on_snapshot_load_canceled(range, &delete_range_scheduler);
+                            core.on_snapshot_load_canceled(&region, &delete_range_scheduler);
                             continue;
                         }
 
-                        if core.on_snapshot_load_finished(range.clone(), &delete_range_scheduler) {
+                        if core.on_snapshot_load_finished(&region, &delete_range_scheduler) {
                             let duration = start.saturating_elapsed();
                             RANGE_LOAD_TIME_HISTOGRAM.observe(duration.as_secs_f64());
                             info!(
-                                "Loading range finished";
-                                "range" => ?range,
+                                "Loading region finished";
+                                "region" => ?region,
                                 "duration(sec)" => ?duration,
                             );
                         } else {
-                            info!("Loading range canceled";"range" => ?range);
+                            info!("Loading region canceled";"region" => ?region);
                         }
                     }
                 };
@@ -1008,7 +1026,7 @@ impl Runnable for BackgroundRunner {
             }
             // DeleteRange task is executed by `DeleteRangeRunner` with a different scheduler so
             // that the task will not be scheduled to here.
-            BackgroundTask::DeleteRange(_) => unreachable!(),
+            BackgroundTask::DeleteRegions(_) => unreachable!(),
             BackgroundTask::TopRegionsLoadEvict => {
                 let delete_range_scheduler = self.delete_range_scheduler.clone();
                 let core = self.core.clone();
@@ -1103,8 +1121,8 @@ impl RunnableWithTimer for BackgroundRunner {
         RANGE_CACHE_MEMORY_USAGE.set(mem_usage as i64);
 
         let core = self.core.engine.read();
-        let pending = core.range_manager.pending_ranges.len();
-        let cached = core.range_manager.ranges().len();
+        let pending = core.range_manager.pending_regions.len();
+        let cached = core.range_manager.regions().len();
         drop(core);
         RANGE_CACHE_COUNT
             .with_label_values(&["pending_range"])
@@ -1125,14 +1143,14 @@ pub struct DeleteRangeRunner {
     // written by apply threads. In that case, we have to delay the delete range task to avoid race
     // condition between them. Periodically, these delayed ranges will be checked to see if it is
     // ready to be deleted.
-    delay_ranges: Vec<CacheRange>,
+    delay_regions: Vec<Region>,
 }
 
 impl DeleteRangeRunner {
     fn new(engine: Arc<RwLock<RangeCacheMemoryEngineCore>>) -> Self {
         Self {
             engine,
-            delay_ranges: vec![],
+            delay_regions: vec![],
         }
     }
 
@@ -1157,41 +1175,44 @@ impl Runnable for DeleteRangeRunner {
     type Task = BackgroundTask;
     fn run(&mut self, task: Self::Task) {
         match task {
-            BackgroundTask::DeleteRange(ranges) => {
+            BackgroundTask::DeleteRegions(regions) => {
                 fail::fail_point!("on_in_memory_engine_delete_range");
-                let (mut ranges_to_delay, ranges_to_delete) = {
+                let (mut regions_to_delay, regions_to_delete) = {
                     let core = self.engine.read();
-                    let mut ranges_to_delay = vec![];
-                    let mut ranges_to_delete = vec![];
-                    for r in ranges {
+                    let mut regions_to_delay = vec![];
+                    let mut regions_to_delete = vec![];
+                    for r in regions {
                         // Check whether range exists in `ranges_being_deleted` and it's scheduled
-                        if !core.range_manager.ranges_being_deleted.iter().any(
-                            |(range_being_delete, &(scheduled, _))| {
-                                if range_being_delete == &r && !scheduled {
-                                    panic!("range to delete with scheduled false; range={:?}", r,);
+                        if !core.range_manager.regions_being_deleted.iter().any(
+                            |(_, (region, scheduled, _))| {
+                                if region == &r && !scheduled {
+                                    panic!("region to delete with scheduled false; range={:?}", r,);
                                 };
-                                range_being_delete == &r
+                                region == &r
                             },
                         ) {
-                            panic!("range to delete not in ranges_being_deleted; range={:?}", r,);
+                            panic!(
+                                "region to delete not in ranges_being_deleted; range={:?}",
+                                r,
+                            );
                         }
 
                         // If the range is overlapped with ranges in `ranges_being_written`, the
                         // range has to be delayed to delete. See comment on `delay_ranges`.
                         if core
                             .range_manager
-                            .is_overlapped_with_ranges_being_written(&r)
+                            .is_overlapped_with_regions_being_written(&r)
                         {
-                            ranges_to_delay.push(r);
+                            regions_to_delay.push(r);
                         } else {
-                            ranges_to_delete.push(r);
+                            regions_to_delete.push(CacheRange::new(r.start_key, r.end_key));
                         }
                     }
-                    (ranges_to_delay, ranges_to_delete)
+                    (regions_to_delay, regions_to_delete)
                 };
-                self.delay_ranges.append(&mut ranges_to_delay);
-                if !ranges_to_delete.is_empty() {
-                    self.delete_ranges(&ranges_to_delete);
+                self.delay_regions.append(&mut regions_to_delay);
+                if !regions_to_delete.is_empty() {
+                    self.delete_ranges(&regions_to_delete);
                 }
             }
             _ => unreachable!(),
@@ -1201,11 +1222,11 @@ impl Runnable for DeleteRangeRunner {
 
 impl RunnableWithTimer for DeleteRangeRunner {
     fn on_timeout(&mut self) {
-        if self.delay_ranges.is_empty() {
+        if self.delay_regions.is_empty() {
             return;
         }
-        let ranges = std::mem::take(&mut self.delay_ranges);
-        self.run(BackgroundTask::DeleteRange(ranges));
+        let regions = std::mem::take(&mut self.delay_regions);
+        self.run(BackgroundTask::DeleteRegions(regions));
     }
 
     fn get_interval(&self) -> Duration {
