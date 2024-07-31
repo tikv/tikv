@@ -274,9 +274,7 @@ where
 
     fn on_fatal_error(&self, select: TaskSelector, err: Box<Error>) {
         err.report_fatal();
-        let tasks = self
-            .pool
-            .block_on(self.range_router.select_task(select.reference()));
+        let tasks = self.range_router.select_task(select.reference());
         warn!("fatal error reporting"; "selector" => ?select, "selected" => ?tasks, "err" => %err);
         for task in tasks {
             // Let's pause the task first.
@@ -803,7 +801,7 @@ where
         // so simply clear all info would be fine.
         self.observer.ranges.wl().clear();
         self.subs.clear();
-        self.pool.block_on(router.unregister_task(task))
+        router.unregister_task(task)
     }
 
     fn prepare_min_ts(&self) -> future![TimeStamp] {
@@ -850,7 +848,7 @@ where
 
     pub fn on_force_flush(&self, task: String) {
         self.pool.block_on(async move {
-            let info = self.range_router.get_task_info(&task).await;
+            let info = self.range_router.get_task_info(&task);
             // This should only happen in testing, it would be to unwrap...
             let _ = info.unwrap().set_flushing_status_cas(false, true);
             let mts = self.prepare_min_ts().await;
