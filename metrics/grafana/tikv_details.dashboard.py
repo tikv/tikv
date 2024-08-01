@@ -4268,10 +4268,10 @@ def RangeCacheMemoryEngine() -> RowPanel:
                 targets=[
                     target(
                         expr=expr_sum_rate(
-                            "tikv_range_load_duration_secs_count",
+                            "tikv_range_eviction_duration_secs_count",
                             by_labels=["instance"],
                         ),
-                        legend_format="{{instance}}--loading2",
+                        legend_format="{{instance}}",
                     ),
                 ],
             ),
