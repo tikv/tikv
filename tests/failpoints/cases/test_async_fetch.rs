@@ -154,7 +154,6 @@ fn test_persist_delay_block_log_compaction() {
             .unwrap()
             .unwrap_or_default();
         let state = state.take_truncated_state();
-        println!("  store id: {}, truncate state: {:?}", id, &state);
         // Should trigger compact.
         assert!(state.get_index() > RAFT_INIT_LOG_INDEX);
         assert!(state.get_term() > RAFT_INIT_LOG_TERM);
