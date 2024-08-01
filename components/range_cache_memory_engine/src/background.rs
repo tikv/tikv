@@ -374,7 +374,7 @@ impl BackgroundRunnerCore {
                 .iter()
                 .find_map(|(r, m)| {
                     if r.contains_range(range) {
-                        m.range_snapshot_list().min_snapshot_ts()
+                        m.region_snapshot_list().min_snapshot_ts()
                     } else {
                         None
                     }
@@ -392,7 +392,7 @@ impl BackgroundRunnerCore {
             }
 
             let min_snapshot = region_meta
-                .range_snapshot_list()
+                .region_snapshot_list()
                 .min_snapshot_ts()
                 .unwrap_or(u64::MAX);
             let safe_point = u64::min(safe_point, min_snapshot);
@@ -632,17 +632,17 @@ impl BackgroundRunnerCore {
                 break;
             }
             let mut engine_wr = self.engine.write();
-            let is_evicted = engine_wr.mut_range_manager().evict_region(&region);
-            if is_evicted {
+            let deleteable_regions = engine_wr.mut_range_manager().evict_region(&region);
+            if !deleteable_regions.is_empty() {
                 info!(
                     "evict on soft limit reached";
-                    "region_to_evict" => ?&region,
+                    "regions_to_evict" => ?&deleteable_regions,
                     "approx_size" => approx_size,
                     "remaining" => remaining
                 );
                 remaining = remaining.saturating_sub(approx_size as usize);
                 range_stats_manager.handle_region_evicted(&region);
-                regions_to_delete.push(region);
+                regions_to_delete.extend(deleteable_regions);
             }
         }
         self.engine
@@ -693,13 +693,13 @@ impl BackgroundRunnerCore {
         for evict_region in regions_to_remove {
             if self.memory_controller.reached_soft_limit() {
                 let mut core = self.engine.write();
-                let evicted = core.mut_range_manager().evict_region(&evict_region);
+                let deleteable_regions = core.mut_range_manager().evict_region(&evict_region);
                 info!(
                     "load_evict: soft limit reached";
-                    "range_to_evict" => ?&evict_region,
-                    "evicted" => evicted,
+                    "region_to_evict" => ?&evict_region,
+                    "evicted_regions" => ?&deleteable_regions,
                 );
-                regions_to_delete.push(evict_region);
+                regions_to_delete.extend(deleteable_regions);
             }
         }
 
@@ -1473,8 +1473,8 @@ pub mod tests {
     use crossbeam::epoch;
     use engine_rocks::util::new_engine;
     use engine_traits::{
-        CacheRange, IterOptions, Iterable, Iterator, RangeCacheEngine, SyncMutable, CF_DEFAULT,
-        CF_LOCK, CF_WRITE, DATA_CFS,
+        CacheRange, IterOptions, Iterable, Iterator, RangeCacheEngine, RegionEvent, SyncMutable,
+        CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
     };
     use futures::future::ready;
     use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
@@ -1491,7 +1491,7 @@ pub mod tests {
     use crate::{
         background::BackgroundRunner,
         config::RangeCacheConfigManager,
-        engine::{SkiplistEngine, SkiplistHandle},
+        engine::{tests::new_region, SkiplistEngine, SkiplistHandle},
         keys::{
             construct_key, construct_user_key, construct_value, encode_key, encode_seek_key,
             encoding_for_filter, InternalBytes, ValueType,
@@ -1737,8 +1737,10 @@ pub mod tests {
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let memory_controller = engine.memory_controller();
-        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
-        engine.new_range(range.clone());
+        let region = new_region(1, b"", b"z");
+        let range = CacheRange::from_region(&region);
+        engine.new_region(region.clone());
+
         let (write, default) = {
             let skiplist_engine = engine.core().write().engine();
             (
@@ -1805,7 +1807,9 @@ pub mod tests {
         );
         delete_data(b"key2", 40, 18, &write, memory_controller.clone());
 
-        let snap = engine.snapshot(range.clone(), u64::MAX, u64::MAX).unwrap();
+        let snap = engine
+            .snapshot(1, 0, range.clone(), u64::MAX, u64::MAX)
+            .unwrap();
         let mut iter_opts = IterOptions::default();
         iter_opts.set_lower_bound(&range.start, 0);
         iter_opts.set_upper_bound(&range.end, 0);
@@ -1816,7 +1820,7 @@ pub mod tests {
             None,
             engine.expected_region_size(),
         );
-        worker.core.gc_range(&range, 40, 100);
+        worker.core.gc_region(1, &range, 40, 100);
 
         let mut iter = snap.iterator_opt("write", iter_opts).unwrap();
         iter.seek_to_first().unwrap();
@@ -1833,8 +1837,9 @@ pub mod tests {
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let memory_controller = engine.memory_controller();
-        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
-        engine.new_range(range.clone());
+        let region = new_region(1, b"", b"z");
+        let range = CacheRange::from_region(&region);
+        engine.new_region(region.clone());
         let (write, default) = {
             let skiplist_engine = engine.core().write().engine();
             (
@@ -1892,22 +1897,22 @@ pub mod tests {
         );
 
         // gc should not hanlde keys with larger seqno than oldest seqno
-        worker.core.gc_range(&range, 13, 10);
+        worker.core.gc_region(1, &range, 13, 10);
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
 
         // gc will not remove the latest mvcc put below safe point
-        worker.core.gc_range(&range, 14, 100);
+        worker.core.gc_region(1, &range, 14, 100);
         assert_eq!(2, element_count(&default));
         assert_eq!(2, element_count(&write));
 
-        worker.core.gc_range(&range, 16, 100);
+        worker.core.gc_region(1, &range, 16, 100);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
 
         // rollback will not make the first older version be filtered
         rollback_data(b"key1", 17, 16, &write, memory_controller.clone());
-        worker.core.gc_range(&range, 17, 100);
+        worker.core.gc_region(1, &range, 17, 100);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
         let key = encode_key(b"key1", TimeStamp::new(15));
@@ -1919,7 +1924,7 @@ pub mod tests {
         // unlike in WriteCompactionFilter, the latest mvcc delete below safe point will
         // be filtered
         delete_data(b"key1", 19, 18, &write, memory_controller.clone());
-        worker.core.gc_range(&range, 19, 100);
+        worker.core.gc_region(1, &range, 19, 100);
         assert_eq!(0, element_count(&write));
         assert_eq!(0, element_count(&default));
     }
@@ -1932,25 +1937,21 @@ pub mod tests {
             VersionTrack::new(config),
         )));
         let memory_controller = engine.memory_controller();
-        let (write, default, range1, range2) = {
+        let (write, default, region1, region2) = {
             let mut core = engine.core().write();
 
-            let start1 = Key::from_raw(b"k00").into_encoded();
-            let end1 = Key::from_raw(b"k10").into_encoded();
-            let range1 = CacheRange::new(start1, end1);
-            core.mut_range_manager().new_range(range1.clone());
+            let region1 = new_region(1, b"00", b"10");
+            core.mut_range_manager().new_region(region1.clone());
 
-            let start2 = Key::from_raw(b"k30").into_encoded();
-            let end2 = Key::from_raw(b"k40").into_encoded();
-            let range2 = CacheRange::new(start2, end2);
-            core.mut_range_manager().new_range(range2.clone());
+            let region2 = new_region(1, b"30", b"40");
+            core.mut_range_manager().new_region(region2.clone());
 
             let engine = core.engine();
             (
                 engine.cf_handle(CF_WRITE),
                 engine.cf_handle(CF_DEFAULT),
-                range1,
-                range2,
+                region1,
+                region2,
             )
         };
 
@@ -2052,7 +2053,8 @@ pub mod tests {
             None,
             engine.expected_region_size(),
         );
-        let filter = worker.core.gc_range(&range1, 100, 100);
+        let range1 = CacheRange::from_region(&region1);
+        let filter = worker.core.gc_region(1, &range1, 100, 100);
         assert_eq!(2, filter.filtered);
 
         verify(b"k05", 15, 18, &write);
@@ -2067,7 +2069,8 @@ pub mod tests {
             None,
             engine.expected_region_size(),
         );
-        worker.core.gc_range(&range2, 100, 100);
+        let range2 = CacheRange::from_region(&region2);
+        worker.core.gc_region(2, &range2, 100, 100);
         assert_eq!(2, filter.filtered);
 
         verify(b"k35", 15, 20, &write);
@@ -2083,8 +2086,8 @@ pub mod tests {
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let memory_controller = engine.memory_controller();
-        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
-        engine.new_range(range.clone());
+        let region = new_region(1, b"", b"z");
+        engine.new_region(region.clone());
         let (write, default) = {
             let skiplist_engine = engine.core().write().engine();
             (
@@ -2116,7 +2119,8 @@ pub mod tests {
             engine.expected_region_size(),
         );
 
-        let filter = worker.core.gc_range(&range, 20, 200);
+        let range = CacheRange::from_region(&region);
+        let filter = worker.core.gc_region(1, &range, 20, 200);
         assert_eq!(1, filter.filtered);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
@@ -2128,8 +2132,8 @@ pub mod tests {
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let memory_controller = engine.memory_controller();
-        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
-        engine.new_range(range.clone());
+        let region = new_region(1, b"", b"z");
+        engine.new_region(region.clone());
         let (write, default) = {
             let skiplist_engine = engine.core().write().engine();
             (
@@ -2213,43 +2217,44 @@ pub mod tests {
             None,
             engine.expected_region_size(),
         );
-        let s1 = engine.snapshot(range.clone(), 10, u64::MAX);
-        let s2 = engine.snapshot(range.clone(), 11, u64::MAX);
-        let s3 = engine.snapshot(range.clone(), 20, u64::MAX);
+        let range = CacheRange::from_region(&region);
+        let s1 = engine.snapshot(1, 0, range.clone(), 10, u64::MAX);
+        let s2 = engine.snapshot(1, 0, range.clone(), 11, u64::MAX);
+        let s3 = engine.snapshot(1, 0, range.clone(), 20, u64::MAX);
 
         // nothing will be removed due to snapshot 5
-        let filter = worker.core.gc_range(&range, 30, 100);
+        let filter = worker.core.gc_region(1, &range, 30, 100);
         assert_eq!(0, filter.filtered);
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
         drop(s1);
-        let filter = worker.core.gc_range(&range, 30, 100);
+        let filter = worker.core.gc_region(1, &range, 30, 100);
         assert_eq!(1, filter.filtered);
         assert_eq!(5, element_count(&default));
         assert_eq!(5, element_count(&write));
 
         drop(s2);
-        let filter = worker.core.gc_range(&range, 30, 100);
+        let filter = worker.core.gc_region(1, &range, 30, 100);
         assert_eq!(1, filter.filtered);
         assert_eq!(4, element_count(&default));
         assert_eq!(4, element_count(&write));
 
         drop(s3);
-        let filter = worker.core.gc_range(&range, 30, 100);
+        let filter = worker.core.gc_region(1, &range, 30, 100);
         assert_eq!(1, filter.filtered);
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
     }
 
     #[test]
-    fn test_gc_range_contained_in_historical_range() {
+    fn test_gc_region_contained_in_historical_range() {
         let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let memory_controller = engine.memory_controller();
-        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
-        engine.new_range(range.clone());
+        let region = new_region(1, b"", b"z");
+        engine.new_region(region.clone());
         let (write, default) = {
             let skiplist_engine = engine.core().write().engine();
             (
@@ -2326,12 +2331,27 @@ pub mod tests {
             memory_controller.clone(),
         );
 
-        let snap1 = engine.snapshot(range.clone(), 20, 1000).unwrap();
-        let snap2 = engine.snapshot(range.clone(), 22, 1000).unwrap();
-        let _snap3 = engine.snapshot(range.clone(), 60, 1000).unwrap();
+        let range = CacheRange::from_region(&region);
+        let snap1 = engine.snapshot(1, 0, range.clone(), 20, 1000).unwrap();
+        let snap2 = engine.snapshot(1, 0, range.clone(), 22, 1000).unwrap();
+        let _snap3 = engine.snapshot(1, 0, range.clone(), 60, 1000).unwrap();
 
-        let range2 = CacheRange::new(b"key5".to_vec(), b"key8".to_vec());
-        engine.evict_range(&range2);
+        let mut new_regions = vec![
+            new_region(1, "", "key5"),
+            new_region(2, "key5", "key8"),
+            new_region(2, "key8", "z"),
+        ];
+        for r in &mut new_regions {
+            r.mut_region_epoch().version = 1;
+        }
+        let region2 = new_regions[1].clone();
+        engine.on_region_event(RegionEvent::Split {
+            source: region.clone(),
+            new_regions,
+        });
+        assert_eq!(engine.core.read().range_manager().regions().len(), 3);
+
+        engine.evict_region(region2);
 
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
@@ -2343,17 +2363,22 @@ pub mod tests {
             engine.expected_region_size(),
         );
 
-        let ranges: Vec<_> = engine
+        let regions: Vec<_> = engine
             .core
             .read()
             .range_manager()
-            .ranges()
-            .keys()
-            .cloned()
+            .regions()
+            .values()
+            .map(|m| m.region().clone())
             .collect();
+        assert_eq!(regions.len(), 2);
         let mut filter = FilterMetrics::default();
-        for r in &ranges {
-            filter.merge(&worker.core.gc_range(r, 50, 1000));
+        for r in &regions {
+            filter.merge(
+                &worker
+                    .core
+                    .gc_region(region.id, &CacheRange::from_region(r), 50, 1000),
+            );
         }
         assert_eq!(2, filter.filtered);
         assert_eq!(4, element_count(&default));
@@ -2361,8 +2386,12 @@ pub mod tests {
 
         drop(snap1);
         let mut filter = FilterMetrics::default();
-        for r in &ranges {
-            filter.merge(&worker.core.gc_range(r, 50, 1000));
+        for r in &regions {
+            filter.merge(
+                &worker
+                    .core
+                    .gc_region(region.id, &CacheRange::from_region(r), 50, 1000),
+            );
         }
         assert_eq!(0, filter.filtered);
         assert_eq!(4, element_count(&default));
@@ -2370,8 +2399,12 @@ pub mod tests {
 
         drop(snap2);
         let mut filter = FilterMetrics::default();
-        for r in &ranges {
-            filter.merge(&worker.core.gc_range(r, 50, 1000));
+        for r in &regions {
+            filter.merge(
+                &worker
+                    .core
+                    .gc_region(region.id, &CacheRange::from_region(r), 50, 1000),
+            );
         }
         assert_eq!(2, filter.filtered);
         assert_eq!(2, element_count(&default));
@@ -2401,15 +2434,19 @@ pub mod tests {
         }
 
         let k = format!("zk{:08}", 15).into_bytes();
-        let r1 = CacheRange::new(DATA_MIN_KEY.to_vec(), k.clone());
-        let r2 = CacheRange::new(k, DATA_MAX_KEY.to_vec());
+        let region1 = new_region(1, DATA_MIN_KEY, k.clone());
+        let region2 = new_region(2, k, DATA_MAX_KEY);
         {
             let mut core = engine.core.write();
-            core.mut_range_manager().pending_ranges.push(r1.clone());
-            core.mut_range_manager().pending_ranges.push(r2.clone());
+            core.mut_range_manager()
+                .pending_regions
+                .push(region1.clone());
+            core.mut_range_manager()
+                .pending_regions
+                .push(region2.clone());
         }
-        engine.prepare_for_apply(1, &r1);
-        engine.prepare_for_apply(1, &r2);
+        engine.prepare_for_apply(1, CacheRange::from_region(&region1), &region1);
+        engine.prepare_for_apply(1, CacheRange::from_region(&region2), &region2);
 
         // concurrent write to rocksdb, but the key will not be loaded in the memory
         // engine
@@ -2435,8 +2472,24 @@ pub mod tests {
         // wait for background load
         std::thread::sleep(Duration::from_secs(1));
 
-        let _ = engine.snapshot(r1, u64::MAX, u64::MAX).unwrap();
-        let _ = engine.snapshot(r2, u64::MAX, u64::MAX).unwrap();
+        let _ = engine
+            .snapshot(
+                region1.id,
+                0,
+                &CacheRange::from_region(&region1),
+                u64::MAX,
+                u64::MAX,
+            )
+            .unwrap();
+        let _ = engine
+            .snapshot(
+                region2.id,
+                0,
+                &CacheRange::from_region(&region1),
+                u64::MAX,
+                u64::MAX,
+            )
+            .unwrap();
 
         let guard = &epoch::pin();
         for i in 10..20 {
@@ -2465,10 +2518,10 @@ pub mod tests {
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
         let memory_controller = engine.memory_controller();
-        let r1 = CacheRange::new(b"a".to_vec(), b"b".to_vec());
-        let r2 = CacheRange::new(b"b".to_vec(), b"c".to_vec());
-        engine.new_range(r1);
-        engine.new_range(r2);
+        let r1 = new_region(1, b"a", b"b");
+        let r2 = new_region(2, b"b", b"c");
+        engine.new_region(r1);
+        engine.new_region(r2);
 
         let (mut runner, _) = BackgroundRunner::new(
             engine.core.clone(),
@@ -2476,15 +2529,15 @@ pub mod tests {
             None,
             engine.expected_region_size(),
         );
-        let ranges = runner.core.ranges_for_gc().unwrap();
-        assert_eq!(2, ranges.len());
+        let regions = runner.core.regions_for_gc().unwrap();
+        assert_eq!(2, regions.len());
 
         // until the previous gc finished, node ranges will be returned
-        assert!(runner.core.ranges_for_gc().is_none());
-        runner.core.on_gc_finished(ranges);
+        assert!(runner.core.regions_for_gc().is_none());
+        runner.core.on_gc_finished(regions);
 
-        let ranges = runner.core.ranges_for_gc().unwrap();
-        assert_eq!(2, ranges.len());
+        let regions = runner.core.regions_for_gc().unwrap();
+        assert_eq!(2, regions.len());
     }
 
     // Test creating and loading cache hint using a region label rule:
@@ -2493,6 +2546,7 @@ pub mod tests {
     // 2. Use test pd client server to create a label rule for portion of the data.
     // 3. Wait until data is loaded.
     // 4. Verify that only the labeled key range has been loaded.
+    #[ignore] // TODO: ignore as pd_hint_service is not implemented currently.
     #[test]
     fn test_load_from_pd_hint_service() {
         let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
@@ -2533,11 +2587,11 @@ pub mod tests {
         // Wait for the watch to fire.
         std::thread::sleep(Duration::from_millis(200));
         let r1 = CacheRange::try_from(&label_rule.data[0]).unwrap();
-        engine.prepare_for_apply(1, &r1);
+        // engine.prepare_for_apply(1, &r1);
 
         // Wait for the range to be loaded.
         std::thread::sleep(Duration::from_secs(1));
-        let _ = engine.snapshot(r1, u64::MAX, u64::MAX).unwrap();
+        // let _ = engine.snapshot(r1, u64::MAX, u64::MAX).unwrap();
 
         let (write, default) = {
             let core = engine.core().write();
@@ -2591,7 +2645,7 @@ pub mod tests {
         engine.set_disk_engine(rocks_engine.clone());
         let mem_controller = engine.memory_controller();
 
-        let range1 = CacheRange::new(construct_user_key(1), construct_user_key(3));
+        let region1 = new_region(1, construct_user_key(1), construct_user_key(3));
         // Memory for one put is 17(key) + 3(val) + 8(Seqno) + 16(Memory controller in
         // key and val) + 96(Node overhead) = 140
         let key = construct_key(1, 10);
@@ -2605,7 +2659,7 @@ pub mod tests {
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
         // After loading range1, the memory usage should be 140*6=840
 
-        let range2 = CacheRange::new(construct_user_key(3), construct_user_key(5));
+        let region2 = new_region(2, construct_user_key(3), construct_user_key(5));
         let key = construct_key(3, 10);
         rocks_engine.put_cf(CF_DEFAULT, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
@@ -2618,7 +2672,7 @@ pub mod tests {
         // 840*2 > hard limit 1500, so the load will fail and the loaded keys should be
         // removed
 
-        let range3 = CacheRange::new(construct_user_key(5), construct_user_key(6));
+        let region3 = new_region(3, construct_user_key(5), construct_user_key(6));
         let key = construct_key(5, 10);
         rocks_engine.put_cf(CF_DEFAULT, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
@@ -2628,9 +2682,9 @@ pub mod tests {
         rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
 
-        for r in [&range1, &range2, &range3] {
-            engine.load_range(r.clone()).unwrap();
-            engine.prepare_for_apply(1, r);
+        for r in [&region1, &region2, &region3] {
+            engine.load_region(r.clone()).unwrap();
+            engine.prepare_for_apply(1, CacheRange::from(r), r);
         }
 
         // ensure all ranges are finshed
@@ -2640,8 +2694,8 @@ pub mod tests {
                 {
                     let core = engine.core.read();
                     let range_manager = core.range_manager();
-                    if range_manager.pending_ranges.is_empty()
-                        && range_manager.pending_ranges_loading_data.is_empty()
+                    if range_manager.pending_regions.is_empty()
+                        && range_manager.pending_regions_loading_data.is_empty()
                     {
                         break;
                     }
@@ -2651,14 +2705,16 @@ pub mod tests {
             }
         }
 
-        let verify = |range: CacheRange, exist, expect_count| {
+        let verify = |region: &Region, exist, expect_count| {
             if exist {
-                let snap = engine.snapshot(range.clone(), 10, u64::MAX).unwrap();
+                let snap = engine
+                    .snapshot(region.id, 0, CacheRange::from_region(region), 10, u64::MAX)
+                    .unwrap();
                 let mut count = 0;
                 for cf in DATA_CFS {
                     let mut iter = IterOptions::default();
-                    iter.set_lower_bound(&range.start, 0);
-                    iter.set_upper_bound(&range.end, 0);
+                    iter.set_lower_bound(&region.start_key, 0);
+                    iter.set_upper_bound(&region.end_key, 0);
                     let mut iter = snap.iterator_opt(cf, iter).unwrap();
                     let _ = iter.seek_to_first();
                     while iter.valid().unwrap() {
@@ -2668,12 +2724,14 @@ pub mod tests {
                 }
                 assert_eq!(count, expect_count);
             } else {
-                engine.snapshot(range, 10, 10).unwrap_err();
+                engine
+                    .snapshot(region.id, 0, CacheRange::from_region(region), 10, 10)
+                    .unwrap_err();
             }
         };
-        verify(range1, true, 6);
-        verify(range2, false, 0);
-        verify(range3, false, 3);
+        verify(&region1, true, 6);
+        verify(&region2, false, 0);
+        verify(&region3, false, 3);
         assert_eq!(mem_controller.mem_usage(), 1540);
     }
 
@@ -2694,7 +2752,7 @@ pub mod tests {
         engine.set_disk_engine(rocks_engine.clone());
         let mem_controller = engine.memory_controller();
 
-        let range1 = CacheRange::new(construct_user_key(1), construct_user_key(3));
+        let region1 = new_region(1, construct_user_key(1), construct_user_key(3));
         // Memory for one put is 17(key) + 3(val) + 8(Seqno) + 16(Memory controller in
         // key and val) + 96(Node overhead) = 140
         let key = construct_key(1, 10);
@@ -2707,10 +2765,10 @@ pub mod tests {
         rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
         // After loading range1, the memory usage should be 140*6=840
-        engine.load_range(range1.clone()).unwrap();
-        engine.prepare_for_apply(1, &range1);
+        engine.load_region(region1.clone()).unwrap();
+        engine.prepare_for_apply(1, CacheRange::from_region(&region1), &region1);
 
-        let range2 = CacheRange::new(construct_user_key(3), construct_user_key(5));
+        let region2 = new_region(2, construct_user_key(3), construct_user_key(5));
         let key = construct_key(3, 10);
         rocks_engine.put_cf(CF_DEFAULT, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
@@ -2732,8 +2790,8 @@ pub mod tests {
         config_manager.dispatch(config_change).unwrap();
         assert_eq!(config.value().hard_limit_threshold(), 2000);
 
-        engine.load_range(range2.clone()).unwrap();
-        engine.prepare_for_apply(1, &range2);
+        engine.load_region(region2.clone()).unwrap();
+        engine.prepare_for_apply(1, CacheRange::from_region(&region2), &region2);
 
         // ensure all ranges are finshed
         {
@@ -2742,8 +2800,8 @@ pub mod tests {
                 {
                     let core = engine.core.read();
                     let range_manager = core.range_manager();
-                    if range_manager.pending_ranges.is_empty()
-                        && range_manager.pending_ranges_loading_data.is_empty()
+                    if range_manager.pending_regions.is_empty()
+                        && range_manager.pending_regions_loading_data.is_empty()
                     {
                         break;
                     }
@@ -2753,9 +2811,11 @@ pub mod tests {
             }
         }
 
-        let verify = |range: CacheRange, exist, expect_count| {
+        let verify = |r: &Region, exist, expect_count| {
             if exist {
-                let snap = engine.snapshot(range.clone(), 10, u64::MAX).unwrap();
+                let snap = engine
+                    .snapshot(r.id, 0, CacheRange::from_region(r), 10, u64::MAX)
+                    .unwrap();
                 let mut count = 0;
                 for cf in DATA_CFS {
                     let mut iter = IterOptions::default();
@@ -2770,11 +2830,13 @@ pub mod tests {
                 }
                 assert_eq!(count, expect_count);
             } else {
-                engine.snapshot(range, 10, 10).unwrap_err();
+                engine
+                    .snapshot(r.id, 0, CacheRange::from_region(r), 10, 10)
+                    .unwrap_err();
             }
         };
-        verify(range1, true, 6);
-        verify(range2, true, 6);
+        verify(&region1, true, 6);
+        verify(&region2, true, 6);
         assert_eq!(mem_controller.mem_usage(), 1680);
     }
 

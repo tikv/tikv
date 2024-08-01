@@ -15,6 +15,7 @@ use crate::{Iterable, KvEngine, Snapshot, WriteBatchExt};
 pub enum FailedReason {
     NotCached,
     TooOldRead,
+    EpochNotMatch,
 }
 
 pub enum RegionEvent {

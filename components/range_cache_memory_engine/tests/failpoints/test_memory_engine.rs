@@ -62,7 +62,7 @@ fn test_gc_worker() {
     let (write, default) = {
         let mut core = engine.core().write();
         core.mut_range_manager()
-            .new_range(CacheRange::new(b"".to_vec(), b"z".to_vec()));
+            .new_range(new_region(1, b"".to_vec(), b"z".to_vec()));
         let engine = core.engine();
         (engine.cf_handle(CF_WRITE), engine.cf_handle(CF_DEFAULT))
     };
@@ -157,7 +157,7 @@ fn test_clean_up_tombstone() {
     let config = Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test()));
     let engine =
         RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(config.clone()));
-    let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+    let range = new_region(1, b"".to_vec(), b"z".to_vec());
 
     let (tx, rx) = sync_channel(0);
     fail::cfg_callback("clean_lock_tombstone_done", move || {
@@ -165,7 +165,7 @@ fn test_clean_up_tombstone() {
     })
     .unwrap();
 
-    engine.new_range(range.clone());
+    engine.new_egion(range.clone());
     let mut wb = engine.write_batch();
     wb.prepare_for_region(range.clone());
     wb.put_cf("lock", b"k", b"val").unwrap();
@@ -243,17 +243,17 @@ fn test_evict_with_loading_range() {
     )));
     engine.set_disk_engine(rocks_engine);
 
-    let range1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
-    let range2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
-    let range3 = CacheRange::new(b"k40".to_vec(), b"k50".to_vec());
+    let r1 = new_region(1, b"k00".to_vec(), b"k10".to_vec());
+    let r2 = new_region(2, b"k20".to_vec(), b"k30".to_vec());
+    let r3 = new_region(3, b"k40".to_vec(), b"k50".to_vec());
     let (snapshot_load_tx, snapshot_load_rx) = sync_channel(0);
 
     // range1 and range2 will be evicted
-    let r = CacheRange::new(b"k05".to_vec(), b"k25".to_vec());
+    let r = new_region(4, b"k05".to_vec(), b"k25".to_vec());
     let engine_clone = engine.clone();
     fail::cfg_callback("on_snapshot_load_finished", move || {
         let _ = snapshot_load_tx.send(true);
-        engine_clone.evict_range(&r);
+        engine_clone.evict_region(r);
     })
     .unwrap();
 
@@ -263,15 +263,15 @@ fn test_evict_with_loading_range() {
     })
     .unwrap();
 
-    engine.load_range(range1.clone()).unwrap();
-    engine.load_range(range2.clone()).unwrap();
-    engine.load_range(range3.clone()).unwrap();
+    engine.load_region(r1.clone()).unwrap();
+    engine.load_region(r2.clone()).unwrap();
+    engine.load_region(r3.clone()).unwrap();
 
     let mut wb = engine.write_batch();
     // prepare range to trigger loading
-    wb.prepare_for_region(range1.clone());
-    wb.prepare_for_region(range2.clone());
-    wb.prepare_for_region(range3.clone());
+    wb.prepare_for_region(&r1);
+    wb.prepare_for_region(&r2);
+    wb.prepare_for_region(&r3);
     wb.set_sequence_number(10).unwrap();
     wb.write().unwrap();
 
@@ -286,9 +286,15 @@ fn test_evict_with_loading_range() {
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
 
-    engine.snapshot(range1, 100, 100).unwrap_err();
-    engine.snapshot(range2, 100, 100).unwrap_err();
-    engine.snapshot(range3, 100, 100).unwrap();
+    engine
+        .snapshot(r1.id, 0, CacheRange::from(&r1), 100, 100)
+        .unwrap_err();
+    engine
+        .snapshot(r2.id, 0, CacheRange::from(&r2), 100, 100)
+        .unwrap_err();
+    engine
+        .snapshot(r3.id, 0, CacheRange::from(&r3), 100, 100)
+        .unwrap();
 }
 
 #[test]
@@ -315,19 +321,19 @@ fn test_cached_write_batch_cleared_when_load_failed() {
 
     // range1 will be canceled in on_snapshot_load_finished whereas range2 will be
     // canceled at begin
-    let range1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
-    let range2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
-    engine.load_range(range1.clone()).unwrap();
-    engine.load_range(range2.clone()).unwrap();
+    let r1 = new_region(1, b"k00".to_vec(), b"k10".to_vec());
+    let r2 = new_region(2, b"k20".to_vec(), b"k30".to_vec());
+    engine.load_region(r1.clone()).unwrap();
+    engine.load_region(r2.clone()).unwrap();
 
     let mut wb = engine.write_batch();
     // range1 starts to load
-    wb.prepare_for_region(range1.clone());
+    wb.prepare_for_region(r1.clone());
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     wb.put(b"k05", b"val").unwrap();
     wb.put(b"k06", b"val").unwrap();
-    wb.prepare_for_region(range2.clone());
+    wb.prepare_for_region(r2.clone());
     wb.put(b"k25", b"val").unwrap();
     wb.set_sequence_number(100).unwrap();
     wb.write().unwrap();
@@ -336,8 +342,8 @@ fn test_cached_write_batch_cleared_when_load_failed() {
 
     let mut tried = 0;
     while tried < 20 {
-        if !engine.core().read().has_cached_write_batch(&range1)
-            && !engine.core().read().has_cached_write_batch(&range2)
+        if !engine.core().read().has_cached_write_batch(r1.id)
+            && !engine.core().read().has_cached_write_batch(r2.id)
         {
             return;
         }
@@ -364,9 +370,9 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     )));
     engine.set_disk_engine(rocks_engine);
 
-    let range1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
-    let range2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
-    let range3 = CacheRange::new(b"k40".to_vec(), b"k50".to_vec());
+    let r1 = new_region(1, b"k00".to_vec(), b"k10".to_vec());
+    let r2 = new_region(2, b"k20".to_vec(), b"k30".to_vec());
+    let r3 = new_region(3, b"k40".to_vec(), b"k50".to_vec());
     let (snapshot_load_cancel_tx, snapshot_load_cancel_rx) = sync_channel(0);
     fail::cfg_callback("in_memory_engine_snapshot_load_canceled", move || {
         let _ = snapshot_load_cancel_tx.send(true);
@@ -391,15 +397,15 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     })
     .unwrap();
 
-    engine.new_range(range1.clone());
-    engine.new_range(range2.clone());
-    engine.load_range(range3.clone()).unwrap();
+    engine.new_egion(r1.clone());
+    engine.new_egion(r2.clone());
+    engine.load_region(r3.clone()).unwrap();
 
     let engine_clone = engine.clone();
     let (range_prepared_tx, range_prepared_rx) = sync_channel(0);
-    let range1_clone = range1.clone();
-    let range2_clone = range2.clone();
-    let range3_clone = range3.clone();
+    let range1_clone = r1.clone();
+    let range2_clone = r2.clone();
+    let range3_clone = r3.clone();
     let handle = std::thread::spawn(move || {
         let mut wb = engine_clone.write_batch();
         wb.prepare_for_region(range1_clone);
@@ -431,12 +437,12 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     // Now, three ranges are in write status, delete range will not be performed
     // until they leave the write status
 
-    engine.evict_range(&range1);
-    engine.evict_range(&range2);
+    engine.evict_region(r1.clone());
+    engine.evict_region(r2.clone());
 
-    let verify_data = |range, expected_num: u64| {
+    let verify_data = |r, expected_num: u64| {
         let handle = engine.core().write().engine().cf_handle(CF_LOCK);
-        let (start, end) = encode_key_for_boundary_without_mvcc(range);
+        let (start, end) = encode_key_for_boundary_without_mvcc(&CacheRange::from_region(r));
         let mut iter = handle.iterator();
         let guard = &epoch::pin();
         let mut count = 0;
@@ -453,39 +459,39 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
         .unwrap();
     // Now, a DeleteRange task has been done: actually, the task will be delayed, so
     // the data has not be deleted
-    verify_data(&range1, 3);
+    verify_data(&r1, 3);
     // remove failpoint so that the range can leave write status
     fail::remove("before_clear_ranges_in_being_written");
     delete_range_rx
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
     // Now, data should be deleted
-    verify_data(&range1, 0);
+    verify_data(&r1, 0);
 
     // Next to test range2
     fail::cfg("before_clear_ranges_in_being_written", "pause").unwrap();
     write_batch_consume_rx
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
-    verify_data(&range2, 2);
+    verify_data(&r2, 2);
     // remove failpoint so that the range can leave write status
     fail::remove("before_clear_ranges_in_being_written");
     delete_range_rx
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
-    verify_data(&range2, 0);
+    verify_data(&r2, 0);
 
     // ensure the range enters on_snapshot_load_finished before eviction
     snapshot_load_rx
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
-    engine.evict_range(&range3);
+    engine.evict_region(&r3);
 
     fail::cfg("before_clear_ranges_in_being_written", "pause").unwrap();
     write_batch_consume_rx
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
-    verify_data(&range3, 3);
+    verify_data(&r3, 3);
     snapshot_load_cancel_rx
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
@@ -493,7 +499,7 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     delete_range_rx
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
-    verify_data(&range3, 0);
+    verify_data(&r3, 0);
 
     let _ = handle.join();
 }
@@ -510,17 +516,17 @@ fn test_double_delete_range_schedule() {
     )));
     engine.set_disk_engine(rocks_engine);
 
-    let range1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
-    let range2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
-    let range3 = CacheRange::new(b"k40".to_vec(), b"k50".to_vec());
+    let r1 = new_region(1, b"k00".to_vec(), b"k10".to_vec());
+    let r2 = new_region(2, b"k20".to_vec(), b"k30".to_vec());
+    let r3 = new_region(3, b"k40".to_vec(), b"k50".to_vec());
     let (snapshot_load_tx, snapshot_load_rx) = sync_channel(0);
     let engine_clone = engine.clone();
-    let r = CacheRange::new(b"k00".to_vec(), b"k60".to_vec());
+    let r = new_region(4, b"k00".to_vec(), b"k60".to_vec());
     fail::cfg_callback("on_snapshot_load_finished", move || {
         let _ = snapshot_load_tx.send(true);
         // evict all ranges. So the loading ranges will also be evicted and a delete
         // range task will be scheduled.
-        engine_clone.evict_range(&r);
+        engine_clone.evict_region(r);
     })
     .unwrap();
 
@@ -530,16 +536,20 @@ fn test_double_delete_range_schedule() {
     })
     .unwrap();
 
-    engine.new_range(range1.clone());
-    engine.new_range(range2.clone());
-    engine.load_range(range3.clone()).unwrap();
+    engine.new_egion(r1.clone());
+    engine.new_egion(r2.clone());
+    engine.load_region(r3.clone()).unwrap();
 
-    let snap1 = engine.snapshot(range1.clone(), 100, 100).unwrap();
-    let snap2 = engine.snapshot(range2.clone(), 100, 100).unwrap();
+    let snap1 = engine
+        .snapshot(r1.id, 0, CacheRegion::from_region(&r1), 100, 100)
+        .unwrap();
+    let snap2 = engine
+        .snapshot(r2.id, 0, CacheRegion::from_region(&r2), 100, 100)
+        .unwrap();
 
     let mut wb = engine.write_batch();
     // prepare range to trigger loading
-    wb.prepare_for_region(range3.clone());
+    wb.prepare_for_region(&r3);
     wb.set_sequence_number(10).unwrap();
     wb.write().unwrap();
 

@@ -120,6 +120,12 @@ where
                         .inc();
                     None
                 }
+                Err(FailedReason::EpochNotMatch) => {
+                    RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC
+                        .epoch_not_match
+                        .inc();
+                    None
+                }
             }
         } else {
             RANGE_CACHEN_SNAPSHOT_ACQUIRE_FAILED_REASON_COUNT_STAIC

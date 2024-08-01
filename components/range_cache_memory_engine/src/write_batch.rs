@@ -242,14 +242,13 @@ impl RangeCacheWriteBatch {
             return vec![];
         }
         let mut core = self.engine.core.write();
-        let mut ranges = vec![];
+        let mut regions = vec![];
         let range_manager = core.mut_range_manager();
         for (_, r) in self.regions_to_evict.drain() {
-            if !range_manager.evict_region(&r) {
-                ranges.push(r);
-            }
+            let mut to_delete = range_manager.evict_region(&r);
+            regions.append(&mut to_delete);
         }
-        ranges
+        regions
     }
 
     #[inline]
@@ -449,7 +448,7 @@ impl RangeCacheWriteBatchEntry {
 // still handles corretly even they are randomly positioned.
 //
 // Note: Some entries may not found a range in both
-// `pending_ranges_loading_data` and `ranges`, it means the range has been
+// `pending_regions_loading_data` and `ranges`, it means the range has been
 // evicted.
 pub fn group_write_batch_entries(
     mut entries: Vec<RangeCacheWriteBatchEntry>,
@@ -647,8 +646,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        background::flush_epoch, config::RangeCacheConfigManager, RangeCacheEngineConfig,
-        RangeCacheEngineContext,
+        background::flush_epoch, config::RangeCacheConfigManager, engine::tests::new_region,
+        RangeCacheEngineConfig, RangeCacheEngineContext,
     };
 
     // We should not use skiplist.get directly as we only cares keys without
@@ -671,15 +670,15 @@ mod tests {
         let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
-        let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
-        engine.new_range(r.clone());
+        let r = new_region(1, b"", b"z");
+        engine.new_region(r.clone());
         {
             let mut core = engine.core.write();
-            core.mut_range_manager().set_safe_point(&r, 10);
+            core.mut_range_manager().set_safe_point(r.id, 10);
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.range_cache_status = RangeCacheStatus::Cached;
-        wb.prepare_for_region(r.clone());
+        wb.prepare_for_region(&r);
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
         assert_eq!(wb.write().unwrap(), 1);
@@ -694,15 +693,15 @@ mod tests {
         let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
-        let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
-        engine.new_range(r.clone());
+        let r = new_region(1, b"", b"z");
+        engine.new_region(r.clone());
         {
             let mut core = engine.core.write();
             core.mut_range_manager().set_safe_point(&r, 10);
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.range_cache_status = RangeCacheStatus::Cached;
-        wb.prepare_for_region(r.clone());
+        wb.prepare_for_region(&r);
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_save_point();
         wb.put(b"aaa", b"ccc").unwrap();
@@ -722,25 +721,27 @@ mod tests {
         let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
-        let r = CacheRange::new(b"".to_vec(), b"z".to_vec());
-        engine.new_range(r.clone());
+        let r = new_region(1, b"", b"z");
+        engine.new_region(r.clone());
         {
             let mut core = engine.core.write();
             core.mut_range_manager().set_safe_point(&r, 10);
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.range_cache_status = RangeCacheStatus::Cached;
-        wb.prepare_for_region(r.clone());
+        wb.prepare_for_region(&r);
         wb.put(b"aaa", b"bbb").unwrap();
         wb.set_sequence_number(1).unwrap();
         _ = wb.write();
         wb.clear();
-        wb.prepare_for_region(r.clone());
+        wb.prepare_for_region(&r);
         wb.put(b"bbb", b"ccc").unwrap();
         wb.delete(b"aaa").unwrap();
         wb.set_sequence_number(2).unwrap();
         _ = wb.write();
-        let snapshot = engine.snapshot(r, u64::MAX, 3).unwrap();
+        let snapshot = engine
+            .snapshot(r.id, 0, CacheRange::from(&r), u64::MAX, 3)
+            .unwrap();
         assert_eq!(
             snapshot.get_value(&b"bbb"[..]).unwrap().unwrap(),
             &b"ccc"[..]
@@ -760,29 +761,31 @@ mod tests {
         let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
-        let r1 = CacheRange::new(b"k01".to_vec(), b"k05".to_vec());
-        let r2 = CacheRange::new(b"k05".to_vec(), b"k10".to_vec());
-        let r3 = CacheRange::new(b"k10".to_vec(), b"k15".to_vec());
+        let r1 = new_region(1, b"k01".to_vec(), b"k05".to_vec());
+        let r2 = new_region(2, b"k05".to_vec(), b"k10".to_vec());
+        let r3 = new_region(3, b"k10".to_vec(), b"k15".to_vec());
         {
-            engine.new_range(r1.clone());
+            engine.new_region(r1.clone());
             let mut core = engine.core.write();
-            core.mut_range_manager().set_safe_point(&r1, 10);
+            core.mut_range_manager().set_safe_point(r1.id, 10);
 
             let snap = Arc::new(rocks_engine.snapshot(None));
             core.mut_range_manager()
-                .pending_ranges_loading_data
+                .pending_regions_loading_data
                 .push_back((r2.clone(), snap, false));
         }
         let mut wb = RangeCacheWriteBatch::from(&engine);
-        wb.prepare_for_region(r1.clone());
+        wb.prepare_for_region(&r1);
         wb.put(b"k01", b"val1").unwrap();
-        wb.prepare_for_region(r2.clone());
+        wb.prepare_for_region(&r2);
         wb.put(b"k05", b"val5").unwrap();
-        wb.prepare_for_region(r3);
+        wb.prepare_for_region(&r3);
         wb.put(b"k10", b"val10").unwrap();
         wb.set_sequence_number(2).unwrap();
         let _ = wb.write();
-        let snapshot = engine.snapshot(r1.clone(), u64::MAX, 5).unwrap();
+        let snapshot = engine
+            .snapshot(r1.id, 0, CacheRange::from(&r1), u64::MAX, 5)
+            .unwrap();
         assert_eq!(
             snapshot.get_value(&b"k01"[..]).unwrap().unwrap(),
             &b"val1"[..]
@@ -793,12 +796,18 @@ mod tests {
         }
 
         let mut wb = RangeCacheWriteBatch::from(&engine);
-        wb.prepare_for_region(r1.clone());
+        wb.prepare_for_region(&r1);
         wb.delete(b"k01").unwrap();
         wb.set_sequence_number(5).unwrap();
         let _ = wb.write();
-        let snapshot = engine.snapshot(r1, u64::MAX, 6).unwrap();
+        let snapshot = engine
+            .snapshot(r1.id, 0, CacheRange::from(&r1), u64::MAX, 6)
+            .unwrap();
         assert!(snapshot.get_value(&b"k01"[..]).unwrap().is_none(),);
+    }
+
+    fn region_contains_key(r: &Region, key: &[u8]) -> bool {
+        &r.start_key <= key && &r.end_key > key
     }
 
     #[test]
@@ -809,16 +818,16 @@ mod tests {
         let snap = rocks_engine.snapshot(None);
 
         let mut range_manager = RangeManager::default();
-        let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
-        let r2 = CacheRange::new(b"k10".to_vec(), b"k20".to_vec());
-        let r3 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
-        range_manager.new_range(r1.clone());
+        let r1 = new_region(1, b"k00".to_vec(), b"k10".to_vec());
+        let r2 = new_region(2, b"k10".to_vec(), b"k20".to_vec());
+        let r3 = new_region(3, b"k20".to_vec(), b"k30".to_vec());
+        range_manager.new_region(r1.clone());
         let snap = Arc::new(snap);
         range_manager
-            .pending_ranges_loading_data
+            .pending_regions_loading_data
             .push_back((r2.clone(), snap.clone(), false));
         range_manager
-            .pending_ranges_loading_data
+            .pending_regions_loading_data
             .push_back((r3.clone(), snap, false));
 
         let entries = vec![
@@ -842,18 +851,20 @@ mod tests {
         assert_eq!(entries_to_write.len(), 3);
         entries_to_write
             .iter()
-            .for_each(|e| assert!(r1.contains_key(&e.key)));
-        group_entries_to_cache.iter().for_each(|(range, entries)| {
-            if *range == r2 {
+            .for_each(|e| assert!(region_contains_key(&r1, &e.key)&));
+        group_entries_to_cache.iter().for_each(|(id, entries)| {
+            let region = if *id == r2.id {
                 assert_eq!(entries.len(), 2);
-            } else if *range == r3 {
+                &r2
+            } else if *id == r3.id {
                 assert_eq!(entries.len(), 4);
+                &r3
             } else {
                 unreachable!();
-            }
+            };
             entries
                 .iter()
-                .for_each(|e| assert!(range.contains_key(&e.key)))
+                .for_each(|e| assert!(region_contains_key(&region, &e.key)))
         });
     }
 
@@ -865,7 +876,7 @@ mod tests {
                 .core
                 .read()
                 .range_manager()
-                .ranges_being_deleted
+                .regions_being_deleted
                 .is_empty()
             {
                 std::thread::sleep(Duration::from_millis(200));
@@ -884,30 +895,34 @@ mod tests {
         let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(config),
         )));
-        let range1 = CacheRange::new(b"kk00".to_vec(), b"kk10".to_vec());
-        let range2 = CacheRange::new(b"kk10".to_vec(), b"kk20".to_vec());
-        let range3 = CacheRange::new(b"kk20".to_vec(), b"kk30".to_vec());
-        let range4 = CacheRange::new(b"kk30".to_vec(), b"kk40".to_vec());
-        let range5 = CacheRange::new(b"kk40".to_vec(), b"kk50".to_vec());
-        for r in [&range1, &range2, &range3, &range4, &range5] {
-            engine.new_range(r.clone());
+        let regions = [
+            new_region(1, b"kk00", b"kk10"),
+            new_region(2, b"kk10", b"kk20"),
+            new_region(3, b"kk20", b"kk30"),
+            new_region(4, b"kk30", b"kk40"),
+            new_region(5, b"kk40", b"kk50"),
+        ];
+        for r in &regions {
+            engine.new_region(r.clone());
             {
                 let mut core = engine.core.write();
                 core.mut_range_manager().set_safe_point(r, 10);
             }
-            let _ = engine.snapshot(r.clone(), 1000, 1000).unwrap();
+            let _ = engine
+                .snapshot(r.id, 0, CacheRange::from_region(&r), 1000, 1000)
+                .unwrap();
         }
 
         let val1: Vec<u8> = (0..150).map(|_| 0).collect();
         let mut wb = RangeCacheWriteBatch::from(&engine);
-        wb.prepare_for_region(range1.clone());
+        wb.prepare_for_region(&regions[0]);
         // memory required:
         // 4(key) + 8(sequencen number) + 150(value) + 16(2 Arc<MemoryController) = 178
         wb.put(b"kk01", &val1).unwrap();
-        wb.prepare_for_region(range2.clone());
+        wb.prepare_for_region(&regions[1]);
         // Now, 356
         wb.put(b"kk11", &val1).unwrap();
-        wb.prepare_for_region(range3.clone());
+        wb.prepare_for_region(&regions[2]);
         // Now, 534
         wb.put(b"kk21", &val1).unwrap();
         // memory required:
@@ -920,13 +935,13 @@ mod tests {
 
         // The memory capacity is enough for the following two inserts
         let val3: Vec<u8> = (0..150).map(|_| 3).collect();
-        wb.prepare_for_region(range4.clone());
+        wb.prepare_for_region(&regions[3]);
         // Now, 740
         wb.put(b"kk32", &val3).unwrap();
 
         // The memory will fail to acquire
         let val4: Vec<u8> = (0..300).map(|_| 3).collect();
-        wb.prepare_for_region(range5.clone());
+        wb.prepare_for_region(&regions[4]);
         wb.put(b"kk41", &val4).unwrap();
 
         let memory_controller = engine.memory_controller();
@@ -939,21 +954,31 @@ mod tests {
         // most MB level.
         assert_eq!(1220, memory_controller.mem_usage());
 
-        let snap1 = engine.snapshot(range1.clone(), 1000, 1010).unwrap();
+        let snap1 = engine
+            .snapshot(regions[0].id, 0, CacheRange::from(&regions[0]), 1000, 1010)
+            .unwrap();
         assert_eq!(snap1.get_value(b"kk01").unwrap().unwrap(), &val1);
-        let snap2 = engine.snapshot(range2.clone(), 1000, 1010).unwrap();
+        let snap2 = engine
+            .snapshot(regions[1].id, 0, CacheRange::from(&regions[1]), 1000, 1010)
+            .unwrap();
         assert_eq!(snap2.get_value(b"kk11").unwrap().unwrap(), &val1);
 
         assert_eq!(
-            engine.snapshot(range3.clone(), 1000, 1000).unwrap_err(),
+            engine
+                .snapshot(regions[2].id, 0, CacheRange::from(&regions[2]), 1000, 1000)
+                .unwrap_err(),
             FailedReason::NotCached
         );
 
-        let snap4 = engine.snapshot(range4.clone(), 1000, 1010).unwrap();
+        let snap4 = engine
+            .snapshot(regions[3].id, 0, CacheRange::from(&regions[3]), 1000, 1010)
+            .unwrap();
         assert_eq!(snap4.get_value(b"kk32").unwrap().unwrap(), &val3);
 
         assert_eq!(
-            engine.snapshot(range5.clone(), 1000, 1010).unwrap_err(),
+            engine
+                .snapshot(regions[4].id, 0, CacheRange::from(&regions[4]), 1000, 1010)
+                .unwrap_err(),
             FailedReason::NotCached
         );
 
@@ -965,7 +990,7 @@ mod tests {
         assert_eq!(822, memory_controller.mem_usage());
 
         drop(snap1);
-        engine.evict_range(&range1);
+        engine.evict_region(&regions[0].clone());
         flush_epoch();
         wait_evict_done(&engine);
         assert_eq!(548, memory_controller.mem_usage());
@@ -980,22 +1005,26 @@ mod tests {
         let config = Arc::new(VersionTrack::new(config));
         let engine =
             RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(config.clone()));
-        let r1 = CacheRange::new(b"kk00".to_vec(), b"kk10".to_vec());
-        let r2 = CacheRange::new(b"kk10".to_vec(), b"kk20".to_vec());
+        let r1 = new_region(1, b"kk00".to_vec(), b"kk10".to_vec());
+        let r2 = new_region(2, b"kk10".to_vec(), b"kk20".to_vec());
         for r in [&r1, &r2] {
-            engine.new_range(r.clone());
+            engine.new_region(r.clone());
             {
                 let mut core = engine.core.write();
                 core.mut_range_manager().set_safe_point(r, 10);
             }
-            let _ = engine.snapshot(r.clone(), 1000, 1000).unwrap();
+            let _ = engine
+                .snapshot(r.id, 0, CacheRange::from_region(r), 1000, 1000)
+                .unwrap();
         }
 
         let val1: Vec<u8> = (0..150).map(|_| 0).collect();
         let mut wb = RangeCacheWriteBatch::from(&engine);
-        wb.prepare_for_region(r2.clone());
+        wb.prepare_for_region(&r2);
         wb.put(b"kk11", &val1).unwrap();
-        let snap1 = engine.snapshot(r1.clone(), 1000, 1000).unwrap();
+        let snap1 = engine
+            .snapshot(r1.id, 0, CacheRange::from_region(&r1), 1000, 1000)
+            .unwrap();
 
         // disable the range cache
         let mut config_manager = RangeCacheConfigManager(config.clone());
@@ -1009,15 +1038,17 @@ mod tests {
         assert!(snap1.get_value(b"kk00").unwrap().is_none());
 
         let mut wb = RangeCacheWriteBatch::from(&engine);
-        wb.prepare_for_region(r1.clone());
+        wb.prepare_for_region(&r1);
         // put should trigger the evict and it won't write into range cache
         wb.put(b"kk01", &val1).unwrap();
         wb.write_impl(1000).unwrap();
 
         // new snapshot will fail to create as it's evicted already
-        let snap1 = engine.snapshot(r1.clone(), 1000, 1000);
+        let snap1 = engine.snapshot(r1.id, 0, CacheRange::from_region(&r1), 1000, 1000);
         assert_eq!(snap1.unwrap_err(), FailedReason::NotCached);
-        let snap2 = engine.snapshot(r2.clone(), 1000, 1000).unwrap();
+        let snap2 = engine
+            .snapshot(r2.id, 0, CacheRange::from_region(&r2), 1000, 1000)
+            .unwrap();
         // if no new write, the range cache can still be used.
         assert_eq!(snap2.get_value(b"kk11").unwrap().unwrap(), &val1);
 
@@ -1027,9 +1058,11 @@ mod tests {
         config_change.insert(String::from("enabled"), ConfigValue::Bool(true));
         config_manager.dispatch(config_change).unwrap();
 
-        let snap1 = engine.snapshot(r1.clone(), 1000, 1000);
+        let snap1 = engine.snapshot(r1.id, 0, CacheRange::from_region(&r1), 1000, 1000);
         assert_eq!(snap1.unwrap_err(), FailedReason::NotCached);
-        let snap2 = engine.snapshot(r2.clone(), 1000, 1000).unwrap();
+        let snap2 = engine
+            .snapshot(r2.id, 0, CacheRange::from_region(&r2), 1000, 1000)
+            .unwrap();
         assert_eq!(snap2.get_value(b"kk11").unwrap().unwrap(), &val1);
     }
 }

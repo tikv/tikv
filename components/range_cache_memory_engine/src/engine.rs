@@ -27,6 +27,8 @@ use raftstore::coprocessor::RegionInfoProvider;
 use slog_global::error;
 use tikv_util::{config::VersionTrack, info};
 
+#[cfg(test)]
+use crate::range_manager::LoadFailedReason;
 use crate::{
     background::{BackgroundTask, BgWorkManager, PdRangeHintService},
     keys::{
@@ -341,22 +343,30 @@ impl RangeCacheMemoryEngine {
         self.config.value().expected_region_size()
     }
 
+    pub fn new_region(&self, region: Region) {
+        self.core.write().range_manager.new_region(region);
+    }
+
+    #[cfg(test)]
+    pub fn load_region(&self, region: Region) -> result::Result<(), LoadFailedReason> {
+        self.core.write().mut_range_manager().load_region(region)
+    }
+
     /// Evict a region from the in-memory engine. After this call, the region
     /// will not be readable, but the data of the region may not be deleted
     /// immediately due to some ongoing snapshots.
     pub fn evict_region(&self, region: Region) {
         let mut core = self.core.write();
-        let should_evict = core.range_manager.evict_region(&region);
-        if should_evict {
-            let mut regions = vec![region];
+        let mut deleteable_regions = core.range_manager.evict_region(&region);
+        if !deleteable_regions.is_empty() {
             core.mut_range_manager()
-                .mark_delete_regions_scheduled(&mut regions);
-            if !regions.is_empty() {
+                .mark_delete_regions_scheduled(&mut deleteable_regions);
+            if !deleteable_regions.is_empty() {
                 drop(core);
                 // The range can be deleted directly.
                 if let Err(e) = self
                     .bg_worker_manager()
-                    .schedule_task(BackgroundTask::DeleteRegions(regions))
+                    .schedule_task(BackgroundTask::DeleteRegions(deleteable_regions))
                 {
                     error!(
                         "schedule delete region failed";
@@ -401,7 +411,11 @@ impl RangeCacheMemoryEngine {
 
         let cached_region = range_manager.pending_regions.swap_remove(idx);
         // region range changes, discard this range.
-        if cached_region.get_region_epoch().version != region.get_region_epoch().version {
+        if cached_region.get_region_epoch().version != region.get_region_epoch().version
+            && (cached_region.start_key < region.start_key
+                || cached_region.end_key > region.end_key)
+        {
+            info!("ignore outdated pending region"; "cached_region" => ?cached_region, "current_region" => ?region);
             return RangeCacheStatus::NotInCache;
         }
 
@@ -439,7 +453,7 @@ impl RangeCacheMemoryEngine {
     }
 
     // The writes in `handle_pending_range_in_loading_buffer` indicating the ranges
-    // of the writes are pending_ranges that are still loading data at the time of
+    // of the writes are pending_regions that are still loading data at the time of
     // `prepare_for_apply`. But some of them may have been finished the load and
     // become a normal range so that the writes should be written to the engine
     // directly rather than cached. This method decides which writes should be
@@ -602,6 +616,7 @@ pub mod tests {
 
     use crossbeam::epoch;
     use engine_traits::{CacheRange, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use kvproto::metapb::Region;
     use tikv_util::config::{ReadableSize, VersionTrack};
 
     use super::SkiplistEngine;
@@ -612,38 +627,58 @@ pub mod tests {
         ValueType,
     };
 
+    pub fn new_region<T1: Into<Vec<u8>>, T2: Into<Vec<u8>>>(id: u64, start: T1, end: T2) -> Region {
+        let mut region = Region::default();
+        region.id = id;
+        region.start_key = start.into();
+        region.end_key = end.into();
+        region
+    }
+
     #[test]
-    fn test_overlap_with_pending() {
+    fn test_region_overlap_with_outdated_epoch() {
         let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
-        let range1 = CacheRange::new(b"k1".to_vec(), b"k3".to_vec());
-        engine.load_range(range1).unwrap();
+        let region1 = new_region(1, b"k1", b"k3");
+        engine.load_region(region1).unwrap();
 
-        let range2 = CacheRange::new(b"k1".to_vec(), b"k5".to_vec());
-        engine.prepare_for_apply(1, &range2);
+        let mut region2 = new_region(1, b"k1", b"k5");
+        region2.mut_region_epoch().version = 2;
+        engine.prepare_for_apply(1, CacheRange::from_region(&region2), &region2);
         assert!(
-            engine.core.read().range_manager().pending_ranges.is_empty()
+            engine
+                .core
+                .read()
+                .range_manager()
+                .pending_regions
+                .is_empty()
                 && engine
                     .core
                     .read()
                     .range_manager()
-                    .pending_ranges_loading_data
+                    .pending_regions_loading_data
                     .is_empty()
         );
 
-        let range1 = CacheRange::new(b"k1".to_vec(), b"k3".to_vec());
-        engine.load_range(range1).unwrap();
+        let region1 = new_region(1, b"k1", b"k3");
+        engine.load_region(region1).unwrap();
 
-        let range2 = CacheRange::new(b"k2".to_vec(), b"k5".to_vec());
-        engine.prepare_for_apply(1, &range2);
+        let mut region2 = new_region(1, b"k2", b"k5");
+        region2.mut_region_epoch().version = 2;
+        engine.prepare_for_apply(1, CacheRange::from_region(&region2), &region2);
         assert!(
-            engine.core.read().range_manager().pending_ranges.is_empty()
+            engine
+                .core
+                .read()
+                .range_manager()
+                .pending_regions
+                .is_empty()
                 && engine
                     .core
                     .read()
                     .range_manager()
-                    .pending_ranges_loading_data
+                    .pending_regions_loading_data
                     .is_empty()
         );
     }

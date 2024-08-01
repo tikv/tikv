@@ -51,7 +51,7 @@ pub struct RangeMeta {
     // need a range id.
     id: u64,
     region: Region,
-    range_snapshot_list: SnapshotList,
+    region_snapshot_list: SnapshotList,
     safe_point: u64,
 }
 
@@ -60,7 +60,7 @@ impl RangeMeta {
         Self {
             id,
             region,
-            range_snapshot_list: SnapshotList::default(),
+            region_snapshot_list: SnapshotList::default(),
             safe_point: 0,
         }
     }
@@ -79,17 +79,8 @@ impl RangeMeta {
         self.safe_point = safe_point;
     }
 
-    fn derive_from(id: u64, r: &RangeMeta) -> Self {
-        Self {
-            id,
-            region: r.region.clone(),
-            range_snapshot_list: SnapshotList::default(),
-            safe_point: r.safe_point,
-        }
-    }
-
-    pub(crate) fn range_snapshot_list(&self) -> &SnapshotList {
-        &self.range_snapshot_list
+    pub(crate) fn region_snapshot_list(&self) -> &SnapshotList {
+        &self.region_snapshot_list
     }
 }
 
@@ -111,7 +102,7 @@ impl IdAllocator {
 // k3-k5, and k5-k10.
 // k1-k3 and k5-k10 will be new ranges inserted in self.ranges with meta dervied
 // from meta of k1-k10 (only safe_ts will be derived). k1-k10 will be removed
-// from self.ranges and inserted to self.historical_ranges. Then, k3-k5 will be
+// from self.ranges and inserted to self.historical_regions. Then, k3-k5 will be
 // in the self.evicted_ranges. Now, we cannot remove the data of k3-k5 as there
 // may be some snapshot of k1-k10. After these snapshot are dropped, k3-k5 can
 // be acutally removed.
@@ -226,7 +217,7 @@ impl RangeManager {
             .any(|r| r.0.id == region_id)
         // self.pending_ranges_loading_data
         //     .iter()
-        //     .any(|(r, ..)| r.contains_range(range))
+        //     .any(|(r, ..)| r.contains_region(range))
     }
 
     fn overlap_with_region(&self, region: &Region) -> bool {
@@ -246,18 +237,21 @@ impl RangeManager {
         let Some(meta) = self.regions.get_mut(&region_id) else {
             return Err(FailedReason::NotCached);
         };
-        assert_eq!(meta.region.get_region_epoch().version, region_epoch);
+
+        if meta.region.get_region_epoch().version != region_epoch {
+            return Err(FailedReason::EpochNotMatch);
+        }
 
         if read_ts <= meta.safe_point {
             return Err(FailedReason::TooOldRead);
         }
 
-        meta.range_snapshot_list.new_snapshot(read_ts);
+        meta.region_snapshot_list.new_snapshot(read_ts);
         Ok(meta.id)
     }
 
     // If the snapshot is the last one in the snapshot list of one cache range in
-    // historical_ranges, it means one or some evicted_ranges may be ready to be
+    // historical_regions, it means one or some evicted_ranges may be ready to be
     // removed physically.
     // So, we return a vector of ranges to denote the ranges that are ready to be
     // removed.range_key
@@ -266,9 +260,9 @@ impl RangeManager {
         snapshot_meta: &RangeCacheSnapshotMeta,
     ) -> Vec<Region> {
         if let Some(meta) = self.historical_regions.get_mut(&snapshot_meta.range) {
-            meta.range_snapshot_list
+            meta.region_snapshot_list
                 .remove_snapshot(snapshot_meta.snapshot_ts);
-            if meta.range_snapshot_list.is_empty() {
+            if meta.region_snapshot_list.is_empty() {
                 self.historical_regions.remove(&snapshot_meta.range);
             }
 
@@ -286,7 +280,7 @@ impl RangeManager {
         // `self.historical_regions`
         let region_meta = self.regions.get_mut(&snapshot_meta.region_id).unwrap();
         region_meta
-            .range_snapshot_list
+            .region_snapshot_list
             .remove_snapshot(snapshot_meta.snapshot_ts);
 
         vec![]
@@ -306,7 +300,7 @@ impl RangeManager {
     //
     // For 2, this is caused by some special operations such as merge and delete
     // range. So, conservatively, we evict all ranges overlap with it.
-    pub(crate) fn evict_region(&mut self, evict_region: &Region) -> bool {
+    pub(crate) fn evict_region(&mut self, evict_region: &Region) -> Vec<Region> {
         info!(
             "try to evict region";
             "evict_region" => ?evict_region,
@@ -316,37 +310,80 @@ impl RangeManager {
         self.pending_regions_loading_data
             .iter_mut()
             .for_each(|(r, _, canceled)| {
-                if evict_region.id == r.id {
+                if is_region_overlap(evict_region, r) {
                     // TODO: handle epoch changes.
-                    info!("evict overlapped region with stale epoch"; "evicted_region" => ?evict_region, "overlapped_region" => ?r,);
+                    info!("evict overlapped region"; "evicted_region" => ?evict_region, "overlapped_region" => ?r,);
                     *canceled = true;
                 }
             });
 
-        let should_evict = self.regions.contains_key(&evict_region.id);
-        if !should_evict {
-            info!(
-                "evict a region that is not cached";
-                "range" => ?evict_region,
-            );
-        } else {
-            let meta = self.regions.remove(&evict_region.id).unwrap();
-            info!(
-                "evict region in cache range engine";
-                "evict_region" => ?meta.region,
-            );
-            let range =
-                CacheRange::new(evict_region.start_key.clone(), evict_region.end_key.clone());
-            self.regions_being_deleted
-                .insert(range, (meta.region.clone(), false, Instant::now()));
-            if !meta.range_snapshot_list.is_empty() {
-                let range =
-                    CacheRange::new(meta.region.start_key.clone(), meta.region.end_key.clone());
-                self.historical_regions.insert(range, meta);
+        let mut deleteable_regions = vec![];
+        let mut need_scan = true;
+        if let Some(meta) = self.regions.get(&evict_region.id) {
+            // if epoch not changed, no need to do range scan.
+            if meta.region.get_region_epoch().version == evict_region.get_region_epoch().version {
+                need_scan = false;
+            }
+            if !need_scan || is_region_overlap(&meta.region, evict_region) {
+                if let Some(region) = self.do_evict_region(evict_region.id, evict_region) {
+                    deleteable_regions.push(region);
+                }
             }
         }
 
-        should_evict
+        if need_scan {
+            let evict_ids: Vec<_> = self
+                .regions_by_range
+                .iter()
+                .filter_map(|(r, id)| {
+                    if r.overlaps_with_region(&evict_region) {
+                        Some(*id)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for rid in evict_ids {
+                if let Some(region) = self.do_evict_region(rid, evict_region) {
+                    deleteable_regions.push(region);
+                }
+            }
+        }
+
+        deleteable_regions
+    }
+
+    // return the region if it can be directly deleted.
+    fn do_evict_region(&mut self, id: u64, evict_region: &Region) -> Option<Region> {
+        let meta = self.remove_region(id).unwrap();
+        assert!(is_region_overlap(&meta.region, evict_region));
+        info!(
+            "evict overlap region in cache range engine";
+            "target_region" => ?evict_region,
+            "overlap_region" => ?meta.region,
+        );
+        let range = CacheRange::from_region(&meta.region);
+        self.regions_being_deleted
+            .insert(range.clone(), (meta.region.clone(), false, Instant::now()));
+        if !meta.region_snapshot_list.is_empty() {
+            self.historical_regions.insert(range, meta);
+        } else if !self
+            .historical_regions
+            .keys()
+            .any(|r| r.overlaps_with_region(&meta.region))
+        {
+            return Some(meta.region);
+        }
+        None
+    }
+
+    fn remove_region(&mut self, id: u64) -> Option<RangeMeta> {
+        self.regions.remove(&id).map(|m| {
+            self.regions_by_range
+                .remove(&CacheRange::from_region(&m.region))
+                .unwrap();
+            m
+        })
     }
 
     pub fn has_regions_in_gc(&self) -> bool {
@@ -517,86 +554,113 @@ pub enum RangeCacheStatus {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use engine_traits::{CacheRange, FailedReason};
 
     use super::RangeManager;
-    use crate::range_manager::LoadFailedReason;
+    use crate::{engine::tests::new_region, range_manager::LoadFailedReason};
 
     #[test]
     fn test_range_manager() {
         let mut range_mgr = RangeManager::default();
-        let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
+        let r1 = new_region(1, "k00", b"k10");
 
-        range_mgr.new_range(r1.clone());
-        range_mgr.set_safe_point(&r1, 5);
+        range_mgr.new_region(r1.clone());
+        range_mgr.set_safe_point(r1.id, 5);
         assert_eq!(
-            range_mgr.range_snapshot(&r1, 5).unwrap_err(),
+            range_mgr.region_snapshot(r1.id, 0, 5).unwrap_err(),
             FailedReason::TooOldRead
         );
-        range_mgr.range_snapshot(&r1, 8).unwrap();
-        range_mgr.range_snapshot(&r1, 10).unwrap();
-        let tmp_r = CacheRange::new(b"k08".to_vec(), b"k15".to_vec());
+        range_mgr.region_snapshot(r1.id, 0, 8).unwrap();
+        range_mgr.region_snapshot(r1.id, 0, 10).unwrap();
         assert_eq!(
-            range_mgr.range_snapshot(&tmp_r, 8).unwrap_err(),
-            FailedReason::NotCached
-        );
-        let tmp_r = CacheRange::new(b"k10".to_vec(), b"k11".to_vec());
-        assert_eq!(
-            range_mgr.range_snapshot(&tmp_r, 8).unwrap_err(),
+            range_mgr.region_snapshot(2, 0, 8).unwrap_err(),
             FailedReason::NotCached
         );
 
-        let r_evict = CacheRange::new(b"k03".to_vec(), b"k06".to_vec());
-        let r_left = CacheRange::new(b"k00".to_vec(), b"k03".to_vec());
-        let r_right = CacheRange::new(b"k06".to_vec(), b"k10".to_vec());
-        range_mgr.evict_range(&r_evict);
-        let meta1 = range_mgr.historical_ranges.get(&r1).unwrap();
-        assert!(range_mgr.ranges_being_deleted.get(&r_evict).is_some());
-        assert!(range_mgr.ranges.get(&r1).is_none());
-        let meta2 = range_mgr.ranges.get(&r_left).unwrap();
-        let meta3 = range_mgr.ranges.get(&r_right).unwrap();
+        let mut r_evict = new_region(2, b"k03", b"k06");
+        let mut r_left = new_region(1, b"k00", b"k03");
+        let mut r_right = new_region(3, b"k06", b"k10");
+        for r in [&mut r_evict, &mut r_left, &mut r_right] {
+            r.mut_region_epoch().version = 2;
+        }
+        range_mgr.split_region(&r1, vec![r_left, r_evict.clone(), r_right]);
+        range_mgr.evict_region(&r_evict);
+        let meta1 = range_mgr
+            .historical_regions
+            .get(&CacheRange::from_region(&r1))
+            .unwrap();
+        assert!(
+            range_mgr
+                .regions_being_deleted
+                .get(&CacheRange::from_region(&r_evict))
+                .is_some()
+        );
+        assert!(
+            range_mgr
+                .regions_by_range
+                .get(&CacheRange::from_region(&r1))
+                .is_none()
+        );
+        let meta2 = range_mgr.regions.get(&r_left.id).unwrap();
+        let meta3 = range_mgr.regions.get(&r_right.id).unwrap();
         assert!(meta1.safe_point == meta2.safe_point && meta1.safe_point == meta3.safe_point);
 
         // evict a range with accurate match
-        let _ = range_mgr.range_snapshot(&r_left, 10);
-        range_mgr.evict_range(&r_left);
-        assert!(range_mgr.historical_ranges.get(&r_left).is_some());
-        assert!(range_mgr.ranges_being_deleted.get(&r_left).is_some());
-        assert!(range_mgr.ranges.get(&r_left).is_none());
+        let _ = range_mgr.region_snapshot(r_left.id, 1, 10);
+        range_mgr.evict_region(&r_left);
+        assert!(
+            range_mgr
+                .historical_regions
+                .get(&CacheRange::from_region(&r_left))
+                .is_some()
+        );
+        assert!(
+            range_mgr
+                .regions_being_deleted
+                .get(&CacheRange::from_region(&r_left))
+                .is_some()
+        );
+        assert!(range_mgr.regions.get(&r_left.id).is_none());
 
-        assert!(range_mgr.evict_range(&r_right).is_empty());
-        assert!(range_mgr.historical_ranges.get(&r_right).is_none());
+        assert!(range_mgr.evict_region(&r_right).is_empty());
+        assert!(
+            range_mgr
+                .historical_regions
+                .get(&CacheRange::from_region(&r_right))
+                .is_none()
+        );
     }
 
     #[test]
     fn test_range_load() {
         let mut range_mgr = RangeManager::default();
-        let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
-        let r2 = CacheRange::new(b"k10".to_vec(), b"k20".to_vec());
-        let r3 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
-        let r4 = CacheRange::new(b"k25".to_vec(), b"k35".to_vec());
-        range_mgr.new_range(r1.clone());
-        range_mgr.new_range(r3.clone());
-        range_mgr.evict_range(&r1);
+        let r1 = new_region(1, b"k00", b"k10");
+        let r2 = new_region(2, b"k10", b"k20");
+        let r3 = new_region(3, b"k20", b"k30");
+        let r4 = new_region(4, b"k25", b"k35");
 
-        let mut gced = BTreeSet::default();
-        gced.insert(r2.clone());
-        range_mgr.set_ranges_in_gc(gced);
+        range_mgr.new_region(r1.clone());
+        range_mgr.new_region(r3.clone());
+        range_mgr.evict_region(&r1);
+
+        let mut gced = BTreeMap::default();
+        gced.insert(CacheRange::from_region(&r2), r2.id);
+        range_mgr.set_regions_in_gc(gced);
 
         assert_eq!(
-            range_mgr.load_range(r1).unwrap_err(),
+            range_mgr.load_region(r1).unwrap_err(),
             LoadFailedReason::Evicting
         );
 
         assert_eq!(
-            range_mgr.load_range(r2).unwrap_err(),
+            range_mgr.load_region(r2).unwrap_err(),
             LoadFailedReason::InGc
         );
 
         assert_eq!(
-            range_mgr.load_range(r4).unwrap_err(),
+            range_mgr.load_region(r4).unwrap_err(),
             LoadFailedReason::Overlapped
         );
     }
@@ -604,121 +668,114 @@ mod tests {
     #[test]
     fn test_range_load_overlapped() {
         let mut range_mgr = RangeManager::default();
-        let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
-        let r2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
-        let r3 = CacheRange::new(b"k40".to_vec(), b"k50".to_vec());
-        range_mgr.new_range(r1.clone());
-        range_mgr.evict_range(&r1);
+        let r1 = new_region(1, b"k00", b"k10");
+        let r2 = new_region(2, b"k20", b"k30");
+        let r3 = new_region(3, b"k40", b"k50");
+        range_mgr.new_region(r1.clone());
+        range_mgr.evict_region(&r1);
 
-        let mut gced = BTreeSet::default();
-        gced.insert(r2);
-        range_mgr.set_ranges_in_gc(gced);
+        let mut gced = BTreeMap::default();
+        gced.insert(CacheRange::from_region(&r2), r2.id);
+        range_mgr.set_regions_in_gc(gced);
 
-        range_mgr.load_range(r3).unwrap();
+        range_mgr.load_region(r3).unwrap();
 
-        let r = CacheRange::new(b"".to_vec(), b"k05".to_vec());
+        let r = new_region(4, b"k00", b"k05");
         assert_eq!(
-            range_mgr.load_range(r).unwrap_err(),
+            range_mgr.load_region(r).unwrap_err(),
             LoadFailedReason::Evicting
         );
-        let r = CacheRange::new(b"k05".to_vec(), b"k15".to_vec());
+        let r = new_region(4, b"k05", b"k15");
         assert_eq!(
-            range_mgr.load_range(r).unwrap_err(),
+            range_mgr.load_region(r).unwrap_err(),
             LoadFailedReason::Evicting
         );
 
-        let r = CacheRange::new(b"k15".to_vec(), b"k25".to_vec());
-        assert_eq!(range_mgr.load_range(r).unwrap_err(), LoadFailedReason::InGc);
-        let r = CacheRange::new(b"k25".to_vec(), b"k35".to_vec());
-        assert_eq!(range_mgr.load_range(r).unwrap_err(), LoadFailedReason::InGc);
-
-        let r = CacheRange::new(b"k35".to_vec(), b"k45".to_vec());
+        let r = new_region(4, b"k15", b"k25");
         assert_eq!(
-            range_mgr.load_range(r).unwrap_err(),
+            range_mgr.load_region(r).unwrap_err(),
+            LoadFailedReason::InGc
+        );
+        let r = new_region(4, b"k25", b"k35");
+        assert_eq!(
+            range_mgr.load_region(r).unwrap_err(),
+            LoadFailedReason::InGc
+        );
+
+        let r = new_region(4, b"k35", b"k45");
+        assert_eq!(
+            range_mgr.load_region(r).unwrap_err(),
             LoadFailedReason::PendingRange
         );
-        let r = CacheRange::new(b"k45".to_vec(), b"k55".to_vec());
+        let r = new_region(4, b"k45", b"k55");
         assert_eq!(
-            range_mgr.load_range(r).unwrap_err(),
+            range_mgr.load_region(r).unwrap_err(),
             LoadFailedReason::PendingRange
         );
     }
 
     #[test]
-    fn test_evict_ranges() {
+    fn test_evict_regions() {
         {
             let mut range_mgr = RangeManager::default();
-            let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
-            let r2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
-            let r3 = CacheRange::new(b"k40".to_vec(), b"k50".to_vec());
-            range_mgr.new_range(r1.clone());
-            range_mgr.new_range(r2.clone());
-            range_mgr.new_range(r3.clone());
-            range_mgr.contains_range(&r1);
-            range_mgr.contains_range(&r2);
-            range_mgr.contains_range(&r3);
+            let r1 = new_region(1, b"k00", b"k10");
+            let r2 = new_region(2, b"k20", b"k30");
+            let r3 = new_region(3, b"k40", b"k50");
+            range_mgr.new_region(r1.clone());
+            range_mgr.new_region(r2.clone());
+            range_mgr.new_region(r3.clone());
+            range_mgr.contains_region(r1.id);
+            range_mgr.contains_region(r2.id);
+            range_mgr.contains_region(r3.id);
 
-            let r4 = CacheRange::new(b"k00".to_vec(), b"k05".to_vec());
-            let r5 = CacheRange::new(b"k05".to_vec(), b"k10".to_vec());
-            assert_eq!(range_mgr.evict_range(&r4), vec![r4]);
-            assert_eq!(
-                range_mgr.ranges().keys().collect::<Vec<_>>(),
-                vec![&r5, &r2, &r3]
-            );
-
-            let r6 = CacheRange::new(b"k24".to_vec(), b"k27".to_vec());
-            let r7 = CacheRange::new(b"k20".to_vec(), b"k24".to_vec());
-            let r8 = CacheRange::new(b"k27".to_vec(), b"k30".to_vec());
-            assert_eq!(range_mgr.evict_range(&r6), vec![r6]);
-            assert_eq!(
-                range_mgr.ranges().keys().collect::<Vec<_>>(),
-                vec![&r5, &r7, &r8, &r3]
-            );
+            let mut r4 = new_region(4, b"00", b"05");
+            r4.mut_region_epoch().version = 2;
+            assert_eq!(range_mgr.evict_region(&r4), vec![r1]);
         }
 
         {
             let mut range_mgr = RangeManager::default();
-            let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
-            let r2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
-            let r3 = CacheRange::new(b"k40".to_vec(), b"k50".to_vec());
-            range_mgr.new_range(r1.clone());
-            range_mgr.new_range(r2.clone());
-            range_mgr.new_range(r3.clone());
-            range_mgr.contains_range(&r1);
-            range_mgr.contains_range(&r2);
-            range_mgr.contains_range(&r3);
+            let r1 = new_region(1, b"k00", b"k10");
+            let r2 = new_region(2, b"k20", b"k30");
+            let r3 = new_region(3, b"k40", b"k50");
+            range_mgr.new_region(r1.clone());
+            range_mgr.new_region(r2.clone());
+            range_mgr.new_region(r3.clone());
+            assert!(range_mgr.contains_region(r1.id));
+            assert!(range_mgr.contains_region(r2.id));
+            assert!(range_mgr.contains_region(r3.id));
 
-            let r4 = CacheRange::new(b"k".to_vec(), b"k51".to_vec());
-            assert_eq!(range_mgr.evict_range(&r4), vec![r1, r2, r3]);
-            assert!(range_mgr.ranges().is_empty());
+            let r4 = new_region(1, b"k", b"k51");
+            assert_eq!(range_mgr.evict_region(&r4), vec![r1, r2, r3]);
+            assert!(range_mgr.regions().is_empty());
         }
 
         {
             let mut range_mgr = RangeManager::default();
-            let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
-            let r2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
-            let r3 = CacheRange::new(b"k40".to_vec(), b"k50".to_vec());
-            range_mgr.new_range(r1.clone());
-            range_mgr.new_range(r2.clone());
-            range_mgr.new_range(r3.clone());
+            let r1 = new_region(1, b"k00", b"k10");
+            let r2 = new_region(2, b"k20", b"k30");
+            let r3 = new_region(3, b"k40", b"k50");
+            range_mgr.new_region(r1.clone());
+            range_mgr.new_region(r2.clone());
+            range_mgr.new_region(r3.clone());
 
-            let r4 = CacheRange::new(b"k25".to_vec(), b"k55".to_vec());
-            assert_eq!(range_mgr.evict_range(&r4), vec![r2, r3]);
-            assert_eq!(range_mgr.ranges().len(), 1);
+            let r4 = new_region(4, b"k25", b"k55");
+            assert_eq!(range_mgr.evict_region(&r4), vec![r2, r3]);
+            assert_eq!(range_mgr.regions().len(), 1);
         }
 
         {
             let mut range_mgr = RangeManager::default();
-            let r1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
-            let r2 = CacheRange::new(b"k30".to_vec(), b"k40".to_vec());
-            let r3 = CacheRange::new(b"k50".to_vec(), b"k60".to_vec());
-            range_mgr.new_range(r1.clone());
-            range_mgr.new_range(r2.clone());
-            range_mgr.new_range(r3.clone());
+            let r1 = new_region(1, b"k00", b"k10");
+            let r2 = new_region(2, b"k30", b"k40");
+            let r3 = new_region(3, b"k50", b"k60");
+            range_mgr.new_region(r1.clone());
+            range_mgr.new_region(r2.clone());
+            range_mgr.new_region(r3.clone());
 
-            let r4 = CacheRange::new(b"k25".to_vec(), b"k75".to_vec());
-            assert_eq!(range_mgr.evict_range(&r4), vec![r2, r3]);
-            assert_eq!(range_mgr.ranges().len(), 1);
+            let r4 = new_region(1, b"k25", b"k75");
+            assert_eq!(range_mgr.evict_region(&r4), vec![r2, r3]);
+            assert_eq!(range_mgr.regions().len(), 1);
         }
     }
 }

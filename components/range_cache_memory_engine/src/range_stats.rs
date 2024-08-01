@@ -322,17 +322,17 @@ pub mod tests {
             RangeCacheEngineConfig::config_for_test().expected_region_size(),
             sim.clone(),
         );
-        let mut added = Vec::<CacheRange>::new();
-        let mut removed = Vec::<CacheRange>::new();
+        let mut added = Vec::new();
+        let mut removed = Vec::new();
         rsm.collect_changed_ranges(&mut added, &mut removed);
-        assert_eq!(&added, &[CacheRange::from_region(&region_1)]);
+        assert_eq!(&added, &[region_1.clone()]);
         assert!(removed.is_empty());
         let top_regions = vec![(region_1.clone(), 42), (region_2.clone(), 7)];
         sim.set_top_regions(&top_regions);
         added.clear();
         removed.clear();
         rsm.collect_changed_ranges(&mut added, &mut removed);
-        assert_eq!(&added, &[CacheRange::from_region(&region_2)]);
+        assert_eq!(&added, &[region_2.clone()]);
         assert!(removed.is_empty());
         let region_3 = new_region(3, b"k5", b"k6", 0);
         let region_4 = new_region(4, b"k7", b"k8", 0);
@@ -349,22 +349,14 @@ pub mod tests {
         added.clear();
         removed.clear();
         rsm.collect_changed_ranges(&mut added, &mut removed);
-        assert_eq!(
-            &added,
-            &[
-                CacheRange::from_region(&region_3),
-                CacheRange::from_region(&region_4),
-                CacheRange::from_region(&region_5),
-                CacheRange::from_region(&region_6)
-            ]
-        );
+        assert_eq!(&added, &[region_3, region_4, region_5, region_6]);
         // `region_1` is no longer in the top regions list, but since it was loaded less
         // than 10 ms ago, it should not be included in the removed ranges.
         assert!(removed.is_empty());
         std::thread::sleep(Duration::from_millis(100));
         // After 100 ms passed, check again, and verify `region_1` is evictable.
         rsm.collect_changed_ranges(&mut added, &mut removed);
-        assert_eq!(&removed, &[CacheRange::from_region(&region_1)]);
+        assert_eq!(&removed, &[region_1.clone()]);
     }
 
     #[test]
@@ -395,17 +387,17 @@ pub mod tests {
             sim.clone(),
         );
         let r_i_p: Arc<dyn RegionInfoProvider> = sim.clone();
-        let check_is_cached = move |range: &CacheRange| -> bool {
+        let check_is_cached = move |r: &Region| -> bool {
             r_i_p
-                .find_region_by_key(&range.start[1..])
+                .find_region_by_key(&r.start_key[1..])
                 .unwrap()
                 .get_id()
                 <= 5
         };
-        let mut _added = Vec::<CacheRange>::new();
-        let mut _removed = Vec::<CacheRange>::new();
+        let mut _added = Vec::new();
+        let mut _removed = Vec::new();
         rsm.collect_changed_ranges(&mut _added, &mut _removed);
-        let mut candidates_for_eviction = Vec::<(CacheRange, u64)>::new();
+        let mut candidates_for_eviction = Vec::new();
         rsm.collect_candidates_for_eviction(&mut candidates_for_eviction, &check_is_cached);
         assert!(candidates_for_eviction.is_empty());
         std::thread::sleep(Duration::from_millis(100));
@@ -415,7 +407,7 @@ pub mod tests {
             .rev()
             .filter_map(|(r, s)| {
                 if r.get_id() <= 5 {
-                    Some((CacheRange::from_region(r), *s))
+                    Some((r.clone(), *s))
                 } else {
                     None
                 }
