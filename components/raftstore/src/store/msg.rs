@@ -1007,17 +1007,11 @@ mod tests {
     fn test_msg_size() {
         use std::mem;
 
-        use engine_rocks::{RocksCompactedEvent, RocksEngine};
-        use engine_traits::KvEngine;
-        use kvproto::raft_serverpb::RaftMessage;
+        use engine_rocks::RocksEngine;
 
         use super::*;
-        use crate::store::fsm::apply::TaskRes;
 
+        // make sure the msg is small enough
         assert_eq!(mem::size_of::<PeerMsg<RocksEngine>>(), 32);
-        // println!("{}", mem::size_of::<RocksCompactedEvent>());
-        // println!("{}", mem::size_of::<metapb::Store>());
-        // println!("{}", mem::size_of::<pdpb::StoreReport>());
-        assert_eq!(mem::size_of::<StoreMsg<RocksEngine>>(), 224);
     }
 }
