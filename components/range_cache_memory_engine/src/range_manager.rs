@@ -8,10 +8,10 @@ use std::{
 
 use collections::HashMap;
 use engine_rocks::RocksSnapshot;
-use engine_traits::{CacheRange, FailedReason};
+use engine_traits::{CacheRange, EvictReason, FailedReason};
 use tikv_util::{info, time::Instant};
 
-use crate::{metrics::RANGE_EVICTION_DURATION_HISTOGRAM, read::RangeCacheSnapshotMeta};
+use crate::{metrics::observe_eviction_duration, read::RangeCacheSnapshotMeta};
 
 // read_ts -> ref_count
 #[derive(Default, Debug)]
@@ -116,7 +116,7 @@ pub struct RangeManager {
     // `ranges_being_deleted` contains ranges that are evicted but not finished the delete (or even
     // not start to delete due to ongoing snapshot)
     // `bool` means whether the range has been scheduled to the delete range worker
-    pub(crate) ranges_being_deleted: BTreeMap<CacheRange, (bool, Instant)>,
+    pub(crate) ranges_being_deleted: BTreeMap<CacheRange, (bool, Instant, EvictReason)>,
     // ranges that are cached now
     ranges: BTreeMap<CacheRange, RangeMeta>,
 
@@ -329,7 +329,11 @@ impl RangeManager {
     //
     // For 2, this is caused by some special operations such as merge and delete
     // range. So, conservatively, we evict all ranges overlap with it.
-    pub(crate) fn evict_range(&mut self, evict_range: &CacheRange) -> Vec<CacheRange> {
+    pub(crate) fn evict_range(
+        &mut self,
+        evict_range: &CacheRange,
+        evict_reason: EvictReason,
+    ) -> Vec<CacheRange> {
         info!(
             "try to evict range";
             "evict_range" => ?evict_range,
@@ -352,7 +356,7 @@ impl RangeManager {
         let mut overlapped_ranges = vec![];
         for r in self.ranges.keys() {
             if r.contains_range(evict_range) {
-                if self.evict_within_range(evict_range, &r.clone()) {
+                if self.evict_within_range(evict_range, &r.clone(), evict_reason) {
                     return vec![evict_range.clone()];
                 } else {
                     return vec![];
@@ -372,13 +376,18 @@ impl RangeManager {
 
         overlapped_ranges
             .into_iter()
-            .filter(|r| self.evict_within_range(r, r))
+            .filter(|r| self.evict_within_range(r, r, evict_reason))
             .collect()
     }
 
     // Return true means there is no ongoing snapshot, the evicted_range can be
     // deleted now.
-    fn evict_within_range(&mut self, evict_range: &CacheRange, cached_range: &CacheRange) -> bool {
+    fn evict_within_range(
+        &mut self,
+        evict_range: &CacheRange,
+        cached_range: &CacheRange,
+        evict_reason: EvictReason,
+    ) -> bool {
         assert!(cached_range.contains_range(evict_range));
         info!(
             "evict range in cache range engine";
@@ -400,7 +409,7 @@ impl RangeManager {
         }
 
         self.ranges_being_deleted
-            .insert(evict_range.clone(), (false, Instant::now()));
+            .insert(evict_range.clone(), (false, Instant::now(), evict_reason));
 
         if !meta.range_snapshot_list.is_empty() {
             self.historical_ranges.insert(cached_range.clone(), meta);
@@ -420,8 +429,8 @@ impl RangeManager {
 
     pub fn on_delete_ranges(&mut self, ranges: &[CacheRange]) {
         for r in ranges {
-            let (_, t) = self.ranges_being_deleted.remove(r).unwrap();
-            RANGE_EVICTION_DURATION_HISTOGRAM.observe(t.saturating_elapsed_secs());
+            let (_, t, evict_reason) = self.ranges_being_deleted.remove(r).unwrap();
+            observe_eviction_duration(t.saturating_elapsed_secs(), evict_reason);
             info!(
                 "range eviction done";
                 "range" => ?r,
@@ -487,7 +496,7 @@ impl RangeManager {
     // Only ranges that have not been scheduled will be retained in `ranges`
     pub fn mark_delete_ranges_scheduled(&mut self, ranges: &mut Vec<CacheRange>) {
         ranges.retain(|r| {
-            let (ref mut scheduled, _) = self.ranges_being_deleted.get_mut(r).unwrap();
+            let (ref mut scheduled, ..) = self.ranges_being_deleted.get_mut(r).unwrap();
             let has_scheduled = *scheduled;
             *scheduled = true;
             !has_scheduled

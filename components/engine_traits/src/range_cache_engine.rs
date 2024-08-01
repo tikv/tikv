@@ -17,6 +17,16 @@ pub enum FailedReason {
     TooOldRead,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum EvictReason {
+    LoadFailed,
+    MemoryLimitReached,
+    BecomeFollower,
+    AutoEvict,
+    DeleteRange,
+    Merge,
+}
+
 /// RangeCacheEngine works as a range cache caching some ranges (in Memory or
 /// NVME for instance) to improve the read performance.
 pub trait RangeCacheEngine:
@@ -48,7 +58,7 @@ pub trait RangeCacheEngine:
         false
     }
 
-    fn evict_range(&self, range: &CacheRange);
+    fn evict_range(&self, range: &CacheRange, evict_reason: EvictReason);
 }
 
 pub trait RangeCacheEngineExt {
@@ -56,7 +66,7 @@ pub trait RangeCacheEngineExt {
 
     // TODO(SpadeA): try to find a better way to reduce coupling degree of range
     // cache engine and kv engine
-    fn evict_range(&self, range: &CacheRange);
+    fn evict_range(&self, range: &CacheRange, evict_range: EvictReason);
 }
 
 /// A service that should run in the background to retrieve and apply cache
