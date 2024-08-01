@@ -1100,7 +1100,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                         Ok(_) | Err(ScheduleError::Stopped(_)) => (),
                         // Must schedule `RegisterMinTsEvent` event otherwise resolved ts can not
                         // advance normally.
-                        Err(err) => panic!("failed to regiester min ts event, error: {:?}", err),
+                        Err(err) => panic!("failed to register min ts event, error: {:?}", err),
                     }
                 } else {
                     // During shutdown, tso runtime drops future immediately,
