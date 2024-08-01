@@ -11,10 +11,7 @@ use std::{
 use online_config::{ConfigChange, OnlineConfig};
 use raftstore::store::Config as RaftstoreConfig;
 use tikv::config::*;
-<<<<<<< HEAD
-=======
-use tikv_util::config::{ReadableOffsetTime, ReadableSchedule, ReadableSize};
->>>>>>> f302b9db0c (raftstore: fix online config change panic for periodic-full-compact-start-time (#17069))
+use tikv_util::config::{ReadableOffsetTime, ReadableSchedule};
 
 fn change(name: &str, value: &str) -> HashMap<String, String> {
     let mut m = HashMap::new();
