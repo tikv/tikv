@@ -12,9 +12,12 @@ use engine_traits::{
 use external_storage::ExternalStorage;
 use file_system::Sha256Reader;
 use futures::{future::TryFutureExt, io::AllowStdIo};
+
 use kvproto::brpb::{self, LogFileSubcompaction};
-use tikv_util::{retry_expr, stream::JustRetry, time::Instant};
-use txn_types::Key;
+use tikv_util::{
+    codec::bytes::decode_bytes_in_place, retry_expr, stream::JustRetry, time::Instant,
+};
+
 
 use super::{Subcompaction, SubcompactionResult};
 use crate::{
@@ -231,10 +234,19 @@ where
         }
         let mut w = wb.build(name)?;
         let mut meta = kvproto::brpb::File::default();
-        let start_key = Key::from_encoded_slice(&sorted_items[0].key);
-        let end_key = Key::from_encoded_slice(&sorted_items.last().unwrap().key);
-        meta.set_start_key(start_key.to_raw().adapt_err()?);
-        meta.set_end_key(end_key.to_raw().adapt_err()?);
+
+        let mut start_key = sorted_items[0].key.clone();
+        // `File::{start,end}_key` should be raw key.
+        decode_bytes_in_place(&mut start_key, false).adapt_err()?;
+        let mut end_key = sorted_items.last().unwrap().key.clone();
+        decode_bytes_in_place(&mut end_key, false).adapt_err()?;
+        // `File::end_key` should be exclusive. (!)
+        // Also we cannot just call next_key, or the table ID of the end key may be
+        // different, some versions of BR panics in that scenario.
+        end_key.push(0u8);
+
+        meta.set_start_key(start_key);
+        meta.set_end_key(end_key);
         meta.set_cf(cf.to_owned());
         meta.name = name.to_owned();
         meta.end_version = u64::MAX;
