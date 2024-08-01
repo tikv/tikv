@@ -16,7 +16,6 @@ impl ImportExt for RocksEngine {
         opts.set_write_global_seqno(false);
         // Note: no need reset the global seqno to 0 for compatibility as #16992
         // enable the TiKV to handle the case on applying abnormal snapshot.
-        let now = Instant::now_coarse();
         // This is calling a specially optimized version of
         // ingest_external_file_cf. In cases where the memtable needs to be
         // flushed it avoids blocking writers while doing the flush. The unused
