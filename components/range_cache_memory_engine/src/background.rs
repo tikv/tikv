@@ -341,8 +341,7 @@ impl BackgroundRunnerCore {
                 return None;
             }
             BTreeMap::from_iter(core.range_manager().regions().values().map(|m| {
-                let range =
-                    CacheRange::new(m.region().start_key.clone(), m.region().end_key.clone());
+                let range = CacheRange::from_region(m.region());
                 (range, m.region().id)
             }))
         };
@@ -385,9 +384,7 @@ impl BackgroundRunnerCore {
                 return FilterMetrics::default();
             };
 
-            if region_meta.region().start_key != range.start
-                || region_meta.region().end_key != range.end
-            {
+            if !range.equals_with_region(region_meta.region()) {
                 return FilterMetrics::default();
             }
 
@@ -512,7 +509,7 @@ impl BackgroundRunnerCore {
                     .unwrap();
                 assert_eq!(&r, region);
                 core.mut_range_manager().regions_being_deleted.insert(
-                    CacheRange::new(r.start_key.clone(), r.end_key.clone()),
+                    CacheRange::from_region(&r),
                     (r.clone(), true, Instant::now()),
                 );
                 core.remove_cached_write_batch(r.id);
@@ -578,7 +575,7 @@ impl BackgroundRunnerCore {
         assert_eq!(&r, region);
         core.remove_cached_write_batch(region.id);
         core.mut_range_manager().regions_being_deleted.insert(
-            CacheRange::new(r.start_key.clone(), r.end_key.clone()),
+            CacheRange::from_region(&r),
             (r.clone(), true, Instant::now()),
         );
 
@@ -1205,7 +1202,7 @@ impl Runnable for DeleteRangeRunner {
                         {
                             regions_to_delay.push(r);
                         } else {
-                            regions_to_delete.push(CacheRange::new(r.start_key, r.end_key));
+                            regions_to_delete.push(CacheRange::from_region(&r));
                         }
                     }
                     (regions_to_delay, regions_to_delete)
@@ -1513,7 +1510,8 @@ pub mod tests {
         write_cf: &SkiplistHandle,
         mem_controller: Arc<MemoryController>,
     ) {
-        let raw_write_k = Key::from_raw(key)
+        let key = data_key(key);
+        let raw_write_k = Key::from_raw(&key)
             .append_ts(TimeStamp::new(ts))
             .into_encoded();
         let mut write_k = encode_key(&raw_write_k, seq_num, ValueType::Value);
@@ -1536,7 +1534,8 @@ pub mod tests {
         write_cf: &SkiplistHandle,
         mem_controller: Arc<MemoryController>,
     ) {
-        let raw_write_k = Key::from_raw(key)
+        let key = data_key(key);
+        let raw_write_k = Key::from_raw(&key)
             .append_ts(TimeStamp::new(ts))
             .into_encoded();
         let mut write_k = encode_key(&raw_write_k, seq_num, ValueType::Value);
@@ -1599,7 +1598,8 @@ pub mod tests {
     }
 
     fn encode_raw_key_for_filter(key: &[u8], ts: TimeStamp) -> InternalBytes {
-        let key = Key::from_raw(key);
+        let key = data_key(key);
+        let key = Key::from_raw(&key);
         encoding_for_filter(key.as_encoded(), ts)
     }
 
@@ -1763,7 +1763,7 @@ pub mod tests {
 
         // Delete the above key
         let guard = &epoch::pin();
-        let raw_write_k = Key::from_raw(b"key1")
+        let raw_write_k = Key::from_raw(&data_key(b"key1"))
             .append_ts(TimeStamp::new(15))
             .into_encoded();
         let mut write_k = encode_key(&raw_write_k, 15, ValueType::Deletion);
@@ -1785,7 +1785,7 @@ pub mod tests {
         );
 
         // Delete the above key
-        let raw_write_k = Key::from_raw(b"key2")
+        let raw_write_k = Key::from_raw(&data_key(b"key2"))
             .append_ts(TimeStamp::new(25))
             .into_encoded();
         let mut write_k = encode_key(&raw_write_k, 15, ValueType::Deletion);
@@ -2339,7 +2339,7 @@ pub mod tests {
         let mut new_regions = vec![
             new_region(1, "", "key5"),
             new_region(2, "key5", "key8"),
-            new_region(2, "key8", "z"),
+            new_region(3, "key8", "z"),
         ];
         for r in &mut new_regions {
             r.mut_region_epoch().version = 1;
@@ -2351,7 +2351,7 @@ pub mod tests {
         });
         assert_eq!(engine.core.read().range_manager().regions().len(), 3);
 
-        engine.evict_region(region2);
+        engine.evict_region(&region2);
 
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
@@ -2377,7 +2377,7 @@ pub mod tests {
             filter.merge(
                 &worker
                     .core
-                    .gc_region(region.id, &CacheRange::from_region(r), 50, 1000),
+                    .gc_region(r.id, &CacheRange::from_region(r), 50, 1000),
             );
         }
         assert_eq!(2, filter.filtered);
@@ -2390,7 +2390,7 @@ pub mod tests {
             filter.merge(
                 &worker
                     .core
-                    .gc_region(region.id, &CacheRange::from_region(r), 50, 1000),
+                    .gc_region(r.id, &CacheRange::from_region(r), 50, 1000),
             );
         }
         assert_eq!(0, filter.filtered);
@@ -2403,7 +2403,7 @@ pub mod tests {
             filter.merge(
                 &worker
                     .core
-                    .gc_region(region.id, &CacheRange::from_region(r), 50, 1000),
+                    .gc_region(r.id, &CacheRange::from_region(r), 50, 1000),
             );
         }
         assert_eq!(2, filter.filtered);
@@ -2476,7 +2476,7 @@ pub mod tests {
             .snapshot(
                 region1.id,
                 0,
-                &CacheRange::from_region(&region1),
+                CacheRange::from_region(&region1),
                 u64::MAX,
                 u64::MAX,
             )
@@ -2485,7 +2485,7 @@ pub mod tests {
             .snapshot(
                 region2.id,
                 0,
-                &CacheRange::from_region(&region1),
+                CacheRange::from_region(&region1),
                 u64::MAX,
                 u64::MAX,
             )
@@ -2684,7 +2684,7 @@ pub mod tests {
 
         for r in [&region1, &region2, &region3] {
             engine.load_region(r.clone()).unwrap();
-            engine.prepare_for_apply(1, CacheRange::from(r), r);
+            engine.prepare_for_apply(1, CacheRange::from_region(r), r);
         }
 
         // ensure all ranges are finshed
@@ -2819,8 +2819,8 @@ pub mod tests {
                 let mut count = 0;
                 for cf in DATA_CFS {
                     let mut iter = IterOptions::default();
-                    iter.set_lower_bound(&range.start, 0);
-                    iter.set_upper_bound(&range.end, 0);
+                    iter.set_lower_bound(&r.start_key, 0);
+                    iter.set_upper_bound(&r.end_key, 0);
                     let mut iter = snap.iterator_opt(cf, iter).unwrap();
                     let _ = iter.seek_to_first();
                     while iter.valid().unwrap() {

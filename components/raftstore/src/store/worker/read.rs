@@ -2548,11 +2548,10 @@ mod tests {
         };
         let leader2 = prs[0].clone();
         region1.set_region_epoch(epoch13.clone());
-        let range = CacheRange::from_region(&region1);
-        memory_engine.new_range(range.clone());
+        memory_engine.new_region(region1.clone());
         {
             let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_safe_point(&range, 1);
+            core.mut_range_manager().set_safe_point(reigon1.id, 1);
         }
         let kv = (&[DATA_PREFIX, b'a'], b"b");
         reader.kv_engine.put(kv.0, kv.1).unwrap();
@@ -2599,10 +2598,12 @@ mod tests {
 
         {
             let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_safe_point(&range, 10);
+            core.mut_range_manager().set_safe_point(region1.id, 10);
         }
 
         let snap_ctx = SnapshotContext {
+            region_id: 0,
+            epoch_version: 0,
             read_ts: 15,
             range: None,
         };

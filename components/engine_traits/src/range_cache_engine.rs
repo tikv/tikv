@@ -172,7 +172,12 @@ impl CacheRange {
     }
 
     pub fn overlaps_with_region(&self, region: &Region) -> bool {
-        self.start < region.end_key && region.start_key < self.end
+        &self.start[1..] < region.end_key.as_slice() && region.start_key.as_slice() < &self.end[1..]
+    }
+
+    pub fn equals_with_region(&self, region: &Region) -> bool {
+        &self.start[1..] == region.start_key.as_slice()
+            && &self.end[1..] == region.end_key.as_slice()
     }
 
     pub fn split_off(&self, range: &CacheRange) -> (Option<CacheRange>, Option<CacheRange>) {

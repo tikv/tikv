@@ -388,11 +388,7 @@ pub mod tests {
         );
         let r_i_p: Arc<dyn RegionInfoProvider> = sim.clone();
         let check_is_cached = move |r: &Region| -> bool {
-            r_i_p
-                .find_region_by_key(&r.start_key[1..])
-                .unwrap()
-                .get_id()
-                <= 5
+            r_i_p.find_region_by_key(&r.start_key).unwrap().get_id() <= 5
         };
         let mut _added = Vec::new();
         let mut _removed = Vec::new();

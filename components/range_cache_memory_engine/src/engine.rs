@@ -355,7 +355,7 @@ impl RangeCacheMemoryEngine {
     /// Evict a region from the in-memory engine. After this call, the region
     /// will not be readable, but the data of the region may not be deleted
     /// immediately due to some ongoing snapshots.
-    pub fn evict_region(&self, region: Region) {
+    pub fn evict_region(&self, region: &Region) {
         let mut core = self.core.write();
         let mut deleteable_regions = core.range_manager.evict_region(&region);
         if !deleteable_regions.is_empty() {
@@ -410,10 +410,11 @@ impl RangeCacheMemoryEngine {
         };
 
         let cached_region = range_manager.pending_regions.swap_remove(idx);
-        // region range changes, discard this range.
+        // if region range changes and the pending region does not contains the new
+        // reiong's range, then just discard the outdated pending region.
         if cached_region.get_region_epoch().version != region.get_region_epoch().version
-            && (cached_region.start_key < region.start_key
-                || cached_region.end_key > region.end_key)
+            && (cached_region.start_key > region.start_key
+                || cached_region.end_key < region.end_key)
         {
             info!("ignore outdated pending region"; "cached_region" => ?cached_region, "current_region" => ?region);
             return RangeCacheStatus::NotInCache;
@@ -572,7 +573,7 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
     fn on_region_event(&self, event: RegionEvent) {
         match event {
             RegionEvent::Eviction { region } => {
-                self.evict_region(region);
+                self.evict_region(&region);
             }
             RegionEvent::Split {
                 source,
@@ -591,7 +592,7 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
                         .get_regions_in_range(&range.start, &range.end)
                         .unwrap();
                     for r in regions {
-                        self.evict_region(r);
+                        self.evict_region(&r);
                     }
                 } else {
                     unimplemented!("Does not support currently");

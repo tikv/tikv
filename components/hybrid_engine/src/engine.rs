@@ -214,6 +214,7 @@ mod tests {
 
     use engine_rocks::util::new_engine;
     use engine_traits::{CacheRange, KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
+    use kvproto::metapb::Region;
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use range_cache_memory_engine::{
         config::RangeCacheConfigManager, RangeCacheEngineConfig, RangeCacheEngineContext,
@@ -222,7 +223,7 @@ mod tests {
     use tempfile::Builder;
     use tikv_util::config::VersionTrack;
 
-    use crate::HybridEngine;
+    use crate::{misc::tests::new_region, HybridEngine};
 
     #[test]
     fn test_engine() {
@@ -236,11 +237,12 @@ mod tests {
         let memory_engine =
             RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(config.clone()));
 
-        let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
-        memory_engine.new_range(range.clone());
+        let region = new_region(1, b"k00", b"k10");
+        let range = CacheRange::from_region(&region);
+        memory_engine.new_region(region.clone());
         {
             let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_safe_point(&range, 10);
+            core.mut_range_manager().set_safe_point(region.id, 10);
         }
 
         let hybrid_engine = HybridEngine::new(disk_engine, memory_engine.clone());
@@ -248,6 +250,8 @@ mod tests {
         assert!(!s.range_cache_snapshot_available());
 
         let mut snap_ctx = SnapshotContext {
+            region_id: 1,
+            epoch_version: 0,
             read_ts: 15,
             range: Some(range.clone()),
         };

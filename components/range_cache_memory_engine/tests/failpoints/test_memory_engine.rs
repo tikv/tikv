@@ -253,7 +253,7 @@ fn test_evict_with_loading_range() {
     let engine_clone = engine.clone();
     fail::cfg_callback("on_snapshot_load_finished", move || {
         let _ = snapshot_load_tx.send(true);
-        engine_clone.evict_region(r);
+        engine_clone.evict_region(&r);
     })
     .unwrap();
 
@@ -287,13 +287,13 @@ fn test_evict_with_loading_range() {
         .unwrap();
 
     engine
-        .snapshot(r1.id, 0, CacheRange::from(&r1), 100, 100)
+        .snapshot(r1.id, 0, CacheRange::from_region(&r1), 100, 100)
         .unwrap_err();
     engine
-        .snapshot(r2.id, 0, CacheRange::from(&r2), 100, 100)
+        .snapshot(r2.id, 0, CacheRange::from_region(&r2), 100, 100)
         .unwrap_err();
     engine
-        .snapshot(r3.id, 0, CacheRange::from(&r3), 100, 100)
+        .snapshot(r3.id, 0, CacheRange::from_region(&r3), 100, 100)
         .unwrap();
 }
 
@@ -437,8 +437,8 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     // Now, three ranges are in write status, delete range will not be performed
     // until they leave the write status
 
-    engine.evict_region(r1.clone());
-    engine.evict_region(r2.clone());
+    engine.evict_region(&r1);
+    engine.evict_region(&r2);
 
     let verify_data = |r, expected_num: u64| {
         let handle = engine.core().write().engine().cf_handle(CF_LOCK);
@@ -526,7 +526,7 @@ fn test_double_delete_range_schedule() {
         let _ = snapshot_load_tx.send(true);
         // evict all ranges. So the loading ranges will also be evicted and a delete
         // range task will be scheduled.
-        engine_clone.evict_region(r);
+        engine_clone.evict_region(&r);
     })
     .unwrap();
 

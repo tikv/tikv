@@ -174,7 +174,7 @@ impl RangeManager {
     pub fn new_region(&mut self, region: Region) {
         assert!(!self.overlap_with_region(&region));
         let id = region.id;
-        let region_range = CacheRange::new(region.start_key.clone(), region.end_key.clone());
+        let region_range = CacheRange::from_region(&region);
         let range_meta = RangeMeta::new(self.id_allocator.allocate_id(), region);
         self.regions.insert(id, range_meta);
         self.regions_by_range.insert(region_range, id);
@@ -480,7 +480,7 @@ impl RangeManager {
     // Only ranges that have not been scheduled will be retained in `ranges`
     pub fn mark_delete_regions_scheduled(&mut self, regions: &mut Vec<Region>) {
         regions.retain(|r| {
-            let range = CacheRange::new(r.start_key.clone(), r.end_key.clone());
+            let range = CacheRange::from_region(r);
             let (_, scheduled, _) = self.regions_being_deleted.get_mut(&range).unwrap();
             !std::mem::replace(scheduled, true)
         });
@@ -502,15 +502,12 @@ impl RangeManager {
                 source_meta.region.get_region_epoch().version,
                 source_region.get_region_epoch().version
             );
-            let region_range = CacheRange::new(
-                source_meta.region.start_key.clone(),
-                source_meta.region.end_key.clone(),
-            );
+            let region_range = CacheRange::from_region(&source_meta.region);
             assert!(self.regions_by_range.remove(&region_range).is_some());
             for region in new_regions {
                 let id = self.id_allocator.allocate_id();
                 let region_id = region.id;
-                let range = CacheRange::new(region.start_key.clone(), region.end_key.clone());
+                let range = CacheRange::from_region(&region);
                 let mut meta = RangeMeta::new(id, region);
                 meta.set_safe_point(source_meta.safe_point());
                 self.regions_by_range.insert(range, region_id);
@@ -585,7 +582,7 @@ mod tests {
         for r in [&mut r_evict, &mut r_left, &mut r_right] {
             r.mut_region_epoch().version = 2;
         }
-        range_mgr.split_region(&r1, vec![r_left, r_evict.clone(), r_right]);
+        range_mgr.split_region(&r1, vec![r_left.clone(), r_evict.clone(), r_right.clone()]);
         range_mgr.evict_region(&r_evict);
         let meta1 = range_mgr
             .historical_regions
@@ -608,7 +605,7 @@ mod tests {
         assert!(meta1.safe_point == meta2.safe_point && meta1.safe_point == meta3.safe_point);
 
         // evict a range with accurate match
-        let _ = range_mgr.region_snapshot(r_left.id, 1, 10);
+        range_mgr.region_snapshot(r_left.id, 2, 10).unwrap();
         range_mgr.evict_region(&r_left);
         assert!(
             range_mgr
@@ -728,7 +725,7 @@ mod tests {
             range_mgr.contains_region(r2.id);
             range_mgr.contains_region(r3.id);
 
-            let mut r4 = new_region(4, b"00", b"05");
+            let mut r4 = new_region(4, b"k00", b"k05");
             r4.mut_region_epoch().version = 2;
             assert_eq!(range_mgr.evict_region(&r4), vec![r1]);
         }
@@ -745,7 +742,7 @@ mod tests {
             assert!(range_mgr.contains_region(r2.id));
             assert!(range_mgr.contains_region(r3.id));
 
-            let r4 = new_region(1, b"k", b"k51");
+            let r4 = new_region(4, b"k", b"k51");
             assert_eq!(range_mgr.evict_region(&r4), vec![r1, r2, r3]);
             assert!(range_mgr.regions().is_empty());
         }
@@ -773,7 +770,7 @@ mod tests {
             range_mgr.new_region(r2.clone());
             range_mgr.new_region(r3.clone());
 
-            let r4 = new_region(1, b"k25", b"k75");
+            let r4 = new_region(4, b"k25", b"k75");
             assert_eq!(range_mgr.evict_region(&r4), vec![r2, r3]);
             assert_eq!(range_mgr.regions().len(), 1);
         }

@@ -687,6 +687,8 @@ mod tests {
         MetricsExt, Mutable, Peekable, RangeCacheEngine, ReadOptions, RegionEvent, WriteBatch,
         WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE,
     };
+    use keys::{DATA_MAX_KEY, DATA_MIN_KEY, DATA_PREFIX_KEY};
+    use kvproto::metapb::Region;
     use tempfile::Builder;
     use tikv_util::config::VersionTrack;
 
@@ -724,7 +726,7 @@ mod tests {
                 );
             } else {
                 assert!(
-                    core.range_manager.regions().regions()[&region.id]
+                    core.range_manager.regions()[&region.id]
                         .region_snapshot_list()
                         .0
                         .get(&snapshot_ts)
@@ -811,6 +813,7 @@ mod tests {
 
     fn construct_mvcc_key(key: &str, mvcc: u64) -> Vec<u8> {
         let mut k = vec![];
+        k.extend_from_slice(DATA_PREFIX_KEY);
         k.extend_from_slice(key.as_bytes());
         k.put_u64(!mvcc);
         k
@@ -895,7 +898,7 @@ mod tests {
 
         {
             let mut core = engine.core.write();
-            core.range_manager.set_safe_point(&range, 5);
+            core.range_manager.set_safe_point(region.id, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
 
             put_key_val(&sl, "b", "val", 10, 5);
@@ -1204,7 +1207,7 @@ mod tests {
 
         {
             let mut core = engine.core.write();
-            core.range_manager.set_safe_point(&range, 5);
+            core.range_manager.set_safe_point(region.id, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
             fill_data_in_skiplist(sl.clone(), (1..100).step_by(step as usize), 1..10, 1);
             delete_data_in_skiplist(sl, (1..100).step_by(step as usize), 1..10, 200);
@@ -1308,7 +1311,7 @@ mod tests {
 
         {
             let mut core = engine.core.write();
-            core.range_manager.set_safe_point(&range, 5);
+            core.range_manager.set_safe_point(region.id, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
 
             put_key_val(&sl, "aaa", "va1", 10, 1);
@@ -1432,7 +1435,7 @@ mod tests {
 
         {
             let mut core = engine.core.write();
-            core.range_manager.set_safe_point(&range, 5);
+            core.range_manager.set_safe_point(region.id, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
 
             put_key_val(&sl, "aaa", "va1", 10, 2);
@@ -1534,7 +1537,7 @@ mod tests {
             engine.new_region(region.clone());
             let sl = {
                 let mut core = engine.core.write();
-                core.range_manager.set_safe_point(&range, 5);
+                core.range_manager.set_safe_point(region.id, 5);
                 core.engine.data[cf_to_id("write")].clone()
             };
 
@@ -1572,7 +1575,7 @@ mod tests {
             engine.new_region(region.clone());
             let sl = {
                 let mut core = engine.core.write();
-                core.range_manager.set_safe_point(&range, 5);
+                core.range_manager.set_safe_point(region.id, 5);
                 core.engine.data[cf_to_id("write")].clone()
             };
 
@@ -1603,7 +1606,7 @@ mod tests {
             engine.new_region(region.clone());
             let sl = {
                 let mut core = engine.core.write();
-                core.range_manager.set_safe_point(&range, 5);
+                core.range_manager.set_safe_point(region.id, 5);
                 core.engine.data[cf_to_id("write")].clone()
             };
             put_key_val(&sl, "a", "val", 10, 1);
@@ -1636,7 +1639,7 @@ mod tests {
             engine.new_region(region.clone());
             let sl = {
                 let mut core = engine.core.write();
-                core.range_manager.set_safe_point(&range, 5);
+                core.range_manager.set_safe_point(region.id, 5);
                 core.engine.data[cf_to_id("write")].clone()
             };
             let mut s = 1;
@@ -1826,7 +1829,7 @@ mod tests {
         });
 
         let evict_region = new_regions[1].clone();
-        engine.evict_region(evict_region.clone());
+        engine.evict_region(&evict_region);
         assert_eq!(
             engine.snapshot(1, 0, range.clone(), 10, 200).unwrap_err(),
             FailedReason::EpochNotMatch
@@ -1879,7 +1882,7 @@ mod tests {
         let guard = &epoch::pin();
         {
             let mut core = engine.core.write();
-            core.range_manager.set_safe_point(&range, 5);
+            core.range_manager.set_safe_point(region.id, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
             for i in 0..30 {
                 let user_key = construct_key(i, 10);
@@ -1894,7 +1897,7 @@ mod tests {
             }
         }
 
-        let range = CacheRange::from(&region);
+        let range = CacheRange::from_region(&region);
         let s1 = engine.snapshot(1, 0, range.clone(), 10, 10);
         let s2 = engine.snapshot(1, 0, range, 20, 20);
 
@@ -1913,14 +1916,14 @@ mod tests {
         });
 
         let evict_region = new_regions[1].clone();
-        engine.evict_region(evict_region.clone());
+        engine.evict_region(&evict_region);
 
         let r_left = new_regions[0].clone();
         let s3 = engine
             .snapshot(
                 r_left.id,
                 r_left.get_region_epoch().version,
-                CacheRange::from(&r_left),
+                CacheRange::from_region(&r_left),
                 20,
                 20,
             )
@@ -1930,14 +1933,14 @@ mod tests {
             .snapshot(
                 r_right.id,
                 r_right.get_region_epoch().version,
-                CacheRange::from(&r_left),
+                CacheRange::from_region(&r_left),
                 20,
                 20,
             )
             .unwrap();
 
         drop(s3);
-        engine.evict_region(r_left.clone());
+        engine.evict_region(&r_left);
         let evict_range = CacheRange::from_region(&evict_region);
 
         // todo(SpadeA): memory limiter
@@ -1969,10 +1972,10 @@ mod tests {
         }
         drop(s2);
         // Now, all snapshots before evicting `evict_range` are released
-        verify_evict_region_deleted(&engine, &evict_range);
+        verify_evict_region_deleted(&engine, &evict_region);
 
         drop(s4);
-        verify_evict_region_deleted(&engine, &CacheRange::from_region(&r_left));
+        verify_evict_region_deleted(&engine, &r_left);
     }
 
     #[test]
@@ -1980,13 +1983,13 @@ mod tests {
         let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
-        let mut iter_opt = IterOptions::default();
         let region = new_region(1, b"", b"z");
         let range = CacheRange::from_region(&region);
+        engine.new_region(region.clone());
 
         {
             let mut core = engine.core.write();
-            core.range_manager.set_safe_point(&range, 5);
+            core.range_manager.set_safe_point(region.id, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
 
             delete_key(&sl, "a", 10, 5);
@@ -2025,13 +2028,12 @@ mod tests {
         let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
-        let mut iter_opt = IterOptions::default();
         let region = new_region(1, b"", b"z");
         let range = CacheRange::from_region(&region);
 
         {
             let mut core = engine.core.write();
-            core.range_manager.set_safe_point(&range, 5);
+            core.range_manager.set_safe_point(region.id, 5);
             let sl = core.engine.data[cf_to_id("write")].clone();
 
             put_key_val(&sl, "a", "val", 10, 5);
@@ -2150,9 +2152,9 @@ mod tests {
         let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
-        let mut iter_opt = IterOptions::default();
         let region = new_region(1, b"", b"z");
         let range = CacheRange::from_region(&region);
+        engine.new_region(region.clone());
 
         let mut wb = engine.write_batch();
         wb.prepare_for_region(&region);

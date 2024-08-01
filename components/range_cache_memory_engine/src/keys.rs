@@ -268,13 +268,13 @@ pub fn encoding_for_filter(mvcc_prefix: &[u8], start_ts: TimeStamp) -> InternalB
 
 #[cfg(test)]
 pub fn construct_user_key(i: u64) -> Vec<u8> {
-    let k = format!("k{:08}", i);
+    let k = format!("zk{:08}", i);
     k.as_bytes().to_owned()
 }
 
 #[cfg(test)]
 pub fn construct_key(i: u64, ts: u64) -> Vec<u8> {
-    let k = format!("k{:08}", i);
+    let k = format!("zk{:08}", i);
     Key::from_encoded(k.as_bytes().to_vec())
         .append_ts(TimeStamp::new(ts))
         .into_encoded()

@@ -134,24 +134,24 @@ mod tests {
     };
     use range_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheStatus};
 
-    use crate::util::hybrid_engine_for_tests;
+    use crate::{misc::tests::new_region, util::hybrid_engine_for_tests};
 
     #[test]
     fn test_iterator() {
-        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+        let region = new_region(1, b"", b"z");
         let mut iter_opt = IterOptions::default();
-        iter_opt.set_upper_bound(&range.end, 0);
-        iter_opt.set_lower_bound(&range.start, 0);
+        iter_opt.set_upper_bound(&region.end_key, 0);
+        iter_opt.set_lower_bound(&region.start_key, 0);
 
-        let range_clone = range.clone();
+        let region_clone = region.clone();
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
             "temp",
             RangeCacheEngineConfig::config_for_test(),
             move |memory_engine| {
-                memory_engine.new_range(range_clone.clone());
+                memory_engine.new_region(region_clone);
                 {
                     let mut core = memory_engine.core().write();
-                    core.mut_range_manager().set_safe_point(&range_clone, 5);
+                    core.mut_range_manager().set_safe_point(1, 5);
                 }
             },
         )
@@ -162,7 +162,7 @@ mod tests {
             assert!(!iter.seek_to_first().unwrap());
         }
         let mut write_batch = hybrid_engine.write_batch();
-        write_batch.prepare_for_region(range.clone());
+        write_batch.prepare_for_region(&region);
         write_batch
             .cache_write_batch
             .set_range_cache_status(RangeCacheStatus::Cached);
@@ -170,7 +170,9 @@ mod tests {
         let seq = write_batch.write().unwrap();
         assert!(seq > 0);
         let ctx = SnapshotContext {
-            range: Some(range.clone()),
+            region_id: 1,
+            epoch_version: 0,
+            range: Some(CacheRange::from_region(&region)),
             read_ts: 10,
         };
         let snap = hybrid_engine.snapshot(Some(ctx));

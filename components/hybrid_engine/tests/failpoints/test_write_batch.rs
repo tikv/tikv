@@ -4,7 +4,7 @@ use std::sync::mpsc::sync_channel;
 
 use crossbeam::epoch;
 use engine_traits::{CacheRange, Mutable, WriteBatch, WriteBatchExt};
-use hybrid_engine::util::hybrid_engine_for_tests;
+use hybrid_engine::{misc::tests::new_region, util::hybrid_engine_for_tests};
 use range_cache_memory_engine::{decode_key, InternalKey, RangeCacheEngineConfig, ValueType};
 
 #[test]
@@ -20,33 +20,33 @@ fn test_sequence_number_unique() {
     .unwrap();
 
     let engine = hybrid_engine.range_cache_engine().clone();
-    let r = CacheRange::new(b"k".to_vec(), b"k5".to_vec());
-    engine.new_range(r.clone());
+    let r = new_region(1, b"k", b"k5");
+    engine.new_region(r.clone());
 
     // Mock that we have a loading range, and there are some keys written in it
     // during the load
-    let r2 = CacheRange::new(b"k5".to_vec(), b"k7".to_vec());
-    let r3 = CacheRange::new(b"k7".to_vec(), b"k9".to_vec());
+    let r2 = new_region(1, b"k5", b"k7");
+    let r3 = new_region(1, b"k7", b"k9");
 
-    engine.load_range(r2.clone()).unwrap();
-    engine.load_range(r3.clone()).unwrap();
+    engine.load_region(r2.clone()).unwrap();
+    engine.load_region(r3.clone()).unwrap();
 
     // The sequence number of write batch should be increased one by one, otherwise
     // if a delete and a put of the same key occurs in the same write batch,
     // the delete will be hidden by the put even the delete is performed
     // after the put.
     let mut wb = hybrid_engine.write_batch();
-    wb.prepare_for_region(r.clone());
+    wb.prepare_for_region(&r);
     wb.put(b"k", b"val").unwrap(); // seq 6
     wb.delete(b"k").unwrap(); // seq 7
     wb.put(b"k2", b"val").unwrap(); // seq 8
 
-    wb.prepare_for_region(r2.clone());
+    wb.prepare_for_region(&r2);
     wb.put(b"k6", b"val").unwrap(); // seq 3
     wb.put(b"k5", b"val").unwrap(); // seq 4
     wb.delete(b"k5").unwrap(); // seq 5
 
-    wb.prepare_for_region(r3.clone());
+    wb.prepare_for_region(&r3);
     wb.put(b"k8", b"val").unwrap(); // seq 1
     wb.put(b"k7", b"val").unwrap(); // seq 2
 

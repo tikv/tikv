@@ -158,26 +158,28 @@ mod tests {
     };
     use range_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheStatus};
 
-    use crate::util::hybrid_engine_for_tests;
+    use crate::{misc::tests::new_region, util::hybrid_engine_for_tests};
 
     #[test]
     fn test_write_to_both_engines() {
-        let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
-        let range_clone = range.clone();
+        let region = new_region(1, b"", b"z");
+        let region_clone = region.clone();
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
             "temp",
             RangeCacheEngineConfig::config_for_test(),
             move |memory_engine| {
-                memory_engine.new_range(range_clone.clone());
-                {
-                    let mut core = memory_engine.core().write();
-                    core.mut_range_manager().set_safe_point(&range_clone, 5);
-                }
+                let id = region_clone.id;
+                memory_engine.new_region(region_clone);
+                memory_engine
+                    .core()
+                    .write()
+                    .mut_range_manager()
+                    .set_safe_point(id, 5);
             },
         )
         .unwrap();
         let mut write_batch = hybrid_engine.write_batch();
-        write_batch.prepare_for_region(range.clone());
+        write_batch.prepare_for_region(&region);
         write_batch
             .cache_write_batch
             .set_range_cache_status(RangeCacheStatus::Cached);
@@ -187,7 +189,9 @@ mod tests {
         let actual: &[u8] = &hybrid_engine.get_value(b"hello").unwrap().unwrap();
         assert_eq!(b"world", &actual);
         let ctx = SnapshotContext {
-            range: Some(range.clone()),
+            region_id: 1,
+            epoch_version: 0,
+            range: Some(CacheRegion::from_region(&region)),
             read_ts: 10,
         };
         let snap = hybrid_engine.snapshot(Some(ctx));
@@ -210,11 +214,11 @@ mod tests {
             "temp",
             RangeCacheEngineConfig::config_for_test(),
             |memory_engine| {
-                let range = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
-                memory_engine.new_range(range.clone());
+                let region = new_region(1, b"k00", b"k10");
+                memory_engine.new_region(region);
                 {
                     let mut core = memory_engine.core().write();
-                    core.mut_range_manager().set_safe_point(&range, 10);
+                    core.mut_range_manager().set_safe_point(1, 10);
                 }
             },
         )
@@ -235,37 +239,37 @@ mod tests {
 
     #[test]
     fn test_delete_range() {
-        let range1 = CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
-        let range2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
+        let region1 = new_region(1, b"k00", b"k10");
+        let region2 = new_region(1, b"k20", b"k30");
 
-        let range1_clone = range1.clone();
-        let range2_clone = range2.clone();
+        let region1_clone = region1.clone();
+        let region2_clone = region2.clone();
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
             "temp",
             RangeCacheEngineConfig::config_for_test(),
             move |memory_engine| {
-                memory_engine.new_range(range1_clone);
-                memory_engine.new_range(range2_clone);
+                memory_engine.new_region(region1_clone);
+                memory_engine.new_region(region2_clone);
             },
         )
         .unwrap();
 
         let mut wb = hybrid_engine.write_batch();
-        wb.prepare_for_region(range1.clone());
+        wb.prepare_for_region(&region1);
         wb.put(b"k05", b"val").unwrap();
         wb.put(b"k08", b"val2").unwrap();
-        wb.prepare_for_region(range2.clone());
+        wb.prepare_for_region(&region2);
         wb.put(b"k25", b"val3").unwrap();
         wb.put(b"k27", b"val4").unwrap();
         wb.write().unwrap();
 
         hybrid_engine
             .range_cache_engine()
-            .snapshot(range1.clone(), 1000, 1000)
+            .snapshot(region1.id, 0, CacheRange::from_region(&region1), 1000, 1000)
             .unwrap();
         hybrid_engine
             .range_cache_engine()
-            .snapshot(range2.clone(), 1000, 1000)
+            .snapshot(region2.id, 0, CacheRange::from_region(&region2), 1000, 1000)
             .unwrap();
         assert_eq!(
             4,
@@ -285,11 +289,11 @@ mod tests {
 
         hybrid_engine
             .range_cache_engine()
-            .snapshot(range1, 1000, 1000)
+            .snapshot(region1.id, 0, CacheRange::from_region(&region1), 1000, 1000)
             .unwrap_err();
         hybrid_engine
             .range_cache_engine()
-            .snapshot(range2, 1000, 1000)
+            .snapshot(region2.id, 0, CacheRange::from_region(&region2), 1000, 1000)
             .unwrap_err();
         let m_engine = hybrid_engine.range_cache_engine();
 
