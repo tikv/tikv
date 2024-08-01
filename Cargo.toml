@@ -419,7 +419,7 @@ raft-engine = { git = "https://github.com/tikv/raft-engine.git", features = [
 ] }
 raft-engine-ctl = { git = "https://github.com/tikv/raft-engine.git" }
 grpcio = { version = "0.10.4", default-features = false, features = [
-  "openssl-vendored",
+  "openssl",
   "protobuf-codec",
   "nightly",
 ] }
