@@ -92,6 +92,7 @@ pub(crate) struct Initializer<E> {
     pub(crate) observe_id: ObserveId,
     pub(crate) downstream_id: DownstreamId,
     pub(crate) downstream_state: Arc<AtomicCell<DownstreamState>>,
+    pub(crate) scan_truncated: Arc<AtomicBool>,
     pub(crate) conn_id: ConnId,
     pub(crate) request_id: u64,
     pub(crate) checkpoint_ts: TimeStamp,
@@ -464,7 +465,11 @@ impl<E: KvEngine> Initializer<E> {
             events.push(CdcEvent::Barrier(Some(cb)));
             barrier = Some(fut);
         }
-        if let Err(e) = self.sink.send_all(events).await {
+        if let Err(e) = self
+            .sink
+            .send_all(events, self.scan_truncated.clone())
+            .await
+        {
             error!("cdc send scan event failed"; "req_id" => ?self.request_id);
             return Err(Error::Sink(e));
         }
@@ -686,6 +691,7 @@ mod tests {
             observe_id: ObserveId::new(),
             downstream_id: DownstreamId::new(),
             downstream_state,
+            scan_truncated: Arc::new(Default::default()),
             conn_id: ConnId::new(),
             request_id: 0,
             checkpoint_ts: 1.into(),
