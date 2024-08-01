@@ -150,7 +150,7 @@ mod tests {
             }
         }
 
-        let err_cases = vec![(vec![1.0, 2.0], vec![3.0])];
+        let err_cases = vec![(vec![1.0, 2.0], vec![3.0]), (vec![1.0, 2.0], vec![])];
         for (arg1, arg2) in err_cases {
             let arg1 = VectorFloat32::new(arg1).unwrap();
             let arg2 = VectorFloat32::new(arg2).unwrap();
@@ -188,7 +188,7 @@ mod tests {
             }
         }
 
-        let err_cases = vec![(vec![1.0, 2.0], vec![3.0])];
+        let err_cases = vec![(vec![1.0, 2.0], vec![3.0]), (vec![1.0, 2.0], vec![])];
         for (arg1, arg2) in err_cases {
             let arg1 = VectorFloat32::new(arg1).unwrap();
             let arg2 = VectorFloat32::new(arg2).unwrap();
@@ -232,7 +232,7 @@ mod tests {
             }
         }
 
-        let err_cases = vec![(vec![1.0, 2.0], vec![3.0])];
+        let err_cases = vec![(vec![1.0, 2.0], vec![3.0]), (vec![1.0, 2.0], vec![])];
         for (arg1, arg2) in err_cases {
             let arg1 = VectorFloat32::new(arg1).unwrap();
             let arg2 = VectorFloat32::new(arg2).unwrap();
@@ -271,7 +271,7 @@ mod tests {
             }
         }
 
-        let err_cases = vec![(vec![1.0, 2.0], vec![3.0])];
+        let err_cases = vec![(vec![1.0, 2.0], vec![3.0]), (vec![1.0, 2.0], vec![])];
         for (arg1, arg2) in err_cases {
             let arg1 = VectorFloat32::new(arg1).unwrap();
             let arg2 = VectorFloat32::new(arg2).unwrap();
