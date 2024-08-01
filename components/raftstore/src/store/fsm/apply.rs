@@ -930,6 +930,7 @@ where
     /// All of messages that need to continue to be handled after
     /// the source peer has applied its logs and pending entries
     /// are all handled.
+    #[allow(clippy::vec_box)]
     pending_msgs: Vec<Box<Msg<EK>>>,
 
     /// Cache heap size for itself.
@@ -4412,6 +4413,7 @@ where
         ctx.finish_for(&mut self.delegate, result);
     }
 
+    #[allow(clippy::vec_box)]
     fn handle_tasks(&mut self, apply_ctx: &mut ApplyContext<EK>, msgs: &mut Vec<Box<Msg<EK>>>) {
         let mut drainer = msgs.drain(..);
         let mut batch_apply = None;
@@ -4623,6 +4625,7 @@ pub struct ApplyPoller<EK>
 where
     EK: KvEngine,
 {
+    #[allow(clippy::vec_box)]
     msg_buf: Vec<Box<Msg<EK>>>,
     apply_ctx: ApplyContext<EK>,
     messages_per_tick: usize,
