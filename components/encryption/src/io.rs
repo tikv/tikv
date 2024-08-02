@@ -616,10 +616,9 @@ impl CrypterCore {
         assert_eq!(
             self.async_write,
             AsyncWriteState::Idle,
-            concat!(
-                "unreachable: try to override the encrypted content when there is pending async writing.",
-                "(canceled future? concurrency call to `write`?)"
-            )
+            "unreachable: try to override the encrypted content \
+            when there is pending async writing. \
+            (canceled future? concurrency call to `write`?)"
         );
 
         if self.crypter.is_none() {
