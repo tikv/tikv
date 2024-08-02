@@ -1077,7 +1077,7 @@ def gRPC() -> RowPanel:
             graph_panel(
                 title="gRPC request sources duration",
                 description="The duration of different sources of gRPC request",
-                yaxes=yaxes(left_format=UNITS.SECONDS),
+                yaxes=yaxes(left_format=UNITS.MICRO_SECONDS),
                 lines=False,
                 stack=True,
                 targets=[
