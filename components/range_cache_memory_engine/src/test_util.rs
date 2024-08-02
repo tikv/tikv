@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use crossbeam::epoch;
+use keys::data_key;
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
 use crate::{
@@ -78,7 +79,8 @@ fn put_data_impl(
     write_cf: &SkiplistHandle,
     mem_controller: Arc<MemoryController>,
 ) {
-    let raw_write_k = Key::from_raw(key)
+    let data_key = data_key(key);
+    let raw_write_k = Key::from_raw(&data_key)
         .append_ts(TimeStamp::new(commit_ts))
         .into_encoded();
     let mut write_k = encode_key(&raw_write_k, seq_num, ValueType::Value);
@@ -110,7 +112,7 @@ fn put_data_impl(
     }
 
     if !short_value {
-        let raw_default_k = Key::from_raw(key)
+        let raw_default_k = Key::from_raw(&data_key)
             .append_ts(TimeStamp::new(start_ts))
             .into_encoded();
         let mut default_k = encode_key(&raw_default_k, seq_num + 1, ValueType::Value);

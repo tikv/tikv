@@ -24,6 +24,18 @@ use test_raftstore::{
 use tikv_util::HandyRwLock;
 use txn_types::Key;
 
+fn new_region<T1: Into<Vec<u8>>, T2: Into<Vec<u8>>>(
+    id: u64,
+    start_key: T1,
+    end_key: T2,
+) -> kvproto::metapb::Region {
+    let mut region = kvproto::metapb::Region::new();
+    region.id = id;
+    region.start_key = start_key.into();
+    region.end_key = end_key.into();
+    region
+}
+
 #[test]
 fn test_basic_put_get() {
     let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
@@ -34,13 +46,16 @@ fn test_basic_put_get() {
     // FIXME: load is not implemented, so we have to insert range manually
     {
         let mut core = range_cache_engine.core().write();
-        let cache_range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
-        core.mut_range_manager().new_range(cache_range.clone());
-        core.mut_range_manager().set_safe_point(&cache_range, 1000);
+        let cache_region = new_region(1, DATA_MIN_KEY, DATA_MAX_KEY);
+        core.mut_range_manager().new_region(cache_region.clone());
+        core.mut_range_manager()
+            .set_safe_point(cache_region.id, 1000);
     }
 
     cluster.put(b"k05", b"val").unwrap();
     let snap_ctx = SnapshotContext {
+        region_id: 0,
+        epoch_version: 0,
         read_ts: 1001,
         range: None,
     };
@@ -92,15 +107,15 @@ fn test_load() {
             if concurrent_with_split {
                 // Load the whole range as if it is not splitted. Loading process should handle
                 // it correctly.
-                let cache_range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
-                core.mut_range_manager().load_range(cache_range).unwrap();
+                let mut cache_region = new_region(1, DATA_MIN_KEY, DATA_MAX_KEY);
+                core.mut_range_manager().load_region(cache_region).unwrap();
             } else {
-                let cache_range = CacheRange::new(DATA_MIN_KEY.to_vec(), data_key(&split_key1));
-                let cache_range2 = CacheRange::new(data_key(&split_key1), data_key(&split_key2));
-                let cache_range3 = CacheRange::new(data_key(&split_key2), DATA_MAX_KEY.to_vec());
-                core.mut_range_manager().load_range(cache_range).unwrap();
-                core.mut_range_manager().load_range(cache_range2).unwrap();
-                core.mut_range_manager().load_range(cache_range3).unwrap();
+                let cache_range = new_region(1, DATA_MIN_KEY, &split_key1);
+                let cache_range2 = new_region(2, data_key(&split_key1), data_key(&split_key2));
+                let cache_range3 = new_region(3, data_key(&split_key2), DATA_MAX_KEY.to_vec());
+                core.mut_range_manager().load_region(cache_range).unwrap();
+                core.mut_range_manager().load_region(cache_range2).unwrap();
+                core.mut_range_manager().load_region(cache_range3).unwrap();
             }
         }
 
@@ -135,6 +150,8 @@ fn test_load() {
         .unwrap();
 
         let snap_ctx = SnapshotContext {
+            region_id: 0,
+            epoch_version: 0,
             read_ts: 20,
             range: None,
         };
@@ -183,8 +200,8 @@ fn test_write_batch_cache_during_load() {
     {
         let range_cache_engine = cluster.get_range_cache_engine(1);
         let mut core = range_cache_engine.core().write();
-        let cache_range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
-        core.mut_range_manager().load_range(cache_range).unwrap();
+        let cache_range = new_region(1, DATA_MIN_KEY, DATA_MAX_KEY);
+        core.mut_range_manager().load_region(cache_range).unwrap();
     }
 
     // First, cache some entries after the acquire of the snapshot
@@ -216,6 +233,8 @@ fn test_write_batch_cache_during_load() {
     })
     .unwrap();
     let snap_ctx = SnapshotContext {
+        region_id: 0,
+        epoch_version: 0,
         read_ts: 20,
         range: None,
     };
@@ -299,8 +318,8 @@ fn test_load_with_split() {
         let mut core = range_cache_engine.core().write();
         // Load the whole range as if it is not splitted. Loading process should handle
         // it correctly.
-        let cache_range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
-        core.mut_range_manager().load_range(cache_range).unwrap();
+        let cache_range = new_region(1, DATA_MIN_KEY, DATA_MAX_KEY);
+        core.mut_range_manager().load_region(cache_range).unwrap();
     }
 
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -334,6 +353,8 @@ fn test_load_with_split() {
     .unwrap();
 
     let snap_ctx = SnapshotContext {
+        region_id: 0,
+        epoch_version: 0,
         read_ts: 20,
         range: None,
     };
@@ -362,8 +383,8 @@ fn test_load_with_split() {
 // It tests race between split and load.
 // Takes k1-k10 as an example:
 // We want to load k1-k10 where k1-k10 is already split into k1-k5, and k5-k10.
-// And before we `load_range` k1-k10, k1-k5 has cached some writes, say k1, in
-// write_batch which means k1 cannot be loaded from snapshot. Now, `load_range`
+// And before we `load_region` k1-k10, k1-k5 has cached some writes, say k1, in
+// write_batch which means k1 cannot be loaded from snapshot. Now, `load_region`
 // k1-k10 is called, and k5-k10 calls prepare_for_apply and the snapshot is
 // acquired and load task of k1-k10 is scheduled. We will loss data of k1 before
 // this PR.
@@ -393,10 +414,7 @@ fn test_load_with_split2() {
         let range_cache_engine = cluster.get_range_cache_engine(1);
         let mut core = range_cache_engine.core().write();
         core.mut_range_manager()
-            .load_range(CacheRange::new(
-                DATA_MIN_KEY.to_vec(),
-                DATA_MAX_KEY.to_vec(),
-            ))
+            .load_region(new_region(1, DATA_MIN_KEY, DATA_MAX_KEY))
             .unwrap();
     }
 
@@ -424,6 +442,8 @@ fn test_load_with_split2() {
     })
     .unwrap();
     let snap_ctx = SnapshotContext {
+        region_id: 0,
+        epoch_version: 0,
         read_ts: 20,
         range: None,
     };
@@ -477,8 +497,8 @@ fn test_load_with_eviction() {
         let mut core = range_cache_engine.core().write();
         // Load the whole range as if it is not splitted. Loading process should handle
         // it correctly.
-        let cache_range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
-        core.mut_range_manager().load_range(cache_range).unwrap();
+        let cache_range = new_region(1, DATA_MIN_KEY, DATA_MAX_KEY);
+        core.mut_range_manager().load_region(cache_range).unwrap();
     }
 
     let r = cluster.get_region(b"");
@@ -505,11 +525,7 @@ fn test_load_with_eviction() {
         let range_cache_engine = cluster.get_range_cache_engine(1);
         let mut tried_count = 0;
         while range_cache_engine
-            .snapshot(
-                CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec()),
-                u64::MAX,
-                u64::MAX,
-            )
+            .snapshot(1, 0, u64::MAX, u64::MAX)
             .is_err()
             && tried_count < 5
         {
@@ -517,8 +533,8 @@ fn test_load_with_eviction() {
             tried_count += 1;
         }
         // Now, the range (DATA_MIN_KEY, DATA_MAX_KEY) should be cached
-        let range = CacheRange::new(data_key(b"k10"), DATA_MAX_KEY.to_vec());
-        range_cache_engine.evict_range(&range);
+        let region = new_region(1, DATA_MIN_KEY, DATA_MAX_KEY);
+        range_cache_engine.evict_range(&region);
     }
 
     fail::remove("on_write_impl");
@@ -532,6 +548,8 @@ fn test_load_with_eviction() {
     .unwrap();
 
     let snap_ctx = SnapshotContext {
+        region_id: 0,
+        epoch_version: 0,
         read_ts: u64::MAX,
         range: None,
     };
@@ -556,22 +574,34 @@ fn test_evictions_after_transfer_leader() {
     let r = cluster.get_region(b"");
     cluster.must_transfer_leader(r.id, new_peer(1, 1));
 
-    let cache_range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
+    let cache_region = new_region(1, DATA_MIN_KEY, DATA_MAX_KEY);
     let range_cache_engine = {
         let range_cache_engine = cluster.get_range_cache_engine(1);
         let mut core = range_cache_engine.core().write();
-        core.mut_range_manager().new_range(cache_range.clone());
+        core.mut_range_manager().new_region(cache_region.clone());
         drop(core);
         range_cache_engine
     };
 
     range_cache_engine
-        .snapshot(cache_range.clone(), 100, 100)
+        .snapshot(
+            cache_region.id,
+            0,
+            CacheRange::from_region(&cache_region),
+            100,
+            100,
+        )
         .unwrap();
 
     cluster.must_transfer_leader(r.id, new_peer(2, 2));
     range_cache_engine
-        .snapshot(cache_range, 100, 100)
+        .snapshot(
+            cache_region.id,
+            0,
+            CacheRange::from_region(&cache_region),
+            100,
+            100,
+        )
         .unwrap_err();
 }
 

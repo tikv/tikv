@@ -20,11 +20,17 @@ use crate::HybridEngine;
 /// ```
 /// use hybrid_engine::util::hybrid_engine_for_tests;
 /// let (_path, _hybrid_engine) = hybrid_engine_for_tests("temp", |memory_engine| {
-///     let range = engine_traits::CacheRange::new(b"k00".to_vec(), b"k10".to_vec());
-///     memory_engine.new_range(range.clone());
+///     let region = {
+///         let mut r = kvproto::metapb::Region::default();
+///         r.id = 1;
+///         r.start_key = b"".into();
+///         r.end_key = b"z".into();
+///         r
+///     };
+///     memory_engine.new_region(region.clone());
 ///     {
 ///         let mut core = memory_engine.core().write().unwrap();
-///         core.mut_range_manager().set_range_readable(&range, true);
+///         core.mut_range_manager().set_region_readable(&region, true);
 ///         core.mut_range_manager().set_safe_ts(&range, 10);
 ///     }
 /// })
