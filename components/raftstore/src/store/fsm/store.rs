@@ -288,9 +288,7 @@ where
             let region_id = r.region_id;
             if let Err(e) = self.router.force_send(
                 region_id,
-                PeerMsg::ApplyRes {
-                    res: ApplyTaskRes::Apply(r),
-                },
+                PeerMsg::ApplyRes(Box::new(ApplyTaskRes::Apply(r))),
             ) {
                 error!("failed to send apply result"; "region_id" => region_id, "err" => ?e);
             }
@@ -326,7 +324,9 @@ where
         for e in msg.get_message().get_entries() {
             heap_size += bytes_capacity(&e.data) + bytes_capacity(&e.context);
         }
-        let peer_msg = PeerMsg::RaftMessage(InspectedRaftMessage { heap_size, msg });
+        let peer_msg = PeerMsg::RaftMessage(
+            Box::new(InspectedRaftMessage { heap_size, msg })
+        );
         let event = TraceEvent::Add(heap_size);
         let send_failed = Cell::new(true);
 
@@ -369,10 +369,10 @@ where
         cmd: RaftCommand<EK::Snapshot>,
     ) -> std::result::Result<(), TrySendError<RaftCommand<EK::Snapshot>>> {
         let region_id = cmd.request.get_header().get_region_id();
-        match self.send(region_id, PeerMsg::RaftCommand(cmd)) {
+        match self.send(region_id, PeerMsg::RaftCommand(Box::new(cmd))) {
             Ok(()) => Ok(()),
-            Err(TrySendError::Full(PeerMsg::RaftCommand(cmd))) => Err(TrySendError::Full(cmd)),
-            Err(TrySendError::Disconnected(PeerMsg::RaftCommand(cmd))) => {
+            Err(TrySendError::Full(PeerMsg::RaftCommand(box cmd))) => Err(TrySendError::Full(cmd)),
+            Err(TrySendError::Disconnected(PeerMsg::RaftCommand(box cmd))) => {
                 Err(TrySendError::Disconnected(cmd))
             }
             _ => unreachable!(),
@@ -381,7 +381,7 @@ where
 
     fn report_unreachable(&self, store_id: u64) {
         self.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(SignificantMsg::StoreUnreachable { store_id })
+            PeerMsg::SignificantMsg(Box::new(SignificantMsg::StoreUnreachable { store_id }))
         });
     }
 
@@ -392,7 +392,10 @@ where
     /// Broadcasts resolved result to all regions.
     pub fn report_resolved(&self, store_id: u64, group_id: u64) {
         self.broadcast_normal(|| {
-            PeerMsg::SignificantMsg(SignificantMsg::StoreResolved { store_id, group_id })
+            PeerMsg::SignificantMsg(Box::new(SignificantMsg::StoreResolved {
+                store_id,
+                group_id,
+            }))
         })
     }
 
@@ -877,12 +880,7 @@ impl<EK: KvEngine, ER: RaftEngine, T: Transport> PollHandler<PeerFsm<EK, ER>, St
                     fail_point!(
                         "pause_on_peer_destroy_res",
                         peer.peer_id() == 1
-                            && matches!(
-                                msg,
-                                PeerMsg::ApplyRes {
-                                    res: ApplyTaskRes::Destroy { .. },
-                                }
-                            ),
+                            && matches!(msg, PeerMsg::ApplyRes(box ApplyTaskRes::Destroy { .. })),
                         |_| unreachable!()
                     );
                     self.peer_msg_buf.push(msg);
@@ -1474,7 +1472,9 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
                         for region_id in regions {
                             let _ = router_clone.send(
                                 region_id,
-                                PeerMsg::CasualMessage(CasualMessage::ForceCompactRaftLogs),
+                                PeerMsg::CasualMessage(Box::new(
+                                    CasualMessage::ForceCompactRaftLogs,
+                                )),
                             );
                         }
                     }
@@ -1854,7 +1854,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         Ok(CheckMsgStatus::NewPeer)
     }
 
-    fn on_raft_message(&mut self, msg: InspectedRaftMessage) -> Result<()> {
+    fn on_raft_message(&mut self, msg: Box<InspectedRaftMessage>) -> Result<()> {
         let (heap_size, forwarded) = (msg.heap_size, Cell::new(false));
         defer!(if !forwarded.get() {
             MEMTRACE_RAFT_MESSAGES.trace(TraceEvent::Sub(heap_size));
@@ -1915,7 +1915,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                     check_msg_status == CheckMsgStatus::NewPeerFirst,
                 )? {
                     // Peer created, send the message again.
-                    let peer_msg = PeerMsg::RaftMessage(InspectedRaftMessage { heap_size, msg });
+                    let peer_msg = PeerMsg::RaftMessage(
+                        Box::new(InspectedRaftMessage { heap_size, msg }),
+                    );
                     if self.ctx.router.send(region_id, peer_msg).is_ok() {
                         forwarded.set(true);
                     }
@@ -1938,7 +1940,8 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 store_meta.pending_msgs.push(msg);
             } else {
                 drop(store_meta);
-                let peer_msg = PeerMsg::RaftMessage(InspectedRaftMessage { heap_size, msg });
+                let peer_msg =
+                    PeerMsg::RaftMessage(Box::new(InspectedRaftMessage { heap_size, msg }));
                 if let Err(e) = self.ctx.router.force_send(region_id, peer_msg) {
                     warn!("handle first request failed"; "region_id" => region_id, "error" => ?e);
                 } else {
@@ -2091,7 +2094,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 // may has been merged/splitted already.
                 let _ = self.ctx.router.force_send(
                     exist_region.get_id(),
-                    PeerMsg::CasualMessage(CasualMessage::RegionOverlapped),
+                    PeerMsg::CasualMessage(Box::new(CasualMessage::RegionOverlapped)),
                 );
             }
         }
@@ -2106,11 +2109,11 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
                 .router
                 .force_send(
                     id,
-                    PeerMsg::SignificantMsg(SignificantMsg::MergeResult {
+                    PeerMsg::SignificantMsg(Box::new(SignificantMsg::MergeResult {
                         target_region_id: region_id,
                         target: target.clone(),
                         result: MergeResultKind::Stale,
-                    }),
+                    })),
                 )
                 .unwrap();
         }
@@ -2177,9 +2180,9 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         for (region_id, declined_bytes) in region_declined_bytes.drain(..) {
             let _ = self.ctx.router.send(
                 region_id,
-                PeerMsg::CasualMessage(CasualMessage::CompactionDeclinedBytes {
+                PeerMsg::CasualMessage(Box::new(CasualMessage::CompactionDeclinedBytes {
                     bytes: declined_bytes,
-                }),
+                })),
             );
         }
     }
@@ -2608,7 +2611,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
 
         let _ = self.ctx.router.send(
             target_region_id,
-            PeerMsg::RaftCommand(RaftCommand::new(request, Callback::None)),
+            PeerMsg::RaftCommand(Box::new(RaftCommand::new(request, Callback::None))),
         );
     }
 
@@ -2646,7 +2649,7 @@ impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER
         for region_id in regions {
             let _ = self.ctx.router.send(
                 region_id,
-                PeerMsg::CasualMessage(CasualMessage::ClearRegionSize),
+                PeerMsg::CasualMessage(Box::new(CasualMessage::ClearRegionSize)),
             );
         }
     }
