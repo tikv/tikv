@@ -12,6 +12,7 @@ mod raftlog_gc;
 mod read;
 mod refresh_config;
 mod region;
+mod snap_gen;
 mod split_check;
 mod split_config;
 mod split_controller;
@@ -44,6 +45,7 @@ pub use self::{
         Task as RefreshConfigTask, WriterContoller,
     },
     region::{Runner as RegionRunner, Task as RegionTask},
+    snap_gen::{Runner as SnapGenRunner, Task as SnapGenTask},
     split_check::{
         Bucket, BucketRange, BucketStatsInfo, KeyEntry, Runner as SplitCheckRunner,
         Task as SplitCheckTask,

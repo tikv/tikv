@@ -107,7 +107,7 @@ use crate::{
             CompactRunner, CompactTask, ConsistencyCheckRunner, ConsistencyCheckTask,
             GcSnapshotRunner, GcSnapshotTask, PdRunner, RaftlogGcRunner, RaftlogGcTask,
             ReadDelegate, RefreshConfigRunner, RefreshConfigTask, RegionRunner, RegionTask,
-            SplitCheckTask,
+            SnapGenRunner, SnapGenTask, SplitCheckTask,
         },
         worker_metrics::PROCESS_STAT_CPU_USAGE,
         Callback, CasualMessage, CompactThreshold, FullCompactController, GlobalReplicationState,
@@ -563,7 +563,7 @@ where
     pub cleanup_scheduler: Scheduler<CleanupTask>,
     pub raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     pub raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
-    pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+    pub region_scheduler: Scheduler<RegionTask>,
     pub apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SstImporter<EK>>,
@@ -1255,7 +1255,8 @@ pub struct RaftPollerBuilder<EK: KvEngine, ER: RaftEngine, T> {
     cleanup_scheduler: Scheduler<CleanupTask>,
     raftlog_gc_scheduler: Scheduler<RaftlogGcTask>,
     raftlog_fetch_scheduler: Scheduler<ReadTask<EK>>,
-    pub region_scheduler: Scheduler<RegionTask<EK::Snapshot>>,
+    pub snap_gen_scheduler: Scheduler<SnapGenTask<EK::Snapshot>>,
+    pub region_scheduler: Scheduler<RegionTask>,
     apply_router: ApplyRouter<EK>,
     pub router: RaftRouter<EK, ER>,
     pub importer: Arc<SstImporter<EK>>,
@@ -1568,6 +1569,7 @@ where
             cleanup_scheduler: self.cleanup_scheduler.clone(),
             raftlog_gc_scheduler: self.raftlog_gc_scheduler.clone(),
             raftlog_fetch_scheduler: self.raftlog_fetch_scheduler.clone(),
+            snap_gen_scheduler: self.snap_gen_scheduler.clone(),
             region_scheduler: self.region_scheduler.clone(),
             apply_router: self.apply_router.clone(),
             router: self.router.clone(),
@@ -1596,6 +1598,8 @@ struct Workers<EK: KvEngine, ER: RaftEngine> {
     // background_workers. This is because the underlying compact_range call is a
     // blocking operation, which can take an extensive amount of time.
     cleanup_worker: Worker,
+    // The worker dedicated to handling snapshot generation tasks.
+    snap_gen_worker: Worker,
     region_worker: Worker,
     // Used for calling `manual_purge` if the specific engine implementation requires it
     // (`need_manual_purge`).
@@ -1695,6 +1699,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             pd_worker,
             background_worker,
             cleanup_worker: Worker::new("cleanup-worker"),
+            snap_gen_worker: Worker::new("snap-gen-worker"),
             region_worker: Worker::new("region-worker"),
             purge_worker,
             raftlog_fetch_worker: Worker::new("raftlog-fetch-worker"),
@@ -1702,19 +1707,29 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             refresh_config_worker: LazyWorker::new("refreash-config-worker"),
         };
         mgr.init()?;
+
+        let snap_gen_runner = SnapGenRunner::new(
+            engines.kv.clone(),
+            mgr.clone(),
+            cfg.clone(),
+            self.router(),
+            Some(Arc::clone(&pd_client)),
+        );
+
         let region_runner = RegionRunner::new(
             engines.kv.clone(),
             mgr.clone(),
             cfg.clone(),
             workers.coprocessor_host.clone(),
             self.router(),
-            Some(Arc::clone(&pd_client)),
         );
-        let snap_generator_pool = region_runner.snap_generator_pool();
+        let snap_generator_pool = snap_gen_runner.snap_generator_pool();
+        let snap_gen_scheduler = workers
+            .snap_gen_worker
+            .start("snap-gen-worker", snap_gen_runner);
         let region_scheduler = workers
             .region_worker
             .start_with_timer("region-worker", region_runner);
-
         let raftlog_gc_runner = RaftlogGcRunner::new(
             engines.clone(),
             cfg.value().raft_log_compact_sync_interval.0,
@@ -1767,6 +1782,7 @@ impl<EK: KvEngine, ER: RaftEngine> RaftBatchSystem<EK, ER> {
             router: self.router.clone(),
             split_check_scheduler,
             region_scheduler,
+            snap_gen_scheduler,
             pd_scheduler: workers.pd_worker.scheduler(),
             consistency_check_scheduler,
             cleanup_scheduler,
