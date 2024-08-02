@@ -159,6 +159,7 @@ fn test_backup_and_import() {
         &make_unique_dir(tmp.path()),
     );
     let resps3 = block_on(rx.collect::<Vec<_>>());
+    println!("{}", files1[0].total_kvs);
     assert_same_files(files1.into_vec(), resps3[0].files.clone().into_vec());
 
     suite.stop();

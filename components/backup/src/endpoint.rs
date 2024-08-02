@@ -28,9 +28,9 @@ use tikv::{
     config::BackupConfig,
     storage::{
         kv::{CursorBuilder, Engine, LocalTablets, ScanMode, SnapContext},
-        mvcc::Error as MvccError,
+        mvcc::{Error as MvccError, ScannerBuilder},
         raw::raw_mvcc::RawMvccSnapshot,
-        txn::{EntryBatch, Error as TxnError, SnapshotStore, TxnEntryScanner, TxnEntryStore},
+        txn::{EntryBatch, Error as TxnError, TxnEntryScanner},
         Snapshot, Statistics,
     },
 };
@@ -375,22 +375,18 @@ impl BackupRange {
         BACKUP_RANGE_HISTOGRAM_VEC
             .with_label_values(&["snapshot"])
             .observe(start_snapshot.saturating_elapsed().as_secs_f64());
-        let snap_store = SnapshotStore::new(
-            snapshot,
-            backup_ts,
-            IsolationLevel::Si,
-            false, // fill_cache
-            Default::default(),
-            Default::default(),
-            false,
-        );
         let start_key = self.start_key.clone();
         let end_key = self.end_key.clone();
         // Incremental backup needs to output delete records.
         let incremental = !begin_ts.is_zero();
-        let mut scanner = snap_store
-            .entry_scanner(start_key, end_key, begin_ts, incremental)
-            .unwrap();
+        let mut scanner = ScannerBuilder::new(snapshot, backup_ts)
+            .range(start_key, end_key)
+            .hint_min_ts(incremental.then_some(begin_ts))
+            .fill_cache(false)
+            .build_delta_scanner(begin_ts, Default::default())
+            .map_err(|err| {
+                Error::Other(box_err!("failed to build delta scanner due to {}", err))
+            })?;
 
         let start_scan = Instant::now();
         let mut batch = EntryBatch::with_capacity(BACKUP_BATCH_LIMIT);
@@ -451,8 +447,8 @@ impl BackupRange {
                 reschedule_checker.check().await;
             }
         }
-        drop(snap_store);
         let stat = scanner.take_statistics();
+        drop(scanner);
         let take = start_scan.saturating_elapsed_secs();
         if take > 30.0 {
             warn!("backup scan takes long time.";
