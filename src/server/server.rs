@@ -155,7 +155,7 @@ where
         cfg: &Arc<VersionTrack<Config>>,
         security_mgr: &Arc<SecurityManager>,
         storage: Storage<E, L, F>,
-        copr: Endpoint<E>,
+        copr: Arc<Endpoint<E>>,
         copr_v2: coprocessor_v2::Endpoint,
         resolver: S,
         snap_mgr: Either<SnapManager, TabletSnapManager>,

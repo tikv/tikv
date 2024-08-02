@@ -12,7 +12,7 @@ use crossbeam::channel::TrySendError;
 use engine_traits::{KvEngine, RaftEngine};
 use futures::Future;
 use kvproto::{
-    errorpb,
+    errorpb, metapb,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftCmdResponse},
 };
 use raftstore::{
@@ -564,6 +564,9 @@ where
         }
         (meta.readers.len(), None)
     }
+    fn locate_key(&self, _key: &[u8]) -> Option<(Arc<metapb::Region>, u64, u64)> {
+        None
+    }
 }
 
 enum ReadRequestPolicy {
@@ -907,7 +910,7 @@ mod tests {
         assert!(Arc::ptr_eq(snap.txn_ext.as_ref().unwrap(), &txn_ext));
         assert!(Arc::ptr_eq(
             snap.bucket_meta.as_ref().unwrap(),
-            &bucket_meta
+            &bucket_meta,
         ));
         assert_eq!(*snap.get_region(), region1);
         assert_eq!(

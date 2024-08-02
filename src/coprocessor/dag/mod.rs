@@ -10,7 +10,7 @@ use kvproto::coprocessor::{KeyRange, Response};
 use protobuf::Message;
 use tidb_query_common::{execute_stats::ExecSummary, storage::IntervalRange};
 use tikv_alloc::trace::MemoryTraceGuard;
-use tipb::{DagRequest, SelectResponse, StreamResponse};
+use tipb::{DagRequest, FieldType, SelectResponse, StreamResponse, TableScan};
 
 pub use self::storage_impl::TikvStorage;
 use crate::{
@@ -87,11 +87,13 @@ impl<S: Store + 'static, F: KvFormat> DagHandlerBuilder<S, F> {
 pub struct BatchDagHandler {
     runner: tidb_query_executors::runner::BatchExecutorsRunner<Statistics>,
     data_version: Option<u64>,
+    index_lookup: Option<TableScan>,
+    req: Option<DagRequest>,
 }
 
 impl BatchDagHandler {
     pub fn new<S: Store + 'static, F: KvFormat>(
-        req: DagRequest,
+        mut req: DagRequest,
         ranges: Vec<KeyRange>,
         store: S,
         data_version: Option<u64>,
@@ -102,6 +104,10 @@ impl BatchDagHandler {
         paging_size: Option<u64>,
         quota_limiter: Arc<QuotaLimiter>,
     ) -> Result<Self> {
+        let extra_dag = req.has_extra_table_info().then(|| req.clone());
+        let index_lookup = req
+            .has_extra_table_info()
+            .then(|| req.take_extra_table_info());
         Ok(Self {
             runner: tidb_query_executors::runner::BatchExecutorsRunner::from_request::<_, F>(
                 req,
@@ -114,6 +120,8 @@ impl BatchDagHandler {
                 quota_limiter,
             )?,
             data_version,
+            req: extra_dag,
+            index_lookup,
         })
     }
 }
@@ -135,6 +143,20 @@ impl RequestHandler for BatchDagHandler {
 
     fn collect_scan_summary(&mut self, dest: &mut ExecSummary) {
         self.runner.collect_scan_summary(dest);
+    }
+
+    fn index_lookup(&self) -> Option<(Vec<FieldType>, TableScan)> {
+        self.index_lookup
+            .as_ref()
+            .map(|index_lookup| (self.runner.schema().to_vec(), index_lookup.clone()))
+    }
+
+    fn get_req(&self) -> Option<DagRequest> {
+        self.req.clone()
+    }
+
+    fn get_schema(&self) -> Option<Vec<FieldType>> {
+        Some(self.runner.schema().to_vec())
     }
 }
 
