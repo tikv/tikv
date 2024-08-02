@@ -575,7 +575,14 @@ mod tests {
         let send = || {
             let rts_ = rts.clone();
             let mut sink_ = sink.clone();
-            Box::pin(async move { sink_.send_all(vec![CdcEvent::ResolvedTs(rts_)]).await })
+            Box::pin(async move {
+                sink_
+                    .send_all(
+                        vec![CdcEvent::ResolvedTs(rts_)],
+                        Arc::new(Default::default()),
+                    )
+                    .await
+            })
         };
         let must_fill_window = || {
             let mut window_size = 0;
