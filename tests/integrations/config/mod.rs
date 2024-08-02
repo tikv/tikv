@@ -265,6 +265,7 @@ fn test_serde_custom_tikv_config() {
         slow_trend_unsensitive_result: 0.5,
         enable_v2_compatible_learner: false,
         unsafe_disable_check_quorum: false,
+        min_pending_apply_region_count: 10,
     };
     value.pd = PdConfig::new(vec!["example.com:443".to_owned()]);
     let titan_cf_config = TitanCfConfig {
