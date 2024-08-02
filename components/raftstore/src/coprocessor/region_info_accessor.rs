@@ -602,8 +602,6 @@ impl RegionCollector {
                         r,
                         ra.map(|ra| ra.region_stat.approximate_size)
                             .unwrap_or_default(),
-                        ra.map(|ra| ra.region_stat.read_keys).unwrap_or_default(),
-                        ra.map(|ra| ra.region_stat.written_keys).unwrap_or_default(),
                     )
                 })
                 .collect::<Vec<_>>()

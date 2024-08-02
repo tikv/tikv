@@ -203,7 +203,7 @@ mod tests {
         fn range_cache_engine_enabled(&self) -> bool {
             self.enabled.load(Ordering::Relaxed)
         }
-        fn evict_range(&self, range: &CacheRange) {
+        fn evict_range(&self, range: &CacheRange, _: EvictReason) {
             self.evicted_ranges.lock().unwrap().push(range.clone());
         }
     }

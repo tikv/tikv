@@ -2314,7 +2314,7 @@ pub mod tests {
         let _snap3 = engine.snapshot(range.clone(), 60, 1000).unwrap();
 
         let range2 = CacheRange::new(b"key5".to_vec(), b"key8".to_vec());
-        engine.evict_range(&range2);
+        engine.evict_range(&range2, EvictReason::AutoEvict);
 
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));

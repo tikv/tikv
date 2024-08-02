@@ -522,7 +522,7 @@ pub enum RangeCacheStatus {
 mod tests {
     use std::collections::BTreeSet;
 
-    use engine_traits::{CacheRange, FailedReason};
+    use engine_traits::{CacheRange, EvictReason, FailedReason};
 
     use super::RangeManager;
     use crate::range_manager::LoadFailedReason;
@@ -554,7 +554,7 @@ mod tests {
         let r_evict = CacheRange::new(b"k03".to_vec(), b"k06".to_vec());
         let r_left = CacheRange::new(b"k00".to_vec(), b"k03".to_vec());
         let r_right = CacheRange::new(b"k06".to_vec(), b"k10".to_vec());
-        range_mgr.evict_range(&r_evict);
+        range_mgr.evict_range(&r_evict, EvictReason::AutoEvict);
         let meta1 = range_mgr.historical_ranges.get(&r1).unwrap();
         assert!(range_mgr.ranges_being_deleted.get(&r_evict).is_some());
         assert!(range_mgr.ranges.get(&r1).is_none());
@@ -564,12 +564,16 @@ mod tests {
 
         // evict a range with accurate match
         let _ = range_mgr.range_snapshot(&r_left, 10);
-        range_mgr.evict_range(&r_left);
+        range_mgr.evict_range(&r_left, EvictReason::AutoEvict);
         assert!(range_mgr.historical_ranges.get(&r_left).is_some());
         assert!(range_mgr.ranges_being_deleted.get(&r_left).is_some());
         assert!(range_mgr.ranges.get(&r_left).is_none());
 
-        assert!(range_mgr.evict_range(&r_right).is_empty());
+        assert!(
+            range_mgr
+                .evict_range(&r_right, EvictReason::AutoEvict)
+                .is_empty()
+        );
         assert!(range_mgr.historical_ranges.get(&r_right).is_none());
     }
 
@@ -582,7 +586,7 @@ mod tests {
         let r4 = CacheRange::new(b"k25".to_vec(), b"k35".to_vec());
         range_mgr.new_range(r1.clone());
         range_mgr.new_range(r3.clone());
-        range_mgr.evict_range(&r1);
+        range_mgr.evict_range(&r1, EvictReason::AutoEvict);
 
         let mut gced = BTreeSet::default();
         gced.insert(r2.clone());
@@ -611,7 +615,7 @@ mod tests {
         let r2 = CacheRange::new(b"k20".to_vec(), b"k30".to_vec());
         let r3 = CacheRange::new(b"k40".to_vec(), b"k50".to_vec());
         range_mgr.new_range(r1.clone());
-        range_mgr.evict_range(&r1);
+        range_mgr.evict_range(&r1, EvictReason::AutoEvict);
 
         let mut gced = BTreeSet::default();
         gced.insert(r2);
@@ -663,7 +667,7 @@ mod tests {
 
             let r4 = CacheRange::new(b"k00".to_vec(), b"k05".to_vec());
             let r5 = CacheRange::new(b"k05".to_vec(), b"k10".to_vec());
-            assert_eq!(range_mgr.evict_range(&r4), vec![r4]);
+            assert_eq!(range_mgr.evict_range(&r4, EvictReason::AutoEvict), vec![r4]);
             assert_eq!(
                 range_mgr.ranges().keys().collect::<Vec<_>>(),
                 vec![&r5, &r2, &r3]
@@ -672,7 +676,7 @@ mod tests {
             let r6 = CacheRange::new(b"k24".to_vec(), b"k27".to_vec());
             let r7 = CacheRange::new(b"k20".to_vec(), b"k24".to_vec());
             let r8 = CacheRange::new(b"k27".to_vec(), b"k30".to_vec());
-            assert_eq!(range_mgr.evict_range(&r6), vec![r6]);
+            assert_eq!(range_mgr.evict_range(&r6, EvictReason::AutoEvict), vec![r6]);
             assert_eq!(
                 range_mgr.ranges().keys().collect::<Vec<_>>(),
                 vec![&r5, &r7, &r8, &r3]
@@ -692,7 +696,10 @@ mod tests {
             range_mgr.contains_range(&r3);
 
             let r4 = CacheRange::new(b"k".to_vec(), b"k51".to_vec());
-            assert_eq!(range_mgr.evict_range(&r4), vec![r1, r2, r3]);
+            assert_eq!(
+                range_mgr.evict_range(&r4, EvictReason::AutoEvict),
+                vec![r1, r2, r3]
+            );
             assert!(range_mgr.ranges().is_empty());
         }
 
@@ -706,7 +713,10 @@ mod tests {
             range_mgr.new_range(r3.clone());
 
             let r4 = CacheRange::new(b"k25".to_vec(), b"k55".to_vec());
-            assert_eq!(range_mgr.evict_range(&r4), vec![r2, r3]);
+            assert_eq!(
+                range_mgr.evict_range(&r4, EvictReason::AutoEvict),
+                vec![r2, r3]
+            );
             assert_eq!(range_mgr.ranges().len(), 1);
         }
 
@@ -720,7 +730,10 @@ mod tests {
             range_mgr.new_range(r3.clone());
 
             let r4 = CacheRange::new(b"k25".to_vec(), b"k75".to_vec());
-            assert_eq!(range_mgr.evict_range(&r4), vec![r2, r3]);
+            assert_eq!(
+                range_mgr.evict_range(&r4, EvictReason::AutoEvict),
+                vec![r2, r3]
+            );
             assert_eq!(range_mgr.ranges().len(), 1);
         }
     }

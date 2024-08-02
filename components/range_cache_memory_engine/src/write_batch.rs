@@ -959,7 +959,7 @@ mod tests {
         assert_eq!(822, memory_controller.mem_usage());
 
         drop(snap1);
-        engine.evict_range(&range1);
+        engine.evict_range(&range1, EvictReason::AutoEvict);
         flush_epoch();
         wait_evict_done(&engine);
         assert_eq!(548, memory_controller.mem_usage());
