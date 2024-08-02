@@ -53,12 +53,10 @@ fn vec_l2_norm(a: VectorFloat32Ref) -> Result<Option<Real>> {
 
 #[cfg(test)]
 mod tests {
-    use std::ptr::null;
-
     use tipb::ScalarFuncSig;
 
     use super::*;
-    use crate::{function::Null, types::test_util::RpnFnScalarEvaluator};
+    use crate::types::test_util::RpnFnScalarEvaluator;
 
     fn real_eq(a: Real, b: Real) -> bool {
         if a.is_nan() {
