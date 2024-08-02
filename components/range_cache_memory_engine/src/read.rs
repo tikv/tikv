@@ -696,7 +696,7 @@ mod tests {
     use crate::{
         engine::{cf_to_id, tests::new_region, SkiplistEngine},
         keys::{
-            construct_key, construct_user_key, construct_value, decode_key, encode_key,
+            construct_key, construct_region_key, construct_user_key, construct_value, decode_key, encode_key,
             encode_seek_key, InternalBytes, ValueType,
         },
         perf_context::PERF_CONTEXT,
@@ -1796,7 +1796,7 @@ mod tests {
         let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
-        let region = new_region(1, construct_user_key(0), construct_user_key(30));
+        let region = new_region(1, construct_region_key(0), construct_region_key(30));
         let range = CacheRange::from_region(&region);
         engine.new_region(region.clone());
 
@@ -1815,9 +1815,9 @@ mod tests {
         }
 
         let mut new_regions = vec![
-            new_region(1, construct_user_key(0), construct_user_key(10)),
-            new_region(2, construct_user_key(10), construct_user_key(20)),
-            new_region(3, construct_user_key(10), construct_user_key(20)),
+            new_region(1, construct_region_key(0), construct_region_key(10)),
+            new_region(2, construct_region_key(10), construct_region_key(20)),
+            new_region(3, construct_region_key(20), construct_region_key(30)),
         ];
         new_regions.iter_mut().for_each(|r| {
             r.mut_region_epoch().version = 1;
@@ -1876,7 +1876,7 @@ mod tests {
         let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
             VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
         )));
-        let region = new_region(1, construct_user_key(0), construct_user_key(30));
+        let region = new_region(1, construct_region_key(0), construct_region_key(30));
         engine.new_region(region.clone());
 
         let guard = &epoch::pin();
@@ -1902,9 +1902,9 @@ mod tests {
         let s2 = engine.snapshot(1, 0, range, 20, 20);
 
         let mut new_regions = vec![
-            new_region(1, construct_user_key(0), construct_user_key(10)),
-            new_region(2, construct_user_key(10), construct_user_key(20)),
-            new_region(3, construct_user_key(10), construct_user_key(20)),
+            new_region(1, construct_region_key(0), construct_region_key(10)),
+            new_region(2, construct_region_key(10), construct_region_key(20)),
+            new_region(3, construct_region_key(10), construct_region_key(20)),
         ];
         new_regions.iter_mut().for_each(|r| {
             r.mut_region_epoch().version = 1;

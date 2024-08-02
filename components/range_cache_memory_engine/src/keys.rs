@@ -273,6 +273,12 @@ pub fn construct_user_key(i: u64) -> Vec<u8> {
 }
 
 #[cfg(test)]
+pub fn construct_region_key(i: u64) -> Vec<u8> {
+    let k = format!("k{:08}", i);
+    k.as_bytes().to_owned()
+}
+
+#[cfg(test)]
 pub fn construct_key(i: u64, ts: u64) -> Vec<u8> {
     let k = format!("zk{:08}", i);
     Key::from_encoded(k.as_bytes().to_vec())
