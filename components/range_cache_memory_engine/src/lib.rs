@@ -54,6 +54,7 @@ pub enum Error {
 pub struct RangeCacheEngineConfig {
     pub enabled: bool,
     pub gc_interval: ReadableDuration,
+    pub reload_period: ReadableDuration,
     pub load_evict_interval: ReadableDuration,
     pub soft_limit_threshold: Option<ReadableSize>,
     pub hard_limit_threshold: Option<ReadableSize>,
@@ -65,6 +66,7 @@ impl Default for RangeCacheEngineConfig {
         Self {
             enabled: false,
             gc_interval: ReadableDuration(Duration::from_secs(180)),
+            reload_period: ReadableDuration(Duration::from_secs(60)),
             load_evict_interval: ReadableDuration(Duration::from_secs(300)), /* Each load/evict
                                                                               * operation should
                                                                               * run within five
@@ -124,6 +126,7 @@ impl RangeCacheEngineConfig {
         RangeCacheEngineConfig {
             enabled: true,
             gc_interval: ReadableDuration(Duration::from_secs(180)),
+            reload_period: ReadableDuration(Duration::from_secs(60)),
             load_evict_interval: ReadableDuration(Duration::from_secs(300)), /* Should run within
                                                                               * five minutes */
             soft_limit_threshold: Some(ReadableSize::gb(1)),
