@@ -1940,7 +1940,7 @@ pub mod tests {
         let mut prs = Progress::new_with_ranges(
             endpoint.store_id,
             ranges,
-            endpoint.region_info.clone(),
+            endpoint.region_info,
             KeyValueCodec::new(false, ApiVersion::V1, ApiVersion::V1),
             engine_traits::CF_DEFAULT,
         );
