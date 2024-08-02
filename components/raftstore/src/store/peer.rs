@@ -1792,6 +1792,7 @@ where
                 "peer_id" => self.peer.get_id(),
                 "msg_type" => %util::MsgType(&msg),
                 "msg_size" => msg.get_message().compute_size(),
+                "!!!! msg" => ?msg,
                 "to" => to_peer_id,
                 "disk_usage" => ?msg.get_disk_usage(),
             );
@@ -1905,7 +1906,10 @@ where
                     resp.set_entries(m.take_entries());
 
                     self.raft_group.raft.msgs.push(resp);
+                    info!("!!!! read index {}", index; "self.region_id" => self.region_id, "m" => ?m);
                     return Ok(());
+                } else {
+                    info!("!!!! read index no lease"; "self.region_id" => self.region_id);
                 }
                 self.should_wake_up = state == LeaseState::Expired;
             }

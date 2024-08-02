@@ -806,6 +806,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
         // If it's not a leader, the read index request will be redirected to the leader
         // later.
         if msg.get_msg_type() != MessageType::MsgReadIndex || role != StateRole::Leader {
+            info!("!!!! quit due to not leader {:?}", role; "msg" => ?msg);
             return;
         }
         assert_eq!(msg.get_entries().len(), 1);
@@ -814,6 +815,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
             let begin_instant = Instant::now();
 
             let start_ts = request.get_start_ts().into();
+            info!("!!!! advance max_ts to {}", start_ts; "msg" => ?msg);
             self.concurrency_manager.update_max_ts(start_ts);
             for range in request.mut_key_ranges().iter_mut() {
                 let key_bound = |key: Vec<u8>| {
@@ -842,6 +844,7 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                     },
                 );
                 if let Err(txn_types::Error(box txn_types::ErrorInner::KeyIsLocked(lock))) = res {
+                    info!("!!!! observe lock {:?}", lock; "msg" => ?msg);
                     rctx.locked = Some(lock);
                     REPLICA_READ_LOCK_CHECK_HISTOGRAM_VEC_STATIC
                         .locked
@@ -853,6 +856,8 @@ impl ReadIndexObserver for ReplicaReadLockChecker {
                 }
             }
             msg.mut_entries()[0].set_data(rctx.to_bytes().into());
+        } else {
+            info!("!!!! no request"; "msg" => ?msg);
         }
     }
 }
