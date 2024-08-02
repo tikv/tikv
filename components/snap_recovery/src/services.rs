@@ -220,9 +220,15 @@ impl<ER: RaftEngine> RecoveryService<ER> {
     pub fn wait_apply_last(router: RaftRouter<RocksEngine, ER>, sender: SyncSender<u64>) {
         let wait_apply = SnapshotRecoveryWaitApplySyncer::new(0, sender);
         router.broadcast_normal(|| {
+<<<<<<< HEAD
             PeerMsg::SignificantMsg(SignificantMsg::SnapshotRecoveryWaitApply(
                 wait_apply.clone(),
             ))
+=======
+            PeerMsg::SignificantMsg(Box::new(SignificantMsg::SnapshotBrWaitApply(
+                SnapshotBrWaitApplyRequest::relaxed(wait_apply.clone()),
+            )))
+>>>>>>> 7c509085cb (batch-system: Reduce the memory usage of peers' message channel  (#17326))
         });
     }
 }
