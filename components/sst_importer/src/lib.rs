@@ -2,6 +2,8 @@
 
 //! Importing RocksDB SST files into TiKV
 #![feature(min_specialization)]
+#![feature(let_chains)]
+#![feature(assert_matches)]
 
 #[macro_use]
 extern crate lazy_static;
@@ -21,6 +23,7 @@ mod util;
 pub mod import_mode;
 mod caching;
 pub mod import_mode2;
+mod mediate;
 pub mod metrics;
 pub mod sst_importer;
 
@@ -29,6 +32,7 @@ pub use self::{
     errors::{error_inc, Error, Result},
     import_file::{sst_meta_to_path, API_VERSION_2},
     import_mode2::range_overlaps,
+    mediate::{periodic_gc_mediator, IngestMediator, IngestObserver, Mediator, Observer},
     sst_importer::SstImporter,
     sst_writer::{RawSstWriter, TxnSstWriter},
     util::{copy_sst_for_ingestion, prepare_sst_for_ingestion},
