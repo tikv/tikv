@@ -16,7 +16,7 @@ use crate::{
         SubcompactionResult,
     },
     execute::{hooks::SaveMeta, Execution, ExecutionConfig},
-    statistic::{CompactStatistic, LoadStatistic},
+    statistic::{LoadStatistic, SubcompactStatistic},
     storage::{LoadFromExt, StreamyMetaStorage},
 };
 
@@ -68,7 +68,7 @@ async fn playground() {
     let compact_worker =
         SubcompactionExec::<RocksEngine>::default_config(Arc::clone(&arc_store) as _);
     let _load_stat = LoadStatistic::default();
-    let _compact_stat = CompactStatistic::default();
+    let _compact_stat = SubcompactStatistic::default();
     let c_ext = SubcompactExt {
         max_load_concurrency: 32,
         ..Default::default()

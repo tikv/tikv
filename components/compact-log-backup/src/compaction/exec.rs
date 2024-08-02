@@ -12,19 +12,17 @@ use engine_traits::{
 use external_storage::ExternalStorage;
 use file_system::Sha256Reader;
 use futures::{future::TryFutureExt, io::AllowStdIo};
-
 use kvproto::brpb::{self, LogFileSubcompaction};
 use tikv_util::{
     codec::bytes::decode_bytes_in_place, retry_expr, stream::JustRetry, time::Instant,
 };
-
 
 use super::{Subcompaction, SubcompactionResult};
 use crate::{
     compaction::SST_OUT_REL,
     errors::{OtherErrExt, Result, TraceResultExt},
     source::{Record, Source},
-    statistic::{CompactStatistic, LoadStatistic},
+    statistic::{LoadStatistic, SubcompactStatistic},
     storage::COMPACTION_OUT_PREFIX,
     util::{self, Cooperate, ExecuteAllExt},
 };
@@ -37,7 +35,7 @@ pub struct SubcompactionExec<DB> {
     out_prefix: PathBuf,
 
     load_stat: LoadStatistic,
-    compact_stat: CompactStatistic,
+    compact_stat: SubcompactStatistic,
 
     db: Option<DB>,
 }

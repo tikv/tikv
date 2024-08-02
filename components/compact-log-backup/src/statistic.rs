@@ -1,10 +1,33 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 use std::time::Duration;
 
+use chrono::{DateTime, Local};
 use derive_more::{Add, AddAssign};
+use serde::Serialize;
+
+/// The statistic of an [`Execution`].
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct CompactLogBackupStatistic {
+    /// When we start the execution?
+    pub start_time: DateTime<Local>,
+    /// When it ends?
+    pub end_time: DateTime<Local>,
+    /// How many time we spent for the whole execution?
+    pub time_taken: Duration,
+    /// From which host we executed this compaction?
+    pub exec_by: String,
+
+    // Summary of statistics.
+    pub load_stat: LoadStatistic,
+    pub load_meta_stat: LoadMetaStatistic,
+    pub collect_subcompactions_stat: CollectSubcompactionStatistic,
+    pub subcompact_stat: SubcompactStatistic,
+}
 
 /// The statistic of loading metadata of compactions' source files.
-#[derive(Default, Debug, Add, AddAssign, Clone)]
+#[derive(Default, Debug, Add, AddAssign, Clone, Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct LoadMetaStatistic {
     /// How many meta files read?
     pub meta_files_in: u64,
@@ -25,7 +48,9 @@ pub struct LoadMetaStatistic {
 }
 
 /// The statistic of loading data files for a subcompaction.
-#[derive(Default, Debug, Add, AddAssign, Clone)]
+#[derive(Default, Debug, Add, AddAssign, Clone, Serialize)]
+#[serde(rename_all = "kebab-case")]
+
 pub struct LoadStatistic {
     /// How many logical "files" we have loaded?
     pub files_in: u64,
@@ -42,8 +67,9 @@ pub struct LoadStatistic {
 }
 
 /// The statistic of executing a subcompaction.
-#[derive(Default, Debug, Add, AddAssign, Clone)]
-pub struct CompactStatistic {
+#[derive(Default, Debug, Add, AddAssign, Clone, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct SubcompactStatistic {
     /// How many keys we have yielded?
     pub keys_out: u64,
     /// How many bytes we have yielded, physically?
@@ -67,8 +93,9 @@ pub struct CompactStatistic {
 }
 
 /// The statistic of collecting subcompactions.
-#[derive(Default, Debug, Add, AddAssign, Clone)]
-pub struct CollectCompactionStatistic {
+#[derive(Default, Debug, Add, AddAssign, Clone, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct CollectSubcompactionStatistic {
     /// How many files we processed?
     pub files_in: u64,
     /// How many bytes the files we have processed have?

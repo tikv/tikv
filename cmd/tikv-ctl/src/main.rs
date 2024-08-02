@@ -70,7 +70,7 @@ fn main() {
     let opt = Opt::from_args();
 
     // Initialize logger.
-    init_ctl_logger(&opt.log_level);
+    init_ctl_logger(&opt.log_level, &opt.log_format);
 
     // Print OpenSSL FIPS mode status.
     fips::log_status();

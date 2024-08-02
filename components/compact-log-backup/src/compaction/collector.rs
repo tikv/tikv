@@ -7,7 +7,7 @@ use super::{Input, SubcompactionCollectKey};
 use crate::{
     compaction::Subcompaction,
     errors::{Result, TraceResultExt},
-    statistic::CollectCompactionStatistic,
+    statistic::CollectSubcompactionStatistic,
     storage::LogFile,
 };
 
@@ -33,7 +33,7 @@ pub struct CollectSubcompaction<S: Stream<Item = Result<LogFile>>> {
 
 impl<S: Stream<Item = Result<LogFile>>> CollectSubcompaction<S> {
     /// Get delta of statistic between last call to this.
-    pub fn take_statistic(&mut self) -> CollectCompactionStatistic {
+    pub fn take_statistic(&mut self) -> CollectSubcompactionStatistic {
         std::mem::take(&mut self.collector.stat)
     }
 
@@ -62,7 +62,7 @@ impl<S: Stream<Item = Result<LogFile>>> CollectSubcompaction<S> {
             collector: SubcompactionCollector {
                 cfg,
                 items: HashMap::new(),
-                stat: CollectCompactionStatistic::default(),
+                stat: CollectSubcompactionStatistic::default(),
             },
         }
     }
@@ -74,7 +74,7 @@ impl<S: Stream<Item = Result<LogFile>>> CollectSubcompaction<S> {
 /// subcompaction will be generated.
 struct SubcompactionCollector {
     items: HashMap<SubcompactionCollectKey, UnformedSubcompaction>,
-    stat: CollectCompactionStatistic,
+    stat: CollectSubcompactionStatistic,
     cfg: CollectSubcompactionConfig,
 }
 

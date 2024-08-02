@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use chrono::{Duration, Local};
+use chrono::Local;
 pub use engine_traits::SstCompressionType;
 use external_storage::{IterableExternalStorage, UnpinReader};
 use futures::{future::TryFutureExt, io::Cursor};
@@ -20,7 +20,10 @@ use crate::{
     },
     errors::Result,
     execute::Execution,
-    statistic::{CollectCompactionStatistic, CompactStatistic, LoadMetaStatistic, LoadStatistic},
+    statistic::{
+        CollectSubcompactionStatistic, CompactLogBackupStatistic, LoadMetaStatistic, LoadStatistic,
+        SubcompactStatistic,
+    },
     storage::StreamyMetaStorage,
     util,
 };
@@ -84,7 +87,7 @@ pub struct SubcompactionStartCtx<'a> {
     ///
     /// Like `load_stat_diff`, we collect subcompactions for every region
     /// concurrently. The statistic diff may not just contributed by the `subc`.
-    pub collect_compaction_stat_diff: &'a CollectCompactionStatistic,
+    pub collect_compaction_stat_diff: &'a CollectSubcompactionStatistic,
 }
 
 /// The hook points of an execution of compaction.
@@ -254,9 +257,9 @@ impl ExecHooks for TuiHooks {
 #[derive(Default)]
 struct CollectStatistic {
     load_stat: LoadStatistic,
-    compact_stat: CompactStatistic,
+    compact_stat: SubcompactStatistic,
     load_meta_stat: LoadMetaStatistic,
-    collect_stat: CollectCompactionStatistic,
+    collect_stat: CollectSubcompactionStatistic,
 }
 
 impl CollectStatistic {
@@ -265,7 +268,7 @@ impl CollectStatistic {
         self.compact_stat += res.compact_stat.clone();
     }
 
-    fn update_collect_compaction_stat(&mut self, stat: &CollectCompactionStatistic) {
+    fn update_collect_compaction_stat(&mut self, stat: &CollectSubcompactionStatistic) {
         self.collect_stat += stat.clone()
     }
 
@@ -296,41 +299,43 @@ impl CollectStatistic {
 /// While [`SubcompactionExec`](crate::compaction::exec::SubcompactionExec)
 /// knows only the subcompaction it handles, it is impossible to do such
 /// optimizations.
-#[derive(Default)]
 pub struct SaveMeta {
     collector: CompactionRunInfoBuilder,
     stats: CollectStatistic,
-    begin: Option<chrono::DateTime<Local>>,
+    begin: chrono::DateTime<Local>,
+}
+
+impl Default for SaveMeta {
+    fn default() -> Self {
+        Self {
+            collector: Default::default(),
+            stats: Default::default(),
+            begin: Local::now(),
+        }
+    }
 }
 
 impl SaveMeta {
     fn comments(&self) -> String {
         let now = Local::now();
-        let mut comments = String::new();
-        comments += &format!(
-            "start_time: {}\n",
-            self.begin
-                .map(|v| v.to_rfc3339())
-                .as_deref()
-                .unwrap_or("unknown")
-        );
-        comments += &format!("end_time: {}\n", now.to_rfc3339());
-        comments += &format!(
-            "taken: {}\n",
-            self.begin.map(|v| now - v).unwrap_or(Duration::zero())
-        );
-        comments += &format!("exec_by: {:?}\n", tikv_util::sys::hostname());
-        comments += &format!("load_stat: {:?}\n", self.stats.load_stat);
-        comments += &format!("compact_stat: {:?}\n", self.stats.compact_stat);
-        comments += &format!("load_meta_stat: {:?}\n", self.stats.load_meta_stat);
-        comments += &format!("collect_stat: {:?}\n", self.stats.collect_stat);
-        comments
+        let stat = CompactLogBackupStatistic {
+            start_time: self.begin,
+            end_time: Local::now(),
+            time_taken: (now - self.begin).to_std().unwrap_or_default(),
+            exec_by: tikv_util::sys::hostname().unwrap_or_default(),
+
+            load_stat: self.stats.load_stat.clone(),
+            subcompact_stat: self.stats.compact_stat.clone(),
+            load_meta_stat: self.stats.load_meta_stat.clone(),
+            collect_subcompactions_stat: self.stats.collect_stat.clone(),
+        };
+        serde_json::to_string(&stat).unwrap_or_else(|err| format!("ERR DURING MARSHALING: {}", err))
     }
 }
 
 impl ExecHooks for SaveMeta {
     async fn before_execution_started(&mut self, cx: BeforeStartCtx<'_>) -> Result<()> {
-        self.begin = Some(Local::now());
+        self.begin = Local::now();
         let run_info = &mut self.collector;
         run_info.mut_meta().set_name(cx.this.gen_name());
         run_info

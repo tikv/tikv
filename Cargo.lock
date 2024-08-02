@@ -1073,6 +1073,8 @@ dependencies = [
  "pprof",
  "prometheus",
  "protobuf",
+ "serde",
+ "serde_json",
  "slog",
  "slog-global",
  "tempdir",

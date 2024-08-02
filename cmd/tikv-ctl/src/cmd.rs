@@ -30,6 +30,9 @@ pub struct Opt {
     /// Set the log level
     pub log_level: String,
 
+    #[structopt(long, default_value = "text")]
+    pub log_format: String,
+
     #[structopt(long)]
     /// Set the remote host
     pub host: Option<String>,

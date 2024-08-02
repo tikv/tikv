@@ -40,6 +40,8 @@ tokio-util = { version = "0.7", features = ["compat"] }
 tracing = { workspace = true }
 tracing-active-tree = { workspace = true }
 txn_types = { workspace = true }
+serde = "1.0"
+serde_json = "1.0"
 
 # Below are used by `test_utils` only.
 zstd = "0.11"

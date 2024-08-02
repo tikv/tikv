@@ -5,7 +5,7 @@ use derive_more::Display;
 use kvproto::brpb::{self, FileType};
 
 use crate::{
-    statistic::{CompactStatistic, LoadStatistic},
+    statistic::{LoadStatistic, SubcompactStatistic},
     storage::LogFileId,
     util,
 };
@@ -80,7 +80,7 @@ pub struct SubcompactionResult {
     pub expected_size: u64,
 
     pub load_stat: LoadStatistic,
-    pub compact_stat: CompactStatistic,
+    pub compact_stat: SubcompactStatistic,
 }
 
 impl SubcompactionResult {
