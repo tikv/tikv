@@ -714,7 +714,7 @@ mod tests {
                 Key::from_raw(key),
                 self.clone(),
                 token,
-                dummy_request_cb,
+                dummy_request_cb.into(),
                 false,
             );
 
