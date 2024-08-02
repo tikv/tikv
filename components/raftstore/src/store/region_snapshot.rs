@@ -80,10 +80,10 @@ where
     pub fn replace_snapshot<Sp, F>(self, snap_fn: F) -> RegionSnapshot<Sp>
     where
         Sp: Snapshot,
-        F: FnOnce(S) -> Sp,
+        F: FnOnce(S, &Region) -> Sp,
     {
         RegionSnapshot {
-            snap: Arc::new(snap_fn(Arc::unwrap_or_clone(self.snap))),
+            snap: Arc::new(snap_fn(Arc::unwrap_or_clone(self.snap), &self.region)),
             region: self.region,
             apply_index: self.apply_index,
             from_v2: self.from_v2,

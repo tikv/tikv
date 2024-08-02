@@ -22,7 +22,9 @@ use std::{
 
 use collections::{HashMap, HashSet};
 use concurrency_manager::ConcurrencyManager;
-use engine_traits::{CfName, KvEngine, MvccProperties, Snapshot, SnapshotContext, SnapshotMiscExt};
+use engine_traits::{
+    CacheRange, CfName, KvEngine, MvccProperties, Snapshot, SnapshotContext, SnapshotMiscExt,
+};
 use futures::{future::BoxFuture, task::AtomicWaker, Future, Stream, StreamExt, TryFutureExt};
 use hybrid_engine::{HybridEngine, HybridEngineSnapshot};
 use kvproto::{
@@ -620,7 +622,7 @@ where
     type IMSnap = RegionSnapshot<HybridEngineSnapshot<E, RangeCacheMemoryEngine>>;
     type IMSnapshotRes = impl Future<Output = kv::Result<Self::IMSnap>> + Send;
     fn async_in_memory_snapshot(&mut self, ctx: SnapContext<'_>) -> Self::IMSnapshotRes {
-        let snap_ctx = if self.in_memory_engine.is_some() {
+        let mut snap_ctx = if self.in_memory_engine.is_some() {
             // When range cache engine is enabled, we need snapshot context to determine
             // whether we should use range cache engine snapshot for this request.
             ctx.start_ts.map(|ts| SnapshotContext {
@@ -630,10 +632,13 @@ where
         } else {
             None
         };
-        let cacheable_engine = self.in_memory_engine.clone();
+        let in_memory_engine = self.in_memory_engine.clone();
         async_snapshot(&mut self.router, ctx, snap_ctx.clone()).map_ok(|region_snap| {
-            region_snap.replace_snapshot(move |disk_snap| {
-                let in_memory_snapshot = cacheable_engine
+            region_snap.replace_snapshot(move |disk_snap, region| {
+                if let Some(ref mut ctx) = snap_ctx {
+                    ctx.set_range(CacheRange::from_region(region))
+                }
+                let in_memory_snapshot = in_memory_engine
                     .as_ref()
                     .map(|he| he.new_in_memory_snapshot(disk_snap.sequence_number(), snap_ctx))
                     .flatten();
