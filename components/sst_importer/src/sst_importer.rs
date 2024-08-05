@@ -383,6 +383,7 @@ impl<E: KvEngine> SstImporter<E> {
         backend: &StorageBackend,
         name: &str,
         rewrite_rule: &RewriteRule,
+        restore_ts: u64,
         crypter: Option<CipherInfo>,
         speed_limiter: Limiter,
         engine: E,
@@ -393,6 +394,7 @@ impl<E: KvEngine> SstImporter<E> {
             "url" => ?backend,
             "name" => name,
             "rewrite_rule" => ?rewrite_rule,
+            "restore_ts" => ?restore_ts,
             "speed_limit" => speed_limiter.speed_limit(),
         );
         let r = self.do_download_ext(
@@ -400,6 +402,7 @@ impl<E: KvEngine> SstImporter<E> {
             backend,
             name,
             rewrite_rule,
+            restore_ts,
             crypter,
             &speed_limiter,
             engine,
@@ -1086,6 +1089,7 @@ impl<E: KvEngine> SstImporter<E> {
         backend: &StorageBackend,
         name: &str,
         rewrite_rule: &RewriteRule,
+        restore_ts: u64,
         crypter: Option<CipherInfo>,
         speed_limiter: &Limiter,
         engine: E,
@@ -1169,6 +1173,10 @@ impl<E: KvEngine> SstImporter<E> {
         // simply move the entire SST instead of iterating and generate a new one.
         let mut iter = sst_reader.iter(IterOptions::default())?;
         let direct_retval = (|| -> Result<Option<_>> {
+            // only need partial SST files that ts <= restore_ts.
+            if restore_ts > 0 {
+                return Ok(None)
+            }
             if rewrite_rule.old_key_prefix != rewrite_rule.new_key_prefix
                 || rewrite_rule.new_timestamp != 0
             {
@@ -1262,14 +1270,18 @@ impl<E: KvEngine> SstImporter<E> {
         let mut count = 0;
         while iter.valid()? {
             let mut old_key = Cow::Borrowed(keys::origin_key(iter.key()));
-            let mut ts = None;
 
             if is_after_end_bound(old_key.as_ref(), &range_end) {
                 break;
             }
 
+            let key_ts = Key::decode_ts_from(old_key.as_ref())?;
+            if restore_ts > 0 && key_ts > TimeStamp::new(restore_ts) {
+                // skip this key
+                continue
+            }
+
             if req_type == DownloadRequestType::Keyspace {
-                ts = Some(Key::decode_ts_bytes_from(old_key.as_ref())?.to_owned());
                 old_key = {
                     let mut key = old_key.to_vec();
                     decode_bytes_in_place(&mut key, false)?;
@@ -1284,13 +1296,13 @@ impl<E: KvEngine> SstImporter<E> {
                     prefix: old_prefix.to_vec(),
                 });
             }
-
+            
             data_key.truncate(data_key_prefix_len);
             user_key.truncate(user_key_prefix_len);
             user_key.extend_from_slice(&old_key[old_prefix.len()..]);
             if req_type == DownloadRequestType::Keyspace {
                 data_key.extend(encode_bytes(&user_key));
-                data_key.extend(ts.unwrap());
+                data_key = Key::from_encoded(data_key).append_ts(key_ts).into_encoded();
             } else {
                 data_key.extend_from_slice(&user_key);
             }
