@@ -909,19 +909,19 @@ impl<EK: KvEngine> StoreMsg<EK> {
     pub fn discriminant(&self) -> usize {
         match self {
             StoreMsg::RaftMessage(..) => 0,
-            StoreMsg::ClearRegionSizeInRange { .. } => 2,
-            StoreMsg::StoreUnreachable { .. } => 3,
-            StoreMsg::CompactedEvent(_) => 4,
-            StoreMsg::Tick(_) => 5,
-            StoreMsg::Start { .. } => 6,
-            StoreMsg::UpdateReplicationMode(_) => 7,
-            StoreMsg::LatencyInspect { .. } => 8,
-            StoreMsg::UnsafeRecoveryReport(_) => 9,
-            StoreMsg::UnsafeRecoveryCreatePeer { .. } => 10,
-            StoreMsg::GcSnapshotFinish => 11,
-            StoreMsg::AwakenRegions { .. } => 12,
+            StoreMsg::ClearRegionSizeInRange { .. } => 1,
+            StoreMsg::StoreUnreachable { .. } => 2,
+            StoreMsg::CompactedEvent(_) => 3,
+            StoreMsg::Tick(_) => 4,
+            StoreMsg::Start { .. } => 5,
+            StoreMsg::UpdateReplicationMode(_) => 6,
+            StoreMsg::LatencyInspect { .. } => 7,
+            StoreMsg::UnsafeRecoveryReport(_) => 8,
+            StoreMsg::UnsafeRecoveryCreatePeer { .. } => 9,
+            StoreMsg::GcSnapshotFinish => 10,
+            StoreMsg::AwakenRegions { .. } => 11,
             #[cfg(any(test, feature = "testexport"))]
-            StoreMsg::Validate(_) => 13,
+            StoreMsg::Validate(_) => 12,
         }
     }
 }
