@@ -199,7 +199,7 @@ impl<'a> slog::Value for TrackerTokenArray<'a> {
         let trackers_str = self.0.iter()
             .map(|tracker_token| {
             format!("{:?}",GLOBAL_TRACKERS.with_tracker(*tracker_token, |t|
-            t.req_info.clone() ))             }) // Customize the format if needed
+            t.req_info.clone() ))             })
             .collect::<Vec<String>>()
             .join(", ");
         serializer.emit_str(key, &trackers_str)
