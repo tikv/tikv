@@ -220,8 +220,9 @@ impl TikvServerCore {
             }
         }
 
-        let disk_stats = fs2::statvfs(&self.config.storage.data_dir).unwrap();
-        let mut capacity = disk_stats.total_space();
+        let (disk_cap, disk_avail) =
+            disk::get_disk_space_stats(&self.config.storage.data_dir).unwrap();
+        let mut capacity = disk_cap;
         if self.config.raft_store.capacity.0 > 0 {
             capacity = cmp::min(capacity, self.config.raft_store.capacity.0);
         }
@@ -229,11 +230,7 @@ impl TikvServerCore {
         let kv_reserved_size =
             calculate_reserved_space(capacity, self.config.storage.reserve_space.0);
         disk::set_disk_reserved_space(kv_reserved_size);
-        reserve_physical_space(
-            &self.config.storage.data_dir,
-            disk_stats.available_space(),
-            kv_reserved_size,
-        );
+        reserve_physical_space(&self.config.storage.data_dir, disk_avail, kv_reserved_size);
 
         let raft_data_dir = if self.config.raft_engine.enable {
             self.config.raft_engine.config().dir
@@ -244,18 +241,13 @@ impl TikvServerCore {
         let separated_raft_mount_path =
             path_in_diff_mount_point(&self.config.storage.data_dir, &raft_data_dir);
         if separated_raft_mount_path {
-            let raft_disk_stats = fs2::statvfs(&raft_data_dir).unwrap();
+            let (raft_disk_cap, raft_disk_avail) =
+                disk::get_disk_space_stats(&raft_data_dir).unwrap();
             // reserve space for raft engine if raft engine is deployed separately
-            let raft_reserved_size = calculate_reserved_space(
-                raft_disk_stats.total_space(),
-                self.config.storage.reserve_raft_space.0,
-            );
+            let raft_reserved_size =
+                calculate_reserved_space(raft_disk_cap, self.config.storage.reserve_raft_space.0);
             disk::set_raft_disk_reserved_space(raft_reserved_size);
-            reserve_physical_space(
-                &raft_data_dir,
-                raft_disk_stats.available_space(),
-                raft_reserved_size,
-            );
+            reserve_physical_space(&raft_data_dir, raft_disk_avail, raft_reserved_size);
         }
     }
 
