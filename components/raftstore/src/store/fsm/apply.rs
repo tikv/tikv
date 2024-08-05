@@ -59,7 +59,7 @@ use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err, box_try,
     config::{Tracker, VersionTrack},
-    debug, debug_with_req_info, error, info,
+    debug, error, info,
     memory::HeapSize,
     mpsc::{loose_bounded, LooseBoundedSender, Receiver},
     safe_panic, slow_log,
@@ -70,7 +70,7 @@ use tikv_util::{
     Either, MustConsumeVec,
 };
 use time::Timespec;
-use tracker::GLOBAL_TRACKERS;
+use tracker::{TrackerTokenArray, GLOBAL_TRACKERS};
 use uuid::Builder as UuidBuilder;
 
 use self::memtrace::*;
@@ -645,10 +645,12 @@ where
         // Call it before invoking callback for preventing Commit is executed before
         // Prewrite is observed.
         for (cb, _) in cb_batch.iter() {
-            debug_with_req_info!(
-                "raft log is applied to the kv db",
-                cb.write_trackers(),
-                "cmd_batch" => ?cmd_batch
+            debug!("raft log is applied to the kv db";
+                "req_info" => TrackerTokenArray::new(cb.write_trackers()
+                    .into_iter()
+                    .filter_map(|time_tracker| time_tracker.as_tracker_token())
+                    .collect::<Vec<_>>().as_slice()),
+                "cmd_batch" => ?cmd_batch,
             );
         }
         self.host

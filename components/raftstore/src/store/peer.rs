@@ -57,7 +57,7 @@ use tikv_alloc::trace::TraceEvent;
 use tikv_util::{
     box_err,
     codec::number::decode_u64,
-    debug, debug_with_req_info, error, info,
+    debug, error, info,
     store::find_peer_by_id,
     sys::disk::DiskUsage,
     time::{duration_to_sec, monotonic_raw_now, Instant as TiInstant, InstantExt},
@@ -66,7 +66,7 @@ use tikv_util::{
     Either,
 };
 use time::{Duration as TimeDuration, Timespec};
-use tracker::GLOBAL_TRACKERS;
+use tracker::{TrackerTokenArray, GLOBAL_TRACKERS};
 use txn_types::{TimeStamp, WriteBatchFlags};
 use uuid::Uuid;
 
@@ -3085,7 +3085,13 @@ where
                             // In this case the apply can be guaranteed to be successful. Invoke the
                             // on_committed callback if necessary.
                             p.cb.invoke_committed();
-                            debug_with_req_info!("raft log is committed", p.cb.write_trackers());
+
+                            debug!("raft log is committed";
+                                "req_info" => TrackerTokenArray::new(p.cb.write_trackers()
+                                    .into_iter()
+                                    .filter_map(|time_tracker| time_tracker.as_tracker_token())
+                                    .collect::<Vec<_>>().as_slice())
+                            );
                         }
                         p
                     })
