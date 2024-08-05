@@ -532,6 +532,13 @@ pub trait SnapshotExt {
     fn get_buckets(&self) -> Option<Arc<BucketMeta>> {
         None
     }
+
+    /// Whether the snapshot acquired hit the cached range in the range cache
+    /// engine. It always returns false if the range cahce engine is not
+    /// enabled.
+    fn range_cache_engine_hit(&self) -> bool {
+        false
+    }
 }
 
 pub struct DummySnapshotExt;
