@@ -1228,7 +1228,7 @@ where
                             // directory of raft engine, it's needed to be checked.
                             if separated_raft_auxillay_mount_path {
                                 assert!(raft_auxillay_path.is_some());
-                                let (auxiliary_disk_cap, auxiliary_disk_avail) = match disk::get_disk_space_stats(&raft_auxillay_path.as_ref().unwrap()) {
+                                let (auxiliary_disk_cap, auxiliary_disk_avail) = match disk::get_disk_space_stats(raft_auxillay_path.as_ref().unwrap()) {
                                     Err(e) => {
                                         error!(
                                             "get auxiliary disk stat for raft engine failed";
