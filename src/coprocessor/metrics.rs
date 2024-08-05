@@ -18,7 +18,9 @@ use crate::{
 make_auto_flush_static_metric! {
     pub label_enum ReqTag {
         select,
+        select_by_range_cache,
         index,
+        index_by_range_cache,
         // For AnalyzeType::{TypeColumn,TypeMixed}.
         analyze_table,
         // For AnalyzeType::{TypeIndex,TypeCommonHandle}.
