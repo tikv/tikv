@@ -193,7 +193,7 @@ impl<'a> VectorFloat32Ref<'a> {
             norma += va[i] * va[i];
             normb += vb[i] * vb[i];
         }
-        let similarity = (distance as f64) / ((norma as f64).sqrt() * (normb as f64).sqrt());
+        let similarity = (distance as f64) / ((norma as f64) * (normb as f64)).sqrt();
         if similarity.is_nan() {
             // Divide by zero
             return Ok(std::f64::NAN);
