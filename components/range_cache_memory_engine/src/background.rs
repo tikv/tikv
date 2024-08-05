@@ -355,7 +355,7 @@ impl BackgroundRunnerCore {
     }
 
     fn gc_range(&self, range: &CacheRange, safe_point: u64, oldest_seqno: u64) -> FilterMetrics {
-        let (skiplist_engine, safe_ts) = {
+        let (skiplist_engine, safe_point) = {
             let mut core = self.engine.write();
             // We should also consider the ongoing snapshot of the historical ranges (ranges
             // that have been evicted).
@@ -402,30 +402,13 @@ impl BackgroundRunnerCore {
         };
 
         let start = Instant::now();
-        let write_cf_handle = skiplist_engine.cf_handle(CF_WRITE);
-        let default_cf_handle = skiplist_engine.cf_handle(CF_DEFAULT);
         let mut filter = Filter::new(
-            safe_ts,
+            safe_point,
             oldest_seqno,
-            default_cf_handle,
-            write_cf_handle.clone(),
+            skiplist_engine.cf_handle(CF_DEFAULT),
+            skiplist_engine.cf_handle(CF_WRITE),
         );
-
-        let mut iter = write_cf_handle.iterator();
-        let guard = &epoch::pin();
-        let (start_key, end_key) = encode_key_for_boundary_with_mvcc(range);
-        iter.seek(&start_key, guard);
-        while iter.valid() && iter.key() < &end_key {
-            let k = iter.key();
-            let v = iter.value();
-            if let Err(e) = filter.filter(k.as_bytes(), v.as_bytes()) {
-                warn!(
-                    "Something Wrong in memory engine GC";
-                    "error" => ?e,
-                );
-            }
-            iter.next(guard);
-        }
+        filter.filter_keys_in_range(range);
 
         let duration = start.saturating_elapsed();
         RANGE_GC_TIME_HISTOGRAM.observe(duration.as_secs_f64());
@@ -438,7 +421,7 @@ impl BackgroundRunnerCore {
             "below_safe_point_unique_keys" => filter.metrics.unique_key,
             "below_safe_point_version" => filter.metrics.versions,
             "below_safe_point_delete_version" => filter.metrics.delete_versions,
-            "current_safe_point" => safe_ts,
+            "current_safe_point" => safe_point,
         );
 
         let mut metrics = std::mem::take(&mut filter.metrics);
@@ -1003,30 +986,13 @@ impl Runnable for BackgroundRunner {
                                 TimeStamp::compose(safe_point, 0).into_inner()
                             })();
 
-                            let write_cf_handle = skiplist_engine.cf_handle(CF_WRITE);
-                            let default_cf_handle = skiplist_engine.cf_handle(CF_DEFAULT);
                             let mut filter = Filter::new(
                                 safe_point,
                                 u64::MAX,
-                                default_cf_handle,
-                                write_cf_handle.clone(),
+                                skiplist_engine.cf_handle(CF_DEFAULT),
+                                skiplist_engine.cf_handle(CF_WRITE),
                             );
-
-                            let mut iter = write_cf_handle.iterator();
-                            let guard = &epoch::pin();
-                            let (start_key, end_key) = encode_key_for_boundary_with_mvcc(&range);
-                            iter.seek(&start_key, guard);
-                            while iter.valid() && iter.key() < &end_key {
-                                let k = iter.key();
-                                let v = iter.value();
-                                if let Err(e) = filter.filter(k.as_bytes(), v.as_bytes()) {
-                                    warn!(
-                                        "something wrong in memory engine GC";
-                                        "error" => ?e,
-                                    );
-                                }
-                                iter.next(guard);
-                            }
+                            filter.filter_keys_in_range(&range);
 
                             Some(safe_point)
                         };
@@ -1380,7 +1346,25 @@ impl Filter {
         }
     }
 
-    fn filter(&mut self, key: &Bytes, value: &Bytes) -> Result<(), String> {
+    fn filter_keys_in_range(&mut self, range: &CacheRange) {
+        let mut iter = self.write_cf_handle.iterator();
+        let guard = &epoch::pin();
+        let (start_key, end_key) = encode_key_for_boundary_with_mvcc(range);
+        iter.seek(&start_key, guard);
+        while iter.valid() && iter.key() < &end_key {
+            let k = iter.key();
+            let v = iter.value();
+            if let Err(e) = self.filter_key(k.as_bytes(), v.as_bytes()) {
+                warn!(
+                    "Something Wrong in memory engine GC";
+                    "error" => ?e,
+                );
+            }
+            iter.next(guard);
+        }
+    }
+
+    fn filter_key(&mut self, key: &Bytes, value: &Bytes) -> Result<(), String> {
         self.metrics.total += 1;
         let InternalKey {
             user_key,
@@ -1762,7 +1746,7 @@ pub mod tests {
         while iter.valid() {
             let k = iter.key();
             let v = iter.value();
-            filter.filter(k.as_bytes(), v.as_bytes()).unwrap();
+            filter.filter_key(k.as_bytes(), v.as_bytes()).unwrap();
             count += 1;
             iter.next(guard);
         }
