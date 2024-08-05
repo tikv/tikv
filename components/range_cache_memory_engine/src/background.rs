@@ -666,7 +666,7 @@ impl BackgroundRunnerCore {
         range_stats_manager.set_checking_top_regions(true);
 
         let curr_memory_usage = self.memory_controller.mem_usage();
-        let threshold = self.memory_controller.soft_limit_threshold();
+        let threshold = self.memory_controller.stop_load_limit_threshold();
         range_stats_manager.adjust_max_num_regions(curr_memory_usage, threshold);
 
         let mut ranges_to_add = Vec::<CacheRange>::with_capacity(256);
@@ -899,7 +899,7 @@ impl Runnable for BackgroundRunner {
                             Some(KeyBuilder::from_vec(range.end.clone(), 0, 0)),
                             false,
                         );
-                        if core.memory_controller.reached_soft_limit() {
+                        if core.memory_controller.reached_stop_load_limit() {
                             // We are running out of memory, so cancel the load.
                             canceled = true;
                         }

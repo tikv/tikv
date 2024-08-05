@@ -55,7 +55,11 @@ pub struct RangeCacheEngineConfig {
     pub enabled: bool,
     pub gc_interval: ReadableDuration,
     pub load_evict_interval: ReadableDuration,
+    // When memory usage reaches this amount, no further load will be performed.
+    pub stop_load_limit_threshold: Option<ReadableSize>,
+    // When memory usage reaches this amount, we start to pick some ranges to evict.
     pub soft_limit_threshold: Option<ReadableSize>,
+    // When memory usage reaches this amount, all onging writting ranges will be evicted.
     pub hard_limit_threshold: Option<ReadableSize>,
     pub expected_region_size: Option<ReadableSize>,
 }
@@ -69,6 +73,7 @@ impl Default for RangeCacheEngineConfig {
                                                                               * operation should
                                                                               * run within five
                                                                               * minutes. */
+            stop_load_limit_threshold: None,
             soft_limit_threshold: None,
             hard_limit_threshold: None,
             expected_region_size: None,
@@ -105,6 +110,10 @@ impl RangeCacheEngineConfig {
         Ok(())
     }
 
+    pub fn stop_load_limit_threshold(&self) -> usize {
+        self.stop_load_limit_threshold.map_or(0, |r| r.0 as usize)
+    }
+
     pub fn soft_limit_threshold(&self) -> usize {
         self.soft_limit_threshold.map_or(0, |r| r.0 as usize)
     }
@@ -126,6 +135,7 @@ impl RangeCacheEngineConfig {
             gc_interval: ReadableDuration(Duration::from_secs(180)),
             load_evict_interval: ReadableDuration(Duration::from_secs(300)), /* Should run within
                                                                               * five minutes */
+            stop_load_limit_threshold: Some(ReadableSize::gb(1)),
             soft_limit_threshold: Some(ReadableSize::gb(1)),
             hard_limit_threshold: Some(ReadableSize::gb(2)),
             expected_region_size: Some(ReadableSize::mb(20)),
