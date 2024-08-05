@@ -747,7 +747,7 @@ macro_rules! impl_write {
                             Ok(writer)
                         })
                         .await;
-                    let writer, = match result {
+                    let writer = match result {
                         Ok(r) => r,
                         Err(e) => return (Err(e), None),
                     };
@@ -757,7 +757,7 @@ macro_rules! impl_write {
                         Err(e) => return (Err(e), None),
                     };
                     if let Err(e) = import.verify_checksum(&metas) {
-                        return (Err(e), None),
+                        return (Err(e), None);
                     };
                     let mut resp = $resp_ty::default();
                     resp.set_metas(metas.into());
