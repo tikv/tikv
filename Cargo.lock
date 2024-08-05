@@ -4262,6 +4262,7 @@ dependencies = [
  "getset",
  "grpcio-health",
  "health_controller",
+ "hex 0.4.2",
  "hybrid_engine",
  "into_other",
  "itertools",

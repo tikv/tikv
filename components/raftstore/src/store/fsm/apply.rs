@@ -450,6 +450,7 @@ where
 
     /// The ssts waiting to be ingested in `write_to_db`.
     pending_ssts: Vec<SstMetaInfo>,
+    ssts_one_batch: usize,
 
     /// The pending inspector should be cleaned at the end of a write.
     pending_latency_inspect: Vec<LatencyInspector>,
@@ -522,6 +523,7 @@ where
             priority,
             yield_high_latency_operation: cfg.apply_batch_system.low_priority_pool_size > 0,
             pending_ssts: vec![],
+            ssts_one_batch: 0,
             pending_latency_inspect: vec![],
             apply_wait: APPLY_TASK_WAIT_TIME_HISTOGRAM.local(),
             apply_time: APPLY_TIME_HISTOGRAM.local(),
@@ -731,6 +733,9 @@ where
         // take raft log gc for example, we write kv WAL first, then write raft WAL,
         // if power failure happen, raft WAL may synced to disk, but kv WAL may not.
         // so we use sync-log flag here.
+        if !self.pending_ssts.is_empty() {
+            IMPORTER_INGEST_COUNT.observe(self.pending_ssts.len() as _);
+        }
         let (is_synced, _) = self.write_to_db();
 
         if !self.apply_res.is_empty() {
@@ -841,6 +846,72 @@ fn has_high_latency_operation(cmd: &RaftCmdRequest) -> bool {
         }
     }
     false
+}
+
+const ADMIN_CMD_TYPE_NAME: [&str; 16] = [
+    "InvalidAdmin",
+    "ChangePeer",
+    "Split",
+    "CompactLog",
+    "TransferLeader",
+    "ComputeHash",
+    "VerifyHash",
+    "PrepareMerge",
+    "CommitMerge",
+    "RollbackMerge",
+    "BatchSplit",
+    "ChangePeerV2",
+    "PrepareFlashback",
+    "FinishFlashback",
+    "BatchSwitchWitness",
+    "UpdateGcPeer",
+];
+
+const CMD_TYPE_NAME: [&str; 10] = [
+    "invalid",
+    "get",
+    "nothing",
+    "put",
+    "delete",
+    "snap",
+    "prewrite",
+    "deleterange",
+    "ingestsst",
+    "readindex",
+];
+
+fn check_operation(cmd: &RaftCmdRequest) -> (bool, bool, &'static str) {
+    let mut delete_range = false;
+    let mut ingest_sst = false;
+    let mut other_type: CmdType = CmdType::Invalid;
+    let mut type_str: &'static str = "none";
+    for req in cmd.get_requests() {
+        if req.has_delete_range() {
+            delete_range = true;
+            if other_type == CmdType::Invalid || other_type == CmdType::IngestSst {
+                other_type = CmdType::DeleteRange;
+            }
+            continue;
+        }
+        if req.has_ingest_sst() {
+            if other_type == CmdType::Invalid {
+                other_type = CmdType::IngestSst;
+            }
+            ingest_sst = true;
+            continue;
+        }
+
+        if other_type == CmdType::Invalid || other_type == CmdType::IngestSst {
+            other_type = req.cmd_type;
+        }
+    }
+    if !cmd.get_requests().is_empty() {
+        type_str = CMD_TYPE_NAME[other_type as usize];
+    } else if cmd.has_admin_request() {
+        type_str = ADMIN_CMD_TYPE_NAME[cmd.get_admin_request().cmd_type as usize];
+    }
+
+    (delete_range, ingest_sst, type_str)
 }
 
 /// Checks if a write is needed to be issued after handling the command.
@@ -1058,6 +1129,9 @@ where
     unfinished_write_seqno: Vec<SequenceNumber>,
 
     has_pending_ssts: bool,
+    pending_ssts_index: usize,
+
+    dealing_with_ssts: bool,
 }
 
 impl<EK> ApplyDelegate<EK>
@@ -1093,6 +1167,8 @@ where
             buckets: None,
             unfinished_write_seqno: vec![],
             has_pending_ssts: false,
+            pending_ssts_index: 0,
+            dealing_with_ssts: false,
         }
     }
 
@@ -1137,6 +1213,7 @@ where
                 );
             }
 
+            self.dealing_with_ssts = false;
             // NOTE: before v5.0, `EntryType::EntryConfChangeV2` entry is handled by
             // `unimplemented!()`, which can break compatibility (i.e. old version tikv
             // running on data written by new version tikv), but PD will reject old version
@@ -1165,6 +1242,9 @@ where
                     // Note that current entry is skipped when yield.
                     pending_entries.push(entry);
                     pending_entries.extend(committed_entries_drainer);
+                    if self.dealing_with_ssts {
+                        IMPORTER_INGEST_COUNT_YIELD.observe(pending_entries.len() as _);
+                    }
                     apply_ctx.finish_for(self, results);
                     self.yield_state = Some(YieldState {
                         pending_entries,
@@ -1240,21 +1320,51 @@ where
                         simple_write_decoder.to_raft_cmd_request()
                     }
                 };
-                if apply_ctx.yield_high_latency_operation && has_high_latency_operation(&cmd) {
+                let (delete_range, ingest_sst, cmdtp) = check_operation(&cmd);
+                let high_latency_operation = delete_range || ingest_sst;
+                self.dealing_with_ssts = ingest_sst;
+                if apply_ctx.yield_high_latency_operation && high_latency_operation {
                     self.priority = Priority::Low;
                 }
                 if self.has_pending_ssts {
                     // we are in low priority handler and to avoid overlapped ssts with same region
                     // just return Yield
+                    if ingest_sst {
+                        RAFT_APPLY_SST_YIELD_BY_VEC
+                            .with_label_values(&[cmdtp])
+                            .inc();
+
+                        info!(
+                            "apply ingest pending";
+                            "region_id" => self.region_id(),
+                            "peer_id" => self.id(),
+                            "pending_sst_uuid" => hex::encode_upper(apply_ctx.pending_ssts[self.pending_ssts_index].meta.get_uuid()),
+                            "current_sst_uuid" => hex::encode_upper(cmd.get_requests()[0].get_ingest_sst().get_sst().get_uuid()),
+                        );
+                    }
+
                     return ApplyResult::Yield;
                 }
                 let mut has_unflushed_data =
                     self.last_flush_applied_index != self.apply_state.get_applied_index();
+                let check_should_write_to_engine = apply_ctx.kv_wb().should_write_to_engine();
                 if (has_unflushed_data
                     && should_write_to_engine(!apply_ctx.kv_wb().is_empty(), &cmd)
-                    || apply_ctx.kv_wb().should_write_to_engine())
+                    || check_should_write_to_engine)
                     && apply_ctx.host.pre_persist(&self.region, false, Some(&cmd))
                 {
+                    if !apply_ctx.pending_ssts.is_empty() {
+                        if check_should_write_to_engine {
+                            RAFT_APPLY_COMMIT_BY_VEC
+                                .with_label_values(&["unflush-1", cmdtp])
+                                .inc();
+                        } else {
+                            RAFT_APPLY_COMMIT_BY_VEC
+                                .with_label_values(&["unflush-2", cmdtp])
+                                .inc();
+                        }
+                        IMPORTER_INGEST_COUNT_UNFLUSH.observe(apply_ctx.pending_ssts.len() as _);
+                    }
                     apply_ctx.commit(self);
                     if self.metrics.written_bytes >= apply_ctx.yield_msg_size
                         || self
@@ -1269,7 +1379,19 @@ where
                 }
                 if self.priority != apply_ctx.priority {
                     if has_unflushed_data {
-                        apply_ctx.commit(self);
+                        if !apply_ctx.pending_ssts.is_empty() {
+                            RAFT_APPLY_COMMIT_BY_VEC
+                                .with_label_values(&["nopoller", cmdtp])
+                                .inc();
+                            IMPORTER_INGEST_COUNT_NOPOLLER
+                                .observe(apply_ctx.pending_ssts.len() as _);
+                        }
+                        // apply_ctx.commit(self);
+                    }
+                    if ingest_sst {
+                        RAFT_APPLY_SST_YIELD_BY_VEC
+                            .with_label_values(&["notpoller"])
+                            .inc();
                     }
                     return ApplyResult::Yield;
                 }
@@ -1420,6 +1542,9 @@ where
             // when `post_exec`.
             self.write_apply_state(apply_ctx.kv_wb_mut());
             apply_ctx.commit(self);
+            RAFT_APPLY_COMMIT_BY_VEC
+                .with_label_values(&["should_write"])
+                .inc();
         }
         exec_result
     }
@@ -2022,7 +2147,9 @@ where
 
         match ctx.importer.validate(sst) {
             Ok(meta_info) => {
+                self.pending_ssts_index = ctx.pending_ssts.len();
                 ctx.pending_ssts.push(meta_info.clone());
+                ctx.ssts_one_batch += 1;
                 self.has_pending_ssts = true;
                 ssts.push(meta_info)
             }
@@ -4155,6 +4282,7 @@ where
             ctx.timer = Some(Instant::now_coarse());
         }
         if !state.pending_entries.is_empty() {
+            // self.delegate.priority = Priority::Normal;
             self.delegate
                 .handle_raft_committed_entries(ctx, state.pending_entries.drain(..));
             if let Some(ref mut s) = self.delegate.yield_state {
@@ -4634,6 +4762,7 @@ where
     where
         for<'a> F: FnOnce(&'a BatchSystemConfig),
     {
+        self.apply_ctx.ssts_one_batch = 0;
         if let Some(incoming) = self.cfg_tracker.any_new() {
             match Ord::cmp(&incoming.messages_per_tick, &self.messages_per_tick) {
                 CmpOrdering::Greater => {
@@ -4719,6 +4848,12 @@ where
     }
 
     fn end(&mut self, fsms: &mut [Option<impl DerefMut<Target = ApplyFsm<EK>>>]) {
+        if !self.apply_ctx.pending_ssts.is_empty() {
+            IMPORTER_INGEST_COUNT_END.observe(self.apply_ctx.pending_ssts.len() as _);
+        }
+        if self.apply_ctx.ssts_one_batch != 0 {
+            IMPORTER_INGEST_COUNT_ONE_BATCH.observe(self.apply_ctx.ssts_one_batch as _);
+        }
         self.apply_ctx.flush();
         for fsm in fsms.iter_mut().flatten() {
             fsm.delegate.last_flush_applied_index = fsm.delegate.apply_state.get_applied_index();
@@ -8097,5 +8232,13 @@ mod tests {
         // case: pass the validation
         let req = new_batch_split_request(vec![b"k06".to_vec(), b"k07".to_vec(), b"k08".to_vec()]);
         validate_batch_split(&req, &region).unwrap();
+    }
+
+    #[test]
+    fn test_xxx() {
+        let other_type = CmdType::DeleteRange;
+        let tp2 = other_type as i32;
+        let msg = CMD_TYPE_NAME[tp2 as usize];
+        assert_eq!(msg, "deleterange");
     }
 }
