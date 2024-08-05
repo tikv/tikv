@@ -1149,6 +1149,18 @@ where
         let raft_path = raft_engine.get_engine_path().to_string();
         let separated_raft_mount_path =
             path_in_diff_mount_point(raft_path.as_str(), tablet_registry.tablet_root());
+        let raft_auxillay_path = if self.core.config.raft_engine.enable {
+            self.core.config.raft_engine.config().spill_dir.clone()
+        } else {
+            None
+        };
+        let separated_raft_auxillay_mount_path = raft_auxillay_path
+            .as_ref()
+            .map(|path| {
+                path_in_diff_mount_point(path.as_str(), raft_path.as_str())
+                    && path_in_diff_mount_point(path.as_str(), tablet_registry.tablet_root())
+            })
+            .unwrap_or(false);
         let raft_almost_full_threshold = reserve_raft_space;
         let raft_already_full_threshold = reserve_raft_space / 2;
 
@@ -1165,7 +1177,7 @@ where
         }
         self.core.background_worker
             .spawn_interval_task(DEFAULT_STORAGE_STATS_INTERVAL, move || {
-                let disk_stats = match fs2::statvfs(&store_path) {
+                let (disk_cap, disk_avail) = match disk::get_disk_space_stats(&store_path) {
                     Err(e) => {
                         error!(
                             "get disk stat for kv store failed";
@@ -1174,9 +1186,9 @@ where
                         );
                         return;
                     }
-                    Ok(stats) => stats,
+                    Ok((cap, avail)) => (cap, avail),
                 };
-                let disk_cap = disk_stats.total_space();
+
                 let snap_size = snap_mgr.total_snap_size().unwrap();
 
                 let mut kv_size = 0;
@@ -1193,7 +1205,7 @@ where
 
                 let mut raft_disk_status = disk::DiskUsage::Normal;
                 if separated_raft_mount_path && reserve_raft_space != 0 {
-                    let raft_disk_stats = match fs2::statvfs(&raft_path) {
+                    let (raft_disk_cap, raft_disk_avail) = match disk::get_disk_space_stats(&raft_path) {
                         Err(e) => {
                             error!(
                                 "get disk stat for raft engine failed";
@@ -1202,12 +1214,29 @@ where
                             );
                             return;
                         }
-                        Ok(stats) => stats,
+                        Ok((cap, avail)) => {
+                            // If the auxiliary directory of raft engine is separated from kv engine and the main
+                            // directory of raft engine, it's needed to be checked.
+                            if separated_raft_auxillay_mount_path {
+                                assert!(raft_auxillay_path.is_some());
+                                let (auxiliary_disk_cap, auxiliary_disk_avail) = match disk::get_disk_space_stats(&raft_auxillay_path.as_ref().unwrap()) {
+                                    Err(e) => {
+                                        error!(
+                                            "get auxiliary disk stat for raft engine failed";
+                                            "raft_engine_path" => raft_auxillay_path.clone(),
+                                            "err" => ?e
+                                        );
+                                        (0_u64, 0_u64)
+                                    }
+                                    Ok((total, avail)) => (total, avail),
+                                };
+                                (cap + auxiliary_disk_cap, avail + auxiliary_disk_avail)
+                            } else {
+                                (cap, avail)
+                            }
+                        },
                     };
-                    let raft_disk_cap = raft_disk_stats.total_space();
-                    let mut raft_disk_available =
-                        raft_disk_cap.checked_sub(raft_size).unwrap_or_default();
-                    raft_disk_available = cmp::min(raft_disk_available, raft_disk_stats.available_space());
+                    let raft_disk_available = cmp::min(raft_disk_cap.checked_sub(raft_size).unwrap_or_default(), raft_disk_avail);
                     raft_disk_status = if raft_disk_available <= raft_already_full_threshold
                     {
                         disk::DiskUsage::AlreadyFull
@@ -1237,7 +1266,7 @@ where
                 };
 
                 let mut available = capacity.checked_sub(used_size).unwrap_or_default();
-                available = cmp::min(available, disk_stats.available_space());
+                available = cmp::min(available, disk_avail);
 
                 let prev_disk_status = disk::get_disk_status(0); //0 no need care about failpoint.
                 let cur_kv_disk_status = if available <= already_full_threshold {
