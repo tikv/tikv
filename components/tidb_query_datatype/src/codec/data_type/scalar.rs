@@ -137,6 +137,7 @@ impl_from! { Bytes }
 impl_from! { DateTime }
 impl_from! { Duration }
 impl_from! { Json }
+impl_from! { VectorFloat32 }
 
 impl From<Option<f64>> for ScalarValue {
     #[inline]
@@ -156,6 +157,13 @@ impl<'a> From<Option<BytesRef<'a>>> for ScalarValue {
     #[inline]
     fn from(s: Option<BytesRef<'a>>) -> ScalarValue {
         ScalarValue::Bytes(s.map(|x| x.to_vec()))
+    }
+}
+
+impl<'a> From<Option<VectorFloat32Ref<'a>>> for ScalarValue {
+    #[inline]
+    fn from(s: Option<VectorFloat32Ref<'a>>) -> ScalarValue {
+        ScalarValue::VectorFloat32(s.map(|x| x.to_owned()))
     }
 }
 
