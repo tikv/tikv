@@ -28,21 +28,16 @@ use kvproto::{
         WriteRequest_oneof_chunk as Chunk, *,
     },
     kvrpcpb::Context,
-<<<<<<< HEAD
     raft_cmdpb::{CmdType, DeleteRequest, PutRequest, RaftCmdRequest, RaftRequestHeader, Request},
+    metapb::RegionEpoch,
 };
 use protobuf::Message;
 use raftstore::{
     router::RaftStoreRouter,
     store::{Callback, RaftCmdExtraOpts, RegionSnapshot},
-=======
-    metapb::RegionEpoch,
-};
-use raftstore::{
     coprocessor::{RegionInfo, RegionInfoProvider},
     store::util::is_epoch_stale,
     RegionInfoAccessor,
->>>>>>> 69ef88b2e9 (import: write RPC will check region epoch before continue (#15795))
 };
 use sst_importer::{
     error_inc, metrics::*, sst_importer::DownloadExt, sst_meta_to_path, Config, Error, Result,
@@ -96,17 +91,7 @@ where
     limiter: Limiter,
     task_slots: Arc<Mutex<HashSet<PathBuf>>>,
     raft_entry_max_size: ReadableSize,
-<<<<<<< HEAD
-=======
     region_info_accessor: Arc<RegionInfoAccessor>,
-
-    writer: raft_writer::ThrottledTlsEngineWriter,
-
-    // it's some iff multi-rocksdb is enabled
-    store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
-    resource_manager: Option<Arc<ResourceGroupManager>>,
-
->>>>>>> 69ef88b2e9 (import: write RPC will check region epoch before continue (#15795))
     // When less than now, don't accept any requests.
     suspend_req_until: Arc<AtomicU64>,
 }
@@ -310,14 +295,8 @@ where
         router: Router,
         engine: E,
         importer: Arc<SstImporter>,
-<<<<<<< HEAD
-    ) -> ImportSstService<E, Router> {
-=======
-        store_meta: Option<Arc<Mutex<StoreMeta<E::Local>>>>,
-        resource_manager: Option<Arc<ResourceGroupManager>>,
         region_info_accessor: Arc<RegionInfoAccessor>,
-    ) -> Self {
->>>>>>> 69ef88b2e9 (import: write RPC will check region epoch before continue (#15795))
+    ) -> ImportSstService<E, Router> {
         let props = tikv_util::thread_group::current_properties();
         let threads = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(cfg.num_threads)
@@ -356,13 +335,7 @@ where
             limiter: Limiter::new(f64::INFINITY),
             task_slots: Arc::new(Mutex::new(HashSet::default())),
             raft_entry_max_size,
-<<<<<<< HEAD
-=======
             region_info_accessor,
-            writer,
-            store_meta,
-            resource_manager,
->>>>>>> 69ef88b2e9 (import: write RPC will check region epoch before continue (#15795))
             suspend_req_until: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -708,12 +681,8 @@ macro_rules! impl_write {
             sink: ClientStreamingSink<$resp_ty>,
         ) {
             let import = self.importer.clone();
-<<<<<<< HEAD
             let engine = self.engine.clone();
-=======
-            let tablets = self.tablets.clone();
             let region_info_accessor = self.region_info_accessor.clone();
->>>>>>> 69ef88b2e9 (import: write RPC will check region epoch before continue (#15795))
             let (rx, buf_driver) =
                 create_stream_with_buffer(stream, self.cfg.stream_channel_window);
             let mut rx = rx.map_err(Error::from);
@@ -721,37 +690,16 @@ macro_rules! impl_write {
             let timer = Instant::now_coarse();
             let label = stringify!($fn);
             let handle_task = async move {
-<<<<<<< HEAD
-                let res = async move {
-                    let first_req = rx.try_next().await?;
-                    let meta = match first_req {
-                        Some(r) => match r.chunk {
-                            Some($chunk_ty::Meta(m)) => m,
-                            _ => return Err(Error::InvalidChunk),
-                        },
-                        _ => return Err(Error::InvalidChunk),
-                    };
-=======
                 let (res, rx) = async move {
                     let first_req = match rx.try_next().await {
                         Ok(r) => r,
                         Err(e) => return (Err(e), Some(rx)),
                     };
-                    let (meta, resource_limiter) = match first_req {
-                        Some(r) => {
-                            let limiter = resource_manager.as_ref().and_then(|m| {
-                                m.get_resource_limiter(
-                                    r.get_context()
-                                        .get_resource_control_context()
-                                        .get_resource_group_name(),
-                                    r.get_context().get_request_source(),
-                                )
-                            });
-                            match r.chunk {
-                                Some($chunk_ty::Meta(m)) => (m, limiter),
-                                _ => return (Err(Error::InvalidChunk), Some(rx)),
-                            }
-                        }
+                    let meta = match first_req {
+                        Some(r) => match r.chunk {
+                            Some($chunk_ty::Meta(m)) => m,
+                            _ => return (Err(Error::InvalidChunk), Some(rx)),
+                        },
                         _ => return (Err(Error::InvalidChunk), Some(rx)),
                     };
                     // wait the region epoch on this TiKV to catch up with the epoch
@@ -782,20 +730,6 @@ macro_rules! impl_write {
                         return (Err(e), Some(rx));
                     };
 
-                    let tablet = match tablets.get(region_id) {
-                        Some(t) => t,
-                        None => {
-                            return (
-                                Err(Error::RequestTooOld(format!(
-                                    "region {} not found",
-                                    region_id
-                                ))),
-                                Some(rx),
-                            );
-                        }
-                    };
->>>>>>> 69ef88b2e9 (import: write RPC will check region epoch before continue (#15795))
-
                     let writer = match import.$writer_fn(&engine, meta) {
                         Ok(w) => w,
                         Err(e) => {
@@ -803,7 +737,6 @@ macro_rules! impl_write {
                             return (Err(Error::InvalidChunk), Some(rx));
                         }
                     };
-<<<<<<< HEAD
                     let writer = rx
                         .try_fold(writer, |mut writer, req| async move {
                             let batch = match req.chunk {
@@ -817,42 +750,6 @@ macro_rules! impl_write {
 
                     let metas = writer.finish()?;
                     import.verify_checksum(&metas)?;
-=======
-                    let result = rx
-                        .try_fold(
-                            (writer, resource_limiter),
-                            |(mut writer, limiter), req| async move {
-                                let batch = match req.chunk {
-                                    Some($chunk_ty::Batch(b)) => b,
-                                    _ => return Err(Error::InvalidChunk),
-                                };
-                                let f = async {
-                                    writer.write(batch)?;
-                                    Ok(writer)
-                                };
-                                with_resource_limiter(f, limiter.clone())
-                                    .await
-                                    .map(|w| (w, limiter))
-                            },
-                        )
-                        .await;
-                    let (writer, resource_limiter) = match result {
-                        Ok(r) => r,
-                        Err(e) => return (Err(e), None),
-                    };
-
-                    let finish_fn = async {
-                        let metas = writer.finish()?;
-                        import.verify_checksum(&metas)?;
-                        Ok(metas)
-                    };
-
-                    let metas: Result<_> = with_resource_limiter(finish_fn, resource_limiter).await;
-                    let metas = match metas {
-                        Ok(r) => r,
-                        Err(e) => return (Err(e), None),
-                    };
->>>>>>> 69ef88b2e9 (import: write RPC will check region epoch before continue (#15795))
                     let mut resp = $resp_ty::default();
                     resp.set_metas(metas.into());
                     (Ok(resp), None)
@@ -1438,12 +1335,16 @@ mod test {
     use std::collections::HashMap;
 
     use engine_traits::{CF_DEFAULT, CF_WRITE};
-<<<<<<< HEAD
-    use kvproto::{kvrpcpb::Context, metapb::RegionEpoch, raft_cmdpb::*};
-    use protobuf::Message;
+    use kvproto::{kvrpcpb::Context, metapb::{Region, RegionEpoch}, raft_cmdpb::*};
+    use protobuf::{Message, SingularPtrField};
+    use raft::StateRole::Follower;
+    use raftstore::RegionInfo;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
-    use crate::import::sst_service::{key_from_request, RequestCollector};
+    use crate::{
+        import::sst_service::{check_local_region_stale, RequestCollector},
+        server::raftkv,
+    };
 
     /// The extra size needed in the request header.
     /// They are:
@@ -1453,23 +1354,6 @@ mod test {
     /// use 1/2 of the max raft command size as the goal of batching, where the
     /// extra size is acceptable.
     const HEADER_EXTRA_SIZE: u32 = 40;
-=======
-    use kvproto::{
-        kvrpcpb::Context,
-        metapb::{Region, RegionEpoch},
-        raft_cmdpb::{RaftCmdRequest, Request},
-    };
-    use protobuf::{Message, SingularPtrField};
-    use raft::StateRole::Follower;
-    use raftstore::RegionInfo;
-    use tikv_kv::{Modify, WriteData};
-    use txn_types::{Key, TimeStamp, Write, WriteBatchFlags, WriteType};
-
-    use crate::{
-        import::sst_service::{check_local_region_stale, RequestCollector},
-        server::raftkv,
-    };
->>>>>>> 69ef88b2e9 (import: write RPC will check region epoch before continue (#15795))
 
     fn write(key: &[u8], ty: WriteType, commit_ts: u64, start_ts: u64) -> (Vec<u8>, Vec<u8>) {
         let k = Key::from_raw(key).append_ts(TimeStamp::new(commit_ts));

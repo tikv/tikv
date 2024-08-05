@@ -2657,10 +2657,6 @@ const VERSION_1_SST_CLEANUP_DURATION: Duration = Duration::from_secs(7 * 24 * 60
 impl<'a, EK: KvEngine, ER: RaftEngine, T: Transport> StoreFsmDelegate<'a, EK, ER, T> {
     fn on_cleanup_import_sst(&mut self) -> Result<()> {
         let mut delete_ssts = Vec::new();
-<<<<<<< HEAD
-        let mut validate_ssts = Vec::new();
-=======
->>>>>>> 69ef88b2e9 (import: write RPC will check region epoch before continue (#15795))
 
         let ssts = box_try!(self.ctx.importer.list_ssts());
         if ssts.is_empty() {
