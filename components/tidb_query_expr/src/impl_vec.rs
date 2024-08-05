@@ -99,13 +99,14 @@ mod tests {
     #[test]
     fn test_l2_distance() {
         let ok_cases = vec![
-            (vec![0.0, 0.0], vec![3.0, 4.0], Some(5.0)),
-            (vec![0.0, 0.0], vec![0.0, 1.0], Some(1.0)),
-            (vec![3e38], vec![-3e38], Some(f64::INFINITY)),
+            (Some(vec![0.0, 0.0]), Some(vec![3.0, 4.0]), Some(5.0)),
+            (Some(vec![0.0, 0.0]), Some(vec![0.0, 1.0]), Some(1.0)),
+            (Some(vec![3e38]), Some(vec![-3e38]), Some(f64::INFINITY)),
+            (Some(vec![1.0, 2.0]), None, None),
         ];
         for (arg1, arg2, expected_output) in ok_cases {
-            let arg1 = VectorFloat32::from_f32(arg1).unwrap();
-            let arg2 = VectorFloat32::from_f32(arg2).unwrap();
+            let arg1 = arg1.map(|v| VectorFloat32::from_f32(v).unwrap());
+            let arg2 = arg2.map(|v| VectorFloat32::from_f32(v).unwrap());
             let output: Option<Real> = RpnFnScalarEvaluator::new()
                 .push_param(arg1)
                 .push_param(arg2)
@@ -129,12 +130,13 @@ mod tests {
     #[test]
     fn test_negative_inner_product() {
         let ok_cases = vec![
-            (vec![1.0, 2.0], vec![3.0, 4.0], Some(-11.0)),
-            (vec![3e38], vec![3e38], Some(f64::NEG_INFINITY)),
+            (Some(vec![1.0, 2.0]), Some(vec![3.0, 4.0]), Some(-11.0)),
+            (Some(vec![3e38]), Some(vec![3e38]), Some(f64::NEG_INFINITY)),
+            (Some(vec![1.0, 2.0]), None, None),
         ];
         for (arg1, arg2, expected_output) in ok_cases {
-            let arg1 = VectorFloat32::from_f32(arg1).unwrap();
-            let arg2 = VectorFloat32::from_f32(arg2).unwrap();
+            let arg1 = arg1.map(|v| VectorFloat32::from_f32(v).unwrap());
+            let arg2 = arg2.map(|v| VectorFloat32::from_f32(v).unwrap());
             let output: Option<Real> = RpnFnScalarEvaluator::new()
                 .push_param(arg1)
                 .push_param(arg2)
@@ -158,18 +160,19 @@ mod tests {
     #[test]
     fn test_cosine_distance() {
         let ok_cases = vec![
-            (vec![1.0, 2.0], vec![2.0, 4.0], Some(0.0)),
-            (vec![1.0, 2.0], vec![0.0, 0.0], None), // NaN turns to NULL
-            (vec![1.0, 1.0], vec![1.0, 1.0], Some(0.0)),
-            (vec![1.0, 0.0], vec![0.0, 2.0], Some(1.0)),
-            (vec![1.0, 1.0], vec![-1.0, -1.0], Some(2.0)),
-            (vec![1.0, 1.0], vec![1.1, 1.1], Some(0.0)),
-            (vec![1.0, 1.0], vec![-1.1, -1.1], Some(2.0)),
-            (vec![3e38], vec![3e38], None), // NaN turns to NULL
+            (Some(vec![1.0, 2.0]), Some(vec![2.0, 4.0]), Some(0.0)),
+            (Some(vec![1.0, 2.0]), Some(vec![0.0, 0.0]), None), // NaN turns to NULL
+            (Some(vec![1.0, 1.0]), Some(vec![1.0, 1.0]), Some(0.0)),
+            (Some(vec![1.0, 0.0]), Some(vec![0.0, 2.0]), Some(1.0)),
+            (Some(vec![1.0, 1.0]), Some(vec![-1.0, -1.0]), Some(2.0)),
+            (Some(vec![1.0, 1.0]), Some(vec![1.1, 1.1]), Some(0.0)),
+            (Some(vec![1.0, 1.0]), Some(vec![-1.1, -1.1]), Some(2.0)),
+            (Some(vec![3e38]), Some(vec![3e38]), None), // NaN turns to NULL
+            (Some(vec![1.0, 2.0]), None, None),
         ];
         for (arg1, arg2, expected_output) in ok_cases {
-            let arg1 = VectorFloat32::from_f32(arg1).unwrap();
-            let arg2 = VectorFloat32::from_f32(arg2).unwrap();
+            let arg1 = arg1.map(|v| VectorFloat32::from_f32(v).unwrap());
+            let arg2 = arg2.map(|v| VectorFloat32::from_f32(v).unwrap());
             let output: Option<Real> = RpnFnScalarEvaluator::new()
                 .push_param(arg1)
                 .push_param(arg2)
@@ -193,13 +196,14 @@ mod tests {
     #[test]
     fn test_l1_distance() {
         let ok_cases = vec![
-            (vec![0.0, 0.0], vec![3.0, 4.0], Some(7.0)),
-            (vec![0.0, 0.0], vec![0.0, 1.0], Some(1.0)),
-            (vec![3e38], vec![-3e38], Some(f64::INFINITY)),
+            (Some(vec![0.0, 0.0]), Some(vec![3.0, 4.0]), Some(7.0)),
+            (Some(vec![0.0, 0.0]), Some(vec![0.0, 1.0]), Some(1.0)),
+            (Some(vec![3e38]), Some(vec![-3e38]), Some(f64::INFINITY)),
+            (Some(vec![1.0, 2.0]), None, None),
         ];
         for (arg1, arg2, expected_output) in ok_cases {
-            let arg1 = VectorFloat32::from_f32(arg1).unwrap();
-            let arg2 = VectorFloat32::from_f32(arg2).unwrap();
+            let arg1 = arg1.map(|v| VectorFloat32::from_f32(v).unwrap());
+            let arg2 = arg2.map(|v| VectorFloat32::from_f32(v).unwrap());
             let output: Option<Real> = RpnFnScalarEvaluator::new()
                 .push_param(arg1)
                 .push_param(arg2)
