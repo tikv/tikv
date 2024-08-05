@@ -542,10 +542,12 @@ impl BackgroundRunnerCore {
         true
     }
 
-    fn on_snapshot_load_canceled(
+    // `start` means whether to start to load keys
+    fn on_snapshot_load_failed(
         &mut self,
         range: CacheRange,
         delete_range_scheduler: &Scheduler<BackgroundTask>,
+        started: bool,
     ) {
         let mut core = self.engine.write();
         let (r, ..) = core
@@ -555,9 +557,18 @@ impl BackgroundRunnerCore {
             .unwrap();
         assert_eq!(r, range);
         core.remove_cached_write_batch(&range);
-        core.mut_range_manager()
-            .ranges_being_deleted
-            .insert(r.clone(), (true, Instant::now(), EvictReason::LoadFailed));
+        core.mut_range_manager().ranges_being_deleted.insert(
+            r.clone(),
+            (
+                true,
+                Instant::now(),
+                if !started {
+                    EvictReason::LoadFailedWithoutStart
+                } else {
+                    EvictReason::LoadFailed
+                },
+            ),
+        );
 
         if let Err(e) = delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(vec![r]))
         {
@@ -909,7 +920,7 @@ impl Runnable for BackgroundRunner {
                                 "snapshot load canceled due to memory reaching soft limit";
                                 "range" => ?range,
                             );
-                            core.on_snapshot_load_canceled(range, &delete_range_scheduler);
+                            core.on_snapshot_load_failed(range, &delete_range_scheduler, false);
                             continue;
                         }
 
@@ -973,7 +984,7 @@ impl Runnable for BackgroundRunner {
                                 "snapshot load failed";
                                 "range" => ?range,
                             );
-                            core.on_snapshot_load_canceled(range, &delete_range_scheduler);
+                            core.on_snapshot_load_failed(range, &delete_range_scheduler, true);
                             continue;
                         }
 

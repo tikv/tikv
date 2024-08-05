@@ -35,6 +35,7 @@ make_auto_flush_static_metric! {
         merge,
         auto_evict,
         load_failed,
+        load_failed_without_start,
         delete_range,
         become_follower,
         memory_limit_reached,
@@ -191,6 +192,9 @@ pub(crate) fn observe_eviction_duration(secs: f64, evict_reason: EvictReason) {
             .observe(secs),
         EvictReason::LoadFailed => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC
             .load_failed
+            .observe(secs),
+        EvictReason::LoadFailedWithoutStart => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC
+            .load_failed_without_start
             .observe(secs),
         EvictReason::MemoryLimitReached => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC
             .memory_limit_reached
