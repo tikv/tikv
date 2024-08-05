@@ -435,7 +435,7 @@ impl Suite {
         ))
         .unwrap();
         let name = name.to_owned();
-        self.wait_with_router(move |r| block_on(r.get_task_info(&name)).is_ok())
+        self.wait_with_router(move |r| r.get_task_info(&name).is_ok())
     }
 
     /// This function tries to calculate the global checkpoint from the flush
@@ -926,9 +926,9 @@ impl Suite {
 
     pub fn wait_for_flush(&self) {
         self.wait_with_router(move |r| {
-            let task_names = block_on(r.select_task(TaskSelector::All.reference()));
+            let task_names = r.select_task(TaskSelector::All.reference());
             for task_name in task_names {
-                let tsk = block_on(r.get_task_info(&task_name));
+                let tsk = r.get_task_info(&task_name);
                 if tsk.unwrap().is_flushing() {
                     return false;
                 }
