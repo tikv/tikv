@@ -196,10 +196,15 @@ impl<'a> slog::Value for TrackerTokenArray<'a> {
         key: slog::Key,
         serializer: &mut dyn slog::Serializer,
     ) -> slog::Result {
-        let trackers_str = self.0.iter()
+        let trackers_str = self
+            .0
+            .iter()
             .map(|tracker_token| {
-            format!("{:?}",GLOBAL_TRACKERS.with_tracker(*tracker_token, |t|
-            t.req_info.clone() ))             })
+                format!(
+                    "{:?}",
+                    GLOBAL_TRACKERS.with_tracker(*tracker_token, |t| t.req_info.clone())
+                )
+            })
             .collect::<Vec<String>>()
             .join(", ");
         serializer.emit_str(key, &trackers_str)
