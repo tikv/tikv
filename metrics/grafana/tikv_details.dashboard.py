@@ -4269,9 +4269,9 @@ def RangeCacheMemoryEngine() -> RowPanel:
                     target(
                         expr=expr_sum_rate(
                             "tikv_range_eviction_duration_secs_count",
-                            by_labels=["instance"],
+                            by_labels=["type"],
                         ),
-                        legend_format="{{instance}}",
+                        legend_format="{{type}}",
                     ),
                 ],
             ),
