@@ -20,13 +20,7 @@ use futures::{
 use grpcio::WriteFlags;
 use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
 use protobuf::Message;
-use tikv_util::{
-    future::block_on_timeout,
-    impl_display_as_debug,
-    memory::{MemoryQuota, MemoryQuotaExceeded},
-    time::Instant,
-    warn,
-};
+use tikv_util::{future::block_on_timeout, impl_display_as_debug, info, memory::{MemoryQuota, MemoryQuotaExceeded}, time::Instant, warn};
 
 use crate::metrics::*;
 
@@ -362,6 +356,7 @@ impl<'a> Drain {
         let observed = (&mut self.unbounded_receiver).map(|x| (x.created, x.event, x.size));
         let scaned = (&mut self.bounded_receiver).filter_map(|x| {
             if x.truncated.load(Ordering::Acquire) {
+                self.memory_quota.free(x.size as _);
                 return futures::future::ready(None);
             }
             futures::future::ready(Some((x.created, x.event, x.size)))
@@ -420,9 +415,9 @@ impl Drop for Drain {
         self.bounded_receiver.close();
         self.unbounded_receiver.close();
         let start = Instant::now();
-        let mut drain = Box::pin(async {
+        let mut total_bytes = 0;
+        let mut drain = Box::pin(async move {
             let memory_quota = self.memory_quota.clone();
-            let mut total_bytes = 0;
             let mut drain = self.drain();
             while let Some((_, bytes)) = drain.next().await {
                 total_bytes += bytes;
@@ -431,9 +426,7 @@ impl Drop for Drain {
         });
         block_on(&mut drain);
         let takes = start.saturating_elapsed();
-        if takes >= Duration::from_millis(200) {
-            warn!("drop Drain too slow"; "takes" => ?takes);
-        }
+        info!("drop Drain finished, free memory", "takes" => ?takes, "bytes" => total_bytes);
     }
 }
 
