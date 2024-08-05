@@ -55,7 +55,7 @@ use tikv_kv::{Modify, Snapshot, SnapshotExt, WriteData, WriteEvent};
 use tikv_util::{
     memory::MemoryQuota, quota_limiter::QuotaLimiter, time::Instant, timer::GLOBAL_TIMER_HANDLE,
 };
-use tracker::{set_tls_tracker_token, TrackerToken, GLOBAL_TRACKERS};
+use tracker::{set_tls_tracker_token, TrackerToken, TrackerTokenArray, GLOBAL_TRACKERS};
 use txn_types::TimeStamp;
 
 use super::task::Task;
@@ -880,8 +880,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             SCHED_STAGE_COUNTER_VEC.get(tag).write_finish.inc();
         }
 
-        debug_with_req_info_tracker!("write_command_finished",
-            [sched_details.tracker],
+        debug!("write_command_finished";
+            "req_info" => TrackerTokenArray::new(&[sched_details.tracker]),
             "cid" => ?cid,
             "pipelined" => ?pipelined,
             "async_apply_prewrite" => ?async_apply_prewrite
@@ -1465,8 +1465,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 &ctx,
             )
         {
-            debug_with_req_info_tracker!("pessimistic locks to be written in-memory",
-                [tracker_token],
+            debug!("pessimistic locks to be written in-memory";
+                "req_info" => TrackerTokenArray::new(&[tracker_token]),
                 "locks" => ?&to_be_write.modifies,
                 "cid" => ?cid
             );
@@ -1643,9 +1643,9 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
                 }
             _ => vec![],
         };
-        debug_with_req_info_tracker!(
-            "to be removed pessimistic_locks",
-            [tracker_token],
+        debug!(
+            "to be removed pessimistic_locks";
+            "req_info" => TrackerTokenArray::new(&[tracker_token]),
             "removed_locks" => ?&removed_pessimistic_locks,
             "cid" => ?cid
         );
@@ -1832,8 +1832,8 @@ impl<E: Engine, L: LockManager> TxnScheduler<E, L> {
             Ok(res) => res,
         };
         SCHED_STAGE_COUNTER_VEC.get(tag).write.inc();
-        debug_with_req_info_tracker!("process_write task handle result",
-            [tracker_token],
+        debug!("process_write task handle result";
+            "req_info" => TrackerTokenArray::new(&[tracker_token]),
             "cid" => ?cid,
             "process_result" => ?&write_result.pr
         );
