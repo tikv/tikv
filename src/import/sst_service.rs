@@ -737,7 +737,7 @@ macro_rules! impl_write {
                             return (Err(Error::InvalidChunk), Some(rx));
                         }
                     };
-                    let writer = rx
+                    let result = rx
                         .try_fold(writer, |mut writer, req| async move {
                             let batch = match req.chunk {
                                 Some($chunk_ty::Batch(b)) => b,
@@ -746,10 +746,19 @@ macro_rules! impl_write {
                             writer.write(batch)?;
                             Ok(writer)
                         })
-                        .await?;
-
-                    let metas = writer.finish()?;
-                    import.verify_checksum(&metas)?;
+                        .await;
+                    let writer, = match result {
+                        Ok(r) => r,
+                        Err(e) => return (Err(e), None),
+                    };
+                    let metas = writer.finish();
+                    let metas = match metas {
+                        Ok(r) => r,
+                        Err(e) => return (Err(e), None),
+                    };
+                    if let Err(e) = import.verify_checksum(&metas) {
+                        return (Err(e), None),
+                    };
                     let mut resp = $resp_ty::default();
                     resp.set_metas(metas.into());
                     (Ok(resp), None)
@@ -1342,8 +1351,7 @@ mod test {
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
     use crate::{
-        import::sst_service::{check_local_region_stale, RequestCollector},
-        server::raftkv,
+        import::sst_service::{check_local_region_stale, RequestCollector, key_from_request},
     };
 
     /// The extra size needed in the request header.
