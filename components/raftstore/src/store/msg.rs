@@ -909,7 +909,6 @@ impl<EK: KvEngine> StoreMsg<EK> {
     pub fn discriminant(&self) -> usize {
         match self {
             StoreMsg::RaftMessage(..) => 0,
-            StoreMsg::ValidateSstResult { .. } => 1,
             StoreMsg::ClearRegionSizeInRange { .. } => 2,
             StoreMsg::StoreUnreachable { .. } => 3,
             StoreMsg::CompactedEvent(_) => 4,

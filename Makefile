@@ -404,6 +404,7 @@ docker_test:
 	docker run -i -v $(shell pwd):/tikv \
 		${DEV_DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
 		make test
+
 ## The driver for script/run-cargo.sh
 ## ----------------------------------
 
