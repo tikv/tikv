@@ -19,7 +19,13 @@ use futures::{
 use grpcio::WriteFlags;
 use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
 use protobuf::Message;
-use tikv_util::{future::block_on_timeout, impl_display_as_debug, info, memory::{MemoryQuota, MemoryQuotaExceeded}, time::Instant, warn};
+use tikv_util::{
+    future::block_on_timeout,
+    impl_display_as_debug, info,
+    memory::{MemoryQuota, MemoryQuotaExceeded},
+    time::Instant,
+    warn,
+};
 
 use crate::metrics::*;
 
