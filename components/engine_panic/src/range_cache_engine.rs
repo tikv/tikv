@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::RangeCacheEngineExt;
+use engine_traits::{EvictReason, RangeCacheEngineExt};
 
 use crate::PanicEngine;
 
@@ -9,7 +9,7 @@ impl RangeCacheEngineExt for PanicEngine {
         panic!()
     }
 
-    fn evict_range(&self, range: &engine_traits::CacheRange) {
+    fn evict_range(&self, range: &engine_traits::CacheRange, evict_range: EvictReason) {
         panic!()
     }
 }
