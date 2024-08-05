@@ -17,7 +17,7 @@ use pd_client::{PdClient, RpcClient};
 use raftstore::coprocessor::RegionInfoProvider;
 use slog_global::{error, info, warn};
 use tikv_util::{
-    config::ReadableSize,
+    config::{ReadableSize, VersionTrack},
     future::block_on_timeout,
     keybuilder::KeyBuilder,
     time::Instant,
@@ -27,6 +27,7 @@ use txn_types::{Key, TimeStamp, WriteRef, WriteType};
 use yatp::Remote;
 
 use crate::{
+    cross_check::CrossChecker,
     engine::{RangeCacheMemoryEngineCore, SkiplistHandle},
     keys::{
         decode_key, encode_key, encode_key_for_boundary_with_mvcc, encoding_for_filter,
@@ -43,12 +44,13 @@ use crate::{
         LabelRule, RegionLabelAddedCb, RegionLabelRulesManager, RegionLabelServiceBuilder,
     },
     write_batch::RangeCacheWriteBatchEntry,
+    RangeCacheEngineConfig, RangeCacheMemoryEngine,
 };
 
 /// Try to extract the key and `u64` timestamp from `encoded_key`.
 ///
 /// See also: [`txn_types::Key::split_on_ts_for`]
-fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
+pub(crate) fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
     match Key::split_on_ts_for(key) {
         Ok((key, ts)) => Ok((key, ts.into_inner())),
         Err(_) => Err(format!(
@@ -58,7 +60,7 @@ fn split_ts(key: &[u8]) -> Result<(&[u8], u64), String> {
     }
 }
 
-fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
+pub(crate) fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
     match WriteRef::parse(value) {
         Ok(write) => Ok(write),
         Err(_) => Err(format!(
@@ -68,7 +70,6 @@ fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
     }
 }
 
-#[derive(Debug)]
 pub enum BackgroundTask {
     Gc(GcTask),
     LoadRange,
@@ -76,6 +77,14 @@ pub enum BackgroundTask {
     DeleteRange(Vec<CacheRange>),
     TopRegionsLoadEvict,
     CleanLockTombstone(u64),
+    TurnOnCrossCheck(
+        (
+            RangeCacheMemoryEngine,
+            RocksEngine,
+            Arc<dyn PdClient>,
+            Duration,
+        ),
+    ),
     SetRocksEngine(RocksEngine),
 }
 
@@ -93,6 +102,7 @@ impl Display for BackgroundTask {
                 .debug_struct("CleanLockTombstone")
                 .field("seqno", r)
                 .finish(),
+            BackgroundTask::TurnOnCrossCheck(_) => f.debug_struct("TurnOnCrossCheck").finish(),
             BackgroundTask::SetRocksEngine(_) => f.debug_struct("SetDiskEngine").finish(),
         }
     }
@@ -206,26 +216,25 @@ impl BgWorkManager {
     pub fn new(
         core: Arc<RwLock<RangeCacheMemoryEngineCore>>,
         pd_client: Arc<dyn PdClient>,
-        gc_interval: Duration,
-        load_evict_interval: Duration,
-        expected_region_size: usize,
+        config: Arc<VersionTrack<RangeCacheEngineConfig>>,
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
     ) -> Self {
+        let config = config.value();
         let worker = Worker::new("range-cache-background-worker");
         let (runner, delete_range_scheduler) = BackgroundRunner::new(
             core.clone(),
             memory_controller,
             region_info_provider,
-            expected_region_size,
+            config.expected_region_size(),
         );
         let scheduler = worker.start_with_timer("range-cache-engine-background", runner);
 
         let (h, tx) = BgWorkManager::start_tick(
             scheduler.clone(),
             pd_client,
-            gc_interval,
-            load_evict_interval,
+            config.gc_interval.0,
+            config.load_evict_interval.0,
         );
 
         Self {
@@ -764,6 +773,8 @@ pub struct BackgroundRunner {
     lock_cleanup_remote: Remote<yatp::task::future::TaskCell>,
     lock_cleanup_worker: Worker,
 
+    cross_check_worker: Option<Worker>,
+
     // The last sequence number for the lock cf tombstone cleanup
     last_seqno: u64,
     // RocksEngine is used to get the oldest snapshot sequence number.
@@ -777,6 +788,9 @@ impl Drop for BackgroundRunner {
         self.gc_range_worker.stop();
         self.load_evict_worker.stop();
         self.lock_cleanup_worker.stop();
+        if let Some(cross_check_worker) = self.cross_check_worker.take() {
+            cross_check_worker.stop()
+        };
     }
 }
 
@@ -837,6 +851,7 @@ impl BackgroundRunner {
                 load_evict_remote,
                 lock_cleanup_remote,
                 lock_cleanup_worker,
+                cross_check_worker: None,
                 last_seqno: 0,
                 rocks_engine: None,
             },
@@ -1107,6 +1122,14 @@ impl Runnable for BackgroundRunner {
                 };
 
                 self.lock_cleanup_remote.spawn(f);
+            }
+            BackgroundTask::TurnOnCrossCheck((engine, rocks_engine, pd_client, check_interval)) => {
+                let cross_check_worker = Worker::new("cross-check-worker");
+                let cross_check_runner =
+                    CrossChecker::new(pd_client, engine, rocks_engine, check_interval);
+                let _ =
+                    cross_check_worker.start_with_timer("cross-check-runner", cross_check_runner);
+                self.cross_check_worker = Some(cross_check_worker);
             }
         }
     }
