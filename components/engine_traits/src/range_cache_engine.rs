@@ -20,6 +20,7 @@ pub enum FailedReason {
 #[derive(Debug, Clone, Copy)]
 pub enum EvictReason {
     LoadFailed,
+    LoadFailedWithoutStart,
     MemoryLimitReached,
     BecomeFollower,
     AutoEvict,
