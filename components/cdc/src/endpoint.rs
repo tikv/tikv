@@ -23,7 +23,7 @@ use kvproto::{
     cdcpb::{
         ChangeDataRequest, ClusterIdMismatch as ErrorClusterIdMismatch,
         Compatibility as ErrorCompatibility, DuplicateRequest as ErrorDuplicateRequest,
-        Error as EventError, Event, Event_oneof_event, ResolvedTs,
+        Error as EventError, ResolvedTs,
     },
     kvrpcpb::ApiVersion,
     metapb::Region,
@@ -955,6 +955,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let mut statistics = Statistics::default();
         for batch in multi {
             let region_id = batch.region_id;
+            let mut deregister = None;
             if let Some(delegate) = self.capture_regions.get_mut(&region_id) {
                 if delegate.has_failed() {
                     // Skip the batch if the delegate has failed.
@@ -967,13 +968,15 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     &mut statistics,
                 ) {
                     delegate.mark_failed();
-                    // Delegate has error, deregister the delegate.
-                    self.on_deregister(Deregister::Delegate {
+                    deregister = Some(Deregister::Delegate {
                         region_id,
                         observe_id: delegate.handle.id,
                         err: e,
                     });
                 }
+            }
+            if let Some(deregister) = deregister {
+                self.on_deregister(deregister);
             }
         }
         flush_oldvalue_stats(&statistics, TAG_DELTA_CHANGE);
@@ -1002,7 +1005,7 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
                     Ok(fails) => {
                         let mut deregisters = Vec::new();
                         for (downstream, e) in fails {
-                            self.on_deregister(Deregister::Downstream {
+                            deregisters.push(Deregister::Downstream {
                                 conn_id: downstream.conn_id,
                                 request_id: downstream.req_id,
                                 region_id,
@@ -1319,7 +1322,7 @@ mod tests {
     use engine_rocks::RocksEngine;
     use futures::executor::block_on;
     use kvproto::{
-        cdcpb::{ChangeDataRequestKvApi, Header},
+        cdcpb::{ChangeDataRequestKvApi, Event, Event_oneof_event, Header},
         errorpb::Error as ErrorHeader,
     };
     use raftstore::{

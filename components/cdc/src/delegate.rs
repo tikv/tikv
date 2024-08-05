@@ -671,10 +671,6 @@ impl Delegate {
             } else if features.contains(FeatureGate::BATCH_RESOLVED_TS) {
                 let v = advance.exclusive.entry(d.conn_id).or_default();
                 v.push(self.region_id, advanced_to);
-            } else {
-                let k = (d.conn_id, self.region_id);
-                let v = (d.req_id, advanced_to);
-                advance.compat.insert(k, v);
             }
 
             let lag = current_ts
