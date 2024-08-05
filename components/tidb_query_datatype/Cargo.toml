@@ -13,6 +13,7 @@ bitfield = "0.13.2"
 bitflags = "1.0.1"
 boolinator = "2.4.0"
 bstr = "0.2.8"
+bytemuck = "1.14.3"
 chrono = { workspace = true }
 chrono-tz = "0.5.1"
 codec = { workspace = true }
@@ -42,3 +43,11 @@ tidb_query_common = { workspace = true }
 tikv_alloc = { workspace = true }
 tikv_util = { workspace = true }
 tipb = { workspace = true }
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[bench]]
+name = "bench_vector_distance"
+path = "benches/bench_vector_distance.rs"
+harness = false
