@@ -321,8 +321,6 @@ where
             if task.is_paused {
                 continue;
             }
-            // We have meet task upon store start, we must in a failover.
-            scheduler.schedule(Task::MarkFailover(Instant::now()))?;
             // move task to schedule
             scheduler.schedule(Task::WatchTask(TaskOp::AddTask(task)))?;
         }
@@ -668,15 +666,16 @@ where
     pub fn on_register(&self, task: StreamTask) {
         let name = task.info.name.clone();
         let start_ts = task.info.start_ts;
-        self.load_task(task);
+        self.register_stream_task(task);
 
         metrics::STORE_CHECKPOINT_TS
             .with_label_values(&[name.as_str()])
             .set(start_ts as _);
     }
 
-    /// Load the task into memory: this would make the endpint start to observe.
-    fn load_task(&self, task: StreamTask) {
+    /// Load the task into memory: this would make the endpoint start to
+    /// observe.
+    fn register_stream_task(&self, task: StreamTask) {
         let cli = self.meta_client.clone();
         let range_router = self.range_router.clone();
 
@@ -699,10 +698,9 @@ where
                 })
         ));
         self.pool.block_on(async move {
-            let task_clone = task.clone();
+            let task_name_clone = task.info.get_name().to_owned();
             let run = async move {
-                let task_name = task.info.get_name();
-                let ranges = cli.ranges_of_task(task_name).await?;
+                let ranges = cli.ranges_of_task(&task_name_clone).await?;
                 fail::fail_point!("load_task::error_when_fetching_ranges", |_| {
                     Err(Error::Other("what range? no such thing, go away.".into()))
                 });
@@ -730,10 +728,10 @@ where
                     "finish register backup stream ranges";
                     "task" => ?task,
                 );
-                Result::Ok(())
+                Ok(())
             };
             if let Err(e) = run.await {
-                self.on_fatal_error_of_task(&task_clone.info.name, &Box::new(e))
+                self.on_fatal_error_of_task(&task_name_clone, &Box::new(e))
                     .await;
             }
         });
@@ -757,7 +755,7 @@ where
     pub fn on_resume(&self, task_name: String) {
         let task = self.pool.block_on(self.meta_client.get_task(&task_name));
         match task {
-            Ok(Some(stream_task)) => self.load_task(stream_task),
+            Ok(Some(stream_task)) => self.register_stream_task(stream_task),
             Ok(None) => {
                 info!("backup stream task not existed"; "task" => %task_name);
             }
