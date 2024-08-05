@@ -28,15 +28,14 @@ use kvproto::{
         WriteRequest_oneof_chunk as Chunk, *,
     },
     kvrpcpb::Context,
-    raft_cmdpb::{CmdType, DeleteRequest, PutRequest, RaftCmdRequest, RaftRequestHeader, Request},
     metapb::RegionEpoch,
+    raft_cmdpb::{CmdType, DeleteRequest, PutRequest, RaftCmdRequest, RaftRequestHeader, Request},
 };
 use protobuf::Message;
 use raftstore::{
-    router::RaftStoreRouter,
-    store::{Callback, RaftCmdExtraOpts, RegionSnapshot},
     coprocessor::{RegionInfo, RegionInfoProvider},
-    store::util::is_epoch_stale,
+    router::RaftStoreRouter,
+    store::{util::is_epoch_stale, Callback, RaftCmdExtraOpts, RegionSnapshot},
     RegionInfoAccessor,
 };
 use sst_importer::{
@@ -1344,14 +1343,18 @@ mod test {
     use std::collections::HashMap;
 
     use engine_traits::{CF_DEFAULT, CF_WRITE};
-    use kvproto::{kvrpcpb::Context, metapb::{Region, RegionEpoch}, raft_cmdpb::*};
+    use kvproto::{
+        kvrpcpb::Context,
+        metapb::{Region, RegionEpoch},
+        raft_cmdpb::*,
+    };
     use protobuf::{Message, SingularPtrField};
     use raft::StateRole::Follower;
     use raftstore::RegionInfo;
     use txn_types::{Key, TimeStamp, Write, WriteType};
 
-    use crate::{
-        import::sst_service::{check_local_region_stale, RequestCollector, key_from_request},
+    use crate::import::sst_service::{
+        check_local_region_stale, key_from_request, RequestCollector,
     };
 
     /// The extra size needed in the request header.
