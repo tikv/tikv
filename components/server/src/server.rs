@@ -1377,6 +1377,9 @@ where
         let raft_path = engines.raft.get_engine_path().to_string();
         let separated_raft_mount_path =
             path_in_diff_mount_point(raft_path.as_str(), engines.kv.path());
+        // If the auxiliary directory of raft engine is specified, it's needed to be
+        // checked. Otherwise, it's not needed to be checked. And as the configuration
+        // is static, it's safe to check it only once.
         let raft_auxillay_path = if self.core.config.raft_engine.enable {
             self.core.config.raft_engine.config().spill_dir.clone()
         } else {
@@ -1442,7 +1445,7 @@ where
                         }
                         Ok((cap, avail)) => {
                             // If the auxiliary directory of raft engine is separated from kv engine and the main
-                            // directory of raft engine, it's needed to be checked.
+                            // directory of raft engine, the disk space of the auxiliary directory should be checked.
                             if separated_raft_auxillay_mount_path {
                                 assert!(raft_auxillay_path.is_some());
                                 let (auxiliary_disk_cap, auxiliary_disk_avail) = match disk::get_disk_space_stats(raft_auxillay_path.as_ref().unwrap()) {
