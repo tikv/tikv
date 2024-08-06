@@ -6449,6 +6449,7 @@ dependencies = [
  "codec",
  "collections",
  "crc32fast",
+ "criterion",
  "encoding_rs 0.8.29 (git+https://github.com/xiongjiwei/encoding_rs.git?rev=68e0bc5a72a37a78228d80cd98047326559cf43c)",
  "error_code",
  "hex 0.4.2",
