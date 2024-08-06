@@ -6,6 +6,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
+    time::Duration,
 };
 
 use futures::{
@@ -428,11 +429,14 @@ impl Drop for Drain {
                 total_bytes += bytes;
             }
             memory_quota.free(total_bytes);
+            info!("drop Drain finished, free memory";
+                "freed_bytes" => total_bytes, "inuse_bytes" => memory_quota.in_use());
         });
         block_on(&mut drain);
         let takes = start.saturating_elapsed();
-        info!("drop Drain finished, free memory";"takes" => ?takes,
-            "freed_bytes" => total_bytes, "inuse_bytes" => self.memory_quota.in_use());
+        if takes >= Duration::from_millis(200) {
+            warn!("drop Drain too slow"; "takes" => ?takes);
+        }
     }
 }
 
