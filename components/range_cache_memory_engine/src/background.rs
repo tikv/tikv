@@ -9,8 +9,8 @@ use crossbeam::{
 };
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{
-    CacheRange, IterOptions, Iterable, Iterator, MiscExt, RangeHintService, SnapshotMiscExt,
-    CF_DEFAULT, CF_WRITE, DATA_CFS,
+    CacheRange, EvictReason, IterOptions, Iterable, Iterator, MiscExt, RangeHintService,
+    SnapshotMiscExt, CF_DEFAULT, CF_WRITE, DATA_CFS,
 };
 use parking_lot::RwLock;
 use pd_client::{PdClient, RpcClient};
@@ -480,7 +480,7 @@ impl BackgroundRunnerCore {
                 assert_eq!(r, range);
                 core.mut_range_manager()
                     .ranges_being_deleted
-                    .insert(r.clone(), true);
+                    .insert(r.clone(), (true, Instant::now(), EvictReason::LoadFailed));
                 core.remove_cached_write_batch(&range);
                 drop(core);
                 fail::fail_point!("in_memory_engine_snapshot_load_canceled");
@@ -532,10 +532,12 @@ impl BackgroundRunnerCore {
         true
     }
 
-    fn on_snapshot_load_canceled(
+    // `start` means whether to start to load keys
+    fn on_snapshot_load_failed(
         &mut self,
         range: CacheRange,
         delete_range_scheduler: &Scheduler<BackgroundTask>,
+        started: bool,
     ) {
         let mut core = self.engine.write();
         let (r, ..) = core
@@ -545,9 +547,18 @@ impl BackgroundRunnerCore {
             .unwrap();
         assert_eq!(r, range);
         core.remove_cached_write_batch(&range);
-        core.mut_range_manager()
-            .ranges_being_deleted
-            .insert(r.clone(), true);
+        core.mut_range_manager().ranges_being_deleted.insert(
+            r.clone(),
+            (
+                true,
+                Instant::now(),
+                if !started {
+                    EvictReason::LoadFailedWithoutStart
+                } else {
+                    EvictReason::LoadFailed
+                },
+            ),
+        );
 
         if let Err(e) = delete_range_scheduler.schedule_force(BackgroundTask::DeleteRange(vec![r]))
         {
@@ -596,7 +607,9 @@ impl BackgroundRunnerCore {
             }
             let evicted_range = {
                 let mut engine_wr = self.engine.write();
-                let mut ranges = engine_wr.mut_range_manager().evict_range(range);
+                let mut ranges = engine_wr
+                    .mut_range_manager()
+                    .evict_range(range, EvictReason::MemoryLimitReached);
                 if !ranges.is_empty() {
                     info!(
                         "evict on soft limit reached";
@@ -665,7 +678,9 @@ impl BackgroundRunnerCore {
         for evict_range in ranges_to_remove {
             if self.memory_controller.reached_soft_limit() {
                 let mut core = self.engine.write();
-                let mut ranges = core.mut_range_manager().evict_range(&evict_range);
+                let mut ranges = core
+                    .mut_range_manager()
+                    .evict_range(&evict_range, EvictReason::AutoEvict);
                 info!(
                     "load_evict: soft limit reached";
                     "range_to_evict" => ?&evict_range,
@@ -904,7 +919,7 @@ impl Runnable for BackgroundRunner {
                                 "snapshot load canceled due to memory reaching soft limit";
                                 "range" => ?range,
                             );
-                            core.on_snapshot_load_canceled(range, &delete_range_scheduler);
+                            core.on_snapshot_load_failed(range, &delete_range_scheduler, false);
                             continue;
                         }
 
@@ -1019,7 +1034,7 @@ impl Runnable for BackgroundRunner {
                                 "snapshot load failed";
                                 "range" => ?range,
                             );
-                            core.on_snapshot_load_canceled(range, &delete_range_scheduler);
+                            core.on_snapshot_load_failed(range, &delete_range_scheduler, true);
                             continue;
                         }
                     }
@@ -1143,8 +1158,6 @@ impl RunnableWithTimer for BackgroundRunner {
         let core = self.core.engine.read();
         let pending = core.range_manager.pending_ranges.len();
         let cached = core.range_manager.ranges().len();
-        let loading = core.range_manager.pending_ranges_loading_data.len();
-        let evictions = core.range_manager.get_and_reset_range_evictions();
         drop(core);
         RANGE_CACHE_COUNT
             .with_label_values(&["pending_range"])
@@ -1152,16 +1165,10 @@ impl RunnableWithTimer for BackgroundRunner {
         RANGE_CACHE_COUNT
             .with_label_values(&["cached_range"])
             .set(cached as i64);
-        RANGE_CACHE_COUNT
-            .with_label_values(&["loading_range"])
-            .set(loading as i64);
-        RANGE_CACHE_COUNT
-            .with_label_values(&["range_evictions"])
-            .set(evictions as i64);
     }
 
     fn get_interval(&self) -> Duration {
-        Duration::from_secs(1)
+        Duration::from_secs(10)
     }
 }
 
@@ -1212,7 +1219,7 @@ impl Runnable for DeleteRangeRunner {
                     for r in ranges {
                         // Check whether range exists in `ranges_being_deleted` and it's scheduled
                         if !core.range_manager.ranges_being_deleted.iter().any(
-                            |(range_being_delete, scheduled)| {
+                            |(range_being_delete, &(scheduled, ..))| {
                                 if range_being_delete == &r && !scheduled {
                                     panic!("range to delete with scheduled false; range={:?}", r,);
                                 };
@@ -2388,7 +2395,7 @@ pub mod tests {
         let _snap3 = engine.snapshot(range.clone(), 60, 1000).unwrap();
 
         let range2 = CacheRange::new(b"key5".to_vec(), b"key8".to_vec());
-        engine.evict_range(&range2);
+        engine.evict_range(&range2, EvictReason::AutoEvict);
 
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));

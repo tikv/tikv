@@ -463,6 +463,35 @@ pub struct WriteResult {
     pub known_txn_status: Vec<(TimeStamp, TimeStamp)>,
 }
 
+impl WriteResult {
+    pub fn new(
+        ctx: Context,
+        to_be_write: WriteData,
+        rows: usize,
+        pr: ProcessResult,
+        lock_info: Vec<WriteResultLockInfo>,
+        released_locks: ReleasedLocks,
+        new_acquired_locks: Vec<LockInfo>,
+        lock_guards: Vec<KeyHandleGuard>,
+        response_policy: ResponsePolicy,
+        known_txn_status: Vec<(TimeStamp, TimeStamp)>,
+    ) -> Self {
+        Self {
+            ctx,
+            to_be_write,
+            rows,
+            pr,
+            lock_info,
+            released_locks,
+            new_acquired_locks,
+            lock_guards,
+            response_policy,
+            known_txn_status,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct WriteResultLockInfo {
     pub lock_digest: lock_manager::LockDigest,
     pub key: Key,
@@ -504,7 +533,7 @@ impl WriteResultLockInfo {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ReleasedLocks(Vec<ReleasedLock>);
 
 impl ReleasedLocks {

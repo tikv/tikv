@@ -8,8 +8,8 @@ use std::{
 use crossbeam::epoch;
 use engine_rocks::util::new_engine;
 use engine_traits::{
-    CacheRange, Mutable, RangeCacheEngine, WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK,
-    CF_WRITE, DATA_CFS,
+    CacheRange, EvictReason, Mutable, RangeCacheEngine, WriteBatch, WriteBatchExt, CF_DEFAULT,
+    CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use range_cache_memory_engine::{
     decode_key, encode_key_for_boundary_without_mvcc, encoding_for_filter,
@@ -254,7 +254,7 @@ fn test_evict_with_loading_range() {
     let engine_clone = engine.clone();
     fail::cfg_callback("on_snapshot_load_finished", move || {
         let _ = snapshot_load_tx.send(true);
-        engine_clone.evict_range(&r);
+        engine_clone.evict_range(&r, EvictReason::AutoEvict);
     })
     .unwrap();
 
@@ -433,8 +433,8 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     // Now, three ranges are in write status, delete range will not be performed
     // until they leave the write status
 
-    engine.evict_range(&range1);
-    engine.evict_range(&range2);
+    engine.evict_range(&range1, EvictReason::AutoEvict);
+    engine.evict_range(&range2, EvictReason::AutoEvict);
 
     let verify_data = |range, expected_num: u64| {
         let handle = engine.core().write().engine().cf_handle(CF_LOCK);
@@ -481,7 +481,7 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     snapshot_load_rx
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
-    engine.evict_range(&range3);
+    engine.evict_range(&range3, EvictReason::AutoEvict);
 
     fail::cfg("before_clear_ranges_in_being_written", "pause").unwrap();
     write_batch_consume_rx
@@ -522,7 +522,7 @@ fn test_double_delete_range_schedule() {
         let _ = snapshot_load_tx.send(true);
         // evict all ranges. So the loading ranges will also be evicted and a delete
         // range task will be scheduled.
-        engine_clone.evict_range(&r);
+        engine_clone.evict_range(&r, EvictReason::AutoEvict);
     })
     .unwrap();
 
