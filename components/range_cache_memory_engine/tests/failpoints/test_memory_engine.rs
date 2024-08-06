@@ -12,13 +12,14 @@ use engine_traits::{
     CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use range_cache_memory_engine::{
-    decode_key, encode_key_for_boundary_without_mvcc, encoding_for_filter, test_util::put_data,
+    decode_key, encode_key_for_boundary_without_mvcc, encoding_for_filter,
+    test_util::{put_data, put_data_in_rocks},
     BackgroundTask, InternalBytes, InternalKey, RangeCacheEngineConfig, RangeCacheEngineContext,
     RangeCacheMemoryEngine, SkiplistHandle, ValueType,
 };
 use tempfile::Builder;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
-use txn_types::{Key, TimeStamp};
+use txn_types::{Key, TimeStamp, WriteType};
 
 #[test]
 fn test_set_disk_engine() {
@@ -286,9 +287,10 @@ fn test_evict_with_loading_range() {
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
 
-    engine.snapshot(range1, 100, 100).unwrap_err();
-    engine.snapshot(range2, 100, 100).unwrap_err();
-    engine.snapshot(range3, 100, 100).unwrap();
+    let read_ts = TimeStamp::compose(TimeStamp::physical_now(), 0).into_inner();
+    engine.snapshot(range1, read_ts, 100).unwrap_err();
+    engine.snapshot(range2, read_ts, 100).unwrap_err();
+    engine.snapshot(range3, read_ts, 100).unwrap();
 }
 
 #[test]
@@ -564,4 +566,67 @@ fn test_double_delete_range_schedule() {
     delete_range_rx
         .recv_timeout(Duration::from_secs(2))
         .unwrap_err();
+}
+
+#[test]
+fn test_load_with_gc() {
+    let path = Builder::new().prefix("test").tempdir().unwrap();
+    let path_str = path.path().to_str().unwrap();
+    let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
+
+    let mut config = RangeCacheEngineConfig::config_for_test();
+    config.gc_interval = ReadableDuration(Duration::from_secs(1));
+    let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
+        VersionTrack::new(config),
+    )));
+    engine.set_disk_engine(rocks_engine.clone());
+
+    // safe_point: 6
+    // Rocks: [k1-5, k1-3, k2-4-d, k2-3, k3-7, k3-4, k3-1, k4-6-d, k4-5]
+    // After load
+    // IME: [k1-5, k3-7, k3-4]
+    put_data_in_rocks(b"k1", b"val", 5, 4, false, &rocks_engine, WriteType::Put);
+    put_data_in_rocks(b"k1", b"val", 3, 2, false, &rocks_engine, WriteType::Put);
+    put_data_in_rocks(b"k2", b"val", 4, 3, false, &rocks_engine, WriteType::Delete);
+    put_data_in_rocks(b"k2", b"val", 3, 2, false, &rocks_engine, WriteType::Put);
+    put_data_in_rocks(b"k3", b"val", 7, 5, false, &rocks_engine, WriteType::Put);
+    put_data_in_rocks(b"k3", b"val", 4, 3, false, &rocks_engine, WriteType::Put);
+    put_data_in_rocks(b"k3", b"val", 1, 0, false, &rocks_engine, WriteType::Put);
+    put_data_in_rocks(b"k4", b"val", 6, 0, false, &rocks_engine, WriteType::Delete);
+    put_data_in_rocks(b"k4", b"val", 5, 0, false, &rocks_engine, WriteType::Put);
+
+    fail::cfg("in_memory_engine_safe_point_in_loading", "return(6)").unwrap();
+    let (load_tx, load_rx) = sync_channel(0);
+    fail::cfg_callback("pending_range_completes_loading", move || {
+        let _ = load_tx.send(true);
+    })
+    .unwrap();
+
+    let range = CacheRange::new(b"".to_vec(), b"z".to_vec());
+    engine.load_range(range.clone()).unwrap();
+    let mut wb = engine.write_batch();
+    wb.prepare_for_range(range.clone());
+    wb.set_sequence_number(100).unwrap();
+    wb.write().unwrap();
+
+    load_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    let expects = vec![(b"k1", 5), (b"k3", 7), (b"k3", 4)];
+    let write_handle = engine.core().read().engine().cf_handle(CF_WRITE);
+
+    let mut iter = write_handle.iterator();
+    let guard = &epoch::pin();
+    iter.seek_to_first(guard);
+    for (key, commit_ts) in expects {
+        let expect_key = Key::from_raw(key).into_encoded();
+        let InternalKey { user_key, .. } = decode_key(iter.key().as_bytes());
+        let (mem_key, ts) = Key::split_on_ts_for(user_key).unwrap();
+        assert_eq!(expect_key, mem_key);
+        assert_eq!(commit_ts, ts.into_inner());
+        iter.next(guard);
+    }
+
+    // ensure the safe point of the engine
+    engine.snapshot(range.clone(), 6, 100).unwrap_err();
+    engine.snapshot(range, 7, 100).unwrap();
 }

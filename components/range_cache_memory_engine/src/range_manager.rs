@@ -176,6 +176,13 @@ impl RangeManager {
         self.ranges.insert(range, range_meta);
     }
 
+    pub fn new_range_with_safe_point(&mut self, range: CacheRange, safe_point: u64) {
+        assert!(!self.overlap_with_range(&range));
+        let mut range_meta = RangeMeta::new(self.id_allocator.allocate_id());
+        range_meta.set_safe_point(safe_point);
+        self.ranges.insert(range, range_meta);
+    }
+
     pub fn mut_range_meta(&mut self, range: &CacheRange) -> Option<&mut RangeMeta> {
         self.ranges.get_mut(range)
     }
