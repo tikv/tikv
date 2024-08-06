@@ -132,9 +132,9 @@ impl RocksEngine {
         }
         if wb.count() > 0 {
             wb.write_opt(wopts)?;
-            if !wopts.disable_wal() {
-                self.sync_wal()?;
-            }
+            // if !wopts.disable_wal() {
+            //     self.sync_wal()?;
+            // }
             Ok(true)
         } else {
             Ok(false)
