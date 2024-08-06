@@ -597,13 +597,7 @@ impl RegionCollector {
                     (Some(_), None) => Ordering::Less,
                     (Some(a), Some(b)) => compare_fn(a, b),
                 })
-                .map(|(r, ra)| {
-                    (
-                        r,
-                        ra.map(|ra| ra.region_stat.approximate_size)
-                            .unwrap_or_default(),
-                    )
-                })
+                .map(|(r, ra)| (r, ra.map(|ra| ra.region_stat.clone()).unwrap_or_default()))
                 .collect::<Vec<_>>()
         } else {
             let count = usize::max(count, self.region_activity.len());
@@ -617,9 +611,30 @@ impl RegionCollector {
                 })
                 .sorted_by(|(_, activity_0), (_, activity_1)| compare_fn(activity_0, activity_1))
                 .take(count)
-                .map(|(ri, ac)| (ri.region.clone(), ac.region_stat.approximate_size))
+                .map(|(ri, ac)| (ri.region.clone(), ac.region_stat.clone()))
                 .collect::<Vec<_>>()
         };
+
+        let debug: Vec<_> = top_regions
+            .iter()
+            .map(|(r, s)| {
+                format!(
+                    "region_id={}, read_keys={}, cop={}",
+                    r.get_id(),
+                    s.read_keys,
+                    s.query_stats.coprocessor
+                )
+            })
+            .collect_vec();
+        info!(
+            "get top k regions";
+            "regions" => ?debug,
+        );
+        let top_regions = top_regions
+            .into_iter()
+            .map(|(r, s)| (r, s.read_keys))
+            .collect_vec();
+
         callback(top_regions)
     }
 
