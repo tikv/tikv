@@ -83,6 +83,14 @@ pub fn get_disk_status(_store_id: u64) -> DiskUsage {
 }
 
 pub fn get_disk_space_stats<P: AsRef<Path>>(path: P) -> std::io::Result<(u64, u64)> {
+    fail_point!("mock_disk_space_stats", |stats| {
+        let stats = stats.unwrap();
+        let values = stats.split(',').collect::<Vec<_>>();
+        Ok((
+            values[0].parse::<u64>().unwrap(),
+            values[1].parse::<u64>().unwrap(),
+        ))
+    });
     let disk_stats = fs2::statvfs(path)?;
     Ok((disk_stats.total_space(), disk_stats.available_space()))
 }
