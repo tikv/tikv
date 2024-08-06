@@ -4,7 +4,7 @@ use lazy_static::*;
 use prometheus::*;
 
 // When adding new metrics, remember to update in the grafana dashboard, for
-// example update the tikv_details.json file.
+// example update the tikv_details.dashboard.py.
 lazy_static! {
     pub static ref BACKUP_RANGE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_backup_range_duration_seconds",

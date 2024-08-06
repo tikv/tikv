@@ -700,7 +700,7 @@ where
         self.pool.block_on(async move {
             let task_name_clone = task.info.get_name().to_owned();
             let run = async move {
-                let ranges = cli.ranges_of_task(&task.info.get_name()).await?;
+                let ranges = cli.ranges_of_task(task.info.get_name()).await?;
                 fail::fail_point!("load_task::error_when_fetching_ranges", |_| {
                     Err(Error::Other("what range? no such thing, go away.".into()))
                 });
