@@ -482,6 +482,7 @@ dependencies = [
  "bytes",
  "chrono",
  "concurrency_manager",
+ "crc64fast",
  "crossbeam",
  "crossbeam-channel",
  "dashmap",
@@ -506,6 +507,7 @@ dependencies = [
  "openssl",
  "pd_client",
  "pin-project",
+ "pprof",
  "prometheus",
  "prometheus-static-metric",
  "protobuf",
@@ -988,6 +990,7 @@ dependencies = [
  "derive_more",
  "error_code",
  "fail",
+ "futures 0.3.15",
  "futures-io",
  "kvproto",
  "lazy_static",
@@ -1042,6 +1045,50 @@ version = "0.1.0"
 dependencies = [
  "fxhash",
  "tikv_alloc",
+]
+
+[[package]]
+name = "compact-log-backup"
+version = "0.1.0"
+dependencies = [
+ "async-compression",
+ "bytes",
+ "chrono",
+ "codec",
+ "crc64fast",
+ "dashmap",
+ "derive_more",
+ "encryption",
+ "engine_rocks",
+ "engine_traits",
+ "external_storage",
+ "fail",
+ "file_system",
+ "futures 0.3.15",
+ "futures-io",
+ "hex 0.4.2",
+ "keys",
+ "kvproto",
+ "pin-project",
+ "pprof",
+ "prometheus",
+ "protobuf",
+ "serde",
+ "serde_json",
+ "slog",
+ "slog-global",
+ "tempdir",
+ "test_util",
+ "thiserror",
+ "tidb_query_datatype",
+ "tikv_util",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tracing",
+ "tracing-active-tree",
+ "txn_types",
+ "zstd",
 ]
 
 [[package]]
@@ -1800,6 +1847,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "url",
+ "walkdir",
 ]
 
 [[package]]
@@ -2843,7 +2891,7 @@ dependencies = [
 [[package]]
 name = "kvproto"
 version = "0.0.2"
-source = "git+https://github.com/pingcap/kvproto.git#0ad602a429126e39bd4a87c687be64f9ae173c02"
+source = "git+https://github.com/YuJuncen/kvproto?branch=compact-log-backup#6d93a3086bf2a4edfe4efbeaf46e7786111e3db8"
 dependencies = [
  "futures 0.3.15",
  "grpcio",
@@ -6582,10 +6630,12 @@ version = "0.0.1"
 dependencies = [
  "api_version",
  "backup",
+ "base64 0.13.0",
  "cc",
  "cdc",
  "clap 2.33.0",
  "collections",
+ "compact-log-backup",
  "concurrency_manager",
  "crossbeam",
  "crypto",
@@ -7085,7 +7135,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.0",
  "static_assertions",
 ]
 

@@ -1383,6 +1383,7 @@ struct DataFile {
     end_key: Vec<u8>,
     number_of_entries: usize,
     file_size: usize,
+    crc64xor: u64,
 }
 
 #[derive(Debug)]
@@ -1465,6 +1466,7 @@ impl DataFile {
             file_size: 0,
             start_key: vec![],
             end_key: vec![],
+            crc64xor: 0,
         })
     }
 
@@ -1487,6 +1489,10 @@ impl DataFile {
         let mut total_size = 0;
 
         for mut event in events.events {
+            let mut digest = crc64fast::Digest::new();
+            digest.write(&event.key);
+            digest.write(&event.value);
+            self.crc64xor ^= digest.sum64();
             let encoded = EventEncoder::encode_event(&event.key, &event.value);
             let mut size = 0;
             for slice in encoded {
@@ -1549,6 +1555,7 @@ impl DataFile {
                 .map(|bytes| bytes.to_vec())
                 .map_err(|err| Error::Other(box_err!("openssl hasher failed to init: {}", err)))?,
         );
+        meta.set_crc64xor(self.crc64xor);
         meta.set_number_of_entries(self.number_of_entries as _);
         meta.set_max_ts(self.max_ts.into_inner() as _);
         meta.set_min_ts(self.min_ts.into_inner() as _);
@@ -2043,7 +2050,7 @@ mod tests {
         async fn write(
             &self,
             name: &str,
-            reader: UnpinReader,
+            reader: UnpinReader<'_>,
             content_length: u64,
         ) -> io::Result<()> {
             (self.error_on_write)()?;
@@ -2401,7 +2408,7 @@ mod tests {
         async fn write(
             &self,
             _name: &str,
-            mut reader: UnpinReader,
+            mut reader: UnpinReader<'_>,
             content_length: u64,
         ) -> io::Result<()> {
             let mut data = Vec::new();
