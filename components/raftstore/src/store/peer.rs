@@ -1458,7 +1458,7 @@ where
             drop(pending_create_peers);
 
             perf_context.start_observe();
-            engines.raft.consume(&mut raft_wb, true)?;
+            engines.raft.consume(&mut raft_wb, false)?;
             perf_context.report_metrics(&[]);
 
             if self.get_store().is_initialized() && !keep_data {
