@@ -431,7 +431,8 @@ impl Drop for Drain {
         });
         block_on(&mut drain);
         let takes = start.saturating_elapsed();
-        info!("drop Drain finished, free memory"; "takes" => ?takes, "bytes" => total_bytes);
+        info!("drop Drain finished, free memory";"takes" => ?takes,
+            "freed_bytes" => total_bytes, "inuse_bytes" => self.memory_quota.in_use());
     }
 }
 
