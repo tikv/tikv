@@ -12,6 +12,7 @@ use codec::{
     number::{self, NumberCodec},
     prelude::*,
 };
+use mysql::VectorFloat32;
 use tikv_util::{codec::BytesSlice, escape};
 
 use super::{
@@ -41,6 +42,7 @@ pub const DURATION_FLAG: u8 = 7;
 pub const VAR_INT_FLAG: u8 = 8;
 pub const VAR_UINT_FLAG: u8 = 9;
 pub const JSON_FLAG: u8 = 10;
+pub const VECTOR_FLOAT32_FLAG: u8 = 20;
 pub const MAX_FLAG: u8 = 250;
 
 pub const DATUM_DATA_NULL: &[u8; 1] = &[NIL_FLAG];
@@ -57,6 +59,7 @@ pub enum Datum {
     Dec(Decimal),
     Time(Time),
     Json(Json),
+    VectorFloat32(VectorFloat32),
     Enum(Enum),
     Set(Set),
     Min,
@@ -141,6 +144,7 @@ impl Display for Datum {
             Datum::Dec(ref d) => write!(f, "Dec({})", d),
             Datum::Time(t) => write!(f, "Time({})", t),
             Datum::Json(ref j) => write!(f, "Json({})", j),
+            Datum::VectorFloat32(ref v) => write!(f, "VectorFloat32({})", v),
             Datum::Enum(ref e) => write!(f, "Enum({})", e),
             Datum::Set(ref s) => write!(f, "Set({})", s),
             Datum::Min => write!(f, "MIN"),
@@ -207,6 +211,7 @@ impl Datum {
             Datum::Dec(ref d) => self.cmp_dec(ctx, d),
             Datum::Time(t) => self.cmp_time(ctx, t),
             Datum::Json(ref j) => self.cmp_json(ctx, j),
+            Datum::VectorFloat32(_) => Err(box_err!("not implemented")),
             Datum::Enum(ref e) => self.cmp_enum(ctx, e),
             Datum::Set(ref s) => self.cmp_set(ctx, s),
         }
@@ -252,6 +257,7 @@ impl Datum {
             Datum::Dur(ref d) => cmp_f64(d.to_secs_f64(), f),
             Datum::Time(t) => cmp_f64(t.convert(ctx)?, f),
             Datum::Json(_) => Ok(Ordering::Less),
+            Datum::VectorFloat32(_) => Err(box_err!("not implemented")),
             Datum::Enum(_) => Ok(Ordering::Less),
             Datum::Set(_) => Ok(Ordering::Less),
         }
@@ -475,6 +481,7 @@ impl Datum {
             | Datum::Bytes(_)
             | Datum::Dec(_)
             | Datum::Json(_)
+            | Datum::VectorFloat32(_)
             | Datum::Enum(_)
             | Datum::Set(_)
             | Datum::Max
@@ -919,6 +926,7 @@ pub trait DatumDecoder:
             VAR_INT_FLAG => self.read_var_i64().map(Datum::I64)?,
             VAR_UINT_FLAG => self.read_var_u64().map(Datum::U64)?,
             JSON_FLAG => self.read_json().map(Datum::Json)?,
+            VECTOR_FLOAT32_FLAG => unimplemented!(),
             f => return Err(invalid_type!("unsupported data type `{}`", f)),
         };
         Ok(datum)
@@ -1012,6 +1020,9 @@ pub trait DatumEncoder:
                     self.write_json(j.as_ref())?;
                 }
                 // TODO: implement datum write here.
+                Datum::VectorFloat32(_) => {
+                    return Err(box_err!("not implemented"));
+                }
                 Datum::Enum(_) => unimplemented!(),
                 Datum::Set(_) => unimplemented!(),
             }
@@ -1057,6 +1068,7 @@ pub fn approximate_size(values: &[Datum], comparable: bool) -> usize {
                 Datum::Dec(ref d) => d.approximate_encoded_size(),
                 Datum::Json(ref d) => d.as_ref().binary_len(),
                 Datum::Null | Datum::Min | Datum::Max => 0,
+                Datum::VectorFloat32(ref v) => v.as_ref().encoded_len(),
                 // TODO: implement here after we implement datum write
                 Datum::Enum(_) => unimplemented!(),
                 Datum::Set(_) => unimplemented!(),

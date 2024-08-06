@@ -145,6 +145,7 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Duration, EvalType::Bytes) => cast_any_as_string_fn_meta::<Duration>(),
         (EvalType::Json, EvalType::Bytes) => cast_json_as_bytes_fn_meta(),
         (EvalType::Enum, EvalType::Bytes) => cast_enum_as_bytes_fn_meta(),
+        (EvalType::VectorFloat32, EvalType::Bytes) => cast_vector_float32_as_bytes_fn_meta(),
 
         // any as decimal
         (EvalType::Int, EvalType::Decimal) => {
@@ -218,6 +219,11 @@ fn get_cast_fn_rpn_meta(
         (EvalType::Duration, EvalType::Json) => cast_any_as_json_fn_meta::<Duration>(),
         (EvalType::Json, EvalType::Json) => cast_json_as_json_fn_meta(),
         (EvalType::Enum, EvalType::Json) => cast_enum_as_json_fn_meta(),
+
+        // any as VectorFloat32
+        (EvalType::VectorFloat32, EvalType::VectorFloat32) => {
+            cast_vector_float32_as_vector_float32_fn_meta()
+        }
 
         _ => return Err(other_err!("Unsupported cast from {} to {}", from, to)),
     };
@@ -1421,6 +1427,12 @@ fn cast_json_as_json(val: Option<JsonRef>) -> Result<Option<Json>> {
     }
 }
 
+#[rpn_fn]
+#[inline]
+fn cast_vector_float32_as_vector_float32(val: VectorFloat32Ref) -> Result<Option<VectorFloat32>> {
+    Ok(Some(val.to_owned()))
+}
+
 #[rpn_fn(nullable, capture = [ctx])]
 #[inline]
 fn cast_any_as_any<From: ConvertTo<To> + Evaluable + EvaluableRet, To: Evaluable + EvaluableRet>(
@@ -1491,6 +1503,12 @@ fn cast_json_as_bytes(ctx: &mut EvalContext, val: Option<JsonRef>) -> Result<Opt
             Ok(Some(val))
         }
     }
+}
+
+#[rpn_fn]
+#[inline]
+fn cast_vector_float32_as_bytes(val: VectorFloat32Ref) -> Result<Option<Bytes>> {
+    Ok(Some(val.to_string().into_bytes()))
 }
 
 #[rpn_fn(nullable, capture = [ctx])]

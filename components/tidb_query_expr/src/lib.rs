@@ -41,6 +41,7 @@ pub mod impl_other;
 pub mod impl_regexp;
 pub mod impl_string;
 pub mod impl_time;
+pub mod impl_vec;
 
 use tidb_query_common::Result;
 use tidb_query_datatype::{
@@ -57,7 +58,7 @@ pub use self::types::*;
 use self::{
     impl_arithmetic::*, impl_cast::*, impl_compare::*, impl_compare_in::*, impl_control::*,
     impl_encryption::*, impl_json::*, impl_like::*, impl_math::*, impl_miscellaneous::*,
-    impl_op::*, impl_other::*, impl_regexp::*, impl_string::*, impl_time::*,
+    impl_op::*, impl_other::*, impl_regexp::*, impl_string::*, impl_time::*, impl_vec::*,
 };
 
 fn map_to_binary_fn_sig(expr: &Expr) -> Result<RpnFnMeta> {
@@ -449,7 +450,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::ModIntUnsignedSigned => arithmetic_fn_meta::<UintIntMod>(),
         ScalarFuncSig::ModIntSignedUnsigned => arithmetic_fn_meta::<IntUintMod>(),
         ScalarFuncSig::ModIntSignedSigned => arithmetic_fn_meta::<IntIntMod>(),
-                
+
         // impl_cast
         ScalarFuncSig::CastIntAsInt |
         ScalarFuncSig::CastIntAsReal |
@@ -499,7 +500,9 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::CastJsonAsDecimal |
         ScalarFuncSig::CastJsonAsTime |
         ScalarFuncSig::CastJsonAsDuration |
-        ScalarFuncSig::CastJsonAsJson => map_cast_func(expr)?,
+        ScalarFuncSig::CastJsonAsJson |
+        ScalarFuncSig::CastVectorFloat32AsString |
+        ScalarFuncSig::CastVectorFloat32AsVectorFloat32 => map_cast_func(expr)?,
         ScalarFuncSig::ToBinary => map_to_binary_fn_sig(expr)?,
         ScalarFuncSig::FromBinary => map_from_binary_fn_sig(expr)?,
 
@@ -511,6 +514,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::LtTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpLt>>(),
         ScalarFuncSig::LtDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpLt>>(),
         ScalarFuncSig::LtJson => compare_json_fn_meta::<CmpOpLt>(),
+        ScalarFuncSig::LtVectorFloat32 => compare_vector_float32_fn_meta::<CmpOpLt>(),
         ScalarFuncSig::LeInt => map_int_sig(value, children, compare_mapper::<CmpOpLe>)?,
         ScalarFuncSig::LeReal => compare_fn_meta::<BasicComparer<Real, CmpOpLe>>(),
         ScalarFuncSig::LeDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpLe>>(),
@@ -518,6 +522,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::LeTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpLe>>(),
         ScalarFuncSig::LeDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpLe>>(),
         ScalarFuncSig::LeJson => compare_json_fn_meta::<CmpOpLe>(),
+        ScalarFuncSig::LeVectorFloat32 => compare_vector_float32_fn_meta::<CmpOpLe>(),
         ScalarFuncSig::GreatestInt => greatest_int_fn_meta(),
         ScalarFuncSig::GreatestDecimal => greatest_decimal_fn_meta(),
         ScalarFuncSig::GreatestString => greatest_string_fn_meta(),
@@ -545,6 +550,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::GtTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpGt>>(),
         ScalarFuncSig::GtDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpGt>>(),
         ScalarFuncSig::GtJson => compare_json_fn_meta::<CmpOpGt>(),
+        ScalarFuncSig::GtVectorFloat32 => compare_vector_float32_fn_meta::<CmpOpGt>(),
         ScalarFuncSig::GeInt => map_int_sig(value, children, compare_mapper::<CmpOpGe>)?,
         ScalarFuncSig::GeReal => compare_fn_meta::<BasicComparer<Real, CmpOpGe>>(),
         ScalarFuncSig::GeDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpGe>>(),
@@ -552,6 +558,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::GeTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpGe>>(),
         ScalarFuncSig::GeDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpGe>>(),
         ScalarFuncSig::GeJson => compare_json_fn_meta::<CmpOpGe>(),
+        ScalarFuncSig::GeVectorFloat32 => compare_vector_float32_fn_meta::<CmpOpGe>(),
         ScalarFuncSig::NeInt => map_int_sig(value, children, compare_mapper::<CmpOpNe>)?,
         ScalarFuncSig::NeReal => compare_fn_meta::<BasicComparer<Real, CmpOpNe>>(),
         ScalarFuncSig::NeDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpNe>>(),
@@ -559,6 +566,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::NeTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpNe>>(),
         ScalarFuncSig::NeDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpNe>>(),
         ScalarFuncSig::NeJson => compare_json_fn_meta::<CmpOpNe>(),
+        ScalarFuncSig::NeVectorFloat32 => compare_vector_float32_fn_meta::<CmpOpNe>(),
         ScalarFuncSig::EqInt => map_int_sig(value, children, compare_mapper::<CmpOpEq>)?,
         ScalarFuncSig::EqReal => compare_fn_meta::<BasicComparer<Real, CmpOpEq>>(),
         ScalarFuncSig::EqDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpEq>>(),
@@ -566,6 +574,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::EqTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpEq>>(),
         ScalarFuncSig::EqDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpEq>>(),
         ScalarFuncSig::EqJson => compare_json_fn_meta::<CmpOpEq>(),
+        ScalarFuncSig::EqVectorFloat32 => compare_vector_float32_fn_meta::<CmpOpEq>(),
         ScalarFuncSig::NullEqInt => map_int_sig(value, children, compare_mapper::<CmpOpNullEq>)?,
         ScalarFuncSig::NullEqReal => compare_fn_meta::<BasicComparer<Real, CmpOpNullEq>>(),
         ScalarFuncSig::NullEqDecimal => compare_fn_meta::<BasicComparer<Decimal, CmpOpNullEq>>(),
@@ -573,6 +582,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::NullEqTime => compare_fn_meta::<BasicComparer<DateTime, CmpOpNullEq>>(),
         ScalarFuncSig::NullEqDuration => compare_fn_meta::<BasicComparer<Duration, CmpOpNullEq>>(),
         ScalarFuncSig::NullEqJson => compare_json_fn_meta::<CmpOpNullEq>(),
+        ScalarFuncSig::NullEqVectorFloat32 => compare_vector_float32_fn_meta::<CmpOpNullEq>(),
         ScalarFuncSig::CoalesceInt => coalesce_fn_meta::<Int>(),
         ScalarFuncSig::CoalesceReal => coalesce_fn_meta::<Real>(),
         ScalarFuncSig::CoalesceString => coalesce_bytes_fn_meta(),
@@ -640,6 +650,9 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::JsonValidStringSig => json_valid_fn_meta(),
         ScalarFuncSig::JsonValidOthersSig => json_valid_fn_meta(),
         ScalarFuncSig::JsonMemberOfSig => member_of_fn_meta(),
+        // impl_vec
+        ScalarFuncSig::VecAsTextSig => vec_as_text_fn_meta(),
+        ScalarFuncSig::VecDimsSig => vec_dims_fn_meta(),
         // impl_like
         ScalarFuncSig::LikeSig => map_like_sig(ft, children)?,
         // impl_regexp
@@ -703,6 +716,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::DurationAnyValue => any_value_fn_meta::<Duration>(),
         ScalarFuncSig::IntAnyValue => any_value_fn_meta::<Int>(),
         ScalarFuncSig::JsonAnyValue => any_value_json_fn_meta(),
+        ScalarFuncSig::VectorFloat32AnyValue => any_value_vector_float32_fn_meta(),
         ScalarFuncSig::RealAnyValue => any_value_fn_meta::<Real>(),
         ScalarFuncSig::StringAnyValue => any_value_bytes_fn_meta(),
         ScalarFuncSig::TimeAnyValue => any_value_fn_meta::<DateTime>(),
@@ -723,6 +737,7 @@ fn map_expr_node_to_rpn_func(expr: &Expr) -> Result<RpnFnMeta> {
         ScalarFuncSig::TimeIsNull => is_null_fn_meta::<DateTime>(),
         ScalarFuncSig::DurationIsNull => is_null_fn_meta::<Duration>(),
         ScalarFuncSig::JsonIsNull => is_null_json_fn_meta(),
+        ScalarFuncSig::VectorFloat32IsNull => is_null_vector_float32_fn_meta(),
         ScalarFuncSig::IntIsTrue => int_is_true_fn_meta::<KeepNullOff>(),
         ScalarFuncSig::IntIsTrueWithNull => int_is_true_fn_meta::<KeepNullOn>(),
         ScalarFuncSig::RealIsTrue => real_is_true_fn_meta::<KeepNullOff>(),
