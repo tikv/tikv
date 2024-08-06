@@ -339,7 +339,7 @@ impl Service {
                 warn!(
                     "cdc invalid observed start key or end key version";
                     "downstream" => ?peer, "region_id" => request.region_id,
-                    "error" => ?e,
+                    "error" => ?e, "start_key" => ?request.start_key, "end_key" => ?request.end_key,
                 );
                 ObservedRange::default()
             });
