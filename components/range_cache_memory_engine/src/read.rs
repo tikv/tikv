@@ -43,8 +43,8 @@ enum Direction {
 
 #[derive(Clone, Debug)]
 pub struct RangeCacheSnapshotMeta {
-    pub(crate) range_id: u64,
     pub(crate) range: CacheRange,
+    pub(crate) epoch_version: u64,
     pub(crate) region_id: u64,
     pub(crate) snapshot_ts: u64,
     // Sequence number is shared between RangeCacheEngine and disk KvEnigne to
@@ -54,15 +54,15 @@ pub struct RangeCacheSnapshotMeta {
 
 impl RangeCacheSnapshotMeta {
     fn new(
-        range_id: u64,
         region_id: u64,
+        epoch_version: u64,
         range: CacheRange,
         snapshot_ts: u64,
         sequence_number: u64,
     ) -> Self {
         Self {
-            range_id,
             range,
+            epoch_version,
             region_id,
             snapshot_ts,
             sequence_number,
@@ -70,7 +70,7 @@ impl RangeCacheSnapshotMeta {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct RangeCacheSnapshot {
     snapshot_meta: RangeCacheSnapshotMeta,
     skiplist_engine: SkiplistEngine,
@@ -87,12 +87,15 @@ impl RangeCacheSnapshot {
         seq_num: u64,
     ) -> result::Result<Self, FailedReason> {
         let mut core = engine.core.write();
-        let range_id = core
-            .range_manager
+        core.range_manager
             .region_snapshot(region_id, region_epoch, read_ts)?;
         Ok(RangeCacheSnapshot {
             snapshot_meta: RangeCacheSnapshotMeta::new(
-                range_id, region_id, range, read_ts, seq_num,
+                region_id,
+                region_epoch,
+                range,
+                read_ts,
+                seq_num,
             ),
             skiplist_engine: core.engine.clone(),
             engine: engine.clone(),
@@ -696,8 +699,8 @@ mod tests {
     use crate::{
         engine::{cf_to_id, tests::new_region, SkiplistEngine},
         keys::{
-            construct_key, construct_region_key, construct_user_key, construct_value, decode_key, encode_key,
-            encode_seek_key, InternalBytes, ValueType,
+            construct_key, construct_region_key, construct_user_key, construct_value, decode_key,
+            encode_key, encode_seek_key, InternalBytes, ValueType,
         },
         perf_context::PERF_CONTEXT,
         statistics::Tickers,
