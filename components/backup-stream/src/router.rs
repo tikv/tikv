@@ -484,7 +484,7 @@ impl RouterInner {
         // register task info
         let cfg = self.tempfile_config_for_task(&task);
         let stream_task_handler =
-            StreamTaskInfo::new(task, ranges.clone(), merged_file_size_limit, cfg).await?;
+            StreamTaskHandler::new(task, ranges.clone(), merged_file_size_limit, cfg).await?;
         self.tasks
             .insert(task_name.clone(), Arc::new(stream_task_handler));
 
@@ -556,7 +556,7 @@ impl RouterInner {
     }
 
     #[instrument(skip(self))]
-    pub fn get_task_handler(&self, task_name: &str) -> Result<Arc<StreamTaskInfo>> {
+    pub fn get_task_handler(&self, task_name: &str) -> Result<Arc<StreamTaskHandler>> {
         let task_handler = match self.tasks.get(task_name) {
             Some(t) => t.clone(),
             None => {
@@ -581,7 +581,7 @@ impl RouterInner {
         debug!(
             "backup stream statics size";
             "task" => ?task,
-            "next_size" => task_info.total_size(),
+            "next_size" => task_handler.total_size(),
             "size_limit" => file_size_limit,
         );
         let cur_size = task_handler.total_size();
