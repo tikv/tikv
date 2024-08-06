@@ -852,7 +852,7 @@ fn should_sync_log(cmd: &RaftCmdRequest) -> bool {
             // index instead of deleting them in apply thread directly.
             return false;
         }
-        return true;
+        return false;
     }
 
     for req in cmd.get_requests() {
