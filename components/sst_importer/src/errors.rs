@@ -118,6 +118,12 @@ pub enum Error {
     #[error("Importing a SST file with imcompatible api version")]
     IncompatibleApiVersion,
 
+    #[error("{0}, please retry write later")]
+    RequestTooNew(String),
+
+    #[error("{0}, please rescan region later")]
+    RequestTooOld(String),
+
     #[error("Key mode mismatched with the request mode, writer: {:?}, storage: {:?}, key: {}", .writer, .storage_api_version, .key)]
     InvalidKeyMode {
         writer: SstWriterType,
@@ -214,6 +220,8 @@ impl ErrorCodeExt for Error {
             Error::InvalidKeyMode { .. } => error_code::sst_importer::INVALID_KEY_MODE,
             Error::ResourceNotEnough(_) => error_code::sst_importer::RESOURCE_NOT_ENOUTH,
             Error::Suspended { .. } => error_code::sst_importer::SUSPENDED,
+            Error::RequestTooNew(_) => error_code::sst_importer::REQUEST_TOO_NEW,
+            Error::RequestTooOld(_) => error_code::sst_importer::REQUEST_TOO_OLD,
         }
     }
 }

@@ -25,5 +25,7 @@ define_error_codes!(
     RESOURCE_NOT_ENOUTH => ("ResourceNotEnough", "", ""),
     SUSPENDED => ("Suspended",
         "this request has been suspended.",
-        "Probably there are some export tools don't support exporting data inserted by `ingest`(say, snapshot backup). Check the user manual and stop them.")
+        "Probably there are some export tools don't support exporting data inserted by `ingest`(say, snapshot backup). Check the user manual and stop them."),
+    REQUEST_TOO_NEW => ("RequestTooNew", "", ""),
+    REQUEST_TOO_OLD => ("RequestTooOld", "", "")
 );

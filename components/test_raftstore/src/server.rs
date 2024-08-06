@@ -441,6 +441,7 @@ impl ServerCluster {
             sim_router.clone(),
             engines.kv.clone(),
             Arc::clone(&importer),
+            Arc::new(region_info_accessor.clone()),
         );
 
         // Create deadlock service.
