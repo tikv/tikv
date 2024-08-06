@@ -3,12 +3,9 @@
 use lazy_static::*;
 use prometheus::*;
 
+/// When adding new metrics, remember to update in the grafana dashboard, for
+/// example update the tikv_details.json file.
 lazy_static! {
-    pub static ref BACKUP_REQUEST_HISTOGRAM: Histogram = register_histogram!(
-        "tikv_backup_request_duration_seconds",
-        "Bucketed histogram of backup requests duration"
-    )
-    .unwrap();
     pub static ref BACKUP_RANGE_HISTOGRAM_VEC: HistogramVec = register_histogram_vec!(
         "tikv_backup_range_duration_seconds",
         "Bucketed histogram of backup range duration",

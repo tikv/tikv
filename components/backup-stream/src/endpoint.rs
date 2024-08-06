@@ -846,9 +846,9 @@ where
 
     pub fn on_force_flush(&self, task: String) {
         self.pool.block_on(async move {
-            let info = self.range_router.get_task_info(&task);
+            let handler_res = self.range_router.get_task_handler(&task);
             // This should only happen in testing, it would be to unwrap...
-            let _ = info.unwrap().set_flushing_status_cas(false, true);
+            let _ = handler_res.unwrap().set_flushing_status_cas(false, true);
             let mts = self.prepare_min_ts().await;
             let sched = self.scheduler.clone();
             self.region_op(ObserveOp::ResolveRegions {
