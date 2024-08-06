@@ -171,15 +171,6 @@ impl CacheRange {
         self.start < other.end && other.start < self.end
     }
 
-    pub fn overlaps_with_region(&self, region: &Region) -> bool {
-        &self.start[1..] < region.end_key.as_slice() && region.start_key.as_slice() < &self.end[1..]
-    }
-
-    pub fn equals_with_region(&self, region: &Region) -> bool {
-        &self.start[1..] == region.start_key.as_slice()
-            && &self.end[1..] == region.end_key.as_slice()
-    }
-
     pub fn split_off(&self, range: &CacheRange) -> (Option<CacheRange>, Option<CacheRange>) {
         assert!(self.contains_range(range));
         let left = if self.start != range.start {
