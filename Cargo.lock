@@ -2817,7 +2817,11 @@ dependencies = [
 [[package]]
 name = "librocksdb_sys"
 version = "0.1.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.1#2a127d084abb239a6c53e1e82e695325cf66bbce"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
+>>>>>>> 050f1a6de6 (RocksDB: Fix bloom filter incompatible issue (#17361))
 dependencies = [
  "bindgen 0.57.0",
  "bzip2-sys",
@@ -2836,7 +2840,11 @@ dependencies = [
 [[package]]
 name = "libtitan_sys"
 version = "0.0.1"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.1#2a127d084abb239a6c53e1e82e695325cf66bbce"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
+>>>>>>> 050f1a6de6 (RocksDB: Fix bloom filter incompatible issue (#17361))
 dependencies = [
  "bzip2-sys",
  "cc",
@@ -4710,7 +4718,11 @@ dependencies = [
 [[package]]
 name = "rocksdb"
 version = "0.3.0"
+<<<<<<< HEAD
 source = "git+https://github.com/tikv/rust-rocksdb.git?branch=tikv-7.1#2a127d084abb239a6c53e1e82e695325cf66bbce"
+=======
+source = "git+https://github.com/tikv/rust-rocksdb.git#c92c467a3ab0b60484a0db83fcf89366791716cd"
+>>>>>>> 050f1a6de6 (RocksDB: Fix bloom filter incompatible issue (#17361))
 dependencies = [
  "libc 0.2.139",
  "librocksdb_sys",
