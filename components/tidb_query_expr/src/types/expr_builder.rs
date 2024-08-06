@@ -7,7 +7,7 @@ use tidb_query_common::Result;
 use tidb_query_datatype::{
     codec::{
         data_type::*,
-        mysql::{EnumDecoder, JsonDecoder, MAX_FSP},
+        mysql::{EnumDecoder, JsonDecoder, VectorFloat32Decoder, MAX_FSP},
     },
     expr::EvalContext,
     match_template_evaltype, EvalType, FieldTypeAccessor,
@@ -47,6 +47,7 @@ impl RpnExpressionBuilder {
             ExprType::MysqlDuration => {}
             ExprType::MysqlDecimal => {}
             ExprType::MysqlJson => {}
+            ExprType::TiDbVectorFloat32 => {}
             ExprType::ColumnRef => {}
             _ => return Err(other_err!("Blacklist expression type {:?}", c.get_tp())),
         }
@@ -69,7 +70,8 @@ impl RpnExpressionBuilder {
             | ExprType::MysqlDuration
             | ExprType::MysqlDecimal
             | ExprType::MysqlJson
-            | ExprType::MysqlEnum => Ok(true),
+            | ExprType::MysqlEnum
+            | ExprType::TiDbVectorFloat32 => Ok(true),
             ExprType::ScalarFunc => Ok(false),
             ExprType::ColumnRef => Ok(false),
             _ => Err(other_err!("Unsupported expression type {:?}", c.get_tp())),
@@ -373,6 +375,9 @@ fn handle_node_constant(
         ExprType::MysqlBit if eval_type == EvalType::Int => {
             extract_scalar_value_uint64_from_bits(tree_node.take_val())?
         }
+        ExprType::TiDbVectorFloat32 if eval_type == EvalType::VectorFloat32 => {
+            extract_scalar_value_vector_float32(tree_node.take_val())?
+        }
         expr_type => {
             return Err(other_err!(
                 "Unexpected ExprType {:?} and EvalType {:?}",
@@ -493,6 +498,15 @@ fn extract_scalar_value_enum(val: Vec<u8>, field_type: &FieldType) -> Result<Sca
         .read_enum_uint(field_type)
         .map_err(|_| other_err!("Unable to decode enum from the request"))?;
     Ok(ScalarValue::Enum(Some(value)))
+}
+
+#[inline]
+fn extract_scalar_value_vector_float32(val: Vec<u8>) -> Result<ScalarValue> {
+    let value = val
+        .as_slice()
+        .read_vector_float32()
+        .map_err(|_| other_err!("Unable to decode vector float32 from the request"))?;
+    Ok(ScalarValue::VectorFloat32(Some(value)))
 }
 
 #[cfg(test)]

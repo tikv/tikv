@@ -108,6 +108,10 @@ pub trait V1CompatibleEncoder: DatumFlagAndPayloadEncoder {
                 // Copy datum payload as it is
                 self.write_bytes(src)?;
             }
+            FieldTypeTp::TiDbVectorFloat32 => {
+                self.write_u8(datum::VECTOR_FLOAT32_FLAG)?;
+                self.write_bytes(src)?;
+            }
             FieldTypeTp::Null => {
                 self.write_u8(datum::NIL_FLAG)?;
             }

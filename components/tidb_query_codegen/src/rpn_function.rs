@@ -497,7 +497,7 @@ impl RpnFnRefEvaluableType {
         match self {
             RpnFnRefEvaluableType::Ref(x) => quote! { &#lifetime #x },
             RpnFnRefEvaluableType::Type(x) => {
-                if is_json(x) || is_bytes(x) || is_enum(x) || is_set(x) {
+                if is_json(x) || is_bytes(x) || is_enum(x) || is_set(x) || is_vector_float32(x) {
                     quote! {
                         #x <#lifetime>
                     }
@@ -846,6 +846,14 @@ fn is_json(ty: &TypePath) -> bool {
     }
 }
 
+/// Checks if parameter type is VectorFloat32
+fn is_vector_float32(ty: &TypePath) -> bool {
+    match ty.path.get_ident() {
+        Some(x) => *x == "VectorFloat32Ref" || *x == "VectorFloat32",
+        None => false,
+    }
+}
+
 /// Checks if parameter type is Bytes
 fn is_bytes(ty: &TypePath) -> bool {
     match ty.path.get_ident() {
@@ -880,6 +888,8 @@ fn get_vargs_buf(ty: &TypePath) -> TokenStream {
                 quote! { VARG_PARAM_BUF_JSON_REF }
             } else if *x == "BytesRef" {
                 quote! { VARG_PARAM_BUF_BYTES_REF }
+            } else if *x == "VectorFloat32Ref" {
+                quote! { VARG_PARAM_BUF_VECTOR_FLOAT32_REF }
             } else {
                 quote! { VARG_PARAM_BUF }
             }
@@ -896,6 +906,8 @@ fn get_vectoried_type(ty: &TypePath) -> TokenStream {
         Some(x) => {
             if *x == "JsonRef" {
                 quote! { JsonRef }
+            } else if *x == "VectorFloat32Ref" {
+                quote! { VectorFloat32Ref }
             } else if *x == "BytesRef" {
                 quote! { BytesRef }
             } else if *x == "EnumRef" {
@@ -1047,6 +1059,10 @@ impl VargsRpnFn {
         let transmute_ref = if is_json(arg_type) {
             quote! {
                 let arg: Option<JsonRef> = unsafe { std::mem::transmute::<Option<JsonRef>, Option<JsonRef<'static>>>(arg) };
+            }
+        } else if is_vector_float32(arg_type) {
+            quote! {
+                let arg: Option<VectorFloat32Ref> = unsafe { std::mem::transmute::<Option<VectorFloat32Ref>, Option<VectorFloat32Ref<'static>>>(arg) };
             }
         } else if is_bytes(arg_type) {
             quote! {
