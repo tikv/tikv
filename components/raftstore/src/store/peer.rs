@@ -1451,15 +1451,19 @@ where
             )?;
 
             // write kv rocksdb first in case of restart happen between two write
+            let t1 = TiInstant::now();
             let mut write_opts = WriteOptions::new();
             write_opts.set_sync(false);
             kv_wb.write_opt(&write_opts)?;
+            info!("kv rocksdb write finish"; "region_id" => self.region_id, "peer_id" => self.peer.get_id(), "takes" => ?t1.saturating_elapsed());
 
             drop(pending_create_peers);
 
+            let t2 = TiInstant::now();
             perf_context.start_observe();
             engines.raft.consume(&mut raft_wb, false)?;
             perf_context.report_metrics(&[]);
+            info!("raft rocksdb consume finish"; "region_id" => self.region_id, "peer_id" => self.peer.get_id(), "takes" => ?t2.saturating_elapsed());
 
             if self.get_store().is_initialized() && !keep_data {
                 // If we meet panic when deleting data and raft log, the dirty data

@@ -98,11 +98,12 @@ impl<EK: KvEngine, ER: RaftEngine> Runner<EK, ER> {
         fail::fail_point!("worker_gc_raft_log_flush");
         // Sync wal of kv_db to make sure the data before apply_index has been persisted
         // to disk.
-        let start = Instant::now();
-        self.engines.kv.sync().unwrap_or_else(|e| {
-            panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
-        });
-        RAFT_LOG_GC_KV_SYNC_DURATION_HISTOGRAM.observe(start.saturating_elapsed_secs());
+        // let start = Instant::now();
+        // self.engines.kv.sync().unwrap_or_else(|e| {
+        //     panic!("failed to sync kv_engine in raft_log_gc: {:?}", e);
+        // });
+        // RAFT_LOG_GC_KV_SYNC_DURATION_HISTOGRAM.observe(start.
+        // saturating_elapsed_secs());
 
         let tasks = std::mem::take(&mut self.tasks);
         let mut cbs = Vec::new();
