@@ -493,10 +493,10 @@ where
                 error!("failed to delete files in range"; "err" => %e);
             })
             .unwrap();
-        if let Err(e) = self.delete_all_in_range(&ranges, false) {
-            error!("failed to cleanup stale range"; "err" => %e);
-            return;
-        }
+        // if let Err(e) = self.delete_all_in_range(&ranges, false) {
+        //     error!("failed to cleanup stale range"; "err" => %e);
+        //     return;
+        // }
         self.engine
             .delete_ranges_cfs(
                 &WriteOptions::default(),
@@ -537,15 +537,14 @@ where
         let mut written = false;
         for cf in self.engine.cf_names() {
             // CF_LOCK usually contains fewer keys than other CFs, so we delete them by key.
-            let strategy = if cf == CF_LOCK {
-                DeleteStrategy::DeleteByKey
-            } else if self.use_delete_range {
-                DeleteStrategy::DeleteByRange
-            } else {
-                DeleteStrategy::DeleteByWriter {
-                    sst_path: self.mgr.get_temp_path_for_ingest(),
-                }
-            };
+            let strategy = DeleteStrategy::DeleteByKey;
+            // } else if self.use_delete_range {
+            //     DeleteStrategy::DeleteByRange
+            // } else {
+            //     DeleteStrategy::DeleteByWriter {
+            //         sst_path: self.mgr.get_temp_path_for_ingest(),
+            //     }
+            // };
             written |= box_try!(self.engine.delete_ranges_cf(&wopts, cf, strategy, ranges));
         }
         if apply && written {
