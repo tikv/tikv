@@ -945,7 +945,7 @@ pub struct DiskUsageChecker {
     separated_raft_auxiliary_mount_path: bool,
     /// Whether the auxiliary directory of raft engine is both separated from
     /// the main directory of raft engine and kv engine.
-    separated_raft_and_kvdb_mount_path: bool,
+    separated_raft_auxiliary_and_kvdb_mount_path: bool,
     /// The threshold of disk usage of kv engine to trigger the almost full
     /// status.
     kvdb_almost_full_thd: u64,
@@ -963,7 +963,7 @@ impl DiskUsageChecker {
         raft_auxiliary_path: Option<String>,
         separated_raft_mount_path: bool,
         separated_raft_auxiliary_mount_path: bool,
-        separated_raft_and_kvdb_mount_path: bool,
+        separated_raft_auxiliary_and_kvdb_mount_path: bool,
         kvdb_almost_full_thd: u64,
         raft_almost_full_thd: u64,
         config_disk_capacity: u64,
@@ -974,7 +974,7 @@ impl DiskUsageChecker {
             raft_auxiliary_path,
             separated_raft_mount_path,
             separated_raft_auxiliary_mount_path,
-            separated_raft_and_kvdb_mount_path,
+            separated_raft_auxiliary_and_kvdb_mount_path,
             kvdb_almost_full_thd,
             raft_almost_full_thd,
             config_disk_capacity,
@@ -1030,7 +1030,7 @@ impl DiskUsageChecker {
                             // kv engine, returns u64::MAX to indicate that the disk space of
                             // the raft engine should not be checked.
                             (std::u64::MAX, std::u64::MAX)
-                        } else if self.separated_raft_and_kvdb_mount_path {
+                        } else if self.separated_raft_auxiliary_and_kvdb_mount_path {
                             // If the auxiliary directory of raft engine is separated from kv
                             // engine and the main directory of
                             // raft engine, the disk space of
