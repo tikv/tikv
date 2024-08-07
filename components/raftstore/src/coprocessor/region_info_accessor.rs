@@ -582,7 +582,9 @@ impl RegionCollector {
             let b = b.region_stat.read_keys;
             b.cmp(&a)
         };
-        let top_regions = if count == 0 {
+
+        let mut max_qps = 0;
+        let mut top_regions = if count == 0 {
             self.regions
                 .values()
                 .map(|ri| {
@@ -604,6 +606,7 @@ impl RegionCollector {
             self.region_activity
                 .iter()
                 .filter_map(|(id, ac)| {
+                    max_qps = u64::max(ac.region_stat.query_stats.coprocessor, max_qps);
                     self.regions
                         .get(id)
                         .filter(|ri| ri.role == StateRole::Leader)
@@ -614,6 +617,14 @@ impl RegionCollector {
                 .map(|(ri, ac)| (ri.region.clone(), ac.region_stat.clone()))
                 .collect::<Vec<_>>()
         };
+
+        let max_read_keys = top_regions[0].1.read_keys;
+        top_regions = top_regions
+            .into_iter()
+            .filter(|(_, s)| {
+                s.read_bytes >= max_read_keys / 10 || s.query_stats.coprocessor >= max_qps / 10
+            })
+            .collect_vec();
 
         let debug: Vec<_> = top_regions
             .iter()
