@@ -631,7 +631,7 @@ impl RegionCollector {
         top_regions = top_regions
             .into_iter()
             .filter(|(_, s)| {
-                s.read_bytes >= max_read_keys / 10 || s.query_stats.coprocessor >= max_qps / 10
+                s.read_keys >= max_read_keys / 10 || s.query_stats.coprocessor >= max_qps / 10
             })
             .collect_vec();
 
@@ -649,6 +649,8 @@ impl RegionCollector {
         info!(
             "get top k regions";
             "count" => count,
+            "max_qps" => max_qps,
+            "max_read_keys" => max_read_keys,
             "regions" => ?debug,
         );
         let top_regions = top_regions
