@@ -982,15 +982,15 @@ impl DiskUsageChecker {
     }
 
     /// Inspect the disk usage of kv engine and raft engine.
-    /// The `used_size` is the used size of kv engine, and the `raft_size` is
-    /// the used size of raft engine.
+    /// The `kvdb_used_size` is the used size of kv engine, and the
+    /// `raft_used_size` is the used size of raft engine.
     ///
     /// Returns the disk usage status of the whole disk, kv engine and raft
     /// engine, the whole disk capacity and available size.
     pub fn inspect(
         &self,
-        used_size: u64,
-        raft_size: u64,
+        kvdb_used_size: u64,
+        raft_used_size: u64,
     ) -> (
         disk::DiskUsage, // whole disk status
         disk::DiskUsage, // kvdb disk status
@@ -1058,7 +1058,9 @@ impl DiskUsageChecker {
                     }
                 };
                 let raft_disk_available = cmp::min(
-                    raft_disk_cap.checked_sub(raft_size).unwrap_or_default(),
+                    raft_disk_cap
+                        .checked_sub(raft_used_size)
+                        .unwrap_or_default(),
                     raft_disk_avail,
                 );
                 if raft_disk_available <= raft_already_full_thd {
@@ -1094,7 +1096,7 @@ impl DiskUsageChecker {
             self.config_disk_capacity
         };
         let available = cmp::min(
-            capacity.checked_sub(used_size).unwrap_or_default(),
+            capacity.checked_sub(kvdb_used_size).unwrap_or_default(),
             disk_avail,
         );
         let cur_kv_disk_status = if available <= kvdb_already_full_thd {

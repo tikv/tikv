@@ -356,6 +356,7 @@ mqueue /dev/mqueue mqueue rw,relatime 0 0
         let (capacity, available) = disk::get_disk_space_stats("./").unwrap();
         assert!(capacity > 0);
         assert!(available > 0);
+        assert!(capacity >= available);
 
         disk::get_disk_space_stats("/non-exist-path").unwrap_err();
     }
