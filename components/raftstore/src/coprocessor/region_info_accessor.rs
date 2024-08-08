@@ -578,8 +578,8 @@ impl RegionCollector {
     /// approximately `300_000``.
     pub fn handle_get_top_regions(&mut self, count: usize, callback: Callback<TopRegions>) {
         let compare_fn = |a: &RegionActivity, b: &RegionActivity| {
-            let a = a.region_stat.read_keys;
-            let b = b.region_stat.read_keys;
+            let a = a.region_stat.cop_detail.next;
+            let b = b.region_stat.cop_detail.next;
             b.cmp(&a)
         };
 
@@ -627,11 +627,34 @@ impl RegionCollector {
                 .collect::<Vec<_>>()
         };
 
-        let max_read_keys = top_regions[0].1.read_keys;
+        let debug: Vec<_> = top_regions
+            .iter()
+            .map(|(r, s)| {
+                format!(
+                    "region_id={}, read_keys={}, cop={}, cop_detail={:?}",
+                    r.get_id(),
+                    s.read_keys,
+                    s.query_stats.coprocessor,
+                    s.cop_detail,
+                )
+            })
+            .collect_vec();
+
+        info!(
+            "get top k regions before filter";
+            "count" => count,
+            "max_qps" => max_qps,
+            "regions" => ?debug,
+        );
+
+        let max_next_prev = top_regions[0].1.cop_detail.next + top_regions[0].1.cop_detail.prev;
         top_regions = top_regions
             .into_iter()
             .filter(|(_, s)| {
-                s.read_keys >= max_read_keys / 10 || s.query_stats.coprocessor >= max_qps / 10
+                s.cop_detail.next + s.cop_detail.prev >= max_next_prev / 10
+                    && ((s.cop_detail.next + s.cop_detail.prev) / s.cop_detail.processed_keys)
+                        as f64
+                        >= 2.5
             })
             .collect_vec();
 
@@ -639,23 +662,26 @@ impl RegionCollector {
             .iter()
             .map(|(r, s)| {
                 format!(
-                    "region_id={}, read_keys={}, cop={}",
+                    "region_id={}, read_keys={}, cop={}, cop_detail={:?}",
                     r.get_id(),
                     s.read_keys,
-                    s.query_stats.coprocessor
+                    s.query_stats.coprocessor,
+                    s.cop_detail,
                 )
             })
             .collect_vec();
+
         info!(
-            "get top k regions";
+            "get top k regions after filter";
             "count" => count,
+            "read_count" => debug.len(),
             "max_qps" => max_qps,
-            "max_read_keys" => max_read_keys,
             "regions" => ?debug,
         );
+
         let top_regions = top_regions
             .into_iter()
-            .map(|(r, s)| (r, s.read_keys))
+            .map(|(r, s)| (r, s.approximate_size))
             .collect_vec();
 
         callback(top_regions)
