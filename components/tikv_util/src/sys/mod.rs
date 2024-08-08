@@ -195,10 +195,11 @@ pub fn path_in_diff_mount_point(_path1: impl AsRef<Path>, _path2: impl AsRef<Pat
     false
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_path_in_diff_mount_point() {
         let (empty_path1, path2) = ("", "/");
@@ -216,5 +217,61 @@ mod tests {
         let (normal_path1, normal_path2) = ("/", "/");
         let result = path_in_diff_mount_point(normal_path1, normal_path2);
         assert_eq!(result, false);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_get_path_mount_point() {
+        let mounts = "
+sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0
+proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0
+tmpfs /sys/fs/cgroup tmpfs ro,nosuid,nodev,noexec,mode=755 0 0
+cgroup /sys/fs/cgroup/systemd cgroup rw,nosuid,nodev,noexec,relatime,xattr,release_agent=/usr/lib/systemd/systemd-cgroups-agent,name=systemd 0 0
+pstore /sys/fs/pstore pstore rw,nosuid,nodev,noexec,relatime 0 0
+bpf /sys/fs/bpf bpf rw,nosuid,nodev,noexec,relatime,mode=700 0 0
+none /sys/kernel/tracing tracefs rw,relatime 0 0
+configfs /sys/kernel/config configfs rw,relatime 0 0
+systemd-1 /proc/sys/fs/binfmt_misc autofs rw,relatime,fd=32,pgrp=1,timeout=0,minproto=5,maxproto=5,direct,pipe_ino=16122 0 0
+mqueue /dev/mqueue mqueue rw,relatime 0 0
+/dev/vda2 /boot ext4 rw,relatime 0 0
+/dev/vda3 / ext4 rw,relatime 0 0
+
+# Double spaces in below.
+/dev/nvme1n1  /data/nvme1n1  xfs  rw,seclabel,relatime,attr2,inode64,logbufs=8,logbsize=32k,noquota 0 0
+# \\t in below.
+/dev/nvme0n1\t/data/nvme0n1/data ext4 rw,seclabel,relatime 0 0
+";
+        let reader = mounts.as_bytes();
+        let check = |path: &str, expected: Option<&str>| {
+            let mp = get_path_mount_point(Box::new(reader), Path::new(path));
+            if let Some(expected) = expected {
+                assert!(
+                    mp.as_ref().unwrap().starts_with(expected),
+                    "{:?}: {:?}",
+                    mp,
+                    expected
+                );
+            } else {
+                assert!(mp.is_none(), "{:?}: {:?}", mp, expected);
+            };
+        };
+        check("/data/nvme1n1", Some("/dev/nvme1n1  /data/nvme1n1  xfs"));
+        check(
+            "/data/nvme0n1/data/tikv",
+            Some("/dev/nvme0n1\t/data/nvme0n1/data ext4"),
+        );
+        check("/data/nvme0n1", Some("/dev/vda3 / ext4"));
+        check("/home", Some("/dev/vda3 / ext4"));
+        check("unknown/path", None);
+    }
+
+    #[test]
+    fn test_get_disk_space_stats() {
+        let (capacity, available) = disk::get_disk_space_stats("./").unwrap();
+        assert!(capacity > 0);
+        assert!(available > 0);
+        assert!(capacity >= available);
+
+        disk::get_disk_space_stats("/non-exist-path").unwrap_err();
     }
 }
