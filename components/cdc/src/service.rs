@@ -338,8 +338,8 @@ impl Service {
             .unwrap_or_else(|e| {
                 warn!(
                     "cdc invalid observed start key or end key version";
-                    "downstream" => ?peer, "region_id" => request.region_id,
-                    "error" => ?e,
+                    "downstream" => ?peer, "region_id" => request.region_id, "request_id" => request.region_id,
+                    "error" => ?e, "start_key" => ?request.start_key, "end_key" => ?request.end_key,
                 );
                 ObservedRange::default()
             });
@@ -405,6 +405,7 @@ impl Service {
             channel(CDC_CHANNLE_CAPACITY, self.memory_quota.clone());
         let conn = Conn::new(event_sink, ctx.peer());
         let conn_id = conn.get_id();
+        event_drain.set_conn_id(conn_id);
         let mut explicit_features = vec![];
 
         if event_feed_v2 {

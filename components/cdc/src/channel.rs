@@ -22,13 +22,13 @@ use kvproto::cdcpb::{ChangeDataEvent, Event, ResolvedTs};
 use protobuf::Message;
 use tikv_util::{
     future::block_on_timeout,
-    impl_display_as_debug,
+    impl_display_as_debug, info,
     memory::{MemoryQuota, MemoryQuotaExceeded},
     time::Instant,
     warn,
 };
 
-use crate::metrics::*;
+use crate::{metrics::*, service::ConnId};
 
 /// The maximum bytes of events can be batched into one `CdcEvent::Event`, 32KB.
 pub const CDC_EVENT_MAX_BYTES: usize = 32 * 1024;
@@ -207,6 +207,7 @@ pub fn channel(buffer: usize, memory_quota: Arc<MemoryQuota>) -> (Sink, Drain) {
             unbounded_receiver,
             bounded_receiver,
             memory_quota,
+            conn_id: Default::default(),
         },
     )
 }
@@ -355,13 +356,19 @@ pub struct Drain {
     unbounded_receiver: UnboundedReceiver<ObservedEvent>,
     bounded_receiver: Receiver<ScanedEvent>,
     memory_quota: Arc<MemoryQuota>,
+    conn_id: ConnId,
 }
 
 impl<'a> Drain {
+    pub fn set_conn_id(&'a mut self, conn_id: ConnId) {
+        self.conn_id = conn_id;
+    }
+
     pub fn drain(&'a mut self) -> impl Stream<Item = (CdcEvent, usize)> + 'a {
         let observed = (&mut self.unbounded_receiver).map(|x| (x.created, x.event, x.size));
         let scaned = (&mut self.bounded_receiver).filter_map(|x| {
             if x.truncated.load(Ordering::Acquire) {
+                self.memory_quota.free(x.size as _);
                 return futures::future::ready(None);
             }
             futures::future::ready(Some((x.created, x.event, x.size)))
@@ -420,14 +427,17 @@ impl Drop for Drain {
         self.bounded_receiver.close();
         self.unbounded_receiver.close();
         let start = Instant::now();
-        let mut drain = Box::pin(async {
+        let mut total_bytes = 0;
+        let mut drain = Box::pin(async move {
+            let conn_id = self.conn_id;
             let memory_quota = self.memory_quota.clone();
-            let mut total_bytes = 0;
             let mut drain = self.drain();
             while let Some((_, bytes)) = drain.next().await {
                 total_bytes += bytes;
             }
             memory_quota.free(total_bytes);
+            info!("drop Drain finished, free memory"; "conn_id" => ?conn_id,
+                "freed_bytes" => total_bytes, "inuse_bytes" => memory_quota.in_use());
         });
         block_on(&mut drain);
         let takes = start.saturating_elapsed();
