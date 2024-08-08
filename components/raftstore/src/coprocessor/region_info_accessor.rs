@@ -647,36 +647,39 @@ impl RegionCollector {
             "regions" => ?debug,
         );
 
-        let max_next_prev = top_regions[0].1.cop_detail.next + top_regions[0].1.cop_detail.prev;
-        top_regions = top_regions
-            .into_iter()
-            .filter(|(_, s)| {
-                s.cop_detail.next + s.cop_detail.prev >= max_next_prev / 10
-                    && s.cop_detail.processed_keys != 0
-                    && (s.cop_detail.next + s.cop_detail.prev) / s.cop_detail.processed_keys >= 2
-            })
-            .collect_vec();
+        if top_regions.len() > 0 {
+            let max_next_prev = top_regions[0].1.cop_detail.next + top_regions[0].1.cop_detail.prev;
+            top_regions = top_regions
+                .into_iter()
+                .filter(|(_, s)| {
+                    s.cop_detail.next + s.cop_detail.prev >= max_next_prev / 10
+                        && s.cop_detail.processed_keys != 0
+                        && (s.cop_detail.next + s.cop_detail.prev) / s.cop_detail.processed_keys
+                            >= 2
+                })
+                .collect_vec();
 
-        let debug: Vec<_> = top_regions
-            .iter()
-            .map(|(r, s)| {
-                format!(
-                    "region_id={}, read_keys={}, cop={}, cop_detail={:?}",
-                    r.get_id(),
-                    s.read_keys,
-                    s.query_stats.coprocessor,
-                    s.cop_detail,
-                )
-            })
-            .collect_vec();
+            let debug: Vec<_> = top_regions
+                .iter()
+                .map(|(r, s)| {
+                    format!(
+                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}",
+                        r.get_id(),
+                        s.read_keys,
+                        s.query_stats.coprocessor,
+                        s.cop_detail,
+                    )
+                })
+                .collect_vec();
 
-        info!(
-            "get top k regions after filter";
-            "count" => count,
-            "read_count" => debug.len(),
-            "max_qps" => max_qps,
-            "regions" => ?debug,
-        );
+            info!(
+                "get top k regions after filter";
+                "count" => count,
+                "read_count" => debug.len(),
+                "max_qps" => max_qps,
+                "regions" => ?debug,
+            );
+        }
 
         let top_regions = top_regions
             .into_iter()
