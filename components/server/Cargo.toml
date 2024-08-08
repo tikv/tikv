@@ -14,6 +14,7 @@ portable = ["tikv/portable"]
 sse = ["tikv/sse"]
 mem-profiling = ["tikv/mem-profiling"]
 failpoints = ["tikv/failpoints"]
+<<<<<<< HEAD
 cloud-aws = ["encryption_export/cloud-aws"]
 cloud-gcp = ["encryption_export/cloud-gcp"]
 cloud-azure = ["encryption_export/cloud-azure"]
@@ -29,6 +30,12 @@ test-engines-rocksdb = [
 test-engines-panic = [
   "tikv/test-engines-panic",
 ]
+=======
+test-engine-kv-rocksdb = ["tikv/test-engine-kv-rocksdb"]
+test-engine-raft-raft-engine = ["tikv/test-engine-raft-raft-engine"]
+test-engines-rocksdb = ["tikv/test-engines-rocksdb"]
+test-engines-panic = ["tikv/test-engines-panic"]
+>>>>>>> 0e3806935c (*: fix compatibility to `raft-engine.spill-dir` (#17358))
 nortcheck = ["engine_rocks/nortcheck"]
 backup-stream-debug = ["backup-stream/backup-stream-debug"]
 
@@ -51,7 +58,6 @@ engine_traits = { workspace = true }
 error_code = { workspace = true }
 fail = "0.5"
 file_system = { workspace = true }
-fs2 = "0.4"
 futures = "0.3"
 grpcio = { workspace = true }
 grpcio-health = { workspace = true }
@@ -59,7 +65,10 @@ hex = "0.4"
 keys = { workspace = true }
 kvproto = { workspace = true }
 libc = "0.2"
-log = { version = "0.4", features = ["max_level_trace", "release_max_level_debug"] }
+log = { version = "0.4", features = [
+  "max_level_trace",
+  "release_max_level_debug",
+] }
 log_wrappers = { workspace = true }
 pd_client = { workspace = true }
 prometheus = { version = "0.13", features = ["nightly"] }
