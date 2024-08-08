@@ -65,10 +65,8 @@ impl Default for RangeCacheEngineConfig {
         Self {
             enabled: false,
             gc_interval: ReadableDuration(Duration::from_secs(180)),
-            load_evict_interval: ReadableDuration(Duration::from_secs(300)), /* Each load/evict
-                                                                              * operation should
-                                                                              * run within five
-                                                                              * minutes. */
+            // Each load/evict operation should run within five minutes.
+            load_evict_interval: ReadableDuration(Duration::from_secs(300)),
             soft_limit_threshold: None,
             hard_limit_threshold: None,
             expected_region_size: None,

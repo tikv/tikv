@@ -26,7 +26,7 @@ pub enum RegionEvent {
     Eviction {
         region: Region,
     },
-    // range eviction triggered by delte_range
+    // range eviction triggered by delete_range
     // we should evict all cache regions that overlaps with this range
     EvictByRange {
         range: CacheRange,

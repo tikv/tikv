@@ -271,11 +271,7 @@ impl RangeCacheWriteBatch {
         F1: FnOnce() -> usize,
         F2: FnOnce() -> RangeCacheWriteBatchEntry,
     {
-        if !matches!(
-            self.range_cache_status,
-            RangeCacheStatus::Cached | RangeCacheStatus::Loading
-        ) || self.currnet_region_evicted
-        {
+        if self.range_cache_status == RangeCacheStatus::NotInCache || self.currnet_region_evicted {
             return;
         }
 
@@ -301,12 +297,7 @@ impl RangeCacheWriteBatch {
             return;
         }
 
-        match self.range_cache_status {
-            RangeCacheStatus::Cached | RangeCacheStatus::Loading => {
-                self.buffer.push(entry());
-            }
-            RangeCacheStatus::NotInCache => {}
-        }
+        self.buffer.push(entry());
     }
 
     fn schedule_memory_check(&self) {

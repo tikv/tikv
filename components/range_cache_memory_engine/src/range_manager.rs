@@ -45,8 +45,7 @@ pub(crate) struct SnapshotList(pub(crate) BTreeMap<u64, u64>);
 impl SnapshotList {
     pub(crate) fn new_snapshot(&mut self, read_ts: u64) {
         // snapshot with this ts may be granted before
-        let count = self.0.get(&read_ts).unwrap_or(&0) + 1;
-        self.0.insert(read_ts, count);
+        *self.0.entry(read_ts).or_default() += 1;
     }
 
     pub(crate) fn remove_snapshot(&mut self, read_ts: u64) {
@@ -136,10 +135,11 @@ impl RangeMeta {
         self.state = new_state;
     }
 
-    pub(crate) fn mark_pending_evict(&mut self) {
+    pub(crate) fn mark_evict(&mut self, state: RegionState) {
         use RegionState::*;
-        assert!(matches!(self.state, Active | LoadingCanceled));
-        self.state = PendingEvict;
+        assert!(matches!(self.state, Loading | Active | LoadingCanceled));
+        assert!(matches!(state, PendingEvict | Evicting));
+        self.state = state;
         self.evict_start = Instant::now_coarse();
     }
 
@@ -340,7 +340,6 @@ impl RegionManager {
                     return None;
                 }
             }
-            cached_meta.state = ReadyToLoad;
         }
         Some(cached_meta.state)
     }
@@ -376,6 +375,7 @@ impl RegionManager {
                 || region_meta.region.get_region_epoch().version
                     >= region.get_region_epoch().version
             {
+                tikv_util::warn!("load region overlaps with existing region"; "region" => ?region, "exist_meta" => ?region_meta);
                 overlapped_region_state = Some(region_meta.state);
                 return false;
             }
@@ -400,6 +400,10 @@ impl RegionManager {
         let Some(meta) = self.regions.get_mut(&region_id) else {
             return Err(FailedReason::NotCached);
         };
+
+        if meta.state != RegionState::Active {
+            return Err(FailedReason::NotCached);
+        }
 
         if meta.region.get_region_epoch().version != region_epoch {
             return Err(FailedReason::EpochNotMatch);
@@ -469,7 +473,7 @@ impl RegionManager {
         }
         meta.region_snapshot_list.is_empty()
             && !meta.in_gc
-            && Self::overlaps_with_historical_regions(&meta.range, historical_regions)
+            && !Self::overlaps_with_historical_regions(&meta.range, historical_regions)
     }
 
     fn overlaps_with_historical_regions(
@@ -585,7 +589,12 @@ impl RegionManager {
     fn do_evict_region(&mut self, id: u64, evict_region: &Region) -> Option<Region> {
         let meta = self.regions.get_mut(&id).unwrap();
         let prev_state = meta.state;
-        assert!(is_region_overlap(&meta.region, evict_region));
+        assert!(
+            meta.range.overlaps(&CacheRange::from_region(evict_region)),
+            "meta: {:?}, evict_region: {:?}",
+            meta,
+            evict_region
+        );
         if prev_state == RegionState::Pending {
             let meta = self.remove_region(id);
             info!(
@@ -601,7 +610,7 @@ impl RegionManager {
         }
 
         if prev_state == RegionState::Active {
-            meta.mark_pending_evict();
+            meta.mark_evict(RegionState::PendingEvict);
         } else {
             meta.state = RegionState::LoadingCanceled;
         };
@@ -723,6 +732,13 @@ impl RegionManager {
         assert!(region_meta.state <= RegionState::Active);
         if region_meta.region.get_region_epoch().version != source_region.get_region_epoch().version
         {
+            // for pending regions, we keep regions that still fall in this range if epoch
+            // version changed.
+            assert_eq!(region_meta.state, RegionState::Pending);
+            assert!(
+                region_meta.region.get_region_epoch().version
+                    < source_region.get_region_epoch().version
+            );
             new_regions = new_regions
                 .iter()
                 .filter(|r| {
@@ -733,7 +749,10 @@ impl RegionManager {
                 })
                 .cloned()
                 .collect();
+            info!("[IME] handle split region met pending region epoch stale"; "cached" => ?region_meta, "split_source" => ?source_region, "cache_new_regions" => ?new_regions);
         }
+
+        info!("handle region split"; "region_id" => source_region.id, "meta" => ?region_meta, "new_regions" => ?new_regions);
 
         for r in new_regions {
             let meta = RangeMeta::dervie_from(r, &region_meta);
@@ -752,10 +771,6 @@ impl RegionManager {
     }
 }
 
-pub fn is_region_overlap(rg1: &Region, rg2: &Region) -> bool {
-    rg1.start_key < rg2.end_key && rg1.end_key > rg2.start_key
-}
-
 #[derive(Debug, PartialEq)]
 pub enum LoadFailedReason {
     Overlapped,
@@ -763,6 +778,7 @@ pub enum LoadFailedReason {
     Evicting,
 }
 
+#[derive(PartialEq)]
 pub enum RangeCacheStatus {
     NotInCache,
     Cached,
@@ -774,8 +790,9 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use engine_traits::{CacheRange, FailedReason};
+    use pd_client::Key;
 
-    use super::RegionManager;
+    use super::*;
     use crate::{engine::tests::new_region, range_manager::LoadFailedReason};
 
     #[test]
@@ -804,21 +821,18 @@ mod tests {
         }
         range_mgr.split_region(&r1, vec![r_left.clone(), r_evict.clone(), r_right.clone()]);
         range_mgr.evict_region(&r_evict);
+        let range1 = CacheRange::from_region(&r1);
         let meta1 = range_mgr
             .historical_regions
-            .get(&CacheRange::from_region(&r1))
+            .get(&KeyAndVersion(range1.end.clone(), 0))
             .unwrap();
-        assert!(
-            range_mgr
-                .regions_being_deleted
-                .get(&CacheRange::from_region(&r_evict))
-                .is_some()
+        assert_eq!(
+            range_mgr.regions.get(&r_evict.id).unwrap().state,
+            RegionState::PendingEvict,
         );
-        assert!(
-            range_mgr
-                .regions_by_range
-                .get(&CacheRange::from_region(&r1))
-                .is_none()
+        assert_eq!(
+            range_mgr.regions_by_range.get(&range1.end).unwrap(),
+            &r_right.id
         );
         let meta2 = range_mgr.regions.get(&r_left.id).unwrap();
         let meta3 = range_mgr.regions.get(&r_right.id).unwrap();
@@ -827,25 +841,24 @@ mod tests {
         // evict a range with accurate match
         range_mgr.region_snapshot(r_left.id, 2, 10).unwrap();
         range_mgr.evict_region(&r_left);
+        let range_left = CacheRange::from_region(&r_left);
         assert!(
             range_mgr
                 .historical_regions
-                .get(&CacheRange::from_region(&r_left))
+                .get(&KeyAndVersion(range_left.end.clone(), 2))
                 .is_some()
         );
-        assert!(
-            range_mgr
-                .regions_being_deleted
-                .get(&CacheRange::from_region(&r_left))
-                .is_some()
+        assert_eq!(
+            range_mgr.regions.get(&r_left.id).unwrap().state,
+            RegionState::PendingEvict,
         );
-        assert!(range_mgr.regions.get(&r_left.id).is_none());
 
         assert!(range_mgr.evict_region(&r_right).is_empty());
+        let range_right = CacheRange::from_region(&r_right);
         assert!(
             range_mgr
                 .historical_regions
-                .get(&CacheRange::from_region(&r_right))
+                .get(&KeyAndVersion(range_right.end.clone(), 2))
                 .is_none()
         );
     }
@@ -854,26 +867,26 @@ mod tests {
     fn test_range_load() {
         let mut range_mgr = RegionManager::default();
         let r1 = new_region(1, b"k00", b"k10");
-        let r2 = new_region(2, b"k10", b"k20");
+        let mut r2 = new_region(2, b"k10", b"k20");
+        r2.mut_region_epoch().version = 2;
         let r3 = new_region(3, b"k20", b"k30");
         let r4 = new_region(4, b"k25", b"k35");
 
         range_mgr.new_region(r1.clone());
+        range_mgr.load_region(r2.clone());
         range_mgr.new_region(r3.clone());
         range_mgr.evict_region(&r1);
-
-        let mut gced = BTreeMap::default();
-        gced.insert(CacheRange::from_region(&r2), r2.id);
-        range_mgr.set_regions_in_gc(gced);
 
         assert_eq!(
             range_mgr.load_region(r1).unwrap_err(),
             LoadFailedReason::Evicting
         );
 
+        // load r2 with an outdated epoch.
+        r2.mut_region_epoch().version = 1;
         assert_eq!(
             range_mgr.load_region(r2).unwrap_err(),
-            LoadFailedReason::InGc
+            LoadFailedReason::PendingRange,
         );
 
         assert_eq!(
@@ -886,14 +899,10 @@ mod tests {
     fn test_range_load_overlapped() {
         let mut range_mgr = RegionManager::default();
         let r1 = new_region(1, b"k00", b"k10");
-        let r2 = new_region(2, b"k20", b"k30");
+        // let r2 = new_region(2, b"k20", b"k30");
         let r3 = new_region(3, b"k40", b"k50");
         range_mgr.new_region(r1.clone());
         range_mgr.evict_region(&r1);
-
-        let mut gced = BTreeMap::default();
-        gced.insert(CacheRange::from_region(&r2), r2.id);
-        range_mgr.set_regions_in_gc(gced);
 
         range_mgr.load_region(r3).unwrap();
 
@@ -906,17 +915,6 @@ mod tests {
         assert_eq!(
             range_mgr.load_region(r).unwrap_err(),
             LoadFailedReason::Evicting
-        );
-
-        let r = new_region(4, b"k15", b"k25");
-        assert_eq!(
-            range_mgr.load_region(r).unwrap_err(),
-            LoadFailedReason::InGc
-        );
-        let r = new_region(4, b"k25", b"k35");
-        assert_eq!(
-            range_mgr.load_region(r).unwrap_err(),
-            LoadFailedReason::InGc
         );
 
         let r = new_region(4, b"k35", b"k45");

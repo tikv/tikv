@@ -703,6 +703,7 @@ mod tests {
             encode_key, encode_seek_key, InternalBytes, ValueType,
         },
         perf_context::PERF_CONTEXT,
+        range_manager::RegionState,
         statistics::Tickers,
         RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
         RangeCacheWriteBatch,
@@ -1769,21 +1770,21 @@ mod tests {
     }
 
     fn verify_evict_region_deleted(engine: &RangeCacheMemoryEngine, region: &Region) {
-        let mut wait = 0;
-        while wait < 10 {
-            wait += 1;
-            if !engine
-                .core
-                .read()
-                .range_manager()
-                .regions_being_deleted
-                .is_empty()
-            {
-                std::thread::sleep(Duration::from_millis(200));
-            } else {
-                break;
-            }
-        }
+        test_util::eventually(
+            Duration::from_millis(100),
+            Duration::from_millis(2000),
+            || {
+                let count = engine
+                    .core
+                    .read()
+                    .range_manager()
+                    .regions()
+                    .values()
+                    .filter(|m| m.get_state() >= RegionState::LoadingCanceled)
+                    .count();
+                count == 0
+            },
+        );
         let write_handle = engine.core.read().engine.cf_handle("write");
         let start_key = encode_seek_key(&region.start_key, u64::MAX);
         let mut iter = write_handle.iterator();
@@ -1949,28 +1950,30 @@ mod tests {
         // todo(SpadeA): memory limiter
         {
             // evict_range is not eligible for delete
-            assert!(
+            assert_eq!(
                 engine
                     .core
                     .read()
                     .range_manager()
-                    .regions_being_deleted
-                    .get(&evict_range)
-                    .is_some()
+                    .region_meta(evict_region.id)
+                    .unwrap()
+                    .get_state(),
+                RegionState::PendingEvict
             );
         }
 
         drop(s1);
         {
             // evict_range is still not eligible for delete
-            assert!(
+            assert_eq!(
                 engine
                     .core
                     .read()
                     .range_manager()
-                    .regions_being_deleted
-                    .get(&evict_range)
-                    .is_some()
+                    .region_meta(evict_region.id)
+                    .unwrap()
+                    .get_state(),
+                RegionState::PendingEvict
             );
         }
         drop(s2);

@@ -250,7 +250,6 @@ pub struct RangeCacheMemoryEngine {
 
     // `write_batch_id_allocator` is used to allocate id for each write batch
     write_batch_id_allocator: Arc<AtomicU64>,
-    region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
 }
 
 impl RangeCacheMemoryEngine {
@@ -281,7 +280,7 @@ impl RangeCacheMemoryEngine {
             config.value().load_evict_interval.0,
             config.value().expected_region_size(),
             memory_controller.clone(),
-            region_info_provider.clone(),
+            region_info_provider,
         ));
 
         Self {
@@ -293,7 +292,6 @@ impl RangeCacheMemoryEngine {
             config,
             lock_modification_bytes: Arc::default(),
             write_batch_id_allocator: Arc::default(),
-            region_info_provider,
         }
     }
 
@@ -344,9 +342,9 @@ impl RangeCacheMemoryEngine {
             return RangeCacheStatus::NotInCache;
         };
 
-        if region_state == RegionState::ReadyToLoad {
+        if region_state == RegionState::Pending {
             let rocks_snap = Arc::new(self.rocks_engine.as_ref().unwrap().snapshot(None));
-            range_manager.update_region_state(region.id, RegionState::Loading);
+            range_manager.update_region_state(region.id, RegionState::ReadyToLoad);
             info!(
                 "range to load";
                 "region" => ?region,
@@ -363,16 +361,19 @@ impl RangeCacheMemoryEngine {
                 );
                 assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
             }
-            region_state = RegionState::Loading;
+            region_state = RegionState::ReadyToLoad;
         }
 
         let mut result = RangeCacheStatus::NotInCache;
-        if region_state == RegionState::Loading || region_state == RegionState::Active {
+        if region_state == RegionState::ReadyToLoad
+            || region_state == RegionState::Loading
+            || region_state == RegionState::Active
+        {
             range_manager.record_in_region_being_written(write_batch_id, range, region.id);
-            if region_state == RegionState::Loading {
-                result = RangeCacheStatus::Loading;
-            } else {
+            if region_state == RegionState::Active {
                 result = RangeCacheStatus::Cached;
+            } else {
+                result = RangeCacheStatus::Loading;
             }
         }
 
@@ -474,16 +475,17 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
                     .split_region(&source, new_regions);
             }
             RegionEvent::EvictByRange { range } => {
-                // TOOD: handle overlapped region locally after we change to state machine.
-                if let Some(provider) = &self.region_info_provider {
-                    let regions = provider
-                        .get_regions_in_range(&range.start, &range.end)
-                        .unwrap();
-                    for r in regions {
-                        self.evict_region(&r);
-                    }
-                } else {
-                    unimplemented!("Does not support currently");
+                let mut regions = vec![];
+                self.core()
+                    .read()
+                    .range_manager()
+                    .iter_overlapped_regions(&range, |meta| {
+                        assert!(meta.get_range().overlaps(&range));
+                        regions.push(meta.region().clone());
+                        true
+                    });
+                for r in regions {
+                    self.evict_region(&r);
                 }
             }
         }
@@ -512,6 +514,7 @@ pub mod tests {
     use crate::{
         keys::{construct_key, construct_user_key, encode_key},
         memory_controller::MemoryController,
+        range_manager::{RangeMeta, RegionManager, RegionState},
         InternalBytes, RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
         ValueType,
     };
@@ -524,6 +527,9 @@ pub mod tests {
         region
     }
 
+    fn count_region(mgr: &RegionManager, mut f: impl FnMut(&RangeMeta) -> bool) -> usize {
+        mgr.regions().values().filter(|m| f(m)).count()
+    }
     #[test]
     fn test_region_overlap_with_outdated_epoch() {
         let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
@@ -535,19 +541,11 @@ pub mod tests {
         let mut region2 = new_region(1, b"k1", b"k5");
         region2.mut_region_epoch().version = 2;
         engine.prepare_for_apply(1, CacheRange::from_region(&region2), &region2);
-        assert!(
-            engine
-                .core
-                .read()
-                .range_manager()
-                .pending_regions
-                .is_empty()
-                && engine
-                    .core
-                    .read()
-                    .range_manager()
-                    .pending_regions_loading_data
-                    .is_empty()
+        assert_eq!(
+            count_region(engine.core.read().range_manager(), |m| {
+                m.get_state() <= RegionState::Loading
+            }),
+            0
         );
 
         let region1 = new_region(1, b"k1", b"k3");
@@ -556,19 +554,11 @@ pub mod tests {
         let mut region2 = new_region(1, b"k2", b"k5");
         region2.mut_region_epoch().version = 2;
         engine.prepare_for_apply(1, CacheRange::from_region(&region2), &region2);
-        assert!(
-            engine
-                .core
-                .read()
-                .range_manager()
-                .pending_regions
-                .is_empty()
-                && engine
-                    .core
-                    .read()
-                    .range_manager()
-                    .pending_regions_loading_data
-                    .is_empty()
+        assert_eq!(
+            count_region(engine.core.read().range_manager(), |m| {
+                m.get_state() <= RegionState::Loading
+            }),
+            0
         );
     }
 

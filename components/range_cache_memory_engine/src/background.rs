@@ -361,7 +361,7 @@ impl BackgroundRunnerCore {
         regions
     }
 
-    fn gc_region(
+    pub(crate) fn gc_region(
         &self,
         region: &Region,
         safe_point: u64,
@@ -504,14 +504,15 @@ impl BackgroundRunnerCore {
         let mut on_region_meta = |meta: &mut RangeMeta| {
             assert!(
                 meta.get_state() == RegionState::Loading
-                    || meta.get_state() == RegionState::LoadingCanceled
+                    || meta.get_state() == RegionState::LoadingCanceled,
+                "region meta: {:?}",
+                meta,
             );
             if meta.get_state() == RegionState::Loading {
                 meta.set_state(RegionState::Active);
             } else {
                 assert_eq!(meta.get_state(), RegionState::LoadingCanceled);
-                meta.mark_pending_evict();
-                meta.set_state(RegionState::Evicting);
+                meta.mark_evict(RegionState::Evicting);
                 remove_regions.push(meta.region().clone());
             }
         };
@@ -563,8 +564,7 @@ impl BackgroundRunnerCore {
                 meta.get_state() == RegionState::Loading
                     || meta.get_state() == RegionState::LoadingCanceled
             );
-            meta.mark_pending_evict();
-            meta.set_state(RegionState::Evicting);
+            meta.mark_evict(RegionState::Evicting);
             remove_regions.push(meta.region().clone());
         };
 
@@ -901,8 +901,11 @@ impl Runnable for BackgroundRunner {
                     let mut is_canceled = false;
                     let region_range = CacheRange::from_region(&region);
                     let skiplist_engine = {
-                        let engine = core.engine.read();
-                        let region_meta = engine.range_manager().region_meta(region.id).unwrap();
+                        let mut engine = core.engine.write();
+                        let region_meta = engine
+                            .mut_range_manager()
+                            .mut_region_meta(region.id)
+                            .unwrap();
                         // if loading is canceled, we skip the batch load.
                         // NOTE: here we don't check the region epoch version change,
                         // We will handle possible region split and partial cancelation
@@ -910,6 +913,8 @@ impl Runnable for BackgroundRunner {
                         if region_meta.get_state() != RegionState::ReadyToLoad {
                             assert_eq!(region_meta.get_state(), RegionState::LoadingCanceled);
                             is_canceled = true;
+                        } else {
+                            region_meta.set_state(RegionState::Loading);
                         }
 
                         engine.engine.clone()
@@ -1822,13 +1827,13 @@ pub mod tests {
         iter_opts.set_lower_bound(&range.start, 0);
         iter_opts.set_upper_bound(&range.end, 0);
 
-        let (worker, _) = BackgroundRunner::new(
+        let (worker, scheduler) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
         );
-        worker.core.gc_region(1, &range, 40, 100);
+        worker.core.gc_region(&region, 40, 100, &scheduler);
 
         let mut iter = snap.iterator_opt("write", iter_opts).unwrap();
         iter.seek_to_first().unwrap();
@@ -1897,7 +1902,7 @@ pub mod tests {
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
 
-        let (worker, _) = BackgroundRunner::new(
+        let (worker, scheduler) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
@@ -1905,22 +1910,22 @@ pub mod tests {
         );
 
         // gc should not hanlde keys with larger seqno than oldest seqno
-        worker.core.gc_region(1, &range, 13, 10);
+        worker.core.gc_region(&region, 13, 10, &scheduler);
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
 
         // gc will not remove the latest mvcc put below safe point
-        worker.core.gc_region(1, &range, 14, 100);
+        worker.core.gc_region(&region, 14, 100, &scheduler);
         assert_eq!(2, element_count(&default));
         assert_eq!(2, element_count(&write));
 
-        worker.core.gc_region(1, &range, 16, 100);
+        worker.core.gc_region(&region, 16, 100, &scheduler);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
 
         // rollback will not make the first older version be filtered
         rollback_data(b"key1", 17, 16, &write, memory_controller.clone());
-        worker.core.gc_region(1, &range, 17, 100);
+        worker.core.gc_region(&region, 17, 100, &scheduler);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
         let key = encode_key(b"key1", TimeStamp::new(15));
@@ -1932,7 +1937,7 @@ pub mod tests {
         // unlike in WriteCompactionFilter, the latest mvcc delete below safe point will
         // be filtered
         delete_data(b"key1", 19, 18, &write, memory_controller.clone());
-        worker.core.gc_region(1, &range, 19, 100);
+        worker.core.gc_region(&region, 19, 100, &scheduler);
         assert_eq!(0, element_count(&write));
         assert_eq!(0, element_count(&default));
     }
@@ -2055,14 +2060,13 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let (worker, _) = BackgroundRunner::new(
+        let (worker, scheduler) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
         );
-        let range1 = CacheRange::from_region(&region1);
-        let filter = worker.core.gc_region(1, &range1, 100, 100);
+        let filter = worker.core.gc_region(&region1, 100, 100, &scheduler);
         assert_eq!(2, filter.filtered);
 
         verify(b"k05", 15, 18, &write);
@@ -2077,8 +2081,7 @@ pub mod tests {
             None,
             engine.expected_region_size(),
         );
-        let range2 = CacheRange::from_region(&region2);
-        worker.core.gc_region(2, &range2, 100, 100);
+        worker.core.gc_region(&region2, 100, 100, &scheduler);
         assert_eq!(2, filter.filtered);
 
         verify(b"k35", 15, 20, &write);
@@ -2120,15 +2123,14 @@ pub mod tests {
         assert_eq!(1, element_count(&default));
         assert_eq!(2, element_count(&write));
 
-        let (worker, _) = BackgroundRunner::new(
+        let (worker, scheduler) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
         );
 
-        let range = CacheRange::from_region(&region);
-        let filter = worker.core.gc_region(1, &range, 20, 200);
+        let filter = worker.core.gc_region(&region, 20, 200, &scheduler);
         assert_eq!(1, filter.filtered);
         assert_eq!(1, element_count(&default));
         assert_eq!(1, element_count(&write));
@@ -2219,7 +2221,7 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let (worker, _) = BackgroundRunner::new(
+        let (worker, scheduler) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller,
             None,
@@ -2231,25 +2233,25 @@ pub mod tests {
         let s3 = engine.snapshot(1, 0, range.clone(), 20, u64::MAX);
 
         // nothing will be removed due to snapshot 5
-        let filter = worker.core.gc_region(1, &range, 30, 100);
+        let filter = worker.core.gc_region(&region, 30, 100, &scheduler);
         assert_eq!(0, filter.filtered);
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
         drop(s1);
-        let filter = worker.core.gc_region(1, &range, 30, 100);
+        let filter = worker.core.gc_region(&region, 30, 100, &scheduler);
         assert_eq!(1, filter.filtered);
         assert_eq!(5, element_count(&default));
         assert_eq!(5, element_count(&write));
 
         drop(s2);
-        let filter = worker.core.gc_region(1, &range, 30, 100);
+        let filter = worker.core.gc_region(&region, 30, 100, &scheduler);
         assert_eq!(1, filter.filtered);
         assert_eq!(4, element_count(&default));
         assert_eq!(4, element_count(&write));
 
         drop(s3);
-        let filter = worker.core.gc_region(1, &range, 30, 100);
+        let filter = worker.core.gc_region(&region, 30, 100, &scheduler);
         assert_eq!(1, filter.filtered);
         assert_eq!(3, element_count(&default));
         assert_eq!(3, element_count(&write));
@@ -2364,7 +2366,7 @@ pub mod tests {
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
-        let (worker, _) = BackgroundRunner::new(
+        let (worker, scheduler) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller,
             None,
@@ -2382,11 +2384,7 @@ pub mod tests {
         assert_eq!(regions.len(), 2);
         let mut filter = FilterMetrics::default();
         for r in &regions {
-            filter.merge(
-                &worker
-                    .core
-                    .gc_region(r.id, &CacheRange::from_region(r), 50, 1000),
-            );
+            filter.merge(&worker.core.gc_region(r, 50, 1000, &scheduler));
         }
         assert_eq!(2, filter.filtered);
         assert_eq!(4, element_count(&default));
@@ -2395,11 +2393,7 @@ pub mod tests {
         drop(snap1);
         let mut filter = FilterMetrics::default();
         for r in &regions {
-            filter.merge(
-                &worker
-                    .core
-                    .gc_region(r.id, &CacheRange::from_region(r), 50, 1000),
-            );
+            filter.merge(&worker.core.gc_region(r, 50, 1000, &scheduler));
         }
         assert_eq!(0, filter.filtered);
         assert_eq!(4, element_count(&default));
@@ -2408,11 +2402,7 @@ pub mod tests {
         drop(snap2);
         let mut filter = FilterMetrics::default();
         for r in &regions {
-            filter.merge(
-                &worker
-                    .core
-                    .gc_region(r.id, &CacheRange::from_region(r), 50, 1000),
-            );
+            filter.merge(&worker.core.gc_region(r, 50, 1000, &scheduler));
         }
         assert_eq!(2, filter.filtered);
         assert_eq!(2, element_count(&default));
@@ -2447,11 +2437,11 @@ pub mod tests {
         {
             let mut core = engine.core.write();
             core.mut_range_manager()
-                .pending_regions
-                .push(region1.clone());
+                .load_region(region1.clone())
+                .unwrap();
             core.mut_range_manager()
-                .pending_regions
-                .push(region2.clone());
+                .load_region(region2.clone())
+                .unwrap();
         }
         engine.prepare_for_apply(1, CacheRange::from_region(&region1), &region1);
         engine.prepare_for_apply(1, CacheRange::from_region(&region2), &region2);
@@ -2537,14 +2527,14 @@ pub mod tests {
             None,
             engine.expected_region_size(),
         );
-        let regions = runner.core.regions_for_gc().unwrap();
+        let regions = runner.core.regions_for_gc();
         assert_eq!(2, regions.len());
 
         // until the previous gc finished, node ranges will be returned
-        assert!(runner.core.regions_for_gc().is_none());
-        runner.core.on_gc_finished(regions);
+        assert!(runner.core.regions_for_gc().is_empty());
+        runner.core.on_gc_finished();
 
-        let regions = runner.core.regions_for_gc().unwrap();
+        let regions = runner.core.regions_for_gc();
         assert_eq!(2, regions.len());
     }
 
@@ -2696,22 +2686,17 @@ pub mod tests {
         }
 
         // ensure all ranges are finshed
-        {
-            let mut count = 0;
-            while count < 20 {
-                {
-                    let core = engine.core.read();
-                    let range_manager = core.range_manager();
-                    if range_manager.pending_regions.is_empty()
-                        && range_manager.pending_regions_loading_data.is_empty()
-                    {
-                        break;
-                    }
-                }
-                std::thread::sleep(Duration::from_millis(100));
-                count += 1;
-            }
-        }
+        test_util::eventually(Duration::from_millis(100), Duration::from_secs(2), || {
+            let count = engine
+                .core
+                .read()
+                .range_manager()
+                .regions()
+                .values()
+                .filter(|m| m.get_state() <= RegionState::Loading)
+                .count();
+            count == 0
+        });
 
         let verify = |region: &Region, exist, expect_count| {
             if exist {
@@ -2802,22 +2787,17 @@ pub mod tests {
         engine.prepare_for_apply(1, CacheRange::from_region(&region2), &region2);
 
         // ensure all ranges are finshed
-        {
-            let mut count = 0;
-            while count < 20 {
-                {
-                    let core = engine.core.read();
-                    let range_manager = core.range_manager();
-                    if range_manager.pending_regions.is_empty()
-                        && range_manager.pending_regions_loading_data.is_empty()
-                    {
-                        break;
-                    }
-                }
-                std::thread::sleep(Duration::from_millis(100));
-                count += 1;
-            }
-        }
+        test_util::eventually(Duration::from_millis(100), Duration::from_secs(2), || {
+            let count = engine
+                .core
+                .read()
+                .range_manager()
+                .regions()
+                .values()
+                .filter(|m| m.get_state() <= RegionState::Loading)
+                .count();
+            count == 0
+        });
 
         let verify = |r: &Region, exist, expect_count| {
             if exist {

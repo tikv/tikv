@@ -1511,9 +1511,9 @@ where
 
         let (modified_region, new_regions, mut pending_handle_ssts) = match &exec_result {
             ApplyResult::Res(e) => match e {
-                ExecResult::SplitRegion {
-                    derived, regions, ..
-                } => (Some(derived.clone()), regions.clone(), None),
+                ExecResult::SplitRegion { regions, .. } => {
+                    (Some(self.region.clone()), regions.clone(), None)
+                }
                 ExecResult::PrepareMerge { region, .. } => (Some(region.clone()), vec![], None),
                 ExecResult::CommitMerge { region, .. } => (Some(region.clone()), vec![], None),
                 ExecResult::RollbackMerge { region, .. } => (Some(region.clone()), vec![], None),
