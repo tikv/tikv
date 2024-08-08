@@ -652,9 +652,7 @@ impl RegionCollector {
             .into_iter()
             .filter(|(_, s)| {
                 s.cop_detail.next + s.cop_detail.prev >= max_next_prev / 10
-                    && ((s.cop_detail.next + s.cop_detail.prev) / s.cop_detail.processed_keys)
-                        as f64
-                        >= 2.5
+                    && (s.cop_detail.next + s.cop_detail.prev) / s.cop_detail.processed_keys >= 2
             })
             .collect_vec();
 
