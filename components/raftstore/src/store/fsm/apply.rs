@@ -70,7 +70,7 @@ use tikv_util::{
     Either, MustConsumeVec,
 };
 use time::Timespec;
-use tracker::GLOBAL_TRACKERS;
+use tracker::{TrackerTokenArray, GLOBAL_TRACKERS};
 use uuid::Builder as UuidBuilder;
 
 use self::memtrace::*;
@@ -644,6 +644,15 @@ where
         } = mem::replace(&mut self.applied_batch, ApplyCallbackBatch::new());
         // Call it before invoking callback for preventing Commit is executed before
         // Prewrite is observed.
+        for (cb, _) in cb_batch.iter() {
+            debug!("raft log is applied to the kv db";
+                "req_info" => TrackerTokenArray::new(cb.write_trackers()
+                    .into_iter()
+                    .filter_map(|time_tracker| time_tracker.as_tracker_token())
+                    .collect::<Vec<_>>().as_slice()),
+                "cmd_batch" => ?cmd_batch,
+            );
+        }
         self.host
             .on_flush_applied_cmd_batch(batch_max_level, cmd_batch, &self.engine);
         // Invoke callbacks
