@@ -281,10 +281,11 @@ pub fn path_in_diff_mount_point(_path1: impl AsRef<Path>, _path2: impl AsRef<Pat
     false
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_path_in_diff_mount_point() {
         let (empty_path1, path2) = ("", "/");
@@ -304,6 +305,7 @@ mod tests {
         assert_eq!(result, false);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_get_path_mount_point() {
         let mounts = "
@@ -347,5 +349,15 @@ mqueue /dev/mqueue mqueue rw,relatime 0 0
         check("/data/nvme0n1", Some("/dev/vda3 / ext4"));
         check("/home", Some("/dev/vda3 / ext4"));
         check("unknown/path", None);
+    }
+
+    #[test]
+    fn test_get_disk_space_stats() {
+        let (capacity, available) = disk::get_disk_space_stats("./").unwrap();
+        assert!(capacity > 0);
+        assert!(available > 0);
+        assert!(capacity >= available);
+
+        disk::get_disk_space_stats("/non-exist-path").unwrap_err();
     }
 }
