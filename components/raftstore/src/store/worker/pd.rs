@@ -44,7 +44,7 @@ use tikv_util::{
     box_err, debug, error, info,
     metrics::ThreadInfoStatistics,
     store::QueryStats,
-    sys::{thread::StdThreadBuildWrapper, SysQuota},
+    sys::{disk::get_disk_space_stats, thread::StdThreadBuildWrapper, SysQuota},
     thd_name,
     time::{Instant as TiInstant, UnixSecs},
     timer::GLOBAL_TIMER_HANDLE,
@@ -2433,7 +2433,7 @@ fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
         return Some((engine_size.capacity, engine_size.used, engine_size.avail));
     }
     let store_info = store_info.unwrap();
-    let disk_stats = match fs2::statvfs(store_info.kv_engine.path()) {
+    let (disk_cap, disk_avail) = match get_disk_space_stats(store_info.kv_engine.path()) {
         Err(e) => {
             error!(
                 "get disk stat for rocksdb failed";
@@ -2442,9 +2442,8 @@ fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
             );
             return None;
         }
-        Ok(stats) => stats,
+        Ok((total_size, available_size)) => (total_size, available_size),
     };
-    let disk_cap = disk_stats.total_space();
     let capacity = if store_info.capacity == 0 || disk_cap < store_info.capacity {
         disk_cap
     } else {
@@ -2468,7 +2467,7 @@ fn collect_engine_size<EK: KvEngine, ER: RaftEngine>(
     let mut available = capacity.checked_sub(used_size).unwrap_or_default();
     // We only care about rocksdb SST file size, so we should check disk available
     // here.
-    available = cmp::min(available, disk_stats.available_space());
+    available = cmp::min(available, disk_avail);
     Some((capacity, used_size, available))
 }
 
