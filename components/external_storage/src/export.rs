@@ -1,12 +1,13 @@
 // Copyright 2021 TiKV Project Authors. Licensed under Apache-2.0.
 
-use std::{io, path::Path, sync::Arc};
+use std::{io, path::Path, pin::Pin, result::Result, sync::Arc};
 
 use async_trait::async_trait;
 pub use aws::{Config as S3Config, S3Storage};
 pub use azure::{AzureStorage, Config as AzureConfig};
-use cloud::blob::{BlobStorage, PutResource};
+use cloud::blob::{BlobObject, BlobStorage, IterableStorage, PutResource};
 use encryption::DataKeyManager;
+use futures::prelude::Stream;
 use gcp::GcsStorage;
 use kvproto::brpb::{
     AzureBlobStorage, Gcs, Noop, StorageBackend, StorageBackend_oneof_backend as Backend, S3,
@@ -19,6 +20,13 @@ use crate::{
     NoopStorage, RestoreConfig, UnpinReader,
 };
 
+/// An interface that supports more operations than `ExternalStorage`.
+/// Some of operations may not be required by all users. Using a thiner
+/// interface will make them easier to be tested.
+pub trait IterableExternalStorage: ExternalStorage + IterableStorage {}
+
+impl<T: ExternalStorage + IterableStorage> IterableExternalStorage for T {}
+
 pub fn create_storage(
     storage_backend: &StorageBackend,
     config: BackendConfig,
@@ -28,6 +36,31 @@ pub fn create_storage(
     } else {
         Err(bad_storage_backend(storage_backend))
     }
+}
+
+/// Create an full featured storage.
+/// If the `StorageBackend` provided isn't full-featured, will return a
+/// [`io::ErrorKind::NotFound`].
+pub fn create_iterable_storage(
+    storage_backend: &StorageBackend,
+    config: BackendConfig,
+) -> io::Result<Box<dyn IterableExternalStorage>> {
+    if let Some(backend) = &storage_backend.backend {
+        create_iterable_backend(backend, config)
+    } else {
+        Err(bad_storage_backend(storage_backend))
+    }
+}
+
+fn not_iterable(backend: Backend) -> io::Error {
+    let storage_backend = StorageBackend {
+        backend: Some(backend),
+        ..Default::default()
+    };
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("storage backend isn't full featured {:?}", storage_backend),
+    )
 }
 
 fn bad_storage_backend(storage_backend: &StorageBackend) -> io::Error {
@@ -47,6 +80,31 @@ fn bad_backend(backend: Backend) -> io::Error {
 
 fn blob_store<Blob: BlobStorage>(store: Blob) -> Box<dyn ExternalStorage> {
     Box::new(BlobStore::new(store)) as Box<dyn ExternalStorage>
+}
+
+fn create_iterable_backend(
+    backend: &Backend,
+    backend_config: BackendConfig,
+) -> io::Result<Box<dyn IterableExternalStorage>> {
+    let start = Instant::now();
+    let storage: Box<dyn IterableExternalStorage> = match backend {
+        Backend::S3(config) => {
+            let mut s = S3Storage::from_input(config.clone())?;
+            s.set_multi_part_size(backend_config.s3_multi_part_size);
+            Box::new(BlobStore::new(s)) as _
+        }
+        Backend::Gcs(config) => {
+            Box::new(BlobStore::new(GcsStorage::from_input(config.clone())?)) as _
+        }
+        Backend::Local(config) => {
+            let p = Path::new(&config.path);
+            Box::new(LocalStorage::new(p)?) as _
+        }
+        #[allow(unreachable_patterns)]
+        _ => return Err(not_iterable(backend.clone())),
+    };
+    record_storage_create(start, &*storage);
+    Ok(storage)
 }
 
 fn create_backend(
@@ -136,6 +194,15 @@ impl<Blob: BlobStorage> std::ops::Deref for BlobStore<Blob> {
     }
 }
 
+impl<Blob: BlobStorage + IterableStorage> IterableStorage for BlobStore<Blob> {
+    fn iter_prefix(
+        &self,
+        prefix: &str,
+    ) -> Pin<Box<dyn Stream<Item = Result<BlobObject, io::Error>> + '_>> {
+        self.0.iter_prefix(prefix)
+    }
+}
+
 pub struct EncryptedExternalStorage<S> {
     pub key_manager: Arc<DataKeyManager>,
     pub storage: S,
@@ -149,7 +216,12 @@ impl<S: ExternalStorage> ExternalStorage for EncryptedExternalStorage<S> {
     fn url(&self) -> io::Result<url::Url> {
         self.storage.url()
     }
-    async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()> {
+    async fn write(
+        &self,
+        name: &str,
+        reader: UnpinReader<'_>,
+        content_length: u64,
+    ) -> io::Result<()> {
         self.storage.write(name, reader, content_length).await
     }
     fn read(&self, name: &str) -> ExternalData<'_> {
@@ -206,7 +278,12 @@ impl<Blob: BlobStorage> ExternalStorage for BlobStore<Blob> {
     fn url(&self) -> io::Result<url::Url> {
         (**self).config().url()
     }
-    async fn write(&self, name: &str, reader: UnpinReader, content_length: u64) -> io::Result<()> {
+    async fn write(
+        &self,
+        name: &str,
+        reader: UnpinReader<'_>,
+        content_length: u64,
+    ) -> io::Result<()> {
         (**self)
             .put(name, PutResource(reader.0), content_length)
             .await
