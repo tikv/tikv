@@ -671,9 +671,9 @@ mod tests {
         raw::DBStatisticsTickerType, util::new_engine_opt, RocksDbOptions, RocksStatistics,
     };
     use engine_traits::{
-        CacheRange, FailedReason, IterMetricsCollector, IterOptions, Iterable, Iterator,
-        MetricsExt, Mutable, Peekable, RangeCacheEngine, ReadOptions, WriteBatch, WriteBatchExt,
-        CF_DEFAULT, CF_LOCK, CF_WRITE,
+        CacheRange, EvictReason, FailedReason, IterMetricsCollector, IterOptions, Iterable,
+        Iterator, MetricsExt, Mutable, Peekable, RangeCacheEngine, ReadOptions, WriteBatch,
+        WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE,
     };
     use tempfile::Builder;
     use tikv_util::config::VersionTrack;
@@ -1798,7 +1798,7 @@ mod tests {
             }
         }
 
-        engine.evict_range(&evict_range);
+        engine.evict_range(&evict_range, EvictReason::AutoEvict);
         assert_eq!(
             engine.snapshot(range.clone(), 10, 200).unwrap_err(),
             FailedReason::NotCached
@@ -1863,7 +1863,7 @@ mod tests {
 
         let s1 = engine.snapshot(range.clone(), 10, 10);
         let s2 = engine.snapshot(range, 20, 20);
-        engine.evict_range(&evict_range);
+        engine.evict_range(&evict_range, EvictReason::AutoEvict);
         let range_left = CacheRange::new(construct_user_key(0), construct_user_key(10));
         let s3 = engine.snapshot(range_left, 20, 20).unwrap();
         let range_right = CacheRange::new(construct_user_key(20), construct_user_key(30));
@@ -1871,7 +1871,7 @@ mod tests {
 
         drop(s3);
         let range_left_eviction = CacheRange::new(construct_user_key(0), construct_user_key(5));
-        engine.evict_range(&range_left_eviction);
+        engine.evict_range(&range_left_eviction, EvictReason::AutoEvict);
 
         // todo(SpadeA): memory limiter
         {
