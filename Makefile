@@ -193,13 +193,21 @@ endif
 build:
 	PROXY_ENABLE_FEATURES="${ENABLE_FEATURES}" ./proxy_scripts/build.sh
 
+# Do not call make build which could duplicate ENABLE_FEATURES
+ifeq ($(PROXY_FRAME_POINTER),1)
+debug: ENABLE_FEATURES += pprof-fp
+endif
 debug: export PROXY_PROFILE=debug
 debug:
-	make build
+	PROXY_ENABLE_FEATURES="${ENABLE_FEATURES}" ./proxy_scripts/build.sh
 
+
+ifeq ($(PROXY_FRAME_POINTER),1)
+release: ENABLE_FEATURES += pprof-fp
+endif
 release: export PROXY_PROFILE=release
 release:
-	make build
+	PROXY_ENABLE_FEATURES="${ENABLE_FEATURES}" ./proxy_scripts/build.sh
 
 ## Testing
 ## -------

@@ -3,7 +3,7 @@ name = "engine_store_ffi"
 version = "0.0.1"
 authors = ["The TiKV Authors"]
 license = "Apache-2.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [features]

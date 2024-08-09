@@ -20,8 +20,6 @@ extern "C" {
     ) -> ::std::os::raw::c_int;
 }
 
-extern crate libc;
-
 #[allow(unused_variables)]
 #[allow(unused_mut)]
 #[allow(unused_unsafe)]

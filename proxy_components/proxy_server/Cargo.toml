@@ -2,7 +2,7 @@
 name = "proxy_server"
 version = "0.0.1"
 license = "Apache-2.0"
-edition = "2018"
+edition = "2021"
 publish = false
 
 [features]
