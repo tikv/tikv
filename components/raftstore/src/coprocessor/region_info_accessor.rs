@@ -161,6 +161,7 @@ pub enum RegionInfoQuery {
     GetRegionsInRange {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
+        leader_only: bool,
         callback: Callback<Vec<Region>>,
     },
     GetTopRegions {
@@ -297,15 +298,17 @@ pub struct RegionCollector {
     // together in a struct exposing add, delete, and get_top_regions methods.
     region_activity: RegionActivityMap,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
+    mvcc_amplification: usize,
 }
 
 impl RegionCollector {
-    pub fn new(region_leaders: Arc<RwLock<HashSet<u64>>>) -> Self {
+    pub fn new(region_leaders: Arc<RwLock<HashSet<u64>>>, mvcc_amplification: usize) -> Self {
         Self {
             region_leaders,
             regions: HashMap::default(),
             region_activity: HashMap::default(),
             region_ranges: BTreeMap::default(),
+            mvcc_amplification,
         }
     }
 
@@ -548,6 +551,7 @@ impl RegionCollector {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
         callback: Callback<Vec<Region>>,
+        leader_only: bool,
     ) {
         let end_key = RangeKey::from_end_key(end_key);
         let mut regions = vec![];
@@ -559,7 +563,9 @@ impl RegionCollector {
             if RangeKey::from_start_key(region_info.region.get_start_key().to_vec()) > end_key {
                 break;
             }
-            regions.push(region_info.region.clone());
+            if !leader_only || region_info.role == StateRole::Leader {
+                regions.push(region_info.region.clone());
+            }
         }
         callback(regions);
     }
@@ -578,11 +584,13 @@ impl RegionCollector {
     /// approximately `300_000``.
     pub fn handle_get_top_regions(&mut self, count: usize, callback: Callback<TopRegions>) {
         let compare_fn = |a: &RegionActivity, b: &RegionActivity| {
-            let a = a.region_stat.read_keys;
-            let b = b.region_stat.read_keys;
+            let a = a.region_stat.cop_detail.next;
+            let b = b.region_stat.cop_detail.next;
             b.cmp(&a)
         };
-        let top_regions = if count == 0 {
+
+        let mut max_qps = 0;
+        let mut top_regions = if count == 0 {
             self.regions
                 .values()
                 .map(|ri| {
@@ -600,8 +608,11 @@ impl RegionCollector {
                 .map(|(r, ra)| {
                     (
                         r,
-                        ra.map(|ra| ra.region_stat.approximate_size)
-                            .unwrap_or_default(),
+                        ra.map(|ra| {
+                            max_qps = u64::max(ra.region_stat.query_stats.coprocessor, max_qps);
+                            ra.region_stat.clone()
+                        })
+                        .unwrap_or_default(),
                     )
                 })
                 .collect::<Vec<_>>()
@@ -610,6 +621,7 @@ impl RegionCollector {
             self.region_activity
                 .iter()
                 .filter_map(|(id, ac)| {
+                    max_qps = u64::max(ac.region_stat.query_stats.coprocessor, max_qps);
                     self.regions
                         .get(id)
                         .filter(|ri| ri.role == StateRole::Leader)
@@ -617,9 +629,69 @@ impl RegionCollector {
                 })
                 .sorted_by(|(_, activity_0), (_, activity_1)| compare_fn(activity_0, activity_1))
                 .take(count)
-                .map(|(ri, ac)| (ri.region.clone(), ac.region_stat.approximate_size))
+                .map(|(ri, ac)| (ri.region.clone(), ac.region_stat.clone()))
                 .collect::<Vec<_>>()
         };
+
+        let debug: Vec<_> = top_regions
+            .iter()
+            .map(|(r, s)| {
+                format!(
+                    "region_id={}, read_keys={}, cop={}, cop_detail={:?}",
+                    r.get_id(),
+                    s.read_keys,
+                    s.query_stats.coprocessor,
+                    s.cop_detail,
+                )
+            })
+            .collect_vec();
+
+        info!(
+            "get top k regions before filter";
+            "count" => count,
+            "max_qps" => max_qps,
+            "regions" => ?debug,
+        );
+
+        if top_regions.len() > 0 {
+            let max_next_prev = top_regions[0].1.cop_detail.next + top_regions[0].1.cop_detail.prev;
+            top_regions = top_regions
+                .into_iter()
+                .filter(|(_, s)| {
+                    s.cop_detail.next + s.cop_detail.prev >= max_next_prev / 10
+                        && s.cop_detail.processed_keys != 0
+                        && (s.cop_detail.next + s.cop_detail.prev) / s.cop_detail.processed_keys
+                            >= self.mvcc_amplification
+                })
+                .collect_vec();
+
+            let debug: Vec<_> = top_regions
+                .iter()
+                .map(|(r, s)| {
+                    format!(
+                        "region_id={}, read_keys={}, cop={}, cop_detail={:?}",
+                        r.get_id(),
+                        s.read_keys,
+                        s.query_stats.coprocessor,
+                        s.cop_detail,
+                    )
+                })
+                .collect_vec();
+
+            info!(
+                "get top k regions after filter";
+                "count" => count,
+                "read_count" => debug.len(),
+                "max_qps" => max_qps,
+                "regions" => ?debug,
+            );
+        }
+
+        let top_regions = top_regions
+            .into_iter()
+            .map(|(r, s)| (r, s.approximate_size))
+            .collect_vec();
+
         callback(top_regions)
     }
 
@@ -696,9 +768,10 @@ impl Runnable for RegionCollector {
             RegionInfoQuery::GetRegionsInRange {
                 start_key,
                 end_key,
+                leader_only,
                 callback,
             } => {
-                self.handle_get_regions_in_range(start_key, end_key, callback);
+                self.handle_get_regions_in_range(start_key, end_key, callback, leader_only);
             }
             RegionInfoQuery::GetTopRegions { count, callback } => {
                 self.handle_get_top_regions(count, callback);
@@ -768,12 +841,13 @@ impl RegionInfoAccessor {
     pub fn new(
         host: &mut CoprocessorHost<impl KvEngine>,
         region_stats_manager_enabled_cb: RegionStatsManagerEnabledCb,
+        mvcc_amplification: usize,
     ) -> Self {
         let region_leaders = Arc::new(RwLock::new(HashSet::default()));
         let worker = WorkerBuilder::new("region-collector-worker").create();
         let scheduler = worker.start_with_timer(
             "region-collector-worker",
-            RegionCollector::new(region_leaders.clone()),
+            RegionCollector::new(region_leaders.clone(), mvcc_amplification),
         );
         register_region_event_listener(host, scheduler.clone(), region_stats_manager_enabled_cb);
 
@@ -827,7 +901,12 @@ pub trait RegionInfoProvider: Send + Sync {
         unimplemented!()
     }
 
-    fn get_regions_in_range(&self, _start_key: &[u8], _end_key: &[u8]) -> Result<Vec<Region>> {
+    fn get_regions_in_range(
+        &self,
+        _start_key: &[u8],
+        _end_key: &[u8],
+        _leader_only: bool,
+    ) -> Result<Vec<Region>> {
         unimplemented!()
     }
     fn get_top_regions(&self, _count: Option<NonZeroUsize>) -> Result<TopRegions> {
@@ -882,11 +961,17 @@ impl RegionInfoProvider for RegionInfoAccessor {
             )
         })
     }
-    fn get_regions_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<Vec<Region>> {
+    fn get_regions_in_range(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+        leader_only: bool,
+    ) -> Result<Vec<Region>> {
         let (tx, rx) = mpsc::channel();
         let msg = RegionInfoQuery::GetRegionsInRange {
             start_key: start_key.to_vec(),
             end_key: end_key.to_vec(),
+            leader_only,
             callback: Box::new(move |regions| {
                 if let Err(e) = tx.send(regions) {
                     warn!("failed to send get_regions_in_range result: {:?}", e);
@@ -958,7 +1043,12 @@ impl Clone for MockRegionInfoProvider {
 }
 
 impl RegionInfoProvider for MockRegionInfoProvider {
-    fn get_regions_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<Vec<Region>> {
+    fn get_regions_in_range(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+        _: bool,
+    ) -> Result<Vec<Region>> {
         let mut regions = Vec::new();
         let (tx, rx) = mpsc::channel();
         let end_key = RangeKey::from_end_key(end_key.to_vec());

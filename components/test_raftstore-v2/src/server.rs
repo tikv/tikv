@@ -36,7 +36,7 @@ use raftstore::{
     errors::Error as RaftError,
     store::{
         region_meta, AutoSplitController, CheckLeaderRunner, FlowStatsReporter, ReadStats,
-        RegionSnapshot, TabletSnapManager, WriteStats,
+        RegionSnapshot, RegionWriteCfCopDetail, TabletSnapManager, WriteStats,
     },
     RegionInfoAccessor,
 };
@@ -90,7 +90,7 @@ use crate::{Cluster, RaftStoreRouter, SimulateTransport, Simulator, SnapshotRout
 struct DummyReporter;
 
 impl FlowStatsReporter for DummyReporter {
-    fn report_read_stats(&self, _read_stats: ReadStats) {}
+    fn report_read_stats(&self, _read_stats: ReadStats, _: HashMap<u64, RegionWriteCfCopDetail>) {}
     fn report_write_stats(&self, _write_stats: WriteStats) {}
 }
 

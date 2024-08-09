@@ -35,7 +35,7 @@ use kvproto::{
     raft_serverpb::RaftMessage,
     replication_modepb::{RegionReplicationStatus, StoreDrAutoSyncStatus},
 };
-use pd_client::{metrics::*, BucketStat, Error, PdClient, RegionStat};
+use pd_client::{metrics::*, BucketStat, Error, PdClient, RegionStat, RegionWriteCfCopDetail};
 use prometheus::local::LocalHistogram;
 use raft::eraftpb::ConfChangeType;
 use resource_metering::{Collector, CollectorGuard, CollectorRegHandle, RawRecords};
@@ -291,10 +291,12 @@ pub struct PeerStat {
     pub read_bytes: u64,
     pub read_keys: u64,
     pub query_stats: QueryStats,
+    pub cop_detail: RegionWriteCfCopDetail,
     // last_region_report_attributes records the state of the last region heartbeat
     pub last_region_report_read_bytes: u64,
     pub last_region_report_read_keys: u64,
     pub last_region_report_query_stats: QueryStats,
+    pub last_region_report_cop_detail: RegionWriteCfCopDetail,
     pub last_region_report_written_bytes: u64,
     pub last_region_report_written_keys: u64,
     pub last_region_report_ts: UnixSecs,
@@ -1601,6 +1603,7 @@ where
             peer_stat
                 .query_stats
                 .add_query_stats(&region_info.query_stats.0);
+            peer_stat.cop_detail.add(&region_info.cop_detail);
             self.store_stat
                 .engine_total_query_num
                 .add_query_stats(&region_info.query_stats.0);
@@ -2031,6 +2034,7 @@ where
                     written_keys_delta,
                     last_report_ts,
                     query_stats,
+                    cop_detail,
                     cpu_usage,
                 ) = {
                     let region_id = hb_task.region.get_id();
@@ -2049,12 +2053,16 @@ where
                     let query_stats = peer_stat
                         .query_stats
                         .sub_query_stats(&peer_stat.last_region_report_query_stats);
+                    let cop_detail = peer_stat
+                        .cop_detail
+                        .sub(&peer_stat.last_region_report_cop_detail);
                     let mut last_report_ts = peer_stat.last_region_report_ts;
                     peer_stat.last_region_report_written_bytes = hb_task.written_bytes;
                     peer_stat.last_region_report_written_keys = hb_task.written_keys;
                     peer_stat.last_region_report_read_bytes = peer_stat.read_bytes;
                     peer_stat.last_region_report_read_keys = peer_stat.read_keys;
                     peer_stat.last_region_report_query_stats = peer_stat.query_stats.clone();
+                    peer_stat.last_region_report_cop_detail = peer_stat.cop_detail.clone();
                     let unix_secs_now = UnixSecs::now();
                     peer_stat.last_region_report_ts = unix_secs_now;
 
@@ -2085,6 +2093,7 @@ where
                         written_keys_delta,
                         last_report_ts,
                         query_stats.0,
+                        cop_detail,
                         cpu_usage,
                     )
                 };
@@ -2100,6 +2109,7 @@ where
                         read_bytes: read_bytes_delta,
                         read_keys: read_keys_delta,
                         query_stats,
+                        cop_detail,
                         approximate_size,
                         approximate_keys,
                         last_report_ts,
