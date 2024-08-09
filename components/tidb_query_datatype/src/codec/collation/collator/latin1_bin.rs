@@ -28,10 +28,14 @@ impl Collator for CollatorLatin1Bin {
     }
 
     #[inline]
-    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
-        Ok(B(a)
-            .trim_end_with(|c| c == PADDING_SPACE)
-            .cmp(B(b).trim_end_with(|c| c == PADDING_SPACE)))
+    fn sort_compare(mut a: &[u8], mut b: &[u8], force_no_pad: bool) -> Result<Ordering> {
+        if !force_no_pad {
+            a = a.trim_end_with(|c| c == PADDING_SPACE);
+        }
+        if !force_no_pad {
+            b = b.trim_end_with(|c| c == PADDING_SPACE);
+        }
+        Ok(a.cmp(b))
     }
 
     #[inline]

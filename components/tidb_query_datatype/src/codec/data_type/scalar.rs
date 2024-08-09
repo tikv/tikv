@@ -362,7 +362,7 @@ impl<'a> ScalarValueRef<'a> {
                 (ScalarValueRef::Bytes(Some(v1)), ScalarValueRef::Bytes(Some(v2))) => {
                     match_template_collator! {
                         TT, match field_type.collation()? {
-                            Collation::TT => TT::sort_compare(v1, v2)?
+                            Collation::TT => TT::sort_compare(v1, v2, false)?
                         }
                     }
                 }

@@ -212,7 +212,7 @@ mod tests {
                                 hasher.finish()
                             };
 
-                            let cmp = TT::sort_compare(sa, sb).unwrap();
+                            let cmp = TT::sort_compare(sa, sb, false).unwrap();
                             let ha = eval_hash(sa);
                             let hb = eval_hash(sb);
                             (cmp, ha, hb)
@@ -448,7 +448,7 @@ mod tests {
                 hasher.finish()
             };
 
-            let cmp = CollatorLatin1Bin::sort_compare(sa.as_slice(), sb.as_slice()).unwrap();
+            let cmp = CollatorLatin1Bin::sort_compare(sa.as_slice(), sb.as_slice(), false).unwrap();
             let ha = eval_hash(sa.as_slice());
             let hb = eval_hash(sb.as_slice());
 

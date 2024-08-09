@@ -26,9 +26,13 @@ impl Collator for CollatorUtf8Mb4Bin {
     }
 
     #[inline]
-    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
-        let sa = str::from_utf8(a)?.trim_end_matches(PADDING_SPACE);
-        let sb = str::from_utf8(b)?.trim_end_matches(PADDING_SPACE);
+    fn sort_compare(a: &[u8], b: &[u8], force_no_pad: bool) -> Result<Ordering> {
+        let mut sa = str::from_utf8(a)?;
+        let mut sb = str::from_utf8(b)?;
+        if !force_no_pad {
+            sa = sa.trim_end_matches(PADDING_SPACE);
+            sb = sb.trim_end_matches(PADDING_SPACE);
+        }
         Ok(sa.as_bytes().cmp(sb.as_bytes()))
     }
 
@@ -63,7 +67,7 @@ impl Collator for CollatorUtf8Mb4BinNoPadding {
     }
 
     #[inline]
-    fn sort_compare(a: &[u8], b: &[u8]) -> Result<Ordering> {
+    fn sort_compare(a: &[u8], b: &[u8], _force_no_pad: bool) -> Result<Ordering> {
         str::from_utf8(a)?;
         str::from_utf8(b)?;
         Ok(a.cmp(b))

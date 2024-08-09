@@ -47,7 +47,7 @@ pub fn like<C: Collator, CS: Charset>(
                 }
                 if let Some((_, toff)) = CS::decode_one(&target[tx..]) {
                     if let Ok(std::cmp::Ordering::Equal) =
-                        C::sort_compare(&target[tx..tx + toff], &pattern[px..px + poff])
+                        C::sort_compare(&target[tx..tx + toff], &pattern[px..px + poff], true)
                     {
                         tx += toff;
                         px += poff;
@@ -200,17 +200,27 @@ mod tests {
                 Some(0),
             ),
             (r#"Ⱕ"#, r#"ⱕ"#, '\\', Collation::Utf8Mb40900AiCi, Some(1)),
+            (
+                r#"a　a"#,
+                r#"a a"#,
+                '\\',
+                Collation::Utf8Mb4UnicodeCi,
+                Some(1),
+            ),
         ];
         for (target, pattern, escape, collation, expected) in cases {
+            let ret_ft = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::LongLong)
+                .collation(collation)
+                .build();
+            let arg_ft = FieldTypeBuilder::new()
+                .tp(FieldTypeTp::String)
+                .collation(collation)
+                .build();
             let output = RpnFnScalarEvaluator::new()
-                .return_field_type(
-                    FieldTypeBuilder::new()
-                        .tp(FieldTypeTp::LongLong)
-                        .collation(collation)
-                        .build(),
-                )
-                .push_param(target.to_owned().into_bytes())
-                .push_param(pattern.to_owned().into_bytes())
+                .return_field_type(ret_ft.clone())
+                .push_param_with_field_type(target.to_owned().into_bytes(), arg_ft.clone())
+                .push_param_with_field_type(pattern.to_owned().into_bytes(), arg_ft)
                 .push_param(escape as i64)
                 .evaluate(ScalarFuncSig::LikeSig)
                 .unwrap();
@@ -334,6 +344,18 @@ mod tests {
                 Collation::Utf8Mb4Bin,
                 Collation::Utf8Mb4Bin,
                 Some(1),
+            ),
+            // This can happen when the new collation is not enabled, and TiDB
+            // doesn't push down the collation information. Though the two collations
+            // are the same, we still use the binary order.
+            (
+                r#"测试A"#,
+                r#"测_a"#,
+                '\\',
+                Collation::Binary,
+                Collation::Utf8Mb4UnicodeCi,
+                Collation::Utf8Mb4UnicodeCi,
+                Some(0),
             ),
         ];
         for (target, pattern, escape, collation, target_collation, pattern_collation, expected) in
