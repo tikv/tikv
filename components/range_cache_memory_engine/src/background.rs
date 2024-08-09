@@ -1503,7 +1503,7 @@ pub mod tests {
         config::RangeCacheConfigManager,
         engine::{tests::new_region, SkiplistEngine, SkiplistHandle},
         keys::{
-            construct_key, construct_user_key, construct_value, encode_key, encode_seek_key,
+            construct_key, construct_region_key, construct_value, encode_key, encode_seek_key,
             encoding_for_filter, InternalBytes, ValueType,
         },
         memory_controller::MemoryController,
@@ -1851,7 +1851,6 @@ pub mod tests {
         )));
         let memory_controller = engine.memory_controller();
         let region = new_region(1, b"", b"z");
-        let range = CacheRange::from_region(&region);
         engine.new_region(region.clone());
         let (write, default) = {
             let skiplist_engine = engine.core().write().engine();
@@ -1862,7 +1861,8 @@ pub mod tests {
         };
 
         let encode_key = |key, ts| {
-            let key = Key::from_raw(key);
+            let data_key = data_key(key);
+            let key = Key::from_raw(&data_key);
             encoding_for_filter(key.as_encoded(), ts)
         };
 
@@ -1953,10 +1953,10 @@ pub mod tests {
         let (write, default, region1, region2) = {
             let mut core = engine.core().write();
 
-            let region1 = new_region(1, b"00", b"10");
+            let region1 = new_region(1, b"k00", b"k10");
             core.mut_range_manager().new_region(region1.clone());
 
-            let region2 = new_region(1, b"30", b"40");
+            let region2 = new_region(2, b"k30", b"k40");
             core.mut_range_manager().new_region(region2.clone());
 
             let engine = core.engine();
@@ -2041,7 +2041,8 @@ pub mod tests {
         );
 
         let encode_key = |key, commit_ts, seq_num| -> InternalBytes {
-            let raw_write_k = Key::from_raw(key)
+            let data_key = data_key(key);
+            let raw_write_k = Key::from_raw(&data_key)
                 .append_ts(TimeStamp::new(commit_ts))
                 .into_encoded();
             encode_key(&raw_write_k, seq_num, ValueType::Value)
@@ -2379,7 +2380,13 @@ pub mod tests {
             .range_manager()
             .regions()
             .values()
-            .map(|m| m.region().clone())
+            .filter_map(|m| {
+                if m.get_state() == RegionState::Active {
+                    Some(m.region().clone())
+                } else {
+                    None
+                }
+            })
             .collect();
         assert_eq!(regions.len(), 2);
         let mut filter = FilterMetrics::default();
@@ -2521,7 +2528,7 @@ pub mod tests {
         engine.new_region(r1);
         engine.new_region(r2);
 
-        let (mut runner, _) = BackgroundRunner::new(
+        let (runner, _) = BackgroundRunner::new(
             engine.core.clone(),
             memory_controller,
             None,
@@ -2584,8 +2591,8 @@ pub mod tests {
 
         // Wait for the watch to fire.
         std::thread::sleep(Duration::from_millis(200));
-        let r1 = CacheRange::try_from(&label_rule.data[0]).unwrap();
-        // engine.prepare_for_apply(1, &r1);
+        // let r1 = CacheRange::try_from(&label_rule.data[0]).unwrap();
+        // engine.prepare_for_apply(1, &r1, );
 
         // Wait for the range to be loaded.
         std::thread::sleep(Duration::from_secs(1));
@@ -2643,7 +2650,7 @@ pub mod tests {
         engine.set_disk_engine(rocks_engine.clone());
         let mem_controller = engine.memory_controller();
 
-        let region1 = new_region(1, construct_user_key(1), construct_user_key(3));
+        let region1 = new_region(1, construct_region_key(1), construct_region_key(3));
         // Memory for one put is 17(key) + 3(val) + 8(Seqno) + 16(Memory controller in
         // key and val) + 96(Node overhead) = 140
         let key = construct_key(1, 10);
@@ -2657,7 +2664,7 @@ pub mod tests {
         rocks_engine.put_cf(CF_WRITE, &key, b"val").unwrap();
         // After loading range1, the memory usage should be 140*6=840
 
-        let region2 = new_region(2, construct_user_key(3), construct_user_key(5));
+        let region2 = new_region(2, construct_region_key(3), construct_region_key(5));
         let key = construct_key(3, 10);
         rocks_engine.put_cf(CF_DEFAULT, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
@@ -2670,7 +2677,7 @@ pub mod tests {
         // 840*2 > hard limit 1500, so the load will fail and the loaded keys should be
         // removed
 
-        let region3 = new_region(3, construct_user_key(5), construct_user_key(6));
+        let region3 = new_region(3, construct_region_key(5), construct_region_key(6));
         let key = construct_key(5, 10);
         rocks_engine.put_cf(CF_DEFAULT, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
@@ -2704,10 +2711,11 @@ pub mod tests {
                     .snapshot(region.id, 0, CacheRange::from_region(region), 10, u64::MAX)
                     .unwrap();
                 let mut count = 0;
+                let range = CacheRange::from_region(&region);
                 for cf in DATA_CFS {
                     let mut iter = IterOptions::default();
-                    iter.set_lower_bound(&region.start_key, 0);
-                    iter.set_upper_bound(&region.end_key, 0);
+                    iter.set_lower_bound(&range.start, 0);
+                    iter.set_upper_bound(&range.end, 0);
                     let mut iter = snap.iterator_opt(cf, iter).unwrap();
                     let _ = iter.seek_to_first();
                     while iter.valid().unwrap() {
@@ -2725,7 +2733,7 @@ pub mod tests {
         verify(&region1, true, 6);
         verify(&region2, false, 0);
         verify(&region3, false, 3);
-        assert_eq!(mem_controller.mem_usage(), 1540);
+        assert_eq!(mem_controller.mem_usage(), 1551);
     }
 
     #[test]
@@ -2745,7 +2753,7 @@ pub mod tests {
         engine.set_disk_engine(rocks_engine.clone());
         let mem_controller = engine.memory_controller();
 
-        let region1 = new_region(1, construct_user_key(1), construct_user_key(3));
+        let region1 = new_region(1, construct_region_key(1), construct_region_key(3));
         // Memory for one put is 17(key) + 3(val) + 8(Seqno) + 16(Memory controller in
         // key and val) + 96(Node overhead) = 140
         let key = construct_key(1, 10);
@@ -2761,7 +2769,7 @@ pub mod tests {
         engine.load_region(region1.clone()).unwrap();
         engine.prepare_for_apply(1, CacheRange::from_region(&region1), &region1);
 
-        let region2 = new_region(2, construct_user_key(3), construct_user_key(5));
+        let region2 = new_region(2, construct_region_key(3), construct_region_key(5));
         let key = construct_key(3, 10);
         rocks_engine.put_cf(CF_DEFAULT, &key, b"val").unwrap();
         rocks_engine.put_cf(CF_LOCK, &key, b"val").unwrap();
@@ -2805,10 +2813,11 @@ pub mod tests {
                     .snapshot(r.id, 0, CacheRange::from_region(r), 10, u64::MAX)
                     .unwrap();
                 let mut count = 0;
+                let range = CacheRange::from_region(&r);
                 for cf in DATA_CFS {
                     let mut iter = IterOptions::default();
-                    iter.set_lower_bound(&r.start_key, 0);
-                    iter.set_upper_bound(&r.end_key, 0);
+                    iter.set_lower_bound(&range.start, 0);
+                    iter.set_upper_bound(&range.end, 0);
                     let mut iter = snap.iterator_opt(cf, iter).unwrap();
                     let _ = iter.seek_to_first();
                     while iter.valid().unwrap() {
@@ -2825,7 +2834,7 @@ pub mod tests {
         };
         verify(&region1, true, 6);
         verify(&region2, true, 6);
-        assert_eq!(mem_controller.mem_usage(), 1680);
+        assert_eq!(mem_controller.mem_usage(), 1692);
     }
 
     #[test]

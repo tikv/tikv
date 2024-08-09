@@ -434,6 +434,10 @@ impl RegionManager {
             region_meta
                 .region_snapshot_list
                 .remove_snapshot(snapshot_meta.snapshot_ts);
+            if Self::region_ready_to_evict(region_meta, &self.historical_regions) {
+                region_meta.set_state(RegionState::Evicting);
+                return vec![region_meta.region.clone()];
+            }
             return vec![];
         }
 
@@ -464,6 +468,7 @@ impl RegionManager {
         deletable_regions
     }
 
+    #[inline]
     fn region_ready_to_evict(
         meta: &RangeMeta,
         historical_regions: &BTreeMap<KeyAndVersion, RangeMeta>,
@@ -787,10 +792,7 @@ pub enum RangeCacheStatus {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
-
     use engine_traits::{CacheRange, FailedReason};
-    use pd_client::Key;
 
     use super::*;
     use crate::{engine::tests::new_region, range_manager::LoadFailedReason};
@@ -807,7 +809,9 @@ mod tests {
             FailedReason::TooOldRead
         );
         range_mgr.region_snapshot(r1.id, 0, 8).unwrap();
+        let snapshot1 = RangeCacheSnapshotMeta::new(1, 0, CacheRange::from_region(&r1), 8, 1);
         range_mgr.region_snapshot(r1.id, 0, 10).unwrap();
+        let snapshot2 = RangeCacheSnapshotMeta::new(1, 0, CacheRange::from_region(&r1), 10, 2);
         assert_eq!(
             range_mgr.region_snapshot(2, 0, 8).unwrap_err(),
             FailedReason::NotCached
@@ -840,26 +844,27 @@ mod tests {
 
         // evict a range with accurate match
         range_mgr.region_snapshot(r_left.id, 2, 10).unwrap();
+        let snapshot3 =
+            RangeCacheSnapshotMeta::new(r_left.id, 2, CacheRange::from_region(&r1), 10, 3);
         range_mgr.evict_region(&r_left);
-        let range_left = CacheRange::from_region(&r_left);
-        assert!(
-            range_mgr
-                .historical_regions
-                .get(&KeyAndVersion(range_left.end.clone(), 2))
-                .is_some()
-        );
         assert_eq!(
             range_mgr.regions.get(&r_left.id).unwrap().state,
             RegionState::PendingEvict,
         );
+        assert!(range_mgr.remove_region_snapshot(&snapshot1).is_empty());
 
-        assert!(range_mgr.evict_region(&r_right).is_empty());
-        let range_right = CacheRange::from_region(&r_right);
-        assert!(
-            range_mgr
-                .historical_regions
-                .get(&KeyAndVersion(range_right.end.clone(), 2))
-                .is_none()
+        let regions = range_mgr.remove_region_snapshot(&snapshot2);
+        assert_eq!(regions, vec![r_evict.clone()]);
+        assert_eq!(
+            range_mgr.region_meta(r_evict.id).unwrap().get_state(),
+            RegionState::Evicting
+        );
+
+        let regions = range_mgr.remove_region_snapshot(&snapshot3);
+        assert_eq!(regions, vec![r_left.clone()]);
+        assert_eq!(
+            range_mgr.region_meta(r_left.id).unwrap().get_state(),
+            RegionState::Evicting
         );
     }
 
@@ -873,7 +878,7 @@ mod tests {
         let r4 = new_region(4, b"k25", b"k35");
 
         range_mgr.new_region(r1.clone());
-        range_mgr.load_region(r2.clone());
+        range_mgr.load_region(r2.clone()).unwrap();
         range_mgr.new_region(r3.clone());
         range_mgr.evict_region(&r1);
 
@@ -962,7 +967,12 @@ mod tests {
 
             let r4 = new_region(4, b"k", b"k51");
             assert_eq!(range_mgr.evict_region(&r4), vec![r1, r2, r3]);
-            assert!(range_mgr.regions().is_empty());
+            assert!(
+                range_mgr
+                    .regions()
+                    .values()
+                    .all(|m| m.get_state() == RegionState::Evicting)
+            );
         }
 
         {
@@ -976,7 +986,14 @@ mod tests {
 
             let r4 = new_region(4, b"k25", b"k55");
             assert_eq!(range_mgr.evict_region(&r4), vec![r2, r3]);
-            assert_eq!(range_mgr.regions().len(), 1);
+            assert_eq!(
+                range_mgr
+                    .regions()
+                    .values()
+                    .filter(|m| m.get_state() == RegionState::Active)
+                    .count(),
+                1
+            );
         }
 
         {
@@ -990,7 +1007,14 @@ mod tests {
 
             let r4 = new_region(4, b"k25", b"k75");
             assert_eq!(range_mgr.evict_region(&r4), vec![r2, r3]);
-            assert_eq!(range_mgr.regions().len(), 1);
+            assert_eq!(
+                range_mgr
+                    .regions()
+                    .values()
+                    .filter(|m| m.get_state() == RegionState::Active)
+                    .count(),
+                1
+            );
         }
     }
 }

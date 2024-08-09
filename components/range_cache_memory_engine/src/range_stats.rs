@@ -252,7 +252,6 @@ impl RangeStatsManager {
 
 #[cfg(test)]
 pub mod tests {
-    use engine_traits::CacheRange;
     use kvproto::metapb::Peer;
     use raftstore::coprocessor::{self, region_info_accessor::TopRegions, RegionInfoProvider};
     use tikv_util::box_err;

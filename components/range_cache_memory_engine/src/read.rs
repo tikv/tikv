@@ -53,7 +53,7 @@ pub struct RangeCacheSnapshotMeta {
 }
 
 impl RangeCacheSnapshotMeta {
-    fn new(
+    pub(crate) fn new(
         region_id: u64,
         epoch_version: u64,
         range: CacheRange,
@@ -690,7 +690,7 @@ mod tests {
         MetricsExt, Mutable, Peekable, RangeCacheEngine, ReadOptions, RegionEvent, WriteBatch,
         WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE,
     };
-    use keys::{DATA_MAX_KEY, DATA_MIN_KEY, DATA_PREFIX_KEY};
+    use keys::DATA_PREFIX_KEY;
     use kvproto::metapb::Region;
     use tempfile::Builder;
     use tikv_util::config::VersionTrack;
@@ -1908,7 +1908,7 @@ mod tests {
         let mut new_regions = vec![
             new_region(1, construct_region_key(0), construct_region_key(10)),
             new_region(2, construct_region_key(10), construct_region_key(20)),
-            new_region(3, construct_region_key(10), construct_region_key(20)),
+            new_region(3, construct_region_key(20), construct_region_key(30)),
         ];
         new_regions.iter_mut().for_each(|r| {
             r.mut_region_epoch().version = 1;
@@ -1945,7 +1945,6 @@ mod tests {
 
         drop(s3);
         engine.evict_region(&r_left);
-        let evict_range = CacheRange::from_region(&evict_region);
 
         // todo(SpadeA): memory limiter
         {
@@ -2036,6 +2035,7 @@ mod tests {
         )));
         let region = new_region(1, b"", b"z");
         let range = CacheRange::from_region(&region);
+        engine.new_region(region.clone());
 
         {
             let mut core = engine.core.write();
@@ -2114,7 +2114,7 @@ mod tests {
         iter.next().unwrap();
         rocks_iter.next().unwrap();
         drop(iter);
-        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 54);
+        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 58);
         assert_eq!(2, statistics.get_ticker_count(Tickers::NumberDbSeek));
         assert_eq!(2, statistics.get_ticker_count(Tickers::NumberDbSeekFound));
         assert_eq!(2, statistics.get_ticker_count(Tickers::NumberDbNext));
@@ -2131,12 +2131,12 @@ mod tests {
         rocks_iter.prev().unwrap();
         drop(rocks_iter);
         drop(iter);
-        assert_eq!(statistics.get_ticker_count(Tickers::IterBytesRead), 108);
+        assert_eq!(statistics.get_ticker_count(Tickers::IterBytesRead), 116);
         assert_eq!(
             rocks_statistics.get_and_reset_ticker_count(DBStatisticsTickerType::IterBytesRead),
             statistics.get_and_reset_ticker_count(Tickers::IterBytesRead)
         );
-        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 108);
+        assert_eq!(PERF_CONTEXT.with(|c| c.borrow().iter_read_bytes), 116);
         assert_eq!(3, statistics.get_ticker_count(Tickers::NumberDbSeek));
         assert_eq!(3, statistics.get_ticker_count(Tickers::NumberDbSeekFound));
         assert_eq!(3, statistics.get_ticker_count(Tickers::NumberDbPrev));
@@ -2183,34 +2183,34 @@ mod tests {
     #[test]
     fn test_iterator() {
         let (.., mut iter) = set_up_for_iteator(100, 200, |wb| {
-            wb.put(b"a", b"1").unwrap();
-            wb.put(b"b", b"2").unwrap();
-            wb.put(b"c", b"3").unwrap();
-            wb.put(b"d", b"4").unwrap();
+            wb.put(b"za", b"1").unwrap();
+            wb.put(b"zb", b"2").unwrap();
+            wb.put(b"zc", b"3").unwrap();
+            wb.put(b"zd", b"4").unwrap();
         });
 
-        iter.seek(b"c").unwrap();
+        iter.seek(b"zc").unwrap();
         assert!(iter.valid().unwrap());
         iter.prev().unwrap();
         assert!(iter.valid().unwrap());
-        assert_eq!(iter.key(), b"b");
+        assert_eq!(iter.key(), b"zb");
         assert_eq!(iter.value(), b"2");
 
         iter.next().unwrap();
         assert!(iter.valid().unwrap());
-        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.key(), b"zc");
         assert_eq!(iter.value(), b"3");
 
-        iter.seek_for_prev(b"c").unwrap();
+        iter.seek_for_prev(b"zc").unwrap();
         assert!(iter.valid().unwrap());
         iter.next().unwrap();
         assert!(iter.valid().unwrap());
-        assert_eq!(iter.key(), b"d");
+        assert_eq!(iter.key(), b"zd");
         assert_eq!(iter.value(), b"4");
 
         iter.prev().unwrap();
         assert!(iter.valid().unwrap());
-        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.key(), b"zc");
         assert_eq!(iter.value(), b"3");
     }
 
@@ -2219,57 +2219,57 @@ mod tests {
     #[test]
     fn test_next_with_newer_seq() {
         let (engine, _, mut iter) = set_up_for_iteator(100, 110, |wb| {
-            wb.put(b"0", b"0").unwrap();
-            wb.put(b"a", b"b").unwrap();
-            wb.put(b"c", b"d").unwrap();
-            wb.put(b"d", b"e").unwrap();
+            wb.put(b"z0", b"0").unwrap();
+            wb.put(b"za", b"b").unwrap();
+            wb.put(b"zc", b"d").unwrap();
+            wb.put(b"zd", b"e").unwrap();
         });
 
         let mut wb = engine.write_batch();
         let region = new_region(1, b"", b"z");
         wb.prepare_for_region(&region);
-        wb.put(b"b", b"f").unwrap();
+        wb.put(b"zb", b"f").unwrap();
         wb.set_sequence_number(200).unwrap();
 
-        iter.seek(b"a").unwrap();
-        assert_eq!(iter.key(), b"a");
+        iter.seek(b"za").unwrap();
+        assert_eq!(iter.key(), b"za");
         assert_eq!(iter.value(), b"b");
 
         iter.next().unwrap();
-        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.key(), b"zc");
         assert_eq!(iter.value(), b"d");
 
-        iter.seek_for_prev(b"b").unwrap();
-        assert_eq!(iter.key(), b"a");
+        iter.seek_for_prev(b"zb").unwrap();
+        assert_eq!(iter.key(), b"za");
         assert_eq!(iter.value(), b"b");
 
         iter.next().unwrap();
-        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.key(), b"zc");
         assert_eq!(iter.value(), b"d");
 
-        iter.seek(b"d").unwrap();
-        assert_eq!(iter.key(), b"d");
+        iter.seek(b"zd").unwrap();
+        assert_eq!(iter.key(), b"zd");
         assert_eq!(iter.value(), b"e");
 
         iter.prev().unwrap();
-        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.key(), b"zc");
         assert_eq!(iter.value(), b"d");
 
         iter.prev().unwrap();
-        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.key(), b"za");
         assert_eq!(iter.value(), b"b");
 
         iter.prev().unwrap();
-        iter.seek_for_prev(b"d").unwrap();
-        assert_eq!(iter.key(), b"d");
+        iter.seek_for_prev(b"zd").unwrap();
+        assert_eq!(iter.key(), b"zd");
         assert_eq!(iter.value(), b"e");
 
         iter.prev().unwrap();
-        assert_eq!(iter.key(), b"c");
+        assert_eq!(iter.key(), b"zc");
         assert_eq!(iter.value(), b"d");
 
         iter.prev().unwrap();
-        assert_eq!(iter.key(), b"a");
+        assert_eq!(iter.key(), b"za");
         assert_eq!(iter.value(), b"b");
     }
 

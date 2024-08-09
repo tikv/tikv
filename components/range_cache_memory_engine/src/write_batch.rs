@@ -1,3 +1,4 @@
+use core::slice::SlicePattern;
 use std::{
     collections::HashMap,
     sync::{atomic::Ordering, Arc},
@@ -362,6 +363,13 @@ impl WriteBatchEntryInternal {
         }
     }
 
+    fn value(&self) -> &[u8] {
+        match self {
+            WriteBatchEntryInternal::PutValue(value) => value.as_slice(),
+            WriteBatchEntryInternal::Deletion => &[],
+        }
+    }
+
     fn data_size(&self) -> usize {
         match self {
             WriteBatchEntryInternal::PutValue(value) => value.len(),
@@ -420,8 +428,7 @@ impl RangeCacheWriteBatchEntry {
     }
 
     fn memory_size_required(&self) -> usize {
-        InternalBytes::memory_size_required(self.key.len())
-            + InternalBytes::memory_size_required(self.inner.data_size())
+        Self::memory_size_required_for_key_value(self.key.as_slice(), self.inner.value())
     }
 
     #[inline]
@@ -585,8 +592,7 @@ mod tests {
     use crossbeam_skiplist::SkipList;
     use engine_rocks::util::new_engine;
     use engine_traits::{
-        CacheRange, FailedReason, KvEngine, Peekable, RangeCacheEngine, WriteBatch, CF_WRITE,
-        DATA_CFS,
+        CacheRange, FailedReason, Peekable, RangeCacheEngine, WriteBatch, DATA_CFS,
     };
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use tempfile::Builder;
@@ -595,7 +601,7 @@ mod tests {
     use super::*;
     use crate::{
         background::flush_epoch, config::RangeCacheConfigManager, engine::tests::new_region,
-        RangeCacheEngineConfig, RangeCacheEngineContext,
+        range_manager::RegionState, RangeCacheEngineConfig, RangeCacheEngineContext,
     };
 
     // We should not use skiplist.get directly as we only cares keys without
@@ -706,132 +712,110 @@ mod tests {
         let path_str = path.path().to_str().unwrap();
         let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
 
-        let engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(Arc::new(
-            VersionTrack::new(RangeCacheEngineConfig::config_for_test()),
-        )));
-        let r1 = new_region(1, b"k01".to_vec(), b"k05".to_vec());
-        let r2 = new_region(2, b"k05".to_vec(), b"k10".to_vec());
-        let r3 = new_region(3, b"k10".to_vec(), b"k15".to_vec());
-        {
-            engine.new_region(r1.clone());
-            let mut core = engine.core.write();
-            core.mut_range_manager().set_safe_point(r1.id, 10);
+        let mut engine = RangeCacheMemoryEngine::new(RangeCacheEngineContext::new_for_tests(
+            Arc::new(VersionTrack::new(RangeCacheEngineConfig::config_for_test())),
+        ));
+        engine.set_disk_engine(rocks_engine.clone());
 
-            let snap = Arc::new(rocks_engine.snapshot(None));
-            core.mut_range_manager()
-                .pending_regions_loading_data
-                .push_back((r2.clone(), snap, false));
+        let r1 = new_region(1, b"k01".to_vec(), b"k05".to_vec());
+        {
+            // load region with epoch and range change, will remove the pending region.
+            engine.load_region(r1.clone()).unwrap();
+            let mut r1_new = new_region(1, b"k01".to_vec(), b"k06".to_vec());
+            r1_new.mut_region_epoch().version = 2;
+            let mut wb = RangeCacheWriteBatch::from(&engine);
+            wb.prepare_for_region(&r1_new);
+            assert!(engine.core().read().range_manager().regions().is_empty());
+            wb.put(b"zk01", b"val1").unwrap();
+            wb.put(b"zk03", b"val1").unwrap();
+            wb.put(b"zk05", b"val1").unwrap();
+            wb.set_sequence_number(2).unwrap();
+            wb.write().unwrap();
         }
+        // pending region is removed, no data should write to skiplist.
+        let skip_engine = engine.core.read().engine();
+        assert_eq!(skip_engine.node_count(), 0);
+
+        // epoch changes but new range is contained by the pending region, will update
+        // the reigon.
+        engine.load_region(r1.clone()).unwrap();
+        let mut r1_new = new_region(1, b"k01".to_vec(), b"k05".to_vec());
+        r1_new.mut_region_epoch().version = 2;
         let mut wb = RangeCacheWriteBatch::from(&engine);
-        wb.prepare_for_region(&r1);
-        wb.put(b"zk01", b"val1").unwrap();
-        wb.prepare_for_region(&r2);
-        wb.put(b"zk05", b"val5").unwrap();
-        wb.prepare_for_region(&r3);
-        wb.put(b"zk10", b"val10").unwrap();
-        wb.set_sequence_number(2).unwrap();
-        let _ = wb.write();
-        let snapshot = engine
-            .snapshot(r1.id, 0, CacheRange::from_region(&r1), u64::MAX, 5)
-            .unwrap();
-        assert_eq!(
-            snapshot.get_value(&b"zk01"[..]).unwrap().unwrap(),
-            &b"val1"[..]
-        );
+        wb.prepare_for_region(&r1_new);
         {
             let core = engine.core.read();
-            assert_eq!(core.cached_write_batch.get(&r2.id).unwrap().len(), 1);
+            let region_meta = core.range_manager().region_meta(1).unwrap();
+            assert_eq!(region_meta.region(), &r1_new);
+            assert_eq!(region_meta.get_state(), RegionState::ReadyToLoad);
+        }
+        wb.put(b"zk02", b"val1").unwrap();
+        wb.put(b"zk04", b"val1").unwrap();
+        wb.set_sequence_number(5).unwrap();
+        wb.write().unwrap();
+
+        test_util::eventually(
+            Duration::from_millis(50),
+            Duration::from_millis(1000),
+            || {
+                let core = engine.core.read();
+                core.range_manager().region_meta(1).unwrap().get_state() == RegionState::Active
+            },
+        );
+        let snapshot = engine
+            .snapshot(r1.id, 2, CacheRange::from_region(&r1_new), u64::MAX, 6)
+            .unwrap();
+        for i in 1..5 {
+            let res = snapshot.get_value(format!("zk0{}", i).as_bytes()).unwrap();
+            if i % 2 == 0 {
+                assert_eq!(res.unwrap(), b"val1".as_slice());
+            } else {
+                assert!(res.is_none());
+            }
         }
 
+        let skip_engine = engine.core.read().engine();
+        assert_eq!(skip_engine.node_count(), 2);
+
         let mut wb = RangeCacheWriteBatch::from(&engine);
-        wb.prepare_for_region(&r1);
-        wb.delete(b"zk01").unwrap();
-        wb.set_sequence_number(5).unwrap();
-        let _ = wb.write();
-        let snapshot = engine
-            .snapshot(r1.id, 0, CacheRange::from_region(&r1), u64::MAX, 6)
-            .unwrap();
-        assert!(snapshot.get_value(&b"zk01"[..]).unwrap().is_none(),);
-    }
+        wb.prepare_for_region(&r1_new);
+        wb.put(b"zk01", b"val2").unwrap();
+        wb.set_sequence_number(6).unwrap();
+        wb.write().unwrap();
 
-    fn region_contains_key(r: &Region, key: &[u8]) -> bool {
-        r.start_key.as_slice() <= &key[1..] && r.end_key.as_slice() > &key[1..]
-    }
+        assert_eq!(skip_engine.node_count(), 3);
 
-    #[test]
-    fn test_group_entries() {
-        let path = Builder::new().prefix("test_group").tempdir().unwrap();
-        let path_str = path.path().to_str().unwrap();
-        let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
-        let snap = rocks_engine.snapshot(None);
-
-        let mut range_manager = RegionManager::default();
-        let r1 = new_region(1, b"k00".to_vec(), b"k10".to_vec());
-        let r2 = new_region(2, b"k10".to_vec(), b"k20".to_vec());
-        let r3 = new_region(3, b"k20".to_vec(), b"k30".to_vec());
-        range_manager.new_region(r1.clone());
-        let snap = Arc::new(snap);
-        range_manager
-            .pending_regions_loading_data
-            .push_back((r2.clone(), snap.clone(), false));
-        range_manager
-            .pending_regions_loading_data
-            .push_back((r3.clone(), snap, false));
-
-        let entries = vec![
-            RangeCacheWriteBatchEntry::put_value(CF_DEFAULT, b"zk22", b"val"),
-            RangeCacheWriteBatchEntry::put_value(CF_DEFAULT, b"zk21", b"val"),
-            RangeCacheWriteBatchEntry::deletion(CF_DEFAULT, b"zk25"),
-            RangeCacheWriteBatchEntry::put_value(CF_DEFAULT, b"zk28", b"val"),
-            RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"zk03", b"val"),
-            RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"zk05", b"val"),
-            RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"zk09", b"val"),
-            RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"zk10", b"val"),
-            RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"zk19", b"val"),
-            // Mock the range is evicted
-            RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"zk32", b"val"),
-            RangeCacheWriteBatchEntry::put_value(CF_WRITE, b"zk45", b"val"),
-        ];
-
-        let (group_entries_to_cache, entries_to_write) =
-            group_write_batch_entries(entries, &range_manager);
-        assert_eq!(group_entries_to_cache.len(), 2);
-        assert_eq!(entries_to_write.len(), 3);
-        entries_to_write
-            .iter()
-            .for_each(|e| assert!(region_contains_key(&r1, &e.key)));
-        group_entries_to_cache.iter().for_each(|(id, entries)| {
-            let region = if *id == r2.id {
-                assert_eq!(entries.len(), 2);
-                &r2
-            } else if *id == r3.id {
-                assert_eq!(entries.len(), 4);
-                &r3
-            } else {
-                unreachable!();
-            };
-            entries
-                .iter()
-                .for_each(|e| assert!(region_contains_key(&region, &e.key)))
-        });
+        // evict region, data should not be updated.
+        {
+            let mut core = engine.core.write();
+            core.mut_range_manager()
+                .mut_region_meta(1)
+                .unwrap()
+                .set_state(RegionState::PendingEvict);
+        }
+        let mut wb = RangeCacheWriteBatch::from(&engine);
+        wb.prepare_for_region(&r1_new);
+        wb.put(b"zk02", b"val2").unwrap();
+        wb.set_sequence_number(7).unwrap();
+        wb.write().unwrap();
+        // node count should not change.
+        assert_eq!(skip_engine.node_count(), 3);
     }
 
     fn wait_evict_done(engine: &RangeCacheMemoryEngine) {
-        let mut wait = 0;
-        while wait < 10 {
-            wait += 1;
-            if !engine
-                .core
-                .read()
-                .range_manager()
-                .regions_being_deleted
-                .is_empty()
-            {
-                std::thread::sleep(Duration::from_millis(200));
-            } else {
-                break;
-            }
-        }
+        test_util::eventually(
+            Duration::from_millis(100),
+            Duration::from_millis(2000),
+            || {
+                !engine
+                    .core
+                    .read()
+                    .range_manager()
+                    .regions()
+                    .values()
+                    .any(|meta| meta.get_state() >= RegionState::LoadingCanceled)
+            },
+        );
     }
 
     #[test]
@@ -844,11 +828,11 @@ mod tests {
             VersionTrack::new(config),
         )));
         let regions = [
-            new_region(1, b"kk00", b"kk10"),
-            new_region(2, b"kk10", b"kk20"),
-            new_region(3, b"kk20", b"kk30"),
-            new_region(4, b"kk30", b"kk40"),
-            new_region(5, b"kk40", b"kk50"),
+            new_region(1, b"k00", b"k10"),
+            new_region(2, b"k10", b"k20"),
+            new_region(3, b"k20", b"k30"),
+            new_region(4, b"k30", b"k40"),
+            new_region(5, b"k40", b"k50"),
         ];
         for r in &regions {
             engine.new_region(r.clone());
@@ -860,47 +844,59 @@ mod tests {
                 .snapshot(r.id, 0, CacheRange::from_region(&r), 1000, 1000)
                 .unwrap();
         }
+        let memory_controller = engine.memory_controller();
 
-        let val1: Vec<u8> = (0..150).map(|_| 0).collect();
+        let val1: Vec<u8> = vec![0; 150];
         let mut wb = RangeCacheWriteBatch::from(&engine);
         wb.prepare_for_region(&regions[0]);
         // memory required:
         // 4(key) + 8(sequencen number) + 150(value) + 16(2 Arc<MemoryController) = 178
-        wb.put(b"zkk01", &val1).unwrap();
+        wb.put(b"zk01", &val1).unwrap();
         wb.prepare_for_region(&regions[1]);
         // Now, 356
-        wb.put(b"zkk11", &val1).unwrap();
+        wb.put(b"zk11", &val1).unwrap();
+        assert_eq!(356, memory_controller.mem_usage());
+        assert_eq!(wb.count(), 2);
         wb.prepare_for_region(&regions[2]);
+
         // Now, 534
-        wb.put(b"zkk21", &val1).unwrap();
+        wb.put(b"zk21", &val1).unwrap();
         // memory required:
         // 4(key) + 8(sequence number) + 16(2 Arc<MemoryController>) = 28
         // Now, 562
-        wb.delete(b"zkk21").unwrap();
-        let val2: Vec<u8> = (0..500).map(|_| 2).collect();
+        wb.delete(b"zk21").unwrap();
+        assert_eq!(562, memory_controller.mem_usage());
+        assert_eq!(wb.count(), 4);
+
+        let val2: Vec<u8> = vec![2; 500];
         // The memory will fail to acquire
-        wb.put(b"zkk22", &val2).unwrap();
+        wb.put(b"zk22", &val2).unwrap();
+
+        wb.prepare_for_region(&regions[3]);
+        // region 2 is evicted due to memory insufficient,
+        // after preprare, all region 2's entries are removed.
+        assert_eq!(356, memory_controller.mem_usage());
+        assert_eq!(wb.count(), 2);
 
         // The memory capacity is enough for the following two inserts
-        let val3: Vec<u8> = (0..150).map(|_| 3).collect();
-        wb.prepare_for_region(&regions[3]);
-        // Now, 740
-        wb.put(b"zkk32", &val3).unwrap();
+        // Now, 534
+        let val3: Vec<u8> = vec![3; 150];
+        wb.put(b"zk32", &val3).unwrap();
+        assert_eq!(534, memory_controller.mem_usage());
 
-        // The memory will fail to acquire
-        let val4: Vec<u8> = (0..300).map(|_| 3).collect();
+        // Now, 862
+        let val4: Vec<u8> = vec![3; 300];
         wb.prepare_for_region(&regions[4]);
-        wb.put(b"zkk41", &val4).unwrap();
+        wb.put(b"zk41", &val4).unwrap();
 
-        let memory_controller = engine.memory_controller();
         // We should have allocated 740 as calculated above
-        assert_eq!(745, memory_controller.mem_usage());
+        assert_eq!(862, memory_controller.mem_usage());
         wb.write_impl(1000).unwrap();
         // We dont count the node overhead (96 bytes for each node) in write batch, so
         // after they are written into the engine, the mem usage can even exceed
         // the hard limit. But this should be fine as this amount should be at
         // most MB level.
-        assert_eq!(1225, memory_controller.mem_usage());
+        assert_eq!(1246, memory_controller.mem_usage());
 
         let snap1 = engine
             .snapshot(
@@ -911,7 +907,7 @@ mod tests {
                 1010,
             )
             .unwrap();
-        assert_eq!(snap1.get_value(b"zkk01").unwrap().unwrap(), &val1);
+        assert_eq!(snap1.get_value(b"zk01").unwrap().unwrap(), &val1);
         let snap2 = engine
             .snapshot(
                 regions[1].id,
@@ -921,7 +917,7 @@ mod tests {
                 1010,
             )
             .unwrap();
-        assert_eq!(snap2.get_value(b"zkk11").unwrap().unwrap(), &val1);
+        assert_eq!(snap2.get_value(b"zk11").unwrap().unwrap(), &val1);
 
         assert_eq!(
             engine
@@ -945,33 +941,23 @@ mod tests {
                 1010,
             )
             .unwrap();
-        assert_eq!(snap4.get_value(b"zkk32").unwrap().unwrap(), &val3);
+        assert_eq!(snap4.get_value(b"zk32").unwrap().unwrap(), &val3);
 
-        assert_eq!(
-            engine
-                .snapshot(
-                    regions[4].id,
-                    0,
-                    CacheRange::from_region(&regions[4]),
-                    1000,
-                    1010
-                )
-                .unwrap_err(),
-            FailedReason::NotCached
-        );
-
-        // For range3, one write is buffered but others is rejected, so the range3 is
-        // evicted and the keys of it are deleted. After flush the epoch, we should
-        // get 1220-178-28(kv)-96*2(node overhead) = 822 memory usage.
-        flush_epoch();
-        wait_evict_done(&engine);
-        assert_eq!(825, memory_controller.mem_usage());
+        let _snap5 = engine
+            .snapshot(
+                regions[4].id,
+                0,
+                CacheRange::from_region(&regions[4]),
+                1000,
+                1010,
+            )
+            .unwrap();
 
         drop(snap1);
         engine.evict_region(&regions[0]);
-        flush_epoch();
         wait_evict_done(&engine);
-        assert_eq!(550, memory_controller.mem_usage());
+        flush_epoch();
+        assert_eq!(972, memory_controller.mem_usage());
     }
 
     #[test]
