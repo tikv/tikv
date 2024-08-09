@@ -297,15 +297,17 @@ pub struct RegionCollector {
     // together in a struct exposing add, delete, and get_top_regions methods.
     region_activity: RegionActivityMap,
     region_leaders: Arc<RwLock<HashSet<u64>>>,
+    mvcc_amplification: usize,
 }
 
 impl RegionCollector {
-    pub fn new(region_leaders: Arc<RwLock<HashSet<u64>>>) -> Self {
+    pub fn new(region_leaders: Arc<RwLock<HashSet<u64>>>, mvcc_amplification: usize) -> Self {
         Self {
             region_leaders,
             regions: HashMap::default(),
             region_activity: HashMap::default(),
             region_ranges: BTreeMap::default(),
+            mvcc_amplification,
         }
     }
 
@@ -655,7 +657,7 @@ impl RegionCollector {
                     s.cop_detail.next + s.cop_detail.prev >= max_next_prev / 10
                         && s.cop_detail.processed_keys != 0
                         && (s.cop_detail.next + s.cop_detail.prev) / s.cop_detail.processed_keys
-                            >= 2
+                            >= self.mvcc_amplification
                 })
                 .collect_vec();
 
@@ -834,12 +836,13 @@ impl RegionInfoAccessor {
     pub fn new(
         host: &mut CoprocessorHost<impl KvEngine>,
         region_stats_manager_enabled_cb: RegionStatsManagerEnabledCb,
+        mvcc_amplification: usize,
     ) -> Self {
         let region_leaders = Arc::new(RwLock::new(HashSet::default()));
         let worker = WorkerBuilder::new("region-collector-worker").create();
         let scheduler = worker.start_with_timer(
             "region-collector-worker",
-            RegionCollector::new(region_leaders.clone()),
+            RegionCollector::new(region_leaders.clone(), mvcc_amplification),
         );
         register_region_event_listener(host, scheduler.clone(), region_stats_manager_enabled_cb);
 

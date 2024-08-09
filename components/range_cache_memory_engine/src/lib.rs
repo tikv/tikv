@@ -62,6 +62,7 @@ pub struct RangeCacheEngineConfig {
     // When memory usage reaches this amount, all onging writting ranges will be evicted.
     pub hard_limit_threshold: Option<ReadableSize>,
     pub expected_region_size: Option<ReadableSize>,
+    pub mvcc_amplification: usize,
 }
 
 impl Default for RangeCacheEngineConfig {
@@ -77,6 +78,7 @@ impl Default for RangeCacheEngineConfig {
             soft_limit_threshold: None,
             hard_limit_threshold: None,
             expected_region_size: None,
+            mvcc_amplification: 5,
         }
     }
 }
@@ -139,6 +141,7 @@ impl RangeCacheEngineConfig {
             soft_limit_threshold: Some(ReadableSize::gb(1)),
             hard_limit_threshold: Some(ReadableSize::gb(2)),
             expected_region_size: Some(ReadableSize::mb(20)),
+            mvcc_amplification: 5,
         }
     }
 }
