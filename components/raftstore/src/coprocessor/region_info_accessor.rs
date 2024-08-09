@@ -161,6 +161,7 @@ pub enum RegionInfoQuery {
     GetRegionsInRange {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
+        leader_only: bool,
         callback: Callback<Vec<Region>>,
     },
     GetTopRegions {
@@ -550,6 +551,7 @@ impl RegionCollector {
         start_key: Vec<u8>,
         end_key: Vec<u8>,
         callback: Callback<Vec<Region>>,
+        leader_only: bool,
     ) {
         let end_key = RangeKey::from_end_key(end_key);
         let mut regions = vec![];
@@ -561,7 +563,9 @@ impl RegionCollector {
             if RangeKey::from_start_key(region_info.region.get_start_key().to_vec()) > end_key {
                 break;
             }
-            regions.push(region_info.region.clone());
+            if !leader_only || region_info.role == StateRole::Leader {
+                regions.push(region_info.region.clone());
+            }
         }
         callback(regions);
     }
@@ -764,9 +768,10 @@ impl Runnable for RegionCollector {
             RegionInfoQuery::GetRegionsInRange {
                 start_key,
                 end_key,
+                leader_only,
                 callback,
             } => {
-                self.handle_get_regions_in_range(start_key, end_key, callback);
+                self.handle_get_regions_in_range(start_key, end_key, callback, leader_only);
             }
             RegionInfoQuery::GetTopRegions { count, callback } => {
                 self.handle_get_top_regions(count, callback);
@@ -896,7 +901,12 @@ pub trait RegionInfoProvider: Send + Sync {
         unimplemented!()
     }
 
-    fn get_regions_in_range(&self, _start_key: &[u8], _end_key: &[u8]) -> Result<Vec<Region>> {
+    fn get_regions_in_range(
+        &self,
+        _start_key: &[u8],
+        _end_key: &[u8],
+        _leader_only: bool,
+    ) -> Result<Vec<Region>> {
         unimplemented!()
     }
     fn get_top_regions(&self, _count: Option<NonZeroUsize>) -> Result<TopRegions> {
@@ -951,11 +961,17 @@ impl RegionInfoProvider for RegionInfoAccessor {
             )
         })
     }
-    fn get_regions_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<Vec<Region>> {
+    fn get_regions_in_range(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+        leader_only: bool,
+    ) -> Result<Vec<Region>> {
         let (tx, rx) = mpsc::channel();
         let msg = RegionInfoQuery::GetRegionsInRange {
             start_key: start_key.to_vec(),
             end_key: end_key.to_vec(),
+            leader_only,
             callback: Box::new(move |regions| {
                 if let Err(e) = tx.send(regions) {
                     warn!("failed to send get_regions_in_range result: {:?}", e);
@@ -1027,7 +1043,12 @@ impl Clone for MockRegionInfoProvider {
 }
 
 impl RegionInfoProvider for MockRegionInfoProvider {
-    fn get_regions_in_range(&self, start_key: &[u8], end_key: &[u8]) -> Result<Vec<Region>> {
+    fn get_regions_in_range(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+        _: bool,
+    ) -> Result<Vec<Region>> {
         let mut regions = Vec::new();
         let (tx, rx) = mpsc::channel();
         let end_key = RangeKey::from_end_key(end_key.to_vec());
