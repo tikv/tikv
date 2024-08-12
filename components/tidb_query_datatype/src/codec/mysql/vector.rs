@@ -7,6 +7,7 @@ use codec::prelude::*;
 use crate::codec::Result;
 
 const F32_SIZE: usize = std::mem::size_of::<f32>();
+
 // TODO: Implement generic version
 #[derive(Clone, Eq, Hash, PartialEq)]
 pub struct VectorFloat32 {
@@ -146,7 +147,7 @@ impl<'a> VectorFloat32Ref<'a> {
     }
 
     pub fn encoded_len(&self) -> usize {
-        self.value.len() + F32_SIZE
+        self.value.len() + std::mem::size_of::<u32>()
     }
 
     pub fn to_owned(&self) -> VectorFloat32 {
