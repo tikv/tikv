@@ -273,6 +273,7 @@ where
             meta.total_bytes += item.key.len() as u64 + item.value.len() as u64;
         }
         let (info, out) = w.finish_read()?;
+        meta.set_size(info.file_size());
         self.compact_stat.keys_out += info.num_entries();
         self.compact_stat.physical_bytes_out += info.file_size();
 
