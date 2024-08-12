@@ -4724,6 +4724,13 @@ where
         }
     }
 
+    pub fn pre_load_cache<T>(&self, ctx: &mut PollContext<EK, ER, T>) -> bool {
+        ctx.engines
+            .kv
+            .load_range(CacheRange::from_region(self.get_store().region()));
+        true
+    }
+
     pub fn ack_transfer_leader_msg(
         &mut self,
         reply_cmd: bool, // whether it is a reply to a TransferLeader command

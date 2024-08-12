@@ -598,6 +598,10 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
         self.config.value().enabled
     }
 
+    fn load_range(&self, range: CacheRange) {
+        let _ = self.load_range(range);
+    }
+
     fn evict_range(&self, range: &CacheRange, evict_range: EvictReason) {
         self.evict_range(range, evict_range)
     }

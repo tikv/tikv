@@ -17,4 +17,9 @@ where
     fn evict_range(&self, range: &CacheRange, evict_range: EvictReason) {
         self.range_cache_engine().evict_range(range, evict_range);
     }
+
+    #[inline]
+    fn load_range(&self, range: CacheRange) {
+        self.range_cache_engine().load_range(range);
+    }
 }

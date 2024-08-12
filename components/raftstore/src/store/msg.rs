@@ -538,6 +538,7 @@ where
     RaftLogGcFlushed,
     // Reports the result of asynchronous Raft logs fetching.
     RaftlogFetched(FetchedLogs),
+    RangeCacheLoaded,
     EnterForceLeaderState {
         syncer: UnsafeRecoveryForceLeaderSyncer,
         failed_stores: HashSet<u64>,

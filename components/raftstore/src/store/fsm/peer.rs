@@ -1564,6 +1564,9 @@ where
             SignificantMsg::RaftlogFetched(fetched_logs) => {
                 self.on_raft_log_fetched(fetched_logs.context, fetched_logs.logs);
             }
+            SignificantMsg::RangeCacheLoaded => {
+                self.on_range_cache_loaded();
+            }
             SignificantMsg::EnterForceLeaderState {
                 syncer,
                 failed_stores,
@@ -2037,6 +2040,8 @@ where
         self.fsm.peer.mut_store().update_async_fetch_res(low, None);
         self.fsm.has_ready = true;
     }
+
+    fn on_range_cache_loaded(&mut self) {}
 
     fn on_persisted_msg(&mut self, peer_id: u64, ready_number: u64) {
         if peer_id != self.fsm.peer_id() {
@@ -3688,6 +3693,7 @@ where
             .fsm
             .peer
             .maybe_reject_transfer_leader_msg(self.ctx, msg, peer_disk_usage)
+            && self.fsm.peer.pre_load_cache(self.ctx)
             && self.fsm.peer.pre_ack_transfer_leader_msg(self.ctx, msg)
         {
             self.fsm.peer.ack_transfer_leader_msg(false);
