@@ -496,12 +496,20 @@ mod tests {
         let event = CdcEvent::Event(e);
         let scanned_events = vec![event];
 
-        let truncated = Arc::new(AtomicBool::new(false));
-
-        blockon(tx.send_all(scanned_events, truncated).unwrap());
-        let mut drain = rx.drain();
-        let (event, _) = block_on(drain.next()).unwrap();
-        assert_eq!(rx.memory_quota.in_use(), 0);
+        {
+            let truncated = Arc::new(AtomicBool::new(false));
+            blockon(tx.send_all(scanned_events, truncated).unwrap());
+            let mut drain = rx.drain();
+            let (event, _) = block_on(drain.next()).unwrap();
+            assert_eq!(rx.memory_quota.in_use(), event.size());
+        }
+        {
+            let truncated = Arc::new(AtomicBool::new(true));
+            blockon(tx.send_all(scanned_events, truncated).unwrap());
+            let mut drain = rx.drain();
+            let (event, _) = block_on(drain.next()).unwrap();
+            assert_eq!(rx.memory_quota.in_use(), 0);
+        }
     }
 
     #[test]
