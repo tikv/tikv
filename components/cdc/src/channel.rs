@@ -487,6 +487,24 @@ mod tests {
     }
 
     #[test]
+    fn test_scanned_event() {
+        let memory_quota = Arc::new(MemoryQuota::new(1024));
+        let (mut tx, mut rx) = channel(10, memory_quota);
+
+        let mut e = Event::default();
+        e.region_id = 233;
+        let event = CdcEvent::Event(e);
+        let scanned_events = vec![event];
+
+        let truncated = Arc::new(AtomicBool::new(false));
+
+        blockon(tx.send_all(scanned_events, truncated).unwrap());
+        let mut drain = rx.drain();
+        let (event, _) = block_on(drain.next()).unwrap();
+        assert_eq!(rx.memory_quota.in_use(), 0);
+    }
+
+    #[test]
     fn test_barrier() {
         let force_send = false;
         let (mut send, mut rx) = new_test_channel(10, usize::MAX, force_send);
