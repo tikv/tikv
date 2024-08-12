@@ -176,6 +176,13 @@ impl<'a> VectorFloat32Ref<'a> {
     }
 
     fn index(&self, idx: usize) -> f32 {
+        if idx > self.len() {
+            panic!(
+                "Index out of bounds: index = {}, length = {}",
+                idx,
+                self.len()
+            );
+        }
         let byte_index: usize = idx * F32_SIZE;
         if byte_index + F32_SIZE > self.value.len() {
             panic!(
@@ -184,7 +191,7 @@ impl<'a> VectorFloat32Ref<'a> {
                 self.len()
             );
         }
-        let byte_index: usize = idx * 4;
+        let byte_index: usize = idx * F32_SIZE;
         unsafe {
             let float_ptr = self.value.as_ptr().add(byte_index) as *const f32;
             float_ptr.read_unaligned()
