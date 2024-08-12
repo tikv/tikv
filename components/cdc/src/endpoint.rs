@@ -1025,7 +1025,8 @@ impl<T: 'static + CdcHandle<E>, E: KvEngine, S: StoreRegionMeta> Endpoint<T, E, 
         let region_id = region.get_id();
         match self.capture_regions.get_mut(&region_id) {
             None => {
-                debug!("cdc region not found on region ready (finish scan locks)"; "region_id" => region.get_id());
+                debug!("cdc region not found on region ready (finish scan locks)";
+                    "region_id" => region.get_id());
             }
             Some(delegate) => {
                 if delegate.handle.id != observe_id {
