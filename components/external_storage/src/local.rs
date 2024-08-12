@@ -1,16 +1,23 @@
 // Copyright 2019 TiKV Project Authors. Licensed under Apache-2.0.
 
 use std::{
+    ffi::OsStr,
     fs::File as StdFile,
     io::{self, BufReader, Read, Seek},
+    os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use async_trait::async_trait;
-use cloud::blob::{BlobObject, IterableStorage};
+use cloud::blob::{
+    BlobConfig, BlobObject, BlobStorage, BlobStream, DeletableStorage, IterableStorage, PutResource,
+};
 use futures::{io::AllowStdIo, prelude::Stream};
-use futures_util::stream::TryStreamExt;
+use futures_util::{
+    future::{FutureExt, LocalBoxFuture},
+    stream::TryStreamExt,
+};
 use rand::Rng;
 use tikv_util::stream::error_stream;
 use tokio::fs::{self, File};
@@ -29,17 +36,39 @@ pub struct LocalStorage {
     base_dir: Arc<File>,
 }
 
+impl DeletableStorage for LocalStorage {
+    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+        let path = self.base.join(name);
+        async move {
+            match fs::remove_file(&path).await {
+                Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
+                _ => {}
+            };
+            // sync the inode.
+            self.base_dir.sync_all().await
+        }
+        .boxed_local()
+    }
+}
+
 impl IterableStorage for LocalStorage {
     fn iter_prefix(
         &self,
         prefix: &str,
     ) -> std::pin::Pin<Box<dyn Stream<Item = io::Result<BlobObject>> + '_>> {
+        let p = Path::new(prefix);
+        let dir_name = p.parent().unwrap_or_else(|| Path::new("")).to_owned();
+        let file_name = p.file_name().unwrap_or(OsStr::new("")).to_owned();
         Box::pin(
             futures::stream::iter(
-                WalkDir::new(self.base.join(prefix))
+                WalkDir::new(self.base.join(dir_name))
                     .follow_links(false)
                     .into_iter()
-                    .filter(|v| v.as_ref().map(|d| d.file_type().is_file()).unwrap_or(false)),
+                    .filter(move |v| v.as_ref().map(|d| {
+                    let is_file = d.file_type().is_file();
+                    let target_file_name = d.file_name();
+                    is_file && target_file_name.as_bytes().starts_with(file_name.as_bytes())
+            } ).unwrap_or(false)),
             )
             .map_err(|err| {
                 let kind = err
@@ -91,7 +120,49 @@ fn url_for(base: &Path) -> url::Url {
     u
 }
 
+struct LocalConfig {
+    base: PathBuf,
+}
+
+impl BlobConfig for LocalConfig {
+    fn name(&self) -> &'static str {
+        STORAGE_NAME
+    }
+
+    fn url(&self) -> io::Result<url::Url> {
+        Ok(url_for(&self.base.as_path()))
+    }
+}
+
 pub const STORAGE_NAME: &str = "local";
+
+#[async_trait]
+impl BlobStorage for LocalStorage {
+    fn config(&self) -> Box<dyn BlobConfig> {
+        LocalConfig {
+            base: self.base.clone(),
+        }
+    }
+
+    async fn put(
+        &self,
+        name: &str,
+        reader: PutResource<'_>,
+        content_length: u64,
+    ) -> io::Result<()> {
+        ExternalStorage::write(self, name, UnpinReader(reader.0), content_length).await
+    }
+
+    /// Read all contents of the given path.
+    fn get(&self, name: &str) -> BlobStream<'_> {
+        ExternalStorage::read(self, name)
+    }
+
+    /// Read part of contents of the given path.
+    fn get_part(&self, name: &str, off: u64, len: u64) -> BlobStream<'_> {
+        ExternalStorage::read_part(self, name, off, len)
+    }
+}
 
 #[async_trait]
 impl ExternalStorage for LocalStorage {

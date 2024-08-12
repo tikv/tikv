@@ -9,15 +9,15 @@ use std::{
 use async_trait::async_trait;
 use cloud::{
     blob::{
-        none_to_empty, BlobConfig, BlobObject, BlobStorage, BucketConf, IterableStorage,
-        PutResource, StringNonEmpty,
+        none_to_empty, BlobConfig, BlobObject, BlobStorage, BucketConf, DeletableStorage,
+        IterableStorage, PutResource, StringNonEmpty,
     },
     metrics::CLOUD_REQUEST_HISTOGRAM_VEC,
 };
 use fail::fail_point;
 use futures::stream::{self, Stream};
 use futures_util::{
-    future::FutureExt,
+    future::{FutureExt, LocalBoxFuture},
     io::{AsyncRead, AsyncReadExt},
     stream::TryStreamExt,
 };
@@ -680,6 +680,34 @@ impl<'cli> S3PrefixIter<'cli> {
             })
             .collect::<Vec<_>>();
         Ok(Some(data))
+    }
+}
+
+impl DeletableStorage for S3Storage {
+    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+        let key = self.maybe_prefix_key(name);
+        async move {
+            debug!("delete file from s3 storage"; "key" => %key);
+            let res = retry_and_count(
+                || {
+                    self.client.delete_object(DeleteObjectRequest {
+                        bucket: self.config.bucket.bucket.to_string(),
+                        key: key.clone(),
+                        ..Default::default()
+                    })
+                },
+                "delete_object",
+            )
+            .await;
+            match res {
+                Ok(_) => Ok(()),
+                Err(e) => Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("failed to delete object {}", e),
+                )),
+            }
+        }
+        .boxed_local()
     }
 }
 

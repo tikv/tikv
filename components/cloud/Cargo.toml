@@ -20,6 +20,7 @@ rusoto_core = "0.46.0"
 thiserror = "1.0"
 tikv_util = { workspace = true }
 url = "2.0"
+uuid = { version = "0.8", features = ["v4"] }
 
 [dev-dependencies]
 fail = "0.5"

@@ -37,6 +37,7 @@ pub use cloud::blob::{BlobObject, IterableStorage};
 pub use hdfs::{HdfsConfig, HdfsStorage};
 pub mod local;
 pub use local::LocalStorage;
+pub mod locking;
 mod noop;
 pub use noop::NoopStorage;
 mod metrics;

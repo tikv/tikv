@@ -5,9 +5,13 @@ use std::{io, path::Path, pin::Pin, result::Result, sync::Arc};
 use async_trait::async_trait;
 pub use aws::{Config as S3Config, S3Storage};
 pub use azure::{AzureStorage, Config as AzureConfig};
-use cloud::blob::{BlobObject, BlobStorage, IterableStorage, PutResource};
+use cloud::blob::{
+    BlobConfig, BlobObject, BlobStorage, DeletableStorage, ExclusiveWritableStorage,
+    ExclusiveWriteTxn, IterableStorage, PutResource,
+};
 use encryption::DataKeyManager;
 use futures::prelude::Stream;
+use futures_util::future::LocalBoxFuture;
 use gcp::GcsStorage;
 use kvproto::brpb::{
     AzureBlobStorage, Gcs, Noop, StorageBackend, StorageBackend_oneof_backend as Backend, S3,
@@ -23,9 +27,15 @@ use crate::{
 /// An interface that supports more operations than `ExternalStorage`.
 /// Some of operations may not be required by all users. Using a thiner
 /// interface will make them easier to be tested.
-pub trait IterableExternalStorage: ExternalStorage + IterableStorage {}
+pub trait ExternalStorageV2:
+    ExternalStorage + IterableStorage + DeletableStorage + ExclusiveWritableStorage
+{
+}
 
-impl<T: ExternalStorage + IterableStorage> IterableExternalStorage for T {}
+impl<T: ExternalStorage + IterableStorage + DeletableStorage + ExclusiveWritableStorage>
+    ExternalStorageV2 for T
+{
+}
 
 pub fn create_storage(
     storage_backend: &StorageBackend,
@@ -44,7 +54,7 @@ pub fn create_storage(
 pub fn create_iterable_storage(
     storage_backend: &StorageBackend,
     config: BackendConfig,
-) -> io::Result<Box<dyn IterableExternalStorage>> {
+) -> io::Result<Box<dyn ExternalStorageV2>> {
     if let Some(backend) = &storage_backend.backend {
         create_iterable_backend(backend, config)
     } else {
@@ -85,9 +95,9 @@ fn blob_store<Blob: BlobStorage>(store: Blob) -> Box<dyn ExternalStorage> {
 fn create_iterable_backend(
     backend: &Backend,
     backend_config: BackendConfig,
-) -> io::Result<Box<dyn IterableExternalStorage>> {
+) -> io::Result<Box<dyn ExternalStorageV2>> {
     let start = Instant::now();
-    let storage: Box<dyn IterableExternalStorage> = match backend {
+    let storage: Box<dyn ExternalStorageV2> = match backend {
         Backend::S3(config) => {
             let mut s = S3Storage::from_input(config.clone())?;
             s.set_multi_part_size(backend_config.s3_multi_part_size);
@@ -200,6 +210,23 @@ impl<Blob: BlobStorage + IterableStorage> IterableStorage for BlobStore<Blob> {
         prefix: &str,
     ) -> Pin<Box<dyn Stream<Item = Result<BlobObject, io::Error>> + '_>> {
         self.0.iter_prefix(prefix)
+    }
+}
+
+impl<Blob: BlobStorage + DeletableStorage> DeletableStorage for BlobStore<Blob> {
+    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+        self.0.delete(name)
+    }
+}
+
+impl<Blob: BlobStorage + DeletableStorage + IterableStorage> ExclusiveWritableStorage
+    for BlobStore<Blob>
+{
+    fn exclusive_write<'s: 'ret, 'txn: 'ret, 'ret>(
+        &'s self,
+        w: &'txn dyn ExclusiveWriteTxn,
+    ) -> LocalBoxFuture<'ret, io::Result<uuid::Uuid>> {
+        self.0.exclusive_write(w)
     }
 }
 

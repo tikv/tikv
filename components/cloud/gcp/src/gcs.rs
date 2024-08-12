@@ -4,13 +4,13 @@ use std::{fmt::Display, io, pin::Pin};
 use async_trait::async_trait;
 use cloud::{
     blob::{
-        none_to_empty, BlobConfig, BlobObject, BlobStorage, BucketConf, IterableStorage,
-        PutResource, StringNonEmpty,
+        none_to_empty, BlobConfig, BlobObject, BlobStorage, BucketConf, DeletableStorage,
+        IterableStorage, PutResource, StringNonEmpty,
     },
     metrics,
 };
 use futures_util::{
-    future::{FutureExt, TryFutureExt},
+    future::{FutureExt, LocalBoxFuture, TryFutureExt},
     io::{self as async_io, AsyncRead, Cursor},
     stream::{self, Stream, StreamExt, TryStreamExt},
 };
@@ -136,6 +136,26 @@ impl<T, E: Display> ResultExt for Result<T, E> {
     }
     fn or_invalid_input<D: Display>(self, msg: D) -> io::Result<T> {
         self.map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("{}: {}", msg, e)))
+    }
+}
+
+impl DeletableStorage for GcsStorage {
+    fn delete(&self, name: &str) -> LocalBoxFuture<'_, io::Result<()>> {
+        let name = name.to_owned();
+        async move {
+            let key = self.maybe_prefix_key(&name);
+            let oid = ObjectId::new(self.config.bucket.bucket.to_string(), key)
+                .or_invalid_input(format_args!("invalid object id"))?;
+            let req = Object::delete(&oid, None)
+                .or_io_error(format_args!("failed to delete {}", name))?;
+            self.make_request(
+                req.map(|_: io::Empty| Body::empty()),
+                tame_gcs::Scopes::ReadWrite,
+            )
+            .await?;
+            Ok(())
+        }
+        .boxed_local()
     }
 }
 
