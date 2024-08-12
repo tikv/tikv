@@ -2551,6 +2551,7 @@ dependencies = [
  "slog",
  "slog-global",
  "tempfile",
+ "test_util",
  "tikv_util",
  "txn_types",
 ]
@@ -6202,6 +6203,7 @@ dependencies = [
  "raftstore-v2",
  "rand 0.8.5",
  "rand_xorshift",
+ "range_cache_memory_engine",
  "resource_control",
  "resource_metering",
  "security",

@@ -96,7 +96,7 @@ impl RangeStatsManager {
             all_regions
                 .iter()
                 .filter_map(|(region, approx_size)| {
-                    is_cached_pred(&region)
+                    is_cached_pred(region)
                         .then(|| {
                             match regions_loaded.get(&region.get_id()) {
                                 // Do not evict ranges that were loaded less than
@@ -220,7 +220,7 @@ impl RangeStatsManager {
             ret
         };
         if prev_top_regions.is_empty() {
-            regions_added_out.extend(curr_top_regions.values().map(|r| r.clone()));
+            regions_added_out.extend(curr_top_regions.values().cloned());
             return;
         }
         let added_ranges = curr_top_regions
@@ -252,12 +252,11 @@ impl RangeStatsManager {
 
 #[cfg(test)]
 pub mod tests {
-    use kvproto::metapb::Peer;
     use raftstore::coprocessor::{self, region_info_accessor::TopRegions, RegionInfoProvider};
     use tikv_util::box_err;
 
     use super::*;
-    use crate::RangeCacheEngineConfig;
+    use crate::{test_util::new_region, RangeCacheEngineConfig};
 
     struct RegionInfoSimulator {
         regions: Mutex<TopRegions>,
@@ -296,21 +295,11 @@ pub mod tests {
         }
     }
 
-    fn new_region(id: u64, start_key: &[u8], end_key: &[u8], version: u64) -> Region {
-        let mut region = Region::default();
-        region.set_id(id);
-        region.set_start_key(start_key.to_vec());
-        region.set_end_key(end_key.to_vec());
-        region.mut_region_epoch().set_version(version);
-        region.mut_peers().push(Peer::default());
-        region
-    }
-
     #[test]
     fn test_collect_changed_regions() {
-        let region_1 = new_region(1, b"k1", b"k2", 0);
+        let region_1 = new_region(1, b"k1", b"k2");
 
-        let region_2 = new_region(2, b"k3", b"k4", 0);
+        let region_2 = new_region(2, b"k3", b"k4");
         let sim = Arc::new(RegionInfoSimulator {
             regions: Mutex::new(vec![(region_1.clone(), 42)]),
         });
@@ -333,10 +322,10 @@ pub mod tests {
         rsm.collect_changed_ranges(&mut added, &mut removed);
         assert_eq!(&added, &[region_2.clone()]);
         assert!(removed.is_empty());
-        let region_3 = new_region(3, b"k5", b"k6", 0);
-        let region_4 = new_region(4, b"k7", b"k8", 0);
-        let region_5 = new_region(5, b"k9", b"k10", 0);
-        let region_6 = new_region(6, b"k11", b"k12", 0);
+        let region_3 = new_region(3, b"k5", b"k6");
+        let region_4 = new_region(4, b"k7", b"k8");
+        let region_5 = new_region(5, b"k9", b"k10");
+        let region_6 = new_region(6, b"k11", b"k12");
         let top_regions = vec![
             (region_6.clone(), 42),
             (region_2.clone(), 7),
@@ -364,12 +353,12 @@ pub mod tests {
             rs.iter().map(|&r| (r.clone(), 42)).collect::<Vec<_>>()
         }
 
-        let region_1 = new_region(1, b"k1", b"k2", 0);
-        let region_2 = new_region(2, b"k3", b"k4", 0);
-        let region_3 = new_region(3, b"k5", b"k6", 0);
-        let region_4 = new_region(4, b"k7", b"k8", 0);
-        let region_5 = new_region(5, b"k9", b"k10", 0);
-        let region_6 = new_region(6, b"k11", b"k12", 0);
+        let region_1 = new_region(1, b"k1", b"k2");
+        let region_2 = new_region(2, b"k3", b"k4");
+        let region_3 = new_region(3, b"k5", b"k6");
+        let region_4 = new_region(4, b"k7", b"k8");
+        let region_5 = new_region(5, b"k9", b"k10");
+        let region_6 = new_region(6, b"k11", b"k12");
 
         let all_regions = make_region_vec(&[
             &region_1, &region_2, &region_3, &region_4, &region_5, &region_6,

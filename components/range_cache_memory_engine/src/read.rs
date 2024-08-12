@@ -686,9 +686,9 @@ mod tests {
         raw::DBStatisticsTickerType, util::new_engine_opt, RocksDbOptions, RocksStatistics,
     };
     use engine_traits::{
-        CacheRange, EvictReason, FailedReason, IterMetricsCollector, IterOptions, Iterable, Iterator,
-        MetricsExt, Mutable, Peekable, RangeCacheEngine, ReadOptions, RegionEvent, WriteBatch,
-        WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE,
+        CacheRange, EvictReason, FailedReason, IterMetricsCollector, IterOptions, Iterable,
+        Iterator, MetricsExt, Mutable, Peekable, RangeCacheEngine, ReadOptions, RegionEvent,
+        WriteBatch, WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE,
     };
     use keys::DATA_PREFIX_KEY;
     use kvproto::metapb::Region;
@@ -697,7 +697,7 @@ mod tests {
 
     use super::{RangeCacheIterator, RangeCacheSnapshot};
     use crate::{
-        engine::{cf_to_id, tests::new_region, SkiplistEngine},
+        engine::{cf_to_id, SkiplistEngine},
         keys::{
             construct_key, construct_region_key, construct_user_key, construct_value, decode_key,
             encode_key, encode_seek_key, InternalBytes, ValueType,
@@ -705,6 +705,7 @@ mod tests {
         perf_context::PERF_CONTEXT,
         range_manager::RegionState,
         statistics::Tickers,
+        test_util::new_region,
         RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
         RangeCacheWriteBatch,
     };

@@ -1300,7 +1300,7 @@ mod tests {
 
     use crossbeam::channel::TrySendError;
     use engine_test::kv::{KvTestEngine, KvTestSnapshot};
-    use engine_traits::{CacheRange, MiscExt, Peekable, SyncMutable, ALL_CFS};
+    use engine_traits::{MiscExt, Peekable, SyncMutable, ALL_CFS};
     use hybrid_engine::{HybridEngine, HybridEngineSnapshot};
     use keys::DATA_PREFIX;
     use kvproto::{metapb::RegionEpoch, raft_cmdpb::*};
@@ -2551,7 +2551,7 @@ mod tests {
         memory_engine.new_region(region1.clone());
         {
             let mut core = memory_engine.core().write();
-            core.mut_range_manager().set_safe_point(reigon1.id, 1);
+            core.mut_range_manager().set_safe_point(region1.id, 1);
         }
         let kv = (&[DATA_PREFIX, b'a'], b"b");
         reader.kv_engine.put(kv.0, kv.1).unwrap();
@@ -2686,6 +2686,8 @@ mod tests {
         let snap_ctx = SnapshotContext {
             read_ts: 15,
             range: None,
+            region_id: 0,
+            epoch_version: 0,
         };
         reader.propose_raft_command(Some(snap_ctx), read_id, task.request, task.callback);
         assert_eq!(rx.try_recv().unwrap_err(), TryRecvError::Empty);

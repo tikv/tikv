@@ -42,7 +42,7 @@ const AMOUNT_TO_CLEAN_TOMBSTONE: u64 = ReadableSize::mb(16).0;
 // slice.
 const DELETE_ENTRY_VAL: &[u8] = b"";
 
-// `prepare_for_range` should be called before raft command apply for each peer
+// `prepare_for_region` should be called before raft command apply for each peer
 // delegate. It sets `range_cache_status` which is used to determine whether the
 // writes of this peer should be buffered.
 pub struct RangeCacheWriteBatch {
@@ -527,7 +527,7 @@ impl WriteBatch for RangeCacheWriteBatch {
         self.current_region = Some(region.clone());
         // TODO: remote range.
         let range = CacheRange::from_region(region);
-        self.set_range_cache_status(self.engine.prepare_for_apply(self.id, range, &region));
+        self.set_range_cache_status(self.engine.prepare_for_apply(self.id, range, region));
         self.memory_usage_reach_hard_limit = false;
         // last region is canceled, we should remove outdated entries of last region.
         if self.currnet_region_evicted {
@@ -600,8 +600,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        background::flush_epoch, config::RangeCacheConfigManager, engine::tests::new_region,
-        range_manager::RegionState, RangeCacheEngineConfig, RangeCacheEngineContext,
+        background::flush_epoch, config::RangeCacheConfigManager, range_manager::RegionState,
+        test_util::new_region, RangeCacheEngineConfig, RangeCacheEngineContext,
     };
 
     // We should not use skiplist.get directly as we only cares keys without
@@ -841,7 +841,7 @@ mod tests {
                 core.mut_range_manager().set_safe_point(r.id, 10);
             }
             let _ = engine
-                .snapshot(r.id, 0, CacheRange::from_region(&r), 1000, 1000)
+                .snapshot(r.id, 0, CacheRange::from_region(r), 1000, 1000)
                 .unwrap();
         }
         let memory_controller = engine.memory_controller();

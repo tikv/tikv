@@ -214,16 +214,15 @@ mod tests {
 
     use engine_rocks::util::new_engine;
     use engine_traits::{CacheRange, KvEngine, SnapshotContext, CF_DEFAULT, CF_LOCK, CF_WRITE};
-    use kvproto::metapb::Region;
     use online_config::{ConfigChange, ConfigManager, ConfigValue};
     use range_cache_memory_engine::{
-        config::RangeCacheConfigManager, RangeCacheEngineConfig, RangeCacheEngineContext,
-        RangeCacheMemoryEngine,
+        config::RangeCacheConfigManager, test_util::new_region, RangeCacheEngineConfig,
+        RangeCacheEngineContext, RangeCacheMemoryEngine,
     };
     use tempfile::Builder;
     use tikv_util::config::VersionTrack;
 
-    use crate::{misc::tests::new_region, HybridEngine};
+    use crate::HybridEngine;
 
     #[test]
     fn test_engine() {

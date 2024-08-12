@@ -35,3 +35,4 @@ kvproto = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3.0"
+test_util = { workspace = true }

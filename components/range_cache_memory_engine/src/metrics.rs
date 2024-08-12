@@ -201,6 +201,8 @@ pub(crate) fn observe_eviction_duration(secs: f64, evict_reason: EvictReason) {
             .memory_limit_reached
             .observe(secs),
         EvictReason::Merge => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC.merge.observe(secs),
-        EvictReason::InMemoryEngineDisabled => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC.in_memory_engine_disabled.observe(secs),
+        EvictReason::InMemoryEngineDisabled => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC
+            .in_memory_engine_disabled
+            .observe(secs),
     }
 }

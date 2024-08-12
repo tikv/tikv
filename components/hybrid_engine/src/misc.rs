@@ -1,7 +1,8 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    CacheRange, EvictReason, KvEngine, MiscExt, RangeCacheEngine, RegionEvent, Result, WriteBatchExt,
+    CacheRange, EvictReason, KvEngine, MiscExt, RangeCacheEngine, RegionEvent, Result,
+    WriteBatchExt,
 };
 
 use crate::{engine::HybridEngine, hybrid_metrics::HybridEngineStatisticsReporter};
@@ -157,24 +158,15 @@ pub mod tests {
         CacheRange, DeleteStrategy, MiscExt, Mutable, Range, RangeCacheEngine, WriteBatch,
         WriteBatchExt, WriteOptions, CF_DEFAULT,
     };
-    use kvproto::metapb::Region;
-    use range_cache_memory_engine::RangeCacheEngineConfig;
+    use range_cache_memory_engine::{test_util::new_region, RangeCacheEngineConfig};
 
     use crate::util::hybrid_engine_for_tests;
-
-    pub fn new_region<T1: Into<Vec<u8>>, T2: Into<Vec<u8>>>(id: u64, start: T1, end: T2) -> Region {
-        let mut region = Region::new();
-        region.id = id;
-        region.start_key = start.into();
-        region.end_key = end.into();
-        region
-    }
 
     #[test]
     fn test_delete_range() {
         let r1 = new_region(1, b"k00", b"k10");
-        let r2 = new_region(1, b"k20", b"k30");
-        let r3 = new_region(1, b"k40", b"k50");
+        let r2 = new_region(2, b"k20", b"k30");
+        let r3 = new_region(3, b"k40", b"k50");
         let r1_clone = r1.clone();
         let r2_clone = r2.clone();
         let r3_clone = r3.clone();
@@ -190,14 +182,14 @@ pub mod tests {
         .unwrap();
         let mut write_batch = hybrid_engine.write_batch();
         write_batch.prepare_for_region(&r1);
-        write_batch.put(b"k02", b"val").unwrap();
-        write_batch.put(b"k03", b"val").unwrap();
+        write_batch.put(b"zk02", b"val").unwrap();
+        write_batch.put(b"zk03", b"val").unwrap();
         write_batch.prepare_for_region(&r2);
-        write_batch.put(b"k22", b"val").unwrap();
-        write_batch.put(b"k23", b"val").unwrap();
+        write_batch.put(b"zk22", b"val").unwrap();
+        write_batch.put(b"zk23", b"val").unwrap();
         write_batch.prepare_for_region(&r3);
-        write_batch.put(b"k42", b"val").unwrap();
-        write_batch.put(b"k42", b"val").unwrap();
+        write_batch.put(b"zk42", b"val").unwrap();
+        write_batch.put(b"zk42", b"val").unwrap();
         write_batch.write().unwrap();
 
         hybrid_engine
@@ -205,7 +197,7 @@ pub mod tests {
                 &WriteOptions::default(),
                 CF_DEFAULT,
                 DeleteStrategy::DeleteByRange,
-                &[Range::new(b"k00", b"k15"), Range::new(b"k22", b"k27")],
+                &[Range::new(b"zk00", b"zk15"), Range::new(b"zk22", b"zk27")],
             )
             .unwrap();
 
@@ -215,11 +207,11 @@ pub mod tests {
             .unwrap_err();
         hybrid_engine
             .range_cache_engine()
-            .snapshot(r1.id, 0, CacheRange::from_region(&r1), 1000, 1000)
+            .snapshot(r2.id, 0, CacheRange::from_region(&r2), 1000, 1000)
             .unwrap_err();
         hybrid_engine
             .range_cache_engine()
-            .snapshot(r1.id, 0, CacheRange::from_region(&r1), 1000, 1000)
+            .snapshot(r3.id, 0, CacheRange::from_region(&r3), 1000, 1000)
             .unwrap();
     }
 }

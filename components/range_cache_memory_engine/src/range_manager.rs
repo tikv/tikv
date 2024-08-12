@@ -110,7 +110,7 @@ impl RangeMeta {
             self.region.id == region.id
                 && self.region.get_region_epoch().version < region.get_region_epoch().version
         );
-        let new_range = CacheRange::from_region(&region);
+        let new_range = CacheRange::from_region(region);
         if !self.range.contains_range(&new_range) {
             return false;
         }
@@ -341,14 +341,13 @@ impl RegionManager {
         let Some(cached_meta) = self.regions.get_mut(&region.id) else {
             return None;
         };
-        if cached_meta.state == Pending {
-            if cached_meta.region.get_region_epoch().version != region.get_region_epoch().version {
-                if !cached_meta.update_region(region) {
-                    info!("remove outdated pending region"; "pending_region" => ?cached_meta.region, "new_region" => ?region);
-                    self.remove_region(region.id);
-                    return None;
-                }
-            }
+        if cached_meta.state == Pending
+            && cached_meta.region.get_region_epoch().version != region.get_region_epoch().version
+            && !cached_meta.update_region(region)
+        {
+            info!("remove outdated pending region"; "pending_region" => ?cached_meta.region, "new_region" => ?region);
+            self.remove_region(region.id);
+            return None;
         }
         Some(cached_meta.state)
     }
@@ -566,7 +565,11 @@ impl RegionManager {
     //
     // For 2, this is caused by some special operations such as merge and delete
     // range. So, conservatively, we evict all ranges overlap with it.
-    pub(crate) fn evict_region(&mut self, evict_region: &Region, evict_reason: EvictReason) -> Vec<Region> {
+    pub(crate) fn evict_region(
+        &mut self,
+        evict_region: &Region,
+        evict_reason: EvictReason,
+    ) -> Vec<Region> {
         info!(
             "try to evict region";
             "evict_region" => ?evict_region,
@@ -576,7 +579,9 @@ impl RegionManager {
         if let Some(meta) = self.regions.get(&evict_region.id) {
             // if epoch not changed, no need to do range scan.
             if meta.region.get_region_epoch().version == evict_region.get_region_epoch().version {
-                if let Some(region) = self.do_evict_region(evict_region.id, evict_region, evict_reason) {
+                if let Some(region) =
+                    self.do_evict_region(evict_region.id, evict_region, evict_reason)
+                {
                     return vec![region];
                 }
             }
@@ -601,7 +606,12 @@ impl RegionManager {
     }
 
     // return the region if it can be directly deleted.
-    fn do_evict_region(&mut self, id: u64, evict_region: &Region, evict_reason: EvictReason) -> Option<Region> {
+    fn do_evict_region(
+        &mut self,
+        id: u64,
+        evict_region: &Region,
+        evict_reason: EvictReason,
+    ) -> Option<Region> {
         let meta = self.regions.get_mut(&id).unwrap();
         let prev_state = meta.state;
         assert!(
@@ -663,8 +673,11 @@ impl RegionManager {
                 r.get_region_epoch().version
             );
 
-            let evict_info = meta.evict_info.clone().unwrap();
-            observe_eviction_duration(evict_info.start.saturating_elapsed_secs(), evict_info.reason);
+            let evict_info = meta.evict_info.unwrap();
+            observe_eviction_duration(
+                evict_info.start.saturating_elapsed_secs(),
+                evict_info.reason,
+            );
             info!(
                 "range eviction done";
                 "region" => ?r,
@@ -757,16 +770,11 @@ impl RegionManager {
                 region_meta.region.get_region_epoch().version
                     < source_region.get_region_epoch().version
             );
-            new_regions = new_regions
-                .iter()
-                .filter(|r| {
-                    r.start_key <= source_region.start_key
-                        && (source_region.end_key.is_empty()
-                            || (source_region.end_key >= r.end_key
-                                && !r.end_key.as_slice().is_empty()))
-                })
-                .cloned()
-                .collect();
+            new_regions.retain(|r| {
+                r.start_key <= source_region.start_key
+                    && (source_region.end_key.is_empty()
+                        || (source_region.end_key >= r.end_key && !r.end_key.as_slice().is_empty()))
+            });
             info!("[IME] handle split region met pending region epoch stale"; "cached" => ?region_meta, "split_source" => ?source_region, "cache_new_regions" => ?new_regions);
         }
 
@@ -805,12 +813,10 @@ pub enum RangeCacheStatus {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
     use engine_traits::{CacheRange, EvictReason, FailedReason};
 
     use super::*;
-    use crate::{engine::tests::new_region, range_manager::LoadFailedReason};
+    use crate::{range_manager::LoadFailedReason, test_util::new_region};
 
     #[test]
     fn test_range_manager() {
@@ -839,7 +845,7 @@ mod tests {
             r.mut_region_epoch().version = 2;
         }
         range_mgr.split_region(&r1, vec![r_left.clone(), r_evict.clone(), r_right.clone()]);
-        range_mgr.evict_region(&r_evict);
+        range_mgr.evict_region(&r_evict, EvictReason::AutoEvict);
         let range1 = CacheRange::from_region(&r1);
         let meta1 = range_mgr
             .historical_regions
@@ -965,7 +971,10 @@ mod tests {
 
             let mut r4 = new_region(4, b"k00", b"k05");
             r4.mut_region_epoch().version = 2;
-            assert_eq!(range_mgr.evict_region(&r4, EvictReason::AutoEvict), vec![r1]);
+            assert_eq!(
+                range_mgr.evict_region(&r4, EvictReason::AutoEvict),
+                vec![r1]
+            );
         }
 
         {
@@ -981,7 +990,10 @@ mod tests {
             assert!(range_mgr.contains_region(r3.id));
 
             let r4 = new_region(4, b"k", b"k51");
-            assert_eq!(range_mgr.evict_region(&r4, EvictReason::AutoEvict), vec![r1, r2, r3]);
+            assert_eq!(
+                range_mgr.evict_region(&r4, EvictReason::AutoEvict),
+                vec![r1, r2, r3]
+            );
             assert!(
                 range_mgr
                     .regions()
@@ -1000,7 +1012,10 @@ mod tests {
             range_mgr.new_region(r3.clone());
 
             let r4 = new_region(4, b"k25", b"k55");
-            assert_eq!(range_mgr.evict_region(&r4, EvictReason::AutoEvict), vec![r2, r3]);
+            assert_eq!(
+                range_mgr.evict_region(&r4, EvictReason::AutoEvict),
+                vec![r2, r3]
+            );
             assert_eq!(
                 range_mgr
                     .regions()
@@ -1021,7 +1036,10 @@ mod tests {
             range_mgr.new_region(r3.clone());
 
             let r4 = new_region(4, b"k25", b"k75");
-            assert_eq!(range_mgr.evict_region(&r4, EvictReason::AutoEvict), vec![r2, r3]);
+            assert_eq!(
+                range_mgr.evict_region(&r4, EvictReason::AutoEvict),
+                vec![r2, r3]
+            );
             assert_eq!(
                 range_mgr
                     .regions()

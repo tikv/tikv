@@ -17,8 +17,8 @@ use crossbeam_skiplist::{
 };
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    CacheRange, EvictReason, FailedReason, IterOptions, Iterable, KvEngine, RangeCacheEngine, RegionEvent,
-    Result, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    CacheRange, EvictReason, FailedReason, IterOptions, Iterable, KvEngine, RangeCacheEngine,
+    RegionEvent, Result, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use kvproto::metapb::Region;
 use parking_lot::RwLock;
@@ -26,15 +26,13 @@ use raftstore::coprocessor::RegionInfoProvider;
 use slog_global::error;
 use tikv_util::{config::VersionTrack, info};
 
-#[cfg(test)]
-use crate::range_manager::LoadFailedReason;
 use crate::{
     background::{BackgroundTask, BgWorkManager, PdRangeHintService},
     keys::{
         encode_key_for_boundary_with_mvcc, encode_key_for_boundary_without_mvcc, InternalBytes,
     },
     memory_controller::MemoryController,
-    range_manager::{RangeCacheStatus, RegionManager, RegionState},
+    range_manager::{RangeCacheStatus, RegionManager, RegionState, LoadFailedReason},
     read::{RangeCacheIterator, RangeCacheSnapshot},
     statistics::Statistics,
     RangeCacheEngineConfig, RangeCacheEngineContext,
@@ -303,7 +301,6 @@ impl RangeCacheMemoryEngine {
         self.core.write().range_manager.new_region(region);
     }
 
-    #[cfg(test)]
     pub fn load_region(&self, region: Region) -> result::Result<(), LoadFailedReason> {
         self.core.write().mut_range_manager().load_region(region)
     }
@@ -312,7 +309,11 @@ impl RangeCacheMemoryEngine {
     /// will not be readable, but the data of the region may not be deleted
     /// immediately due to some ongoing snapshots.
     pub fn evict_region(&self, region: &Region, evict_reason: EvictReason) {
-        let deleteable_regions = self.core.write().range_manager.evict_region(&region, evict_reason);
+        let deleteable_regions = self
+            .core
+            .write()
+            .range_manager
+            .evict_region(region, evict_reason);
         if !deleteable_regions.is_empty() {
             // The range can be deleted directly.
             if let Err(e) = self
@@ -507,7 +508,6 @@ pub mod tests {
 
     use crossbeam::epoch;
     use engine_traits::{CacheRange, CF_DEFAULT, CF_LOCK, CF_WRITE};
-    use kvproto::metapb::Region;
     use tikv_util::config::{ReadableSize, VersionTrack};
 
     use super::SkiplistEngine;
@@ -515,17 +515,10 @@ pub mod tests {
         keys::{construct_key, construct_user_key, encode_key},
         memory_controller::MemoryController,
         range_manager::{RangeMeta, RegionManager, RegionState},
+        test_util::new_region,
         InternalBytes, RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
         ValueType,
     };
-
-    pub fn new_region<T1: Into<Vec<u8>>, T2: Into<Vec<u8>>>(id: u64, start: T1, end: T2) -> Region {
-        let mut region = Region::default();
-        region.id = id;
-        region.start_key = start.into();
-        region.end_key = end.into();
-        region
-    }
 
     fn count_region(mgr: &RegionManager, mut f: impl FnMut(&RangeMeta) -> bool) -> usize {
         mgr.regions().values().filter(|m| f(m)).count()

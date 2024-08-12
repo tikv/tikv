@@ -135,16 +135,19 @@ mod tests {
         CacheRange, IterOptions, Iterable, Iterator, KvEngine, Mutable, SnapshotContext,
         WriteBatch, WriteBatchExt, CF_DEFAULT,
     };
-    use range_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheStatus};
+    use range_cache_memory_engine::{
+        test_util::new_region, RangeCacheEngineConfig, RangeCacheStatus,
+    };
 
-    use crate::{misc::tests::new_region, util::hybrid_engine_for_tests};
+    use crate::util::hybrid_engine_for_tests;
 
     #[test]
     fn test_iterator() {
         let region = new_region(1, b"", b"z");
+        let range = CacheRange::from_region(&region);
         let mut iter_opt = IterOptions::default();
-        iter_opt.set_upper_bound(&region.end_key, 0);
-        iter_opt.set_lower_bound(&region.start_key, 0);
+        iter_opt.set_upper_bound(&range.end, 0);
+        iter_opt.set_lower_bound(&range.start, 0);
 
         let region_clone = region.clone();
         let (_path, hybrid_engine) = hybrid_engine_for_tests(
@@ -169,7 +172,7 @@ mod tests {
         write_batch
             .cache_write_batch
             .set_range_cache_status(RangeCacheStatus::Cached);
-        write_batch.put(b"hello", b"world").unwrap();
+        write_batch.put(b"zhello", b"world").unwrap();
         let seq = write_batch.write().unwrap();
         assert!(seq > 0);
         let ctx = SnapshotContext {
@@ -184,7 +187,7 @@ mod tests {
             assert!(iter.seek_to_first().unwrap());
             let actual_key = iter.key();
             let actual_value = iter.value();
-            assert_eq!(actual_key, b"hello");
+            assert_eq!(actual_key, b"zhello");
             assert_eq!(actual_value, b"world");
         }
     }

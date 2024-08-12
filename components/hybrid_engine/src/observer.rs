@@ -273,7 +273,7 @@ mod tests {
         observer.post_exec_cmd(&mut ctx, &cmd, &RegionState::default(), &mut apply);
         observer.on_flush_cmd();
         let expected = CacheRange::from_region(&region);
-        assert!(&cache_engine.evicted_ranges.lock().unwrap().is_empty());
+        assert!(&cache_engine.region_events.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -309,13 +309,17 @@ mod tests {
         // Must not evict range when range cache engine is disabled.
         observer.post_exec_cmd(&mut ctx, &cmd, &RegionState::default(), &mut apply);
         observer.on_flush_cmd();
-        assert!(cache_engine.evicted_ranges.lock().unwrap().is_empty());
+        assert!(cache_engine.region_events.lock().unwrap().is_empty());
 
         // Enable range cache engine.
         cache_engine.enabled.store(true, Ordering::Relaxed);
         observer.post_exec_cmd(&mut ctx, &cmd, &RegionState::default(), &mut apply);
         observer.on_flush_cmd();
         let expected = CacheRange::from_region(&region);
-        assert_eq!(&cache_engine.evicted_ranges.lock().unwrap()[0], &expected);
+        let expected = RegionEvent::Eviction {
+            region,
+            reason: EvictReason::Merge,
+        };
+        assert_eq!(&cache_engine.region_events.lock().unwrap()[0], &expected);
     }
 }

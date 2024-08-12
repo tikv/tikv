@@ -372,7 +372,7 @@ impl BackgroundRunnerCore {
         oldest_seqno: u64,
         delete_scheduler: &Scheduler<BackgroundTask>,
     ) -> FilterMetrics {
-        let range = CacheRange::from_region(&region);
+        let range = CacheRange::from_region(region);
         let (skiplist_engine, safe_point) = {
             let mut core = self.engine.write();
             // We should also consider the ongoing snapshot of the historical ranges (ranges
@@ -429,7 +429,7 @@ impl BackgroundRunnerCore {
 
         {
             let mut engine = self.engine.write();
-            let deletable_regions = engine.mut_range_manager().on_gc_region_finished(&region);
+            let deletable_regions = engine.mut_range_manager().on_gc_region_finished(region);
             if !deletable_regions.is_empty() {
                 if let Err(e) = delete_scheduler
                     .schedule_force(BackgroundTask::DeleteRegions(deletable_regions))
@@ -511,10 +511,10 @@ impl BackgroundRunnerCore {
             on_region_meta(region_meta);
         } else {
             // epoch version changed, should use scan to find all overlapped regions
-            let range = CacheRange::from_region(&region);
+            let range = CacheRange::from_region(region);
             core.range_manager
                 .iter_overlapped_regions_mut(&range, |meta| {
-                    assert!(range.contains_range(&meta.get_range()));
+                    assert!(range.contains_range(meta.get_range()));
                     on_region_meta(meta);
                 });
         }
@@ -568,10 +568,10 @@ impl BackgroundRunnerCore {
             mark_region_evicted(region_meta);
         } else {
             // epoch version changed, should use scan to find all overlap regions
-            let range = CacheRange::from_region(&region);
+            let range = CacheRange::from_region(region);
             core.range_manager
                 .iter_overlapped_regions_mut(&range, |meta| {
-                    assert!(range.contains_range(&meta.get_range()));
+                    assert!(range.contains_range(meta.get_range()));
                     mark_region_evicted(meta);
                 });
         }
@@ -626,7 +626,9 @@ impl BackgroundRunnerCore {
                 break;
             }
             let mut engine_wr = self.engine.write();
-            let deleteable_regions = engine_wr.mut_range_manager().evict_region(&region, EvictReason::MemoryLimitReached);
+            let deleteable_regions = engine_wr
+                .mut_range_manager()
+                .evict_region(&region, EvictReason::MemoryLimitReached);
             if !deleteable_regions.is_empty() {
                 info!(
                     "evict on soft limit reached";
@@ -684,7 +686,9 @@ impl BackgroundRunnerCore {
         for evict_region in regions_to_remove {
             if self.memory_controller.reached_soft_limit() {
                 let mut core = self.engine.write();
-                let deleteable_regions = core.mut_range_manager().evict_region(&evict_region, EvictReason::AutoEvict);
+                let deleteable_regions = core
+                    .mut_range_manager()
+                    .evict_region(&evict_region, EvictReason::AutoEvict);
                 info!(
                     "load_evict: soft limit reached";
                     "region_to_evict" => ?&evict_region,
@@ -1034,7 +1038,11 @@ impl Runnable for BackgroundRunner {
                     };
 
                     if let Some(safe_point) = safe_point {
-                        if core.on_snapshot_load_finished(&region, &delete_range_scheduler, safe_point) {
+                        if core.on_snapshot_load_finished(
+                            &region,
+                            &delete_range_scheduler,
+                            safe_point,
+                        ) {
                             let duration = start.saturating_elapsed();
                             RANGE_LOAD_TIME_HISTOGRAM.observe(duration.as_secs_f64());
                             info!(
@@ -1213,7 +1221,7 @@ impl DeleteRangeRunner {
     fn delete_regions(&mut self, regions: &[Region]) {
         let skiplist_engine = self.engine.read().engine();
         for r in regions {
-            let range = CacheRange::from_region(&r);
+            let range = CacheRange::from_region(r);
             skiplist_engine.delete_range(&range);
         }
         self.engine
@@ -1553,7 +1561,7 @@ pub mod tests {
     use crate::{
         background::BackgroundRunner,
         config::RangeCacheConfigManager,
-        engine::{tests::new_region, SkiplistEngine, SkiplistHandle},
+        engine::{SkiplistEngine, SkiplistHandle},
         keys::{
             construct_key, construct_region_key, construct_value, encode_key, encode_seek_key,
             encoding_for_filter, InternalBytes, ValueType,
@@ -1563,7 +1571,7 @@ pub mod tests {
             region_label_meta_client,
             tests::{add_region_label_rule, new_region_label_rule, new_test_server_and_client},
         },
-        test_util::{put_data, put_data_with_overwrite},
+        test_util::{new_region, put_data, put_data_with_overwrite},
         write_batch::RangeCacheWriteBatchEntry,
         RangeCacheEngineConfig, RangeCacheEngineContext, RangeCacheMemoryEngine,
     };
@@ -2783,10 +2791,16 @@ pub mod tests {
             if exist {
                 let read_ts = TimeStamp::compose(TimeStamp::physical_now(), 0).into_inner();
                 let snap = engine
-                    .snapshot(region.id, 0, CacheRange::from_region(region), read_ts, u64::MAX)
+                    .snapshot(
+                        region.id,
+                        0,
+                        CacheRange::from_region(region),
+                        read_ts,
+                        u64::MAX,
+                    )
                     .unwrap();
                 let mut count = 0;
-                let range = CacheRange::from_region(&region);
+                let range = CacheRange::from_region(region);
                 for cf in DATA_CFS {
                     let mut iter = IterOptions::default();
                     iter.set_lower_bound(&range.start, 0);
@@ -2889,7 +2903,7 @@ pub mod tests {
                     .snapshot(r.id, 0, CacheRange::from_region(r), read_ts, u64::MAX)
                     .unwrap();
                 let mut count = 0;
-                let range = CacheRange::from_region(&r);
+                let range = CacheRange::from_region(r);
                 for cf in DATA_CFS {
                     let mut iter = IterOptions::default();
                     iter.set_lower_bound(&range.start, 0);

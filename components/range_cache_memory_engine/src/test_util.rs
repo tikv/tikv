@@ -6,6 +6,7 @@ use crossbeam::epoch;
 use engine_rocks::RocksEngine;
 use engine_traits::{SyncMutable, CF_WRITE};
 use keys::data_key;
+use kvproto::metapb::{Peer, Region};
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
 use crate::{
@@ -138,7 +139,8 @@ pub fn put_data_in_rocks(
     rocks_engine: &RocksEngine,
     write_type: WriteType,
 ) {
-    let raw_write_k = Key::from_raw(key)
+    let data_key = data_key(key);
+    let raw_write_k = Key::from_raw(&data_key)
         .append_ts(TimeStamp::new(commit_ts))
         .into_encoded();
     let write_v = Write::new(
@@ -165,4 +167,14 @@ pub fn put_data_in_rocks(
             .into_encoded();
         rocks_engine.put(&raw_default_k, value).unwrap();
     }
+}
+
+pub fn new_region<T1: Into<Vec<u8>>, T2: Into<Vec<u8>>>(id: u64, start: T1, end: T2) -> Region {
+    let mut region = Region::new();
+    region.id = id;
+    region.start_key = start.into();
+    region.end_key = end.into();
+    // push a dummy peer to avoid CacheRange::from_region panic.
+    region.mut_peers().push(Peer::default());
+    region
 }

@@ -1023,6 +1023,8 @@ where
                     DATA_MIN_KEY.to_vec(),
                     DATA_MAX_KEY.to_vec(),
                 )),
+                region_id: 0,
+                epoch_version: 0,
             };
             self.get_cf_with_snap_ctx(CF_DEFAULT, key, true, ctx)
         }
@@ -1038,6 +1040,8 @@ where
                     DATA_MIN_KEY.to_vec(),
                     DATA_MAX_KEY.to_vec(),
                 )),
+                region_id: 0,
+                epoch_version: 0,
             };
             self.get_cf_with_snap_ctx(cf, key, true, ctx)
         }
@@ -1053,6 +1057,8 @@ where
                     DATA_MIN_KEY.to_vec(),
                     DATA_MAX_KEY.to_vec(),
                 )),
+                region_id: 0,
+                epoch_version: 0,
             };
             self.get_cf_with_snap_ctx(CF_DEFAULT, key, true, ctx)
         }

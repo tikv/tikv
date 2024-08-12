@@ -156,9 +156,11 @@ mod tests {
         CacheRange, KvEngine, Mutable, Peekable, RangeCacheEngine, SnapshotContext, WriteBatch,
         WriteBatchExt,
     };
-    use range_cache_memory_engine::{RangeCacheEngineConfig, RangeCacheStatus};
+    use range_cache_memory_engine::{
+        test_util::new_region, RangeCacheEngineConfig, RangeCacheStatus,
+    };
 
-    use crate::{misc::tests::new_region, util::hybrid_engine_for_tests};
+    use crate::util::hybrid_engine_for_tests;
 
     #[test]
     fn test_write_to_both_engines() {
@@ -183,26 +185,26 @@ mod tests {
         write_batch
             .cache_write_batch
             .set_range_cache_status(RangeCacheStatus::Cached);
-        write_batch.put(b"hello", b"world").unwrap();
+        write_batch.put(b"zhello", b"world").unwrap();
         let seq = write_batch.write().unwrap();
         assert!(seq > 0);
-        let actual: &[u8] = &hybrid_engine.get_value(b"hello").unwrap().unwrap();
+        let actual: &[u8] = &hybrid_engine.get_value(b"zhello").unwrap().unwrap();
         assert_eq!(b"world", &actual);
         let ctx = SnapshotContext {
             region_id: 1,
             epoch_version: 0,
-            range: Some(CacheRegion::from_region(&region)),
+            range: Some(CacheRange::from_region(&region)),
             read_ts: 10,
         };
         let snap = hybrid_engine.snapshot(Some(ctx));
-        let actual: &[u8] = &snap.get_value(b"hello").unwrap().unwrap();
+        let actual: &[u8] = &snap.get_value(b"zhello").unwrap().unwrap();
         assert_eq!(b"world", &actual);
-        let actual: &[u8] = &snap.disk_snap().get_value(b"hello").unwrap().unwrap();
+        let actual: &[u8] = &snap.disk_snap().get_value(b"zhello").unwrap().unwrap();
         assert_eq!(b"world", &actual);
         let actual: &[u8] = &snap
             .range_cache_snap()
             .unwrap()
-            .get_value(b"hello")
+            .get_value(b"zhello")
             .unwrap()
             .unwrap();
         assert_eq!(b"world", &actual);
@@ -240,7 +242,7 @@ mod tests {
     #[test]
     fn test_delete_range() {
         let region1 = new_region(1, b"k00", b"k10");
-        let region2 = new_region(1, b"k20", b"k30");
+        let region2 = new_region(2, b"k20", b"k30");
 
         let region1_clone = region1.clone();
         let region2_clone = region2.clone();
@@ -256,11 +258,11 @@ mod tests {
 
         let mut wb = hybrid_engine.write_batch();
         wb.prepare_for_region(&region1);
-        wb.put(b"k05", b"val").unwrap();
-        wb.put(b"k08", b"val2").unwrap();
+        wb.put(b"zk05", b"val").unwrap();
+        wb.put(b"zk08", b"val2").unwrap();
         wb.prepare_for_region(&region2);
-        wb.put(b"k25", b"val3").unwrap();
-        wb.put(b"k27", b"val4").unwrap();
+        wb.put(b"zk25", b"val3").unwrap();
+        wb.put(b"zk27", b"val4").unwrap();
         wb.write().unwrap();
 
         hybrid_engine
@@ -284,7 +286,10 @@ mod tests {
 
         let mut wb = hybrid_engine.write_batch();
         // all ranges overlapped with it will be evicted
-        wb.delete_range(b"k05", b"k21").unwrap();
+        wb.prepare_for_region(&region1);
+        wb.delete_range(b"zk05", b"zk08").unwrap();
+        wb.prepare_for_region(&region2);
+        wb.delete_range(b"zk20", b"zk21").unwrap();
         wb.write().unwrap();
 
         hybrid_engine
@@ -297,20 +302,17 @@ mod tests {
             .unwrap_err();
         let m_engine = hybrid_engine.range_cache_engine();
 
-        let mut times = 0;
-        while times < 10 {
-            if m_engine
-                .core()
-                .read()
-                .engine()
-                .cf_handle("default")
-                .is_empty()
-            {
-                return;
-            }
-            times += 1;
-            std::thread::sleep(Duration::from_millis(200));
-        }
-        panic!("data is not empty");
+        test_util::eventually(
+            Duration::from_millis(100),
+            Duration::from_millis(2000),
+            || {
+                m_engine
+                    .core()
+                    .read()
+                    .engine()
+                    .cf_handle("default")
+                    .is_empty()
+            },
+        );
     }
 }
