@@ -7,8 +7,8 @@ use std::{
 
 use engine_rocks::RocksSstWriterBuilder;
 use engine_traits::{
-    CacheRange, RangeCacheEngine, SnapshotContext, SstWriter, SstWriterBuilder, CF_DEFAULT,
-    CF_WRITE,
+    CacheRange, EvictReason, RangeCacheEngine, SnapshotContext, SstWriter, SstWriterBuilder,
+    CF_DEFAULT, CF_WRITE,
 };
 use file_system::calc_crc32_bytes;
 use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
@@ -533,8 +533,8 @@ fn test_load_with_eviction() {
             tried_count += 1;
         }
         // Now, the range (DATA_MIN_KEY, DATA_MAX_KEY) should be cached
-        let region = new_region(1, DATA_MIN_KEY, DATA_MAX_KEY);
-        range_cache_engine.evict_range(&region);
+        let region = new_region(1, b"k10", DATA_MAX_KEY);
+        range_cache_engine.evict_range(&region, EvictReason::AutoEvict);
     }
 
     fail::remove("on_write_impl");

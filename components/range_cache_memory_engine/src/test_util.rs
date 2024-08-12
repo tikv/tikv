@@ -3,6 +3,8 @@
 use std::sync::Arc;
 
 use crossbeam::epoch;
+use engine_rocks::RocksEngine;
+use engine_traits::{SyncMutable, CF_WRITE};
 use keys::data_key;
 use txn_types::{Key, TimeStamp, Write, WriteType};
 
@@ -124,5 +126,43 @@ fn put_data_impl(
             val.as_bytes(),
         ));
         default_cf.insert(default_k, val, guard);
+    }
+}
+
+pub fn put_data_in_rocks(
+    key: &[u8],
+    value: &[u8],
+    commit_ts: u64,
+    start_ts: u64,
+    short_value: bool,
+    rocks_engine: &RocksEngine,
+    write_type: WriteType,
+) {
+    let raw_write_k = Key::from_raw(key)
+        .append_ts(TimeStamp::new(commit_ts))
+        .into_encoded();
+    let write_v = Write::new(
+        write_type,
+        TimeStamp::new(start_ts),
+        if short_value {
+            Some(value.to_vec())
+        } else {
+            None
+        },
+    );
+
+    rocks_engine
+        .put_cf(CF_WRITE, &raw_write_k, &write_v.as_ref().to_bytes())
+        .unwrap();
+
+    if write_type == WriteType::Delete {
+        return;
+    }
+
+    if !short_value {
+        let raw_default_k = Key::from_raw(key)
+            .append_ts(TimeStamp::new(start_ts))
+            .into_encoded();
+        rocks_engine.put(&raw_default_k, value).unwrap();
     }
 }

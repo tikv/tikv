@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use engine_traits::{CacheRange, KvEngine, RangeCacheEngineExt, RegionEvent};
+use engine_traits::{CacheRange, EvictReason, KvEngine, RangeCacheEngineExt, RegionEvent};
 use kvproto::{metapb::Region, raft_cmdpb::AdminCmdType, raft_serverpb::RaftApplyState};
 use raft::StateRole;
 use raftstore::coprocessor::{
@@ -89,6 +89,7 @@ impl Observer {
                 .unwrap()
                 .push(RegionEvent::Eviction {
                     region: ctx.region().clone(),
+                    reason: EvictReason::Merge,
                 });
         }
         // there are new_regions, this must be a split event.
@@ -142,6 +143,7 @@ impl Observer {
             .unwrap()
             .push(RegionEvent::Eviction {
                 region: region.clone(),
+                reason: EvictReason::BecomeFollower,
             });
     }
 }
@@ -222,14 +224,14 @@ mod tests {
     #[derive(Default)]
     struct MockRangeCacheEngine {
         enabled: AtomicBool,
-        evicted_ranges: Arc<Mutex<Vec<CacheRange>>>,
+        region_events: Arc<Mutex<Vec<RegionEvent>>>,
     }
     impl RangeCacheEngineExt for MockRangeCacheEngine {
         fn range_cache_engine_enabled(&self) -> bool {
             self.enabled.load(Ordering::Relaxed)
         }
         fn on_region_event(&self, event: RegionEvent) {
-            // TODO
+            self.region_events.lock().unwrap().push(event);
         }
     }
 

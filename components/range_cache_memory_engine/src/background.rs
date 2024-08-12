@@ -9,8 +9,8 @@ use crossbeam::{
 };
 use engine_rocks::{RocksEngine, RocksSnapshot};
 use engine_traits::{
-    CacheRange, IterOptions, Iterable, Iterator, MiscExt, RangeHintService, SnapshotMiscExt,
-    CF_DEFAULT, CF_WRITE, DATA_CFS,
+    CacheRange, EvictReason, IterOptions, Iterable, Iterator, MiscExt, RangeHintService,
+    SnapshotMiscExt, CF_DEFAULT, CF_WRITE, DATA_CFS,
 };
 use kvproto::metapb::Region;
 use parking_lot::RwLock;
@@ -45,6 +45,9 @@ use crate::{
     },
     write_batch::RangeCacheWriteBatchEntry,
 };
+
+// 5 seconds should be long enough for getting a TSO from PD.
+const TIMTOUT_FOR_TSO: Duration = Duration::from_secs(5);
 
 /// Try to extract the key and `u64` timestamp from `encoded_key`.
 ///
@@ -219,6 +222,8 @@ impl BgWorkManager {
             memory_controller,
             region_info_provider,
             expected_region_size,
+            gc_interval,
+            pd_client.clone(),
         );
         let scheduler = worker.start_with_timer("range-cache-engine-background", runner);
 
@@ -273,8 +278,7 @@ impl BgWorkManager {
         let h = std::thread::spawn(move || {
             let gc_ticker = tick(gc_interval);
             let load_evict_ticker = tick(load_evict_interval); // TODO (afeinberg): Use a real value.
-            // 5 seconds should be long enough for getting a TSO from PD.
-            let tso_timeout = std::cmp::min(gc_interval, Duration::from_secs(5));
+            let tso_timeout = std::cmp::min(gc_interval, TIMTOUT_FOR_TSO);
             'LOOP: loop {
                 select! {
                     recv(gc_ticker) -> _ => {
@@ -369,7 +373,7 @@ impl BackgroundRunnerCore {
         delete_scheduler: &Scheduler<BackgroundTask>,
     ) -> FilterMetrics {
         let range = CacheRange::from_region(&region);
-        let (skiplist_engine, safe_ts) = {
+        let (skiplist_engine, safe_point) = {
             let mut core = self.engine.write();
             // We should also consider the ongoing snapshot of the historical ranges (ranges
             // that have been evicted).
@@ -415,30 +419,14 @@ impl BackgroundRunnerCore {
         };
 
         let start = Instant::now();
-        let write_cf_handle = skiplist_engine.cf_handle(CF_WRITE);
-        let default_cf_handle = skiplist_engine.cf_handle(CF_DEFAULT);
         let mut filter = Filter::new(
-            safe_ts,
+            safe_point,
             oldest_seqno,
-            default_cf_handle,
-            write_cf_handle.clone(),
+            skiplist_engine.cf_handle(CF_DEFAULT),
+            skiplist_engine.cf_handle(CF_WRITE),
         );
+        filter.filter_keys_in_range(&range);
 
-        let mut iter = write_cf_handle.iterator();
-        let guard = &epoch::pin();
-        let (start_key, end_key) = encode_key_for_boundary_with_mvcc(&range);
-        iter.seek(&start_key, guard);
-        while iter.valid() && iter.key() < &end_key {
-            let k = iter.key();
-            let v = iter.value();
-            if let Err(e) = filter.filter(k.as_bytes(), v.as_bytes()) {
-                warn!(
-                    "Something Wrong in memory engine GC";
-                    "error" => ?e,
-                );
-            }
-            iter.next(guard);
-        }
         {
             let mut engine = self.engine.write();
             let deletable_regions = engine.mut_range_manager().on_gc_region_finished(&region);
@@ -466,7 +454,7 @@ impl BackgroundRunnerCore {
             "below_safe_point_unique_keys" => filter.metrics.unique_key,
             "below_safe_point_version" => filter.metrics.versions,
             "below_safe_point_delete_version" => filter.metrics.delete_versions,
-            "current_safe_point" => safe_ts,
+            "current_safe_point" => safe_point,
         );
 
         let mut metrics = std::mem::take(&mut filter.metrics);
@@ -493,6 +481,7 @@ impl BackgroundRunnerCore {
         &self,
         region: &Region,
         delete_range_scheduler: &Scheduler<BackgroundTask>,
+        safe_point: u64,
     ) -> bool {
         fail::fail_point!("on_snapshot_load_finished");
         fail::fail_point!("on_snapshot_load_finished2");
@@ -510,9 +499,10 @@ impl BackgroundRunnerCore {
             );
             if meta.get_state() == RegionState::Loading {
                 meta.set_state(RegionState::Active);
+                meta.set_safe_point(safe_point);
             } else {
                 assert_eq!(meta.get_state(), RegionState::LoadingCanceled);
-                meta.mark_evict(RegionState::Evicting);
+                meta.mark_evict(RegionState::Evicting, EvictReason::LoadFailed);
                 remove_regions.push(meta.region().clone());
             }
         };
@@ -550,10 +540,11 @@ impl BackgroundRunnerCore {
         true
     }
 
-    fn on_snapshot_load_canceled(
+    fn on_snapshot_load_failed(
         &self,
         region: &Region,
         delete_range_scheduler: &Scheduler<BackgroundTask>,
+        started: bool,
     ) {
         let mut core = self.engine.write();
         let region_meta = core.range_manager.mut_region_meta(region.id).unwrap();
@@ -564,7 +555,12 @@ impl BackgroundRunnerCore {
                 meta.get_state() == RegionState::Loading
                     || meta.get_state() == RegionState::LoadingCanceled
             );
-            meta.mark_evict(RegionState::Evicting);
+            let reason = if started {
+                EvictReason::LoadFailed
+            } else {
+                EvictReason::LoadFailedWithoutStart
+            };
+            meta.mark_evict(RegionState::Evicting, reason);
             remove_regions.push(meta.region().clone());
         };
 
@@ -630,11 +626,12 @@ impl BackgroundRunnerCore {
                 break;
             }
             let mut engine_wr = self.engine.write();
-            let deleteable_regions = engine_wr.mut_range_manager().evict_region(&region);
+            let deleteable_regions = engine_wr.mut_range_manager().evict_region(&region, EvictReason::MemoryLimitReached);
             if !deleteable_regions.is_empty() {
                 info!(
                     "evict on soft limit reached";
-                    "regions_to_evict" => ?&deleteable_regions,
+                    "region_to_evict" => ?region,
+                    "regions_evicted" => ?&deleteable_regions,
                     "approx_size" => approx_size,
                     "remaining" => remaining
                 );
@@ -687,7 +684,7 @@ impl BackgroundRunnerCore {
         for evict_region in regions_to_remove {
             if self.memory_controller.reached_soft_limit() {
                 let mut core = self.engine.write();
-                let deleteable_regions = core.mut_range_manager().evict_region(&evict_region);
+                let deleteable_regions = core.mut_range_manager().evict_region(&evict_region, EvictReason::AutoEvict);
                 info!(
                     "load_evict: soft limit reached";
                     "region_to_evict" => ?&evict_region,
@@ -737,6 +734,9 @@ pub(crate) fn flush_epoch() {
 pub struct BackgroundRunner {
     core: BackgroundRunnerCore,
 
+    pd_client: Arc<dyn PdClient>,
+    gc_interval: Duration,
+
     // We have following four separate workers so that each type of task would not block each
     // others
     range_load_remote: Remote<yatp::task::future::TaskCell>,
@@ -778,6 +778,8 @@ impl BackgroundRunner {
         memory_controller: Arc<MemoryController>,
         region_info_provider: Option<Arc<dyn RegionInfoProvider>>,
         expected_region_size: usize,
+        gc_interval: Duration,
+        pd_client: Arc<dyn PdClient>,
     ) -> (Self, Scheduler<BackgroundTask>) {
         let range_load_worker = Builder::new("background-range-load-worker")
             // Range load now is implemented sequentially, so we must use exactly one thread to handle it.
@@ -819,6 +821,8 @@ impl BackgroundRunner {
                     memory_controller,
                     range_stats_manager,
                 },
+                pd_client,
+                gc_interval,
                 range_load_worker,
                 range_load_remote,
                 delete_range_worker,
@@ -897,6 +901,8 @@ impl Runnable for BackgroundRunner {
             BackgroundTask::LoadRegion(region, snapshot) => {
                 let core = self.core.clone();
                 let delete_range_scheduler = self.delete_range_scheduler.clone();
+                let pd_client = self.pd_client.clone();
+                let gc_interval = self.gc_interval;
                 let f = async move {
                     let mut is_canceled = false;
                     let region_range = CacheRange::from_region(&region);
@@ -930,19 +936,19 @@ impl Runnable for BackgroundRunner {
                             "snapshot load canceled";
                             "region" => ?region,
                         );
-                        core.on_snapshot_load_canceled(&region, &delete_range_scheduler);
+                        core.on_snapshot_load_failed(&region, &delete_range_scheduler, false);
                         return;
                     }
 
                     info!("Loading region"; "region" => ?&region);
                     let start = Instant::now();
                     let iter_opt = IterOptions::new(
-                        Some(KeyBuilder::from_vec(region_range.start, 0, 0)),
-                        Some(KeyBuilder::from_vec(region_range.end, 0, 0)),
+                        Some(KeyBuilder::from_slice(&region_range.start, 0, 0)),
+                        Some(KeyBuilder::from_slice(&region_range.end, 0, 0)),
                         false,
                     );
 
-                    let success = 'load_snapshot: {
+                    let safe_point = 'load_snapshot: {
                         for &cf in DATA_CFS {
                             let handle = skiplist_engine.cf_handle(cf);
                             let seq = snapshot.sequence_number();
@@ -974,7 +980,7 @@ impl Runnable for BackgroundRunner {
                                                 "region" => ?region,
                                                 "memory_usage(MB)" => ReadableSize(n as u64).as_mb_f64(),
                                             );
-                                            break 'load_snapshot false;
+                                            break 'load_snapshot None;
                                         }
 
                                         encoded_key
@@ -986,32 +992,65 @@ impl Runnable for BackgroundRunner {
                                 }
                                 Err(e) => {
                                     error!("creating rocksdb iterator failed"; "cf" => cf, "err" => %e);
-                                    break 'load_snapshot false;
+                                    break 'load_snapshot None;
                                 }
                             }
                         }
-                        true
+                        // gc the range
+                        let tso_timeout = std::cmp::min(gc_interval, TIMTOUT_FOR_TSO);
+                        let now = match block_on_timeout(pd_client.get_tso(), tso_timeout) {
+                            Ok(Ok(ts)) => ts,
+                            err => {
+                                error!(
+                                    "get timestamp failed, skip gc loaded range";
+                                    "timeout_duration" => ?tso_timeout,
+                                    "error" => ?err,
+                                );
+                                // Get timestamp fail so don't do gc.
+                                break 'load_snapshot Some(0);
+                            }
+                        };
+
+                        let safe_point = (|| {
+                            fail::fail_point!("in_memory_engine_safe_point_in_loading", |t| {
+                                t.unwrap().parse::<u64>().unwrap()
+                            });
+
+                            let safe_point = now
+                                .physical()
+                                .saturating_sub(gc_interval.as_millis() as u64);
+                            TimeStamp::compose(safe_point, 0).into_inner()
+                        })();
+
+                        let mut filter = Filter::new(
+                            safe_point,
+                            u64::MAX,
+                            skiplist_engine.cf_handle(CF_DEFAULT),
+                            skiplist_engine.cf_handle(CF_WRITE),
+                        );
+                        filter.filter_keys_in_range(&region_range);
+
+                        Some(safe_point)
                     };
 
-                    if !success {
+                    if let Some(safe_point) = safe_point {
+                        if core.on_snapshot_load_finished(&region, &delete_range_scheduler, safe_point) {
+                            let duration = start.saturating_elapsed();
+                            RANGE_LOAD_TIME_HISTOGRAM.observe(duration.as_secs_f64());
+                            info!(
+                                "Loading region finished";
+                                "region" => ?region,
+                                "duration(sec)" => ?duration,
+                            );
+                        } else {
+                            info!("Loading region canceled";"region" => ?region);
+                        }
+                    } else {
                         info!(
                             "snapshot load failed";
                             "region" => ?region,
                         );
-                        core.on_snapshot_load_canceled(&region, &delete_range_scheduler);
-                        return;
-                    }
-
-                    if core.on_snapshot_load_finished(&region, &delete_range_scheduler) {
-                        let duration = start.saturating_elapsed();
-                        RANGE_LOAD_TIME_HISTOGRAM.observe(duration.as_secs_f64());
-                        info!(
-                            "Loading region finished";
-                            "region" => ?region,
-                            "duration(sec)" => ?duration,
-                        );
-                    } else {
-                        info!("Loading region canceled";"region" => ?region);
+                        core.on_snapshot_load_failed(&region, &delete_range_scheduler, true);
                     }
                 };
                 self.range_load_remote.spawn(f);
@@ -1331,7 +1370,25 @@ impl Filter {
         }
     }
 
-    fn filter(&mut self, key: &Bytes, value: &Bytes) -> Result<(), String> {
+    fn filter_keys_in_range(&mut self, range: &CacheRange) {
+        let mut iter = self.write_cf_handle.iterator();
+        let guard = &epoch::pin();
+        let (start_key, end_key) = encode_key_for_boundary_with_mvcc(range);
+        iter.seek(&start_key, guard);
+        while iter.valid() && iter.key() < &end_key {
+            let k = iter.key();
+            let v = iter.value();
+            if let Err(e) = self.filter_key(k.as_bytes(), v.as_bytes()) {
+                warn!(
+                    "Something Wrong in memory engine GC";
+                    "error" => ?e,
+                );
+            }
+            iter.next(guard);
+        }
+    }
+
+    fn filter_key(&mut self, key: &Bytes, value: &Bytes) -> Result<(), String> {
         self.metrics.total += 1;
         let InternalKey {
             user_key,
@@ -1441,16 +1498,12 @@ impl Filter {
         self.metrics.filtered += 1;
         self.write_cf_handle
             .remove(&InternalBytes::from_bytes(key.clone()), guard);
-        self.handle_filtered_write(write, guard)?;
+        self.handle_filtered_write(write, guard);
 
         Ok(())
     }
 
-    fn handle_filtered_write(
-        &mut self,
-        write: WriteRef<'_>,
-        guard: &epoch::Guard,
-    ) -> std::result::Result<(), String> {
+    fn handle_filtered_write(&mut self, write: WriteRef<'_>, guard: &epoch::Guard) {
         if write.short_value.is_none() && write.write_type == WriteType::Put {
             // todo(SpadeA): We don't know the sequence number of the key in the skiplist so
             // we cannot delete it directly. So we encoding a key with MAX sequence number
@@ -1466,7 +1519,6 @@ impl Filter {
                 iter.next(guard);
             }
         }
-        Ok(())
     }
 }
 
@@ -1616,6 +1668,13 @@ pub mod tests {
         encoding_for_filter(key.as_encoded(), ts)
     }
 
+    struct MockPdClient {}
+    impl PdClient for MockPdClient {
+        fn get_tso(&self) -> pd_client::PdFuture<txn_types::TimeStamp> {
+            Box::pin(ready(Ok(TimeStamp::compose(TimeStamp::physical_now(), 0))))
+        }
+    }
+
     #[test]
     fn test_filter() {
         let skiplist_engine = SkiplistEngine::new();
@@ -1714,7 +1773,7 @@ pub mod tests {
         while iter.valid() {
             let k = iter.key();
             let v = iter.value();
-            filter.filter(k.as_bytes(), v.as_bytes()).unwrap();
+            filter.filter_key(k.as_bytes(), v.as_bytes()).unwrap();
             count += 1;
             iter.next(guard);
         }
@@ -1832,6 +1891,8 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            Duration::from_secs(100),
+            Arc::new(MockPdClient {}),
         );
         worker.core.gc_region(&region, 40, 100, &scheduler);
 
@@ -1907,6 +1968,8 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            Duration::from_secs(100),
+            Arc::new(MockPdClient {}),
         );
 
         // gc should not hanlde keys with larger seqno than oldest seqno
@@ -2066,6 +2129,8 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            Duration::from_secs(100),
+            Arc::new(MockPdClient {}),
         );
         let filter = worker.core.gc_region(&region1, 100, 100, &scheduler);
         assert_eq!(2, filter.filtered);
@@ -2081,6 +2146,8 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            Duration::from_secs(100),
+            Arc::new(MockPdClient {}),
         );
         worker.core.gc_region(&region2, 100, 100, &scheduler);
         assert_eq!(2, filter.filtered);
@@ -2129,6 +2196,8 @@ pub mod tests {
             memory_controller.clone(),
             None,
             engine.expected_region_size(),
+            Duration::from_secs(100),
+            Arc::new(MockPdClient {}),
         );
 
         let filter = worker.core.gc_region(&region, 20, 200, &scheduler);
@@ -2227,6 +2296,8 @@ pub mod tests {
             memory_controller,
             None,
             engine.expected_region_size(),
+            Duration::from_secs(100),
+            Arc::new(MockPdClient {}),
         );
         let range = CacheRange::from_region(&region);
         let s1 = engine.snapshot(1, 0, range.clone(), 10, u64::MAX);
@@ -2362,8 +2433,7 @@ pub mod tests {
         });
         assert_eq!(engine.core.read().range_manager().regions().len(), 3);
 
-        engine.evict_region(&region2);
-
+        engine.evict_region(&region2, EvictReason::AutoEvict);
         assert_eq!(6, element_count(&default));
         assert_eq!(6, element_count(&write));
 
@@ -2372,6 +2442,8 @@ pub mod tests {
             memory_controller,
             None,
             engine.expected_region_size(),
+            Duration::from_secs(100),
+            Arc::new(MockPdClient {}),
         );
 
         let regions: Vec<_> = engine
@@ -2533,6 +2605,8 @@ pub mod tests {
             memory_controller,
             None,
             engine.expected_region_size(),
+            Duration::from_secs(100),
+            Arc::new(MockPdClient {}),
         );
         let regions = runner.core.regions_for_gc();
         assert_eq!(2, regions.len());
@@ -2707,8 +2781,9 @@ pub mod tests {
 
         let verify = |region: &Region, exist, expect_count| {
             if exist {
+                let read_ts = TimeStamp::compose(TimeStamp::physical_now(), 0).into_inner();
                 let snap = engine
-                    .snapshot(region.id, 0, CacheRange::from_region(region), 10, u64::MAX)
+                    .snapshot(region.id, 0, CacheRange::from_region(region), read_ts, u64::MAX)
                     .unwrap();
                 let mut count = 0;
                 let range = CacheRange::from_region(&region);
@@ -2809,8 +2884,9 @@ pub mod tests {
 
         let verify = |r: &Region, exist, expect_count| {
             if exist {
+                let read_ts = TimeStamp::compose(TimeStamp::physical_now(), 0).into_inner();
                 let snap = engine
-                    .snapshot(r.id, 0, CacheRange::from_region(r), 10, u64::MAX)
+                    .snapshot(r.id, 0, CacheRange::from_region(r), read_ts, u64::MAX)
                     .unwrap();
                 let mut count = 0;
                 let range = CacheRange::from_region(&r);

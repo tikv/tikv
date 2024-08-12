@@ -1,6 +1,6 @@
 // Copyright 2024 TiKV Project Authors. Licensed under Apache-2.0.
 
-use engine_traits::{RangeCacheEngineExt, RegionEvent};
+use engine_traits::{EvictReason, RangeCacheEngineExt, RegionEvent};
 
 use crate::PanicEngine;
 

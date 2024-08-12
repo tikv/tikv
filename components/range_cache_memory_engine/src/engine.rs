@@ -17,7 +17,7 @@ use crossbeam_skiplist::{
 };
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    CacheRange, FailedReason, IterOptions, Iterable, KvEngine, RangeCacheEngine, RegionEvent,
+    CacheRange, EvictReason, FailedReason, IterOptions, Iterable, KvEngine, RangeCacheEngine, RegionEvent,
     Result, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use kvproto::metapb::Region;
@@ -311,8 +311,8 @@ impl RangeCacheMemoryEngine {
     /// Evict a region from the in-memory engine. After this call, the region
     /// will not be readable, but the data of the region may not be deleted
     /// immediately due to some ongoing snapshots.
-    pub fn evict_region(&self, region: &Region) {
-        let deleteable_regions = self.core.write().range_manager.evict_region(&region);
+    pub fn evict_region(&self, region: &Region, evict_reason: EvictReason) {
+        let deleteable_regions = self.core.write().range_manager.evict_region(&region, evict_reason);
         if !deleteable_regions.is_empty() {
             // The range can be deleted directly.
             if let Err(e) = self
@@ -462,8 +462,8 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
 
     fn on_region_event(&self, event: RegionEvent) {
         match event {
-            RegionEvent::Eviction { region } => {
-                self.evict_region(&region);
+            RegionEvent::Eviction { region, reason } => {
+                self.evict_region(&region, reason);
             }
             RegionEvent::Split {
                 source,
@@ -474,7 +474,7 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
                     .range_manager
                     .split_region(&source, new_regions);
             }
-            RegionEvent::EvictByRange { range } => {
+            RegionEvent::EvictByRange { range, reason } => {
                 let mut regions = vec![];
                 self.core()
                     .read()
@@ -485,7 +485,7 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
                         true
                     });
                 for r in regions {
-                    self.evict_region(&r);
+                    self.evict_region(&r, reason);
                 }
             }
         }

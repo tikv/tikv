@@ -25,12 +25,26 @@ pub enum RegionEvent {
     },
     Eviction {
         region: Region,
+        reason: EvictReason,
     },
     // range eviction triggered by delete_range
     // we should evict all cache regions that overlaps with this range
     EvictByRange {
         range: CacheRange,
+        reason: EvictReason,
     },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum EvictReason {
+    LoadFailed,
+    LoadFailedWithoutStart,
+    MemoryLimitReached,
+    BecomeFollower,
+    AutoEvict,
+    DeleteRange,
+    Merge,
+    InMemoryEngineDisabled,
 }
 
 /// RangeCacheEngine works as a range cache caching some ranges (in Memory or

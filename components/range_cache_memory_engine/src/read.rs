@@ -686,7 +686,7 @@ mod tests {
         raw::DBStatisticsTickerType, util::new_engine_opt, RocksDbOptions, RocksStatistics,
     };
     use engine_traits::{
-        CacheRange, FailedReason, IterMetricsCollector, IterOptions, Iterable, Iterator,
+        CacheRange, EvictReason, FailedReason, IterMetricsCollector, IterOptions, Iterable, Iterator,
         MetricsExt, Mutable, Peekable, RangeCacheEngine, ReadOptions, RegionEvent, WriteBatch,
         WriteBatchExt, CF_DEFAULT, CF_LOCK, CF_WRITE,
     };
@@ -1833,7 +1833,7 @@ mod tests {
         });
 
         let evict_region = new_regions[1].clone();
-        engine.evict_region(&evict_region);
+        engine.evict_region(&evict_region, EvictReason::AutoEvict);
         assert_eq!(
             engine.snapshot(1, 0, range.clone(), 10, 200).unwrap_err(),
             FailedReason::EpochNotMatch
@@ -1920,7 +1920,7 @@ mod tests {
         });
 
         let evict_region = new_regions[1].clone();
-        engine.evict_region(&evict_region);
+        engine.evict_region(&evict_region, EvictReason::AutoEvict);
 
         let r_left = new_regions[0].clone();
         let s3 = engine
@@ -1944,7 +1944,7 @@ mod tests {
             .unwrap();
 
         drop(s3);
-        engine.evict_region(&r_left);
+        engine.evict_region(&r_left, EvictReason::AutoEvict);
 
         // todo(SpadeA): memory limiter
         {

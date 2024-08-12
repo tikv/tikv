@@ -1,7 +1,7 @@
 // Copyright 2023 TiKV Project Authors. Licensed under Apache-2.0.
 
 use engine_traits::{
-    CacheRange, KvEngine, MiscExt, RangeCacheEngine, RegionEvent, Result, WriteBatchExt,
+    CacheRange, EvictReason, KvEngine, MiscExt, RangeCacheEngine, RegionEvent, Result, WriteBatchExt,
 };
 
 use crate::{engine::HybridEngine, hybrid_metrics::HybridEngineStatisticsReporter};
@@ -41,6 +41,7 @@ where
             self.range_cache_engine()
                 .on_region_event(RegionEvent::EvictByRange {
                     range: CacheRange::new(r.start_key.to_vec(), r.end_key.to_vec()),
+                    reason: EvictReason::DeleteRange,
                 });
         }
         self.disk_engine()

@@ -8,7 +8,7 @@ use std::{
 use bytes::Bytes;
 use crossbeam::epoch;
 use engine_traits::{
-    CacheRange, MiscExt, Mutable, RangeCacheEngine, Result, WriteBatch, WriteBatchExt,
+    CacheRange, EvictReason, MiscExt, Mutable, RangeCacheEngine, Result, WriteBatch, WriteBatchExt,
     WriteOptions, CF_DEFAULT,
 };
 use kvproto::metapb::Region;
@@ -244,7 +244,7 @@ impl RangeCacheWriteBatch {
         let mut regions = vec![];
         let range_manager = core.mut_range_manager();
         for (_, r) in self.regions_to_evict.drain() {
-            let mut to_delete = range_manager.evict_region(&r);
+            let mut to_delete = range_manager.evict_region(&r, EvictReason::MemoryLimitReached);
             regions.append(&mut to_delete);
         }
         regions
@@ -255,11 +255,11 @@ impl RangeCacheWriteBatch {
         self.range_cache_status = range_cache_status;
     }
 
-    fn evict_current_region(&mut self, directly: bool) {
+    fn evict_current_region(&mut self, reason: EvictReason, directly: bool) {
         let region = self.current_region.clone().unwrap();
         if directly {
             self.engine
-                .evict_region(self.current_region.as_ref().unwrap());
+                .evict_region(self.current_region.as_ref().unwrap(), reason);
         } else {
             self.regions_to_evict.insert(region.id, region);
         }
@@ -283,7 +283,7 @@ impl RangeCacheWriteBatch {
                 "range_start" => log_wrappers::Value(&region.start_key),
                 "range_end" => log_wrappers::Value(&region.end_key),
             );
-            self.evict_current_region(false);
+            self.evict_current_region(EvictReason::InMemoryEngineDisabled, false);
             return;
         }
         let memory_expect = entry_size();
@@ -294,7 +294,7 @@ impl RangeCacheWriteBatch {
                 "range_start" => log_wrappers::Value(&region.start_key),
                 "range_end" => log_wrappers::Value(&region.end_key),
             );
-            self.evict_current_region(false);
+            self.evict_current_region(EvictReason::MemoryLimitReached, false);
             return;
         }
 
@@ -575,12 +575,12 @@ impl Mutable for RangeCacheWriteBatch {
     // rather than delete the keys in the range, we evict ranges that overlap with
     // them directly
     fn delete_range(&mut self, _begin_key: &[u8], _end_key: &[u8]) -> Result<()> {
-        self.evict_current_region(true);
+        self.evict_current_region(EvictReason::DeleteRange, true);
         Ok(())
     }
 
     fn delete_range_cf(&mut self, _: &str, _begin_key: &[u8], _end_key: &[u8]) -> Result<()> {
-        self.evict_current_region(true);
+        self.evict_current_region(EvictReason::DeleteRange, true);
         Ok(())
     }
 }
@@ -954,7 +954,7 @@ mod tests {
             .unwrap();
 
         drop(snap1);
-        engine.evict_region(&regions[0]);
+        engine.evict_region(&regions[0], EvictReason::AutoEvict);
         wait_evict_done(&engine);
         flush_epoch();
         assert_eq!(972, memory_controller.mem_usage());

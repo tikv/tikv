@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use engine_traits::EvictReason;
 use lazy_static::lazy_static;
 use prometheus::*;
 use prometheus_static_metric::*;
@@ -30,12 +31,27 @@ make_auto_flush_static_metric! {
         number_db_prev_found,
     }
 
+    pub label_enum EvictReasonType {
+        merge,
+        auto_evict,
+        load_failed,
+        load_failed_without_start,
+        delete_range,
+        become_follower,
+        memory_limit_reached,
+        in_memory_engine_disabled,
+    }
+
     pub struct GcFilteredCountVec: LocalIntCounter {
         "type" => KeyCountType,
     }
 
     pub struct InMemoryEngineTickerMetrics: LocalIntCounter {
         "type" => TickerEnum,
+    }
+
+    pub struct EvictionDurationVec: LocalHistogram {
+        "type" => EvictReasonType,
     }
 }
 
@@ -63,9 +79,10 @@ lazy_static! {
         exponential_buckets(0.001, 2.0, 20).unwrap()
     )
     .unwrap();
-    pub static ref RANGE_EVICTION_DURATION_HISTOGRAM: Histogram = register_histogram!(
+    pub static ref RANGE_EVICTION_DURATION_HISTOGRAM: HistogramVec = register_histogram_vec!(
         "tikv_range_eviction_duration_secs",
         "Bucketed histogram of range eviction time duration.",
+        &["type"],
         exponential_buckets(0.001, 2.0, 20).unwrap()
     )
     .unwrap();
@@ -114,6 +131,8 @@ lazy_static! {
         auto_flush_from!(IN_MEMORY_ENGINE_FLOW, InMemoryEngineTickerMetrics);
     pub static ref IN_MEMORY_ENGINE_LOCATE_STATIC: InMemoryEngineTickerMetrics =
         auto_flush_from!(IN_MEMORY_ENGINE_LOCATE, InMemoryEngineTickerMetrics);
+    pub static ref RANGE_EVICTION_DURATION_HISTOGRAM_STATIC: EvictionDurationVec =
+        auto_flush_from!(RANGE_EVICTION_DURATION_HISTOGRAM, EvictionDurationVec);
 }
 
 pub fn flush_range_cache_engine_statistics(statistics: &Arc<RangeCacheMemoryEngineStatistics>) {
@@ -158,5 +177,30 @@ fn flush_engine_ticker_metrics(t: Tickers, value: u64) {
         _ => {
             unreachable!()
         }
+    }
+}
+
+pub(crate) fn observe_eviction_duration(secs: f64, evict_reason: EvictReason) {
+    match evict_reason {
+        EvictReason::AutoEvict => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC
+            .auto_evict
+            .observe(secs),
+        EvictReason::BecomeFollower => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC
+            .become_follower
+            .observe(secs),
+        EvictReason::DeleteRange => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC
+            .delete_range
+            .observe(secs),
+        EvictReason::LoadFailed => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC
+            .load_failed
+            .observe(secs),
+        EvictReason::LoadFailedWithoutStart => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC
+            .load_failed_without_start
+            .observe(secs),
+        EvictReason::MemoryLimitReached => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC
+            .memory_limit_reached
+            .observe(secs),
+        EvictReason::Merge => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC.merge.observe(secs),
+        EvictReason::InMemoryEngineDisabled => RANGE_EVICTION_DURATION_HISTOGRAM_STATIC.in_memory_engine_disabled.observe(secs),
     }
 }
