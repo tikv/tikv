@@ -1,6 +1,5 @@
 use core::slice::SlicePattern;
 use std::{
-    collections::HashMap,
     sync::{atomic::Ordering, Arc},
     time::Duration,
 };
@@ -62,16 +61,12 @@ pub struct RangeCacheWriteBatch {
     sequence_number: Option<u64>,
     memory_controller: Arc<MemoryController>,
     memory_usage_reach_hard_limit: bool,
-
-    // the ranges that reaches the hard limit and need to be evicted
-    regions_to_evict: HashMap<u64, Region>,
     region_save_point: usize,
     currnet_region_evicted: bool,
+    current_region: Option<Region>,
 
     // record the total durations of the prepare work for write in the write batch
     prepare_for_write_duration: Duration,
-
-    current_region: Option<Region>,
 }
 
 impl std::fmt::Debug for RangeCacheWriteBatch {
@@ -95,7 +90,6 @@ impl From<&RangeCacheMemoryEngine> for RangeCacheWriteBatch {
             sequence_number: None,
             memory_controller: engine.memory_controller(),
             memory_usage_reach_hard_limit: false,
-            regions_to_evict: HashMap::default(),
             region_save_point: 0,
             currnet_region_evicted: false,
             prepare_for_write_duration: Duration::default(),
@@ -116,7 +110,6 @@ impl RangeCacheWriteBatch {
             sequence_number: None,
             memory_controller: engine.memory_controller(),
             memory_usage_reach_hard_limit: false,
-            regions_to_evict: HashMap::default(),
             region_save_point: 0,
             currnet_region_evicted: false,
             prepare_for_write_duration: Duration::default(),
@@ -180,8 +173,6 @@ impl RangeCacheWriteBatch {
     // that all keys have unique sequence numbers.
     fn write_impl(&mut self, mut seq: u64) -> Result<()> {
         fail::fail_point!("on_write_impl");
-        let regions_to_delete = self.handle_regions_to_evict();
-
         let guard = &epoch::pin();
         let start = Instant::now();
         let mut lock_modification: u64 = 0;
@@ -215,39 +206,10 @@ impl RangeCacheWriteBatch {
             .lock_modification_bytes
             .fetch_add(lock_modification, Ordering::Relaxed);
 
-        if !regions_to_delete.is_empty() {
-            if let Err(e) = self
-                .engine
-                .bg_worker_manager()
-                .schedule_task(BackgroundTask::DeleteRegions(regions_to_delete))
-            {
-                error!(
-                    "schedule delete range failed";
-                    "err" => ?e,
-                );
-                assert!(tikv_util::thread_group::is_shutdown(!cfg!(test)));
-            }
-        }
-
-        let dur = std::mem::take(&mut self.prepare_for_write_duration);
-        RANGE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM.observe(dur.as_secs_f64());
+        RANGE_PREPARE_FOR_WRITE_DURATION_HISTOGRAM
+            .observe(self.prepare_for_write_duration.as_secs_f64());
 
         res
-    }
-
-    // return ranges that can be deleted from engine now
-    fn handle_regions_to_evict(&mut self) -> Vec<Region> {
-        if self.regions_to_evict.is_empty() {
-            return vec![];
-        }
-        let mut core = self.engine.core.write();
-        let mut regions = vec![];
-        let range_manager = core.mut_range_manager();
-        for (_, r) in self.regions_to_evict.drain() {
-            let mut to_delete = range_manager.evict_region(&r, EvictReason::MemoryLimitReached);
-            regions.append(&mut to_delete);
-        }
-        regions
     }
 
     #[inline]
@@ -255,15 +217,23 @@ impl RangeCacheWriteBatch {
         self.range_cache_status = range_cache_status;
     }
 
-    fn evict_current_region(&mut self, reason: EvictReason, directly: bool) {
-        let region = self.current_region.clone().unwrap();
-        if directly {
-            self.engine
-                .evict_region(self.current_region.as_ref().unwrap(), reason);
-        } else {
-            self.regions_to_evict.insert(region.id, region);
+    fn evict_current_region(&mut self, reason: EvictReason) {
+        if self.currnet_region_evicted {
+            return;
         }
-
+        self.engine
+            .evict_region(self.current_region.as_ref().unwrap(), reason);
+        // cleanup cached entries belong to this region as there is no need
+        // to write them.
+        assert!(self.save_points.is_empty());
+        if self.buffer.len() > self.region_save_point {
+            let mut total_size = 0;
+            for e in &self.buffer[self.region_save_point..] {
+                total_size += e.memory_size_required();
+            }
+            self.memory_controller.release(total_size);
+            self.buffer.truncate(self.region_save_point);
+        }
         self.currnet_region_evicted = true;
     }
 
@@ -283,7 +253,7 @@ impl RangeCacheWriteBatch {
                 "range_start" => log_wrappers::Value(&region.start_key),
                 "range_end" => log_wrappers::Value(&region.end_key),
             );
-            self.evict_current_region(EvictReason::InMemoryEngineDisabled, false);
+            self.evict_current_region(EvictReason::InMemoryEngineDisabled);
             return;
         }
         let memory_expect = entry_size();
@@ -294,7 +264,7 @@ impl RangeCacheWriteBatch {
                 "range_start" => log_wrappers::Value(&region.start_key),
                 "range_end" => log_wrappers::Value(&region.end_key),
             );
-            self.evict_current_region(EvictReason::MemoryLimitReached, false);
+            self.evict_current_region(EvictReason::MemoryLimitReached);
             return;
         }
 
@@ -529,18 +499,6 @@ impl WriteBatch for RangeCacheWriteBatch {
         let range = CacheRange::from_region(region);
         self.set_range_cache_status(self.engine.prepare_for_apply(self.id, range, region));
         self.memory_usage_reach_hard_limit = false;
-        // last region is canceled, we should remove outdated entries of last region.
-        if self.currnet_region_evicted {
-            assert!(self.save_points.is_empty());
-            if self.buffer.len() > self.region_save_point {
-                let mut total_size = 0;
-                for e in &self.buffer[self.region_save_point..] {
-                    total_size += e.memory_size_required();
-                }
-                self.memory_controller.release(total_size);
-                self.buffer.truncate(self.region_save_point);
-            }
-        }
         self.region_save_point = self.buffer.len();
         self.currnet_region_evicted = false;
         self.prepare_for_write_duration += time.saturating_elapsed();
@@ -575,12 +533,12 @@ impl Mutable for RangeCacheWriteBatch {
     // rather than delete the keys in the range, we evict ranges that overlap with
     // them directly
     fn delete_range(&mut self, _begin_key: &[u8], _end_key: &[u8]) -> Result<()> {
-        self.evict_current_region(EvictReason::DeleteRange, true);
+        self.evict_current_region(EvictReason::DeleteRange);
         Ok(())
     }
 
     fn delete_range_cf(&mut self, _: &str, _begin_key: &[u8], _end_key: &[u8]) -> Result<()> {
-        self.evict_current_region(EvictReason::DeleteRange, true);
+        self.evict_current_region(EvictReason::DeleteRange);
         Ok(())
     }
 }

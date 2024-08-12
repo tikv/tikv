@@ -19,19 +19,12 @@ use crate::HybridEngine;
 ///
 /// ```
 /// use hybrid_engine::util::hybrid_engine_for_tests;
-/// use range_cache_memory_engine::RangeCacheEngineConfig;
+/// use range_cache_memory_engine::{test_util::new_region, RangeCacheEngineConfig};
 /// let mut config = RangeCacheEngineConfig::default();
 /// config.enabled = true;
 /// let (_path, _hybrid_engine) = hybrid_engine_for_tests("temp", config, |memory_engine| {
-///     let region = {
-///         let mut r = kvproto::metapb::Region::default();
-///         r.id = 1;
-///         r.start_key = b"".into();
-///         r.end_key = b"z".into();
-///         r.mut_peers().push(kvproto::metapb::Peer::default());
-///         r
-///     };
-///     memory_engine.new_region(region.clone());
+///     let region = new_region(1, b"", b"z");
+///     memory_engine.new_region(region);
 /// })
 /// .unwrap();
 /// ```

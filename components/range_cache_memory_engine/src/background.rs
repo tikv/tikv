@@ -2776,15 +2776,13 @@ pub mod tests {
 
         // ensure all ranges are finshed
         test_util::eventually(Duration::from_millis(100), Duration::from_secs(2), || {
-            let count = engine
+            !engine
                 .core
                 .read()
                 .range_manager()
                 .regions()
                 .values()
-                .filter(|m| m.get_state() <= RegionState::Loading)
-                .count();
-            count == 0
+                .any(|m| m.get_state() <= RegionState::Loading)
         });
 
         let verify = |region: &Region, exist, expect_count| {
@@ -2885,15 +2883,13 @@ pub mod tests {
 
         // ensure all ranges are finshed
         test_util::eventually(Duration::from_millis(100), Duration::from_secs(2), || {
-            let count = engine
+            !engine
                 .core
                 .read()
                 .range_manager()
                 .regions()
                 .values()
-                .filter(|m| m.get_state() <= RegionState::Loading)
-                .count();
-            count == 0
+                .any(|m| m.get_state() <= RegionState::Loading)
         });
 
         let verify = |r: &Region, exist, expect_count| {

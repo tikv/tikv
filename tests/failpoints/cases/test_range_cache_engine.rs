@@ -631,8 +631,12 @@ fn test_eviction_after_merge() {
     let pd_client = Arc::clone(&cluster.pd_client);
     pd_client.must_merge(r.get_id(), r2.get_id());
 
-    range_cache_engine.snapshot(r.id, r.get_region_epoch().version, range1, 100, 100).unwrap_err();
-    range_cache_engine.snapshot(r2.id, r2.get_region_epoch().version, range2, 100, 100).unwrap_err();
+    range_cache_engine
+        .snapshot(r.id, r.get_region_epoch().version, range1, 100, 100)
+        .unwrap_err();
+    range_cache_engine
+        .snapshot(r2.id, r2.get_region_epoch().version, range2, 100, 100)
+        .unwrap_err();
 }
 
 #[test]
@@ -707,5 +711,13 @@ fn test_eviction_after_ingest_sst() {
         .unwrap();
     assert!(!resp.get_header().has_error(), "{:?}", resp);
 
-    range_cache_engine.snapshot(region.id, region.get_region_epoch().version, range, 100, 100).unwrap_err();
+    range_cache_engine
+        .snapshot(
+            region.id,
+            region.get_region_epoch().version,
+            range,
+            100,
+            100,
+        )
+        .unwrap_err();
 }

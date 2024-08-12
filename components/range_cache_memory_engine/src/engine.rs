@@ -32,7 +32,7 @@ use crate::{
         encode_key_for_boundary_with_mvcc, encode_key_for_boundary_without_mvcc, InternalBytes,
     },
     memory_controller::MemoryController,
-    range_manager::{RangeCacheStatus, RegionManager, RegionState, LoadFailedReason},
+    range_manager::{LoadFailedReason, RangeCacheStatus, RegionManager, RegionState},
     read::{RangeCacheIterator, RangeCacheSnapshot},
     statistics::Statistics,
     RangeCacheEngineConfig, RangeCacheEngineContext,

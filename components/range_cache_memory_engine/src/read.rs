@@ -1775,15 +1775,13 @@ mod tests {
             Duration::from_millis(100),
             Duration::from_millis(2000),
             || {
-                let count = engine
+                !engine
                     .core
                     .read()
                     .range_manager()
                     .regions()
                     .values()
-                    .filter(|m| m.get_state() >= RegionState::LoadingCanceled)
-                    .count();
-                count == 0
+                    .any(|m| m.get_state() >= RegionState::LoadingCanceled)
             },
         );
         let write_handle = engine.core.read().engine.cf_handle("write");
