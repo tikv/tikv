@@ -6,6 +6,8 @@ use codec::prelude::*;
 
 use crate::codec::Result;
 
+const F32_SIZE: usize = std::mem::size_of::<f32>();
+
 // TODO: Implement generic version
 #[derive(Clone, Eq, Hash, PartialEq)]
 pub struct VectorFloat32 {
@@ -78,7 +80,7 @@ pub trait VectorFloat32Decoder: NumberDecoder {
             return VectorFloat32Ref::new(&[]);
         }
         let n = self.read_u32_le()? as usize;
-        let data_size = n * 4;
+        let data_size = n * F32_SIZE;
         let data = self.read_bytes(data_size)?;
         VectorFloat32Ref::new(data)
     }
@@ -124,7 +126,7 @@ impl<'a> PartialOrd for VectorFloat32Ref<'a> {
 
 impl<'a> VectorFloat32Ref<'a> {
     pub fn new(value: &[u8]) -> Result<VectorFloat32Ref<'_>> {
-        if value.len() % 4 != 0 {
+        if value.len() % F32_SIZE != 0 {
             return Err(box_err!("Vector length error. Please check the input."));
         }
         let check_vec = VectorFloat32Ref { value };
@@ -145,7 +147,7 @@ impl<'a> VectorFloat32Ref<'a> {
     }
 
     pub fn encoded_len(&self) -> usize {
-        self.value.len() + 4
+        self.value.len() + std::mem::size_of::<u32>()
     }
 
     pub fn to_owned(&self) -> VectorFloat32 {
@@ -155,7 +157,7 @@ impl<'a> VectorFloat32Ref<'a> {
     }
 
     pub fn len(&self) -> usize {
-        self.value.len() / 4
+        self.value.len() / F32_SIZE
     }
 
     pub fn is_empty(&self) -> bool {
@@ -174,7 +176,8 @@ impl<'a> VectorFloat32Ref<'a> {
     }
 
     fn index(&self, idx: usize) -> f32 {
-        if idx > self.len() {
+        let byte_index: usize = idx * F32_SIZE;
+        if byte_index + F32_SIZE > self.value.len() {
             panic!(
                 "Index out of bounds: index = {}, length = {}",
                 idx,
