@@ -638,10 +638,9 @@ where
                 if let Some(ref mut ctx) = snap_ctx {
                     ctx.set_range(CacheRange::from_region(region))
                 }
-                let in_memory_snapshot = in_memory_engine
-                    .as_ref()
-                    .map(|he| he.new_in_memory_snapshot(disk_snap.sequence_number(), snap_ctx))
-                    .flatten();
+                let in_memory_snapshot = in_memory_engine.as_ref().and_then(|he| {
+                    he.new_in_memory_snapshot(disk_snap.sequence_number(), snap_ctx)
+                });
                 HybridEngineSnapshot::new(disk_snap, in_memory_snapshot)
             })
         })

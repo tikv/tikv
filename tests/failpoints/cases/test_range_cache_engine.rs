@@ -50,7 +50,7 @@ fn must_copr_load_data(cluster: &mut Cluster<ServerCluster>, table: &ProductTabl
     let _ = init_data_with_details_pd_client(
         ctx.clone(),
         engine,
-        &table,
+        table,
         &[(row_id, Some(&format!("name:{}", row_id)), row_id)],
         true,
         &cluster.cfg.tikv.server,

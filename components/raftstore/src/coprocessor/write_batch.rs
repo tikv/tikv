@@ -52,9 +52,9 @@ impl<WB: WriteBatch> WriteBatch for WriteBatchWrapper<WB> {
         let called = AtomicBool::new(false);
         self.write_batch.write_callback_opt(opts, |s| {
             if !called.fetch_or(true, Ordering::SeqCst) {
-                self.observable_write_batch
-                    .as_mut()
-                    .map(|w| w.write_opt(opts, s));
+                if let Some(w) = self.observable_write_batch.as_mut() {
+                    w.write_opt(opts, s)
+                }
             }
             cb(s);
         })
@@ -77,28 +77,30 @@ impl<WB: WriteBatch> WriteBatch for WriteBatchWrapper<WB> {
     }
 
     fn clear(&mut self) {
-        self.observable_write_batch.as_mut().map(|w| w.clear());
+        if let Some(w) = self.observable_write_batch.as_mut() {
+            w.clear()
+        }
         self.write_batch.clear();
     }
 
     fn set_save_point(&mut self) {
-        self.observable_write_batch
-            .as_mut()
-            .map(|w| w.set_save_point());
+        if let Some(w) = self.observable_write_batch.as_mut() {
+            w.set_save_point()
+        }
         self.write_batch.set_save_point()
     }
 
     fn pop_save_point(&mut self) -> Result<()> {
-        self.observable_write_batch
-            .as_mut()
-            .map(|w| w.pop_save_point());
+        if let Some(w) = self.observable_write_batch.as_mut() {
+            w.pop_save_point()
+        }
         self.write_batch.pop_save_point()
     }
 
     fn rollback_to_save_point(&mut self) -> Result<()> {
-        self.observable_write_batch
-            .as_mut()
-            .map(|w| w.rollback_to_save_point());
+        if let Some(w) = self.observable_write_batch.as_mut() {
+            w.rollback_to_save_point()
+        }
         self.write_batch.rollback_to_save_point()
     }
 
@@ -107,56 +109,56 @@ impl<WB: WriteBatch> WriteBatch for WriteBatchWrapper<WB> {
     }
 
     fn prepare_for_range(&mut self, range: CacheRange) {
-        self.observable_write_batch
-            .as_mut()
-            .map(|w| w.prepare_for_range(range));
+        if let Some(w) = self.observable_write_batch.as_mut() {
+            w.prepare_for_range(range)
+        }
     }
 }
 
 impl<WB: WriteBatch> Mutable for WriteBatchWrapper<WB> {
     fn put(&mut self, key: &[u8], value: &[u8]) -> Result<()> {
-        self.observable_write_batch
-            .as_mut()
-            .map(|w| w.put_cf(CF_DEFAULT, key, value));
+        if let Some(w) = self.observable_write_batch.as_mut() {
+            w.put_cf(CF_DEFAULT, key, value)
+        }
         self.write_batch.put(key, value)
     }
 
     fn put_cf(&mut self, cf: &str, key: &[u8], value: &[u8]) -> Result<()> {
-        self.observable_write_batch
-            .as_mut()
-            .map(|w| w.put_cf(cf, key, value));
+        if let Some(w) = self.observable_write_batch.as_mut() {
+            w.put_cf(cf, key, value)
+        }
         self.write_batch.put_cf(cf, key, value)
     }
 
     fn delete(&mut self, key: &[u8]) -> Result<()> {
-        self.observable_write_batch
-            .as_mut()
-            .map(|w| w.delete_cf(CF_DEFAULT, key));
+        if let Some(w) = self.observable_write_batch.as_mut() {
+            w.delete_cf(CF_DEFAULT, key)
+        }
         self.write_batch.delete(key)
     }
 
     fn delete_cf(&mut self, cf: &str, key: &[u8]) -> Result<()> {
-        self.observable_write_batch
-            .as_mut()
-            .map(|w| w.delete_cf(cf, key));
+        if let Some(w) = self.observable_write_batch.as_mut() {
+            w.delete_cf(cf, key)
+        }
         self.write_batch.delete_cf(cf, key)
     }
 
     fn delete_range(&mut self, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         // delete_range in range cache engine means eviction -- all ranges overlapped
         // with [begin_key, end_key] will be evicted.
-        self.observable_write_batch
-            .as_mut()
-            .map(|w| w.delete_range_cf(CF_DEFAULT, begin_key, end_key));
+        if let Some(w) = self.observable_write_batch.as_mut() {
+            w.delete_range_cf(CF_DEFAULT, begin_key, end_key)
+        }
         self.write_batch.delete_range(begin_key, end_key)
     }
 
     fn delete_range_cf(&mut self, cf: &str, begin_key: &[u8], end_key: &[u8]) -> Result<()> {
         // delete_range in range cache engine means eviction -- all ranges overlapped
         // with [begin_key, end_key] will be evicted.
-        self.observable_write_batch
-            .as_mut()
-            .map(|w| w.delete_range_cf(cf, begin_key, end_key));
+        if let Some(w) = self.observable_write_batch.as_mut() {
+            w.delete_range_cf(cf, begin_key, end_key)
+        }
         self.write_batch.delete_range_cf(cf, begin_key, end_key)
     }
 
