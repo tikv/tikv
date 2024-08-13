@@ -3,6 +3,7 @@
 use core::slice::SlicePattern;
 use std::{
     cmp::{self, Ordering},
+    fmt,
     sync::Arc,
 };
 
@@ -154,11 +155,22 @@ impl TryFrom<u8> for ValueType {
     }
 }
 
+#[derive(PartialEq)]
 pub struct InternalKey<'a> {
     // key with mvcc version in memory comparable format
     pub user_key: &'a [u8],
     pub v_type: ValueType,
     pub sequence: u64,
+}
+
+impl<'a> fmt::Debug for InternalKey<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "(key: {:?}, type: {:?}, seq: {})",
+            self.user_key, self.v_type, self.sequence
+        )
+    }
 }
 
 // The size of sequence number suffix

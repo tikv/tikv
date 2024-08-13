@@ -206,7 +206,7 @@ fn test_write_batch_cache_during_load() {
     }
 
     let (tx1, rx1) = sync_channel(1);
-    fail::cfg_callback("pending_range_completes_loading", move || {
+    fail::cfg_callback("on_completes_batch_loading", move || {
         tx1.send(true).unwrap();
     })
     .unwrap();
@@ -389,6 +389,8 @@ fn test_load_with_split2() {
     let r = cluster.get_region(b"");
     cluster.must_split(&r, b"k05");
 
+    let r_split = cluster.get_region(b"k05");
+
     fail::cfg("on_handle_put", "pause").unwrap();
     let write_req = make_write_req(&mut cluster, b"k02");
     let (cb, _) = make_cb::<HybridEngineImpl>(&write_req);
@@ -402,8 +404,10 @@ fn test_load_with_split2() {
     {
         let range_cache_engine = cluster.get_range_cache_engine(1);
         let mut core = range_cache_engine.core().write();
+        // try to load a region with old epoch and bigger range,
+        // it should be updated to the real region range.
         core.mut_range_manager()
-            .load_region(new_region(1, "", ""))
+            .load_region(new_region(r_split.id, "", ""))
             .unwrap();
     }
 
@@ -421,6 +425,14 @@ fn test_load_with_split2() {
         .async_command_on_node(1, write_req, cb2)
         .unwrap();
     let _ = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+    {
+        let range_cache_engine = cluster.get_range_cache_engine(1);
+        let core = range_cache_engine.core().read();
+        let meta = core.range_manager().region_meta(r_split.id).unwrap();
+        let split_range = CacheRange::from_region(&r_split);
+        assert_eq!(&split_range, meta.get_range());
+    }
 
     fail::remove("on_handle_put");
     std::thread::sleep(Duration::from_secs(1));
@@ -442,18 +454,11 @@ fn test_load_with_split2() {
         .unwrap();
     assert!(rx.try_recv().unwrap());
 
-    // k1-k5 should not cached now
+    // k1-k5 should not cached.
     let _ = cluster
         .get_with_snap_ctx(b"k02", false, snap_ctx.clone())
         .unwrap();
     rx.try_recv().unwrap_err();
-
-    // write a key to trigger load task
-    cluster.must_put(b"k03", b"val");
-    let _ = cluster
-        .get_with_snap_ctx(b"k02", false, snap_ctx.clone())
-        .unwrap();
-    assert!(rx.try_recv().unwrap());
 }
 
 fn make_write_req(

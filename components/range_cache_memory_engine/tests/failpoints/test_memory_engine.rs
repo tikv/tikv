@@ -12,11 +12,12 @@ use engine_traits::{
     CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use keys::data_key;
+use kvproto::metapb::Region;
 use range_cache_memory_engine::{
     decode_key, encode_key_for_boundary_without_mvcc, encoding_for_filter,
     test_util::{new_region, put_data, put_data_in_rocks},
     BackgroundTask, InternalBytes, InternalKey, RangeCacheEngineConfig, RangeCacheEngineContext,
-    RangeCacheMemoryEngine, RegionState, SkiplistHandle, ValueType,
+    RangeCacheMemoryEngine, SkiplistHandle, ValueType,
 };
 use tempfile::Builder;
 use tikv_util::config::{ReadableDuration, ReadableSize, VersionTrack};
@@ -260,7 +261,7 @@ fn test_evict_with_loading_range() {
     .unwrap();
 
     let (loading_complete_tx, loading_complete_rx) = sync_channel(0);
-    fail::cfg_callback("pending_range_completes_loading", move || {
+    fail::cfg_callback("on_completes_batch_loading", move || {
         let _ = loading_complete_tx.send(true);
     })
     .unwrap();
@@ -324,8 +325,8 @@ fn test_cached_write_batch_cleared_when_load_failed() {
 
     // range1 will be canceled in on_snapshot_load_finished whereas range2 will be
     // canceled at begin
-    let r1 = new_region(1, b"k00".to_vec(), b"k10".to_vec());
-    let r2 = new_region(2, b"k20".to_vec(), b"k30".to_vec());
+    let r1 = new_region(1, b"k00", b"k10");
+    let r2 = new_region(2, b"k20", b"k30");
     engine.load_region(r1.clone()).unwrap();
     engine.load_region(r2.clone()).unwrap();
 
@@ -334,10 +335,10 @@ fn test_cached_write_batch_cleared_when_load_failed() {
     wb.prepare_for_region(&r1);
     rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
-    wb.put(b"k05", b"val").unwrap();
-    wb.put(b"k06", b"val").unwrap();
-    wb.prepare_for_region(&r2.clone());
-    wb.put(b"k25", b"val").unwrap();
+    wb.put(b"zk05", b"val").unwrap();
+    wb.put(b"zk06", b"val").unwrap();
+    wb.prepare_for_region(&r2);
+    wb.put(b"zk25", b"val").unwrap();
     wb.set_sequence_number(100).unwrap();
     wb.write().unwrap();
 
@@ -348,8 +349,10 @@ fn test_cached_write_batch_cleared_when_load_failed() {
         Duration::from_millis(2000),
         || {
             let core = engine.core().read();
-            core.range_manager().region_meta(1).unwrap().get_state() == RegionState::Active
-                && core.range_manager().region_meta(1).unwrap().get_state() == RegionState::Active
+            // all failed regions should be removed.
+            [1, 2]
+                .into_iter()
+                .all(|i| core.range_manager().region_meta(i).is_none())
         },
     );
 }
@@ -360,9 +363,9 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     let path_str = path.path().to_str().unwrap();
     let rocks_engine = new_engine(path_str, DATA_CFS).unwrap();
     let mut wb = rocks_engine.write_batch();
-    wb.put_cf(CF_LOCK, b"k40", b"val").unwrap();
-    wb.put_cf(CF_LOCK, b"k41", b"val").unwrap();
-    wb.put_cf(CF_LOCK, b"k42", b"val").unwrap();
+    wb.put_cf(CF_LOCK, b"zk40", b"val").unwrap();
+    wb.put_cf(CF_LOCK, b"zk41", b"val").unwrap();
+    wb.put_cf(CF_LOCK, b"zk42", b"val").unwrap();
     wb.write().unwrap();
 
     let config = RangeCacheEngineConfig::config_for_test();
@@ -404,25 +407,25 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
 
     let engine_clone = engine.clone();
     let (range_prepared_tx, range_prepared_rx) = sync_channel(0);
-    let range1_clone = r1.clone();
-    let range2_clone = r2.clone();
-    let range3_clone = r3.clone();
+    let region1_clone = r1.clone();
+    let region2_clone = r2.clone();
+    let region3_clone = r3.clone();
     let handle = std::thread::spawn(move || {
         let mut wb = engine_clone.write_batch();
-        wb.prepare_for_region(&range1_clone);
-        wb.put_cf(CF_LOCK, b"k02", b"val").unwrap();
-        wb.put_cf(CF_LOCK, b"k03", b"val").unwrap();
-        wb.put_cf(CF_LOCK, b"k04", b"val").unwrap();
+        wb.prepare_for_region(&region1_clone);
+        wb.put_cf(CF_LOCK, b"zk02", b"val").unwrap();
+        wb.put_cf(CF_LOCK, b"zk03", b"val").unwrap();
+        wb.put_cf(CF_LOCK, b"zk04", b"val").unwrap();
         wb.set_sequence_number(100).unwrap();
 
         let mut wb2 = engine_clone.write_batch();
-        wb2.prepare_for_region(&range2_clone);
-        wb.put_cf(CF_LOCK, b"k22", b"val").unwrap();
-        wb.put_cf(CF_LOCK, b"k23", b"val").unwrap();
+        wb2.prepare_for_region(&region2_clone);
+        wb.put_cf(CF_LOCK, b"zk22", b"val").unwrap();
+        wb.put_cf(CF_LOCK, b"zk23", b"val").unwrap();
         wb2.set_sequence_number(200).unwrap();
 
         let mut wb3 = engine_clone.write_batch();
-        wb3.prepare_for_region(&range3_clone);
+        wb3.prepare_for_region(&region3_clone);
         wb3.set_sequence_number(300).unwrap();
 
         range_prepared_tx.send(true).unwrap();
@@ -441,8 +444,8 @@ fn test_concurrency_between_delete_range_and_write_to_memory() {
     engine.evict_region(&r1, EvictReason::AutoEvict);
     engine.evict_region(&r2, EvictReason::AutoEvict);
 
-    let verify_data = |r, expected_num: u64| {
-        let handle = engine.core().write().engine().cf_handle(CF_LOCK);
+    let verify_data = |r: &Region, expected_num: u64| {
+        let handle = engine.core().read().engine().cf_handle(CF_LOCK);
         let (start, end) = encode_key_for_boundary_without_mvcc(&CacheRange::from_region(r));
         let mut iter = handle.iterator();
         let guard = &epoch::pin();
@@ -606,7 +609,7 @@ fn test_load_with_gc() {
 
     fail::cfg("in_memory_engine_safe_point_in_loading", "return(6)").unwrap();
     let (load_tx, load_rx) = sync_channel(0);
-    fail::cfg_callback("pending_range_completes_loading", move || {
+    fail::cfg_callback("on_completes_batch_loading", move || {
         let _ = load_tx.send(true);
     })
     .unwrap();

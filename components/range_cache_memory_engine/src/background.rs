@@ -518,6 +518,8 @@ impl BackgroundRunnerCore {
                     on_region_meta(meta);
                 });
         }
+        drop(core);
+
         if !remove_regions.is_empty() {
             fail::fail_point!("in_memory_engine_snapshot_load_canceled");
 
@@ -534,9 +536,7 @@ impl BackgroundRunnerCore {
             return false;
         }
 
-        drop(core);
-
-        fail::fail_point!("pending_range_completes_loading");
+        fail::fail_point!("on_completes_batch_loading");
         true
     }
 
@@ -908,6 +908,7 @@ impl Runnable for BackgroundRunner {
                 let pd_client = self.pd_client.clone();
                 let gc_interval = self.gc_interval;
                 let f = async move {
+                    fail::fail_point!("on_start_loading_region");
                     let mut is_canceled = false;
                     let region_range = CacheRange::from_region(&region);
                     let skiplist_engine = {

@@ -100,7 +100,7 @@ impl RangeMeta {
     }
 
     #[inline]
-    pub(crate) fn region(&self) -> &Region {
+    pub fn region(&self) -> &Region {
         &self.region
     }
 
@@ -129,7 +129,7 @@ impl RangeMeta {
         self.safe_point = safe_point;
     }
 
-    pub(crate) fn get_range(&self) -> &CacheRange {
+    pub fn get_range(&self) -> &CacheRange {
         &self.range
     }
 
@@ -804,7 +804,7 @@ pub enum LoadFailedReason {
     Evicting,
 }
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug)]
 pub enum RangeCacheStatus {
     NotInCache,
     Cached,

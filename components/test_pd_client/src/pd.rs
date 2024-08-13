@@ -581,6 +581,20 @@ impl PdCluster {
             .and_then(|k| self.regions.get(k).cloned()))
     }
 
+    fn scan_regions(&self, start: &[u8], end: &[u8], limit: i32) -> Vec<metapb::Region> {
+        let mut result = vec![];
+        for (_, region) in self.regions.range((Excluded(start.to_vec()), Unbounded)) {
+            if !end.is_empty() && region.start_key.as_slice() >= end {
+                break;
+            }
+            result.push(region.clone());
+            if result.len() as i32 >= limit {
+                break;
+            }
+        }
+        return result;
+    }
+
     fn get_region_approximate_size(&self, region_id: u64) -> Option<u64> {
         self.region_approximate_size.get(&region_id).cloned()
     }
@@ -1654,6 +1668,28 @@ impl PdClient for TestPdClient {
             }
             Err(e) => Box::pin(err(e)),
         }
+    }
+
+    fn scan_regions(
+        &self,
+        start_key: &[u8],
+        end_key: &[u8],
+        limit: i32,
+    ) -> Result<Vec<pdpb::Region>> {
+        self.check_bootstrap()?;
+
+        let result: Vec<_> = self
+            .cluster
+            .rl()
+            .scan_regions(start_key, end_key, limit)
+            .into_iter()
+            .map(|r| {
+                let mut res = pdpb::Region::new();
+                res.set_region(r);
+                res
+            })
+            .collect();
+        Ok(result)
     }
 
     fn get_cluster_config(&self) -> Result<metapb::Cluster> {

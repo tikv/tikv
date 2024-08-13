@@ -369,9 +369,15 @@ where
         self.bootstrap_region().unwrap();
         self.start().unwrap();
         if self.range_cache_engine_enabled_with_whole_range {
+            let pd_regions = self.pd_client.scan_regions(&[], &[], i32::MAX).unwrap();
+            let regions: Vec<_> = pd_regions
+                .into_iter()
+                .map(|mut r| r.take_region())
+                .collect();
+
             self.engines
                 .iter()
-                .for_each(|(_, engines)| engines.kv.cache_all());
+                .for_each(|(_, engines)| engines.kv.cache_regions(&regions));
         }
     }
 
