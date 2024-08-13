@@ -582,17 +582,17 @@ impl PdCluster {
     }
 
     fn scan_regions(&self, start: &[u8], end: &[u8], limit: i32) -> Vec<metapb::Region> {
-        let mut result = vec![];
+        let mut regions = vec![];
         for (_, region) in self.regions.range((Excluded(start.to_vec()), Unbounded)) {
             if !end.is_empty() && region.start_key.as_slice() >= end {
                 break;
             }
-            result.push(region.clone());
-            if result.len() as i32 >= limit {
+            regions.push(region.clone());
+            if regions.len() as i32 >= limit {
                 break;
             }
         }
-        return result;
+        regions
     }
 
     fn get_region_approximate_size(&self, region_id: u64) -> Option<u64> {
