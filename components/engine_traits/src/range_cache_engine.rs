@@ -62,10 +62,14 @@ pub trait RangeCacheEngine:
     fn load_range(&self, range: CacheRange);
 
     fn evict_range(&self, range: &CacheRange, evict_reason: EvictReason);
+
+    fn range_cached(&self, range: &CacheRange) -> bool;
 }
 
 pub trait RangeCacheEngineExt {
     fn range_cache_engine_enabled(&self) -> bool;
+
+    fn range_cached(&self, range: &CacheRange) -> bool;
 
     fn load_range(&self, range: CacheRange);
 

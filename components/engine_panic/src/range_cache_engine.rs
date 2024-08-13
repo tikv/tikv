@@ -9,6 +9,10 @@ impl RangeCacheEngineExt for PanicEngine {
         panic!()
     }
 
+    fn range_cached(&self, range: &CacheRange) -> bool {
+        panic!()
+    }
+
     fn load_range(&self, range: CacheRange) {
         panic!()
     }

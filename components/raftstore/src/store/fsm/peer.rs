@@ -19,7 +19,8 @@ use std::{
 use batch_system::{BasicMailbox, Fsm};
 use collections::{HashMap, HashSet};
 use engine_traits::{
-    Engines, KvEngine, RaftEngine, RaftLogBatch, SstMetaInfo, WriteBatchExt, CF_LOCK, CF_RAFT,
+    CacheRange, Engines, KvEngine, RaftEngine, RaftLogBatch, SstMetaInfo, WriteBatchExt, CF_LOCK,
+    CF_RAFT,
 };
 use error_code::ErrorCodeExt;
 use fail::fail_point;
@@ -3086,6 +3087,12 @@ where
                     }
                 }
             }
+            ExtraMessageType::MsgPreLoadRange => {
+                self.ctx
+                    .engines
+                    .kv
+                    .load_range(CacheRange::from_region(self.region()));
+            }
         }
     }
 
@@ -3693,7 +3700,6 @@ where
             .fsm
             .peer
             .maybe_reject_transfer_leader_msg(self.ctx, msg, peer_disk_usage)
-            && self.fsm.peer.pre_load_cache(self.ctx)
             && self.fsm.peer.pre_ack_transfer_leader_msg(self.ctx, msg)
         {
             self.fsm.peer.ack_transfer_leader_msg(false);

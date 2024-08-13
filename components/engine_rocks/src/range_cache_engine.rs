@@ -10,8 +10,12 @@ impl RangeCacheEngineExt for RocksEngine {
     }
 
     #[inline]
-    fn load_range(&self, range: CacheRange) {
+    fn range_cached(&self, _: &CacheRange) -> bool {
+        false
     }
+
+    #[inline]
+    fn load_range(&self, _: CacheRange) {}
 
     #[inline]
     fn evict_range(&self, _: &engine_traits::CacheRange, _: EvictReason) {}

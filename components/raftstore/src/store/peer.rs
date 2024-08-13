@@ -3888,7 +3888,11 @@ where
         self.should_wake_up = true;
     }
 
-    fn pre_transfer_leader(&mut self, peer: &metapb::Peer) -> bool {
+    fn pre_transfer_leader<T: Transport>(
+        &mut self,
+        peer: &metapb::Peer,
+        ctx: &mut PollContext<EK, ER, T>,
+    ) -> bool {
         // Checks if safe to transfer leader.
         if self.raft_group.raft.has_pending_conf() {
             info!(
@@ -3914,6 +3918,22 @@ where
         // forbids setting it for MsgTransferLeader messages.
         msg.set_log_term(self.term());
         self.raft_group.raft.msgs.push(msg);
+
+        if ctx
+            .engines
+            .kv
+            .range_cached(&CacheRange::from_region(self.region()))
+        {
+            let mut msg = RaftMessage::default();
+            msg.set_region_id(self.region_id);
+            msg.set_from_peer(self.peer.clone());
+            msg.set_to_peer(peer.clone());
+            msg.set_region_epoch(self.region().get_region_epoch().clone());
+            let extra_msg = msg.mut_extra_msg();
+            extra_msg.set_type(ExtraMessageType::MsgPreLoadRange);
+            self.send_raft_messages(ctx, vec![msg]);
+        }
+
         true
     }
 
@@ -4724,11 +4744,10 @@ where
         }
     }
 
-    pub fn pre_load_cache<T>(&self, ctx: &mut PollContext<EK, ER, T>) -> bool {
+    pub fn pre_load_cache<T>(&self, ctx: &mut PollContext<EK, ER, T>) {
         ctx.engines
             .kv
             .load_range(CacheRange::from_region(self.get_store().region()));
-        true
     }
 
     pub fn ack_transfer_leader_msg(
@@ -4774,7 +4793,7 @@ where
     ///    to do the remaining work.
     ///
     /// See also: tikv/rfcs#37.
-    fn propose_transfer_leader<T>(
+    fn propose_transfer_leader<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         req: RaftCmdRequest,
@@ -4826,7 +4845,7 @@ where
         let transferred = if peer.id == self.peer.id {
             false
         } else {
-            self.pre_transfer_leader(peer)
+            self.pre_transfer_leader(peer, ctx)
         };
 
         // transfer leader command doesn't need to replicate log and apply, so we
@@ -5209,7 +5228,7 @@ where
 
     // Check disk usages for the peer itself and other peers in the raft group.
     // The return value indicates whether the proposal is allowed or not.
-    fn check_normal_proposal_with_disk_full_opt<T>(
+    fn check_normal_proposal_with_disk_full_opt<T: Transport>(
         &mut self,
         ctx: &mut PollContext<EK, ER, T>,
         disk_full_opt: DiskFullOpt,
@@ -5245,7 +5264,7 @@ where
                         "peer_id" => self.peer.get_id(),
                         "target_peer_id" => p.get_id(),
                     );
-                    self.pre_transfer_leader(&p);
+                    self.pre_transfer_leader(&p, ctx);
                 }
             }
         } else {

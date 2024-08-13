@@ -605,6 +605,11 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
     fn evict_range(&self, range: &CacheRange, evict_range: EvictReason) {
         self.evict_range(range, evict_range)
     }
+
+    fn range_cached(&self, range: &CacheRange) -> bool {
+        let core = self.core.read();
+        core.range_manager().contains_range(range)
+    }
 }
 
 impl Iterable for RangeCacheMemoryEngine {

@@ -13,6 +13,10 @@ where
         true
     }
 
+    fn range_cached(&self, range: &CacheRange) -> bool {
+        self.range_cache_engine().range_cached(range)
+    }
+
     #[inline]
     fn evict_range(&self, range: &CacheRange, evict_range: EvictReason) {
         self.range_cache_engine().evict_range(range, evict_range);
