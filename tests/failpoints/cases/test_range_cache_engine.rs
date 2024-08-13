@@ -7,8 +7,7 @@ use std::{
 
 use engine_rocks::RocksSstWriterBuilder;
 use engine_traits::{
-    CacheRange, EvictReason, RangeCacheEngine, SnapshotContext, SstWriter, SstWriterBuilder,
-    CF_DEFAULT, CF_WRITE,
+    CacheRange, EvictReason, RangeCacheEngine, SstWriter, SstWriterBuilder, CF_DEFAULT,
 };
 use file_system::calc_crc32_bytes;
 use keys::{data_key, DATA_MAX_KEY, DATA_MIN_KEY};
@@ -16,45 +15,78 @@ use kvproto::{
     import_sstpb::SstMeta,
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request},
 };
+use protobuf::Message;
 use tempfile::tempdir;
+use test_coprocessor::{handle_request, init_data_with_details_pd_client, DagSelect, ProductTable};
 use test_raftstore::{
-    make_cb, new_peer, new_put_cmd, new_request,
-    new_server_cluster_with_hybrid_engine_with_no_range_cache, Cluster, ServerCluster, Simulator,
+    get_tso, new_peer, new_server_cluster_with_hybrid_engine_with_no_range_cache, Cluster,
+    ServerCluster,
 };
-use tikv_util::HandyRwLock;
+use tikv_util::{mpsc::unbounded, HandyRwLock};
+use tipb::SelectResponse;
 use txn_types::Key;
 
+fn must_copr_point_get(cluster: &mut Cluster<ServerCluster>, table: &ProductTable, row_id: i64) {
+    let key = table.get_table_prefix();
+    let table_key = Key::from_raw(&key).into_encoded();
+    let ctx = cluster.get_ctx(&table_key);
+    let endpoint = cluster.sim.rl().copr_endpoints[&1].clone();
+    let key_range = table.get_record_range_one(row_id);
+    let req = DagSelect::from(table)
+        .key_ranges(vec![key_range])
+        .build_with(ctx, &[0]);
+    let cop_resp = handle_request(&endpoint, req);
+    let mut resp = SelectResponse::default();
+    resp.merge_from_bytes(cop_resp.get_data()).unwrap();
+    assert!(!cop_resp.has_region_error(), "{:?}", cop_resp);
+    assert!(cop_resp.get_other_error().is_empty(), "{:?}", cop_resp);
+}
+
+fn must_copr_load_data(cluster: &mut Cluster<ServerCluster>, table: &ProductTable, row_id: i64) {
+    let key = table.get_table_prefix();
+    let table_key = Key::from_raw(&key).into_encoded();
+    let ctx = cluster.get_ctx(&table_key);
+    let engine = cluster.sim.rl().storages[&1].clone();
+    let _ = init_data_with_details_pd_client(
+        ctx.clone(),
+        engine,
+        &table,
+        &[(row_id, Some(&format!("name:{}", row_id)), row_id)],
+        true,
+        &cluster.cfg.tikv.server,
+        Some(cluster.pd_client.clone()),
+    );
+}
+
 #[test]
-fn test_basic_put_get() {
+fn test_put_copr_get() {
     let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 1;
     cluster.run();
 
+    let current_ts = get_tso(&cluster.pd_client);
     let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
     // FIXME: load is not implemented, so we have to insert range manually
     {
         let mut core = range_cache_engine.core().write();
         let cache_range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
         core.mut_range_manager().new_range(cache_range.clone());
-        core.mut_range_manager().set_safe_point(&cache_range, 1000);
+        core.mut_range_manager()
+            .set_safe_point(&cache_range, current_ts);
     }
 
-    cluster.put(b"k05", b"val").unwrap();
-    let snap_ctx = SnapshotContext {
-        read_ts: 1001,
-        range: None,
-    };
-    let (tx, rx) = sync_channel(1);
-    fail::cfg_callback("on_range_cache_get_value", move || {
+    let product = ProductTable::new();
+    must_copr_load_data(&mut cluster, &product, 1);
+    let (tx, rx) = unbounded();
+    fail::cfg_callback("on_range_cache_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
 
-    let val = cluster.get_with_snap_ctx(b"k05", false, snap_ctx).unwrap();
-    assert_eq!(&val, b"val");
+    must_copr_point_get(&mut cluster, &product, 1);
 
     // verify it's read from range cache engine
-    assert!(rx.try_recv().unwrap());
+    rx.try_recv().unwrap();
 }
 
 #[test]
@@ -64,22 +96,23 @@ fn test_load() {
         cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
         cluster.run();
 
-        for i in (0..30).step_by(2) {
-            let key = format!("key-{:04}", i);
-            let encoded_key = Key::from_raw(key.as_bytes())
-                .append_ts(20.into())
-                .into_encoded();
-            cluster.must_put(&encoded_key, b"val-default");
-            cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
+        let mut tables = vec![];
+        for _ in 0..3 {
+            let product = ProductTable::new();
+            tables.push(product.clone());
+            must_copr_load_data(&mut cluster, &product, 1);
         }
-        let r = cluster.get_region(b"");
-        let split_key1 = format!("key-{:04}", 10).into_bytes();
-        cluster.must_split(&r, &split_key1);
-        let r = cluster.get_region(&split_key1);
-        let split_key2 = format!("key-{:04}", 20).into_bytes();
-        cluster.must_split(&r, &split_key2);
 
-        let (tx, rx) = sync_channel(1);
+        let mut split_keys = vec![];
+        for table in &tables[1..] {
+            let key = table.get_table_prefix();
+            let split_key = Key::from_raw(&key).into_encoded();
+            let r = cluster.get_region(&split_key);
+            cluster.must_split(&r, &split_key);
+            split_keys.push(split_key);
+        }
+
+        let (tx, rx) = unbounded();
         fail::cfg_callback("on_snapshot_load_finished", move || {
             tx.send(true).unwrap();
         })
@@ -95,9 +128,10 @@ fn test_load() {
                 let cache_range = CacheRange::new(DATA_MIN_KEY.to_vec(), DATA_MAX_KEY.to_vec());
                 core.mut_range_manager().load_range(cache_range).unwrap();
             } else {
-                let cache_range = CacheRange::new(DATA_MIN_KEY.to_vec(), data_key(&split_key1));
-                let cache_range2 = CacheRange::new(data_key(&split_key1), data_key(&split_key2));
-                let cache_range3 = CacheRange::new(data_key(&split_key2), DATA_MAX_KEY.to_vec());
+                let cache_range = CacheRange::new(DATA_MIN_KEY.to_vec(), data_key(&split_keys[0]));
+                let cache_range2 =
+                    CacheRange::new(data_key(&split_keys[0]), data_key(&split_keys[1]));
+                let cache_range3 = CacheRange::new(data_key(&split_keys[1]), DATA_MAX_KEY.to_vec());
                 core.mut_range_manager().load_range(cache_range).unwrap();
                 core.mut_range_manager().load_range(cache_range2).unwrap();
                 core.mut_range_manager().load_range(cache_range3).unwrap();
@@ -105,13 +139,8 @@ fn test_load() {
         }
 
         // put key to trigger load task
-        for i in &[0, 10, 20] {
-            let key = format!("key-{:04}", i);
-            let encoded_key = Key::from_raw(key.as_bytes())
-                .append_ts(20.into())
-                .into_encoded();
-            cluster.must_put(&encoded_key, b"val-default");
-            cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
+        for table in &tables {
+            must_copr_load_data(&mut cluster, table, 1);
         }
 
         // ensure the snapshot is loaded
@@ -119,42 +148,15 @@ fn test_load() {
         rx.recv_timeout(Duration::from_secs(5)).unwrap();
         rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
-        for i in (1..30).step_by(2) {
-            let key = format!("key-{:04}", i);
-            let encoded_key = Key::from_raw(key.as_bytes())
-                .append_ts(20.into())
-                .into_encoded();
-            cluster.must_put(&encoded_key, b"val-default");
-            cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
-        }
-
-        let (tx, rx) = sync_channel(1);
-        fail::cfg_callback("on_range_cache_get_value", move || {
+        let (tx, rx) = unbounded();
+        fail::cfg_callback("on_range_cache_iterator_seek", move || {
             tx.send(true).unwrap();
         })
         .unwrap();
 
-        let snap_ctx = SnapshotContext {
-            read_ts: 20,
-            range: None,
-        };
+        for table in &tables {
+            must_copr_point_get(&mut cluster, table, 1);
 
-        for i in 0..30 {
-            let key = format!("key-{:04}", i);
-            let encoded_key = Key::from_raw(key.as_bytes())
-                .append_ts(20.into())
-                .into_encoded();
-            let val = cluster
-                .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, false, snap_ctx.clone())
-                .unwrap();
-            assert_eq!(&val, b"val-write");
-            // verify it's read from range cache engine
-            assert!(rx.try_recv().unwrap());
-
-            let val = cluster
-                .get_with_snap_ctx(&encoded_key, false, snap_ctx.clone())
-                .unwrap();
-            assert_eq!(&val, b"val-default");
             // verify it's read from range cache engine
             assert!(rx.try_recv().unwrap());
         }
@@ -169,13 +171,9 @@ fn test_write_batch_cache_during_load() {
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     cluster.run();
 
+    let product = ProductTable::new();
     for i in 0..10 {
-        let key = format!("key-{:04}", i);
-        let encoded_key = Key::from_raw(key.as_bytes())
-            .append_ts(20.into())
-            .into_encoded();
-        cluster.must_put(&encoded_key, b"val-default");
-        cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
+        must_copr_load_data(&mut cluster, &product, i);
     }
 
     fail::cfg("on_snapshot_load_finished", "pause").unwrap();
@@ -191,12 +189,7 @@ fn test_write_batch_cache_during_load() {
     // Then, cache some additional entries after the snapshot loaded and the
     // previous cache consumed
     for i in 10..20 {
-        let key = format!("key-{:04}", i);
-        let encoded_key = Key::from_raw(key.as_bytes())
-            .append_ts(20.into())
-            .into_encoded();
-        cluster.must_put(&encoded_key, b"val-default");
-        cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
+        must_copr_load_data(&mut cluster, &product, i);
     }
 
     let (tx1, rx1) = sync_channel(1);
@@ -211,76 +204,47 @@ fn test_write_batch_cache_during_load() {
     fail::remove("on_snapshot_load_finished");
 
     let (tx2, rx2) = sync_channel(1);
-    fail::cfg_callback("on_range_cache_get_value", move || {
+    fail::cfg_callback("on_range_cache_iterator_seek", move || {
         tx2.send(true).unwrap();
     })
     .unwrap();
-    let snap_ctx = SnapshotContext {
-        read_ts: 20,
-        range: None,
-    };
 
     for i in 20..30 {
         if i == 29 {
-            let key = format!("key-{:04}", 1);
-            let encoded_key = Key::from_raw(key.as_bytes())
-                .append_ts(20.into())
-                .into_encoded();
-            let val = cluster
-                .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, false, snap_ctx.clone())
-                .unwrap();
-            assert_eq!(&val, b"val-write");
+            must_copr_point_get(&mut cluster, &product, i);
+
             // We should not read the value in the memory engine at this phase.
             rx2.try_recv().unwrap_err();
             fail::remove("on_cached_write_batch_consumed");
         }
-        let key = format!("key-{:04}", i);
-        let encoded_key = Key::from_raw(key.as_bytes())
-            .append_ts(20.into())
-            .into_encoded();
-        cluster.must_put(&encoded_key, b"val-default");
-        cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
+
+        must_copr_load_data(&mut cluster, &product, i);
     }
 
     // ensure the pending range is transfered to normal range
     rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 
     for i in 0..30 {
-        let key = format!("key-{:04}", i);
-        let encoded_key = Key::from_raw(key.as_bytes())
-            .append_ts(20.into())
-            .into_encoded();
-        let val = cluster
-            .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, false, snap_ctx.clone())
-            .unwrap();
-        assert_eq!(&val, b"val-write");
-        // verify it's read from range cache engine
-        assert!(rx2.try_recv().unwrap());
+        must_copr_point_get(&mut cluster, &product, i);
 
-        let val = cluster
-            .get_with_snap_ctx(&encoded_key, false, snap_ctx.clone())
-            .unwrap();
-        assert_eq!(&val, b"val-default");
         // verify it's read from range cache engine
         assert!(rx2.try_recv().unwrap());
     }
 }
 
-#[test]
 // It tests that after we schedule the pending range to load snapshot, the range
 // splits.
+#[test]
 fn test_load_with_split() {
     let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     cluster.run();
 
-    for i in (0..30).step_by(2) {
-        let key = format!("key-{:04}", i);
-        let encoded_key = Key::from_raw(key.as_bytes())
-            .append_ts(20.into())
-            .into_encoded();
-        cluster.must_put(&encoded_key, b"val-default");
-        cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
+    let mut tables = vec![];
+    for _ in 0..3 {
+        let product = ProductTable::new();
+        tables.push(product.clone());
+        must_copr_load_data(&mut cluster, &product, 1);
     }
 
     let (tx, rx) = sync_channel(0);
@@ -307,90 +271,104 @@ fn test_load_with_split() {
     // Now, the snapshot load is finished, and blocked before consuming cached
     // write batches. Let split the range.
 
-    let r = cluster.get_region(b"");
-    let split_key1 = format!("key-{:04}", 10).into_bytes();
-    cluster.must_split(&r, &split_key1);
-    let r = cluster.get_region(&split_key1);
-    let split_key2 = format!("key-{:04}", 20).into_bytes();
-    cluster.must_split(&r, &split_key2);
-    // Now, we have 3 regions: [min, 10), [10, 20), [20, max)
+    for table in &tables[1..] {
+        let key = table.get_table_prefix();
+        let split_key = Key::from_raw(&key).into_encoded();
+        let r = cluster.get_region(&split_key);
+        cluster.must_split(&r, &split_key);
+    }
+    // Now, we have 3 regions: [min, table1), [table1, table2), [table2, max)
 
-    for i in (1..30).step_by(2) {
-        let key = format!("key-{:04}", i);
-        let encoded_key = Key::from_raw(key.as_bytes())
-            .append_ts(20.into())
-            .into_encoded();
-        cluster.must_put(&encoded_key, b"val-default");
-        cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
+    for table in &tables {
+        must_copr_load_data(&mut cluster, table, 1);
     }
 
     // unblock loading task
     tx2.send(true).unwrap();
 
-    let (tx, rx) = sync_channel(1);
-    fail::cfg_callback("on_range_cache_get_value", move || {
+    let (tx, rx) = unbounded();
+    fail::cfg_callback("on_range_cache_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
 
-    let snap_ctx = SnapshotContext {
-        read_ts: 20,
-        range: None,
-    };
+    for table in &tables {
+        must_copr_point_get(&mut cluster, table, 1);
 
-    for i in 0..30 {
-        let key = format!("key-{:04}", i);
-        let encoded_key = Key::from_raw(key.as_bytes())
-            .append_ts(20.into())
-            .into_encoded();
-        let val = cluster
-            .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, false, snap_ctx.clone())
-            .unwrap();
-        assert_eq!(&val, b"val-write");
-        // verify it's read from range cache engine
-        assert!(rx.try_recv().unwrap());
-
-        let val = cluster
-            .get_with_snap_ctx(&encoded_key, false, snap_ctx.clone())
-            .unwrap();
-        assert_eq!(&val, b"val-default");
         // verify it's read from range cache engine
         assert!(rx.try_recv().unwrap());
     }
 }
 
 // It tests race between split and load.
-// Takes k1-k10 as an example:
-// We want to load k1-k10 where k1-k10 is already split into k1-k5, and k5-k10.
-// And before we `load_range` k1-k10, k1-k5 has cached some writes, say k1, in
-// write_batch which means k1 cannot be loaded from snapshot. Now, `load_range`
-// k1-k10 is called, and k5-k10 calls prepare_for_apply and the snapshot is
-// acquired and load task of k1-k10 is scheduled. We will loss data of k1 before
-// this PR.
+// Takes table1-table2 as an example:
+// We want to load table1-table2 where table1-table2 is already split into
+// ["", table2), and [table2, "").
+// And before we `load_range` table1-table2, ["", table2) has cached some
+// writes, say table1_1, in write_batch which means table1_1 cannot be loaded
+// from snapshot. Now, `load_range` table1-table2 is called, and [table2, "")
+// calls prepare_for_apply and the snapshot is acquired and load task of
+// table1-table2 is scheduled.
 #[test]
 fn test_load_with_split2() {
     let mut cluster = new_server_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 4;
     cluster.run();
+    let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
 
-    cluster.must_put(b"k01", b"val");
-    cluster.must_put(b"k10", b"val");
+    let product1 = ProductTable::new();
+    let product2 = ProductTable::new();
 
-    let r = cluster.get_region(b"");
-    cluster.must_split(&r, b"k05");
+    for table in [&product1, &product2] {
+        must_copr_load_data(&mut cluster, table, 1);
+    }
 
-    fail::cfg("on_handle_put", "pause").unwrap();
-    let write_req = make_write_req(&mut cluster, b"k02");
-    let (cb, _) = make_cb(&write_req);
-    cluster
-        .sim
-        .rl()
-        .async_command_on_node(1, write_req, cb)
-        .unwrap();
+    let key = product2.get_table_prefix();
+    let split_key = Key::from_raw(&key).into_encoded();
+    let r = cluster.get_region(&split_key);
+    cluster.must_split(&r, &split_key);
+
+    let (handle_put_tx, handle_put_rx) = unbounded();
+    let (handle_put_pause_tx, handle_put_pause_rx) = unbounded::<()>();
+    fail::cfg_callback("on_handle_put", move || {
+        handle_put_tx.send(()).unwrap();
+        info!("dbg on_handle_put waiting");
+        let _ = handle_put_pause_rx.recv();
+        info!("dbg on_handle_put done");
+    })
+    .unwrap();
+    let mut async_put = |table: &ProductTable, row_id| {
+        let engine = cluster.sim.rl().storages[&1].clone();
+        let cfg = cluster.cfg.tikv.server.clone();
+        let pd_client = cluster.pd_client.clone();
+        let key = table.get_table_prefix();
+        let split_key = Key::from_raw(&key).into_encoded();
+        let ctx = cluster.get_ctx(&split_key);
+        let table_ = table.clone();
+        let (tx, rx) = unbounded();
+        let handle = std::thread::spawn(move || {
+            tx.send(()).unwrap();
+            info!("dbg async_put start"; "table_id" => table_.table_id());
+            let _ = init_data_with_details_pd_client(
+                ctx,
+                engine,
+                &table_,
+                &[(row_id, Some(&format!("name:{}", row_id)), row_id)],
+                true,
+                &cfg,
+                Some(pd_client),
+            );
+            info!("dbg async_put done"; "table_id" => table_.table_id());
+        });
+        rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        handle
+    };
+    let handle1 = async_put(&product1, 2);
+    handle_put_rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
     std::thread::sleep(Duration::from_secs(1));
     {
-        let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
+        info!("dbg load_range start");
         let mut core = range_cache_engine.core().write();
         core.mut_range_manager()
             .load_range(CacheRange::new(
@@ -398,6 +376,7 @@ fn test_load_with_split2() {
                 DATA_MAX_KEY.to_vec(),
             ))
             .unwrap();
+        info!("dbg load_range finish");
     }
 
     let (tx, rx) = sync_channel(1);
@@ -406,58 +385,33 @@ fn test_load_with_split2() {
     })
     .unwrap();
 
-    let write_req = make_write_req(&mut cluster, b"k09");
-    let (cb2, _) = make_cb(&write_req);
-    cluster
-        .sim
-        .rl()
-        .async_command_on_node(1, write_req, cb2)
-        .unwrap();
+    let handle2 = async_put(&product2, 9);
     let _ = rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
+    drop(handle_put_pause_tx);
     fail::remove("on_handle_put");
     std::thread::sleep(Duration::from_secs(1));
+    handle1.join().unwrap();
+    handle2.join().unwrap();
 
     let (tx, rx) = sync_channel(1);
-    fail::cfg_callback("on_range_cache_get_value", move || {
+    fail::cfg_callback("on_range_cache_iterator_seek", move || {
         tx.send(true).unwrap();
     })
     .unwrap();
-    let snap_ctx = SnapshotContext {
-        read_ts: 20,
-        range: None,
-    };
-
-    let _ = cluster
-        .get_with_snap_ctx(b"k09", false, snap_ctx.clone())
-        .unwrap();
+    must_copr_point_get(&mut cluster, &product2, 9);
     assert!(rx.try_recv().unwrap());
 
-    // k1-k5 should not cached now
-    let _ = cluster
-        .get_with_snap_ctx(b"k02", false, snap_ctx.clone())
-        .unwrap();
-    rx.try_recv().unwrap_err();
-
-    // write a key to trigger load task
-    cluster.must_put(b"k03", b"val");
-    let _ = cluster
-        .get_with_snap_ctx(b"k02", false, snap_ctx.clone())
-        .unwrap();
+    // write a key to trigger load task ["", table2)
+    must_copr_load_data(&mut cluster, &product1, 3);
+    let (tx, rx) = sync_channel(1);
+    fail::remove("on_range_cache_iterator_seek");
+    fail::cfg_callback("on_range_cache_iterator_seek", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+    must_copr_point_get(&mut cluster, &product1, 2);
     assert!(rx.try_recv().unwrap());
-}
-
-fn make_write_req(cluster: &mut Cluster<ServerCluster>, k: &[u8]) -> RaftCmdRequest {
-    let r = cluster.get_region(k);
-    let mut req = new_request(
-        r.get_id(),
-        r.get_region_epoch().clone(),
-        vec![new_put_cmd(k, b"v")],
-        false,
-    );
-    let leader = cluster.leader_of_region(r.get_id()).unwrap();
-    req.mut_header().set_peer(leader);
-    req
 }
 
 // It tests that for a apply delegate, at the time it prepares to apply
@@ -478,25 +432,37 @@ fn test_load_with_eviction() {
         core.mut_range_manager().load_range(cache_range).unwrap();
     }
 
-    let r = cluster.get_region(b"");
-    cluster.must_split(&r, b"k10");
+    let product1 = ProductTable::new();
+    let product2 = ProductTable::new();
+
+    let key = product2.get_table_prefix();
+    let split_key = Key::from_raw(&key).into_encoded();
+    let r = cluster.get_region(&split_key);
+    cluster.must_split(&r, &split_key);
 
     fail::cfg("on_range_cache_write_batch_write_impl", "pause").unwrap();
-    let write_req = make_write_req(&mut cluster, b"k01");
-    let (cb, mut cb_rx) = make_cb(&write_req);
-    cluster
-        .sim
-        .rl()
-        .async_command_on_node(1, write_req, cb)
-        .unwrap();
-
-    let write_req = make_write_req(&mut cluster, b"k15");
-    let (cb, mut cb_rx2) = make_cb(&write_req);
-    cluster
-        .sim
-        .rl()
-        .async_command_on_node(1, write_req, cb)
-        .unwrap();
+    let mut async_put = |table: &ProductTable, row_id| {
+        let engine = cluster.sim.rl().storages[&1].clone();
+        let cfg = cluster.cfg.tikv.server.clone();
+        let pd_client = cluster.pd_client.clone();
+        let key = table.get_table_prefix();
+        let split_key = Key::from_raw(&key).into_encoded();
+        let ctx = cluster.get_ctx(&split_key);
+        let table_ = table.clone();
+        std::thread::spawn(move || {
+            let _ = init_data_with_details_pd_client(
+                ctx,
+                engine,
+                &table_,
+                &[(row_id, Some(&format!("name:{}", row_id)), row_id)],
+                true,
+                &cfg,
+                Some(pd_client),
+            );
+        })
+    };
+    let handle1 = async_put(&product1, 1);
+    let handle2 = async_put(&product2, 15);
 
     {
         let range_cache_engine = cluster.sim.rl().get_range_cache_engine(1);
@@ -514,35 +480,39 @@ fn test_load_with_eviction() {
             tried_count += 1;
         }
         // Now, the range (DATA_MIN_KEY, DATA_MAX_KEY) should be cached
-        let range = CacheRange::new(data_key(b"k10"), DATA_MAX_KEY.to_vec());
+        let range = CacheRange::new(data_key(&split_key), DATA_MAX_KEY.to_vec());
         range_cache_engine.evict_range(&range, EvictReason::AutoEvict);
     }
 
     fail::remove("on_range_cache_write_batch_write_impl");
-    let _ = cb_rx.recv_timeout(Duration::from_secs(5));
-    let _ = cb_rx2.recv_timeout(Duration::from_secs(5));
+    handle1.join().unwrap();
+    handle2.join().unwrap();
 
-    let (tx, rx) = sync_channel(1);
-    fail::cfg_callback("on_range_cache_get_value", move || {
-        tx.send(true).unwrap();
-    })
-    .unwrap();
-
-    let snap_ctx = SnapshotContext {
-        read_ts: u64::MAX,
-        range: None,
-    };
-    let val = cluster
-        .get_cf_with_snap_ctx(CF_DEFAULT, b"k01", false, snap_ctx.clone())
+    for (table, is_cached) in &[(product1, true), (product2, false)] {
+        fail::remove("on_range_cache_iterator_seek");
+        let (tx, rx) = unbounded();
+        fail::cfg_callback("on_range_cache_iterator_seek", move || {
+            tx.send(true).unwrap();
+        })
         .unwrap();
-    assert_eq!(&val, b"v");
-    assert!(rx.try_recv().unwrap());
 
-    let val = cluster
-        .get_cf_with_snap_ctx(CF_DEFAULT, b"k15", false, snap_ctx.clone())
-        .unwrap();
-    assert_eq!(&val, b"v");
-    rx.try_recv().unwrap_err();
+        let key = table.get_table_prefix();
+        let table_key = Key::from_raw(&key).into_encoded();
+        let ctx = cluster.get_ctx(&table_key);
+        let endpoint = cluster.sim.rl().copr_endpoints[&1].clone();
+        let req = DagSelect::from(table).build_with(ctx, &[0]);
+        let cop_resp = handle_request(&endpoint, req);
+        let mut resp = SelectResponse::default();
+        resp.merge_from_bytes(cop_resp.get_data()).unwrap();
+        assert!(!cop_resp.has_region_error(), "{:?}", cop_resp);
+        assert!(cop_resp.get_other_error().is_empty(), "{:?}", cop_resp);
+
+        if *is_cached {
+            rx.try_recv().unwrap();
+        } else {
+            rx.try_recv().unwrap_err();
+        }
+    }
 }
 
 #[test]

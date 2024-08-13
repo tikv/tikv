@@ -55,7 +55,8 @@ use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use tikv::{
     config::ConfigController,
-    coprocessor, coprocessor_v2,
+    coprocessor::{self, Endpoint},
+    coprocessor_v2,
     import::{ImportSstService, SstImporter},
     read_pool::ReadPool,
     server::{
@@ -151,6 +152,7 @@ pub struct ServerCluster {
     metas: HashMap<u64, ServerMeta>,
     addrs: AddressMap,
     pub storages: HashMap<u64, SimulateEngine>,
+    pub copr_endpoints: HashMap<u64, Endpoint<SimulateEngine>>,
     pub region_info_accessors: HashMap<u64, RegionInfoAccessor>,
     pub importers: HashMap<u64, Arc<SstImporter<RocksEngine>>>,
     pub pending_services: HashMap<u64, PendingServices>,
@@ -198,6 +200,7 @@ impl ServerCluster {
             pd_client,
             security_mgr,
             storages: HashMap::default(),
+            copr_endpoints: HashMap::default(),
             in_memory_engines: HashMap::default(),
             region_info_accessors: HashMap::default(),
             importers: HashMap::default(),
@@ -625,6 +628,7 @@ impl ServerCluster {
         let simulate_trans = SimulateTransport::new(trans);
         let max_grpc_thread_count = cfg.server.grpc_concurrency;
         let server_cfg = Arc::new(VersionTrack::new(cfg.server.clone()));
+        self.copr_endpoints.insert(node_id, copr);
 
         // Register the role change observer of the lock manager.
         lock_mgr.register_detector_role_change_observer(&mut coprocessor_host);
