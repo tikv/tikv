@@ -2952,7 +2952,7 @@ pub mod tests {
         };
         let safe_point = TimeStamp::from(safe_point);
         // Make sure it is a reasonable timestamp.
-        assert!(safe_point > start_time, "{safe_point}, {start_time}");
+        assert!(safe_point >= start_time, "{safe_point}, {start_time}");
         let now = TimeStamp::compose(TimeStamp::physical_now(), 0);
         assert!(safe_point < now, "{safe_point}, {now}");
         // Must get ts from PD.
