@@ -18,8 +18,8 @@ use crossbeam_skiplist::{
 };
 use engine_rocks::RocksEngine;
 use engine_traits::{
-    CacheRange, FailedReason, IterOptions, Iterable, KvEngine, RangeCacheEngine, Result,
-    CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
+    CacheRange, EvictReason, FailedReason, IterOptions, Iterable, KvEngine, RangeCacheEngine,
+    Result, CF_DEFAULT, CF_LOCK, CF_WRITE, DATA_CFS,
 };
 use parking_lot::{lock_api::RwLockUpgradableReadGuard, RwLock, RwLockWriteGuard};
 use raftstore::coprocessor::RegionInfoProvider;
@@ -255,6 +255,7 @@ impl RangeCacheMemoryEngineCore {
     pub(crate) fn pending_range_completes_loading(
         core: &mut RwLockWriteGuard<'_, Self>,
         range: &CacheRange,
+        safe_point: u64,
     ) {
         assert!(!core.has_cached_write_batch(range));
         let range_manager = core.mut_range_manager();
@@ -264,7 +265,7 @@ impl RangeCacheMemoryEngineCore {
             .unwrap();
         assert_eq!(&r, range);
         assert!(!canceled);
-        range_manager.new_range(r);
+        range_manager.new_range_with_safe_point(r, safe_point);
     }
 }
 
@@ -367,9 +368,9 @@ impl RangeCacheMemoryEngine {
     /// Evict a range from the in-memory engine. After this call, the range will
     /// not be readable, but the data of the range may not be deleted
     /// immediately due to some ongoing snapshots.
-    pub fn evict_range(&self, range: &CacheRange) {
+    pub fn evict_range(&self, range: &CacheRange, evict_reason: EvictReason) {
         let mut core = self.core.write();
-        let mut ranges_to_delete = core.range_manager.evict_range(range);
+        let mut ranges_to_delete = core.range_manager.evict_range(range, evict_reason);
         core.mut_range_manager()
             .mark_delete_ranges_scheduled(&mut ranges_to_delete);
         if !ranges_to_delete.is_empty() {
@@ -596,8 +597,8 @@ impl RangeCacheEngine for RangeCacheMemoryEngine {
         self.config.value().enabled
     }
 
-    fn evict_range(&self, range: &CacheRange) {
-        self.evict_range(range)
+    fn evict_range(&self, range: &CacheRange, evict_range: EvictReason) {
+        self.evict_range(range, evict_range)
     }
 }
 

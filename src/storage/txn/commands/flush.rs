@@ -469,12 +469,14 @@ mod tests {
         must_locked(&mut engine, k, 1);
         assert_matches!(
             must_flush_insert_err(&mut engine, k, *v, k, 1, 2),
-            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::AlreadyExist { key }))) if key == k
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::AlreadyExist { key, existing_start_ts})))
+            if key == k  && existing_start_ts == 1.into()
         );
         must_commit(&mut engine, k, 1, 2);
         assert_matches!(
             must_flush_insert_err(&mut engine, k, *v, k, 3, 1),
-            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::AlreadyExist { key }))) if key == k
+            Error(box ErrorInner::Mvcc(MvccError(box MvccErrorInner::AlreadyExist { key, existing_start_ts})))
+            if key == k  && existing_start_ts == 1.into()
         );
     }
 

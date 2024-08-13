@@ -110,8 +110,13 @@ pub enum ErrorInner {
         wait_chain: Vec<kvproto::deadlock::WaitForEntry>,
     },
 
-    #[error("key {} already exists", log_wrappers::Value::key(.key))]
-    AlreadyExist { key: Vec<u8> },
+    #[error(
+        "key {} already exists with existing_start_ts={}", log_wrappers::Value::key(.key),
+        .existing_start_ts)]
+    AlreadyExist {
+        key: Vec<u8>,
+        existing_start_ts: TimeStamp,
+    },
 
     #[error(
         "default not found: key:{}, maybe read truncated/dropped table data?",
@@ -238,7 +243,13 @@ impl ErrorInner {
                 deadlock_key_hash: *deadlock_key_hash,
                 wait_chain: wait_chain.clone(),
             }),
-            ErrorInner::AlreadyExist { key } => Some(ErrorInner::AlreadyExist { key: key.clone() }),
+            ErrorInner::AlreadyExist {
+                key,
+                existing_start_ts,
+            } => Some(ErrorInner::AlreadyExist {
+                key: key.clone(),
+                existing_start_ts: *existing_start_ts,
+            }),
             ErrorInner::DefaultNotFound { key } => Some(ErrorInner::DefaultNotFound {
                 key: key.to_owned(),
             }),

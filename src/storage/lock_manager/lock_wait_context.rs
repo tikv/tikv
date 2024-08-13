@@ -175,6 +175,16 @@ impl LockWaitContextSharedState {
     }
 }
 
+impl std::fmt::Debug for LockWaitContextSharedState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LockWaitContextSharedState")
+            .field("lock_wait_token", &self.lock_wait_token)
+            .field("key", &self.key)
+            .field("is_canceled", &self.is_canceled)
+            .finish()
+    }
+}
+
 enum FinishRequestKind {
     Executed,
     Canceled,
