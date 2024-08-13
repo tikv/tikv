@@ -65,7 +65,7 @@ fn test_gc_worker() {
     let (write, default) = {
         let mut core = engine.core().write();
         core.mut_range_manager()
-            .new_region(new_region(1, b"".to_vec(), b"z".to_vec()));
+            .new_region(new_region(1, b"", b"z"));
         let engine = core.engine();
         (engine.cf_handle(CF_WRITE), engine.cf_handle(CF_DEFAULT))
     };
@@ -136,7 +136,7 @@ fn test_gc_worker() {
 
     let guard = &epoch::pin();
     for &ts in &[commit_ts1, commit_ts2, commit_ts3] {
-        let key = Key::from_raw(b"k");
+        let key = Key::from_raw(b"zk");
         let key = encoding_for_filter(key.as_encoded(), TimeStamp::new(ts));
 
         assert!(key_exist(&write, &key, guard));
@@ -144,7 +144,7 @@ fn test_gc_worker() {
 
     let _ = rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
-    let key = Key::from_raw(b"k");
+    let key = Key::from_raw(b"zk");
     // now, the outdated mvcc versions should be gone
     for &ts in &[commit_ts1, commit_ts2, commit_ts3] {
         let key = encoding_for_filter(key.as_encoded(), TimeStamp::new(ts));

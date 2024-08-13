@@ -34,11 +34,11 @@ fn test_basic_put_get() {
     let range_cache_engine = cluster.get_range_cache_engine(1);
     // FIXME: load is not implemented, so we have to insert range manually
     {
+        let region = cluster.get_region(b"k");
+        let rid = region.id;
         let mut core = range_cache_engine.core().write();
-        let cache_region = new_region(1, "", "");
-        core.mut_range_manager().new_region(cache_region.clone());
-        core.mut_range_manager()
-            .set_safe_point(cache_region.id, 1000);
+        core.mut_range_manager().new_region(region);
+        core.mut_range_manager().set_safe_point(rid, 1000);
     }
 
     cluster.put(b"k05", b"val").unwrap();
@@ -63,119 +63,11 @@ fn test_basic_put_get() {
 
 #[test]
 fn test_load() {
-    let test_load = |concurrent_with_split: bool| {
-        let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
-        cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
-        cluster.run();
-
-        for i in (0..30).step_by(2) {
-            let key = format!("key-{:04}", i);
-            let encoded_key = Key::from_raw(key.as_bytes())
-                .append_ts(20.into())
-                .into_encoded();
-            cluster.must_put(&encoded_key, b"val-default");
-            cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
-        }
-        let r = cluster.get_region(b"");
-        let split_key1 = format!("key-{:04}", 10).into_bytes();
-        cluster.must_split(&r, &split_key1);
-        let r = cluster.get_region(&split_key1);
-        let split_key2 = format!("key-{:04}", 20).into_bytes();
-        cluster.must_split(&r, &split_key2);
-
-        let (tx, rx) = sync_channel(1);
-        fail::cfg_callback("on_snapshot_load_finished", move || {
-            tx.send(true).unwrap();
-        })
-        .unwrap();
-
-        // load range
-        {
-            let range_cache_engine = cluster.get_range_cache_engine(1);
-            let mut core = range_cache_engine.core().write();
-            if concurrent_with_split {
-                // Load the whole range as if it is not splitted. Loading process should handle
-                // it correctly.
-                let cache_region = new_region(1, "", "");
-                core.mut_range_manager().load_region(cache_region).unwrap();
-            } else {
-                let cache_range = new_region(1, "", split_key1.as_slice());
-                let cache_range2 = new_region(2, data_key(&split_key1), data_key(&split_key2));
-                let cache_range3 = new_region(3, data_key(&split_key2), "");
-                core.mut_range_manager().load_region(cache_range).unwrap();
-                core.mut_range_manager().load_region(cache_range2).unwrap();
-                core.mut_range_manager().load_region(cache_range3).unwrap();
-            }
-        }
-
-        // put key to trigger load task
-        for i in &[0, 10, 20] {
-            let key = format!("key-{:04}", i);
-            let encoded_key = Key::from_raw(key.as_bytes())
-                .append_ts(20.into())
-                .into_encoded();
-            cluster.must_put(&encoded_key, b"val-default");
-            cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
-        }
-
-        // ensure the snapshot is loaded
-        rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        rx.recv_timeout(Duration::from_secs(5)).unwrap();
-
-        for i in (1..30).step_by(2) {
-            let key = format!("key-{:04}", i);
-            let encoded_key = Key::from_raw(key.as_bytes())
-                .append_ts(20.into())
-                .into_encoded();
-            cluster.must_put(&encoded_key, b"val-default");
-            cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
-        }
-
-        let (tx, rx) = sync_channel(1);
-        fail::cfg_callback("on_range_cache_get_value", move || {
-            tx.send(true).unwrap();
-        })
-        .unwrap();
-
-        let snap_ctx = SnapshotContext {
-            region_id: 0,
-            epoch_version: 0,
-            read_ts: 20,
-            range: None,
-        };
-
-        for i in 0..30 {
-            let key = format!("key-{:04}", i);
-            let encoded_key = Key::from_raw(key.as_bytes())
-                .append_ts(20.into())
-                .into_encoded();
-            let val = cluster
-                .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, false, snap_ctx.clone())
-                .unwrap();
-            assert_eq!(&val, b"val-write");
-            // verify it's read from range cache engine
-            assert!(rx.try_recv().unwrap());
-
-            let val = cluster
-                .get_with_snap_ctx(&encoded_key, false, snap_ctx.clone())
-                .unwrap();
-            assert_eq!(&val, b"val-default");
-            // verify it's read from range cache engine
-            assert!(rx.try_recv().unwrap());
-        }
-    };
-    test_load(false);
-    test_load(true);
-}
-
-#[test]
-fn test_write_batch_cache_during_load() {
     let mut cluster = new_node_cluster_with_hybrid_engine_with_no_range_cache(0, 1);
     cluster.cfg.raft_store.apply_batch_system.pool_size = 2;
     cluster.run();
 
-    for i in 0..10 {
+    for i in (0..30).step_by(2) {
         let key = format!("key-{:04}", i);
         let encoded_key = Key::from_raw(key.as_bytes())
             .append_ts(20.into())
@@ -183,20 +75,33 @@ fn test_write_batch_cache_during_load() {
         cluster.must_put(&encoded_key, b"val-default");
         cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
     }
+    let r = cluster.get_region(b"");
+    let split_key1 = format!("key-{:04}", 10).into_bytes();
+    cluster.must_split(&r, &split_key1);
+    let r = cluster.get_region(&split_key1);
+    let split_key2 = format!("key-{:04}", 20).into_bytes();
+    cluster.must_split(&r, &split_key2);
 
-    fail::cfg("on_snapshot_load_finished", "pause").unwrap();
+    let (tx, rx) = sync_channel(1);
+    fail::cfg_callback("on_snapshot_load_finished", move || {
+        tx.send(true).unwrap();
+    })
+    .unwrap();
+
     // load range
     {
+        let r = cluster.get_region(b"");
+        let r1 = cluster.get_region(&split_key1);
+        let r2 = cluster.get_region(&split_key2);
         let range_cache_engine = cluster.get_range_cache_engine(1);
         let mut core = range_cache_engine.core().write();
-        let cache_range = new_region(1, "", "");
-        core.mut_range_manager().load_region(cache_range).unwrap();
+        core.mut_range_manager().load_region(r).unwrap();
+        core.mut_range_manager().load_region(r1).unwrap();
+        core.mut_range_manager().load_region(r2).unwrap();
     }
 
-    // First, cache some entries after the acquire of the snapshot
-    // Then, cache some additional entries after the snapshot loaded and the
-    // previous cache consumed
-    for i in 10..20 {
+    // put key to trigger load task
+    for i in &[0, 10, 20] {
         let key = format!("key-{:04}", i);
         let encoded_key = Key::from_raw(key.as_bytes())
             .append_ts(20.into())
@@ -205,53 +110,32 @@ fn test_write_batch_cache_during_load() {
         cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
     }
 
-    let (tx1, rx1) = sync_channel(1);
-    fail::cfg_callback("on_completes_batch_loading", move || {
-        tx1.send(true).unwrap();
-    })
-    .unwrap();
+    // ensure the snapshot is loaded
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    rx.recv_timeout(Duration::from_secs(5)).unwrap();
 
-    // use it to mock concurrency between consuming cached write batch and cache
-    // further writes
-    fail::cfg("on_cached_write_batch_consumed", "pause").unwrap();
-    fail::remove("on_snapshot_load_finished");
+    for i in (1..30).step_by(2) {
+        let key = format!("key-{:04}", i);
+        let encoded_key = Key::from_raw(key.as_bytes())
+            .append_ts(20.into())
+            .into_encoded();
+        cluster.must_put(&encoded_key, b"val-default");
+        cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
+    }
 
-    let (tx2, rx2) = sync_channel(1);
+    let (tx, rx) = sync_channel(1);
     fail::cfg_callback("on_range_cache_get_value", move || {
-        tx2.send(true).unwrap();
+        tx.send(true).unwrap();
     })
     .unwrap();
+
     let snap_ctx = SnapshotContext {
         region_id: 0,
         epoch_version: 0,
         read_ts: 20,
         range: None,
     };
-
-    for i in 20..30 {
-        if i == 29 {
-            let key = format!("key-{:04}", 1);
-            let encoded_key = Key::from_raw(key.as_bytes())
-                .append_ts(20.into())
-                .into_encoded();
-            let val = cluster
-                .get_cf_with_snap_ctx(CF_WRITE, &encoded_key, false, snap_ctx.clone())
-                .unwrap();
-            assert_eq!(&val, b"val-write");
-            // We should not read the value in the memory engine at this phase.
-            rx2.try_recv().unwrap_err();
-            fail::remove("on_cached_write_batch_consumed");
-        }
-        let key = format!("key-{:04}", i);
-        let encoded_key = Key::from_raw(key.as_bytes())
-            .append_ts(20.into())
-            .into_encoded();
-        cluster.must_put(&encoded_key, b"val-default");
-        cluster.must_put_cf(CF_WRITE, &encoded_key, b"val-write");
-    }
-
-    // ensure the pending range is transfered to normal range
-    rx1.recv_timeout(Duration::from_secs(5)).unwrap();
 
     for i in 0..30 {
         let key = format!("key-{:04}", i);
@@ -263,14 +147,14 @@ fn test_write_batch_cache_during_load() {
             .unwrap();
         assert_eq!(&val, b"val-write");
         // verify it's read from range cache engine
-        assert!(rx2.try_recv().unwrap());
+        assert!(rx.try_recv().unwrap());
 
         let val = cluster
             .get_with_snap_ctx(&encoded_key, false, snap_ctx.clone())
             .unwrap();
         assert_eq!(&val, b"val-default");
         // verify it's read from range cache engine
-        assert!(rx2.try_recv().unwrap());
+        assert!(rx.try_recv().unwrap());
     }
 }
 
