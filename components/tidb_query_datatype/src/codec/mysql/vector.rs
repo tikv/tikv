@@ -176,8 +176,7 @@ impl<'a> VectorFloat32Ref<'a> {
     }
 
     fn index(&self, idx: usize) -> f32 {
-        let byte_index: usize = idx * F32_SIZE;
-        if byte_index + F32_SIZE > self.value.len() {
+        if idx > self.len() {
             panic!(
                 "Index out of bounds: index = {}, length = {}",
                 idx,
