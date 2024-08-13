@@ -22,8 +22,6 @@ pub trait ObservableWriteBatch: Send {
     fn pop_save_point(&mut self);
     fn rollback_to_save_point(&mut self);
     fn clear(&mut self);
-    fn merge(&mut self, other: Vec<u8>);
-    fn to_vec(&mut self) -> Vec<u8>;
     fn write_opt(&mut self, opts: &WriteOptions, seq_num: u64);
     fn prepare_for_range(&mut self, range: CacheRange);
 }
@@ -104,11 +102,8 @@ impl<WB: WriteBatch> WriteBatch for WriteBatchWrapper<WB> {
         self.write_batch.rollback_to_save_point()
     }
 
-    fn merge(&mut self, mut other: Self) -> Result<()> {
-        self.observable_write_batch
-            .as_mut()
-            .map(|w| w.merge(other.observable_write_batch.as_mut().unwrap().to_vec()));
-        self.write_batch.merge(other.write_batch)
+    fn merge(&mut self, _: Self) -> Result<()> {
+        unimplemented!("merge is not supported in WriteBatchWrapper")
     }
 
     fn prepare_for_range(&mut self, range: CacheRange) {

@@ -137,7 +137,7 @@ use tokio::runtime::Builder;
 use crate::{
     common::{
         build_in_memory_engine, ConfiguredRaftEngine, DiskUsageChecker, EngineMetricsManager,
-        EnginesResourceInfo, KvEngineBuilder, TikvServerCore,
+        EnginesResourceInfo, TikvServerCore,
     },
     memory::*,
     setup::*,
@@ -1595,8 +1595,7 @@ where
 
 impl<CER, F> TikvServer<CER, F>
 where
-    RocksEngine:
-        KvEngine<DiskEngine = RocksEngine, CompactedEvent = RocksCompactedEvent> + KvEngineBuilder,
+    RocksEngine: KvEngine<DiskEngine = RocksEngine, CompactedEvent = RocksCompactedEvent>,
     CER: ConfiguredRaftEngine,
     F: KvFormat,
 {

@@ -16,9 +16,7 @@ use collections::HashMap;
 use encryption_export::{
     data_key_manager_from_config, DataKeyManager, FileConfig, MasterKeyConfig,
 };
-use engine_rocks::{
-    config::BlobRunMode, RocksCompactedEvent, RocksEngine, RocksSnapshot, RocksStatistics,
-};
+use engine_rocks::{config::BlobRunMode, RocksEngine, RocksSnapshot, RocksStatistics};
 use engine_test::raft::RaftTestEngine;
 use engine_traits::{
     CfName, CfNamesExt, Engines, Iterable, KvEngine, Peekable, RaftEngineDebug, RaftEngineReadOnly,
@@ -50,8 +48,8 @@ use raftstore::{
     RaftRouterCompactedEventSender, Result,
 };
 use rand::{seq::SliceRandom, RngCore};
-use range_cache_memory_engine::{RangeCacheEngineContext, RangeCacheMemoryEngine};
-use server::common::{ConfiguredRaftEngine, KvEngineBuilder};
+use range_cache_memory_engine::RangeCacheMemoryEngine;
+use server::common::ConfiguredRaftEngine;
 use tempfile::TempDir;
 use test_pd_client::TestPdClient;
 use test_util::eventually;
@@ -673,23 +671,19 @@ pub fn must_contains_error(resp: &RaftCmdResponse, msg: &str) {
     assert!(err_msg.contains(msg), "{:?}", resp);
 }
 
-pub fn create_test_engine<EK>(
+pub fn create_test_engine(
     // TODO: pass it in for all cases.
-    router: Option<RaftRouter<EK, RaftTestEngine>>,
+    router: Option<RaftRouter<RocksEngine, RaftTestEngine>>,
     limiter: Option<Arc<IoRateLimiter>>,
-    pd_client: Arc<dyn PdClient>,
     cfg: &Config,
 ) -> (
-    Engines<EK, RaftTestEngine>,
+    Engines<RocksEngine, RaftTestEngine>,
     Option<Arc<DataKeyManager>>,
     TempDir,
     LazyWorker<String>,
     Arc<RocksStatistics>,
     Option<Arc<RocksStatistics>>,
-)
-where
-    EK: KvEngine<DiskEngine = RocksEngine, CompactedEvent = RocksCompactedEvent> + KvEngineBuilder,
-{
+) {
     let dir = test_util::temp_dir("test_cluster", cfg.prefer_mem);
     let mut cfg = cfg.clone();
     cfg.storage.data_dir = dir.path().to_str().unwrap().to_string();
@@ -717,15 +711,8 @@ where
         }));
     }
     let factory = builder.build();
-    let disk_engine = factory.create_shared_db(dir.path()).unwrap();
-    let config = Arc::new(VersionTrack::new(cfg.tikv.range_cache_engine.clone()));
-    let kv_engine: EK = KvEngineBuilder::build(
-        RangeCacheEngineContext::new(config, pd_client),
-        disk_engine,
-        None,
-        None,
-    );
-    let engines = Engines::new(kv_engine, raft_engine);
+    let engine = factory.create_shared_db(dir.path()).unwrap();
+    let engines = Engines::new(engine, raft_engine);
     (
         engines,
         key_manager,

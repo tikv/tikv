@@ -66,14 +66,6 @@ impl ObservableWriteBatch for HybridObservableWriteBatch {
     fn clear(&mut self) {
         self.cache_write_batch.clear();
     }
-    fn merge(&mut self, other: Vec<u8>) {
-        // self.cache_write_batch.merge(other);
-        unimplemented!()
-    }
-    fn to_vec(&mut self) -> Vec<u8> {
-        // self.cache_write_batch.to_vec();
-        unimplemented!()
-    }
     fn write_opt(&mut self, opts: &WriteOptions, seq_num: u64) {
         self.cache_write_batch.set_sequence_number(seq_num).unwrap();
         self.cache_write_batch.write_opt(opts).unwrap();
@@ -82,6 +74,3 @@ impl ObservableWriteBatch for HybridObservableWriteBatch {
         self.cache_write_batch.prepare_for_range(range);
     }
 }
-
-#[cfg(test)]
-mod tests {}
