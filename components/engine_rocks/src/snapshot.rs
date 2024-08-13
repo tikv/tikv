@@ -21,9 +21,6 @@ pub struct RocksSnapshot {
     inner: Arc<RocksUnsafeSnapshot>,
 }
 
-unsafe impl Send for RocksSnapshot {}
-unsafe impl Sync for RocksSnapshot {}
-
 impl RocksSnapshot {
     pub fn new(db: Arc<DB>) -> Self {
         unsafe {
@@ -49,6 +46,9 @@ struct RocksUnsafeSnapshot {
     db: Arc<DB>,
     snap: UnsafeSnap,
 }
+
+unsafe impl Send for RocksUnsafeSnapshot {}
+unsafe impl Sync for RocksUnsafeSnapshot {}
 
 impl Drop for RocksUnsafeSnapshot {
     fn drop(&mut self) {

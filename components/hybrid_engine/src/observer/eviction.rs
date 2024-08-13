@@ -56,9 +56,6 @@ impl EvictionObserver {
         state: &RegionState,
         apply: &mut ApplyCtxInfo<'_>,
     ) {
-        if !self.cache_engine.range_cache_engine_enabled() {
-            return;
-        }
         // Evict caches for successfully executed ingest commands and admin
         // commands that change region range.
         //
@@ -90,10 +87,6 @@ impl EvictionObserver {
     }
 
     fn on_flush_cmd(&self) {
-        if !self.cache_engine.range_cache_engine_enabled() {
-            return;
-        }
-
         let ranges = {
             let mut ranges = self.pending_evict.lock().unwrap();
             std::mem::take(&mut *ranges)
@@ -104,10 +97,6 @@ impl EvictionObserver {
     }
 
     fn evict_range_on_leader_steps_down(&self, region: &Region) {
-        if !self.cache_engine.range_cache_engine_enabled() {
-            return;
-        }
-
         let range = CacheRange::from_region(region);
         tikv_util::info!(
             "evict range due to leader step down";
@@ -183,8 +172,6 @@ impl<E> CmdObserver<E> for EvictionObserver {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
     use engine_traits::SstMetaInfo;
     use kvproto::{
         import_sstpb::SstMeta,
@@ -196,13 +183,9 @@ mod tests {
 
     #[derive(Default)]
     struct MockRangeCacheEngine {
-        enabled: AtomicBool,
         evicted_ranges: Arc<Mutex<Vec<CacheRange>>>,
     }
     impl RangeCacheEngineExt for MockRangeCacheEngine {
-        fn range_cache_engine_enabled(&self) -> bool {
-            self.enabled.load(Ordering::Relaxed)
-        }
         fn evict_range(&self, range: &CacheRange, _: EvictReason) {
             self.evicted_ranges.lock().unwrap().push(range.clone());
         }
@@ -240,9 +223,6 @@ mod tests {
         let cmd = Cmd::new(0, 0, request, response);
 
         // Must not evict range for region split.
-        //
-        // Enable range cache engine.
-        cache_engine.enabled.store(true, Ordering::Relaxed);
         observer.post_exec_cmd(&mut ctx, &cmd, &RegionState::default(), &mut apply);
         observer.on_flush_cmd();
         let expected = CacheRange::from_region(&region);
@@ -279,13 +259,6 @@ mod tests {
         let response = RaftCmdResponse::default();
         let cmd = Cmd::new(0, 0, request, response);
 
-        // Must not evict range when range cache engine is disabled.
-        observer.post_exec_cmd(&mut ctx, &cmd, &RegionState::default(), &mut apply);
-        observer.on_flush_cmd();
-        assert!(cache_engine.evicted_ranges.lock().unwrap().is_empty());
-
-        // Enable range cache engine.
-        cache_engine.enabled.store(true, Ordering::Relaxed);
         observer.post_exec_cmd(&mut ctx, &cmd, &RegionState::default(), &mut apply);
         observer.on_flush_cmd();
         let expected = CacheRange::from_region(&region);
