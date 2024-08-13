@@ -7,7 +7,7 @@ use engine_store_ffi::ffi::{
     ProtoMsgBaseBuff,
 };
 
-use crate::{shared::ffi, utils::v1::*};
+use crate::utils::v1::*;
 
 #[derive(Default)]
 struct GcMonitor {
@@ -230,7 +230,7 @@ fn test_read_index_applying() {
     cluster.must_put(b"k0", b"v");
     {
         let prev_state = maybe_collect_states(&cluster.cluster_ext, r1, Some(vec![1]));
-        let (compact_index, compact_term) = get_valid_compact_index_by(&prev_state, Some(vec![1]));
+        let _ = get_valid_compact_index_by(&prev_state, Some(vec![1]));
     }
     cluster.pd_client.must_none_pending_peer(p2.clone());
     // assert_eq!(cluster.pd_client.get_pending_peers().len(), 0);
@@ -360,22 +360,21 @@ fn test_util() {
 use kvproto::{
     kvrpcpb::{Context, DiskFullOpt, KeyRange},
     raft_cmdpb::{CmdType, RaftCmdRequest, RaftRequestHeader, Request as RaftRequest},
-    raft_serverpb::RaftMessage,
 };
 use raftstore::{
     router::RaftStoreRouter,
     store::{msg::Callback, RaftCmdExtraOpts, ReadIndexContext},
 };
 use tokio::sync::oneshot;
-use txn_types::{Key, Lock, LockType, TimeStamp};
+use txn_types::{Key, Lock, LockType};
 use uuid::Uuid;
 
-use crate::utils::v1_server::{new_server_cluster, ChannelBuilder, Environment, TikvClient};
+use crate::utils::v1_server::new_server_cluster;
 
 // https://github.com/tikv/tikv/issues/16823
 #[test]
 fn test_raft_cmd_request_cant_advanve_max_ts() {
-    use kvproto::kvrpcpb::{ReadIndexRequest, ReadIndexResponse};
+    use kvproto::kvrpcpb::ReadIndexRequest;
 
     let mut cluster = new_server_cluster(0, 1);
     cluster.run();
@@ -384,10 +383,6 @@ fn test_raft_cmd_request_cant_advanve_max_ts() {
 
     let region = cluster.get_region(b"");
     let leader = region.get_peers()[0].clone();
-    let addr = cluster.sim.rl().get_addr(leader.get_store_id()).to_owned();
-
-    let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env).connect(&addr);
 
     let mut ctx = Context::default();
     let region_id = leader.get_id();
@@ -468,7 +463,6 @@ fn test_raft_cmd_request_learner_advanve_max_ts() {
     let region = cluster.get_region(b"");
     assert_eq!(region_id, 1);
     assert_eq!(region.get_id(), 1);
-    let leader = region.get_peers()[0].clone();
 
     fail::cfg("on_pre_write_apply_state", "return(true)").unwrap();
     let learner = new_learner_peer(2, 2);
@@ -493,11 +487,6 @@ fn test_raft_cmd_request_learner_advanve_max_ts() {
     );
     guards[0].with_lock(|l| *l = Some(lock.clone()));
 
-    let addr = cluster.sim.rl().get_addr(learner.get_store_id()).to_owned();
-
-    let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env).connect(&addr);
-
     // cluster.must_put(b"k", b"v");
 
     let read_index = |ranges: &[(&[u8], &[u8])]| {
@@ -518,7 +507,7 @@ fn test_raft_cmd_request_learner_advanve_max_ts() {
             r.set_end_key(e.to_vec());
             read_index_request.mut_ranges().push(r);
         }
-        let mut cmd =
+        let cmd =
             proxy_ffi::read_index_helper::gen_read_index_raft_cmd_req(&mut read_index_request);
 
         let (result_tx, result_rx) = oneshot::channel();
@@ -584,12 +573,6 @@ fn test_raft_message_can_advanve_max_ts() {
     let region = cluster.get_region(b"");
     let leader = region.get_peers()[0].clone();
     let follower = new_learner_peer(2, 2);
-    let addr = cluster.sim.rl().get_addr(leader.get_store_id()).to_owned();
-
-    let env = Arc::new(Environment::new(1));
-    let channel = ChannelBuilder::new(env).connect(&addr);
-
-    let region_id = leader.get_id();
 
     let read_index = |ranges: &[(&[u8], &[u8])]| {
         let mut m = raft::eraftpb::Message::default();
@@ -627,7 +610,7 @@ fn test_raft_message_can_advanve_max_ts() {
 
     // wait a while until the node updates its own max ts
     let prev_cm_max_ts = cm.max_ts();
-    let (resp, start_ts) = read_index(&[(b"l", b"yz")]);
+    let (_, start_ts) = read_index(&[(b"l", b"yz")]);
     cluster.must_put(b"a", b"b");
     std::thread::sleep(Duration::from_millis(2000));
     // assert!(!resp.has_locked());

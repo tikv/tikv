@@ -4,8 +4,6 @@ use std::path::Path;
 
 use tempfile::NamedTempFile;
 
-use crate::utils::v1::*;
-
 #[test]
 fn test_adhoc_dump_prof() {
     use proxy_server::status_server::vendored_utils::{
@@ -17,8 +15,8 @@ fn test_adhoc_dump_prof() {
         let _ = activate_prof();
     }
 
-    let x = vec![1; 1000];
-    let y = vec![1; 1000];
+    let _x = vec![1; 1000];
+    let _y = vec![1; 1000];
 
     let f = NamedTempFile::new().unwrap();
     let path = f.path().to_str().unwrap();

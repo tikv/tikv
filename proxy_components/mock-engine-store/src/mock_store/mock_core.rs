@@ -43,8 +43,12 @@ impl MockRegion {
 #[derive(Default)]
 pub struct RegionStats {
     pub pre_handle_count: AtomicU64,
+    // Count of call to `ffi_fast_add_peer`.
     pub fast_add_peer_count: AtomicU64,
     pub apply_snap_count: AtomicU64,
+    // FAP is finished building. Whether succeed or not.
+    pub finished_fast_add_peer_count: AtomicU64,
+    pub started_fast_add_peers: std::sync::Mutex<HashSet<u64>>,
 }
 
 // In case of newly added cfs.

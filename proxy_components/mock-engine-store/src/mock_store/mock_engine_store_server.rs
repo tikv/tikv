@@ -76,6 +76,20 @@ impl EngineStoreServer {
         f(self.region_states.borrow_mut().get_mut(&region_id).unwrap())
     }
 
+    pub fn mutate_region_states_mut<F: FnMut(&mut RegionStats)>(
+        &self,
+        region_id: RegionId,
+        mut f: F,
+    ) {
+        let has = self.region_states.borrow().contains_key(&region_id);
+        if !has {
+            self.region_states
+                .borrow_mut()
+                .insert(region_id, Default::default());
+        }
+        f(self.region_states.borrow_mut().get_mut(&region_id).unwrap())
+    }
+
     pub fn get_mem(
         &self,
         region_id: u64,

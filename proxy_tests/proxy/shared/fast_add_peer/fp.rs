@@ -853,6 +853,7 @@ fn test_fall_back_to_slow_path() {
     fail::cfg("fap_core_no_fast_path", "panic").unwrap();
 
     pd_client.must_add_peer(1, new_learner_peer(2, 2));
+    // FAP will fail for "can't find entry for index 9 of region 1".
     check_key(&cluster, b"k2", b"v2", Some(true), None, Some(vec![1, 2]));
     must_wait_until_cond_node(
         &cluster.cluster_ext,
@@ -941,5 +942,104 @@ fn test_single_replica_migrate() {
 
     fail::remove("on_can_apply_snapshot");
     fail::remove("on_pre_write_apply_state");
+    cluster.shutdown();
+}
+
+// Test MsgSnapshot before MsgAppend
+/// According to https://github.com/tikv/raft-rs/blob/2aefbf627f243dd261b7585ef1250d32efd9dfe7/src/raft.rs#L842,
+/// if log is truncated in Leader, a MsgSnapshot may be sent directly before a
+/// MsgAppend. If such MsgSnapshot is received when a FAP snapshot IS BUILDING,
+/// then it will be dropped.
+#[test]
+fn test_msgsnapshot_before_msgappend() {
+    let (mut cluster, pd_client) = new_mock_cluster_snap(0, 2);
+    pd_client.disable_default_operator();
+    fail::cfg("post_apply_snapshot_allow_no_unips", "return").unwrap();
+    cluster.cfg.proxy_cfg.engine_store.enable_fast_add_peer = true;
+
+    tikv_util::set_panic_hook(true, "./");
+    // Can always apply snapshot immediately
+    fail::cfg("on_can_apply_snapshot", "return(true)").unwrap();
+    fail::cfg("on_pre_write_apply_state", "return").unwrap();
+
+    let _ = cluster.run_conf_change();
+
+    cluster.must_put(b"k1", b"v1");
+    check_key(&cluster, b"k1", b"v1", Some(true), None, Some(vec![1]));
+    cluster.must_put(b"k2", b"v2");
+
+    fail::cfg("fap_core_no_fallback", "panic").unwrap();
+    fail::cfg("fap_mock_force_wait_for_data", "return(1)").unwrap();
+    pd_client.must_add_peer(1, new_learner_peer(2, 2));
+
+    std::thread::sleep(Duration::from_secs(1));
+
+    // Trigger direct MsgSnapshot.
+    let region = cluster.get_region("k1".as_bytes());
+    let prev_state = maybe_collect_states(&cluster.cluster_ext, 1, Some(vec![1]));
+    let (compact_index, compact_term) = get_valid_compact_index(&prev_state);
+    debug!("compact at index {}", compact_index);
+    let compact_log = test_raftstore::new_compact_log_request(compact_index, compact_term);
+    let req = test_raftstore::new_admin_request(1, region.get_region_epoch(), compact_log);
+    let res = cluster
+        .call_command_on_leader(req, Duration::from_secs(3))
+        .unwrap();
+
+    let mut t = 0;
+    while true {
+        let mut buf = Vec::<raft::eraftpb::Entry>::new();
+        cluster
+            .get_engines(1)
+            .raft
+            .get_all_entries_to(1, &mut buf)
+            .unwrap();
+        if buf.len() == 1 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        t += 1;
+        assert!(t < 11);
+    }
+
+    // MsgSnapshot will be rejected before.
+    fail::remove("fap_mock_force_wait_for_data");
+    cluster.clear_send_filters();
+
+    pd_client.must_add_peer(1, new_learner_peer(2, 2));
+
+    iter_ffi_helpers(&cluster, Some(vec![2]), &mut |_, ffi: &mut FFIHelperSet| {
+        let mut x: u64 = 0;
+        let mut y: u64 = 0;
+        (*ffi.engine_store_server).mutate_region_states_mut(1, |e: &mut RegionStats| {
+            x = e.finished_fast_add_peer_count.load(Ordering::SeqCst);
+        });
+        (*ffi.engine_store_server).mutate_region_states_mut(1, |e: &mut RegionStats| {
+            y = e.started_fast_add_peers.lock().unwrap().len() as u64;
+        });
+        assert_eq!(x, y);
+    });
+
+    // FAP will fail for "can't find entry for index 9 of region 1".
+    check_key(&cluster, b"k2", b"v2", Some(true), None, Some(vec![1, 2]));
+    must_wait_until_cond_node(
+        &cluster.cluster_ext,
+        1,
+        Some(vec![2]),
+        &|states: &States| -> bool {
+            find_peer_by_id(states.in_disk_region_state.get_region(), 2).is_some()
+        },
+    );
+
+    iter_ffi_helpers(&cluster, Some(vec![2]), &mut |_, ffi: &mut FFIHelperSet| {
+        assert_eq!(
+            ffi.engine_store_server_helper
+                .query_fap_snapshot_state(1, 2, 0, 0),
+            proxy_ffi::interfaces_ffi::FapSnapshotState::NotFound
+        );
+    });
+
+    fail::remove("on_can_apply_snapshot");
+    fail::remove("on_pre_write_apply_state");
+    fail::remove("fap_core_no_fallback");
     cluster.shutdown();
 }

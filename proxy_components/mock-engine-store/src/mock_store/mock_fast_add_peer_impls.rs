@@ -125,6 +125,7 @@ pub(crate) unsafe extern "C" fn ffi_fast_add_peer(
     let store_id = (*store.engine_store_server).id;
     (*store.engine_store_server).mutate_region_states(region_id, |e: &mut RegionStats| {
         e.fast_add_peer_count.fetch_add(1, Ordering::SeqCst);
+        e.started_fast_add_peers.lock().unwrap().insert(region_id);
     });
 
     let failed_add_peer_res =
@@ -147,6 +148,13 @@ pub(crate) unsafe extern "C" fn ffi_fast_add_peer(
         });
         0
     })() != 0;
+    let force_wait_for_data: bool = (|| {
+        fail::fail_point!("fap_mock_force_wait_for_data", |t| {
+            let t = t.unwrap().parse::<u64>().unwrap();
+            t
+        });
+        0
+    })() != 0;
     let fail_after_write: bool = (|| {
         fail::fail_point!("fap_mock_fail_after_write", |t| {
             let t = t.unwrap().parse::<u64>().unwrap();
@@ -156,6 +164,10 @@ pub(crate) unsafe extern "C" fn ffi_fast_add_peer(
     })() != 0;
     debug!("recover from remote peer: enter from {} to {}", from_store, store_id; "region_id" => region_id);
 
+    if force_wait_for_data {
+        debug!("recover from remote peer: force_wait_for_data from {} to {}", from_store, store_id; "region_id" => region_id);
+        return failed_add_peer_res(interfaces_ffi::FastAddPeerStatus::WaitForData);
+    }
     for retry in 0..300 {
         let mut ret: Option<interfaces_ffi::FastAddPeerRes> = None;
         if retry > 0 {
@@ -309,13 +321,33 @@ pub(crate) unsafe extern "C" fn ffi_fast_add_peer(
                     if block_wait {
                         continue;
                     } else {
+                        (*store.engine_store_server).mutate_region_states(
+                            region_id,
+                            |e: &mut RegionStats| {
+                                e.finished_fast_add_peer_count
+                                    .fetch_add(1, Ordering::SeqCst);
+                            },
+                        );
                         return r;
                     }
                 }
-                _ => return r,
+                _ => {
+                    (*store.engine_store_server).mutate_region_states(
+                        region_id,
+                        |e: &mut RegionStats| {
+                            e.finished_fast_add_peer_count
+                                .fetch_add(1, Ordering::SeqCst);
+                        },
+                    );
+                    return r;
+                }
             }
         }
     }
     error!("recover from remote peer: failed after retry"; "region_id" => region_id);
+    (*store.engine_store_server).mutate_region_states(region_id, |e: &mut RegionStats| {
+        e.finished_fast_add_peer_count
+            .fetch_add(1, Ordering::SeqCst);
+    });
     failed_add_peer_res(interfaces_ffi::FastAddPeerStatus::BadData)
 }
